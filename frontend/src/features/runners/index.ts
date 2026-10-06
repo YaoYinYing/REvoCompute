@@ -1,6 +1,7 @@
 import { ArrowLeft, ArrowRight, BookOpen, Cpu, ExternalLink, Search, ShieldCheck, Zap } from 'lucide';
 import { createIcons } from 'lucide';
 import { getParameterSchema, getReadiness, getTaskCatalog, getTaskType, type ParameterDefinition, type TaskTypeDetail, type TaskTypeSummary } from '../../api/app-api';
+import { guidedTour } from '../../app/guided-tour';
 import type { AppShell } from '../../app/shell';
 
 function text(tag: keyof HTMLElementTagNameMap, value: string, className = ''): HTMLElement { const node = document.createElement(tag); node.className = className; node.textContent = value; return node; }
@@ -14,6 +15,8 @@ export async function mountRunnerCatalog(root: HTMLElement): Promise<void> {
   const toolbar = document.createElement('section'); toolbar.className = 'work-toolbar runner-toolbar'; toolbar.innerHTML = '<label class="search-control"><span>Search methods</span><span class="input-with-action"><i data-lucide="search"></i><input type="search" placeholder="Name, category, or summary"></span></label><label><span>Category</span><select><option value="">All categories</option></select></label><fieldset class="layout-switch"><legend>Density</legend><button type="button" data-density="comfortable" aria-pressed="true">Comfortable</button><button type="button" data-density="compact" aria-pressed="false">Compact</button></fieldset><p class="catalog-count" aria-live="polite"></p>';
   const catalog = document.createElement('div'); catalog.className = 'runner-catalog'; catalog.dataset.density = 'comfortable'; const state = text('p', 'Loading methods...', 'empty-state'); catalog.append(state); root.append(head, toolbar, catalog);
   createIcons({ icons: { Search }, root });
+  // An in-progress guided tour resumes on the surface it advanced to.
+  guidedTour.resumeIfActive();
   try {
     const [payload, infrastructure] = await Promise.all([getTaskCatalog(), getReadiness().catch(() => null)]); state.remove();
     if (infrastructure) { readiness.textContent = infrastructure.status === 'READY' ? 'Infrastructure ready' : `Infrastructure ${infrastructure.status.toLowerCase()}`; readiness.dataset.status = infrastructure.status; }

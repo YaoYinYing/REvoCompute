@@ -2703,6 +2703,9 @@ def _serve_frontend_entry(*, private: bool = False, status: int = 200):
 
 
 _MAX_LEGAL_DOCUMENT_BYTES = 64 * 1024
+# Operator-editable, repository-owned notice source. Deployments edit the file in
+# their checkout; it is never frontend source and never a database row.
+_SYSTEM_NOTICES_SOURCE = Path(__file__).with_name("legal") / "SYSTEM_NOTICES.md"
 
 
 @app.route("/compute/api/legal/terms", methods=["GET"])
@@ -2722,6 +2725,44 @@ def legal_terms():
     )
     response.headers["Cache-Control"] = "public, max-age=300"
     return response, 200
+
+
+@app.route("/compute/api/system/notices", methods=["GET"])
+def system_notices():
+    """Return the operator-configured long-form system notice resource.
+
+    The notice text is repository-owned and content-addressed, never frontend
+    source. Clients render the Markdown as text and decide locally whether to
+    hide it by notice identity.
+    """
+    source = _SYSTEM_NOTICES_SOURCE
+    content = source.read_bytes()
+    if len(content) > _MAX_LEGAL_DOCUMENT_BYTES:
+        logging.error("System notices exceed the %d-byte API limit", _MAX_LEGAL_DOCUMENT_BYTES)
+        return jsonify({"error": "System notices are unavailable"}), 503
+    markdown = content.decode("utf-8")
+    if not _has_notice_content(markdown):
+        return jsonify({"notices": []}), 200
+    response = jsonify(
+        {
+            "notices": [
+                {
+                    "id": f"operator-notice-{hashlib.sha256(content).hexdigest()[:12]}",
+                    "level": "info",
+                    "title": "Operator notice",
+                    "body": markdown,
+                }
+            ]
+        }
+    )
+    response.headers["Cache-Control"] = "public, max-age=300"
+    return response, 200
+
+
+def _has_notice_content(markdown):
+    """A notice source with no prose (blank and/or HTML-comment only) publishes nothing."""
+    without_comments = re.sub(r"<!--.*?-->", "", markdown, flags=re.DOTALL)
+    return bool(without_comments.strip())
 
 
 @app.route("/compute/results/<md5sum>", methods=["GET"])

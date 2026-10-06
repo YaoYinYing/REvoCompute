@@ -15,6 +15,7 @@ export type RegistrationCapability = components['schemas']['RegistrationCapabili
 export type CaptchaChallenge = components['schemas']['CaptchaChallenge'];
 export type RegistrationRequest = components['schemas']['RegisterRequest'];
 export type LegalDocument = components['schemas']['LegalDocument'];
+export type SystemNotices = components['schemas']['SystemNotices'];
 export type ApiMessage = components['schemas']['MessageResponse'];
 export interface ApiKeyStatus { has_api_key: boolean }
 export interface ApiKeyCreated extends ApiMessage { api_key: string }
@@ -60,6 +61,7 @@ export const resetPassword = (token: string, password: string): Promise<ApiMessa
 export const verifyEmail = (token: string): Promise<components['schemas']['VerifyEmailResponse']> =>
   jsonRequest('/compute/api/auth/verify-email', { token });
 export const getTerms = (): Promise<LegalDocument> => requestJson('/compute/api/legal/terms');
+export const getSystemNotices = (): Promise<SystemNotices> => requestJson('/compute/api/system/notices');
 
 export const updatePassword = (currentPassword: string, newPassword: string): Promise<ApiMessage> =>
   authorizedJson('/compute/api/auth/me', {

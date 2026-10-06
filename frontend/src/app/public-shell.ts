@@ -1,23 +1,26 @@
-import { createIcons, LogIn, Menu, MoonStar, SunMedium, UserRound } from 'lucide';
+import { Check, createIcons, Languages, LogIn, Menu, MoonStar, SunMedium, UserRound } from 'lucide';
 import type { CurrentUser } from '../api/app-api';
 import type { AppShell } from './shell';
 import { appAsset } from './assets';
+import { locale, locales, setLocale, t, type Locale } from './i18n';
 import { cycleTheme, storedTheme, type ThemeMode } from './theme';
 
-function themeLabel(mode: ThemeMode): string { return `Theme: ${mode[0]!.toUpperCase()}${mode.slice(1)}`; }
+const publicIcons = { Check, Languages, LogIn, Menu, MoonStar, SunMedium, UserRound };
+
+function themeLabel(mode: ThemeMode): string { return `${t('shell.action.theme')}: ${t(`theme.${mode}`)}`; }
 
 export function mountPublicShell(root: HTMLElement): AppShell {
   root.replaceChildren();
   const header = document.createElement('header');
   header.className = 'public-header';
   header.innerHTML = `
-    <a class="public-brand" href="/" aria-label="REvoDesign home"><img src="${appAsset('logo.svg')}" alt="" width="36" height="36"><span>REvoDesign</span></a>
+    <a class="public-brand" href="/" aria-label="${t('public.home')}"><img src="${appAsset('logo.svg')}" alt="" width="36" height="36"><span>${t('public.brand')}</span></a>
     <details class="public-navigation">
-      <summary class="icon-button" aria-label="Open navigation"><i data-lucide="menu"></i></summary>
-      <nav aria-label="Public navigation">
-        <a href="/">Home</a><a href="/runners">Runners</a><a href="/api-docs">API</a><a href="/skills.md">Agent API</a>
-        <a href="https://yaoyinying.github.io/REvoCompute/">Documentation</a>
-        <a href="https://github.com/YaoYinYing/REvoCompute" rel="noopener noreferrer">GitHub</a>
+      <summary class="icon-button" aria-label="${t('public.nav.open')}"><i data-lucide="menu" aria-hidden="true"></i></summary>
+      <nav aria-label="${t('public.nav.label')}">
+        <a href="/">${t('public.nav.home')}</a><a href="/runners">${t('public.nav.runners')}</a><a href="/api-docs">${t('public.nav.api')}</a><a href="/skills.md">${t('public.nav.agentApi')}</a>
+        <a href="https://yaoyinying.github.io/REvoCompute/">${t('public.nav.documentation')}</a>
+        <a href="https://github.com/YaoYinYing/REvoCompute" rel="noopener noreferrer">${t('public.nav.github')}</a>
       </nav>
     </details>`;
   const actions = document.createElement('div');
@@ -25,21 +28,21 @@ export function mountPublicShell(root: HTMLElement): AppShell {
   const account = document.createElement('a');
   account.className = 'public-account secondary-button';
   account.href = '/compute/login';
-  account.innerHTML = '<i data-lucide="log-in"></i><span>Sign in</span>';
+  account.innerHTML = `<i data-lucide="log-in" aria-hidden="true"></i><span>${t('shell.action.signIn')}</span>`;
   const theme = document.createElement('button');
   theme.type = 'button';
   theme.className = 'icon-button';
   theme.title = themeLabel(storedTheme());
   theme.setAttribute('aria-label', theme.title);
-  theme.innerHTML = `<i data-lucide="${document.documentElement.dataset.theme === 'dark' ? 'sun-medium' : 'moon-star'}"></i>`;
+  theme.innerHTML = `<i data-lucide="${document.documentElement.dataset.theme === 'dark' ? 'sun-medium' : 'moon-star'}" aria-hidden="true"></i>`;
   theme.addEventListener('click', () => {
     const mode = cycleTheme();
     theme.title = themeLabel(mode);
     theme.setAttribute('aria-label', theme.title);
-    theme.innerHTML = `<i data-lucide="${document.documentElement.dataset.theme === 'dark' ? 'sun-medium' : 'moon-star'}"></i>`;
+    theme.innerHTML = `<i data-lucide="${document.documentElement.dataset.theme === 'dark' ? 'sun-medium' : 'moon-star'}" aria-hidden="true"></i>`;
     createIcons({ icons: { MoonStar, SunMedium }, root: theme });
   });
-  actions.append(account, theme);
+  actions.append(languageMenu(), account, theme);
   header.append(actions);
   const navigation = header.querySelector<HTMLDetailsElement>('.public-navigation')!;
   const desktopNavigation = matchMedia('(min-width: 66.01rem)');
@@ -56,7 +59,7 @@ export function mountPublicShell(root: HTMLElement): AppShell {
   notices.className = 'app-notices';
   notices.setAttribute('aria-live', 'polite');
   root.append(header, outlet, notices);
-  createIcons({ icons: { LogIn, Menu, MoonStar, SunMedium, UserRound }, root: header });
+  createIcons({ icons: publicIcons, root: header });
   return {
     outlet,
     notify(message, tone = 'info') {
@@ -68,8 +71,26 @@ export function mountPublicShell(root: HTMLElement): AppShell {
     },
     setUser(user: CurrentUser | null) {
       account.href = user ? '/compute/profile' : '/compute/login';
-      account.innerHTML = `<i data-lucide="${user ? 'user-round' : 'log-in'}"></i><span>${user ? 'Profile' : 'Sign in'}</span>`;
+      account.innerHTML = `<i data-lucide="${user ? 'user-round' : 'log-in'}" aria-hidden="true"></i><span>${t(user ? 'shell.action.profile' : 'shell.action.signIn')}</span>`;
       createIcons({ icons: { LogIn, UserRound }, root: account });
     },
   };
+}
+
+function languageMenu(): HTMLElement {
+  const details = document.createElement('details'); details.className = 'lang-menu';
+  const summary = document.createElement('summary'); summary.className = 'icon-button'; summary.title = t('shell.action.language'); summary.setAttribute('aria-label', t('shell.action.language'));
+  const current = locales.find(item => item.id === locale())!;
+  summary.innerHTML = `<i data-lucide="languages" aria-hidden="true"></i><span class="lang-menu-value">${current.label}</span>`;
+  const options = document.createElement('div'); options.className = 'lang-options'; options.setAttribute('role', 'radiogroup'); options.setAttribute('aria-label', t('shell.action.language'));
+  locales.forEach(item => {
+    const button = document.createElement('button'); button.type = 'button'; button.setAttribute('role', 'radio'); button.setAttribute('aria-checked', String(item.id === locale()));
+    button.dataset.locale = item.id;
+    button.append(document.createTextNode(item.label));
+    if (item.id === locale()) { const mark = document.createElement('i'); mark.dataset.lucide = 'check'; mark.setAttribute('aria-hidden', 'true'); button.append(mark); }
+    button.addEventListener('click', () => setLocale(item.id as Locale));
+    options.append(button);
+  });
+  details.append(summary, options);
+  return details;
 }

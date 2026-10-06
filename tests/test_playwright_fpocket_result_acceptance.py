@@ -145,6 +145,7 @@ def _serve(page: Page, manifest: dict, root: Path, task_id: str, logical_paths: 
         f"{ORIGIN}/compute/api/auth/me",
         lambda route: route.fulfill(json={"id": 1, "username": "owner", "role": "user"}),
     )
+    page.route(f"{ORIGIN}/compute/api/system/notices", lambda route: route.fulfill(json={"notices": []}))
     page.route(
         f"{ORIGIN}/compute/api/running/{task_id}",
         lambda route: route.fulfill(

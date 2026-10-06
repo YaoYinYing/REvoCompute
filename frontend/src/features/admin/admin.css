@@ -34,7 +34,7 @@
 .admin-text-danger { min-height: 2rem; padding: .3rem .5rem; border: 1px solid color-mix(in srgb, var(--app-danger) 45%, var(--app-line)); border-radius: var(--r-util); background: transparent; color: var(--app-danger); cursor: pointer; }
 .admin-danger-button { display: inline-flex; min-height: 2.45rem; align-items: center; justify-content: center; padding: .5rem .9rem; border: 1px solid var(--app-danger); border-radius: var(--r-control); background: var(--app-danger); color: var(--app-bg); cursor: pointer; font-weight: 650; }
 button:disabled { cursor: not-allowed; opacity: .55; }
-.admin-batch-bar { display: flex; align-items: center; gap: .5rem; margin-bottom: .6rem; padding: .55rem .7rem; border-left: 3px solid var(--app-accent-2); background: var(--app-soft); font-size: .72rem; }
+.admin-batch-bar { display: flex; align-items: center; gap: .5rem; margin-bottom: .6rem; padding: .55rem .7rem; border-left: 2px solid var(--app-accent-2); background: var(--app-soft); font-size: .72rem; }
 .admin-batch-bar[hidden] { display: none; }
 .admin-batch-bar strong { margin-right: auto; }
 .admin-danger-zone { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-top: 1.5rem; padding: 1rem 0; border-top: 1px solid color-mix(in srgb, var(--app-danger) 55%, var(--app-line)); border-bottom: 1px solid color-mix(in srgb, var(--app-danger) 55%, var(--app-line)); }
@@ -81,7 +81,7 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .admin-event-feed article { display: grid; grid-template-columns: 10rem minmax(8rem, 1fr) minmax(8rem, 1fr) auto; gap: .7rem; padding: .55rem 0; border-bottom: 1px solid var(--app-line); font-size: .69rem; }
 .admin-event-feed time, .admin-event-feed span { color: var(--app-muted); }
 .policy-detail-group { padding-top: .5rem; border-top: 1px solid var(--app-line); }
-.access-evidence { display: grid; gap: .2rem; padding: .7rem; border-left: 3px solid var(--app-accent-2); background: var(--app-soft); font-size: .72rem; }
+.access-evidence { display: grid; gap: .2rem; padding: .7rem; border-left: 2px solid var(--app-accent-2); background: var(--app-soft); font-size: .72rem; }
 .access-evidence p { margin: .4rem 0 0; }
 
 .config-type-list { border-top: 1px solid var(--app-line); }

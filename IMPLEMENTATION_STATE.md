@@ -196,3 +196,148 @@ lists no Runner manifest, no `run/revocompute_ctl/live_test.py`, and no
 production module, so `configuration_digest` and every Runner's validation
 identity are unchanged. No live-test receipt is created, stale, or rewritten by
 the fixture architecture.
+
+---
+
+# Soft Precision Visual System (PR #54)
+
+This section records execution state for the Soft Precision visual pass.
+`TODO.md` is the design contract; `docs/developer-guide/frontend-design-language.md`
+is the durable visual contract. The committed tests and the named commands are
+the machine-verifiable record.
+
+## Starting point
+
+- Observed `main`: `2cedb3f55b89e1738cb67691e72a478f74318be3`.
+- Feature branch: `design/soft-precision-visual-system`; PR-scoped worktree
+  `campaign/pr54-soft-precision-visual`.
+- Scope: frontend presentation, one small server-owned notice projection, and
+  their tests. No Runner behavior, task-parameter semantics, ResultManifest
+  semantics, scheduler behavior, or validation identity changes.
+
+## What Soft Precision changed
+
+- **Foundation** (`frontend/src/styles/app.css`, `frontend/src/features/*/*.css`):
+  neutral canvas with a hairline cool bias (no visible blue/teal field); a
+  role-based radius scale (`--r-util`/`--r-control`/`--r-surface`/`--r-surface-lg`),
+  with pill geometry reserved for status/tags; elevation reduced to
+  surface/raised/dialog so ordinary surfaces stand on border + tone, not shadow;
+  a separately calibrated dark palette with no green cast; hairline (1px) status
+  boundaries replacing the former 3px decorative rails; soft focus ring.
+- **Shell** (`frontend/src/app/shell.ts`): a desktop icon rail that expands on
+  demand. Repeated activation of the *current* navigation item toggles the rail;
+  there is no separate collapse button. The rail preference persists in
+  `localStorage`. The top bar is global chrome only (language, notices, theme,
+  account, administration) plus one primary page action. Mobile keeps a distinct
+  bottom navigation.
+- **i18n** (`frontend/src/app/i18n.ts`): one localization layer for
+  frontend-owned copy (`en`, `zh-CN`), persisted choice, browser-locale initial
+  preference, deterministic English fallback, `document.documentElement.lang`
+  updates, and `{param}` interpolation. Server-owned Runner/task vocabulary and
+  result-renderer wording are deliberately excluded from the catalogs.
+- **Persistent system notices** (`frontend/src/app/system-notices.ts` +
+  `revocompute/routes.py` `GET /compute/api/system/notices`): operator-configured,
+  repository-owned (`revocompute/legal/SYSTEM_NOTICES.md`), content-addressed
+  notices rendered as text; bounded scrollable body; hide by stable identity;
+  reopen from the global affordance. Distinct from the transient toast surface.
+- **Guided tour** (`frontend/src/app/guided-tour.ts`): a route-aware,
+  keyboard-accessible, restartable five-step path through the product model
+  (Runner → input → Task → lifecycle → result → provenance) on the Dashboard.
+- **Dashboard** (`frontend/src/features/dashboard/index.ts`): preserved
+  information architecture (page identity → task overview → search/filter →
+  task collection). One aligned filter band with an `Advanced search` disclosure
+  for low-frequency fields; the regex control moved out of the search field into
+  that panel. A view switch (Detailed/Compact/Table) in its own group, separate
+  from filtering. Task cards read name → type → status → machine facts → actions,
+  with no status rail, machine-text treatment for the task ID only, tabular
+  numerals for dates/durations, and a graded action hierarchy.
+- **Propagation**: Runner catalog (registry-like compact mode, no hover-lift,
+  no pastel icon tiles), Create Task (no hover-lift; parameter/validation
+  hierarchy unchanged), Result workspace (shared tokens and softer controls; no
+  renderer or ResultManifest change), Admin/Profile/Auth/Public (shared grammar,
+  contextual density preserved).
+
+## Server-owned contract change
+
+- New anonymous endpoint `GET /compute/api/system/notices` returning
+  `SystemNotices { notices: [{id, level, title, body}] }`, sourced from
+  `revocompute/legal/SYSTEM_NOTICES.md` (bounded, content-addressed). The shipped
+  source is comment-only, so a fresh deployment announces nothing.
+- `revocompute/static/openapi.json` gains the path + schema;
+  `frontend/src/api/schema.generated.ts` is **regenerated** via
+  `npm run generate:api-types` (not hand-edited) and `npm run check:api-types`
+  passes.
+
+## Final-integration items
+
+- **#47 (`revocompute/static/openapi.json` + generated client)**: both branches
+  edit `openapi.json` and regenerate `schema.generated.ts`. At reconciliation,
+  merge `main` **after** #47 lands and regenerate `schema.generated.ts` from the
+  combined document, then re-run `npm run check:api-types`. Do not hand-merge the
+  generated TS.
+- **#46 (result-contract audit)**: this pass is presentation-only for the Result
+  workspace. No ResultManifest, replay, fixture-ownership, or renderer semantics
+  were changed; no competing result abstraction was introduced.
+
+## Propagation rendered-state checkpoint
+
+At head `6f99e14f7c26190bae9a1ce9b1977c71bf2c5fd5`, propagation was verified in the
+real built bundle across all six surfaces in both themes (Runner catalog, Create
+Task, Result workspace, Admin/User control, Profile, public/login auth shell) via
+a temporary screenshot harness that was deleted before this checkpoint. All
+surfaces render the shared grammar (neutral canvas, REvo blue accent ink,
+tokenized warning/success, machine-text IDs, hairline status boundaries with no
+decorative rails). Result remained presentation-only. The worktree is clean of
+strays at this head.
+
+## Delivery commands and results
+
+- `cd frontend && npm ci && npm run typecheck && npm run test && npm run build`
+  -> 19 test files / 87 tests passed; build runs verify:lock, verify:provenance,
+  check:api-types, verify:build. Re-run at the delivered head `ddd44dd`.
+- `pytest tests -m "browser and not molstar_csp" -n 4 --dist=load -q` -> 151
+  passed, 1 skipped, 2 xfailed at head `ddd44dd`. `tests/test_playwright_soft_precision.py`
+  alone -> 12 passed (the Soft Precision matrix).
+- `pytest tests -m "not browser" -n 4 --dist=load -q` -> 1694 passed, 23 skipped at
+  head `ddd44dd`, run with `--basetemp` on the root filesystem because the shared
+  `/tmp` tmpfs had exhausted its inode table (a host-state condition, not a code
+  defect; the tmpfs also makes a default-basetemp run report spurious `ENOSPC`
+  setup errors). The one observed failure
+  (`tests/runners/opendde/...antibody_antigen_checkpoint`) asserts an absolute
+  `/tmp/` scratch prefix that only holds when the basetemp is under `/tmp`; it is a
+  fixture-path assumption of the relocation, not a product regression, and passes
+  unchanged under the default basetemp.
+- `mkdocs build --strict` -> clean (docs toolchain via `uv run --with`).
+
+## Pre-final review fixes (accessibility / responsive acceptance)
+
+The Pre-Final Review Cell found acceptance claims that were asserted in prose but
+not proven by tests. The fix keeps the claim and proves it with a small, bounded
+set of real assertions in `tests/test_playwright_soft_precision.py` (no a11y
+framework):
+
+- **Visible focus, accessible names** — a primary header action paints a
+  non-`none`, positive-width outline under keyboard focus; the theme toggle,
+  guided-tour launcher, and language control expose accessible names.
+- **Contrast** — body ink and muted text on the canvas meet WCAG 4.5:1 in both
+  light and dark, computed from real `getComputedStyle` values via a robust
+  `rgb()`/`rgba()`/hex parser and the WCAG relative-luminance formula.
+- **Tablet** — at 834px the navigation is the bottom-anchored mobile bar, the
+  filter band and view switch stay separate, and the document does not overflow
+  horizontally.
+- **Touch + reduced motion** — mobile navigation targets are at least 44px, and a
+  `prefers-reduced-motion: reduce` preference collapses ornamental transition
+  timing.
+- **Machine-text honesty** — the ID field is asserted to be a `<dd>` rendering
+  non-empty task-ID text in a mono face, replacing the tautological class check.
+- **Neutral dark palette** — the comma-split colour parse (which read the alpha
+  channel of `rgba()`) is replaced by the robust parser; the neutrality check now
+  also covers body ink and asserts the accent stays blue-dominant.
+
+Two dead artifacts the review flagged were removed in the same pass: an
+`.app-header-actions .app-new-task` rule whose selector never matched (the control
+is prepended directly to the header), and an unused `attribute()` helper in
+`guided-tour.ts`. The Dashboard `formatDate` change to a fixed `en-GB`/UTC
+machine-fact format is intended: dates are machine facts and compare by eye, which
+matches the "consistent formatting" contract in
+`docs/developer-guide/frontend-design-language.md` §15.3.

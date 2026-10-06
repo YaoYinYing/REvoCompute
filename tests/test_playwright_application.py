@@ -227,6 +227,7 @@ def _install_app(page: Page) -> list[str]:
             + "\n\n## Restricted Runner access {#restricted-runner-access}\n\nAccess decisions are server-owned."
         ),
     }))
+    page.route(f"{ORIGIN}/compute/api/system/notices", lambda route: route.fulfill(json={"notices": []}))
     page.route(f"{ORIGIN}/openapi.json", lambda route: route.fulfill(json={
         "openapi": "3.1.0", "info": {"title": "REvoCompute API", "version": "3"},
         "paths": {"/compute/api/types": {"get": {"summary": "List Runner types", "responses": {"200": {"description": "Catalog"}}}}},
