@@ -2111,6 +2111,87 @@ def test_a_purged_task_is_not_republished_by_a_finishing_worker(monkeypatch, tmp
     assert module.task_store.get_data_lifecycle(task_id)["state"] == "DELETE_REQUESTED"
 
 
+def test_a_purge_that_lands_during_finalize_is_not_republished_or_recharged(monkeypatch, tmp_path):
+    """The window between the finalize guard and the charge is real, and deletion wins.
+
+    ``_finalize_results_manifest`` reads the durable lifecycle once at the top
+    and then walks the result tree.  A purge that completes during that walk has
+    removed exactly the bytes this worker is about to re-publish, so publishing
+    anyway would re-create the tree in a directory the deletion emptied and
+    re-open a ``PURGED`` row as ``ACTIVE`` charged zero — a result on disk that
+    nothing owns, and a fabricated zero charge for it.
+    """
+    import os as real_os
+    from types import SimpleNamespace
+
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "gremlin"},
+    )
+    owner = _task_owner(module, "purge-during-finalize")
+    user_id = int(owner["submitted_by_user_id"])
+    task_id = "9" * 32
+    module.task_store.upsert_task(
+        task_id,
+        filename="input.fasta",
+        file_path="/immutable/input.fasta",
+        uploaded_at=900.0,
+        status="running",
+        is_binary=0,
+        username="purge-during-finalize",
+        task_type="gremlin",
+        **owner,
+    )
+    task = module.task_store.get_task(task_id)
+    module.task_store.ensure_data_lifecycle(task_id, user_id=user_id, logical_bytes=64, at=time.time())
+    result_dir = module.task_runtime._task_result_dir(task)
+    charges_before = [
+        entry for entry in module.task_store.list_ledger(user_id)
+        if entry["reason_code"] == "storage_charged"
+    ]
+
+    # The publication's last filesystem step is ``os.replace``; the purge lands
+    # immediately after it and before the charge, which is precisely the window
+    # under test.
+    def _purge_then_replace(src, dst):
+        real_os.replace(src, dst)
+        # Drive the real lifecycle transaction: request, claim, complete.
+        now = time.time()
+        module.task_store.claim_data_deletion(
+            task_id, user_id=user_id, actor_user_id=1, at=now
+        )
+        module.task_store.begin_data_purge(task_id, at=now)
+        module.task_store.complete_data_purge(task_id, at=now)
+
+    shim = SimpleNamespace(**{name: getattr(real_os, name) for name in dir(real_os) if not name.startswith("_")})
+    shim.replace = _purge_then_replace
+    monkeypatch.setattr(module.task_runtime, "os", shim)
+
+    with pytest.raises(module.task_runtime.DataPurgedError):
+        module.task_runtime._finalize_results_manifest(
+            task, execution_state="completed", finished_at=time.time()
+        )
+
+    record = module.task_store.get_data_lifecycle(task_id)
+    # The purge stands: the row is not re-opened to ACTIVE, and nothing is
+    # charged for it.
+    assert record["state"] == "PURGED"
+    assert module.task_store.logical_owned_bytes(user_id) == 0
+    # No new charge was appended for the publication the purge undid; the only
+    # charge on the ledger is the one the original registration made, and the
+    # purge released exactly it.
+    charges_after = [
+        entry for entry in module.task_store.list_ledger(user_id)
+        if entry["reason_code"] == "storage_charged"
+    ]
+    assert charges_after == charges_before
+    # And the resurrected tree the worker had just written is gone, not left
+    # behind in a directory the deletion emptied.
+    assert not os.path.exists(result_dir)
+    assert not os.path.exists(os.path.join(result_dir, "execution"))
+
+
 def test_a_finished_task_with_no_deletion_request_still_publishes_normally(monkeypatch, tmp_path):
     """The guard admits the ordinary case: no lifecycle row, or an owning state."""
     module = _load_pssm_module(
