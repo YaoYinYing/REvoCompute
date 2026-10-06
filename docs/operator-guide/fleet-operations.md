@@ -62,6 +62,26 @@ fabricated, cleared, or rewritten because the executor is offline. The UI
 reports `Operator executor unavailable` and disables mutations; it does not
 retry in a loop.
 
+### Permission boundary
+
+The CLI may remain more powerful than the Web surface, because it runs in an
+explicit operator/SSH context. Neither may ever expose an arbitrary shell.
+
+| Capability | CLI | Admin Web |
+| --- | --- | --- |
+| Status / readiness / evidence | yes | yes |
+| Doctor diagnostics | yes | yes |
+| Live / smoke validation | yes | yes, typed job |
+| Prepare / build a candidate | yes | yes, typed job |
+| Activate (promote) | yes | no — refused |
+| Rollback to the previous validated artifact | yes | no — refused |
+| Readiness repair plan | yes | yes |
+| Bounded logs / operator history | yes | yes |
+| Service-wide restart | yes | no |
+| Bootstrap / setup / secrets | yes, operator-only | no |
+| Destructive reset / recovery | yes, break-glass | no |
+| Arbitrary shell | never | never |
+
 ### Actions that intentionally stay CLI-only
 
 Activation and rollback are **refused** on the Web surface, not approximated.
