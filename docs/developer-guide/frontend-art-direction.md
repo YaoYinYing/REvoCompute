@@ -115,8 +115,8 @@ A status cue can legitimately combine a compact peripheral mark with a textual
 label. That is useful visual redundancy when each channel has a job.
 
 The durable rule is owned by [Frontend Design Language](frontend-design-language.md)
-§15.1: **a status cue may exist when it improves scanning; it must not exist
-merely because a card feels unfinished without an accent.**
+§2 and §15.1: **a status cue may exist when it improves scanning; it must not
+exist merely because a card feels unfinished without an accent.**
 
 Do not reject a conventional visual device merely because it is common; judge
 its reason and its attention cost.
@@ -130,7 +130,9 @@ make screenshots quieter. Admin may look busy when the work is genuinely busy.
 
 A design system prevents accidental inconsistency; it must not erase justified
 authorship. The concrete forms that authorship may take, and the one-sentence
-standard an exception must satisfy, belong to §11 below. The historical User
+standard an exception must satisfy, belong to §11 below; the durable rule is
+owned by [Frontend Design Language](frontend-design-language.md) §19.1. The
+historical User
 Control page — an editorial page title beside a dense operational table and a
 deliberately strong destructive reset action — is the ancestor of that judgment
 (evidence in [Frontend Visual Ancestry](frontend-visual-ancestry.md)).
@@ -160,8 +162,9 @@ showroom-like.
 The strongest artistic reference for the refinement is **Claude Monet —
 _Woman with a Parasol_**, with **Water Lilies** as a secondary reference.
 
-These references must never become literal UI themes (see §12 on metaphor
-safety in [Frontend Taste Review](frontend-taste-review.md) §19).
+These references must never become literal UI themes (see the metaphor-safety
+questions in [Frontend Taste Review](frontend-taste-review.md) §14, governed by
+[Frontend Design Language](frontend-design-language.md) §2.1).
 
 The useful qualities of _Woman with a Parasol_: air around substantial objects;
 cloth with weight but movement; white that contains environmental colour;
@@ -351,7 +354,7 @@ That is still a template.
 The classification that keeps this honest — **convention** (mature, useful),
 **cliché** (overused but possibly valid), **misuse** (no contextual reason) — and
 the test to apply it are owned by
-[Frontend Taste Review](frontend-taste-review.md) §16. The direction's summary:
+[Frontend Taste Review](frontend-taste-review.md) §12. The direction's summary:
 eliminate misuse, question cliché, use convention confidently when it helps.
 
 ---
@@ -366,7 +369,7 @@ failure states exposing enough information to act.
 
 None of these is individually remarkable; together they produce character. The
 reviewable checklist lives in
-[Frontend Taste Review](frontend-taste-review.md) §22.
+[Frontend Taste Review](frontend-taste-review.md) §16.
 
 ---
 

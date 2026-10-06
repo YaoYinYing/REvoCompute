@@ -122,7 +122,7 @@ controls, and subtraction last.
   semantic separation preserved. (Rule: §22.)
 - **Does mobile recompose or merely shrink?** Object identity and primary actions
   preserved, metadata wrapping into meaningful rows, touch targets accessible,
-  no critical state hidden behind unexplained icons. (Rule: §19.)
+  no critical state hidden behind unexplained icons. (Rule: §9.2.)
 
 ## 11. Authorship
 
@@ -152,7 +152,7 @@ Do not confuse fashion fatigue with functional invalidity.
 When you break a system rule, state the reason in one sentence. A good rationale
 sounds like “the molecular stage breaks max-width because the structure is the
 primary scientific object.” A weak one sounds like “it looks cooler.” If no clear
-reason exists, prefer the system rule. (Rule: §16 authored exceptions; art
+reason exists, prefer the system rule. (Rule: §19.1 authored exceptions; art
 direction: §11.)
 
 ## 14. Metaphor safety
@@ -161,7 +161,7 @@ The art-direction metaphors are judgment aids, not themes. Before shipping
 anything inspired by them, confirm you have implemented the *quality* (care,
 materiality, air, weight, colour hierarchy, authorship) and not the *literal*
 metaphor — no flowers, botanical patterns, fabric grain, lab imagery, Monet-like
-gradients, or brush textures. (Rules: §22 anti-literalization; art direction:
+gradients, or brush textures. (Rules: §2.1 metaphor safety; art direction:
 §2, §7.1.)
 
 ## 15. Accessibility preservation
@@ -186,7 +186,7 @@ regression. (Rule: §23.)
 **What can now be removed?** Obsolete CSS, duplicated surface/button/status
 treatments, unused tokens, classes no longer rendered, redundant visual
 wrappers, decoration that no longer earns its space. Do not leave two visual
-systems fighting. (Rule: §25 anti-pattern checklist; art direction §16.)
+systems fighting. (Rule: §25 anti-pattern checklist.)
 
 ---
 

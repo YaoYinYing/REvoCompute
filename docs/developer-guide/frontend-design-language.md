@@ -101,6 +101,26 @@ pill, shadow, or other familiar pattern is valid when it carries semantic or
 interaction value. Judge the reason and attention cost, not whether the pattern
 has become fashionable or overused elsewhere.
 
+### 2.1 Metaphors stay judgment aids, never themes
+
+The art-direction metaphors — the cared-for lab coat, the wild rose, Monet's
+relational light and colour — exist to guide decisions about quality: care,
+materiality, air, weight, colour hierarchy, authorship. They are **never themes
+to implement literally**.
+
+Before shipping anything inspired by a metaphor, confirm you implemented the
+*quality* and not the *literal* image. There must be no floral or botanical
+motif, no rose logo or embroidery effect, no fabric grain, no lab imagery, no
+Monet-like gradients, and no brush textures.
+
+A structure, heatmap, molecular representation, sequence colouring, or real
+scientific plot can be "the rose". Chrome must never be. Some pages need no rose
+at all — Dashboard or Admin may simply be the clean working garment.
+
+The judgment behind the metaphors belongs to
+[Frontend Art Direction](frontend-art-direction.md); the metaphor-safety review
+questions are [Frontend Taste Review](frontend-taste-review.md) §14.
+
 ---
 
 ## 3. Overall composition: one working surface
@@ -181,9 +201,15 @@ Colour is a semantic resource.
 
 The canvas and content surfaces should be neutral.
 
-The background may have a cool bias, but it should not read as visibly blue,
-green, or teal. A strong hue in the neutral field muddies both identity colour
-and status colour.
+The neutral field carries a **warm environmental bias** — a sub-threshold warm
+grey-green, not a sterile cool blue-grey. "Warm" here is a relationship, not a
+tint: the background should not read as visibly yellow, green, or teal. A strong
+hue in the neutral field muddies both identity colour and status colour, so the
+bias must stay below the threshold of a perceived colour.
+
+The rationale is the *cared-for*, laboratory-not-industrial character: a working
+surface that has been used and maintained, not a showroom-cool instrument panel.
+The current values are owned by `frontend/src/styles/app.css`.
 
 Dark mode must be recalibrated independently and must not inherit a green cast.
 
@@ -744,6 +770,26 @@ Shared identity comes from:
 - data treatment.
 
 Not from repeating the same card layout.
+
+### 19.1 Authored exceptions
+
+A completely systematized product can become anonymous. A small amount of
+authored character is allowed when the context earns it, and it is not a bug in
+consistency.
+
+Examples:
+
+- a Result stage breaking normal page width;
+- a strong operator reset action;
+- a semantic Task status rail;
+- an Admin page staying dense;
+- selective typographic contrast;
+- a page-specific relationship between primary and secondary surfaces.
+
+An exception becomes a defect only when it is arbitrary. The test is: **can the
+reason for the exception be stated clearly?** If yes, and usability and
+accessibility remain sound, it may belong. Judge exceptions against
+[Frontend Taste Review](frontend-taste-review.md) §13.
 
 ---
 

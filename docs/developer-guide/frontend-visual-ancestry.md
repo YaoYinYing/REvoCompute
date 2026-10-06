@@ -151,7 +151,7 @@ Keep real comparison density, direct operator action, clear consequences, and
 enough page identity to avoid anonymous admin-console styling. The strong GPU
 reset action is also evidence that a product can contain a small authored
 cultural trace without becoming unserious — now governed by the exception
-standard in [Frontend Design Language](frontend-design-language.md) §16 and its
+standard in [Frontend Design Language](frontend-design-language.md) §19.1 and its
 rationale test in [Frontend Taste Review](frontend-taste-review.md) §13.
 
 ---
