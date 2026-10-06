@@ -2,30 +2,37 @@
 # Distributed under the terms of the GNU General Public License v3.0.
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Serve the MCP streamable-HTTP endpoint as a first-class process role.
+"""Mount the MCP streamable-HTTP endpoint beside the canonical HTTP API.
 
-The MCP surface is a protocol adapter over the same application the ``web`` and
-``worker`` roles already run.  It is deployed exactly like them -- the same
-image, the same environment, the same volumes, a different command -- so it is
-not a new service with its own truth; it is another process over one code base.
+One process, one port, two protocol surfaces over one application truth.  In the
+deployed configuration the MCP endpoint is served from the *same* process as the
+Flask application, so the canonical rate limiter, admission path, and application
+state are shared rather than replicated: an MCP caller and an HTTP caller from
+one client address consume one budget, and MCP cannot become a second admission
+path.
 
-The endpoint is reachable at ``/k/mcp`` once the deployment's gateway routes
-``/k`` to this process.  Every request therefore keeps the deployment's existing
-TLS and network boundary, and the bearer/API-key credentials the process
-verifies are the canonical credentials verified by the canonical user database.
+That is why the default deployment is a companion listener rather than a second
+service role.  The ASGI stack starts only when the optional ``mcp`` extra is
+installed; a deployment without it serves the HTTP API and Web application
+exactly as before.
 """
 
 from __future__ import annotations
 
+import logging
+import threading
 from typing import Any
 
 #: Public path prefix for the MCP surface.  The streamable-HTTP endpoint is at
 #: ``/k/mcp``; the prefix is short and does not collide with an existing route.
 MCP_PATH = "/k"
 
-#: Default internal port for the MCP process.  Never published; the gateway
-#: proxies to it inside the compose network, like the web role's port.
+#: Internal port of the companion MCP listener.  Bound inside the web container
+#: and proxied by the deployment gateway, which also fronts the HTTP API port.
+#: The deployment publishes neither directly.
 DEFAULT_MCP_PORT = 8081
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def mcp_asgi() -> Any:
@@ -40,7 +47,13 @@ def mcp_asgi() -> Any:
 
 
 def serve() -> None:
-    """Run the MCP ASGI endpoint (the ``revocompute-mcp`` console entrypoint)."""
+    """Run the MCP ASGI listener (the standalone ``revocompute-mcp`` entrypoint).
+
+    Used for interoperability testing and for a deployment that chooses to run
+    the listener in its own process.  The deployed default is
+    :func:`start_companion_listener` inside the web process, which keeps the
+    canonical limiter shared.
+    """
     import os
 
     import uvicorn
@@ -49,8 +62,39 @@ def serve() -> None:
 
     port = env_int("MCP_PORT", DEFAULT_MCP_PORT)
     # Binds all interfaces inside the container; the port is never published and
-    # only the deployment gateway reaches it, mirroring the web role.
+    # only the deployment gateway reaches it.
     uvicorn.run(mcp_asgi(), host="0.0.0.0", port=port, log_level=os.environ.get("MCP_LOG_LEVEL", "info"))  # nosec B104
 
 
-__all__ = ["DEFAULT_MCP_PORT", "MCP_PATH", "mcp_asgi", "serve"]
+def start_companion_listener() -> threading.Thread | None:
+    """Start the MCP ASGI listener in a daemon thread of this process.
+
+    The listener shares this process's memory, so the canonical rate limiter,
+    the loaded application, and every in-process admission decision are the same
+    objects the HTTP API uses.  Returns ``None`` when MCP is disabled or the
+    optional ASGI stack is missing, so the HTTP API is never affected by an
+    absent extra.
+    """
+    import os
+
+    from revocompute.config import env_bool, env_int
+
+    if not env_bool("MCP_ENABLED", True):
+        return None
+    try:
+        import uvicorn
+    except ImportError:
+        _LOGGER.info("MCP listener not started: the optional 'mcp' extra is not installed")
+        return None
+
+    host = os.environ.get("MCP_HOST", "0.0.0.0")  # noqa: S104 - container-internal bind
+    port = env_int("MCP_PORT", DEFAULT_MCP_PORT)
+    config = uvicorn.Config(mcp_asgi(), host=host, port=port, log_level=os.environ.get("MCP_LOG_LEVEL", "warning"))
+    server = uvicorn.Server(config)
+    thread = threading.Thread(target=server.run, name="mcp-asgi", daemon=True)
+    thread.start()
+    _LOGGER.info("MCP listener started on %s:%s at %s", host, port, MCP_PATH)
+    return thread
+
+
+__all__ = ["DEFAULT_MCP_PORT", "MCP_PATH", "mcp_asgi", "serve", "start_companion_listener"]
