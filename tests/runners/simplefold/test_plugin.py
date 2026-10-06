@@ -327,7 +327,80 @@ def test_unrecoverable_cuda_faults_propagate_instead_of_being_retried(tmp_path, 
     assert "illegal memory access" in (manifest["items"][0]["error"] or "")
 
 
+# -- recovery provenance ----------------------------------------------------
+
+
+def test_each_item_carries_the_requested_scientific_parameter_set(tmp_path, plugin_module, state):
+    """The requested science travels with the item, so recovery is auditable."""
+    from work_items import sequence_work_items
+
+    fasta = tmp_path / "multi.fa"
+    fasta.write_text(">a\nACDE\n>b\nFGHI\n", encoding="utf-8")
+    manifest = {
+        "task_id": "t1",
+        "params": DEFAULT_PARAMS,
+        "inputs": {"sequence": [{"path": str(fasta), "original_name": "multi.fa"}]},
+    }
+
+    items, _payload = sequence_work_items(
+        manifest, "sequence", item_fields={"sample_count": 2, "requested_parameters": DEFAULT_PARAMS}
+    )
+
+    assert all(item["requested_parameters"] == DEFAULT_PARAMS for item in items)
+
+
+def test_the_recovery_record_shows_the_requested_science_survived_recovery(
+    tmp_path, plugin_module, state, monkeypatch
+):
+    """TODO.md 7/10: the requested count/seed survive; the grouping divergence is explicit."""
+    monkeypatch.setenv("SIMPLEFOLD_FAKE_OOM_MULTIPLICITY", "3")
+    items = _sequence_items(("a", "ACDE"), sample_count=4)
+    # The item carries the requested set, as the entrypoint supplies it.
+    requested = {**DEFAULT_PARAMS, "num_samples": 4, "seed": 7}
+    items[0]["requested_parameters"] = requested
+    plugin = _plugin(plugin_module, tmp_path, {"num_samples": 4, "seed": 7})
+    output = tmp_path / "out"
+
+    manifest = _run(plugin_module, _config(items), plugin, output)
+
+    entry = manifest["items"][0]
+    assert entry["status"] == "SUCCEEDED"
+    records = entry["recovery"]
+    assert [record["plan_label"] for record in records] == ["", "samples_two_at_a_time"]
+    # The grouping rung is a scientific-output change (each group is its own
+    # seeded stream), so it is reported as one, never as resource-only.
+    assert [record["action"] for record in records] == ["", "scientific_output"]
+    # The requested sample count and seed are unchanged at every attempt.
+    for record in records:
+        assert record["effective_parameters"]["num_samples"] == 4
+        assert record["effective_parameters"]["seed"] == 7
+    # The grouping actually applied is explicit: the default draws four at once,
+    # the pair rung draws 2+2 from two streams.
+    assert records[0]["effective_parameters"]["sample_groups"] == [4]
+    assert records[1]["effective_parameters"]["sample_groups"] == [2, 2]
+    assert records[0]["effective_parameters"] != records[1]["effective_parameters"], (
+        "a split run must not look equivalent to the baseline"
+    )
+    assert [row["action"] for row in entry["resource_events"]] == ["", "scientific_output"]
+
+
 # -- declared adaptation plans ----------------------------------------------
+
+
+def test_the_parameter_roles_match_the_modules_actual_use(plugin_module):
+    """TODO.md 1: the comparison contract is derived from the code, not assumed.
+
+    SimpleFold's adaptation vocabulary holds no scientific parameter at all: every
+    required setting reaches the sampling call unchanged, so there is no
+    parameter whose effective value can diverge from the request.
+    """
+    scientific = plugin_module.SCIENTIFIC_PARAMETERS
+    resources = plugin_module.RESOURCE_ONLY_PARAMETERS
+    assert scientific == set(plugin_module.REQUIRED_PARAMS)
+    assert resources == set(plugin_module.RESOURCE_ADJUSTMENT_KEYS)
+    assert resources >= plugin_module.SUPPORTED_ADJUSTMENTS
+    assert scientific & resources == set(), "no SimpleFold resource key is scientific"
+    assert plugin_module.PROVENANCE_PARAMETERS.isdisjoint(scientific | resources)
 
 
 def test_a_plan_naming_a_scientific_parameter_is_rejected_at_load(tmp_path, plugin_module):

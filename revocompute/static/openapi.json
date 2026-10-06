@@ -2124,6 +2124,51 @@
         },
         "additionalProperties": false
       },
+      "WorkItem": {
+        "type": "object",
+        "properties": {
+          "id": {"type": ["string", "null"]},
+          "status": {"type": ["string", "null"]},
+          "attempts": {"type": ["integer", "null"]},
+          "output_path": {"type": ["string", "null"]},
+          "error": {"type": ["string", "null"]},
+          "recovery_action": {
+            "type": "string",
+            "description": "The most scientifically impactful automatic recovery action this item took; empty when the default path ran.",
+            "enum": ["", "resource_only", "numerical_backend", "scientific_output", "unsafe"]
+          },
+          "recovery": {
+            "type": "array",
+            "description": "Per-attempt requested-versus-effective provenance, newest attempts first when the list is trimmed.",
+            "items": {"$ref": "#/components/schemas/RecoveryRecord"}
+          }
+        },
+        "additionalProperties": true
+      },
+      "RecoveryRecord": {
+        "type": "object",
+        "description": "One attempt's adaptive-OOM provenance: the plan applied, its scientific-impact class, the resource-only settings it changed, and the effective parameter set the attempt executed.",
+        "properties": {
+          "attempt": {"type": ["integer", "null"]},
+          "plan_label": {"type": ["string", "null"]},
+          "action": {
+            "type": ["string", "null"],
+            "description": "The attempt's recovery-action class; empty for the default path.",
+            "enum": ["", "resource_only", "numerical_backend", "scientific_output", "unsafe", null]
+          },
+          "resources": {
+            "type": ["object", "null"],
+            "description": "The resource-only settings this attempt applied (never a scientific parameter).",
+            "additionalProperties": true
+          },
+          "effective_parameters": {
+            "type": ["object", "null"],
+            "description": "The effective parameter set the attempt executed; compare with the task's requested parameters to see any divergence.",
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": true
+      },
       "ResultView": {
         "type": "object",
         "required": ["id", "plugin", "role", "title", "sources"],
@@ -2172,7 +2217,7 @@
           },
           "storyboard": {"oneOf": [{"type": "null"}, {"$ref": "#/components/schemas/Storyboard"}]},
           "outcome": {"type": ["string", "null"], "description": "Runner-owned standardized aggregate outcome; PARTIAL_SUCCESS remains a finished task."},
-          "work_items": {"type": "array", "items": {"type": "object"}},
+          "work_items": {"type": "array", "items": {"$ref": "#/components/schemas/WorkItem"}},
           "progress": {"type": "object"},
           "total_size": {"type": "integer", "minimum": 0},
           "archive": {

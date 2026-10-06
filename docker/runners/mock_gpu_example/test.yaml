@@ -1,0 +1,12 @@
+version: 1
+collections:
+  smoke:
+    cases:
+    # The fixture carries several records in one FASTA file, so this single case
+    # already exercises the persistent lifecycle: several work items, several
+    # committed item directories, and one task-level rollup.
+    - id: minimal-mock-folding
+      task: mock_folding
+      input:
+        roles: {sequence: [tests/data/mock_gpu_example/sequences.fasta]}
+      parameters: {num_samples: 4, seed: 7}

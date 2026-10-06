@@ -1,0 +1,126 @@
+id: mock_folding
+display_name: Mock GPU folding (test reference)
+category: structure
+summary: Deterministic, GPU-free stand-in for a persistent folding Runner, used to exercise the multi-input lifecycle, bounded adaptive-OOM recovery, and recovery provenance.
+use_when: Use this test/reference task to exercise the persistent multi-input and adaptive-OOM machinery without a GPU, a model, or a production SIF. It is not science.
+input_summary: One FASTA file containing one or more unaligned protein sequences.
+output_summary: Per-record deterministic pseudo-sample coordinates and a task-level rollup, one directory per committed work item.
+considerations:
+- This task is a TEST/REFERENCE artifact. It fabricates a pseudo-device and a deterministic pseudo-model; it makes no scientific claim.
+- Each FASTA record is an independent work item. A record that exhausts the pseudo-device fails alone and the remaining records still complete.
+- The effective scientific parameters are the requested sample count, the requested seed, the resolved kernel backend, and the sample grouping; resource-only recovery never reaches them.
+- A fallback plan naming a scientific parameter is refused at the lifecycle boundary and never executes.
+gpus: false
+# One FASTA record is one work item. batch_size counts chains folded together;
+# one item is one chain, so it is fixed at 1. The budget is a floor of the
+# default path plus each declared plan once.
+execution:
+  batch_size: 1
+  max_item_attempts: 3
+  max_runtime_restarts: 1
+# Fallbacks are execution-only and monotone: each plan draws the same requested
+# samples under strictly lower instantaneous multiplicity, and the final plan
+# also switches to the reference (lower-memory) kernel backend. The final plan
+# keeps the one-at-a-time grouping, so reaching it never restores the sample
+# concurrency that failed.
+resource_adaptation:
+  stage: recover
+  fallback_plans:
+  - label: samples_two_at_a_time
+    title: Draw the requested samples two at a time
+    adjustments:
+      sample_group_size: 2
+      cache_clear: true
+  - label: samples_one_at_a_time
+    title: Draw the requested samples one at a time
+    adjustments:
+      sample_group_size: 1
+      cache_clear: true
+      chunk_size: 512
+  - label: reference_kernels
+    title: Draw the requested samples one at a time with the reference kernels
+    adjustments:
+      sample_group_size: 1
+      kernel_backend: reference
+      cache_clear: true
+inputs:
+  sequence:
+    title: Protein sequences
+    type: protein_sequence
+    cardinality: {min: 1, max: 1}
+    formats: [fasta, fa, faa]
+input_workspace:
+  steps:
+  - id: material
+    title: Provide protein sequences
+    description: Upload or paste one or more unaligned protein sequences.
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: Protein FASTA
+    - plugin: sequence
+      id: sequence_editor
+      title: Protein sequences
+      options: {role: sequence}
+  - id: settings
+    title: Set sampling controls
+    description: Choose the number of pseudo-samples and the requested seed.
+    capabilities:
+    - plugin: parameters
+      id: task_parameters
+      title: Sampling settings
+  - id: review
+    title: Review and run
+    description: Check the sequences and settings before creating the Task.
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Review
+      options: {show_paths: true}
+result_workspace:
+  views:
+  - plugin: evidence-bundle
+    id: mock_samples_table
+    role: primary
+    title: Mock sample coordinates
+    description: Deterministic per-sample coordinates and their effective parameters, one file per work item.
+    sources:
+      items:
+      - glob: '*/mock_samples.json'
+        required: true
+    mapping: {}
+  - plugin: scalar-summary
+    id: aggregate_summary
+    role: evidence
+    title: Input summary
+    description: Aggregate record and sample counts over the committed work items.
+    sources:
+      data:
+      - path: task_summary.json
+        required: true
+    mapping:
+      fields:
+      - {path: sequence_count, label: Sequences, unit: sequences, direction: neutral}
+      - {path: succeeded_count, label: Succeeded, unit: sequences, direction: neutral}
+      - {path: failed_count, label: Failed, unit: sequences, direction: neutral}
+      - {path: total_samples, label: Samples, unit: samples, direction: neutral}
+stage_markers:
+  model_loading: Loading the pseudo-runtime
+  mock_folding: Drawing pseudo-samples
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties:
+    num_samples:
+      type: integer
+      description: Number of pseudo-samples to draw for each sequence.
+      default: 4
+      minimum: 1
+      maximum: 64
+    seed:
+      type: integer
+      description: Requested sampling seed. Sample j always carries seed + j, whatever the grouping.
+      default: 1
+      minimum: 0
+      maximum: 2147483647

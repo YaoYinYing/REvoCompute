@@ -2317,6 +2317,42 @@ export interface components {
             } & (unknown | unknown))[];
             problems: string[];
         };
+        WorkItem: {
+            id?: string | null;
+            status?: string | null;
+            attempts?: number | null;
+            output_path?: string | null;
+            error?: string | null;
+            /**
+             * @description The most scientifically impactful automatic recovery action this item took; empty when the default path ran.
+             * @enum {string}
+             */
+            recovery_action?: "" | "resource_only" | "numerical_backend" | "scientific_output" | "unsafe";
+            /** @description Per-attempt requested-versus-effective provenance, newest attempts first when the list is trimmed. */
+            recovery?: components["schemas"]["RecoveryRecord"][];
+        } & {
+            [key: string]: unknown;
+        };
+        /** @description One attempt's adaptive-OOM provenance: the plan applied, its scientific-impact class, the resource-only settings it changed, and the effective parameter set the attempt executed. */
+        RecoveryRecord: {
+            attempt?: number | null;
+            plan_label?: string | null;
+            /**
+             * @description The attempt's recovery-action class; empty for the default path.
+             * @enum {string|null}
+             */
+            action?: "" | "resource_only" | "numerical_backend" | "scientific_output" | "unsafe" | null;
+            /** @description The resource-only settings this attempt applied (never a scientific parameter). */
+            resources?: {
+                [key: string]: unknown;
+            } | null;
+            /** @description The effective parameter set the attempt executed; compare with the task's requested parameters to see any divergence. */
+            effective_parameters?: {
+                [key: string]: unknown;
+            } | null;
+        } & {
+            [key: string]: unknown;
+        };
         ResultView: {
             id: string;
             /** @enum {string} */
@@ -2365,7 +2401,7 @@ export interface components {
             storyboard: null | components["schemas"]["Storyboard"];
             /** @description Runner-owned standardized aggregate outcome; PARTIAL_SUCCESS remains a finished task. */
             outcome: string | null;
-            work_items?: Record<string, never>[];
+            work_items?: components["schemas"]["WorkItem"][];
             progress?: Record<string, never>;
             total_size: number;
             archive: {

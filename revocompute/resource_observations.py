@@ -71,6 +71,27 @@ WORK_ITEMS_MAX_BYTES = 8 * 1024 * 1024
 #: item count is orders of magnitude below this cap.
 WORK_ITEMS_MAX_ITEMS = 100_000
 
+#: Scientific-impact class of an automatic recovery action, as the Runner
+#: Protocol defines it (``docker/runners/common/runtime/persistent_runner``,
+#: which the server must not import). ``resource_only`` changes only how the
+#: computation is executed; ``numerical_backend`` may change floating behavior;
+#: ``scientific_output`` changes the result itself (a different stochastic stream
+#: per sample, or a different requested computation); ``unsafe`` is an action the
+#: lifecycle must never take automatically.
+RECOVERY_ACTION_RESOURCE_ONLY = "resource_only"
+RECOVERY_ACTION_NUMERICAL_BACKEND = "numerical_backend"
+RECOVERY_ACTION_SCIENTIFIC_OUTPUT = "scientific_output"
+RECOVERY_ACTION_UNSAFE = "unsafe"
+RECOVERY_ACTION_CLASSES = (
+    RECOVERY_ACTION_RESOURCE_ONLY,
+    RECOVERY_ACTION_NUMERICAL_BACKEND,
+    RECOVERY_ACTION_SCIENTIFIC_OUTPUT,
+    RECOVERY_ACTION_UNSAFE,
+)
+#: Bound on the per-item recovery records the projection republishes, matching
+#: the runner's own accumulator bound.
+RECOVERY_RECORDS_LIMIT = 32
+
 
 def _parse_json_payload(line: str, prefix: str) -> dict[str, Any] | None:
     """Parse the JSON object a protocol line carries, or ``None``.
@@ -261,15 +282,25 @@ def work_items_projection(result_dir: str) -> dict[str, Any] | None:
     """Ordered per-item detail plus progress counts for the result manifest.
 
     Items keep the runner's original input order (the manifest is written in
-    that order), so the published list is directly presentable.
+    that order), so the published list is directly presentable. Beside each
+    item's state the projection carries its adaptive-OOM provenance — the
+    requested-versus-effective record the runner kept per attempt and the
+    scientific-impact class of the recovery action — so a reviewer reads whether
+    the requested science survived recovery from the scientific result itself,
+    without inferring it from scheduler logs.
     """
     manifest = read_work_items(result_dir)
     if manifest is None:
         return None
     items = [
         {
-            key: entry.get(key)
-            for key in ("id", "status", "attempts", "output_path", "error")
+            "id": entry.get("id"),
+            "status": entry.get("status"),
+            "attempts": entry.get("attempts"),
+            "output_path": entry.get("output_path"),
+            "error": entry.get("error"),
+            "recovery_action": recovery_action_class(entry),
+            "recovery": item_recovery_records(entry),
         }
         for entry in manifest["items"]
         if entry.get("id")
@@ -287,6 +318,43 @@ def work_items_projection(result_dir: str) -> dict[str, Any] | None:
         "work_items": items,
         "progress": progress_counts(items, current=manifest.get("current_item")),
     }
+
+
+def recovery_action_class(entry: dict[str, Any]) -> str:
+    """The most scientifically impactful recovery action an item took.
+
+    ``""`` when the item never adapted — the default path ran, so there is
+    nothing to disclose. Otherwise the strongest class in the runner's own
+    per-attempt ``recovery`` records, so an item that walked a resource-only rung
+    and then a numerical-backend one reports the latter. A property of the item,
+    so it can be surfaced without republishing the whole record list.
+    """
+    classes = {
+        str(record.get("action") or "")
+        for record in entry.get("recovery") or []
+        if isinstance(record, dict)
+    }
+    known = [name for name in classes if name in RECOVERY_ACTION_CLASSES]
+    if RECOVERY_ACTION_UNSAFE in known:
+        return RECOVERY_ACTION_UNSAFE
+    if RECOVERY_ACTION_SCIENTIFIC_OUTPUT in known:
+        return RECOVERY_ACTION_SCIENTIFIC_OUTPUT
+    if RECOVERY_ACTION_NUMERICAL_BACKEND in known:
+        return RECOVERY_ACTION_NUMERICAL_BACKEND
+    if RECOVERY_ACTION_RESOURCE_ONLY in known:
+        return RECOVERY_ACTION_RESOURCE_ONLY
+    return ""
+
+
+def item_recovery_records(entry: dict[str, Any]) -> list[dict[str, Any]]:
+    """The bounded, shape-checked per-attempt recovery provenance of one item.
+
+    The runner keeps the *newest* :data:`RECOVERY_RECORDS_LIMIT` attempts, so the
+    server keeps the same end: the record of the attempt that succeeded is the one
+    a reviewer needs, and a long failing ladder must not push it out of view.
+    """
+    records = [record for record in entry.get("recovery") or [] if isinstance(record, dict)]
+    return records[-RECOVERY_RECORDS_LIMIT:]
 
 
 def progress_counts(items: Sequence[dict[str, Any]], *, current: Any = None) -> dict[str, Any]:

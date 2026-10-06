@@ -93,6 +93,16 @@ SUPPORTED_ADJUSTMENTS = frozenset({"sample_group_size", "cache_clear"})
 RESOURCE_ADJUSTMENT_KEYS = frozenset(
     {"sample_group_size", "batch_size", "token_budget", "chunk_size", "cpu_offload", "kernel_backend", "cache_clear"}
 )
+#: Comparison contract (``TODO.md`` §1): what each parameter governs, from this
+#: module's actual use of it. The required scientific settings — model, step
+#: count, tau, sample count, pLDDT, output format, seed — all reach the sampling
+#: call unchanged, so a comparison of two executions holds them fixed.
+#: Execution-only controls change how the requested samples are drawn; there is
+#: no scientific parameter in this family's adaptation vocabulary at all.
+SCIENTIFIC_PARAMETERS = frozenset(REQUIRED_PARAMS)
+RESOURCE_ONLY_PARAMETERS = frozenset(RESOURCE_ADJUSTMENT_KEYS)
+PROVENANCE_PARAMETERS = frozenset({"input_name", "input_sha256"})
+
 #: ``group_size`` is the shorthand the estimator's planner may emit.
 ADJUSTMENT_ALIASES = {"group_size": "sample_group_size"}
 
@@ -509,6 +519,34 @@ class SimpleFoldPlugin:
         """Effective execution key, so the lifecycle skips no-op plans."""
         return effective_plan_key(payload, adjustments)
 
+    def effective_parameters(self, payload: dict, adjustments: dict | None) -> dict:
+        """The effective parameter set one attempt executes.
+
+        Every *requested* scientific parameter keeps the user's value —
+        ``num_samples`` and ``seed`` are never changed by an adaptation. The set
+        also carries the plan-resolved execution-effect keys the user never
+        names: the *sample grouping* (how many samples each draw takes together
+        and the group stream seeds) and the item's effective seed. The grouping is
+        not neutral — each group is its own seeded stream, so the requested
+        samples come out with different coordinates under a different grouping
+        (see the module docstring) — and recording it makes that divergence
+        explicit instead of leaving a split run looking like the baseline.
+        """
+        requested = int(self.params["num_samples"])
+        plan = resolve_sample_plan(
+            requested,
+            int(payload.get("order") or 0),
+            int(self.params["seed"]),
+            adjustments,
+        )
+        params = dict(self.params)
+        params["item_seed"] = plan["item_seed"]
+        params["sample_group_size"] = plan["sample_group_size"]
+        params["sample_groups"] = plan["sample_groups"]
+        params["group_seeds"] = plan["group_seeds"]
+        params["sample_seeds"] = plan["sample_seeds"]
+        return params
+
     def _sample_group(
         self, runtime, plan: dict, group_index: int, group: dict, prediction_dir: Path, work_dir: Path, record_name: str
     ) -> None:
@@ -681,7 +719,13 @@ def main() -> int:
         manifest,
         "sequence",
         extensions=SEQUENCE_EXTENSIONS,
-        item_fields={"sample_count": int(params.get("num_samples") or 1)},
+        item_fields={
+            "sample_count": int(params.get("num_samples") or 1),
+            # The requested scientific parameter set, recorded with the item so
+            # the recovery provenance can show per attempt whether recovery kept
+            # it unchanged.
+            "requested_parameters": dict(params),
+        },
     )
     plugin = build_plugin(manifest, args)
     result = execute_task(

@@ -1,0 +1,21 @@
+Bootstrap: docker
+From: python:3.12.8-slim-bookworm
+
+%post
+    # This image is an *environment*: a Python runtime and nothing else. The
+    # REvoCompute entrypoint and adapters arrive at execution time as a
+    # read-only Runtime Bundle mounted at /opt/revocompute/runtime, so this
+    # definition carries no repository code and has no %files.
+    mkdir -p /opt/revocompute/runtime
+    chmod 0555 /opt/revocompute/runtime
+
+%environment
+    export PYTHONDONTWRITEBYTECODE=1
+    export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
+
+%test
+    # Environment validity only. REvoCompute overlay modules are deliberately
+    # absent from the image: they belong to runtime/live validation, not to the
+    # build, so %test must not import them.
+    python3 -c "import sys, json; assert sys.version_info[:2] == (3, 12)"
+    test -d /opt/revocompute/runtime

@@ -38,6 +38,11 @@ Durability rules:
 
 * ``work_items.json`` is the authoritative per-item state and is written
   atomically beside the results, so a restarted worker resumes it directly.
+  Each item carries two bounded evidence accumulators beside its state:
+  ``resource_events`` (the normalized observations the server's estimator
+  ingests) and ``recovery`` (one requested-versus-effective record per attempt,
+  with the scientific-impact class of the action, so an adaptive-OOM step is
+  auditable per item without scheduler logs).
 * an item's artifacts are written to ``.tmp/<id>/`` and renamed into ``<id>/``
   only after validation, so a final directory always means "this item completed
   and its artifacts passed validation".
@@ -88,7 +93,92 @@ STAGES = ("observe", "recover", "avoid")
 #: ``features.concurrent_samples``, which is the quantity memory is keyed on.
 MATERIAL_FEATURE_KEYS = frozenset({"kernel_backend", "cpu_offload", "chunk_size", "token_budget"})
 
+#: Parameter roles (``TODO.md`` §1). Every parameter a Runner exposes carries
+#: exactly one role, which is what lets the batch-equivalence comparator and the
+#: recovery audit agree on what "the same effective scientific parameters" means:
+#:
+#: ``scientific``    governs what the model computes, so it is part of the
+#:                   effective scientific parameter set a comparison holds fixed;
+#: ``resource_only`` governs how the requested computation is executed, so an
+#:                   adaptation that changes only these cannot change the result;
+#: ``recovery``      the declared ladder itself (``stage``, ``fallback_plans``),
+#:                   owned by the manifest and validated by the server;
+#: ``provenance``    identity and bookkeeping no execution changes.
+SCIENTIFIC = "scientific"
+RESOURCE_ONLY = "resource_only"
+RECOVERY = "recovery"
+PROVENANCE = "provenance"
+PARAMETER_ROLES = (SCIENTIFIC, RESOURCE_ONLY, RECOVERY, PROVENANCE)
+
+#: Scientific-impact class of an automatic recovery action (``TODO.md`` §8).
+#: ``resource_only`` is expected not to change the result; ``numerical_backend``
+#: may change floating behavior; ``scientific_output`` changes the scientific
+#: result itself — a different stochastic stream per sample, or a different
+#: requested computation; ``unsafe`` is an action the lifecycle must never be
+#: able to take automatically — a plan naming a scientific parameter.
+NUMERICAL_BACKEND = "numerical_backend"
+SCIENTIFIC_OUTPUT = "scientific_output"
+UNSAFE = "unsafe"
+RECOVERY_ACTION_CLASSES = (RESOURCE_ONLY, NUMERICAL_BACKEND, SCIENTIFIC_OUTPUT, UNSAFE)
+#: Ordered by scientific impact; a plan changing several controls carries the
+#: most impactful class of any of them.
+_ACTION_RANK = {RESOURCE_ONLY: 0, NUMERICAL_BACKEND: 1, SCIENTIFIC_OUTPUT: 2, UNSAFE: 3}
+
+#: The class of each execution-only adjustment the shared lifecycle understands,
+#: so a recovery action is classified by one vocabulary wherever it is described.
+#:
+#: ``sample_group_size`` is ``scientific_output``, *not* ``resource_only``: it
+#: changes how many samples are drawn simultaneously, and the samples inside one
+#: group share that group's stochastic stream — so the same requested samples
+#: come out with *different coordinates* under a different grouping (ESMFold 2
+#: says so explicitly; SimpleFold re-seeds per group). The requested sample count
+#: and per-sample seed declaration are untouched (see ``resolve_sample_plan``),
+#: which is what makes the split inspectable, but the split is a scientific-output
+#: change and is reported as one rather than as a neutral resource knob that would
+#: imply baseline equivalence.
+ADJUSTMENT_ACTIONS = {
+    "sample_group_size": SCIENTIFIC_OUTPUT,
+    "batch_size": RESOURCE_ONLY,
+    "token_budget": RESOURCE_ONLY,
+    "chunk_size": RESOURCE_ONLY,
+    "cpu_offload": RESOURCE_ONLY,
+    "cache_clear": RESOURCE_ONLY,
+    "kernel_backend": NUMERICAL_BACKEND,
+}
+
+#: Bound on the per-attempt records kept in one item's recovery provenance.
+RECOVERY_MAX_ATTEMPTS = 32
+
 _FAILED_STATES = (FAILED_INPUT, FAILED_RESOURCE, FAILED_RUNTIME)
+
+
+def classify_adjustments(adjustments: dict | None) -> str:
+    """The scientific-impact class of one attempt's resource adjustments.
+
+    The empty default path is not a recovery action, so it classifies as ``""``.
+    A key outside the shared execution-only vocabulary classifies ``unsafe``:
+    automatic recovery must never change a scientific parameter, so a plan that
+    names one is an action the lifecycle must not be able to take.
+    """
+    adjustments = dict(adjustments or {})
+    if not adjustments:
+        return ""
+    return max(
+        (ADJUSTMENT_ACTIONS.get(str(key), UNSAFE) for key in adjustments),
+        key=lambda name: _ACTION_RANK[name],
+    )
+
+
+def unsafe_adjustment_keys(adjustments: dict | None) -> list[str]:
+    """The adjustment keys that name a scientific parameter, in stable order.
+
+    These are keys outside the execution-only vocabulary: a plan naming one is
+    refused at the runner boundary, so it can never mutate the scientific
+    execution even if a malformed declaration or an injected plan reaches the
+    runner. The server rejects such a plan first, but the runner fails closed on
+    its own rather than trusting that it did.
+    """
+    return sorted(str(key) for key in dict(adjustments or {}) if ADJUSTMENT_ACTIONS.get(str(key), UNSAFE) == UNSAFE)
 
 
 class WorkItemError(Exception):
@@ -189,11 +279,15 @@ def write_work_items(output_dir: str, manifest: dict) -> None:
     os.replace(temporary, destination)
 
 
-def new_manifest(task_id: str, runner: str, items: list[dict]) -> dict:
+def new_manifest(task_id: str, runner: str, items: list[dict], *, snapshot_id: str = "") -> dict:
     return {
         "version": SCHEMA_VERSION,
         "task_id": task_id,
         "runner": runner,
+        # The immutable input snapshot this manifest was built from. A resume
+        # refuses a manifest whose snapshot differs, so identical item names with
+        # changed content cannot silently publish new input as a committed result.
+        "input_snapshot": str(snapshot_id or ""),
         "created_at": time.time(),
         "outcome": None,
         "items": [
@@ -208,6 +302,7 @@ def new_manifest(task_id: str, runner: str, items: list[dict]) -> dict:
                 "finished_at": None,
                 "error": None,
                 "resource_events": [],
+                "recovery": [],
             }
             for item in items
         ],
@@ -311,9 +406,12 @@ class Plan:
     """One attempt's execution configuration.
 
     Label ``""`` is the default, upstream-parameter path. A non-empty label
-    names one of the runner's own declared fallbacks, whose ``adjustments`` are
-    resource-equivalent settings only — validated on the server, which rejects
-    any adjustment that would change the requested computation.
+    names one of the runner's own declared fallbacks, whose ``adjustments`` stay
+    within the execution-only vocabulary — validated on the server, which rejects
+    any adjustment that names a requested scientific parameter. A fallback can
+    still change the *result* (a sample grouping changes which stream draws each
+    sample); ``classify_adjustments`` says how strongly, and the item's recorded
+    effective parameter set makes the divergence explicit.
     """
 
     __slots__ = ("label", "adjustments", "allowed", "reason")
@@ -386,8 +484,8 @@ class PlanSequence:
         # restrict the declared ladder, and an entry the runner does not declare
         # is skipped rather than guessed, so a malformed block degrades to
         # bounded recovery. Without one the declared ladder is the order.
-        order = [str(label) for label in guidance.get("plan_order") or []] or ["", *declared_order]
-        self.order = [label for label in order if label == "" or label in self.plans] or [""]
+        ordered = [str(label) for label in guidance.get("plan_order") or []] or ["", *declared_order]
+        self.order = [label for label in ordered if label == "" or label in self.plans] or [""]
         self.profiles = [entry for entry in guidance.get("profiles") or [] if isinstance(entry, dict)]
         # Nothing is bound until the runtime identity is known (see bind_identity).
         self.known_failing: set[str] = set()
@@ -625,6 +723,11 @@ class PersistentTask:
         self.output_dir = output_dir
         self.runner = str(config.get("runner") or getattr(plugin, "runner", "runner"))
         self.task_id = str(config.get("task_id") or "")
+        # The immutable input snapshot this task executes against. Recorded in the
+        # durable manifest, so a resume can verify it is the same snapshot rather
+        # than trusting that identical item names mean identical inputs.
+        self.input_sha256 = str(config.get("input_sha256") or "")
+        self.snapshot_id = self.input_sha256 or self.task_id
         self.execution = dict(config.get("execution") or {})
         self.queue = ExecutionQueue.from_policy(config.get("execution_queue"))
         self.plans = PlanSequence(
@@ -636,6 +739,9 @@ class PersistentTask:
         self.available_mb = 0
         self.runtime_restarts = 0
         self.items: list[dict] = []
+        #: Plans refused at the runner boundary because they name a scientific
+        #: parameter. Recorded, never executed (see ``_active_order``).
+        self.refused_unsafe_plans: list[str] = []
 
     # -- lifecycle ----------------------------------------------------------
 
@@ -725,6 +831,12 @@ class PersistentTask:
         reported more than one quantity a naive comparison would confuse, so it
         does not label the row itself.
         """
+        try:
+            self._record_attempt(entry, item, plan)
+        except Exception:
+            # The recovery record is evidence, not state: a failure to write it
+            # must not cost the observation (or rewrite a published result).
+            traceback.print_exc()
         peak, current, reserved = self.plugin.runtime_usage(self.runtime)
         observation = {
             "schema_version": SCHEMA_VERSION,
@@ -746,11 +858,65 @@ class PersistentTask:
             "error_class": str(fields.pop("error_class", "")),
             "runtime_seconds": float(fields.pop("runtime_seconds", 0.0)),
             "plan_label": str(plan.label or ""),
+            # The scientific-impact class of this attempt's recovery action: how
+            # the server and a reviewer tell a resource-only rung from a
+            # numerical-backend one, and that no rung names a scientific change.
+            "action": classify_adjustments(plan.adjustments),
             "created_at": time.time(),
         }
         entry.setdefault("resource_events", []).append(observation)
         print("REVODESIGN_OBSERVATION:" + json.dumps(observation, sort_keys=True), flush=True)
         return observation
+
+    def _record_attempt(self, entry: dict, item: dict, plan: Plan) -> None:
+        """Append one attempt's recovery-provenance record to the item.
+
+        This is the audit trail ``TODO.md`` §7 needs, kept beside the item it
+        describes rather than in a second store. Per attempt it names the plan
+        and its scientific-impact class, the resource-only settings applied, and
+        the *effective* scientific parameter set — so a reviewer sees whether the
+        requested parameters survived recovery by comparing it with the item's
+        ``parameters``, and never has to infer a scientific change from logs.
+        The measured evidence (device, peaks, outcome) stays in ``resource_events``
+        at the same attempt index, which this record references by number instead
+        of duplicating.
+        """
+        adjustments = dict(plan.adjustments or {})
+        entry.setdefault("recovery", []).append(
+            {
+                "attempt": entry["attempts"],
+                "plan_label": str(plan.label or ""),
+                "action": classify_adjustments(adjustments),
+                # The settings applied that are resource-only by vocabulary. A
+                # key classified otherwise (a backend, or an unsafe scientific
+                # one) is never filed here: it belongs to the effective set, where
+                # its divergence from the request is the disclosure.
+                "resources": {
+                    str(key): value
+                    for key, value in adjustments.items()
+                    if ADJUSTMENT_ACTIONS.get(str(key)) == RESOURCE_ONLY
+                },
+                "effective_parameters": self._effective_parameters(item["payload"], adjustments),
+            }
+        )
+        # Bounded like every other per-item accumulator: a runaway retry must not
+        # grow the durable manifest without limit.
+        records = entry["recovery"]
+        if len(records) > RECOVERY_MAX_ATTEMPTS:
+            del records[: len(records) - RECOVERY_MAX_ATTEMPTS]
+
+    def _effective_parameters(self, payload: dict, adjustments: dict) -> dict:
+        """The effective *scientific* parameter set one attempt executes.
+
+        A plugin that resolves its own plan implements ``effective_parameters``;
+        otherwise the declared requested set is the effective set, which is
+        exactly true for a family whose resource adjustments cannot reach a
+        scientific parameter.
+        """
+        hook = getattr(self.plugin, "effective_parameters", None)
+        if hook is not None:
+            return {str(key): value for key, value in dict(hook(payload, adjustments) or {}).items()}
+        return {str(key): value for key, value in dict(payload.get("requested_parameters") or {}).items()}
 
     def _scale(self, payload: dict) -> int:
         """Workload size proxy in *requested* units (the server's ``requested_scale``).
@@ -808,7 +974,26 @@ class PersistentTask:
         return str(hook(payload, adjustments))
 
     def _active_order(self, payload: dict) -> list[str]:
-        """The declared ladder minus plans that are a no-op for this work item."""
+        """The declared ladder minus plans this runner must not execute.
+
+        Two kinds of plan are dropped before the ladder is walked. A plan that is
+        a no-op for this work item would consume an attempt without changing the
+        execution. A plan that names a *scientific* parameter is refused: the
+        server rejects such a declaration, but the runner fails closed on its own
+        too, so an injected or malformed plan can never mutate the scientific
+        execution. Refusals are recorded so the task summary says what was
+        declined rather than dropping it silently.
+        """
+        refused = [
+            label
+            for label in self.plans.order
+            if label and unsafe_adjustment_keys(self.plans.plans.get(label))
+        ]
+        if refused:
+            for label in refused:
+                if label not in self.refused_unsafe_plans:
+                    self.refused_unsafe_plans.append(label)
+            self.plans.order = [label for label in self.plans.order if label not in refused]
         return active_plan_order(payload, self.plans, self._effective_key)
 
     # -- bounded recovery ---------------------------------------------------
@@ -944,12 +1129,35 @@ class PersistentTask:
 
     # -- task level ---------------------------------------------------------
 
+    def _resumed_manifest(self) -> dict:
+        """The durable manifest to resume, or a fresh one for a different task.
+
+        Resume is safe only against the *same immutable input snapshot*: a
+        resumed worker must not skip a committed item when the input has changed,
+        or the old result would silently bind to the new input. Comparing the
+        item names alone is not enough for that — two FASTA files with the same
+        record headers but different sequences normalize to the same names — so
+        the recorded snapshot identity is compared too. Anything else (a missing
+        manifest, a different task, different items, or a different snapshot) is
+        a fresh run, which recomputes every item rather than trusting stale state.
+        """
+        manifest = read_work_items(self.output_dir)
+        if manifest is None:
+            return new_manifest(self.task_id, self.runner, self.items, snapshot_id=self.snapshot_id)
+        if str(manifest.get("task_id") or "") != self.task_id:
+            return new_manifest(self.task_id, self.runner, self.items, snapshot_id=self.snapshot_id)
+        if [entry["name"] for entry in manifest["items"]] != [item["name"] for item in self.items]:
+            return new_manifest(self.task_id, self.runner, self.items, snapshot_id=self.snapshot_id)
+        # A manifest written before snapshot identity was recorded carries no
+        # identity; resuming it cannot be verified, so it is rebuilt.
+        if str(manifest.get("input_snapshot") or "") != self.snapshot_id:
+            return new_manifest(self.task_id, self.runner, self.items, snapshot_id=self.snapshot_id)
+        return manifest
+
     def run(self) -> dict:
         os.makedirs(self.output_dir, exist_ok=True)
         self.items = normalize_items(list(self.config["items"]))
-        manifest = read_work_items(self.output_dir)
-        if manifest is None or [entry["name"] for entry in manifest["items"]] != [item["name"] for item in self.items]:
-            manifest = new_manifest(self.task_id, self.runner, self.items)
+        manifest = self._resumed_manifest()
         manifest["outcome"] = None
         write_work_items(self.output_dir, manifest)
 
@@ -967,6 +1175,10 @@ class PersistentTask:
                 print(format_progress(manifest), flush=True)
             manifest["outcome"] = derive_outcome(manifest)
             manifest["skipped_known_failure_plans"] = list(dict.fromkeys(self.plans.skipped))
+            # A plan refused for naming a scientific parameter is recorded, so
+            # the task summary shows what automatic recovery declined to run.
+            if self.refused_unsafe_plans:
+                manifest["refused_unsafe_plans"] = list(dict.fromkeys(self.refused_unsafe_plans))
             write_work_items(self.output_dir, manifest)
         finally:
             self.finalize()
