@@ -1386,7 +1386,7 @@ def _finalize_results_manifest(
             pass
         raise
     os.replace(temporary, destination)
-    _charge_logical_storage(task, manifest)
+    _charge_logical_storage(task, manifest, result_dir)
     emit_event(
         "manifest.published",
         request_id=_task_request_id(task),
@@ -1404,7 +1404,21 @@ def _finalize_results_manifest(
     return manifest
 
 
-def _charge_logical_storage(task: dict[str, Any], manifest: dict[str, Any]) -> None:
+def _abandon_published_result(task: dict[str, Any], result_dir: str) -> None:
+    """Remove the result tree a purge authorized while this worker was finishing.
+
+    The publishing worker rebuilt ``result_dir`` (and its execution directory,
+    which lives under the results tree) after a purge had removed them.  Every
+    byte it wrote is disposable — the completed computation, its Slurm stdout,
+    and its observations are independent of these files — and the accepted
+    deletion must not be undone by a worker that simply walked faster.  The walk
+    is unprivileged because the worker owns the tree it just wrote.
+    """
+    for path in (result_dir, os.path.join(result_dir, "execution")):
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def _charge_logical_storage(task: dict[str, Any], manifest: dict[str, Any], result_dir: str) -> None:
     """Charge the durable bytes one published Task logically owns.
 
     The ownership boundary is the published result, measured here once from the
@@ -1412,28 +1426,44 @@ def _charge_logical_storage(task: dict[str, Any], manifest: dict[str, Any]) -> N
     a shared read-only asset, a Runner SIF, or a deployment database is never a
     user's bytes, and a directory walk would charge them.  A failure to record
     it must not withdraw a completed scientific result, so this is total.
+
+    The lifecycle is re-read here, immediately before the charge, because the
+    walk above is the window where a purge can land: the guard at the top of
+    :func:`_finalize_results_manifest` is true, the durable bytes are removed,
+    and the publication that follows would re-create the tree and re-open a
+    ``PURGED`` row as ``ACTIVE`` charged zero — a resurrected result with no
+    owner.  A purge that wins that race is authoritative: this raises
+    :class:`DataPurgedError`, and the caller ends the Task instead of publishing.
     """
+    if not _data_still_owned(str(task["md5sum"])):
+        _abandon_published_result(task, result_dir)
+        raise DataPurgedError(str(task["md5sum"]))
     user_id = int(task.get("submitted_by_user_id") or 0)
     if user_id <= 0:
         return
+    owned = sum(int(item.get("size") or 0) for item in manifest.get("artifacts", []))
     try:
-        owned = sum(int(item.get("size") or 0) for item in manifest.get("artifacts", []))
         task_store.ensure_data_lifecycle(
             str(task["md5sum"]),
             user_id=user_id,
             logical_bytes=owned,
             at=time.time(),
         )
-        emit_event(
-            "resource.storage.charged",
-            request_id=_task_request_id(task),
-            task_id=str(task["md5sum"]),
-            user_id=user_id,
-            storage_bytes=owned,
-            reason_code=LedgerReason.STORAGE_CHARGED.value,
-        )
     except Exception:
+        # Recording the charge is an accounting step, not part of the scientific
+        # result: a failure here must not withdraw a completed publication, and
+        # it must not be mistaken for the deletion race above, which is decided
+        # by the durable row rather than by whether this call raised.
         logging.exception("Could not charge logical storage for task %s", task.get("md5sum"))
+        return
+    emit_event(
+        "resource.storage.charged",
+        request_id=_task_request_id(task),
+        task_id=str(task["md5sum"]),
+        user_id=user_id,
+        storage_bytes=owned,
+        reason_code=LedgerReason.STORAGE_CHARGED.value,
+    )
 
 
 def _build_results_archive(task: dict) -> str:
