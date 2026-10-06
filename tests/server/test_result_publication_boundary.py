@@ -13,8 +13,11 @@ manifest and the real parser, never through repository text.
 from __future__ import annotations
 
 from dataclasses import replace
+import hashlib
 import json
+import os
 from pathlib import Path
+import stat
 import uuid
 
 import pytest
@@ -341,3 +344,167 @@ def test_exact_path_declarations_reach_the_published_manifest(monkeypatch, tmp_p
 def _type_with(view: tuple[str, str, str]):
     view_id, role, path = view
     return type("TaskType", (), {"result_workspace": (replace(_role_view(role, path), id=view_id),)})()
+
+
+# ---------------------------------------------------------------------------
+# The Runner output directory is an untrusted filesystem namespace.
+# ---------------------------------------------------------------------------
+
+
+def _finalize_dir(module, task_id: str, build) -> tuple[dict, Path]:
+    """Finalize a task whose result tree *build* populates, returning the manifest."""
+    task = module.task_store.get_task(task_id)
+    result_dir = Path(module.app.config["storage_resolver"].get_task_root(task))
+    build(result_dir)
+    module.task_runtime._finalize_results_manifest(task, execution_state="completed", finished_at=1_700_000_000)
+    with open(result_dir / "manifest.json", encoding="utf-8") as handle:
+        return json.load(handle), result_dir
+
+
+def test_a_symlink_out_of_the_result_root_is_never_published(monkeypatch, tmp_path) -> None:
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id = _finished_task(module, tmp_path)
+    outside = tmp_path / "host-secret.txt"
+    outside.write_text("host data\n", encoding="utf-8")
+
+    def build(result_dir: Path) -> None:
+        (result_dir / "real.txt").write_text("real result\n", encoding="utf-8")
+        (result_dir / "escape.txt").symlink_to(outside)
+        (result_dir / "linked-dir").symlink_to(tmp_path, target_is_directory=True)
+
+    manifest, _result_dir = _finalize_dir(module, task_id, build)
+
+    published = {artifact["path"]: artifact for artifact in manifest["artifacts"]}
+    assert "real.txt" in published
+    assert "escape.txt" not in published
+    # A symlinked directory is not descended into, so its contents never appear
+    # under a fabricated path either.
+    assert not any(path.startswith("linked-dir/") for path in published)
+    assert manifest["output_check"]["state"] == "failed"
+    assert any("escape.txt" in problem for problem in manifest["output_check"]["problems"])
+
+
+def test_a_second_hardlink_to_published_bytes_is_refused(monkeypatch, tmp_path) -> None:
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id = _finished_task(module, tmp_path)
+    outside = tmp_path / "aliased.txt"
+    outside.write_text("aliased bytes\n", encoding="utf-8")
+
+    def build(result_dir: Path) -> None:
+        (result_dir / "plain.txt").write_text("plain result\n", encoding="utf-8")
+        os.link(outside, result_dir / "aliased.txt")
+
+    manifest, _result_dir = _finalize_dir(module, task_id, build)
+
+    published = {artifact["path"] for artifact in manifest["artifacts"]}
+    assert "plain.txt" in published
+    assert "aliased.txt" not in published
+    assert manifest["output_check"]["state"] == "failed"
+    assert any("hard link" in problem for problem in manifest["output_check"]["problems"])
+
+
+@pytest.mark.parametrize("kind", ["fifo", "char"])
+def test_special_files_are_refused_not_followed(monkeypatch, tmp_path, kind) -> None:
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id = _finished_task(module, tmp_path)
+    name = {"fifo": "pipe.txt", "char": "device.txt"}[kind]
+
+    def build(result_dir: Path) -> None:
+        (result_dir / "plain.txt").write_text("plain result\n", encoding="utf-8")
+        target = result_dir / name
+        if kind == "fifo":
+            os.mkfifo(target)
+        else:
+            # A device node stands in for "any non-regular, non-link entry";
+            # creating one needs privilege, so a host that refuses it skips the
+            # case rather than asserting a weaker property.
+            try:
+                os.mknod(target, 0o600 | stat.S_IFBLK, os.makedev(7, 200))
+            except (PermissionError, OSError) as exc:
+                pytest.skip(f"cannot create a device node here: {exc}")
+
+    manifest, _result_dir = _finalize_dir(module, task_id, build)
+
+    published = {artifact["path"] for artifact in manifest["artifacts"]}
+    assert "plain.txt" in published
+    assert name not in published
+    assert manifest["output_check"]["state"] == "failed"
+    assert any(name in problem for problem in manifest["output_check"]["problems"])
+
+
+def test_an_over_capacity_result_tree_is_bounded_not_published_whole(monkeypatch, tmp_path) -> None:
+    """The published namespace is bounded in entry count before it is registered."""
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id = _finished_task(module, tmp_path)
+    monkeypatch.setattr(module.task_runtime, "MAX_PUBLISHED_ARTIFACTS", 4)
+
+    def build(result_dir: Path) -> None:
+        for index in range(12):
+            (result_dir / f"item_{index:02d}.txt").write_text("data\n", encoding="utf-8")
+
+    manifest, _result_dir = _finalize_dir(module, task_id, build)
+
+    assert len(manifest["artifacts"]) == 4
+    assert manifest["output_check"]["state"] == "failed"
+    assert any("published artifact limit" in problem for problem in manifest["output_check"]["problems"])
+
+
+def test_an_over_capacity_byte_total_is_bounded(monkeypatch, tmp_path) -> None:
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id = _finished_task(module, tmp_path)
+    monkeypatch.setattr(module.task_runtime, "MAX_PUBLISHED_BYTES", 10)
+
+    def build(result_dir: Path) -> None:
+        (result_dir / "big_a.bin").write_bytes(b"a" * 8)
+        (result_dir / "big_b.bin").write_bytes(b"b" * 8)
+
+    manifest, _result_dir = _finalize_dir(module, task_id, build)
+
+    assert manifest["total_size"] <= 10
+    assert len(manifest["artifacts"]) == 1
+    assert manifest["output_check"]["state"] == "failed"
+    assert any("published artifact limit" in problem for problem in manifest["output_check"]["problems"])
+
+
+def test_a_swapped_file_after_the_manifest_is_not_reachable(monkeypatch, tmp_path) -> None:
+    """Hash/size evidence describes the bytes registered, and later swaps are detected."""
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id = _finished_task(module, tmp_path)
+
+    def build(result_dir: Path) -> None:
+        (result_dir / "result.txt").write_text("original bytes\n", encoding="utf-8")
+
+    manifest, result_dir = _finalize_dir(module, task_id, build)
+    artifact = next(item for item in manifest["artifacts"] if item["path"] == "result.txt")
+    assert artifact["sha256"] == hashlib.sha256(b"original bytes\n").hexdigest()
+
+    # The published digest no longer describes the file: the resolver refuses to
+    # serve it rather than handing the caller substituted bytes.
+    (result_dir / "result.txt").write_text("substituted bytes\n", encoding="utf-8")
+    task = module.task_store.get_task(task_id)
+    resolved = module.app.config["storage_resolver"].resolve_artifact(task, "result.txt")
+    assert resolved is None
+
+
+def test_a_refused_tree_never_falls_back_to_publishing_it(monkeypatch, tmp_path) -> None:
+    """Publication failure must not degrade to 'publish everything'."""
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id = _finished_task(module, tmp_path)
+    outside = tmp_path / "secret.txt"
+    outside.write_text("secret\n", encoding="utf-8")
+
+    def build(result_dir: Path) -> None:
+        (result_dir / "only.txt").symlink_to(outside)
+
+    manifest, result_dir = _finalize_dir(module, task_id, build)
+
+    published = {artifact["path"] for artifact in manifest["artifacts"]}
+    # The server writes its own citations record for a known family; that is a
+    # server-owned provenance file, not runner output, and it is the only thing
+    # published here.
+    assert published <= {"citations.bib"}
+    assert manifest["total_size"] == sum(item["size"] for item in manifest["artifacts"])
+    # The manifest itself is still the durable record.
+    assert (result_dir / "manifest.json").is_file()
+    assert manifest["output_check"]["state"] == "failed"
+    assert "secret" not in json.dumps(manifest)

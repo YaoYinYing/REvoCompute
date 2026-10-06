@@ -98,6 +98,13 @@ from revocompute.auth import (
 )
 from revocompute.input_validators import validate_input_file, validate_logical_input
 from revocompute.input_validators.json_file import json_error_message, parse_bounded_json
+from revocompute.ingress_security import (
+    ValidationReceipt,
+    canonical_relative_path,
+    event_for_code,
+    phase_for_code,
+    snapshot_mismatch_reason,
+)
 from revocompute.ndarray import ArrayAccessError, MAX_PROJECTION_ELEMENTS, read_array_projection
 from revocompute.db import GPUCreditUnavailableError, TaskIdReservedError
 from revocompute.operational_events import emit_event
@@ -173,7 +180,6 @@ from jsonschema import ValidationError as JSONSchemaValidationError
 from jsonschema import validate as validate_json_schema
 from sqlalchemy.exc import IntegrityError
 from werkzeug.security import check_password_hash, generate_password_hash
-from werkzeug.utils import secure_filename
 
 MAX_TABLE_PAGE_BYTES = 8 * 1024 * 1024
 MAX_TABLE_CELL_BYTES = 16 * 1024
@@ -946,7 +952,16 @@ def task_type_form(name: str):
 @app.route("/compute/api/types/<name>/workspace/normalize", methods=["POST"])
 @login_required
 def normalize_workspace(name: str):
-    """Normalize one stateful capability through its server-owned adapter."""
+    """Normalize one stateful capability through its server-owned adapter.
+
+    This runs the same Runner-owned normalizer the submission path runs, so it
+    carries the same CSRF gate as every other state-changing POST: the caller
+    must present a Bearer token.  The endpoint has no side effects, but keeping
+    "state-changing POST" one rule rather than a per-route judgement call is what
+    keeps the next POST from being the one that is missed.
+    """
+    if blocked := require_bearer_auth():
+        return blocked
     try:
         tt, _ = _get_task_type(name)
     except KeyError:
@@ -975,51 +990,6 @@ class InputPreflightError(ValueError):
         super().__init__(message)
         self.item = item
         self.code = code
-
-
-# NAME_MAX is 255 on Linux; leave room for the 21-byte `.tmp_<16 hex>_`
-# quarantine prefix plus the role subdirectory.  200 bytes is generous for any
-# real input filename and cannot overflow the prefix.
-_MAX_INPUT_COMPONENT_BYTES = 200
-# PATH_MAX is 4096 on Linux and the snapshot root sits well inside it, so 1024
-# bytes of joined relative path is both far below the limit and far above any
-# real nested upload.
-_MAX_INPUT_RELATIVE_PATH_BYTES = 1024
-
-
-def _safe_input_relative_path(raw_path: str) -> str | None:
-    source = unicodedata.normalize("NFKC", str(raw_path or "")).strip()
-    if not source or any(ord(character) < 32 or ord(character) == 127 for character in source):
-        return None
-    decoded = unquote(source)
-    for candidate in (source, decoded):
-        slash_normalized = candidate.replace("\\", "/")
-        drive, _tail = ntpath.splitdrive(candidate)
-        if drive or ntpath.isabs(candidate) or slash_normalized.startswith("/"):
-            return None
-        parts = slash_normalized.split("/")
-        if not parts or any(part in {"", ".", ".."} or part.startswith(".") for part in parts):
-            return None
-    normalized = source.replace("\\", "/")
-    raw_parts = normalized.split("/")
-    safe_parts = [secure_filename(part) for part in raw_parts]
-    if any(not part for part in safe_parts):
-        return None
-    # A name this long cannot become a file: quarantine prefixes 21 bytes to the
-    # basename (`.tmp_<16 hex>_`), so an unbounded name overflows NAME_MAX and
-    # the OSError used to reach the client as an unhandled 500.  Reject at the
-    # contract boundary with a normal 400 instead.  `secure_filename` only
-    # expands names, so measuring the sanitized form is the conservative check.
-    if any(len(part.encode("utf-8")) > _MAX_INPUT_COMPONENT_BYTES for part in safe_parts):
-        return None
-    # Bounding each component is not enough: the snapshot copy joins every one
-    # of them under the role directory, so a path with ~20 legal components
-    # still overflows PATH_MAX and reaches `_prepare_task_record` as the same
-    # unhandled OSError.  Bound the joined path too.
-    relative_path = "/".join(safe_parts)
-    if len(relative_path.encode("utf-8")) > _MAX_INPUT_RELATIVE_PATH_BYTES:
-        return None
-    return relative_path
 
 
 def _input_contract_error(code: str, message: str, *, role: str | None = None, format_name: str | None = None):
@@ -1075,11 +1045,22 @@ def _validate_input_uploads(task_type: str | None = None):
     seen_paths: set[tuple[str, str]] = set()
     for index, (uploaded, role_name) in enumerate(zip(uploads, submitted_roles, strict=True)):
         raw_path = submitted_paths[index] if index < len(submitted_paths) else uploaded.filename
-        safe_path = _safe_input_relative_path(raw_path)
+        safe_path, reason = canonical_relative_path(raw_path)
         role = _role_by_name(tt, role_name)
-        key = (role_name, safe_path or "")
-        if safe_path is None or key in seen_paths:
-            return None, _input_contract_error("input_path_invalid", "Invalid or duplicate input path")
+        if safe_path is None:
+            return None, _input_contract_error(reason or "input_path_invalid", "Invalid input path")
+        key = (role_name, safe_path)
+        if key in seen_paths:
+            # The canonical path is the namespace identity, so a repeat is either
+            # an outright duplicate claim or a collision the sanitizer created
+            # (two distinct submissions folding onto one path).  Both are
+            # failures: the snapshot is a filesystem, and one submission must
+            # never silently overwrite another's bytes.
+            return None, _input_contract_error(
+                "input_namespace_collision",
+                "Two inputs resolve to the same path within one role.",
+                role=role_name,
+            )
         format_name = os.path.splitext(safe_path)[1].lower().removeprefix(".")
         if role is None or format_name not in role.formats:
             return None, _input_contract_error(
@@ -1149,6 +1130,18 @@ def _quarantine_uploaded_inputs(
                 code = "input_logical_type_invalid"
             if error is not None:
                 raise InputPreflightError(item, code, error)
+            # Bind the admission decision to the exact bytes just validated.  The
+            # digest is computed from the quarantine file that validation read,
+            # so the receipt names the byte stream execution will later consume,
+            # not a path that could be re-resolved to something else.
+            item["validation_receipt"] = ValidationReceipt(
+                sha256=item["hash"],
+                size=item["size"],
+                format=item["format"],
+                logical_type=logical_type,
+                relative_path=item["relative_path"],
+                role=item["role"],
+            ).as_record()
     except Exception:
         for path in quarantined:
             if os.path.exists(path):
@@ -1167,7 +1160,11 @@ def _derive_task_id(
     identity_inputs: dict[str, list[dict[str, str]]] = {}
     for item in saved:
         identity_inputs.setdefault(item["role"], []).append(
-            {"path": item["relative_path"], "sha256": item["hash"]}
+            {
+                "path": item["relative_path"],
+                "sha256": item["hash"],
+                "validation_receipt": item.get("validation_receipt"),
+            }
         )
     identity = json.dumps(
         {
@@ -1480,20 +1477,12 @@ def preflight_task(task_type: str):
             429: "admission_limited",
         }.get(response.status_code, "admission_unavailable")
     )
-    security_codes = {
-        "input_path_invalid",
-        "input_format_invalid",
-        "input_file_count_limit",
-        "input_file_size_limit",
-        "input_total_size_limit",
-        "request_size_limit",
-        "workspace_json_invalid",
-    }
-    phase = "security" if code in security_codes else (
-        "admission" if response.status_code >= 401 else "contract"
-    )
+    # The phase and the emitted event come from the one Core-owned vocabulary,
+    # so a new admission reason code is classified once rather than re-listed at
+    # every ingress that reports it.
+    phase = phase_for_code(code, http_status=response.status_code)
     emit_event(
-        f"preflight.{phase}_rejected" if phase != "admission" else "preflight.admission_denied",
+        event_for_code(code, http_status=response.status_code),
         level="WARNING",
         request_id=g.request_id,
         reason_code=code,
@@ -1900,9 +1889,13 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
                 "relative_path": item["relative_path"],
                 "mounted": f"{virtual_root}/inputs/{item['role']}/{item['relative_path']}",
                 "hash": item["hash"],
+                "size": item["size"],
                 "format": item["format"],
                 "logical_type": role.type if role else "file",
-                "validation": {"status": "valid"},
+                # The receipt is the validation decision bound to this item's
+                # exact immutable bytes; ``status`` is a projection of it, not a
+                # separate assertion.
+                "validation": item["validation_receipt"],
                 "snapshot_path": _safe_join(snapshot_root, item["role"], *item["relative_path"].split("/")),
                 "snapshot_root": snapshot_root,
                 "workspace_key": workspace_key,
@@ -1963,6 +1956,7 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
                 "format": entity["format"],
                 "logical_type": entity["logical_type"],
                 "sha256": entity["hash"],
+                "size": entity["size"],
                 "validation": entity["validation"],
             }
         )

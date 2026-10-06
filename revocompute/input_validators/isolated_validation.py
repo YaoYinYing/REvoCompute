@@ -15,6 +15,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from revocompute.input_validators.common import ISOLATED_RESOURCE_SENTINEL, RESOURCE_LIMIT_ERROR
+
 ISOLATED_TIMEOUT_SECONDS = 3.0
 _MAX_PROTOCOL_BYTES = 64 * 1024
 
@@ -101,4 +103,6 @@ def validate_in_subprocess(path: str, format_name: str) -> str | None:
     error = payload["error"]
     if error is not None and not isinstance(error, str):
         return "Core input parser returned an invalid isolation response"
+    if error == ISOLATED_RESOURCE_SENTINEL:
+        return RESOURCE_LIMIT_ERROR
     return error

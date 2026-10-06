@@ -4,9 +4,12 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 from revocompute.input_validators import validate_input_file, validator_isolation
 from revocompute.input_validators import isolated_validation, isolated_worker
@@ -111,3 +114,93 @@ def test_isolated_worker_applies_resource_and_network_guards(monkeypatch):
         assert "disabled" in str(exc)
     else:
         raise AssertionError("isolated parser networking was not disabled")
+
+
+def test_isolated_parser_memory_limit_is_a_bounded_validation_failure(monkeypatch, tmp_path):
+    """Address-space exhaustion is classified, not reported as an opaque crash."""
+    source = tmp_path / "input.yaml"
+    source.write_text("version: 1\n", encoding="utf-8")
+    monkeypatch.setattr(
+        isolated_validation.subprocess,
+        "Popen",
+        lambda *_args, **_kwargs: _Completed(0, '{"error":"RESOURCE_LIMIT"}'),
+    )
+
+    error = validate_input_file(str(source), source.name)
+    assert error == isolated_validation.RESOURCE_LIMIT_ERROR
+
+
+@pytest.mark.parametrize(
+    "stdout",
+    [
+        "",  # empty
+        "not json at all",
+        "null",
+        "[]",
+        '{"error": null, "extra": 1}',  # extra keys
+        "{}",  # missing the error key
+        '{"error": 5}',  # non-string error
+        '{"other": null}',  # wrong key
+        '{"error": "a" * 200000}',  # oversized protocol response
+    ],
+)
+def test_a_malformed_isolated_response_is_a_validation_failure(monkeypatch, tmp_path, stdout):
+    source = tmp_path / "input.yaml"
+    source.write_text("version: 1\n", encoding="utf-8")
+    monkeypatch.setattr(
+        isolated_validation.subprocess,
+        "Popen",
+        lambda *_args, **_kwargs: _Completed(0, stdout),
+    )
+
+    error = validate_input_file(str(source), source.name)
+    assert error is not None
+    assert "invalid isolation response" in error
+
+
+def test_a_slow_isolated_parser_is_killed_with_its_whole_group(monkeypatch, tmp_path):
+    """A parser that hangs is terminated as a group, not left running."""
+    source = tmp_path / "input.yaml"
+    source.write_text("version: 1\n", encoding="utf-8")
+    signalled: list[tuple[int, int]] = []
+
+    class _Hanging:
+        pid = 4242
+        returncode = -15
+        stdout = ""
+
+        def __init__(self, *_args, **_kwargs):
+            self._waits = 0
+
+        def communicate(self, timeout=None):
+            import subprocess as _sp
+
+            # Hang on the first wait only; the second call is the parent's
+            # post-kill reap and must return.
+            if self._waits == 0:
+                self._waits += 1
+                raise _sp.TimeoutExpired(cmd="worker", timeout=timeout)
+            return "", ""
+
+    monkeypatch.setattr(isolated_validation.subprocess, "Popen", _Hanging)
+    monkeypatch.setattr(
+        isolated_validation, "_kill_group", lambda pid, number: signalled.append((pid, number))
+    )
+
+    error = validate_input_file(str(source), source.name)
+
+    assert "time limit" in error
+    assert signalled and signalled[0] == (4242, isolated_validation.signal.SIGTERM)
+
+
+def test_an_unreadable_input_is_a_validation_failure_not_a_server_error(tmp_path):
+    source = tmp_path / "input.yaml"
+    source.write_text("version: 1\n", encoding="utf-8")
+    source.chmod(0o000)
+
+    error = validate_input_file(str(source), source.name)
+
+    if os.geteuid() == 0:
+        pytest.skip("root can read an unreadable file")
+    assert error is not None
+    assert "Could not open" in error

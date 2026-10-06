@@ -15,6 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from revocompute.input_validators.common import ISOLATED_RESOURCE_SENTINEL
 from revocompute.input_validators.isolated_validation import ISOLATED_RLIMITS
 
 
@@ -45,6 +46,11 @@ def main() -> int:
     try:
         error = _validate(sys.argv[1], sys.argv[2])
         response = json.dumps({"error": error}, separators=(",", ":"))
+    except MemoryError:
+        # Address-space exhaustion is a validation failure with its own bounded
+        # reason code, distinct from a parser crash: the caller classifies it as
+        # a resource limit rather than an opaque isolation failure.
+        response = json.dumps({"error": ISOLATED_RESOURCE_SENTINEL})
     except BaseException:
         return 1
     sys.stdout.write(response)

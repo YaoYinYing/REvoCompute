@@ -20,6 +20,7 @@ import os
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import threading
 import time
@@ -43,6 +44,12 @@ from revocompute.infrastructure import (
 )
 from revocompute.job import Job, JobState
 from revocompute.job.runners.slurm_runner import SlurmJob
+from revocompute.ingress_security import (
+    ARTIFACT_CAPACITY_GUARD,
+    ARTIFACT_PUBLICATION_REJECTED,
+    ValidationReceipt,
+    snapshot_mismatch_reason,
+)
 from revocompute.manage_db import ManageDatabase  # noqa: E402
 from revocompute.operational_events import emit_event
 from revocompute.resource_observations import work_items_projection
@@ -733,6 +740,90 @@ def _public_run_record(task: dict[str, Any], task_type: Any, finished_at: float)
 # diagnostic.
 _COMPLETION_SENTINEL = "task_finished"
 
+# Publication capacity guards.  Runner output is an untrusted filesystem
+# namespace, so the manifest the Server registers is bounded in both entry
+# count and aggregate bytes rather than assumed to be a scientific result set.
+# The limits sit far above any real family's output: a large complex run emits
+# thousands of per-item files, not hundreds of thousands, and the byte ceiling
+# is the existing per-task result budget.
+MAX_PUBLISHED_ARTIFACTS = 100_000
+MAX_PUBLISHED_BYTES = 8 * 1024 * 1024 * 1024
+
+
+def _publishable_artifact(path: str, relative_path: str) -> tuple[dict[str, Any] | None, str | None]:
+    """Return ``(artifact_record, reason)`` for one candidate under the result root.
+
+    Publication never follows a link and never registers a non-regular file.
+    The record's size and digest are taken from one descriptor opened with
+    ``O_NOFOLLOW`` and verified ``fstat``-regular, so the bytes hashed are the
+    bytes the manifest names: a swap between the type check and the read cannot
+    substitute a different inode.
+    """
+    try:
+        info = os.stat(path, follow_symlinks=False)
+    except OSError as exc:
+        return None, f"unreadable ({exc.__class__.__name__})"
+    if stat.S_ISLNK(info.st_mode):
+        return None, "symbolic link"
+    if not stat.S_ISREG(info.st_mode):
+        return None, "special file"
+    if info.st_nlink != 1:
+        return None, "hard link"
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        return None, f"unreadable ({exc.__class__.__name__})"
+    try:
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1:
+            return None, "not a private regular file"
+        digest = hashlib.sha256()
+        with os.fdopen(descriptor, "rb") as handle:
+            descriptor = -1
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError as exc:
+        return None, f"unreadable ({exc.__class__.__name__})"
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    preview = _preview_kind(relative_path)
+    return (
+        {
+            "path": relative_path,
+            "size": opened.st_size,
+            "sha256": digest.hexdigest(),
+            "media_type": mimetypes.guess_type(relative_path)[0] or "application/octet-stream",
+            "preview": preview,
+            "capability": artifact_capability(preview),
+            "role": _default_artifact_role(relative_path),
+        },
+        None,
+    )
+
+
+def _revalidate_legacy_blob(fe: dict[str, Any], upload_file: str) -> str | None:
+    """Re-run the canonical boundary on a blob that carries no admission receipt.
+
+    A Task row written before admission receipts existed still names its input
+    in the same shape; instead of trusting the content-addressed blob by digest
+    alone, it is passed back through the same Core validators that admitted live
+    submissions.  Returns a bounded reason code when it does not validate.
+    """
+    from revocompute.input_validators import validate_input_file, validate_logical_input
+
+    logical_type = str(fe.get("logical_type") or "file")
+    format_name = str(fe.get("format") or "")
+    relative_path = str(fe.get("relative_path") or fe.get("value") or "")
+    error = validate_input_file(upload_file, relative_path, logical_type=logical_type)
+    if error is None:
+        error = validate_logical_input(upload_file, format_name, logical_type)
+    if error is not None:
+        logging.error("Legacy input blob failed Core revalidation: %s", error)
+        return "input_snapshot_mismatch"
+    return None
+
 
 def _default_artifact_role(relative_path: str) -> str:
     basename = os.path.basename(relative_path)
@@ -976,29 +1067,50 @@ def _finalize_results_manifest(
         with open(os.path.join(result_dir, "citations.bib"), "w", encoding="utf-8") as handle:
             handle.write(citations_bibtex(task_type.citations))
     artifacts: list[dict[str, Any]] = []
+    publication_problems: list[str] = []
+    publication_capacity_guard = False
+    total_published_bytes = 0
+    published_paths: set[str] = set()
     for root, dirs, files in os.walk(result_dir, followlinks=False):
         dirs[:] = sorted(directory for directory in dirs if not os.path.islink(os.path.join(root, directory)))
         for filename in sorted(files):
             path = os.path.join(root, filename)
             relative_path = os.path.relpath(path, result_dir).replace(os.sep, "/")
-            if relative_path in {"manifest.json", ".manifest.json.tmp"} or os.path.islink(path):
+            if relative_path in {"manifest.json", ".manifest.json.tmp"}:
                 continue
             if filename == _COMPLETION_SENTINEL:
                 # The runner's execution sentinel is not a published artifact.
                 continue
-            stat = os.stat(path, follow_symlinks=False)
-            preview = _preview_kind(relative_path)
-            artifacts.append(
-                {
-                    "path": relative_path,
-                    "size": stat.st_size,
-                    "sha256": _sha256_file(path),
-                    "media_type": mimetypes.guess_type(relative_path)[0] or "application/octet-stream",
-                    "preview": preview,
-                    "capability": artifact_capability(preview),
-                    "role": _default_artifact_role(relative_path),
-                }
-            )
+            if relative_path in published_paths:
+                # Two walked paths cannot collide on one filesystem, but a
+                # case-insensitive or otherwise aliasing mount could still hand
+                # the manifest one logical path twice; the manifest is the
+                # published namespace and must stay a set.
+                publication_problems.append(f"Duplicate published artifact path: {relative_path}")
+                continue
+            record, reason = _publishable_artifact(path, relative_path)
+            if record is None:
+                # A symlink, hard link, special file, or unreadable entry is not
+                # a publishable artifact.  It is excluded — never followed, never
+                # downgraded to "publish whatever is there" — and the anomaly is
+                # recorded so the output check reflects it.
+                publication_problems.append(f"Rejected non-publishable result entry {relative_path}: {reason}")
+                continue
+            if len(artifacts) >= MAX_PUBLISHED_ARTIFACTS:
+                publication_problems.append(
+                    f"Result tree exceeds the {MAX_PUBLISHED_ARTIFACTS} published artifact limit"
+                )
+                publication_capacity_guard = True
+                break
+            total_published_bytes += record["size"]
+            if total_published_bytes > MAX_PUBLISHED_BYTES:
+                publication_problems.append(
+                    f"Result tree exceeds the {MAX_PUBLISHED_BYTES} byte published artifact limit"
+                )
+                publication_capacity_guard = True
+                break
+            published_paths.add(relative_path)
+            artifacts.append(record)
     # The runner owns its files' presentation roles in expected_files.yaml.
     # Read that declaration first so view resolution can rank it, but resolve
     # the views before building the logical-file projection: view resolution
@@ -1010,6 +1122,10 @@ def _finalize_results_manifest(
     storyboard = None
     checks: list[dict[str, Any]] = []
     problems: list[str] = []
+    # Publication rejections are reported in the same bounded ``problems`` list
+    # the output check already carries, so a refused symlink, hard link, special
+    # file, or over-capacity tree fails the output check instead of disappearing.
+    problems.extend(publication_problems)
     if task_type is not None:
         try:
             tree = expected_file_tree(task_type, CONFIG.server_dir)
@@ -1068,6 +1184,12 @@ def _finalize_results_manifest(
     # A PARTIAL_SUCCESS task is finalized exactly like any other: the task ran
     # to completion and published everything it has.  The standardized outcome
     # is a presentation/consumer vocabulary, not a new tasks.status.
+    #
+    # A rejected or over-capacity publication entry is already recorded in
+    # ``problems``, so the output check reflects it: the manifest never claims a
+    # passed result set that silently dropped files it could not safely publish,
+    # and a tree with only refused entries still publishes a valid manifest (with
+    # no artifacts) rather than degrading to "publish the unsafe tree".
     temporary = _safe_join(result_dir, ".manifest.json.tmp")
     destination = _safe_join(result_dir, "manifest.json")
     with open(temporary, "w", encoding="utf-8") as handle:
@@ -1081,6 +1203,14 @@ def _finalize_results_manifest(
         request_id=_task_request_id(task),
         task_id=str(task["md5sum"]),
         task_type=str(task.get("task_type") or default_task_type()),
+        # The single owning vocabulary carries the publication outcome: a
+        # rejected entry makes the published manifest's output check fail and
+        # names that reason here, instead of a parallel event for the same fact.
+        reason_code=(
+            (ARTIFACT_CAPACITY_GUARD if publication_capacity_guard else ARTIFACT_PUBLICATION_REJECTED)
+            if publication_problems
+            else None
+        ),
     )
     return manifest
 
@@ -1294,15 +1424,21 @@ def _capture_debug_submission(task: dict[str, Any], entities: list[dict], params
                 continue
             destination = _safe_join(inputs_dir, role, *parts)
             os.makedirs(os.path.dirname(destination), exist_ok=True)
-            # Hardlink first: workspace and results live on the same server
-            # filesystem, so the debug copy costs no extra disk and the
-            # workspace deletion later only drops its own link.  Copy when
-            # linking is impossible (e.g. the results dir is a different
-            # mount).
+            # Copy rather than hard link: the debug capture lands inside the
+            # result tree, and the publication boundary refuses any result entry
+            # whose link count is not one.  A hard link here would make every
+            # captured input unpublishable and a symlink would be skipped.
             try:
-                os.link(snapshot_path, destination)
-            except OSError:
                 shutil.copyfile(snapshot_path, destination)
+                os.chmod(destination, 0o440)
+            except OSError as exc:
+                logging.warning(
+                    "Skipping debug capture copy for %r in task %s: %s",
+                    relative_path,
+                    task.get("md5sum"),
+                    exc,
+                )
+                continue
             files.append(
                 {
                     "role": str(fe.get("role") or ""),
@@ -1421,6 +1557,49 @@ def _execute_compute_task(
             )
             logging.error("Input snapshot verification failed for task %s", md5sum)
             return
+        # The snapshot is the immutable byte stream the Runner consumes, so it
+        # is the thing the admission receipt must still describe.  With a
+        # receipt the identity is proven directly; without one (a row that
+        # predates receipts) the snapshot is re-run through the same canonical
+        # boundary rather than assumed safe.  Either way a swap between
+        # admission and execution is a failure, not a silently substituted
+        # input.
+        receipt = fe.get("validation_receipt")
+        if isinstance(receipt, dict):
+            reason = snapshot_mismatch_reason(receipt, snapshot_path)
+        else:
+            reason = _revalidate_legacy_blob(fe, snapshot_path)
+        if reason is not None:
+            _record_failure(
+                md5sum,
+                task,
+                time.time(),
+                "",
+                f"Immutable input snapshot is missing or changed: {fe.get('relative_path', 'unknown')}",
+            )
+            emit_event(
+                "worker.task.failed",
+                level="ERROR",
+                request_id=request_id,
+                task_id=md5sum,
+                task_type=str(task_type),
+                runner_family=tt.runtime.name,
+                reason_code=reason,
+            )
+            logging.error("Input snapshot receipt verification failed for task %s", md5sum)
+            return
+        if not isinstance(receipt, dict):
+            # Record the freshly proven decision on the execution description,
+            # so downstream provenance names the boundary that admitted these
+            # bytes even for a legacy row.
+            fe["validation_receipt"] = ValidationReceipt(
+                sha256=str(fe["hash"]),
+                size=int(fe.get("size") or os.path.getsize(snapshot_path)),
+                format=str(fe.get("format") or ""),
+                logical_type=str(fe.get("logical_type") or "file"),
+                relative_path=str(fe.get("relative_path") or ""),
+                role=str(fe.get("role") or ""),
+            ).as_record()
 
     stages = list(tt.stage_markers.items())
     start_time = task.get("started_at") or time.time()
