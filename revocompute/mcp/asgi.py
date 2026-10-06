@@ -36,14 +36,28 @@ _LOGGER = logging.getLogger(__name__)
 
 
 def mcp_asgi() -> Any:
-    """Return the ASGI application serving the MCP endpoint."""
+    """Return the ASGI application serving the MCP endpoint.
+
+    The streamable-HTTP session manager owns a background task group that the
+    ASGI lifespan must start, so the mount is wrapped in a lifespan that enters
+    the MCP application's own lifespan context.  Without it the first request
+    fails with "Task group is not initialized".
+    """
+    from contextlib import asynccontextmanager
+
     from starlette.applications import Starlette
     from starlette.routing import Mount
 
     from revocompute.mcp.server import build_server
 
     mcp_app = build_server().streamable_http_app()
-    return Starlette(routes=[Mount(MCP_PATH, app=mcp_app)])
+
+    @asynccontextmanager
+    async def lifespan(_app: Any):
+        async with mcp_app.router.lifespan_context(mcp_app):
+            yield
+
+    return Starlette(routes=[Mount(MCP_PATH, app=mcp_app)], lifespan=lifespan)
 
 
 def serve() -> None:
@@ -79,7 +93,10 @@ def start_companion_listener() -> threading.Thread | None:
 
     from revocompute.config import env_bool, env_int
 
-    if not env_bool("MCP_ENABLED", True):
+    # Opt-in: the listener is off unless the deployment turns it on, so an
+    # ordinary import (a worker, a maintenance process, a test) never binds a
+    # port or spawns a thread.
+    if not env_bool("MCP_ENABLED", False):
         return None
     try:
         import uvicorn
@@ -93,7 +110,7 @@ def start_companion_listener() -> threading.Thread | None:
     server = uvicorn.Server(config)
     thread = threading.Thread(target=server.run, name="mcp-asgi", daemon=True)
     thread.start()
-    _LOGGER.info("MCP listener started on %s:%s at %s", host, port, MCP_PATH)
+    _LOGGER.info("MCP surface listening on %s:%s%s", host, port, MCP_PATH)
     return thread
 
 

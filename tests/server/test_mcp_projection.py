@@ -144,6 +144,76 @@ def mcp_app(monkeypatch, tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Admission equivalence -- MCP and HTTP share one control path
+# ---------------------------------------------------------------------------
+
+
+def test_mcp_and_http_consume_one_shared_admission_budget(mcp_app):
+    """Mixing the MCP and HTTP surfaces consumes ONE canonical budget.
+
+    Admission equivalence is a security property, not an environmental one: an
+    MCP caller must not exceed the canonical submission limit by sending some
+    requests through the HTTP API and some through MCP, and the property must
+    hold even when Redis is unavailable and the canonical limiter falls back to
+    its in-process counters.  Both surfaces reach the *same* Flask view function
+    (the MCP path invokes the canonical application in process), so they charge
+    the same bucket.  This test installs a small limiter on that shared view,
+    exhausts it through MCP, and asserts the next HTTP request is refused.
+    """
+    from flask import jsonify
+
+    from revocompute.mcp.context import CanonicalResponse, call_canonical, McpPrincipal
+    from revocompute.mcp.errors import McpError
+    from revocompute.ratelimit import rate_limit
+
+    app = mcp_app.app
+    limit = 3
+    executed = {"count": 0}
+
+    def _handler(*_args, **_kwargs):
+        executed["count"] += 1
+        return jsonify({"ok": True})
+
+    # One limiter object guards the canonical view for BOTH surfaces.
+    app.view_functions["preflight_task"] = rate_limit(max_requests=limit, window_seconds=3600)(_handler)
+
+    client_ip = "203.0.113.7"
+    principal = McpPrincipal(
+        user={"id": 1, "role": "user"},
+        user_id=1,
+        username="mcp-tester",
+        credential_headers={"Authorization": "Bearer test"},
+        client_ip=client_ip,
+        forwarded_headers={},
+    )
+
+    def _call(path):
+        return call_canonical(principal, "POST", path, data={})
+
+    mcp_refusals = 0
+    for _ in range(limit):
+        response = _call("/compute/api/preflight/gremlin")
+        assert response.status == 200, response.status
+    for _ in range(limit):
+        response = _call("/compute/api/preflight/gremlin")
+        if response.status == 429:
+            mcp_refusals += 1
+    assert mcp_refusals == limit, "the shared budget must refuse past the limit"
+
+    # The SAME client over plain HTTP is refused by the same budget, even though
+    # the MCP calls never touched a socket.
+    http_client = app.test_client()
+    http_response = http_client.post(
+        "/compute/api/preflight/gremlin",
+        headers={"Authorization": "Bearer test"},
+        environ_overrides={"REMOTE_ADDR": client_ip},
+    )
+    assert http_response.status_code == 429, "an HTTP request must see the MCP-consumed budget"
+    assert executed["count"] == limit, "only the allowed calls may execute"
+    del CanonicalResponse, McpError
+
+
+# ---------------------------------------------------------------------------
 # Level 0 -- protocol surface / schema
 # ---------------------------------------------------------------------------
 

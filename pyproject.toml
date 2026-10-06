@@ -41,6 +41,11 @@ mcp = [
     "mcp>=1.10,<2",
 ]
 test = [
+    # The canonical server test gate exercises the MCP adapter, so the test
+    # environment carries the SDK.  It stays an OPTIONAL runtime extra: the web
+    # and worker images do not install it unless a deployment enables the MCP
+    # surface.
+    "mcp>=1.10,<2",
     "pytest>=8",
     "pytest-mock>=3.14",
     "pytest-cov>=6",
