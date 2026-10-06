@@ -50,16 +50,11 @@ EVENT_NAMES = frozenset(
         "manifest.publication_quarantined",
         "archive.requested",
         "archive.completed",
-        "gpu.credit.checked",
-        "gpu.credit.denied",
-        "gpu.usage.started",
-        "gpu.usage.settled",
-        "gpu.usage.settlement_failed",
-        "gpu.credit.adjusted",
         # Canonical resource-governance vocabulary.  One scheme for accounting,
-        # admission, retention, and reconciliation so a cross-PR reason code
-        # (placement, reporting, MCP) stays comparable.  The GPU-named events
-        # above remain the projection keyword the existing API emits.
+        # admission, retention, and reconciliation, so a cross-PR event or
+        # reason code (placement, reporting, MCP) stays comparable.  The
+        # GPU-named events it replaces are gone, not aliased: a second spelling
+        # for the same decision is a second source of truth.
         "resource.admission.checked",
         "resource.admission.denied",
         "resource.admission.reserved",

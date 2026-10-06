@@ -53,7 +53,7 @@ from revocompute.ingress_security import (
 from revocompute.input_validators.isolated_validation import VALIDATOR_RESOURCE_LIMIT_ERROR
 from revocompute.manage_db import ManageDatabase  # noqa: E402
 from revocompute.operational_events import emit_event
-from revocompute.resource_ledger import EvidenceSource
+from revocompute.resource_ledger import AdmissionReason, EvidenceSource, LedgerReason
 from revocompute.resource_observations import work_items_projection
 from revocompute.resource_policy import ResolvedResources, ResourceValidationError
 from revocompute.result_projection import artifact_capability
@@ -460,17 +460,15 @@ def _gpu_allocation_callbacks(
                 required_entitlements=required_entitlements,
             )
         except (GPUAuthorizationUnavailableError, GPUCreditUnavailableError) as exc:
-            # One spelling for one admission fact: the preflight detail code
-            # and this operational event both name the exhausted credit.
-            reason_code = "gpu_credit_exhausted"
+            reason_code = AdmissionReason.COMPUTE_EXHAUSTED.value
             if isinstance(exc, GPUAuthorizationUnavailableError):
                 reason_code = (
-                    "runner_readiness_unavailable"
+                    AdmissionReason.RUNNER_READINESS_UNAVAILABLE.value
                     if str(exc) == "Runner readiness is unavailable"
-                    else "authorization_unavailable"
+                    else AdmissionReason.AUTHORIZATION_UNAVAILABLE.value
                 )
             emit_event(
-                "gpu.credit.denied",
+                "resource.admission.denied",
                 level="WARNING",
                 reason_code=reason_code,
                 task_id=task_id,
@@ -482,7 +480,7 @@ def _gpu_allocation_callbacks(
             )
             raise
         emit_event(
-            "gpu.credit.checked",
+            "resource.admission.checked",
             task_id=task_id,
             stage_id=stage_id,
             slurm_job_id=slurm_job_id,
@@ -491,7 +489,7 @@ def _gpu_allocation_callbacks(
             gpu_seconds=max(0, int(summary["remaining_gpu_seconds"])),
         )
         emit_event(
-            "gpu.usage.started",
+            "resource.allocation.started",
             task_id=task_id,
             stage_id=stage_id,
             slurm_job_id=slurm_job_id,
@@ -518,9 +516,9 @@ def _gpu_allocation_callbacks(
                     slurm_job_id,
                 )
             emit_event(
-                "gpu.usage.settlement_failed",
+                "resource.allocation.settlement_failed",
                 level="ERROR",
-                reason_code="settlement_failed",
+                reason_code=LedgerReason.ACTUAL_ALLOCATION.value,
                 task_id=task_id,
                 stage_id=stage_id,
                 slurm_job_id=slurm_job_id,
@@ -529,7 +527,7 @@ def _gpu_allocation_callbacks(
             )
             return
         emit_event(
-            "gpu.usage.settled",
+            "resource.allocation.settled",
             task_id=task_id,
             stage_id=stage_id,
             slurm_job_id=slurm_job_id,
@@ -2132,7 +2130,7 @@ def _reconcile_gpu_allocations() -> dict[str, int]:
             evidence_source=EvidenceSource.SLURM_LIVE.value,
         )
         emit_event(
-            "gpu.usage.settled",
+            "resource.allocation.settled",
             task_id=str(settled["task_id"]),
             stage_id=str(settled["stage_id"]),
             slurm_job_id=job_id,

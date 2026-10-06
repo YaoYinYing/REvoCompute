@@ -174,6 +174,37 @@ class AdmissionReason(str, Enum):
     UNKNOWN_SUBJECT = "unknown_subject"
 
 
+class LedgerReason(str, Enum):
+    """Bounded reason code stored on an append-only resource fact.
+
+    One vocabulary for accounting, policy, and retention so a reason recorded in
+    the ledger is comparable with an :class:`AdmissionReason` at a boundary
+    (admin UI, ops log, and the future MCP projection) instead of being a free
+    string that only the writer understands.
+    """
+
+    PERIOD_GRANT = "period_grant"
+    ALLOWANCE_SET = "allowance_set"
+    ADMIN_ADJUSTMENT = "admin_adjustment"
+    ADMIN_RESET = "admin_reset"
+    ADMIN_RESET_ALL = "admin_reset_all"
+    MIGRATED = "migrated"
+    ACTUAL_ALLOCATION = "actual_allocation"
+    STORAGE_CHARGED = "storage_charged"
+    STORAGE_RELEASED = "storage_released"
+
+
+class ReservationReason(str, Enum):
+    """Bounded reason code for the release (or living hold) of a reservation."""
+
+    ADMISSION_RESERVED = "admission_reserved"
+    ALLOCATION_STARTED = "allocation_started"
+    DISPATCH_FAILED = "dispatch_failed"
+    TASK_DELETED = "task_deleted"
+    RELEASED = "released"
+    EXPIRED = "expired"
+
+
 class DataLifecycleState(str, Enum):
     """Retention state of one Task's durable data, orthogonal to execution."""
 

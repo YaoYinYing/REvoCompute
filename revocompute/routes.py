@@ -112,7 +112,7 @@ from revocompute.db import GPUCreditUnavailableError, TaskIdReservedError
 from revocompute.operational_events import emit_event
 from revocompute.ratelimit import rate_limit
 from revocompute import resource_lifecycle
-from revocompute.resource_ledger import AdmissionReason, SECONDS_PER_CREDIT
+from revocompute.resource_ledger import AdmissionReason, LedgerReason, SECONDS_PER_CREDIT
 from revocompute.resource_observations import observations_for_guidance
 from revocompute.resource_policy import (
     GLOBAL_RESOURCE_KEYS,
@@ -4676,10 +4676,10 @@ def admin_adjust_user_gpu_credit(user_id: int):
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 409
     emit_event(
-        "gpu.credit.adjusted",
+        "resource.policy.adjusted",
         user_id=user_id,
         gpu_seconds=abs(req.gpu_seconds),
-        reason_code="credit_added" if req.gpu_seconds > 0 else "credit_removed",
+        reason_code=LedgerReason.ADMIN_ADJUSTMENT.value,
     )
     return jsonify({"entry_id": entry["id"], "gpu_credit": _gpu_credit_payload(user_id, admin=True)}), 201
 
@@ -4707,7 +4707,12 @@ def admin_set_user_gpu_allowance(user_id: int):
         )
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 409
-    emit_event("gpu.credit.adjusted", user_id=user_id, gpu_seconds=abs(int(entry["quantity"])), reason_code="allowance_set")
+    emit_event(
+        "resource.policy.adjusted",
+        user_id=user_id,
+        gpu_seconds=abs(int(entry["quantity"])),
+        reason_code=LedgerReason.ALLOWANCE_SET.value,
+    )
     return jsonify({"entry_id": entry["id"], "gpu_credit": _gpu_credit_payload(user_id, admin=True)}), 200
 
 
@@ -4739,10 +4744,10 @@ def admin_reset_user_gpu_credit(user_id: int):
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 409
     emit_event(
-        "gpu.credit.adjusted",
+        "resource.policy.adjusted",
         user_id=user_id,
         gpu_seconds=abs(int(result["reset_delta_gpu_seconds"])),
-        reason_code="credit_reset",
+        reason_code=LedgerReason.ADMIN_RESET.value,
     )
     return jsonify({**result, "gpu_credit": _gpu_credit_payload(user_id, admin=True)}), 200
 
@@ -4774,8 +4779,8 @@ def admin_reset_all_gpu_credits():
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 409
     emit_event(
-        "gpu.credit.adjusted",
-        reason_code="credit_reset_all",
+        "resource.policy.adjusted",
+        reason_code=LedgerReason.ADMIN_RESET_ALL.value,
         gpu_seconds=abs(int(result["total_delta_gpu_seconds"])),
         batch_id=result["batch_id"],
     )

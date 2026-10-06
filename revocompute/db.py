@@ -720,12 +720,14 @@ class TaskDatabase:
                 " task_id, stage_id, slurm_job_id, actor_user_id, reason, reason_code, "
                 " evidence_source, idempotency_key, created_at) "
                 "SELECT id, 'user', user_id, period, kind, 'gpu_second', '', gpu_seconds, "
-                " task_id, stage_id, slurm_job_id, actor_user_id, reason, 'migrated', "
+                " task_id, stage_id, slurm_job_id, actor_user_id, reason, ?, "
                 " CASE WHEN kind = 'usage' THEN 'allocation_lifecycle' ELSE 'policy' END, "
-                " idempotency_key, created_at FROM gpu_credit_ledger"
+                " idempotency_key, created_at FROM gpu_credit_ledger",
+                (rloan.LedgerReason.MIGRATED.value,),
             )
             rows = conn.exec_driver_sql(
-                "SELECT id, user_id, idempotency_key FROM resource_ledger WHERE reason_code = 'migrated'"
+                "SELECT id, user_id, idempotency_key FROM resource_ledger WHERE reason_code = ?",
+                (rloan.LedgerReason.MIGRATED.value,),
             ).all()
             for row_id, user_id, key in rows:
                 conn.exec_driver_sql(
@@ -1282,7 +1284,7 @@ class TaskDatabase:
             slurm_job_id=None,
             actor_user_id=None,
             reason="UTC calendar-month allowance",
-            reason_code="period_grant",
+            reason_code=rloan.LedgerReason.PERIOD_GRANT.value,
             evidence_source=rloan.EvidenceSource.POLICY.value,
             idempotency_key=f"monthly_grant:user:{user_id}:class:{resource_class or '-'}:{period}",
             created_at=created_at,
@@ -1560,7 +1562,7 @@ class TaskDatabase:
                         quantity=delta,
                         actor_user_id=actor_user_id,
                         reason=reason,
-                        reason_code="allowance_set",
+                        reason_code=rloan.LedgerReason.ALLOWANCE_SET.value,
                         evidence_source=rloan.EvidenceSource.POLICY.value,
                         idempotency_key=durable_key,
                         created_at=timestamp,
@@ -1684,7 +1686,7 @@ class TaskDatabase:
             slurm_job_id=None,
             actor_user_id=actor_user_id,
             reason=normalized_reason,
-            reason_code="admin_adjustment",
+            reason_code=rloan.LedgerReason.ADMIN_ADJUSTMENT.value,
             evidence_source=rloan.EvidenceSource.POLICY.value,
             idempotency_key=durable_key,
             created_at=timestamp,
@@ -1820,7 +1822,7 @@ class TaskDatabase:
                 slurm_job_id=None,
                 actor_user_id=actor_user_id,
                 reason=reason,
-                reason_code="admin_reset",
+                reason_code=rloan.LedgerReason.ADMIN_RESET.value,
                 evidence_source=rloan.EvidenceSource.POLICY.value,
                 idempotency_key=durable_key,
                 created_at=timestamp,
@@ -2273,7 +2275,7 @@ class TaskDatabase:
             self._release_reservation_in_connection(
                 conn,
                 task_id=task_id,
-                reason_code="allocation_started",
+                reason_code=rloan.ReservationReason.ALLOCATION_STARTED.value,
                 released_at=timestamp,
             )
             row = (
@@ -2355,7 +2357,7 @@ class TaskDatabase:
                     slurm_job_id=slurm_job_id,
                     actor_user_id=None,
                     reason="Actual Slurm allocation time",
-                    reason_code="actual_allocation",
+                    reason_code=rloan.LedgerReason.ACTUAL_ALLOCATION.value,
                     evidence_source=evidence_source,
                     idempotency_key=f"usage:{row['unit']}:{slurm_job_id}",
                     created_at=timestamp,
@@ -2446,7 +2448,7 @@ class TaskDatabase:
         gres: str = "",
         at: float | None = None,
         ttl_seconds: float = rloan.RESERVATION_TTL_SECONDS,
-        reason_code: str = rloan.AdmissionReason.ADMITTED.value,
+        reason_code: str = rloan.ReservationReason.ADMISSION_RESERVED.value,
     ) -> dict[str, Any]:
         """Take a race-safe admission hold for one Task, or report the refusal.
 
@@ -2555,7 +2557,7 @@ class TaskDatabase:
         return result.rowcount == 1
 
     def release_reservation(
-        self, *, task_id: str, reason_code: str = "released", at: float | None = None
+        self, *, task_id: str, reason_code: str = rloan.ReservationReason.RELEASED.value, at: float | None = None
     ) -> bool:
         """Release this Task's live hold.  Idempotent: a second call is a no-op."""
         timestamp = time.time() if at is None else at
@@ -2646,7 +2648,7 @@ class TaskDatabase:
                         task_id=task_id,
                         quantity=-size,
                         reason="Durable result published",
-                        reason_code="storage_charged",
+                        reason_code=rloan.LedgerReason.STORAGE_CHARGED.value,
                         idempotency_key=f"storage_usage:{task_id}:0",
                         timestamp=timestamp,
                     )
@@ -2805,7 +2807,7 @@ class TaskDatabase:
                     task_id=task_id,
                     quantity=charged,
                     reason="Owned bytes purged",
-                    reason_code="storage_released",
+                    reason_code=rloan.LedgerReason.STORAGE_RELEASED.value,
                     idempotency_key=f"storage_usage:{task_id}:{revision}",
                     timestamp=timestamp,
                 )
