@@ -505,6 +505,36 @@ The lesson is simply:
 
 Safety, confirmation, permissions, and consequence text still outrank the joke.
 
+### Runner fleet control plane (owned by PR #55)
+
+PR #55 owns the Runner control-plane *semantics*; this refinement owns how the
+Administration region looks and how the shell composes. When the two meet, the
+control-plane behavior is preserved and the visual layer is adapted to it — the
+fleet surface uses the merged design language and does not become a separate
+"ops dashboard" visual system.
+
+The destination is one Administration region in the left navigation — the same
+region as User control, Server logs, and Configuration. There is no second
+Administration hierarchy and no top-bar Administration launcher.
+
+The fleet-level view separates, at minimum: Runner family; enabled/deployed
+state; derived readiness; the machine-readable reason rendered as understandable
+human copy; transient capacity as its own field; access restriction as its own
+field; active artifact/runtime identity; last validation time and evidence;
+evidence freshness; the recommended corrective action; and any in-flight
+operator job.
+
+A Runner detail view exposes evidence lanes such as Doctor, active SIF identity,
+Runtime bundle, execution contract, resource policy, `test.yaml`/smoke coverage,
+live-test receipt, target host/scheduler identity, and the current invalidation
+reason. Where an authoritative source exists, non-operational evidence is shown
+separately. No "PASS" badge is manufactured for evidence that has no owner.
+
+Corrective actions are state-aware, and the page never offers a button the plan
+contract would reject on submit. A mutation reserves a durable Operator Job and
+is polled, so no operator action holds a request open; cancellation is observed
+between bounded stages, never claimed mid-stage.
+
 ---
 
 ## 14. Public/auth/profile surfaces
