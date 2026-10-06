@@ -293,4 +293,3 @@ def test_the_plan_binds_the_receipt_that_actually_validated_the_candidate(tmp_pa
 
 def _sha256_from(data: bytes) -> str:
     return "sha256:" + hashlib.sha256(data).hexdigest()
-

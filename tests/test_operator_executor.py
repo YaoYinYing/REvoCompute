@@ -160,4 +160,3 @@ def test_oversized_output_is_bounded(host):
     result = execute(host, action_id="runner.status", runner_family="demo", runner=verbose)
     assert len(result.log_text) < 200_000
     assert result.log_text.endswith("...[truncated]")
-

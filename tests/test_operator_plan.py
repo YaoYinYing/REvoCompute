@@ -168,4 +168,3 @@ def test_the_plan_serializes_the_impact_before_confirmation():
     assert payload["plan_digest"].startswith("sha256:")
     assert any(item["operation"] == "build_sif" for item in payload["not_required"])
     assert any(item["label"] == "Build a new Runner SIF" for item in payload["not_required"])
-

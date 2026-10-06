@@ -81,4 +81,3 @@ def materialize_runner_bundles(
     if activate:
         runtime_bundle.write_index(store_root, index)
     return candidate
-
