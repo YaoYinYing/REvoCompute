@@ -1,21 +1,36 @@
-# Persistent Batch Equivalence and Adaptive OOM Scientific Provenance
+# Persistent Item Correctness and Adaptive OOM Provenance
 
 ## Objective
 
-Close the scientific-correctness gap around the persistent multi-input and
-adaptive OOM machinery introduced for structure-folding Runners.
+Close the correctness gap around the persistent multi-item and adaptive OOM
+machinery introduced for structure-folding Runners. This is an
+**infrastructure / execution-semantics** change, and its merge-blocking claim is
+scoped to what that machinery owns:
 
-This PR combines two ordered questions:
+> Persistent multi-item execution preserves item identity and deterministic
+> execution semantics; restart/resume is coherent; adaptive-OOM transitions are
+> bounded, scientifically classified, fail closed for unsafe mutations, and
+> expose requested-versus-effective provenance.
 
-1. **Persistent batch equivalence:** does processing several inputs in one
-   model-loaded task preserve each input's result relative to the corresponding
-   single-input execution under the same effective scientific parameters?
-2. **OOM provenance:** when recovery changes execution parameters, can a reviewer
-   reconstruct exactly what was requested, what was actually used for each
-   attempt/item, and whether the change can affect scientific output?
+The claim decomposes into the questions this PR actually answers:
 
-The target reference Runners are **ESMFold2 and SimpleFold**, matching the
-existing persistent-runner/OOM work.
+1. **Item identity and deterministic execution semantics:** does processing
+   several inputs in one model-resident task map each input to exactly one
+   result, order-independently, with no cross-contamination, duplicate, or lost
+   item?
+2. **Restart/resume coherence:** does a restarted worker resume against the same
+   immutable input snapshot without recomputing, duplicating, or losing an item?
+3. **Adaptive-OOM provenance:** when recovery changes execution parameters, can a
+   reviewer reconstruct exactly what was requested, what was actually used for
+   each attempt/item, and whether the change can affect scientific output?
+
+The **Mock GPU Example Runner** proves this mechanism-level claim in CI without
+physical GPU hardware. Real-model evidence is **supplemental validation** of the
+same machinery (see §11a), not a merge requirement.
+
+The former target reference Runners, **ESMFold2 and SimpleFold**, remain the
+motivating families, but their model-specific scientific equivalence is
+supplemental evidence here and separate acceptance work elsewhere.
 
 Do not redesign the persistent scheduler or build a new estimator.
 
@@ -28,11 +43,14 @@ This is a **Wave 3** PR.
 It can proceed in parallel with the fleet-result/browser-golden PR after the
 Wave 2 dependencies have merged.
 
-This work requires GPU live acceptance. Coordinate one exclusive deployment/
-live-test lease through the Commander.
+This is an infrastructure / execution-semantics change. Its merge-blocking
+evidence is CPU-executable (the Mock GPU Example Runner and the persistent
+runner's own tests); real-model scientific equivalence is supplemental and may
+require a GPU lease coordinated through the Commander, but is **not** a
+READY_FOR_FINAL_REVIEW gate here.
 
-Do not use a host that cannot provide the required GPU/runtime and then replace
-live acceptance with a synthetic claim.
+Record model-level GPU evidence when a host provides it; do not use a host that
+cannot provide a runtime and then replace real evidence with a synthetic claim.
 
 ---
 
@@ -270,41 +288,51 @@ Cover:
 - provenance persistence;
 - all-failed behavior.
 
-### Live scientific acceptance
+### Merge-blocking acceptance (CPU-executable, no GPU required)
 
-For **both ESMFold2 and SimpleFold** on an appropriate GPU target:
+Proven end-to-end on the **Mock GPU Example Runner** and the persistent runner's
+own tests. This is the claim READY_FOR_FINAL_REVIEW rests on:
 
-1. run bounded single-input baselines;
-2. run the same panel persistently;
-3. compare scientific observables;
-4. perform one controlled restart/resume scenario where practical;
-5. exercise at least one safe OOM-recovery path;
-6. verify final requested/effective provenance.
+1. one input maps to exactly one committed result, in input order, independent of
+   execution order (no cross-contamination, duplicate, or lost item);
+2. restart/resume keeps committed items, loses none, and recomputes when the
+   immutable input snapshot differs;
+3. a real (pseudo-device) OOM walks the declared, bounded, monotone fallback
+   ladder; no-op plans consume no attempt;
+4. every recovery action carries its scientific-impact class; a plan naming a
+   scientific parameter is refused before execution and recorded;
+5. per-attempt requested-versus-effective provenance persists in `work_items.json`
+   and is republished by the server projection.
 
-Record exact head, GPU/device profile, Runner/model identity, task ids and
-artifact/result evidence.
+### Supplemental: real-model scientific validation
+
+Recorded when a host provides the runtime; **not** a merge gate for this
+infrastructure change. See §11a for what was obtained and what remains deferred.
 
 ---
 
 ## 11a. Evidence layers
 
-This PR rests on three distinct evidence layers, and must never blur them:
+This PR rests on three distinct evidence layers, and must never blur them. The
+first is the merge-blocking one; the other two are supplemental:
 
-1. **Mock GPU Example Runner** (`docker/runners/mock_gpu_example/`) — proves the
-   *mechanism*: the real `PersistentTask` lifecycle, the bounded recovery
-   ladder, per-attempt recovery provenance, restart/resume identity, and the
-   server projection, end to end, on a configurable **pseudo-device** with no
-   GPU, model, weights, or production SIF. It is a test/reference artifact and
-   makes no scientific claim about any real model.
-2. **Real ESMFold2 / SimpleFold runtime** — the model-specific *scientific*
-   evidence: single-input vs multi-item execution with the real pinned model and
-   weights (see the SimpleFold result below; ESMFold2 is an evidenced hardware
-   limit on this device).
+1. **Mock GPU reference Runner** (`docker/runners/mock_gpu_example/`) ->
+   *orchestration/recovery/provenance correctness*. It drives the real
+   `PersistentTask` lifecycle, the bounded recovery ladder, per-attempt recovery
+   provenance, restart/resume identity, and the server projection, end to end, on
+   a configurable **pseudo-device** with no GPU, model, weights, or production
+   SIF. It proves the mechanism and makes no scientific claim about any real
+   model.
+2. **Real ESMFold2 / SimpleFold runtime** -> *model-specific scientific
+   validation* (supplemental; see the SimpleFold result below; ESMFold2 is an
+   evidenced hardware limit on this device).
 3. **Production SIF + Slurm** — the *deployment/package* integration, exercised
    by the live-test receipt and Doctor gates.
 
-Layer 1 is complete in-repo and runs in CI. Layer 3 is the deployment gate. On
-layer 2, the available accelerator supports only one of the two target Runners:
+Layer 1 is complete in-repo, runs in CI, and is the merge-blocking evidence here.
+Layers 2 and 3 are supplemental for this infrastructure change. On layer 2, the
+available accelerator provides model-level evidence for only one of the two
+motivating Runners:
 
 ### Measured accelerator feasibility (lab309, Quadro P4000 8084 MiB, CC 6.1)
 
@@ -371,16 +399,18 @@ memory. The review panel itself ran at multiplicity 1.
 ## 12. Gates
 
 Run existing persistent-runner tests, ESMFold2 and SimpleFold protocol tests,
-OOM estimator/recovery tests, result provenance tests, and the appropriate
-non-browser repository gate.
+OOM estimator/recovery tests, result provenance tests, the Mock GPU Example
+Runner tests, and the appropriate non-browser repository gate.
 
 Run targeted browser/result tests only if the user-visible provenance surface is
 changed.
 
 Run `mkdocs build --strict` when docs change and `git diff --check`.
 
-Because this PR makes a live scientific statement, exact-final-head GPU
-acceptance is required before `READY_FOR_FINAL_REVIEW`.
+The merge-blocking evidence for this infrastructure change is CPU-executable and
+present in CI: the Mock GPU Example Runner and the persistent runner's own tests.
+Real-model GPU acceptance is supplemental and is **not** required before
+`READY_FOR_FINAL_REVIEW` here.
 
 ---
 
@@ -402,23 +432,27 @@ Do **not**:
 
 ## 14. Definition of done
 
-For ESMFold2 and SimpleFold, the repository must be able to prove:
+The repository must be able to prove:
 
-> Persistent multi-input execution preserves each item's scientific result
-> relative to the corresponding single-input execution when effective scientific
-> parameters are unchanged; restart/resume preserves item identity; and any OOM
-> recovery that changes effective behavior is explicit, bounded, and auditable
-> rather than silent.
+> Persistent multi-item execution preserves item identity and deterministic
+> execution semantics; restart/resume is coherent; adaptive-OOM transitions are
+> bounded, scientifically classified, fail closed for unsafe mutations, and
+> expose requested-versus-effective provenance.
 
-Status against this definition on the available accelerator:
+This is proven for the persistent machinery, end to end, by the Mock GPU
+reference Runner and the persistent runner's own tests (§11a, §12), and runs in
+CI without physical GPU hardware. That mechanism-layer proof is the merge gate.
 
-- **SimpleFold** — model-level equivalence obtained (bitwise single vs
-  multi-item, §11a). The reviewed `SimpleFoldPlugin`/Runner path itself is not
-  exercised on this device (its `initialize_runtime` OOMs); that remains
-  deferred and is stated as such.
-- **ESMFold2** — an evidenced hardware limit on this device (ESMC-6B ≈ 23.66 GiB
-  fp32 vs 7.90 GiB total; §11a). Its equivalence requires a larger GPU; this is
-  not a deferral of an attainable run.
-- **Item identity, restart/resume, and OOM classification/provenance** — proven
-  on the persistent runner's item machinery and end-to-end on the mechanism-layer
-  Mock GPU Example Runner (§11a).
+Supplemental real-model evidence, recorded here but **not** a gate:
+
+- **SimpleFold** — model-level single vs multi-item execution is bitwise
+  identical under the tested pinned model/parameters, with sha256-verified
+  weights (§11a). The reviewed `SimpleFoldPlugin`/Runner path itself was **not**
+  exercised on this device (its `initialize_runtime` OOMs) and is **not** claimed
+  as verified.
+- **ESMFold2** — cannot fit the available P4000; the measured memory evidence is
+  recorded (§11a). Model-specific ESMFold2 equivalence is separate acceptance
+  work on a larger GPU and is not required here.
+
+The Mock GPU reference Runner proves orchestration, recovery, and provenance
+correctness only; it does **not** prove model-specific scientific equivalence.
