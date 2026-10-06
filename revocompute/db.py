@@ -726,7 +726,7 @@ class TaskDatabase:
                 (rloan.LedgerReason.MIGRATED.value,),
             )
             rows = conn.exec_driver_sql(
-                "SELECT id, user_id, idempotency_key FROM resource_ledger WHERE reason_code = ?",
+                "SELECT id, subject_id, idempotency_key FROM resource_ledger WHERE reason_code = ?",
                 (rloan.LedgerReason.MIGRATED.value,),
             ).all()
             for row_id, user_id, key in rows:
