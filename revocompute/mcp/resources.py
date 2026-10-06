@@ -20,7 +20,7 @@ import json
 from typing import Any
 
 from revocompute.mcp.bounds import MAX_TEXT_RESOURCE_BYTES, truncate_text
-from revocompute.mcp.errors import INVALID_PARAMETERS, McpError
+from revocompute.mcp.errors import INVALID_PARAMETERS, TASK_NOT_FOUND, McpError
 from revocompute.mcp.handles import canonical_state
 
 SKILLS_URI = "revocompute://skills"
@@ -59,7 +59,9 @@ def read_result_manifest(principal: Any, task_handle: str) -> str:
         task_handle, user_id=principal.user_id, kind="task", now=_now()
     )
     if mapping is None:
-        raise McpError(INVALID_PARAMETERS, "Unknown task handle")
+        # Same class the tool layer uses for an unknown/foreign handle, so an
+        # agent sees one answer for one condition regardless of surface.
+        raise McpError(TASK_NOT_FOUND, "Unknown task handle")
     return json.dumps(get_task_results(principal, operation_id=mapping.operation_id), ensure_ascii=True, sort_keys=True)
 
 

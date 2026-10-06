@@ -131,12 +131,19 @@ def authenticate(ctx: Any, *, allow_guest: bool = False) -> McpPrincipal:
         value = _header(ctx, header)
         if value:
             forwarded[header] = value
+    client_ip = _client_ip(ctx)
+    if client_ip is None:
+        # The canonical client-IP resolver trusts a client-supplied
+        # X-Forwarded-For only from a trusted-proxy peer.  If this listener
+        # could not observe a socket peer, forwarding a client XFF would let the
+        # caller mint unlimited rate-limit identities, so drop it.
+        forwarded.pop("X-Forwarded-For", None)
     return McpPrincipal(
         user=user,
         user_id=int(user["id"]),
         username=str(user["username"]),
         credential_headers=credential_headers,
-        client_ip=_client_ip(ctx),
+        client_ip=client_ip,
         forwarded_headers=forwarded,
     )
 
@@ -146,7 +153,6 @@ class CanonicalResponse:
     status: int
     body: Any
     headers: dict[str, str]
-    raw: bytes | None = None
 
     @property
     def task_id(self) -> str | None:
@@ -218,14 +224,10 @@ def call_canonical(
         body = response.get_json(silent=True)
     except Exception:  # noqa: BLE001 - a non-JSON body is not fatal here
         body = None
-    fallback_raw: bytes | None = None
-    if body is None and method == "GET":
-        fallback_raw = response.get_data()
     return CanonicalResponse(
         status=response.status_code,
         body=body,
         headers={key: value for key, value in response.headers.items()},
-        raw=fallback_raw,
     )
 
 

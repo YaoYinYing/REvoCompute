@@ -1,0 +1,37 @@
+{
+  "available": true,
+  "host": "mcp-inspector-cli",
+  "methods": {
+    "resources/list": {
+      "returncode": 0,
+      "uris": [
+        "revocompute://skills"
+      ]
+    },
+    "tools/call:discover_tasks": {
+      "catalog_count": 56,
+      "returncode": 0
+    },
+    "tools/list": {
+      "returncode": 0,
+      "tool_count": 14,
+      "tools": [
+        "call_tool",
+        "cancel_task",
+        "discover_tasks",
+        "discover_tools",
+        "get_task_results",
+        "get_task_status",
+        "get_tool_call_status",
+        "get_tool_results",
+        "inspect_task",
+        "inspect_tool",
+        "preflight_task",
+        "retrieve_artifact",
+        "retrieve_tool_output",
+        "submit_task"
+      ]
+    }
+  },
+  "server_url": "http://127.0.0.1:8291/k/mcp"
+}

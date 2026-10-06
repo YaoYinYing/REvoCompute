@@ -296,7 +296,7 @@ def submit_task(
 # ---------------------------------------------------------------------------
 
 
-def _owned_task(principal: Any, operation_id: str, *, mutation: bool = False) -> dict[str, Any]:
+def _owned_task(principal: Any, operation_id: str) -> dict[str, Any]:
     """Return a Task the caller owns, or fail closed without existence leakage."""
     from revocompute.task_runtime import _normalize_task_id
 
@@ -310,7 +310,6 @@ def _owned_task(principal: Any, operation_id: str, *, mutation: bool = False) ->
     owner = str(task.get("submitted_by_user_id")) == str(principal.user_id)
     if not owner:
         raise McpError(TASK_NOT_FOUND, "Unknown task handle")
-    del mutation
     return task
 
 
@@ -369,7 +368,6 @@ def get_task_results(principal: Any, *, operation_id: str) -> dict[str, Any]:
     partial manifest, so an agent never mistakes an unfinished run for a
     complete one.
     """
-    state = canonical_state()
     task = _owned_task(principal, operation_id)
     status = str(task.get("status") or "").strip().lower()
     if status not in {"finished", "failed"}:
@@ -380,23 +378,17 @@ def get_task_results(principal: Any, *, operation_id: str) -> dict[str, Any]:
     artifacts = body.get("artifacts") if isinstance(body.get("artifacts"), list) else []
     logical = body.get("result", {}).get("files", {}) if isinstance(body.get("result"), dict) else {}
     bounded_artifacts, artifacts_truncated = bound_sequence(artifacts, MAX_RESULT_ENTRIES)
+    result_files, files_truncated = bound_result_files(logical)
+    work_items = body.get("work_items") if isinstance(body.get("work_items"), list) else None
+    bounded_work_items, work_items_truncated = (
+        bound_sequence(work_items, MAX_RESULT_ENTRIES) if work_items else (None, False)
+    )
     return {
         "status": status,
         "terminal": True,
         "error": body.get("error"),
-        "result_files": {
-            file_id: [
-                {
-                    "name": item.get("name"),
-                    "size": item.get("size"),
-                    "media_type": item.get("media_type"),
-                    "role": item.get("role"),
-                    "capability": item.get("capability"),
-                }
-                for item in items
-            ]
-            for file_id, items in list(logical.items())[:MAX_RESULT_ENTRIES]
-        },
+        "result_files": result_files,
+        "result_files_truncated": files_truncated,
         "artifacts": [
             {
                 "path": artifact.get("path"),
@@ -409,8 +401,38 @@ def get_task_results(principal: Any, *, operation_id: str) -> dict[str, Any]:
         ],
         "artifacts_truncated": artifacts_truncated,
         "archive_ready": bool(body.get("archive", {}).get("ready")),
-        "work_items": body.get("work_items") if isinstance(body.get("work_items"), list) else None,
+        "work_items": bounded_work_items,
+        "work_items_truncated": work_items_truncated,
     }
+
+
+def bound_result_files(logical: Any) -> tuple[dict[str, Any], bool]:
+    """Bound the logical files of one result manifest, reporting truncation.
+
+    The canonical manifest can hold far more files than a model context should
+    carry (an upstream bound allows up to 100k work items), so both the number
+    of file ids and the entries per id are bounded and *flagged* -- a bounded
+    result must never look complete.
+    """
+    if not isinstance(logical, dict):
+        return {}, False
+    truncated = len(logical) > MAX_RESULT_ENTRIES
+    bounded: dict[str, Any] = {}
+    for file_id, items in list(logical.items())[:MAX_RESULT_ENTRIES]:
+        entries = items if isinstance(items, list) else []
+        if len(entries) > MAX_RESULT_ENTRIES:
+            truncated = True
+        bounded[file_id] = [
+            {
+                "name": item.get("name"),
+                "size": item.get("size"),
+                "media_type": item.get("media_type"),
+                "role": item.get("role"),
+                "capability": item.get("capability"),
+            }
+            for item in entries[:MAX_RESULT_ENTRIES]
+        ]
+    return bounded, truncated
 
 
 def retrieve_artifact(
@@ -418,17 +440,26 @@ def retrieve_artifact(
     *,
     operation_id: str,
     artifact_path: str,
+    handle: str | None = None,
     max_inline_bytes: int = MAX_INLINE_ARTIFACT_BYTES,
 ) -> dict[str, Any]:
     """Retrieve one published artifact, bounded and never by host path.
 
     Resolution, publication, containment, hash/size verification, and role-based
-    visibility all belong to the canonical resolver; this function reads bytes
-    only through the canonical artifact route and inlines them only when the
-    artifact is small enough for a model context.
+    visibility all belong to the canonical resolver; this function inlines bytes
+    only when the artifact is small enough for a model context.
+
+    Authorization still runs through the canonical artifact route (so ownership
+    and role visibility are the canonical rules), but the bytes are read from the
+    resolver's already-verified physical file rather than the route's response
+    body.  The route answers an *empty* body plus ``X-Accel-Redirect`` in the
+    shipped ``nginx`` download mode and content-negotiates otherwise, so a
+    response-body read silently returned empty content for every non-text
+    artifact; the verified file is the same content in every mode.
     """
-    from revocompute.mcp.context import call_canonical
     from urllib.parse import quote
+
+    from revocompute.mcp.context import call_canonical
 
     task = _owned_task(principal, operation_id)
     task_id = str(task["md5sum"])
@@ -437,9 +468,6 @@ def retrieve_artifact(
     normalized = artifact_path.strip()
     if _looks_like_host_path(normalized):
         raise McpError(ARTIFACT_NOT_FOUND, "Artifact not found")
-    from revocompute.storage import StorageResolver
-
-    del StorageResolver
     resolved = canonical_state().web.app.config["storage_resolver"].resolve_artifact(task, normalized)
     if resolved is None:
         raise McpError(ARTIFACT_NOT_FOUND, "Artifact not found")
@@ -454,9 +482,11 @@ def retrieve_artifact(
             "inline": False,
             "truncated": False,
             "content_base64": None,
-            "resource_uri": f"revocompute://artifact/{operation_id}/{encoded}",
-            "note": "Artifact exceeds the inline context limit; read the resource or retrieve it out of band.",
+            "task_handle": handle,
+            "note": "Artifact exceeds the inline context limit and is not returned inline. Fetch it out of "
+            "band through the canonical results API; no host, container, or object-store path is exposed.",
         }
+    # Authorize through the canonical route; the returned body is not used.
     response = call_canonical(
         principal,
         "GET",
@@ -465,9 +495,9 @@ def retrieve_artifact(
     )
     if response.status >= 400:
         raise classify(response.body, status=response.status)
+    raw = _read_verified_bytes(str(resolved.get("physical_path") or ""), size)
     import base64
 
-    raw = response.raw if response.raw is not None else b""
     return {
         "artifact_path": normalized,
         "size": size,
@@ -477,6 +507,22 @@ def retrieve_artifact(
         "truncated": False,
         "content_base64": base64.b64encode(raw).decode("ascii"),
     }
+
+
+def _read_verified_bytes(path: str, expected_size: int) -> bytes:
+    """Read a resolver-verified published file, never beyond its published size."""
+    if not path:
+        raise McpError(ARTIFACT_NOT_FOUND, "Artifact not found")
+    try:
+        with open(path, "rb") as handle:
+            data = handle.read(expected_size)
+    except OSError:
+        raise McpError(ARTIFACT_NOT_FOUND, "Artifact not found") from None
+    if len(data) != expected_size:
+        # The file changed after verification: fail closed rather than serve a
+        # different byte count than the manifest (and the caller) was told.
+        raise McpError(ARTIFACT_NOT_FOUND, "Artifact not found")
+    return data
 
 
 def _looks_like_host_path(value: str) -> bool:
@@ -643,7 +689,7 @@ def call_tool(
         raise McpError(INVALID_PARAMETERS, "tool_name is required")
     name = tool_name.strip()
     try:
-        tool = state.web.tool_registry.get(name)
+        state.web.tool_registry.get(name)
     except KeyError:
         raise McpError(TASK_NOT_FOUND, f"Unknown Tool: {name!r}") from None
 
@@ -709,13 +755,19 @@ def retrieve_tool_output(
     operation_id: str,
     output_id: str,
     index: int = 0,
+    handle: str | None = None,
     max_inline_bytes: int = MAX_INLINE_ARTIFACT_BYTES,
 ) -> dict[str, Any]:
-    """Retrieve one finished ToolCall output, bounded and never by host path."""
-    import base64
+    """Retrieve one finished ToolCall output, bounded and never by host path.
 
-    from revocompute.mcp.context import call_canonical
-    from urllib.parse import quote
+    Ownership and output identity come from the canonical ToolCall record; the
+    bytes are read from the call's isolated workspace, whose containment the
+    canonical workspace object owns.  The content is not read through the
+    download route, so neither the shipped ``nginx`` download mode nor a
+    content-negotiated media type can turn an inlined payload into empty bytes.
+    """
+    import base64
+    from pathlib import Path
 
     state = canonical_state()
     from revocompute.tool_calls import normalize_tool_call_id
@@ -728,8 +780,8 @@ def retrieve_tool_output(
         raise McpError(TASK_NOT_FOUND, "Unknown tool handle")
     if str(call.get("status")) != "finished":
         raise McpError(RESULT_NOT_READY, "Tool output is not ready")
-    raw = call.get("result_manifest_json")
-    manifest = json.loads(raw) if raw else {}
+    raw_manifest = call.get("result_manifest_json")
+    manifest = json.loads(raw_manifest) if raw_manifest else {}
     outputs = manifest.get("outputs", {}) if isinstance(manifest, dict) else {}
     items = outputs.get(output_id)
     if not isinstance(items, list) or not items:
@@ -738,7 +790,6 @@ def retrieve_tool_output(
         raise McpError(ARTIFACT_NOT_FOUND, "Tool output not found")
     item = items[index]
     size = int(item.get("size") or 0)
-    query = f"index={index}" if len(items) > 1 else ""
     if size > max_inline_bytes:
         return {
             "output_id": output_id,
@@ -748,17 +799,18 @@ def retrieve_tool_output(
             "inline": False,
             "truncated": False,
             "content_base64": None,
-            "note": "Tool output exceeds the inline context limit; retrieve it out of band.",
+            "tool_handle": handle,
+            "note": "Tool output exceeds the inline context limit and is not returned inline. Fetch it out "
+            "of band; no host, container, or object-store path is exposed.",
         }
-    response = call_canonical(
-        principal,
-        "GET",
-        f"/compute/api/tool-calls/{call_id}/outputs/{quote(str(output_id), safe='')}",
-        query_string=query,
-    )
-    if response.status >= 400:
-        raise classify(response.body, status=response.status)
-    payload = response.raw if response.raw is not None else b""
+    # Resolve inside the call's isolated workspace; the manifest names a relative
+    # path, and containment keeps it there.
+    workspace_root = Path(state.web.app.config["tool_workspace"].call_root(call_id)) / "output"
+    root_resolved = workspace_root.resolve()
+    candidate = (workspace_root / str(item.get("path") or "")).resolve()
+    if candidate != root_resolved and root_resolved not in candidate.parents:
+        raise McpError(ARTIFACT_NOT_FOUND, "Tool output not found")
+    payload = _read_verified_bytes(str(candidate), size)
     return {
         "output_id": output_id,
         "index": index,

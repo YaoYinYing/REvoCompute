@@ -1,0 +1,10 @@
+{
+  "answer": "",
+  "available": true,
+  "exercised": false,
+  "host": "claude-code",
+  "prompt": "Use the revocompute MCP tools. Call discover_tasks and reply with exactly: COUNT=<number of task types>",
+  "returncode": 0,
+  "server_url": "http://127.0.0.1:8291/k/mcp",
+  "stderr_tail": "[claude-code:unrecognized_model] {\"model\":\"deepseek-flash[1m]\",\"query_source\":\"sdk\"}\n"
+}

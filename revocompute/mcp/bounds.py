@@ -25,8 +25,6 @@ MAX_TEXT_RESOURCE_BYTES = 64 * 1024
 MAX_INLINE_ARTIFACT_BYTES = 128 * 1024
 #: Maximum number of artifacts or logical files listed in one result summary.
 MAX_RESULT_ENTRIES = 500
-#: Maximum bytes of a serialized tool result payload.
-MAX_TOOL_RESULT_BYTES = 256 * 1024
 #: Maximum bytes of secondary human-readable error detail.
 MAX_ERROR_DETAIL_BYTES = 2 * 1024
 #: Maximum total bytes of inputs a single MCP submission may carry.

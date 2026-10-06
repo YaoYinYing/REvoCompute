@@ -44,22 +44,55 @@ FORBIDDEN_PREFIXES = (
 
 
 def _imports(path: Path) -> set[str]:
-    """Return every module name imported by *path* (static import statements)."""
+    """Return every module name imported by *path*, static or literal-dynamic."""
+    return {module for module, _dynamic in _classified_imports(path)}
+
+
+def _classified_imports(path: Path) -> set[tuple[str, bool]]:
+    """Return ``(module, is_dynamic)`` for every import in *path*.
+
+    A dynamic ``importlib.import_module("revocompute.mcp....")`` is a real
+    dependency the static import walk would otherwise miss, so a string-literal
+    target is captured too; ``is_dynamic`` lets the reverse-direction test allow
+    the one documented opt-in hook while still forbidding a static import.
+    """
     tree = ast.parse(path.read_text(encoding='utf-8'))
-    found: set[str] = set()
+    found: set[tuple[str, bool]] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            found.update(alias.name for alias in node.names)
+            found.update((alias.name, False) for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.module:
-            if node.level == 0:
-                found.add(node.module)
-            else:
-                found.add('.' * node.level + node.module)
+            module = node.module if node.level == 0 else '.' * node.level + node.module
+            found.add((module, False))
+        elif isinstance(node, ast.Call):
+            target = _dynamic_import_target(node)
+            if target:
+                found.add((target, True))
     return found
+
+
+def _dynamic_import_target(node: ast.Call) -> str | None:
+    func = node.func
+    is_import_module = (
+        (isinstance(func, ast.Attribute) and func.attr == 'import_module')
+        or (isinstance(func, ast.Name) and func.id == 'import_module')
+    )
+    if not is_import_module or not node.args:
+        return None
+    first = node.args[0]
+    if isinstance(first, ast.Constant) and isinstance(first.value, str):
+        return first.value
+    return None
 
 
 def _mcp_modules() -> list[Path]:
     return sorted(p for p in MCP_PACKAGE.glob('*.py'))
+
+
+def _canonical_modules() -> list[Path]:
+    """Every canonical module outside the adapter package, including subpackages."""
+    package = MCP_PACKAGE.parent
+    return sorted(p for p in package.rglob('*.py') if MCP_PACKAGE not in p.parents)
 
 
 def test_adapter_package_exists_and_is_importable_as_a_layer():
@@ -97,13 +130,14 @@ def test_adapter_reaches_the_application_only_through_canonical_modules():
         'revocompute.auth',
         'revocompute.config',
         'revocompute.db',
-        'revocompute.operating',
+        'revocompute.operational_events',
         'revocompute.result_projection',
         'revocompute.storage',
         'revocompute.task_runtime',
         'revocompute.task_types',
         'revocompute.tool_calls',
         'revocompute.tool_types',
+        'revocompute.tool_workspace',
         'revocompute.mcp',
     }
     violations: list[str] = []
@@ -118,14 +152,30 @@ def test_adapter_reaches_the_application_only_through_canonical_modules():
 
 
 def test_canonical_application_does_not_depend_on_the_mcp_adapter():
-    """The dependency direction is one-way: Core never imports the MCP adapter."""
-    app_source = (Path(__file__).resolve().parents[2] / 'revocompute').glob('*.py')
-    violations = [
-        path.name
-        for path in app_source
-        if any(module.startswith('revocompute.mcp') for module in _imports(path))
-    ]
-    assert not violations, f'canonical modules import the MCP adapter: {violations}'
+    """The dependency direction is one-way: Core never imports the MCP adapter.
+
+    The scan covers the whole canonical package (including subpackages) and
+    resolves the dynamic ``importlib.import_module("revocompute.mcp.asgi")`` the
+    application uses to start its *opt-in* listener.  A static import anywhere is
+    forbidden, and a dynamic import is allowed in exactly one file -- the
+    documented opt-in hook in ``app.py`` -- so no other canonical module can
+    acquire a hidden dependency on the adapter.
+    """
+    allowed_dynamic = {"app.py"}
+    static_violations: list[str] = []
+    hidden_violations: list[str] = []
+    for path in _canonical_modules():
+        relative = path.name
+        for module, dynamic in _classified_imports(path):
+            if not module.startswith("revocompute.mcp"):
+                continue
+            if dynamic:
+                if relative not in allowed_dynamic:
+                    hidden_violations.append(str(path.relative_to(MCP_PACKAGE.parent)))
+            else:
+                static_violations.append(str(path.relative_to(MCP_PACKAGE.parent)))
+    assert not static_violations, f"canonical modules statically import the MCP adapter: {static_violations}"
+    assert not hidden_violations, f"canonical modules dynamically import the MCP adapter off the opt-in hook: {hidden_violations}"
 
 
 def test_server_declares_only_tools_and_resources():

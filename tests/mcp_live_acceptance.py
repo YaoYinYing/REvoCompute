@@ -80,7 +80,13 @@ def _isolated_env(root: Path) -> None:
     )
 
 
-def _seed_finished_task(module, username: str = "mcp-acceptance") -> tuple[str, str]:
+def _seed_finished_task(
+    module,
+    username: str = "mcp-acceptance",
+    *,
+    artifact_name: str = "output.txt",
+    payload: bytes = b"acceptance-artifact\n",
+) -> tuple[str, str]:
     """Create a finished Task publishing one artifact, and return (task_id, token)."""
     from revocompute.auth import generate_token
 
@@ -96,12 +102,11 @@ def _seed_finished_task(module, username: str = "mcp-acceptance") -> tuple[str, 
         )
         db.verify_email(user["id"])
     owner = {"submitted_by_user_id": int(user["id"]), "storage_key": user["storage_key"]}
-    task_id = hashlib.sha256(f"{username}:{time.time()}".encode()).hexdigest()[:32]
+    task_id = hashlib.sha256(f"{username}:{artifact_name}:{time.time_ns()}".encode()).hexdigest()[:32]
     resolver = module.app.config["storage_resolver"]
     root = Path(resolver.get_task_root({"md5sum": task_id, **owner}))
     root.mkdir(parents=True, exist_ok=True)
-    payload = b"acceptance-artifact\n"
-    (root / "output.txt").write_bytes(payload)
+    (root / artifact_name).write_bytes(payload)
     manifest = {
         "schema_version": 3,
         "task_id": task_id,
@@ -112,7 +117,7 @@ def _seed_finished_task(module, username: str = "mcp-acceptance") -> tuple[str, 
         "limitations": [],
         "artifacts": [
             {
-                "path": "output.txt",
+                "path": artifact_name,
                 "size": len(payload),
                 "sha256": hashlib.sha256(payload).hexdigest(),
                 "media_type": "text/plain",
@@ -162,6 +167,8 @@ async def _workflow(
     token_b: str,
     handle_a: str,
     handle_b: str,
+    handle_big: str,
+    big_task_id: str,
     submit_task_type: str,
     submit_role: str,
 ) -> dict:
@@ -325,6 +332,71 @@ async def _workflow(
                 "error_class": (invalid.structuredContent or {}).get("error_class"),
             }
 
+            # Invalid parameters: a required-role mismatch on a real TaskType is
+            # rejected by the canonical contract validator, not by MCP.
+            bad_role = await session.call_tool(
+                "submit_task",
+                {
+                    "task_type": submit_task_type,
+                    "params": {"definitely_not_a_parameter": "x"},
+                    "inputs": [
+                        {
+                            "role": "not-a-real-role",
+                            "filename": "x.fasta",
+                            "content_base64": base64.b64encode(FASTA).decode(),
+                        }
+                    ],
+                },
+            )
+            receipt["steps"]["negative_invalid_parameters"] = {
+                "error": bad_role.isError,
+                "error_class": (bad_role.structuredContent or {}).get("error_class"),
+            }
+
+            # Idempotent retry: an identical resubmission resolves to the same
+            # canonical Task (the handle is fresh, the Task identity is not).
+            retry = await session.call_tool(
+                "submit_task",
+                {
+                    "task_type": submit_task_type,
+                    "params": {},
+                    "inputs": [
+                        {
+                            "role": submit_role,
+                            "filename": "accept.fasta",
+                            "content_base64": base64.b64encode(FASTA).decode(),
+                        }
+                    ],
+                },
+            )
+            retry_handle = (retry.structuredContent or {}).get("task_handle")
+            receipt["steps"]["retry_submit"] = {
+                "error": retry.isError,
+                "fresh_handle": bool(retry_handle) and retry_handle != submitted_handle,
+            }
+
+            # Cancellation through the canonical path, on the owned finished
+            # handle (a terminal Task is not cancellable: TASK_NOT_CANCELLABLE).
+            cancel = await session.call_tool("cancel_task", {"task_handle": handle_a})
+            receipt["steps"]["cancel_terminal_task"] = {
+                "error": cancel.isError,
+                "error_class": (cancel.structuredContent or {}).get("error_class"),
+                "status": (cancel.structuredContent or {}).get("status"),
+            }
+
+            # Oversized artifact: metadata only, no inline content, no canonical
+            # Task id leaked anywhere in the answer.
+            oversized_artifact = await session.call_tool(
+                "retrieve_artifact", {"task_handle": handle_big, "artifact_path": "big.txt"}
+            )
+            big_payload = oversized_artifact.structuredContent or {}
+            receipt["steps"]["negative_oversized_artifact"] = {
+                "error": oversized_artifact.isError,
+                "inline": big_payload.get("inline"),
+                "content_base64": big_payload.get("content_base64"),
+                "leaks_task_id": big_task_id in json.dumps(big_payload),
+            }
+
     async with _session(token_b) as (read, write, _):
         async with ClientSession(read, write) as session:
             await session.initialize()
@@ -351,6 +423,26 @@ async def _workflow(
             receipt["steps"]["negative_anonymous"] = {
                 "error": anonymous.isError,
                 "error_class": (anonymous.structuredContent or {}).get("error_class"),
+            }
+
+    # An invalid credential is rejected by the canonical account rules, not by a
+    # weaker MCP-local check.
+    async with streamablehttp_client(url, headers={"Authorization": "Bearer not-a-real-token"}) as (read, write, _):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            forged_bearer = await session.call_tool("discover_tools", {})
+            receipt["steps"]["negative_invalid_bearer"] = {
+                "error": forged_bearer.isError,
+                "error_class": (forged_bearer.structuredContent or {}).get("error_class"),
+            }
+
+    async with streamablehttp_client(url, headers={"X-API-Key": "not-a-real-key"}) as (read, write, _):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            forged_key = await session.call_tool("discover_tools", {})
+            receipt["steps"]["negative_invalid_api_key"] = {
+                "error": forged_key.isError,
+                "error_class": (forged_key.structuredContent or {}).get("error_class"),
             }
 
     return receipt
@@ -393,7 +485,6 @@ def _second_user(module) -> tuple[str, int]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=8181)
-    parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
 
     with tempfile.TemporaryDirectory(prefix="mcp-acceptance-") as tmp:
@@ -433,26 +524,117 @@ def main(argv: list[str] | None = None) -> int:
 
         module.task_runtime.run_compute_task.apply_async = lambda *_args, **_kwargs: _Queued()
         task_id, token = _seed_finished_task(module)
+        from revocompute.mcp.bounds import MAX_INLINE_ARTIFACT_BYTES
+
+        big_task_id, _big_token = _seed_finished_task(
+            module,
+            artifact_name="big.txt",
+            payload=b"z" * (MAX_INLINE_ARTIFACT_BYTES + 1024),
+        )
         db = module.app.config["user_db"]
         user = db.get_user_by_username("mcp-acceptance")
         handle = _mint_handle(module, int(user["id"]), task_id)
+        big_handle = _mint_handle(module, int(user["id"]), big_task_id)
         other_token, other_id = _second_user(module)
         foreign_handle = _mint_handle(module, other_id, task_id)
 
         import anyio
 
         url = f"http://127.0.0.1:{args.port}/k/mcp"
-        receipt = anyio.run(_workflow, url, token, other_token, handle, foreign_handle, submit_type, submit_role)
+        receipt = anyio.run(
+            _workflow,
+            url,
+            token,
+            other_token,
+            handle,
+            foreign_handle,
+            big_handle,
+            big_task_id,
+            submit_type,
+            submit_role,
+        )
         receipt["transport"] = "streamable-http"
         receipt["endpoint"] = url
         receipt["client"] = "official mcp python SDK"
         receipt["exact_head"] = os.environ.get("GITHUB_SHA") or _git_head()
+        failures = _assert_receipt(receipt)
+        receipt["failures"] = failures
 
-    if args.json:
-        print(json.dumps(receipt, indent=2, sort_keys=True))
-    else:
-        print(json.dumps(receipt, indent=2, sort_keys=True))
+    print(json.dumps(receipt, indent=2, sort_keys=True))
+    if failures:
+        print(f"MCP acceptance FAILED: {len(failures)} unmet expectation(s)", file=sys.stderr)
+        for failure in failures:
+            print(f"  - {failure}", file=sys.stderr)
+        return 1
     return 0
+
+
+def _expect(receipt: dict, failures: list[str], step: str, field: str, expected: object) -> None:
+    actual = (receipt.get("steps", {}).get(step) or {}).get(field)
+    if actual != expected:
+        failures.append(f"{step}.{field}: expected {expected!r}, got {actual!r}")
+
+
+def _assert_receipt(receipt: dict) -> list[str]:
+    """Assert the acceptance's own expectations so it can fail non-zero.
+
+    The receipt is still printed verbatim on every run; these checks make the
+    run *scoring*, not merely illustrative, so a regression turns the exit code
+    red instead of asking a human to eyeball JSON.
+    """
+    failures: list[str] = []
+    if receipt.get("protocol_version") != "2025-11-25":
+        failures.append(f"protocol_version: expected 2025-11-25, got {receipt.get('protocol_version')!r}")
+    if len(receipt.get("tools") or []) != 14:
+        failures.append(f"tools: expected 14, got {len(receipt.get('tools') or [])}")
+
+    _expect(receipt, failures, "discover_tasks", "error", False)
+    _expect(receipt, failures, "inspect_task", "error", False)
+    _expect(receipt, failures, "inspect_task", "has_schema", True)
+
+    guarantees = receipt.get("handle_guarantees") or {}
+    for key in ("opaque_prefix", "sufficient_entropy", "is_not_canonical_task_id"):
+        if guarantees.get(key) is not True:
+            failures.append(f"handle_guarantees.{key}: expected True, got {guarantees.get(key)!r}")
+
+    # Workflow positives.
+    _expect(receipt, failures, "status_own_handle", "error", False)
+    _expect(receipt, failures, "status_own_handle", "status", "finished")
+    _expect(receipt, failures, "results_own_handle", "error", False)
+    _expect(receipt, failures, "retrieve_artifact", "error", False)
+    _expect(receipt, failures, "retrieve_artifact", "inline", True)
+    _expect(receipt, failures, "retrieve_artifact", "bytes_ok", True)
+    _expect(receipt, failures, "retry_submit", "error", False)
+    _expect(receipt, failures, "retry_submit", "fresh_handle", True)
+
+    # Negatives, each with its canonical error class.
+    for step, error_class in (
+        ("negative_unknown_task_type", "TASK_NOT_FOUND"),
+        ("negative_unknown_submit", "TASK_NOT_FOUND"),
+        ("negative_invalid_parameters", "INVALID_PARAMETERS"),
+        ("negative_traversal", "ARTIFACT_NOT_FOUND"),
+        ("negative_missing_artifact", "ARTIFACT_NOT_FOUND"),
+        ("negative_cross_user_handle", "TASK_NOT_FOUND"),
+        ("negative_stolen_handle", "TASK_NOT_FOUND"),
+        ("negative_reused_handle_other_user", "TASK_NOT_FOUND"),
+        ("negative_anonymous", "AUTH_REQUIRED"),
+        ("negative_invalid_bearer", "AUTH_REQUIRED"),
+        ("negative_invalid_api_key", "AUTH_REQUIRED"),
+        ("cancel_terminal_task", "TASK_NOT_CANCELLABLE"),
+    ):
+        _expect(receipt, failures, step, "error", True)
+        _expect(receipt, failures, step, "error_class", error_class)
+
+    oversized = receipt.get("steps", {}).get("negative_oversized_artifact") or {}
+    if oversized.get("error") is not False:
+        failures.append("negative_oversized_artifact.error: expected False")
+    if oversized.get("inline") is not False:
+        failures.append("negative_oversized_artifact.inline: expected False")
+    if oversized.get("content_base64") is not None:
+        failures.append("negative_oversized_artifact.content_base64: expected None")
+    if oversized.get("leaks_task_id") is not False:
+        failures.append("negative_oversized_artifact.leaks_task_id: expected False (canonical id must not leak)")
+    return failures
 
 
 def _git_head() -> str:

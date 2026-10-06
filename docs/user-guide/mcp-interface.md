@@ -22,16 +22,28 @@ ResultManifest, and artifact rules are the ones that apply.
   stdio wrapper in a deployment.
 - Endpoint: `<base-url>/k/mcp` (the surface is mounted at `/k`).
 - The MCP endpoint is served from the **same process** as the HTTP API when a
-  deployment enables it (`MCP_ENABLED=true`), so the canonical rate limiter and
-  application state are shared rather than replicated: mixing HTTP and MCP
-  requests from one client address consumes one budget.
+  deployment enables it, so the canonical rate limiter and application state are
+  shared rather than replicated: mixing HTTP and MCP requests from one client
+  address consumes one budget.
 
-```bash
-REVODESIGN_SERVER_ENV=<env-file> restart.sh up --with-mcp   # enables the MCP surface
-```
+### Enabling the surface
 
-A deployment without the optional `mcp` extra installs and runs exactly as
-before; the endpoint is simply absent.
+Enabling MCP is a **deployment-owned change**, not a flag on the checked-in
+deployment scripts: this repository's `run/restart.sh` and Compose stack do not
+yet wire it. A deployment turns it on by all three of
+
+1. installing the optional extra in the server image
+   (`uv pip install "/app/server[resend,mcp]"`),
+2. setting `MCP_ENABLED=true` (and, if the default is unsuitable, `MCP_PORT`,
+   default `8081`) in the `web` service environment, and
+3. adding a gateway route to the MCP listener port alongside the HTTP API.
+
+Without all three, `revocompute.app` logs `MCP surface disabled` and the
+endpoint is simply absent — an ordinary deployment without the extra installs and
+runs exactly as before. A first-class `--with-mcp` deployment path is tracked as
+a follow-up; the surface is verified today through
+[interoperability testing](#interoperability-testing), which starts the real
+process with the listener enabled.
 
 ## Authentication
 
@@ -120,9 +132,9 @@ hand-roll protocol framing. The equivalent bounded interaction is
 Large trajectories, tensors, and archives must not flood a model context:
 
 - catalogs, schemas, result listings, and error detail are bounded;
-- a small text/JSON artifact is inlined (bounded, with explicit size metadata);
-- a large artifact returns **metadata plus an authorized resource link**, never
-  inline content, and never a host, container, or object-store path.
+- a small artifact or Tool output is inlined (bounded, with explicit size metadata);
+- a large artifact returns **metadata only** — never inline content, and never a
+  host, container, or object-store path.
 
 A bounded result always says it was truncated; content is never silently
 dropped.
@@ -160,10 +172,29 @@ hosts.
 
 `tests/mcp_live_acceptance.py` starts the canonical web process with the MCP
 surface enabled and drives the complete workflow — connect, discover, inspect,
-status, results, artifact — plus the negative cases (unknown task type, cross-user
-handle, traversal, missing artifact, anonymous access) over a real
-streamable-HTTP client, printing a JSON receipt:
+preflight, submit, track, results, artifact — plus the negative cases (unknown
+task type, invalid parameters, unentitled Runner, cross-user handle, cross-user
+artifact, traversal, missing artifact, oversized artifact, cancel, retried
+submission, invalid credentials, anonymous access) over a real streamable-HTTP
+client. It **asserts** those expectations and exits non-zero on any mismatch,
+printing a JSON receipt:
 
 ```bash
-uv run --extra mcp python tests/mcp_live_acceptance.py --json
+uv run --extra mcp python tests/mcp_live_acceptance.py
 ```
+
+Two third-party hosts are exercised reproducibly by
+`tests/mcp_host_receipt.py`, which writes one JSON receipt per host:
+
+```bash
+uv run --extra mcp python tests/mcp_host_receipt.py
+```
+
+- the **MCP Inspector CLI** (`npx @modelcontextprotocol/inspector --cli`), and
+- **Claude Code** as the primary intended agent host (`--mcp-config`).
+
+A second, genuinely independent MCP host and a rendered MCP Inspector Web UI were
+**unavailable in this environment** and are an openly acknowledged gap: they must
+be demonstrated against the final head before the MCP surface is considered fully
+interoperability-accepted. See the PR description and `TODO.md` §19.
+

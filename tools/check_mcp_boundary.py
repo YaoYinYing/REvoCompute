@@ -52,7 +52,27 @@ def imported_modules(path: Path) -> set[str]:
             found.update(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.module:
             found.add(node.module if node.level == 0 else "." * node.level + node.module)
+        elif isinstance(node, ast.Call):
+            # A dynamic ``importlib.import_module("<literal>")`` is a real
+            # dependency the static walk would miss, so resolve literal targets.
+            target = _dynamic_import_target(node)
+            if target:
+                found.add(target)
     return found
+
+
+def _dynamic_import_target(node: ast.Call) -> str | None:
+    func = node.func
+    is_import_module = (
+        (isinstance(func, ast.Attribute) and func.attr == "import_module")
+        or (isinstance(func, ast.Name) and func.id == "import_module")
+    )
+    if not is_import_module or not node.args:
+        return None
+    first = node.args[0]
+    if isinstance(first, ast.Constant) and isinstance(first.value, str):
+        return first.value
+    return None
 
 
 def main() -> int:

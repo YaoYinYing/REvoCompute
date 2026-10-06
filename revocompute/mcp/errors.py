@@ -64,6 +64,13 @@ _STATUS_TO_CLASS = {
 # protocol class.  These are the vocabulary the submission/preflight/tool
 # boundaries already emit; mapping them here keeps the projection declarative
 # instead of re-deriving admission semantics.
+#
+# The canonical admission/reason-code vocabulary is a *reconcile surface* (see
+# ``IMPLEMENTATION_STATE.md``): the resource-accounting work replaces the
+# GPU-credit vocabulary with a shared admission-reason enum, so this table must
+# be re-checked when that lands rather than frozen.  Code that is not yet named
+# here still classifies through ``_DETAIL_CODE_RULES`` below, so an unmapped
+# reason never silently degrades to a *non-retryable* wrong class.
 _DETAIL_CODE_TO_CLASS = {
     "input_role_unknown": INVALID_PARAMETERS,
     "input_role_cardinality": INVALID_PARAMETERS,
@@ -83,6 +90,20 @@ _DETAIL_CODE_TO_CLASS = {
     "invalid_input": INVALID_PARAMETERS,
     "runtime_unavailable": NOT_READY,
 }
+
+# Suffix/marker rules applied when a canonical ``details[0].code`` is not in the
+# table above.  A resource/credit condition is retryable-later, not a policy
+# denial, so an admission reason this adapter has not yet named still lands in a
+# class an agent can act on instead of a bare ``ACCESS_DENIED``.
+_DETAIL_CODE_RULES = (
+    ("exhausted", RESOURCE_LIMIT),
+    ("_limit_exceeded", RESOURCE_LIMIT),
+    ("limit_exceeded", RESOURCE_LIMIT),
+    ("insufficient", RESOURCE_LIMIT),
+    ("unavailable", NOT_READY),
+    ("not_ready", NOT_READY),
+    ("_invalid", INVALID_PARAMETERS),
+)
 
 
 class McpError(Exception):
@@ -119,6 +140,19 @@ class McpError(Exception):
         return payload
 
 
+def _class_for_detail_code(detail_code: str) -> str | None:
+    """Map a canonical detail code to a class, with a suffix-rule fallback."""
+    if not detail_code:
+        return None
+    mapped = _DETAIL_CODE_TO_CLASS.get(detail_code)
+    if mapped is not None:
+        return mapped
+    for marker, error_class in _DETAIL_CODE_RULES:
+        if marker in detail_code:
+            return error_class
+    return None
+
+
 def classify(canonical: Any, *, status: int) -> McpError:
     """Project a canonical error response into a protocol error.
 
@@ -133,7 +167,7 @@ def classify(canonical: Any, *, status: int) -> McpError:
     details = body.get("details")
     if isinstance(details, list) and details and isinstance(details[0], dict):
         detail_code = str(details[0].get("code") or "")
-    error_class = _DETAIL_CODE_TO_CLASS.get(detail_code) or _STATUS_TO_CLASS.get(status)
+    error_class = _class_for_detail_code(detail_code) or _STATUS_TO_CLASS.get(status)
     if error_class is None:
         error_class = ACCESS_DENIED if status >= 400 and status < 500 else NOT_READY
     retry_after = body.get("retry_after_seconds")

@@ -43,6 +43,10 @@ _DEFAULT_TTL_SECONDS = 86400
 _MIN_TTL_SECONDS = 300
 _MAX_TTL_SECONDS = 30 * 86400
 
+#: Mint this many handles between opportunistic expiry sweeps, so an abandoned
+#: handle cannot accumulate rows forever.
+_PRUNE_EVERY_MINTS = 64
+
 KIND_TASK = "task"
 KIND_TOOL_CALL = "tool_call"
 
@@ -71,6 +75,7 @@ class OperationHandleStore:
             raise ValueError(f"handle TTL must be between {_MIN_TTL_SECONDS} and {_MAX_TTL_SECONDS} seconds")
         self.path = path
         self.ttl_seconds = ttl_seconds
+        self._mints_since_prune = 0
         self.engine = create_engine(f"sqlite:///{path}", future=True, connect_args={"check_same_thread": False})
         self.metadata = MetaData()
         self.table = Table(
@@ -119,6 +124,13 @@ class OperationHandleStore:
                     expires_at=now + self.ttl_seconds,
                 )
             )
+        # Expired rows are otherwise only removed when the exact handle is
+        # resolved, which never happens for an abandoned handle.  Reaping
+        # periodically on the write path bounds the table without a scheduler.
+        self._mints_since_prune += 1
+        if self._mints_since_prune >= _PRUNE_EVERY_MINTS:
+            self._mints_since_prune = 0
+            self.prune(now=now)
         return handle
 
     def bind(self, handle: str, operation_id: str, *, now: float) -> None:

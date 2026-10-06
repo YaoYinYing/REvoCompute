@@ -207,8 +207,8 @@ def build_server() -> FastMCP:
 
     @server.tool(
         description="Retrieve one published artifact by its ResultManifest path for an owned "
-        "Task. Small text/JSON artifacts are inlined (bounded); larger artifacts return "
-        "metadata plus an authorized resource URI instead of flooding context.",
+        "Task. A small artifact is inlined (bounded, base64); a larger artifact returns metadata "
+        "only, never inline content and never a host path.",
         annotations=types.ToolAnnotations(readOnlyHint=True),
     )
     def retrieve_artifact(
@@ -222,6 +222,7 @@ def build_server() -> FastMCP:
                     principal,
                     operation_id=mapping.operation_id,
                     artifact_path=_require_str(artifact_path, "artifact_path"),
+                    handle=mapping.handle,
                 )
             )
         except McpError as error:
@@ -322,6 +323,7 @@ def build_server() -> FastMCP:
                     operation_id=mapping.operation_id,
                     output_id=_require_str(output_id, "output_id"),
                     index=index,
+                    handle=mapping.handle,
                 )
             )
         except McpError as error:

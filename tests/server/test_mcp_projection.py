@@ -69,26 +69,6 @@ def test_mcp_carries_the_client_peer_into_the_canonical_request(mcp_app):
     assert observed["remote_addr"] == "203.0.113.9", "the caller peer must reach the canonical request"
 
 
-def test_mcp_and_http_share_one_canonical_admission_path(mcp_app):
-    """MCP submission is the canonical submission: same handler, same rules.
-
-    Admission equivalence is asserted structurally, not by re-implementing the
-    rule here: the MCP submission paths point at the canonical endpoints, and the
-    MCP layer adds no limiter, quota, or validator of its own.  A future change
-    that gives MCP its own admission path fails this test.
-    """
-    from revocompute.mcp import services
-
-    source = Path(services.__file__).read_text(encoding="utf-8")
-    # The mutating paths are the canonical endpoints.
-    assert '"/compute/api/post"' in source
-    assert 'f"/compute/api/preflight/{' in source
-    assert 'f"/compute/api/cancel/{' in source
-    # No MCP-local limiter/quota implementation.
-    for forbidden in ("rate_limit(", "max_requests", "window_seconds"):
-        assert forbidden not in source, f"the MCP layer must not re-implement admission: {forbidden}"
-
-
 def _activate(module) -> None:
     """Point the MCP runtime at *module* as the canonical application.
 
@@ -804,7 +784,14 @@ def test_projected_surface_is_reachable_over_the_mcp_transport(mcp_app):
 # ---------------------------------------------------------------------------
 
 
-def _publish_manifest(module, task_id: str, owner: dict, artifacts: list[tuple[str, str]]) -> None:
+def _publish_manifest(
+    module,
+    task_id: str,
+    owner: dict,
+    artifacts: list[tuple[str, str]],
+    *,
+    media_type: str = "text/plain",
+) -> None:
     """Publish a minimal canonical ResultManifest listing *artifacts*."""
     resolver = module.app.config["storage_resolver"]
     root = Path(resolver.get_task_root({"md5sum": task_id, **owner}))
@@ -817,7 +804,7 @@ def _publish_manifest(module, task_id: str, owner: dict, artifacts: list[tuple[s
                 "path": relative,
                 "size": len(payload),
                 "sha256": hashlib.sha256(payload).hexdigest(),
-                "media_type": "text/plain",
+                "media_type": media_type,
                 "preview": "text",
                 "capability": "text",
                 "role": role,
@@ -893,6 +880,68 @@ def test_unpublished_artifact_path_is_not_found(mcp_app, tmp_path):
     assert excinfo.value.error_class == "ARTIFACT_NOT_FOUND"
 
 
+_EXPECTED_TEXT = ("result" + chr(10)).encode()
+
+
+@pytest.mark.parametrize("download_mode", ["nginx", "flask"])
+def test_inline_artifact_content_is_byte_exact_in_every_download_mode(mcp_app, tmp_path, download_mode):
+    """Inlined bytes are the published bytes regardless of download mode.
+
+    The shipped deployment serves results with ``RESULT_DOWNLOAD_MODE=nginx``,
+    where the canonical download route answers an empty body plus
+    ``X-Accel-Redirect``.  A projection that inlined the *response body* silently
+    returned empty content for every artifact in that mode; this pins byte-exact
+    content in both modes so the silent drop cannot regress.
+    """
+    from revocompute.mcp.services import retrieve_artifact
+
+    mcp_app.app.config["RESULT_DOWNLOAD_MODE"] = download_mode
+    principal = _principal(mcp_app)
+    task_id = _seed_published_artifact(mcp_app, tmp_path)
+    payload = retrieve_artifact(principal, operation_id=task_id, artifact_path="output.txt")
+    assert payload["inline"] is True
+    assert base64.b64decode(payload["content_base64"]) == _EXPECTED_TEXT
+
+
+def test_inline_artifact_content_is_byte_exact_for_a_json_media_type(mcp_app, tmp_path):
+    """A JSON-media artifact inlines its bytes, not a parsed JSON body.
+
+    ``send_from_directory`` content-negotiates, so a JSON artifact parsed into a
+    JSON body and left the route's raw bytes empty in every mode.  The inlined
+    payload must be the published bytes, and must never be empty.
+    """
+    import uuid as _uuid
+
+    from revocompute.mcp.services import retrieve_artifact
+
+    principal = _principal(mcp_app)
+    owner = _conftest._task_owner(mcp_app, "mcp-tester")
+    task_id = _uuid.uuid4().hex
+    result_dir = tmp_path / f"json-{task_id}"
+    result_dir.mkdir(parents=True, exist_ok=True)
+    written = b'{"a": 1}'
+    (result_dir / "data.json").write_bytes(written)
+    _conftest._relocate_task_artifacts(mcp_app, task_id, result_dir, owner)
+    _publish_manifest(mcp_app, task_id, owner, [("data.json", "artifact")], media_type="application/json")
+    mcp_app.task_store.upsert_task(
+        task_id,
+        filename="input.fasta",
+        file_path="/tmp/input.fasta",
+        uploaded_at=time.time(),
+        status="finished",
+        is_binary=0,
+        source_ip="127.0.0.1",
+        user_agent="pytest",
+        username="mcp-tester",
+        task_type="gremlin",
+        submitted_by_user_id=int(owner["submitted_by_user_id"]),
+        storage_key=owner["storage_key"],
+    )
+    payload = retrieve_artifact(principal, operation_id=task_id, artifact_path="data.json")
+    assert payload["inline"] is True
+    assert base64.b64decode(payload["content_base64"]) == written
+
+
 @pytest.mark.parametrize(
     "candidate",
     [
@@ -951,12 +1000,21 @@ def test_oversized_artifact_returns_metadata_not_content(mcp_app, tmp_path):
         submitted_by_user_id=int(owner["submitted_by_user_id"]),
         storage_key=owner["storage_key"],
     )
-    result = retrieve_artifact(principal, operation_id=task_id, artifact_path="big.txt", max_inline_bytes=64)
+    handle = "mcp_op_" + "a" * 43
+    result = retrieve_artifact(
+        principal, operation_id=task_id, artifact_path="big.txt", handle=handle, max_inline_bytes=64
+    )
     assert result["inline"] is False
     assert result["content_base64"] is None
     assert result["size"] == len(payload_bytes)
-    assert result["resource_uri"].startswith("revocompute://artifact/")
     assert result["truncated"] is False
+    # The oversized answer exposes no canonical Task id anywhere: the opaque
+    # handle is the only identity a client may need to echo back.
+    assert task_id not in json.dumps(result)
+    assert result["task_handle"] == handle
+    # No dead resource URI is advertised: nothing here is a followable protocol
+    # resource, so the answer must not claim one.
+    assert "resource_uri" not in result
 
 
 # ---------------------------------------------------------------------------
@@ -1103,3 +1161,101 @@ def test_ordinary_admin_credential_does_not_grant_operator_capability(mcp_app):
     names = {tool.name for tool in server._tool_manager.list_tools()}
     # No operator primitive is reachable, so no credential can select one.
     assert not [name for name in names if "admin" in name or "operator" in name or "sif" in name]
+
+
+def test_authentication_rejects_invalid_and_stale_credentials(mcp_app):
+    """Every credential failure is closed with the canonical account rules.
+
+    An invalid Bearer, an invalid API key, a suspended account, and a token
+    minted under a superseded ``token_version`` must each fail closed with
+    ``AUTH_REQUIRED`` -- the MCP layer holds no credential of its own and adds no
+    weaker path.
+    """
+    from types import SimpleNamespace
+
+    from revocompute.auth import generate_token
+    from revocompute.mcp.context import authenticate
+    from revocompute.mcp.errors import McpError
+
+    db = mcp_app.app.config["user_db"]
+    _conftest._test_client_auth(mcp_app, username="mcp-tester")  # ensure the user exists
+    user = db.get_user_by_username("mcp-tester")
+    user_id = int(user["id"])
+
+    def _ctx(headers: dict[str, str]):
+        request = SimpleNamespace(headers=headers, client=SimpleNamespace(host="127.0.0.1"))
+        return SimpleNamespace(request_context=SimpleNamespace(request=request))
+
+    # A valid token authenticates; everything below is a closed failure.
+    principal = authenticate(_ctx({"authorization": f"Bearer {generate_token(user_id)}"}))
+    assert principal.user_id == user_id
+
+    for headers in (
+        {"authorization": "Bearer not-a-real-token"},
+        {"x-api-key": "not-a-real-key"},
+        {},
+    ):
+        with pytest.raises(McpError) as excinfo:
+            authenticate(_ctx(headers))
+        assert excinfo.value.error_class == "AUTH_REQUIRED"
+
+    # A suspended account is refused even with a structurally valid token.
+    db.update_user(user_id, user_status="banned")
+    with pytest.raises(McpError) as excinfo:
+        authenticate(_ctx({"authorization": f"Bearer {generate_token(user_id)}"}))
+    assert excinfo.value.error_class == "AUTH_REQUIRED"
+    db.update_user(user_id, user_status="active")
+
+    # A token minted under a superseded token_version is refused: logout still
+    # invalidates the MCP surface exactly as it does the HTTP API.
+    stale = generate_token(user_id, token_version=0)
+    db.increment_token_version(user_id)
+    with pytest.raises(McpError) as excinfo:
+        authenticate(_ctx({"authorization": f"Bearer {stale}"}))
+    assert excinfo.value.error_class == "AUTH_REQUIRED"
+
+
+def _register_gpu_task_type(module):
+    """Register a synthetic GPU TaskType, as the canonical admission tests do."""
+    from dataclasses import replace
+
+    base, runner = module.task_runtime._get_task_type("gremlin")
+    task_type = replace(base, name="mcp_gpu_test", gpus=True)
+    _conftest._inject_task_type(module, task_type, runner)
+    return task_type.name
+
+
+def test_exhausted_gpu_credit_is_not_admitted_through_mcp(mcp_app):
+    """An exhausted GPU-credit balance fails MCP admission as RESOURCE_LIMIT.
+
+    The decision is the canonical credit check: the MCP layer reads no ledger and
+    decides no admission itself.  Because the canonical denial carries a specific
+    reason code, the caller sees the actionable ``RESOURCE_LIMIT`` rather than a
+    bare ``ACCESS_DENIED``.
+    """
+    from revocompute.mcp.errors import McpError
+    from revocompute.mcp.handles import canonical_state
+    from revocompute.mcp.services import submit_task
+
+    task_type = _register_gpu_task_type(mcp_app)
+    principal = _principal(mcp_app)
+    db = mcp_app.app.config["user_db"]
+    db.update_user(principal.user_id, allow_gpu_use=True)
+    mcp_app.task_store.adjust_gpu_credit(
+        user_id=principal.user_id,
+        gpu_seconds=-60_000,
+        actor_user_id=principal.user_id,
+        reason="MCP admission test exhaustion",
+        idempotency_key="mcp-exhaust",
+    )
+    with pytest.raises(McpError) as excinfo:
+        submit_task(
+            principal,
+            task_type=task_type,
+            params={},
+            inputs=_submit_payload(),
+            handle_store=canonical_state().handles,
+            now=1000.0,
+        )
+    assert excinfo.value.error_class == "RESOURCE_LIMIT"
+    assert len(mcp_app.task_store.list_tasks()) == 0, "a credit-denied submission must create no Task"
