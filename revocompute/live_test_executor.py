@@ -137,6 +137,13 @@ def _wrapper_resource_observation(job_id: str, output_root: Path | None) -> dict
         "max_rss_kib",
         "gpu_memory_peak_mib",
         "gpu_utilization_peak_percent",
+        # The allocation wrapper's scratch capacity guard reports these whenever
+        # it completed a measurement, so a reader that did not know them would
+        # reject every fresh payload as unknown content and silently fall back to
+        # scheduler accounting that may not be available at all.
+        "scratch_guard.peak_bytes",
+        "scratch_guard.samples",
+        "scratch_guard.exceeded",
     }
     for candidate in candidates:
         try:
