@@ -14,6 +14,8 @@ release exactly the bytes it charged.
 
 from __future__ import annotations
 
+import pytest
+
 from revocompute import resource_lifecycle
 from revocompute.db import TaskDatabase
 from revocompute.resource_ledger import DataLifecycleState, ReservationState
@@ -274,3 +276,253 @@ def test_purge_releases_by_charged_amount_not_by_current_logical_size(tmp_path):
     ]
     assert [entry["quantity"] for entry in released] == [2 * GIB]
     assert database.logical_owned_bytes(21) == 0
+
+def test_a_crashed_purge_reaches_purged_and_releases_the_charged_bytes_once(tmp_path):
+    """A worker that dies between its claim and its completion must not wedge.
+
+    The row is durable state, so recovery is re-entering *from* that state.  A
+    purge that stops at ``PURGING`` — the crash window the claim exists to make
+    resumable — has to reach ``PURGED`` on a later pass and free exactly the
+    bytes it charged, once.
+    """
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    _own_task(database, "b1" + "0" * 30, user_id=30)
+    _charge(database, "b1" + "0" * 30, user_id=30, owned=GIB)
+    resource_lifecycle.request_data_deletion(
+        database, _task("b1" + "0" * 30, user_id=30), actor_user_id=30, at=1_100.0
+    )
+    # The claim is taken and the worker dies: nothing completes it, and no later
+    # pass observes a DELETE_REQUESTED row because the state is already PURGING.
+    assert database.begin_data_purge("b1" + "0" * 30, at=1_200.0) is True
+    assert database.get_data_lifecycle("b1" + "0" * 30)["state"] == DataLifecycleState.PURGING.value
+    assert database.logical_owned_bytes(30) == GIB
+
+    # A fresh claim is live, so a pass that runs immediately must not steal it.
+    assert resource_lifecycle.retry_stale_purges(
+        database, remove_artifacts=_remove, now=1_201.0
+    ) == {"recovered": 0}
+    assert database.get_data_lifecycle("b1" + "0" * 30)["state"] == DataLifecycleState.PURGING.value
+
+    # Past the staleness bound the crash is recoverable.
+    recovered = resource_lifecycle.retry_stale_purges(
+        database, remove_artifacts=_remove, now=1_200.0 + resource_lifecycle.PURGE_STALE_SECONDS + 1
+    )
+
+    assert recovered == {"recovered": 1}
+    assert database.get_data_lifecycle("b1" + "0" * 30)["state"] == DataLifecycleState.PURGED.value
+    assert database.logical_owned_bytes(30) == 0
+    released = [
+        entry for entry in database.list_ledger(30) if entry["reason_code"] == "storage_released"
+    ]
+    assert [entry["quantity"] for entry in released] == [GIB]
+
+    # And it stays released: repeated passes free nothing more.
+    resource_lifecycle.retry_stale_purges(
+        database, remove_artifacts=_remove, now=1_200.0 + 3 * resource_lifecycle.PURGE_STALE_SECONDS
+    )
+    assert database.logical_owned_bytes(30) == 0
+
+
+def test_a_crashed_purge_with_no_owning_task_row_is_completed(tmp_path):
+    """The orphan case: the Task row was hard-removed while its purge was claimed."""
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    _charge(database, "b2" + "0" * 30, user_id=31, owned=GIB)
+    database.claim_data_deletion("b2" + "0" * 30, user_id=31, actor_user_id=31, at=1_100.0)
+    assert database.begin_data_purge("b2" + "0" * 30, at=1_200.0) is True
+
+    recovered = resource_lifecycle.retry_stale_purges(
+        database, remove_artifacts=_remove, now=1_200.0 + resource_lifecycle.PURGE_STALE_SECONDS + 1
+    )
+
+    assert recovered == {"recovered": 1}
+    assert database.get_data_lifecycle("b2" + "0" * 30)["state"] == DataLifecycleState.PURGED.value
+    assert database.logical_owned_bytes(31) == 0
+
+
+def test_republishing_a_purged_result_charges_the_new_bytes(tmp_path):
+    """PURGED is a lifecycle state, not a tombstone.
+
+    Bytes that are back on disk are quota the user holds again.  Leaving the row
+    PURGED after a republication reports zero owned bytes for a real result —
+    phantom free storage — so the republication re-opens the charge under a new
+    revision and the purge's release stays a fact of history.
+    """
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "b3" + "0" * 30
+    _charge(database, task_id, user_id=32, owned=GIB)
+    resource_lifecycle.request_data_deletion(database, _task(task_id, user_id=32), actor_user_id=32, at=1_100.0)
+    resource_lifecycle.purge_task_data(
+        database, _task(task_id, user_id=32), remove_artifacts=_remove, at=1_200.0
+    )
+    assert database.logical_owned_bytes(32) == 0
+
+    database.ensure_data_lifecycle(task_id, user_id=32, logical_bytes=2 * GIB, at=1_300.0)
+    record = database.get_data_lifecycle(task_id)
+
+    assert record["state"] == DataLifecycleState.ACTIVE.value
+    assert record["logical_bytes"] == 2 * GIB
+    assert database.logical_owned_bytes(32) == 2 * GIB
+    facts = sorted(
+        entry["quantity"]
+        for entry in database.list_ledger(32)
+        if entry["reason_code"] in {"storage_charged", "storage_released"}
+    )
+    # charged, released, charged again — the release was not rewritten.
+    assert facts == [-2 * GIB, -GIB, GIB]
+    # No drift: the row no longer claims PURGED while owning bytes.
+    assert "purged_with_owned_bytes" not in {
+        item.kind for item in resource_lifecycle.detect_drift(database, now=1_400.0)
+    }
+
+# ---------------------------------------------------------------------------
+# Accounting vs. the filesystem
+# ---------------------------------------------------------------------------
+
+
+def test_drift_reports_charged_bytes_that_are_not_on_disk(tmp_path):
+    """Accounting says the bytes exist; the filesystem says they do not."""
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    _charge(database, "c1" + "0" * 30, user_id=40, owned=GIB)
+
+    kinds = {
+        item.kind
+        for item in resource_lifecycle.detect_drift(
+            database, now=1_400.0, owned_paths=lambda _task_id: 0
+        )
+    }
+
+    assert "charged_bytes_missing_on_disk" in kinds
+
+
+def test_drift_reports_task_data_that_is_not_accounted_for(tmp_path):
+    """The mirror case: durable data on disk that nothing charges the subject for."""
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    _charge(database, "c2" + "0" * 30, user_id=41, owned=0)
+
+    kinds = {
+        item.kind
+        for item in resource_lifecycle.detect_drift(
+            database, now=1_400.0, owned_paths=lambda _task_id: 4096
+        )
+    }
+
+    assert "filesystem_data_not_accounted" in kinds
+
+
+def test_unmeasurable_storage_is_reported_as_unknown_not_as_zero(tmp_path):
+    """A measurement that could not be taken is its own drift, never "no data"."""
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    _charge(database, "c3" + "0" * 30, user_id=42, owned=GIB)
+
+    kinds = {
+        item.kind
+        for item in resource_lifecycle.detect_drift(
+            database, now=1_400.0, owned_paths=lambda _task_id: None
+        )
+    }
+
+    assert "owned_bytes_unmeasurable" in kinds
+    assert "charged_bytes_missing_on_disk" not in kinds
+
+
+def test_agreeing_accounting_and_filesystem_report_no_storage_drift(tmp_path):
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    _charge(database, "c4" + "0" * 30, user_id=43, owned=GIB)
+
+    kinds = {
+        item.kind
+        for item in resource_lifecycle.detect_drift(
+            database, now=1_400.0, owned_paths=lambda _task_id: GIB
+        )
+    }
+
+    assert kinds & {
+        "charged_bytes_missing_on_disk",
+        "filesystem_data_not_accounted",
+        "owned_bytes_unmeasurable",
+    } == set()
+
+# ---------------------------------------------------------------------------
+# The lifecycle side of the operational vocabulary
+# ---------------------------------------------------------------------------
+
+
+def test_a_deletion_publishes_its_lifecycle_events(tmp_path, monkeypatch):
+    """The canonical event names are the audit trail of an authorized deletion.
+
+    Declaring a vocabulary and never emitting it leaves the lifecycle side of
+    "one reason/event scheme" silent, so the transitions that free quota are the
+    ones an operator cannot see.
+    """
+    emitted: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        resource_lifecycle,
+        "emit_event",
+        lambda event, **fields: emitted.append((event, fields)) or fields,
+    )
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "d1" + "0" * 30
+    _charge(database, task_id, user_id=50, owned=GIB)
+
+    resource_lifecycle.request_data_deletion(
+        database, _task(task_id, user_id=50), actor_user_id=50, at=1_100.0
+    )
+    resource_lifecycle.purge_task_data(
+        database, _task(task_id, user_id=50), remove_artifacts=_remove, at=1_200.0
+    )
+
+    names = [event for event, _ in emitted]
+    assert names == [
+        "resource.lifecycle.requested",
+        "resource.lifecycle.purged",
+        "resource.storage.released",
+    ]
+    released = dict(emitted)["resource.storage.released"]
+    # The event reports what this purge released, read before completion zeroed
+    # it — not the row's end state.
+    assert released["storage_bytes"] == GIB
+    assert released["task_id"] == task_id
+    assert released["user_id"] == 50
+
+
+def test_a_failed_purge_publishes_a_bounded_error_event(tmp_path, monkeypatch):
+    emitted: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        resource_lifecycle,
+        "emit_event",
+        lambda event, **fields: emitted.append((event, fields)) or fields,
+    )
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "d2" + "0" * 30
+    _charge(database, task_id, user_id=51, owned=GIB)
+    resource_lifecycle.request_data_deletion(
+        database, _task(task_id, user_id=51), actor_user_id=51, at=1_100.0
+    )
+
+    with pytest.raises(OSError):
+        resource_lifecycle.purge_task_data(
+            database,
+            _task(task_id, user_id=51),
+            remove_artifacts=lambda _task: (_ for _ in ()).throw(OSError("gone")),
+            at=1_200.0,
+        )
+
+    assert [event for event, _ in emitted] == [
+        "resource.lifecycle.requested",
+        "resource.lifecycle.error",
+    ]
+
+
+def test_reconciliation_publishes_its_completed_event(tmp_path, monkeypatch):
+    emitted: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        resource_lifecycle,
+        "emit_event",
+        lambda event, **fields: emitted.append((event, fields)) or fields,
+    )
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"), monthly_gpu_seconds=10_000)
+
+    resource_lifecycle.reconcile_resources(database, now=1_200.0)
+
+    assert [event for event, _ in emitted] == ["resource.reconciliation.completed"]
+    assert emitted[0][1]["expired_reservations"] == 0

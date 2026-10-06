@@ -31,6 +31,7 @@ from sqlalchemy import (
     delete,
     desc,
     func,
+    literal,
     or_,
     select,
     text,
@@ -42,6 +43,7 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 
 from revocompute import resource_ledger as rloan
 from revocompute import resource_model as rm
+from revocompute.operational_events import emit_event
 from revocompute.schema_epoch import require_current_schema
 
 
@@ -50,26 +52,9 @@ DEFAULT_MONTHLY_GPU_SECONDS = 60_000
 _MANIFEST_SHA256 = re.compile("[0-9a-f]{64}\\Z")
 
 
-def _class_scope(column, resource_class: str):
-    """The rows one entitlement scope covers.
-
-    The class-agnostic scope (``""``) is the deployment's single allowance, so
-    it covers *every* accelerator class: a recorded ``a100`` allocation still
-    consumes the balance it was admitted against.  A named class is the
-    per-class view, which reports the same facts filtered rather than a second
-    ledger.
-    """
-    return column == resource_class if resource_class else column.isnot(None)
-
-
 #: Default per-subject durable-storage ceiling, in logical bytes.  Soft: a
 #: result that crosses it is preserved and only later admission is restricted.
 DEFAULT_STORAGE_SOFT_LIMIT_BYTES = 100 * 1024**3
-
-#: Hard per-Task scratch ceiling enforced by the runner wrapper, in bytes.
-#: Deliberately independent of durable storage entitlement: ephemeral workspace
-#: is a per-execution safety concern, not user quota.
-DEFAULT_TASK_SCRATCH_LIMIT_BYTES = 200 * 1024**3
 
 #: Tables whose legacy ``user_id`` column is replaced by the canonical
 #: ``(subject_type, subject_id)`` pair.  The migration is additive and only
@@ -672,7 +657,12 @@ class TaskDatabase:
                     raise
                 logging.warning("TaskDatabase metadata already present, skipping creation")
             self._migrate_subject_columns(conn)
-            self._migrate_legacy_gpu_tables(conn)
+        # The legacy copy normalizes idempotency keys in place, so it must run
+        # before the append-only guards exist, and it takes its own write
+        # transaction because every process of a multi-process deployment runs
+        # this startup pass concurrently.
+        self._migrate_legacy_gpu_tables()
+        with self.engine.begin() as conn:
             self._install_append_only_guards(conn)
 
     @staticmethod
@@ -709,7 +699,7 @@ class TaskDatabase:
             return f"admin_reset:user:{key.split(':', 1)[1]}"
         return f"legacy:{key}"
 
-    def _migrate_legacy_gpu_tables(self, conn) -> None:
+    def _migrate_legacy_gpu_tables(self) -> None:
         """Copy pre-canonical GPU history into the canonical resource tables.
 
         Bounded and history-preserving: every recorded GPU-second fact moves to
@@ -720,7 +710,23 @@ class TaskDatabase:
         the idempotency-key spelling are normalized — so a policy change still
         never rewrites the past.  The legacy tables are dropped only after the
         copy, so an interrupted migration is simply retried on the next start.
+
+        A multi-process deployment starts every worker at once and each runs this
+        pass, so it runs in one ``BEGIN IMMEDIATE`` transaction and re-reads the
+        legacy tables *inside* that lock: a peer that migrates first drops them,
+        and inspecting before taking the lock would still see tables that are
+        about to disappear, turning a benign race into "no such table".
         """
+        with self.engine.connect() as conn:
+            conn.exec_driver_sql("BEGIN IMMEDIATE")
+            try:
+                self._copy_legacy_gpu_tables(conn)
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+    def _copy_legacy_gpu_tables(self, conn) -> None:
         inspector = sa_inspect(conn)
         tables = set(inspector.get_table_names())
         if "gpu_credit_ledger" in tables:
@@ -1322,27 +1328,6 @@ class TaskDatabase:
         """Default soft durable-storage ceiling, in logical bytes."""
         return self._storage_soft_limit
 
-    def account_summary(
-        self, user_id: int, *, at: float | None = None, gres: str = ""
-    ) -> dict[str, Any]:
-        """The canonical GPU-compute accounting position for one UTC month.
-
-        ``remaining_gpu_seconds`` is the admission balance: allowance minus
-        settled usage minus outstanding admission holds.  Unknown evidence (an
-        allocation whose elapsed time is not yet known) is reported as
-        ``unsettled_allocations`` and never fabricated as zero.
-        """
-        return self.compute_entitlement(user_id, unit=rloan.UNIT_GPU_SECOND, gres=gres, at=at).to_dict() | {
-            "user_id": user_id,
-            "monthly_grant_gpu_seconds": self._effective_monthly_allowance(
-                self._period_totals(user_id, self._gpu_period(at), rloan.resource_class_for_gres(gres))
-            ),
-            "usage_gpu_seconds": self._period_usage(user_id, self._gpu_period(at), rloan.resource_class_for_gres(gres)),
-            "adjustment_gpu_seconds": self._period_adjustments(
-                user_id, self._gpu_period(at), rloan.resource_class_for_gres(gres)
-            ),
-        }
-
     def _period_totals(self, user_id: int, period: str, resource_class: str) -> dict[str, int]:
         with self.engine.connect() as conn:
             return self._ledger_totals_in_connection(conn, user_id, period, resource_class)
@@ -1358,20 +1343,22 @@ class TaskDatabase:
         user_id: int,
         *,
         unit: str = rloan.UNIT_GPU_SECOND,
-        gres: str = "",
         at: float | None = None,
     ) -> rloan.ComputeEntitlement:
-        """The canonical per-(subject, unit, class) position, as a typed value.
+        """The canonical per-(subject, unit) admission position, as a typed value.
 
-        Every requested class is admitted against the one deployment allowance,
-        so every class reports that allowance: a class is a *view* of the same
-        ledger, filtered to the facts recorded under it.  Reporting ``None`` or a
-        zero allowance for a named class would create a second, contradictory
-        answer to "may this user run?" — the class-agnostic scope is the
-        authority, and admission uses it directly.
+        The entry is always the class-agnostic scope, because the deployment has
+        exactly one GPU allowance and it spans every accelerator class: a typed
+        ``a100`` second and an untyped one draw on the same balance.  This method
+        is therefore the only place that answers "may this user run?", and every
+        consumer gets the answer admission acts on.
+
+        Per-class detail is real and stays where it belongs — on the ledger rows,
+        reported by :meth:`class_usage` — but it is not an entitlement: a
+        per-class remaining balance would let a consumer read a confident "yes"
+        at one class while admission refuses at the shared balance.
         """
         checked_at = time.time() if at is None else at
-        resource_class = rloan.resource_class_for_gres(gres)
         enforce = unit == rloan.UNIT_GPU_SECOND
         period = self._gpu_period(checked_at) if rloan.periods_for_unit(unit) else ""
         with self.engine.begin() as conn:
@@ -1382,53 +1369,40 @@ class TaskDatabase:
                     self.resource_ledger_table.c.subject_type == rloan.SUBJECT_USER,
                     self.resource_ledger_table.c.subject_id == user_id,
                     self.resource_ledger_table.c.unit == unit,
-                    _class_scope(self.resource_ledger_table.c.resource_class, resource_class),
                 )
             ).mappings().all()
             reserved = conn.execute(
                 select(func.coalesce(func.sum(self.resource_reservations_table.c.quantity), 0)).where(
                     self.resource_reservations_table.c.subject_id == user_id,
                     self.resource_reservations_table.c.unit == unit,
-                    _class_scope(self.resource_reservations_table.c.resource_class, resource_class),
                     self.resource_reservations_table.c.state == rloan.ReservationState.HELD.value,
                 )
             ).scalar_one()
             unsettled, unsettled_quantity = self._unsettled_in_connection(
-                conn, user_id, unit, resource_class, checked_at
+                conn, user_id, unit, "", checked_at
             )
-            # The allowance is one deployment policy rather than a per-class
-            # budget, so a class view reports that allowance and only its own
-            # usage.  Grant and adjustment facts are always recorded
-            # class-agnostically, so a class-scoped sum of them would be an empty
-            # and misleading zero.
-            allowance = (
-                rloan.summarize_ledger(
-                    conn.execute(
-                        select(self.resource_ledger_table).where(
-                            self.resource_ledger_table.c.subject_id == user_id,
-                            self.resource_ledger_table.c.unit == unit,
-                            self.resource_ledger_table.c.period == period,
-                        )
-                    ).mappings().all(),
-                    unit=unit,
-                    resource_class="",
-                    period=period or None,
-                )["allowance"]
-                if enforce
-                else None
-            )
-        totals = rloan.summarize_ledger(rows, unit=unit, resource_class=resource_class, period=period or None)
+        totals = rloan.summarize_ledger(rows, unit=unit, resource_class="", period=period or None)
         sources = tuple(sorted({str(row["evidence_source"]) for row in rows if row["evidence_source"]}))
         return rloan.ComputeEntitlement(
             unit=unit,
-            resource_class=resource_class,
-            allowance=allowance,
+            resource_class="",
+            allowance=totals["allowance"] if enforce else None,
             used=totals["used"],
             reserved=int(reserved),
             unsettled=int(unsettled),
             unsettled_quantity=int(unsettled_quantity),
             evidence_sources=sources,
         )
+
+    def class_usage(self, user_id: int, *, gres: str, period: str | None = None) -> int:
+        """GPU-seconds one subject actually consumed in one resource class.
+
+        A *report* of recorded facts, never a balance: what a class cost is
+        knowable, while what a class is *allowed* is not a per-class question.
+        """
+        resource_class = rloan.resource_class_for_gres(gres)
+        totals = self._period_totals(user_id, period or self._gpu_period(), resource_class)
+        return -totals.get(rloan.LedgerKind.USAGE.value, 0)
 
     def _unsettled_in_connection(
         self, conn, user_id: int, unit: str, resource_class: str, now: float
@@ -1450,7 +1424,6 @@ class TaskDatabase:
             ).where(
                 self.resource_allocations_table.c.subject_id == user_id,
                 self.resource_allocations_table.c.unit == unit,
-                _class_scope(self.resource_allocations_table.c.resource_class, resource_class),
                 self.resource_allocations_table.c.status.in_(
                     (rloan.AllocationStatus.ACTIVE.value, rloan.AllocationStatus.REVIEW.value)
                 ),
@@ -1475,9 +1448,18 @@ class TaskDatabase:
     def resource_envelope(self, user_id: int, *, at: float | None = None) -> rloan.ResourceEnvelope:
         """The canonical per-subject position that later consumers project.
 
-        GPU compute is the enforced unit; CPU core-seconds are reported as an
-        unenforced fact so placement and reporting read one envelope rather than
-        inventing a second usage model.
+        ``compute`` carries the scopes admission decides on: the class-agnostic
+        GPU balance (the one allowance, which already spans every accelerator
+        class) and each ungated unit this deployment records.  A per-class entry
+        is deliberately absent — it would be a second, potentially contradicting
+        answer to "may this user run?", and a consumer reading it could be told
+        yes while admission says no.  Class detail stays available as a filtered
+        report via :meth:`class_usage`.
+
+        Storage is reported once, as :attr:`ResourceEnvelope.storage`.  It is
+        durable ownership rather than per-period consumption, so mirroring it as
+        a ``storage_byte`` compute entry would publish two numbers that diverge
+        the moment a result is republished with a different size.
         """
         checked_at = time.time() if at is None else at
         return rloan.ResourceEnvelope(
@@ -1487,7 +1469,6 @@ class TaskDatabase:
             compute=(
                 self.compute_entitlement(user_id, unit=rloan.UNIT_GPU_SECOND, at=checked_at),
                 self.compute_entitlement(user_id, unit=rloan.UNIT_CPU_CORE_SECOND, at=checked_at),
-                self.compute_entitlement(user_id, unit=rloan.UNIT_STORAGE_BYTE, at=checked_at),
             ),
             storage=self.storage_entitlement(user_id),
         )
@@ -1780,8 +1761,14 @@ class TaskDatabase:
         return normalized
 
     def _ledger_totals_in_connection(self, conn, user_id: int, period: str, resource_class: str = "") -> dict[str, int]:
-        """Sum one GPU-second period by ledger kind.  A pure projection."""
-        rows = conn.execute(
+        """Sum one GPU-second period by ledger kind, optionally for one class.
+
+        A *report*: an empty class sums every class (the allowance scope) and a
+        named class selects the facts recorded under it.  Neither decides
+        admission — that is :meth:`compute_entitlement`, always at the
+        allowance scope.
+        """
+        stmt = (
             select(
                 self.resource_ledger_table.c.kind,
                 func.sum(self.resource_ledger_table.c.quantity),
@@ -1792,7 +1779,10 @@ class TaskDatabase:
                 self.resource_ledger_table.c.period == period,
             )
             .group_by(self.resource_ledger_table.c.kind)
-        ).all()
+        )
+        if resource_class:
+            stmt = stmt.where(self.resource_ledger_table.c.resource_class == resource_class)
+        rows = conn.execute(stmt).all()
         return {str(kind): int(total or 0) for kind, total in rows}
 
     def _reset_account_in_connection(
@@ -2588,8 +2578,9 @@ class TaskDatabase:
                         "period": period,
                     }
                 reservation_id = self._reservation_id()
-                conn.execute(
-                    sqlite_insert(self.resource_reservations_table).values(
+                inserted = conn.execute(
+                    sqlite_insert(self.resource_reservations_table)
+                    .values(
                         id=reservation_id,
                         subject_type=rloan.SUBJECT_USER,
                         subject_id=user_id,
@@ -2603,7 +2594,27 @@ class TaskDatabase:
                         expires_at=timestamp + ttl_seconds,
                         released_at=None,
                     )
+                    .on_conflict_do_nothing(
+                        index_elements=[self.resource_reservations_table.c.task_id],
+                        index_where=text("state = 'held'"),
+                    )
                 )
+                if not inserted.rowcount:
+                    # This Task already holds entitlement.  Answering with a
+                    # bounded refusal keeps the caller on its decision path: a
+                    # resubmission of a Task whose hold is still live is exactly
+                    # the case the caller already knows how to report.
+                    conn.commit()
+                    return {
+                        "allowed": False,
+                        "reason_code": rloan.AdmissionReason.COMPUTE_EXHAUSTED.value,
+                        "reservation_id": None,
+                        "quantity": 0,
+                        "remaining": remaining,
+                        "unsettled": unsettled,
+                        "resource_class": resource_class,
+                        "period": period,
+                    }
                 conn.commit()
             except Exception:
                 conn.rollback()
@@ -2635,12 +2646,24 @@ class TaskDatabase:
     def release_reservation(
         self, *, task_id: str, reason_code: str = rloan.ReservationReason.RELEASED.value, at: float | None = None
     ) -> bool:
-        """Release this Task's live hold.  Idempotent: a second call is a no-op."""
+        """Release this Task's live hold.  Idempotent: a second call is a no-op.
+
+        The hold is a claim on entitlement a submission has not consumed, so
+        releasing it is a real admission fact and is reported as one.  A no-op
+        release emits nothing: there was no live claim to give back.
+        """
         timestamp = time.time() if at is None else at
         with self.engine.begin() as conn:
-            return self._release_reservation_in_connection(
+            released = self._release_reservation_in_connection(
                 conn, task_id=task_id, reason_code=reason_code, released_at=timestamp
             )
+        if released:
+            emit_event(
+                "resource.admission.released",
+                task_id=task_id,
+                reason_code=reason_code,
+            )
+        return released
 
     def list_reservations(
         self, *, user_id: int | None = None, state: str | None = None, limit: int = 200
@@ -2693,6 +2716,12 @@ class TaskDatabase:
         and records how much was charged (``accounted_bytes``), which is what a
         later purge may release — so a partial purge frees nothing it was not
         charged for, and a completed purge frees it exactly once.
+
+        Republishing after a purge re-opens the Task's data: a ``PURGED`` row is
+        a lifecycle *state*, not a tombstone, and bytes that are back on disk must
+        be charged again or the user gets quota for free.  Each charge carries a
+        monotonic charge revision, so a re-charge is a distinct idempotent fact
+        rather than a duplicate of the first one.
         """
         timestamp = time.time() if at is None else at
         size = max(0, int(logical_bytes))
@@ -2705,8 +2734,13 @@ class TaskDatabase:
                 .one_or_none()
             )
             if existing is None:
-                conn.execute(
-                    sqlite_insert(self.data_lifecycle_table).values(
+                # Two workers can publish the same Task concurrently.  The
+                # loser must not raise: the insert is conditional on the row
+                # still being absent, and whoever loses simply re-reads the
+                # winner's row (and does not charge a second time).
+                claimed = conn.execute(
+                    sqlite_insert(self.data_lifecycle_table)
+                    .values(
                         task_id=task_id,
                         subject_type=rloan.SUBJECT_USER,
                         subject_id=user_id,
@@ -2716,8 +2750,19 @@ class TaskDatabase:
                         charge_revision=1,
                         updated_at=timestamp,
                     )
+                    .on_conflict_do_nothing(index_elements=[self.data_lifecycle_table.c.task_id])
                 )
-                if size:
+                if not claimed.rowcount:
+                    existing = (
+                        conn.execute(
+                            select(self.data_lifecycle_table).where(
+                                self.data_lifecycle_table.c.task_id == task_id
+                            )
+                        )
+                        .mappings()
+                        .one()
+                    )
+                else:
                     self._append_storage_fact(
                         conn,
                         user_id=user_id,
@@ -2725,7 +2770,48 @@ class TaskDatabase:
                         quantity=-size,
                         reason="Durable result published",
                         reason_code=rloan.LedgerReason.STORAGE_CHARGED.value,
-                        idempotency_key=f"storage_usage:{task_id}:0",
+                        idempotency_key=f"storage_usage:{task_id}:1",
+                        timestamp=timestamp,
+                    )
+                    existing = (
+                        conn.execute(
+                            select(self.data_lifecycle_table).where(
+                                self.data_lifecycle_table.c.task_id == task_id
+                            )
+                        )
+                        .mappings()
+                        .one()
+                    )
+                return dict(existing)
+            if str(existing["state"]) == rloan.DataLifecycleState.PURGED.value:
+                # The data came back.  Charge the new ownership under the next
+                # charge revision, so the purge's release stays a fact of history
+                # and this is a new fact rather than a rewrite of it.
+                revision = int(existing["charge_revision"]) + 1
+                conn.execute(
+                    update(self.data_lifecycle_table)
+                    .where(
+                        self.data_lifecycle_table.c.task_id == task_id,
+                        self.data_lifecycle_table.c.state == rloan.DataLifecycleState.PURGED.value,
+                    )
+                    .values(
+                        state=rloan.DataLifecycleState.ACTIVE.value,
+                        logical_bytes=size,
+                        accounted_bytes=size,
+                        charge_revision=revision,
+                        purged_at=None,
+                        updated_at=timestamp,
+                    )
+                )
+                if size:
+                    self._append_storage_fact(
+                        conn,
+                        user_id=user_id,
+                        task_id=task_id,
+                        quantity=-size,
+                        reason="Durable result republished",
+                        reason_code=rloan.LedgerReason.STORAGE_CHARGED.value,
+                        idempotency_key=f"storage_usage:{task_id}:{revision}",
                         timestamp=timestamp,
                     )
             elif int(existing["logical_bytes"]) != size:
@@ -2876,18 +2962,52 @@ class TaskDatabase:
                 return False
             charged = int(row["accounted_bytes"])
             revision = int(row["charge_revision"]) + 1
+            # Both the release and the PURGED write are conditional on the row
+            # still being PURGING, inside one transaction.  Two concurrent
+            # completions therefore append the fact at most once: the loser
+            # observes no row and returns False instead of freeing the quota a
+            # second time.
             if charged:
-                self._append_storage_fact(
-                    conn,
-                    user_id=int(row["subject_id"]),
-                    task_id=task_id,
-                    quantity=charged,
-                    reason="Owned bytes purged",
-                    reason_code=rloan.LedgerReason.STORAGE_RELEASED.value,
-                    idempotency_key=f"storage_usage:{task_id}:{revision}",
-                    timestamp=timestamp,
+                # INSERT ... SELECT: the release exists only if the row is still
+                # PURGING at the moment SQLite evaluates it, and the same
+                # condition gates the PURGED write below, inside this one
+                # transaction.  Two concurrent completions therefore append the
+                # fact at most once — the loser inserts no row and returns False
+                # rather than freeing the quota a second time.
+                release_from = select(
+                    literal(rloan.SUBJECT_USER),
+                    literal(int(row["subject_id"])),
+                    literal(""),
+                    literal(rloan.LedgerKind.STORAGE_USAGE.value),
+                    literal(rloan.UNIT_STORAGE_BYTE),
+                    literal(""),
+                    literal(charged),
+                    literal(task_id),
+                    literal(None),
+                    literal(None),
+                    literal(None),
+                    literal("Owned bytes purged"),
+                    literal(rloan.LedgerReason.STORAGE_RELEASED.value),
+                    literal(rloan.EvidenceSource.ALLOCATION_LIFECYCLE.value),
+                    literal(f"storage_usage:{task_id}:{revision}"),
+                    literal(timestamp),
+                ).select_from(self.data_lifecycle_table).where(
+                    self.data_lifecycle_table.c.task_id == task_id,
+                    self.data_lifecycle_table.c.state == rloan.DataLifecycleState.PURGING.value,
                 )
-            conn.execute(
+                released = conn.execute(
+                    sqlite_insert(self.resource_ledger_table)
+                    .from_select(
+                        ["subject_type", "subject_id", "period", "kind", "unit", "resource_class",
+                         "quantity", "task_id", "stage_id", "slurm_job_id", "actor_user_id",
+                         "reason", "reason_code", "evidence_source", "idempotency_key", "created_at"],
+                        release_from,
+                    )
+                    .on_conflict_do_nothing(index_elements=[self.resource_ledger_table.c.idempotency_key])
+                )
+                if not released.rowcount:
+                    return False
+            completed = conn.execute(
                 update(self.data_lifecycle_table)
                 .where(
                     self.data_lifecycle_table.c.task_id == task_id,
@@ -2903,7 +3023,7 @@ class TaskDatabase:
                     error="",
                 )
             )
-            return True
+            return completed.rowcount == 1
 
     def mark_data_lifecycle_error(self, task_id: str, *, error: str, at: float | None = None) -> bool:
         """Record a purging Task that could not be completed, without freeing quota."""
@@ -2927,6 +3047,28 @@ class TaskDatabase:
             .where(
                 self.data_lifecycle_table.c.task_id == task_id,
                 self.data_lifecycle_table.c.state == rloan.DataLifecycleState.ERROR.value,
+            )
+            .values(state=rloan.DataLifecycleState.DELETE_REQUESTED.value, updated_at=timestamp)
+        )
+        with self.engine.begin() as conn:
+            return conn.execute(stmt).rowcount == 1
+
+    def reclaim_stale_purge(self, task_id: str, *, at: float | None = None) -> bool:
+        """Return an abandoned ``PURGING`` claim to ``DELETE_REQUESTED``.
+
+        The caller owns the staleness decision — it is the only party that knows
+        how long a purge may legitimately run — and this is the transaction that
+        makes the reclaim durable.  Without it an interrupted purge can never be
+        retried: ``begin_data_purge`` requires ``DELETE_REQUESTED``, so a worker
+        that died between its claim and its completion would hold its subject's
+        quota forever.
+        """
+        timestamp = time.time() if at is None else at
+        stmt = (
+            update(self.data_lifecycle_table)
+            .where(
+                self.data_lifecycle_table.c.task_id == task_id,
+                self.data_lifecycle_table.c.state == rloan.DataLifecycleState.PURGING.value,
             )
             .values(state=rloan.DataLifecycleState.DELETE_REQUESTED.value, updated_at=timestamp)
         )

@@ -43,6 +43,60 @@ from revocompute.maintenance.tasks.result_cleanup import delete_task_artifacts
 DEFAULT_RESOURCE_MAINTENANCE_SECONDS = 0
 
 
+#: Bound on the entries one drift measurement visits per Task.  A result tree
+#: is a handful of artifacts; a tree larger than this is not measurable within
+#: the pass, and the drift check reports "unmeasurable" rather than a number it
+#: did not finish computing.
+OWNED_PATHS_MAX_ENTRIES = 20_000
+
+
+def _owned_bytes_measure(results_folder: str) -> Callable[[str], int | None]:
+    """Bind a bounded, unprivileged disk-usage measurement of one Task's data.
+
+    It measures filesystem *occupancy* — allocated blocks — of the Task's result
+    tree, which is what "these bytes are actually on disk" means for the drift
+    check; apparent size would report a sparse file as capacity it never used.
+    A Task with no result directory measures zero: there is no data under it.
+
+    The path is resolved from the storage layout rather than passed in, because
+    the pass only has a Task id and the layout already answers where that Task's
+    data lives.  A tree too large to measure within the bound returns ``None``,
+    which the caller reports as unmeasurable instead of a number it never
+    finished computing.
+    """
+    results_abs = os.path.abspath(results_folder)
+    tasks_root = os.path.join(results_abs, "users")
+
+    def measure(task_id: str) -> int | None:
+        if not os.path.isdir(tasks_root):
+            return 0
+        total = 0
+        visited = 0
+        found = False
+        for user_root in os.scandir(tasks_root):
+            if not user_root.is_dir(follow_symlinks=False):
+                continue
+            candidate = os.path.join(user_root.path, "tasks", task_id)
+            if not os.path.isdir(candidate) or os.path.islink(candidate):
+                continue
+            found = True
+            for walk_root, dirs, files in os.walk(candidate, followlinks=False):
+                dirs[:] = [
+                    name for name in dirs if not os.path.islink(os.path.join(walk_root, name))
+                ]
+                for name in files:
+                    visited += 1
+                    if visited > OWNED_PATHS_MAX_ENTRIES:
+                        return None
+                    try:
+                        total += os.lstat(os.path.join(walk_root, name)).st_blocks * 512
+                    except OSError:
+                        continue
+        return total if found else 0
+
+    return measure
+
+
 def _remove_artifacts(results_folder: str) -> Callable[[dict[str, Any]], None]:
     """Bind the storage layout once, so the lifecycle module owns only the transaction."""
     workspace_folder = os.path.join(os.path.dirname(results_folder), "workspaces")
@@ -62,7 +116,9 @@ def run_resource_maintenance(
     """Run one purge + reconciliation pass and return what it changed."""
     config = ComputeConfig.from_env()
     store = task_store or TaskDatabase(config.db_path)
-    remove_artifacts = _remove_artifacts(results_folder or config.results_folder)
+    results = results_folder or config.results_folder
+    remove_artifacts = _remove_artifacts(results)
+    owned_paths = _owned_bytes_measure(results)
     timestamp = time.time() if now is None else now
 
     purged = resource_lifecycle.purge_requested_tasks(
@@ -71,7 +127,7 @@ def run_resource_maintenance(
     recovered = resource_lifecycle.retry_stale_purges(
         store, remove_artifacts=remove_artifacts, now=timestamp
     )
-    report = resource_lifecycle.reconcile_resources(store, now=timestamp)
+    report = resource_lifecycle.reconcile_resources(store, owned_paths=owned_paths, now=timestamp)
     if purged["purged"] or recovered["recovered"] or report.drift:
         logging.info(
             "Resource maintenance: purged=%d recovered=%d expired_reservations=%d drift=%d",

@@ -1187,6 +1187,15 @@ def _finalize_results_manifest(
     """Atomically publish the immutable scientific result record for a task."""
     if execution_state not in {"completed", "failed"}:
         raise ValueError("execution_state must be completed or failed")
+    if not _data_still_owned(str(task["md5sum"])):
+        # The data lifecycle moved on while this worker was finishing: the Task's
+        # durable data was already deleted, or its deletion is in flight.  A
+        # worker that re-created ``manifest.json`` here would re-materialize the
+        # tree a purge had just removed and charge the subject for it, defeating
+        # the deletion the user — or an Admin — authorized.  The execution
+        # lifecycle and the data lifecycle are orthogonal, and this is the one
+        # place they touch, so the durable row is authoritative.
+        raise DataPurgedError(str(task["md5sum"]))
     result_dir = _task_result_dir(task)
     os.makedirs(result_dir, exist_ok=True)
     try:
@@ -1421,7 +1430,7 @@ def _charge_logical_storage(task: dict[str, Any], manifest: dict[str, Any]) -> N
             task_id=str(task["md5sum"]),
             user_id=user_id,
             storage_bytes=owned,
-            reason_code="storage_charged",
+            reason_code=LedgerReason.STORAGE_CHARGED.value,
         )
     except Exception:
         logging.exception("Could not charge logical storage for task %s", task.get("md5sum"))
@@ -1507,6 +1516,38 @@ def format_walltime(seconds: Any) -> str:
 # ---------------------------------------------------------------------------
 # Status helpers
 # ---------------------------------------------------------------------------
+
+
+class DataPurgedError(RuntimeError):
+    """A result cannot be published because the Task's data lifecycle forbids it.
+
+    ``ACTIVE`` and ``ARCHIVED`` are the states in which the Task still owns its
+    durable data.  Every deletion-ward state — requested, purging, purged — and
+    the error state of an interrupted purge mean the data is being removed or is
+    already gone, so publishing a fresh manifest would resurrect a tree the
+    deletion is responsible for.
+    """
+
+
+def _data_still_owned(task_id: str) -> bool:
+    """Whether a Task may publish durable data right now.
+
+    No lifecycle row is the normal case for a Task whose result has not been
+    registered yet: the charge is created by the publication itself.  The check
+    is therefore "no row, or a row in an owning state", read from the store that
+    owns the row rather than inferred from the task's execution status.
+
+    Only ``ACTIVE`` and ``ARCHIVED`` publish.  The deletion-ward states mean a
+    removal is authorized or under way, and ``ERROR`` is an interrupted removal
+    that a later pass retries, so none of them may re-materialize the tree.
+    """
+    record = task_store.get_data_lifecycle(task_id)
+    if record is None:
+        return True
+    return str(record["state"]) in (
+        rloan.DataLifecycleState.ACTIVE.value,
+        rloan.DataLifecycleState.ARCHIVED.value,
+    )
 
 
 def _is_terminal_status(status: Any) -> bool:
@@ -1928,6 +1969,14 @@ def _execute_compute_task(
             _record_failure(md5sum, task, start_time, stage_state["current"], str(exc))
             logging.error("Publication failed for task %s: %s", md5sum, exc)
             return
+        except DataPurgedError:
+            # The user (or an Admin) deleted this Task's durable data while the
+            # allocation was still finishing.  The deletion wins: the Task ends
+            # without republishing a result tree the purge just removed, and the
+            # lifecycle row keeps its own state instead of charging bytes back.
+            logging.info("Task %s data was purged before finalization; not republishing results", md5sum)
+            _cleanup_task_workspace(task)
+            return
         refreshed_task = task_store.get_task(md5sum) or refreshed_task
         if _is_terminal_status(refreshed_task.get("status")):
             return
@@ -2139,7 +2188,7 @@ def _reconcile_gpu_allocations() -> dict[str, int]:
             user_id=int(settled["subject_id"]),
             gpu_count=int(settled["resource_count"]),
             gpu_seconds=int(settled["quantity"]),
-            reason_code="scontrol_recovery",
+            reason_code=LedgerReason.SLURM_LIVE.value,
         )
         result["settled"] += 1
     return result
@@ -2250,6 +2299,12 @@ def _finalize_after_poll(md5sum, task, tt, state):
             # finished task with an unreadable result.
             _record_failure(md5sum, task, task.get("started_at") or finish_time, "", str(exc))
             logging.error("Publication failed for recovered task %s: %s", md5sum, exc)
+            return
+        except DataPurgedError:
+            # Same rule on the recovery path: a purge that ran while the job was
+            # being recovered is authoritative over this worker's result tree.
+            logging.info("Task %s data was purged before recovery finalization", md5sum)
+            _cleanup_task_workspace(task)
             return
         refreshed = task_store.get_task(md5sum) or refreshed
         if _is_terminal_status(refreshed.get("status")):

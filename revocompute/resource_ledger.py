@@ -25,8 +25,9 @@ Four concepts are deliberately separate and none may overwrite another:
 Everything here is stored in *base units* — integer seconds, bytes, and counts.
 Hours, GiB, percentages, and "credits" exist only at projection boundaries.  A
 measurement that could not be obtained is :data:`UNKNOWN` with its provenance,
-never a fabricated zero: :class:`ComputeEntitlement.usage_complete` and
-:class:`AdmissionDecision.reason_code` carry that distinction forward.
+never a fabricated zero: :class:`ComputeEntitlement.usage_complete` and its
+``unsettled_quantity`` carry that distinction forward, and admission refuses on
+the same reserve rather than admitting a subject as if nothing were running.
 
 The durable ``(subject_type, subject_id)`` pair keeps the schema extensible to
 project/lab subjects without implementing that hierarchy.  Only
@@ -163,7 +164,13 @@ class ReservationState(str, Enum):
 
 
 class AdmissionReason(str, Enum):
-    """Bounded reason code for an admission decision."""
+    """Bounded reason code for an admission decision.
+
+    Every value here is produced by a real refusal path.  A subject that does
+    not exist is a 404 before admission is reached, so there is deliberately no
+    "unknown subject" code: a vocabulary entry nothing can emit is a claim the
+    system cannot make.
+    """
 
     ADMITTED = "admitted"
     COMPUTE_EXHAUSTED = "compute_exhausted"
@@ -171,7 +178,6 @@ class AdmissionReason(str, Enum):
     AUTHORIZATION_UNAVAILABLE = "authorization_unavailable"
     RUNNER_READINESS_UNAVAILABLE = "runner_readiness_unavailable"
     INFRASTRUCTURE_UNAVAILABLE = "infrastructure_unavailable"
-    UNKNOWN_SUBJECT = "unknown_subject"
 
 
 class LedgerReason(str, Enum):
@@ -190,6 +196,7 @@ class LedgerReason(str, Enum):
     ADMIN_RESET_ALL = "admin_reset_all"
     MIGRATED = "migrated"
     ACTUAL_ALLOCATION = "actual_allocation"
+    SLURM_LIVE = "slurm_live"
     STORAGE_CHARGED = "storage_charged"
     STORAGE_RELEASED = "storage_released"
 
@@ -254,12 +261,18 @@ RESERVATION_TTL_SECONDS = 3600.0
 
 @dataclass(frozen=True)
 class ComputeEntitlement:
-    """One (subject, unit, resource class) entitlement and its current position.
+    """One (subject, unit, class) entitlement and its current position.
 
-    ``allowance`` is ``None`` for a unit this deployment does not gate: its
-    usage is still recorded, audited, and reported, but no policy exists to
-    admit or refuse it.  Only GPU compute is gated today, so CPU core-seconds
-    are accounted without inventing a quota for them.
+    Every entry in a :class:`ResourceEnvelope` is an *admission* scope: the
+    class-agnostic GPU balance that admission actually decides on, plus the units
+    this deployment records without gating.  ``allowance`` is ``None`` for an
+    ungated unit: its usage is still recorded, audited, and reported, but no
+    policy exists to admit or refuse it.
+
+    A named resource class is a *report* of the same ledger
+    (``TaskDatabase.class_usage``), never a second entitlement: the deployment
+    has one allowance, so a per-class balance could disagree with the decision
+    made against it and a consumer reading it would get a wrong "yes".
 
     ``unsettled`` counts allocations whose authoritative elapsed time is not yet
     known.  While it is non-zero the recorded usage is a *lower bound*, so
@@ -346,9 +359,16 @@ class StorageEntitlement:
 class ResourceEnvelope:
     """The canonical per-subject position that downstream consumers project.
 
+    ``compute`` carries only the scopes admission actually decides on.  The
+    deployment has one allowance, so a per-class entry would be a second answer
+    to "may this user run?" that can disagree with the decision itself; per-class
+    detail is a *report* of the same ledger (``TaskDatabase.class_usage``) and is
+    never an admission source.  Storage has exactly one representation,
+    :attr:`storage` — it is durable ownership, not per-period consumption, so it
+    is not also a compute entry.
+
     Placement (#60) consumes :attr:`compute`; Admin reporting (#61) aggregates
-    the same ledger; MCP projects :class:`AdmissionDecision` without owning
-    accounting.
+    the same ledger; MCP projects an admission result without owning accounting.
     """
 
     subject_type: str
@@ -357,11 +377,9 @@ class ResourceEnvelope:
     compute: tuple[ComputeEntitlement, ...]
     storage: StorageEntitlement
 
-    def compute_for(self, unit: str, resource_class: str = "") -> ComputeEntitlement | None:
-        return next(
-            (item for item in self.compute if item.unit == unit and item.resource_class == resource_class),
-            None,
-        )
+    def compute_for(self, unit: str) -> ComputeEntitlement | None:
+        """The authoritative entitlement for *unit*, or ``None`` if unrecorded."""
+        return next((item for item in self.compute if item.unit == unit), None)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -370,30 +388,6 @@ class ResourceEnvelope:
             "period": self.period,
             "compute": [item.to_dict() for item in self.compute],
             "storage": self.storage.to_dict(),
-        }
-
-
-@dataclass(frozen=True)
-class AdmissionDecision:
-    """Why a submission was admitted or refused, with its evidence."""
-
-    allowed: bool
-    reason_code: str
-    subject_type: str
-    subject_id: int
-    envelope: ResourceEnvelope
-    reservation_id: str | None = None
-    detail: str = ""
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "allowed": self.allowed,
-            "reason_code": self.reason_code,
-            "subject_type": self.subject_type,
-            "subject_id": self.subject_id,
-            "reservation_id": self.reservation_id,
-            "detail": self.detail,
-            "envelope": self.envelope.to_dict(),
         }
 
 

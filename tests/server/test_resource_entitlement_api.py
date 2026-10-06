@@ -71,7 +71,11 @@ def test_user_envelope_is_self_scoped_and_matches_the_published_schema(monkeypat
     _validate(spec, "ResourceEntitlement", payload)
     assert payload["subject_type"] == "user"
     units = {item["unit"]: item for item in payload["compute"]}
-    assert set(units) == {"gpu_second", "cpu_core_second", "storage_byte"}
+    # Compute scopes only.  Durable storage is reported once, under
+    # ``storage``: mirroring it as a ``storage_byte`` compute entry would put
+    # two numbers for the same fact in one envelope, and they diverge as soon
+    # as a result is republished with a different size.
+    assert set(units) == {"gpu_second", "cpu_core_second"}
     # GPU compute is the enforced unit; the others are accounted facts.
     assert units["gpu_second"]["enforced"] is True
     assert units["cpu_core_second"]["enforced"] is False

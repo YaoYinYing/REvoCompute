@@ -78,16 +78,23 @@ retained, independent of the Task's execution status.
 
 The envelope contains:
 
-- `compute`: one entry per `(unit, resource_class)`. GPU compute
-  (`gpu_second`) is the enforced unit today; CPU core-seconds and storage bytes
-  are recorded and reported with `enforced: false` and `allowance: null`. A GPU
-  entry keeps its Slurm GRES class (`gpu:a100:2` reports class `a100` with count
-  2) rather than collapsing every accelerator into one opaque total.
+- `compute`: one entry per unit admission decides on, always for the
+  class-agnostic scope. GPU compute (`gpu_second`) is the enforced unit today;
+  CPU core-seconds is recorded and reported with `enforced: false` and
+  `allowance: null`. The deployment has one GPU allowance spanning every
+  accelerator class, so the `gpu_second` entry is the single authority on "may
+  this user run?" — a per-class balance could report a confident `yes` for one
+  class while admission refuses at the shared balance. Per-class detail (a Slurm
+  GRES class such as `a100`) stays a *report* of the same ledger, never a second
+  entitlement.
 - `storage`: `logical_owned_bytes` — user-facing quota consumption, measured
   from a Task's published result manifest — kept separate from physical
-  filesystem capacity. `soft_limit_bytes` is a policy ceiling; a successful
-  computation that crosses it keeps its scientific result and only later
-  submission is restricted.
+  filesystem capacity. It appears exactly once; mirroring it as a
+  `storage_byte` compute entry would publish two numbers for one fact, and they
+  diverge the moment a result is republished with a different size.
+  `soft_limit_bytes` is a policy ceiling; a successful computation that crosses
+  it keeps its scientific result and only later admission — of any Task, GPU or
+  CPU — is refused.
 
 ### Accounting facts are append-only
 
@@ -127,7 +134,16 @@ claims it into `PURGING`, and the quota that was charged is released only when
 the owned bytes are actually gone. A crash anywhere in that sequence leaves a
 resumable deletion, and a failed purge keeps the charge and its error so a later
 pass can retry it. A partial purge therefore frees nothing, and a completed purge
-releases exactly the bytes it charged, once.
+releases exactly the bytes it charged, once. Recovery re-enters *from the durable
+state*, so a stale `PURGING` row is reclaimed and retried and a worker that died
+between its claim and its completion cannot hold a subject's quota forever.
+`PURGED` is a lifecycle state rather than a tombstone, so a result published
+again after a purge is charged again.
+
+Deletion and publication cannot resurrect each other. A Task whose data is in a
+deletion-ward lifecycle state is not republished by a worker that is still
+finishing: the durable lifecycle row wins over the worker's result tree, so a
+delete that lands mid-finalization is not re-materialized and re-charged.
 
 Automatic age-based purge is not enabled by default. An operator can turn on the
 `resource-maintenance` periodic task with `RESOURCE_MAINTENANCE_SECONDS` (see

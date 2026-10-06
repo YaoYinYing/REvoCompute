@@ -140,6 +140,11 @@ class _FakeTaskStore:
     def get_result_publication(self, md5sum):
         return self.publications[-1] if self.publications else None
 
+    def get_data_lifecycle(self, task_id):
+        # No lifecycle row: the Task still owns its data, so finalization is
+        # allowed.  The fake store models the task row only.
+        return None
+
 
 class _FakeTaskType:
     stage_markers = {"running": "Running", "done": "Done"}

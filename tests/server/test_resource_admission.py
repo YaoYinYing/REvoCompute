@@ -360,11 +360,16 @@ def test_a_named_class_is_recorded_and_admitted_against_the_one_allowance(tmp_pa
     assert allocation["resource_class"] == "a100"
     assert allocation["resource_count"] == 2
     assert allocation["quantity"] == 200
-    # The class view and the class-agnostic view agree on the same single
-    # allowance, so neither can contradict the other's admission answer.
-    assert database.compute_entitlement(89, at=at + 100).allowance == 1_000
-    assert database.compute_entitlement(89, at=at + 100, gres="gpu:a100:2").allowance == 1_000
-    assert database.compute_entitlement(89, at=at + 100).used == 200
+    # Admission has exactly one authoritative scope, and it is class-agnostic:
+    # there is no per-class balance that could answer "may this user run?" with
+    # a different verdict.  Per-class detail is a *report* of the same ledger.
+    entitlement = database.compute_entitlement(89, at=at + 100)
+    assert entitlement.allowance == 1_000
+    assert entitlement.used == 200
+    assert entitlement.resource_class == ""
+    assert entitlement.remaining == 800
+    assert database.class_usage(89, gres="gpu:a100:2", period="2026-09") == 200
+    assert database.class_usage(89, gres="gpu:h100:1", period="2026-09") == 0
 
 
 def test_typed_gpu_usage_consumes_the_shared_allowance(tmp_path):
@@ -413,3 +418,86 @@ def test_a_different_class_does_not_open_a_second_budget(tmp_path):
     )
     assert decision["allowed"] is False
     assert decision["reason_code"] == AdmissionReason.COMPUTE_EXHAUSTED.value
+
+def test_a_task_that_already_holds_entitlement_is_refused_not_crashed(tmp_path):
+    """A resubmission whose hold is still live must be a bounded refusal.
+
+    The refusal path is a decision the caller already knows how to report; an
+    ``IntegrityError`` from the partial unique index would instead surface as an
+    unhandled 500 on a submission that did nothing wrong.
+    """
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"), monthly_gpu_seconds=1_000)
+    at = _timestamp(2026, 9, 6)
+    task_id = "b" * 32
+
+    first = _reserve(database, 92, task_id=task_id, at=at)
+    second = _reserve(database, 92, task_id=task_id, at=at + 1)
+
+    assert first["allowed"] is True
+    assert second["allowed"] is False
+    assert second["reason_code"] == AdmissionReason.COMPUTE_EXHAUSTED.value
+    assert second["reservation_id"] is None
+    assert second["quantity"] == 0
+    # Exactly one hold exists: the refusal did not mint a second claim.
+    holds = database.list_reservations(user_id=92, state=ReservationState.HELD.value)
+    assert [hold["task_id"] for hold in holds] == [task_id]
+    assert sum(int(hold["quantity"]) for hold in holds) == first["quantity"]
+
+
+# ---------------------------------------------------------------------------
+# One authoritative answer to "may this user run?"
+# ---------------------------------------------------------------------------
+
+
+def test_the_envelope_can_never_contradict_the_admission_decision(tmp_path):
+    """The projection and the decision are the same scope, so they agree.
+
+    A later consumer (placement, reporting, MCP) reads the envelope instead of
+    re-deriving a balance.  If a per-class entry existed it could report a
+    confident "yes" for one class while admission refuses at the shared
+    allowance — so the envelope carries only the scopes admission decides on.
+    """
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"), monthly_gpu_seconds=1_000)
+    at = _timestamp(2026, 9, 6)
+    _start(database, 93, job_id="9810", at=at, gpus=1, gres="gpu:a100:1")
+    database.settle_allocation_elapsed("9810", elapsed_seconds=600, finished_at=at + 600)
+
+    envelope = database.resource_envelope(93, at=at + 600)
+    gpu = envelope.compute_for("gpu_second")
+    assert gpu is not None
+    assert gpu.resource_class == ""
+
+    # The envelope's own remaining balance is what admission acts on: a request
+    # for the last of it is admitted, one unit more is refused, and the envelope
+    # reports the same zero afterwards.
+    decision = _reserve(database, 93, task_id="e" * 32, at=at + 600)
+    assert decision["allowed"] is True
+    assert decision["remaining"] == gpu.remaining - decision["quantity"]
+    refused = _reserve(database, 93, task_id="f" * 32, at=at + 600)
+    assert refused["allowed"] is False
+    assert database.resource_envelope(93, at=at + 600).compute_for("gpu_second").remaining == 0
+
+
+def test_releasing_a_hold_publishes_the_admission_release_fact(tmp_path, monkeypatch):
+    """Giving entitlement back is an admission decision, so it is observable.
+
+    The no-op case emits nothing: a second release has no live claim to report,
+    and emitting one would make an idempotent call look like a second release.
+    """
+    emitted: list[tuple[str, dict]] = []
+    import revocompute.db as db_module
+
+    monkeypatch.setattr(
+        db_module,
+        "emit_event",
+        lambda event, **fields: emitted.append((event, fields)) or fields,
+    )
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"), monthly_gpu_seconds=1_000)
+    at = _timestamp(2026, 9, 6)
+    _reserve(database, 94, task_id="a" * 32, at=at)
+
+    assert database.release_reservation(task_id="a" * 32, at=at + 1) is True
+    assert database.release_reservation(task_id="a" * 32, at=at + 2) is False
+
+    assert [event for event, _ in emitted] == ["resource.admission.released"]
+    assert emitted[0][1]["task_id"] == "a" * 32

@@ -24,6 +24,7 @@ import yaml
 import conftest
 from conftest import _anchor_result_publication, _extract_md5, _load_pssm_module, _relocate_task_artifacts, _task_owner
 from jsonschema import Draft202012Validator
+from revocompute.resource_ledger import DataLifecycleState
 from revocompute.task_types import TaskInputRole
 from werkzeug.utils import secure_filename
 
@@ -1968,6 +1969,176 @@ def test_polling_terminal_flag_covers_settled_outcomes(monkeypatch, tmp_path):
         payload = client.get(f"/compute/api/running/{md5sum}", headers=auth_header).get_json()
         assert payload["terminal"] is want_terminal, status
 
+
+
+def _submit_gremlin(module, client, headers, *, task_type: str = "gremlin", data: bytes = b">test\nACDE\n"):
+    """POST one minimal Swiss-Prot-style submission and return the response."""
+    return client.post(
+        "/compute/api/post",
+        data={
+            "task_type": task_type,
+            "file": (io.BytesIO(data), "upload.fasta"),
+            "input_roles": "sequence",
+        },
+        headers=headers,
+    )
+
+
+def test_durable_storage_soft_limit_refuses_a_submission_of_any_kind(monkeypatch, tmp_path):
+    """The soft ceiling restricts later admission of *any* Task, not only GPUs.
+
+    Durable ownership is a submission-wide concern: it is the same envelope for
+    every Task.  A CPU-only submission creates the overrun as readily as a GPU
+    one, so gating the refusal on a GPU request would let the submissions that
+    cause the overrun keep arriving.
+    """
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "gremlin"},
+    )
+    client = module.app.test_client()
+    headers = _test_client_auth(module)
+    user = module.app.config["user_db"].get_user_by_username("tester")
+    # Register durable ownership past the ceiling.
+    module.task_store.ensure_data_lifecycle(
+        "d" * 32, user_id=int(user["id"]), logical_bytes=module.task_store.storage_soft_limit_bytes + 1
+    )
+
+    class _DummyAsyncResult:
+        id = "celery-test-id"
+
+    monkeypatch.setattr(module.run_compute_task, "apply_async", lambda *a, **kw: _DummyAsyncResult())
+
+    response = _submit_gremlin(module, client, headers)
+
+    assert response.status_code == 403
+    payload = response.get_json()
+    assert payload["details"][0]["code"] == "storage_soft_limit_exceeded"
+    # The refusal is not an accounting event: the completed result that crossed
+    # the ceiling keeps its bytes, and no new Task row was created.
+    assert module.task_store.logical_owned_bytes(int(user["id"])) == (
+        module.task_store.storage_soft_limit_bytes + 1
+    )
+
+
+def test_a_result_that_crossed_the_soft_limit_keeps_its_bytes_and_blocks_the_next_submission(
+    monkeypatch, tmp_path
+):
+    """A successful computation keeps its scientific result even past the limit.
+
+    Quota is checked at admission, never at completion: the bytes are charged,
+    the Task is finished, and only the *next* submission is refused.
+    """
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "gremlin"},
+    )
+    module.task_store._storage_soft_limit = 8
+    client = module.app.test_client()
+    headers = _test_client_auth(module)
+    user = module.app.config["user_db"].get_user_by_username("tester")
+
+    class _DummyAsyncResult:
+        id = "celery-test-id"
+
+    monkeypatch.setattr(module.run_compute_task, "apply_async", lambda *a, **kw: _DummyAsyncResult())
+    accepted = _submit_gremlin(module, client, headers, data=b">crossing\nACDEFGHIKLMNPQRSTVWY\n")
+    assert accepted.status_code == 302
+
+    # A published result larger than the ceiling is charged and kept: the
+    # submission that produced it is not retroactively refused.
+    published = _submit_task_id(accepted)
+    module.task_store.ensure_data_lifecycle(
+        published, user_id=int(user["id"]), logical_bytes=64, at=time.time()
+    )
+    assert module.task_store.logical_owned_bytes(int(user["id"])) == 64
+    record = module.task_store.get_data_lifecycle(published)
+    assert record["state"] == DataLifecycleState.ACTIVE.value
+
+    # The next submission of any kind is refused at the same ceiling.
+    refused = _submit_gremlin(module, client, headers)
+    assert refused.status_code == 403
+    assert refused.get_json()["details"][0]["code"] == "storage_soft_limit_exceeded"
+
+
+def _submit_task_id(response) -> str:
+    return _extract_md5(response.headers["Location"])
+
+
+def test_a_purged_task_is_not_republished_by_a_finishing_worker(monkeypatch, tmp_path):
+    """A deletion that lands while a result is finishing wins.
+
+    Lifecycle state and execution state are independent — ``Task.status`` never
+    encodes storage — so the guard cannot read the task row; it reads the durable
+    lifecycle row.  A worker that republished here would recreate the tree the
+    purge just removed and charge the subject for bytes the deletion was
+    authorized to free.
+    """
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "gremlin"},
+    )
+    owner = _task_owner(module, "purge-vs-finalize")
+    task_id = "e" * 32
+    module.task_store.upsert_task(
+        task_id,
+        filename="input.fasta",
+        file_path="/immutable/input.fasta",
+        uploaded_at=900.0,
+        status="running",
+        is_binary=0,
+        username="purge-vs-finalize",
+        task_type="gremlin",
+        **owner,
+    )
+    task = module.task_store.get_task(task_id)
+    module.task_store.ensure_data_lifecycle(
+        task_id, user_id=int(owner["submitted_by_user_id"]), logical_bytes=64, at=time.time()
+    )
+    module.task_store.claim_data_deletion(
+        task_id, user_id=int(owner["submitted_by_user_id"]), actor_user_id=1, at=time.time()
+    )
+
+    with pytest.raises(module.task_runtime.DataPurgedError):
+        module.task_runtime._finalize_results_manifest(
+            task, execution_state="completed", finished_at=time.time()
+        )
+    # Nothing was resurrected and nothing was charged.
+    assert module.task_store.logical_owned_bytes(int(owner["submitted_by_user_id"])) == 64
+    assert module.task_store.get_data_lifecycle(task_id)["state"] == "DELETE_REQUESTED"
+
+
+def test_a_finished_task_with_no_deletion_request_still_publishes_normally(monkeypatch, tmp_path):
+    """The guard admits the ordinary case: no lifecycle row, or an owning state."""
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "gremlin"},
+    )
+    owner = _task_owner(module, "finalize-normal")
+    task_id = "f" * 32
+    module.task_store.upsert_task(
+        task_id,
+        filename="input.fasta",
+        file_path="/immutable/input.fasta",
+        uploaded_at=900.0,
+        status="running",
+        is_binary=0,
+        username="finalize-normal",
+        task_type="gremlin",
+        **owner,
+    )
+    task = module.task_store.get_task(task_id)
+
+    manifest = module.task_runtime._finalize_results_manifest(
+        task, execution_state="completed", finished_at=time.time()
+    )
+
+    assert manifest["task_id"] == task_id
+    assert module.task_store.get_data_lifecycle(task_id) is not None
 
 def test_private_dashboard_blocks_non_owner_access(monkeypatch, tmp_path):
     module = _load_pssm_module(

@@ -112,7 +112,12 @@ from revocompute.db import GPUCreditUnavailableError, TaskIdReservedError
 from revocompute.operational_events import emit_event
 from revocompute.ratelimit import rate_limit
 from revocompute import resource_lifecycle
-from revocompute.resource_ledger import AdmissionReason, LedgerReason, SECONDS_PER_CREDIT
+from revocompute.resource_ledger import (
+    AdmissionReason,
+    LedgerReason,
+    ReservationReason,
+    SECONDS_PER_CREDIT,
+)
 from revocompute.resource_observations import observations_for_guidance
 from revocompute.resource_policy import (
     GLOBAL_RESOURCE_KEYS,
@@ -1820,6 +1825,17 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
             # operator/user overview.
             block = readiness_service.admission_block(requires_gpu=bool(tt.gpus))
             if block is not None:
+                # The refusal is an admission decision like any other, so it is
+                # reported in the same bounded vocabulary instead of only as
+                # response text a client has to parse.
+                emit_event(
+                    "resource.admission.denied",
+                    level="WARNING",
+                    request_id=g.request_id,
+                    task_type=task_type,
+                    runner_family=tt.runtime.name,
+                    reason_code=AdmissionReason.INFRASTRUCTURE_UNAVAILABLE.value,
+                )
                 return (
                     jsonify(
                         {
@@ -1843,42 +1859,42 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
             return existing_response
 
         gpu_credit = None
+        user_id = int(g.current_user["id"])
+        envelope = task_store.resource_envelope(user_id)
+        # Durable storage is a submission-wide admission concern, not a GPU one:
+        # it is the same envelope for every Task, and a user over their soft
+        # ceiling is refused a new submission of any kind.  The overrun is
+        # reported with its own reason code so the client can explain it.  A
+        # result that already crossed the ceiling keeps its scientific value —
+        # this restricts *later* admission only.
+        if envelope.storage.over_soft_limit:
+            emit_event(
+                "resource.admission.denied",
+                level="WARNING",
+                request_id=g.request_id,
+                task_type=task_type,
+                runner_family=tt.runtime.name,
+                user_id=user_id,
+                reason_code=AdmissionReason.STORAGE_SOFT_LIMIT.value,
+            )
+            return (
+                jsonify(
+                    {
+                        "error": "Durable storage quota exceeded",
+                        "details": [
+                            {
+                                "code": "storage_soft_limit_exceeded",
+                                "message": (
+                                    "Delete or archive retained results before submitting "
+                                    "new compute."
+                                ),
+                            }
+                        ],
+                    }
+                ),
+                403,
+            )
         if tt.gpus:
-            user_id = int(g.current_user["id"])
-            # Core-owned admission against the canonical resource envelope.  A
-            # soft storage overrun does not refuse the submission here: a user
-            # who is over their durable ceiling may still run a computation, and
-            # their *next* one is what the policy restricts.  A storage-only
-            # overrun is reported with its own reason code so the client can
-            # explain it, while GPU entitlement is enforced now.
-            envelope = task_store.resource_envelope(user_id)
-            if envelope.storage.over_soft_limit:
-                emit_event(
-                    "resource.admission.denied",
-                    level="WARNING",
-                    request_id=g.request_id,
-                    task_type=task_type,
-                    runner_family=tt.runtime.name,
-                    user_id=user_id,
-                    reason_code=AdmissionReason.STORAGE_SOFT_LIMIT.value,
-                )
-                return (
-                    jsonify(
-                        {
-                            "error": "Durable storage quota exceeded",
-                            "details": [
-                                {
-                                    "code": "storage_soft_limit_exceeded",
-                                    "message": (
-                                        "Delete or archive retained results before submitting "
-                                        "new compute."
-                                    ),
-                                }
-                            ],
-                        }
-                    ),
-                    403,
-                )
             try:
                 gpu_credit = task_store.require_compute_entitlement(user_id)
             except GPUCreditUnavailableError:
@@ -2224,7 +2240,9 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
         # Task is failed, so its reservation must not keep entitlement the user
         # cannot use.  The release is idempotent, so the worker's own release
         # after a successful allocation is unaffected.
-        task_store.release_reservation(task_id=md5sum, reason_code="dispatch_failed", at=finished_at)
+        task_store.release_reservation(
+            task_id=md5sum, reason_code=ReservationReason.DISPATCH_FAILED.value, at=finished_at
+        )
         failed_task = task_store.get_task(md5sum) or dict(md5sum=md5sum, **base_record)
         _finalize_failed_results(failed_task, error_message, finished_at=finished_at)
         _cleanup_task_workspace(failed_task)
@@ -3130,7 +3148,9 @@ def _soft_delete_task(md5sum: str, task: dict[str, Any]) -> bool:
     # A Task that never started holds entitlement it will never consume, so its
     # admission hold is released with the deletion.  Idempotent: a Task whose
     # allocation already started consumed its hold at allocation time.
-    task_store.release_reservation(task_id=md5sum, reason_code="task_deleted", at=time.time())
+    task_store.release_reservation(
+        task_id=md5sum, reason_code=ReservationReason.TASK_DELETED.value, at=time.time()
+    )
 
     # Durable data is deleted as a transaction, not by ``rm -rf, then mark``:
     # the request is persisted first, then the removal is claimed, and only a

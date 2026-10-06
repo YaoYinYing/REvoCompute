@@ -196,3 +196,49 @@ def test_migrated_ledger_is_still_append_only(tmp_path):
                 raise AssertionError(f"append-only guard did not reject: {statement}")
     finally:
         connection.close()
+
+def _migrate_in_subprocess(path: str, start, results, index: int) -> None:
+    """Open one independent ``TaskDatabase`` on *path* and report the outcome."""
+    start.wait(timeout=30)
+    try:
+        database = TaskDatabase(path)
+        results[index] = len(database.list_compute_ledger(7))
+    except Exception as exc:  # surfaced through ``results`` as a failed migration
+        results[index] = f"{type(exc).__name__}: {exc}"
+
+
+def test_concurrent_startup_processes_migrate_exactly_once(tmp_path):
+    """A multi-process deploy starts every worker at once, each on the same DB.
+
+    Every process runs the migration pass.  ``BEGIN IMMEDIATE`` plus re-reading
+    the legacy tables *inside* the lock makes that benign: whoever runs first
+    copies and drops them, and the peers find nothing left to do.  Inspecting
+    before taking the lock would instead let a peer drop the table between the
+    check and the ``INSERT ... SELECT``, which is a "no such table" crash on a
+    startup that should have succeeded.
+    """
+    import multiprocessing
+
+    path = str(tmp_path / "tasks.sqlite3")
+    _build_legacy_database(path)
+
+    context = multiprocessing.get_context("spawn")
+    start = context.Event()
+    manager = context.Manager()
+    results = manager.dict()
+    processes = [
+        context.Process(target=_migrate_in_subprocess, args=(path, start, results, index))
+        for index in range(4)
+    ]
+    for process in processes:
+        process.start()
+    start.set()
+    for process in processes:
+        process.join(timeout=60)
+
+    outcomes = [results.get(index) for index in range(4)]
+    assert all(isinstance(outcome, int) for outcome in outcomes), outcomes
+    # Every process observed the same migrated history, and it was copied once.
+    assert outcomes == [len(LEGACY_LEDGER_ROWS)] * 4
+    assert "gpu_credit_ledger" not in _tables(path)
+    assert TaskDatabase(path).compute_entitlement(7, at=1_787_227_200.0).used == 900
