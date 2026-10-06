@@ -15,6 +15,7 @@ Soft Precision is the durable system contract. For the post-PR #54 art direction
 and the practical human/agent review rubric, also read:
 
 - [Frontend Art Direction — Cared-for Precision](frontend-art-direction.md)
+- [Frontend Visual Ancestry](frontend-visual-ancestry.md)
 - [Frontend Taste Review](frontend-taste-review.md)
 
 Those companion pages do not replace this contract. They explain how to preserve
