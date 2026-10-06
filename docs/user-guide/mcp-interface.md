@@ -183,8 +183,7 @@ printing a JSON receipt:
 uv run --extra mcp python tests/mcp_live_acceptance.py
 ```
 
-Two third-party hosts are exercised reproducibly by
-`tests/mcp_host_receipt.py`, which writes one JSON receipt per host:
+`tests/mcp_host_receipt.py` produces a JSON receipt per host:
 
 ```bash
 uv run --extra mcp python tests/mcp_host_receipt.py
@@ -192,6 +191,12 @@ uv run --extra mcp python tests/mcp_host_receipt.py
 
 - the **MCP Inspector CLI** (`npx @modelcontextprotocol/inspector --cli`), and
 - **Claude Code** as the primary intended agent host (`--mcp-config`).
+
+The Inspector CLI receipt is a real, reproducing listing. The Claude Code receipt
+records an honest outcome: when the host's non-interactive route is unavailable
+(as on a dev host whose CLI resolves to a non-MCP harness model) it records
+`exercised: false` with the raw cause rather than asserting success, so it must
+not be read as "Claude Code fully accepted".
 
 A second, genuinely independent MCP host and a rendered MCP Inspector Web UI were
 **unavailable in this environment** and are an openly acknowledged gap: they must
