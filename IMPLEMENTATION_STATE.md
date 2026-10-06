@@ -726,3 +726,22 @@ BLOCKERs plus MATERIALs; all are fixed:
 Gates on this head: full non-browser suite 1834 passed / 24 skipped / 1 failed
 (the accepted opendde `/tmp`-prefix basetemp artifact); the frontend typecheck /
 test / build gates are unchanged and green.
+
+## Named follow-ups (tracked, not silent)
+
+- `validator_revision()` reports `sha256:unavailable` when a boundary source
+  cannot be read, and verification does NOT fail on that value: the revision
+  comparison is skipped because both sides read `unavailable`. After the
+  BLOCKER-1 fix this is a false-accept of an unknown boundary identity, not a
+  validation bypass — the bytes are still re-validated through the canonical
+  boundary on every dispatch. It is deferred rather than fixed here because the
+  stay-on-`main` durability contract requires a restored task to keep executing,
+  so failing on `unavailable` must be paired with guaranteeing the sources are
+  always present in a production install, which is a separate change. Owner:
+  follow-up PR; tracked so it is not dropped.
+- The admission reason-code vocabulary and the artifact reason codes are named
+  here as a shared surface for #59 reconciliation (`gpu_credit_exhausted` is the
+  unified spelling; #59's accounting codes must join this vocabulary rather than
+  mint a parallel one).
+- MCP reconciliation after #57 lands (projection only; the canonical path and
+  the receipt are the trust boundary, MCP projects them).

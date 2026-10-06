@@ -104,7 +104,6 @@ from revocompute.ingress_security import (
     canonical_relative_path,
     event_for_code,
     phase_for_code,
-    snapshot_mismatch_reason,
 )
 from revocompute.ndarray import ArrayAccessError, MAX_PROJECTION_ELEMENTS, read_array_projection
 from revocompute.db import GPUCreditUnavailableError, TaskIdReservedError
