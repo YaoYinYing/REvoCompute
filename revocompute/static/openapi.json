@@ -170,6 +170,18 @@
         }
       }
     },
+    "/compute/api/system/notices": {
+      "get": {
+        "tags": ["Service discovery"],
+        "summary": "Get operator-configured system notices",
+        "description": "Returns the long-lived operational notices a deployment has configured. Each notice body is plain text that clients must render without enabling arbitrary HTML. An empty list means there is nothing to announce.",
+        "operationId": "getSystemNotices",
+        "responses": {
+          "200": {"description": "Configured system notices", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/SystemNotices"}}}},
+          "503": {"$ref": "#/components/responses/Unavailable"}
+        }
+      }
+    },
     "/compute/api/auth/logout": {
       "post": {
         "tags": ["Authentication"],
@@ -1131,6 +1143,28 @@
         "type": "object",
         "required": ["message"],
         "properties": {"message": {"type": "string"}},
+        "additionalProperties": false
+      },
+      "SystemNotices": {
+        "type": "object",
+        "required": ["notices"],
+        "properties": {
+          "notices": {
+            "type": "array",
+            "maxItems": 16,
+            "items": {
+              "type": "object",
+              "required": ["id", "level", "title", "body"],
+              "properties": {
+                "id": {"type": "string", "maxLength": 128},
+                "level": {"type": "string", "enum": ["info", "warning", "critical"]},
+                "title": {"type": "string", "maxLength": 200},
+                "body": {"type": "string", "maxLength": 65536}
+              },
+              "additionalProperties": false
+            }
+          }
+        },
         "additionalProperties": false
       },
       "LegalDocument": {

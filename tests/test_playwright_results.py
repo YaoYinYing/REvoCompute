@@ -139,6 +139,7 @@ def _serve_app(page: Page, *, status: dict | None = None, manifest: dict | None 
         f"{ORIGIN}/compute/api/auth/me",
         lambda route: route.fulfill(status=200 if authenticated else 401, json={"id": 1, "username": "owner"} if authenticated else {"error": "Authentication required"}),
     )
+    page.route(f"{ORIGIN}/compute/api/system/notices", lambda route: route.fulfill(json={"notices": []}))
     page.route(f"{ORIGIN}/compute/api/running/{TASK_ID}", lambda route: route.fulfill(json=status or _status()))
     page.route(f"{ORIGIN}/compute/api/results/{TASK_ID}", lambda route: route.fulfill(json=manifest or _manifest()))
     page.route(f"{ORIGIN}/compute/api/results/{TASK_ID}/tables/**", tables)

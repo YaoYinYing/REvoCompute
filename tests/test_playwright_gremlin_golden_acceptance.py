@@ -225,6 +225,7 @@ def _serve(page: Page, manifest: dict, *, matrix_page: int = 3) -> dict:
         f"{ORIGIN}/compute/api/auth/me",
         lambda route: route.fulfill(json={"id": 1, "username": "owner", "role": "user"}),
     )
+    page.route(f"{ORIGIN}/compute/api/system/notices", lambda route: route.fulfill(json={"notices": []}))
     page.route(f"{ORIGIN}/compute/api/running/{TASK_ID}", lambda route: route.fulfill(json=_status()))
     page.route(f"{ORIGIN}/compute/api/results/{TASK_ID}", lambda route: route.fulfill(json=manifest))
     page.route(f"{ORIGIN}/compute/api/results/{TASK_ID}/tables/**", tables)
