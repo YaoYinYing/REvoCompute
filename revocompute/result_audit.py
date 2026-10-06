@@ -17,10 +17,11 @@ required-source, renderer-kind, and role-conflict invariants are statements abou
 the relationship between a view's source and the identities a family publishes in
 ``expected_files.yaml``. A family that ships no tree has no such relationship to
 check, so each of its required sources is reported as
-``result.required_source_undeclared_tree`` -- *unaudited*, not green. A task whose
-declaration the audit cannot satisfy is a finding; the fleet result is therefore a
-summary of covered / unaudited / known-defect tasks rather than "the whole fleet
-passed".
+``result.required_source_undeclared_tree`` -- *unaudited*, not green. Coverage
+(``covered`` / ``unaudited``) and defect status (``defective``) are reported as
+two independent statuses, not one verdict: a Task can be covered and still carry
+a concrete defect. The fleet result is therefore a coverage partition plus an
+orthogonal defect set rather than "the whole fleet passed".
 
 Selector/tree overlap is proven, not assumed. An exact selector against a
 declared path or pattern is decided by the same ``fnmatch`` the Server resolves
@@ -150,11 +151,14 @@ def _defective_tasks(findings: tuple[ContractFinding, ...]) -> frozenset[str]:
 class FleetAuditReport:
     """The audit's result: the Tasks it checked and the defects it found.
 
-    ``covered`` is the set of Tasks whose contract was actually evaluated against
-    a declared result tree; ``unaudited`` require a source that no shipped tree
-    can check; ``defective`` hold a concrete defect. The three need not partition
-    ``tasks`` only because a defective Task may also be unaudited; a Task can be
-    in neither when it declares no required view source at all.
+    Two independent statuses are reported. *Coverage* answers whether a Task's
+    declarations could be evaluated at all: ``covered`` (a declared result tree
+    let its required sources be resolved) and ``unaudited`` (no shipped tree to
+    check against) partition ``tasks`` -- a Task that declares no required view
+    source is in neither. *Defect* is orthogonal: ``defective`` holds the Tasks
+    with a concrete contract defect, and a Task can be covered AND defective at
+    once. So ``ok`` is false whenever ``defective`` is non-empty, even though the
+    coverage partition is unaffected; the two are never collapsed into one set.
     """
 
     tasks: tuple[str, ...]
@@ -167,22 +171,24 @@ class FleetAuditReport:
 
     @property
     def unaudited(self) -> frozenset[str]:
+        """Coverage: Tasks declaring a required view source but shipping no result tree."""
         return _unaudited_tasks(self.findings)
 
     @property
     def defective(self) -> frozenset[str]:
+        """Defect: Tasks with a concrete contract defect; orthogonal to coverage."""
         return _defective_tasks(self.findings)
 
     @property
     def covered(self) -> frozenset[str]:
-        """Tasks with a result tree that were evaluated (may still be defective)."""
+        """Coverage: Tasks a declared result tree let the audit evaluate (may also be defective)."""
         return frozenset(task for task in self.tasks if task not in self.unaudited)
 
     def as_text(self) -> str:
         lines = [
             f"Result contract audit: {len(self.tasks)} tasks discovered; "
-            f"{len(self.covered)} covered, {len(self.unaudited)} unaudited, "
-            f"{len(self.defective)} with a defect"
+            f"coverage {len(self.covered)} covered / {len(self.unaudited)} unaudited; "
+            f"defects {len(self.defective)} (orthogonal to coverage)"
         ]
         lines.extend(f"  {finding}" for finding in self.findings)
         if self.ok:

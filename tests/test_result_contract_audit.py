@@ -6,11 +6,12 @@
 
 The audit is one static pass over every Task the canonical loader discovers
 (``revocompute.result_audit``). It does NOT claim the whole fleet is clean. For
-the real fleet this test asserts the three categories the audit reports --
-*covered* Tasks whose declarations were evaluated against a declared result tree,
-*unaudited* Tasks that require a view source but ship no ``expected_files.yaml``,
-and the recorded known defects -- so a passing run cannot be read as "every
-Runner passed". Each invariant the audit claims to enforce is then made to fire
+the real fleet this test asserts two independent statuses: the *coverage*
+partition -- *covered* Tasks whose declarations were evaluated against a declared
+result tree versus *unaudited* Tasks that require a view source but ship no
+``expected_files.yaml`` -- and the orthogonal *defect* set (a Task can be covered
+and still defective). Neither can be read as "every Runner passed". Each invariant
+the audit claims to enforce is then made to fire
 on a small deliberately-broken fixture, including the glob-overlap classifier's
 provable cases and its deliberately-undecidable ones, so a green fleet run is
 evidence that the checks bite, not that they are inert. Nothing here executes a
@@ -169,22 +170,28 @@ def test_real_fleet_reports_no_unrecorded_contract_defect():
 
 
 def test_fleet_report_separates_covered_unaudited_and_defective():
-    """The three coverage categories are reported, not collapsed into one verdict.
+    """Coverage (a partition) and defect status (orthogonal) are both reported.
 
-    The audit's claim is bounded: it evaluated the covered Tasks against a
-    declared result tree, it could not evaluate the unaudited ones (no tree), and
-    it found a concrete defect in two Foundry design Tasks. The report exposes
-    all three so it can never be read as "the whole fleet passed".
+    The audit's claim is bounded. Coverage asks whether a Task's declarations
+    could be evaluated at all: covered (a declared result tree) versus unaudited
+    (no tree), which partition the fleet. Defect status is orthogonal -- the two
+    Foundry design Tasks are covered (they ship a tree) and still defective. The
+    report exposes both so it can never be read as "the whole fleet passed", and
+    never forces the defect set to fit the coverage partition.
     """
     report = audit_fleet(str(RUNNERS), server_dir=str(ROOT))
 
+    # Coverage is a partition ...
     assert report.covered | report.unaudited == frozenset(report.tasks)
     assert not (report.covered & report.unaudited)
+    assert len(report.covered) == 19 and len(report.unaudited) == 36
+    # ... and defect status is orthogonal: the defective foundry Tasks are covered,
+    # not a third coverage bucket.
     assert set(report.defective) == {"foundry_rfd3_design", "foundry_rfd3na_design"}
+    assert report.defective <= report.covered
     # A concrete defect means the report is not "ok" even though the only other
     # findings are coverage-boundary notices.
     assert report.ok is False
-    assert len(report.covered) == 19 and len(report.unaudited) == 36
     summary = report.as_text().splitlines()[0]
     assert "covered" in summary and "unaudited" in summary and "defect" in summary
 

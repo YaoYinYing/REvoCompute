@@ -274,10 +274,11 @@ Do **not**:
 The PR is complete when:
 
 1. every Task the canonical loader discovers is *classified* by one generic
-   result-contract audit as covered (declarations evaluated against a declared
-   result tree), unaudited (required view sources with no declared tree to
-   resolve against), or a recorded/narrowly-fixed known defect -- the PR does not
-   claim the whole fleet is clean; and
+   result-contract audit on two independent axes -- a coverage partition (covered:
+   declarations evaluated against a declared result tree, vs unaudited: required
+   view sources with no declared tree to resolve against) and an orthogonal
+   defect status (a Task can be covered and still carry a recorded/narrowly-fixed
+   defect) -- the PR does not claim the whole fleet is clean; and
 2. every major generic result renderer is exercised by at least one
    provenance-bearing authentic Runner artifact where operationally feasible.
 
@@ -285,7 +286,8 @@ The resulting evidence should make the hierarchy explicit:
 
 ```text
 fleet audit          -> the covered declarations are internally satisfiable,
-                        and the covered/unaudited/known-defect split is explicit
+                        with the covered/unaudited coverage partition and the
+                        orthogonal defect set both explicit
 real-artifact replay -> renderers consume authentic Runner bytes
 scientific acceptance -> numerical/scientific correctness
 ```
