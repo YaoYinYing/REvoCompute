@@ -33,11 +33,10 @@ import ntpath
 import os
 import stat as stat_module
 import unicodedata
-from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any
 from urllib.parse import unquote
 
 from werkzeug.utils import secure_filename
@@ -107,13 +106,11 @@ REASON_CODES: dict[Phase, frozenset[str]] = {
     ),
 }
 
-
-_REQUEST_SIZE_LIMIT = "request_size_limit"
-
-#: Artifact-publication reason codes, carried on the ``manifest.published``
-#: event so a downstream consumer reads why a result set was narrowed without
-#: scraping the human-readable problems.  Separate from the ingress phases: an
-#: artifact is not a submission, so there is no preflight phase to route to.
+#: Artifact-publication reason codes.  Carried as the ``reason_code`` on the
+#: existing ``manifest.published`` event so a downstream consumer reads why a
+#: result set was narrowed without scraping human-readable problems.  Separate
+#: from the ingress phases: an artifact is not a submission, so there is no
+#: preflight phase to route it to.
 ARTIFACT_PUBLICATION_REJECTED = "artifact_publication_rejected"
 ARTIFACT_CAPACITY_GUARD = "artifact_capacity_guard"
 
@@ -292,59 +289,3 @@ def canonical_relative_path(raw_path: str) -> tuple[str | None, str | None]:
     return relative_path, None
 
 
-T = TypeVar("T")
-
-
-def collapse_sanitization_collisions(
-    items: Iterable[tuple[str, T]],
-) -> tuple[list[tuple[str, T]], T | None, bool]:
-    """Drop entries whose canonical path duplicates one already admitted.
-
-    ``secure_filename`` is many-to-one: ``a b.pdb`` and ``a_b.pdb`` both become
-    ``a_b.pdb``, and a Unicode name folds onto its ASCII lookalike.  Two
-    submissions that canonicalize to one path are one namespace entry, so the
-    later one is dropped and the collision is reported.  Returns
-    ``(kept, first_colliding_item, had_collision)``; the caller decides whether
-    a collision is an admission failure for that role.
-    """
-    seen: set[str] = set()
-    kept: list[tuple[str, T]] = []
-    first_collision: T | None = None
-    collided = False
-    for canonical, item in items:
-        if canonical in seen:
-            collided = True
-            if first_collision is None:
-                first_collision = item
-            continue
-        seen.add(canonical)
-        kept.append((canonical, item))
-    return kept, first_collision, collided
-
-
-def receipt_identity(receipts: Iterable[dict[str, Any]]) -> str:
-    """Return the canonical identity of the admitted snapshot.
-
-    Used where a Task identity must name *what was admitted and by which
-    boundary*, so a submission prepared under one validator revision is not
-    silently reused as the same Task under another.
-    """
-    payload = json.dumps(
-        sorted(
-            (
-                {
-                    "path": str(receipt.get("relative_path") or ""),
-                    "sha256": str(receipt.get("sha256") or ""),
-                    "format": str(receipt.get("format") or ""),
-                    "logical_type": str(receipt.get("logical_type") or ""),
-                    "role": str(receipt.get("role") or ""),
-                    "validator_revision": str(receipt.get("validator_revision") or ""),
-                }
-                for receipt in receipts
-            ),
-            key=lambda item: (item["role"], item["path"]),
-        ),
-        separators=(",", ":"),
-        sort_keys=True,
-    )
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()

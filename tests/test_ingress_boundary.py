@@ -25,10 +25,8 @@ from revocompute.ingress_security import (
     REASON_CODES,
     Phase,
     canonical_relative_path,
-    collapse_sanitization_collisions,
     event_for_code,
     phase_for_code,
-    receipt_identity,
     snapshot_mismatch_reason,
     validator_revision,
 )
@@ -149,20 +147,6 @@ def test_canonical_relative_path_sanitizes_to_one_namespace_entry() -> None:
     assert canonical_relative_path("  spaced.pdb  ")[0] == "spaced.pdb"
 
 
-def test_sanitization_collisions_collapse_to_one_entry_and_are_reported() -> None:
-    kept, first, collided = collapse_sanitization_collisions(
-        [("a_b.pdb", "first"), ("a_b.pdb", "second"), ("c.pdb", "third")]
-    )
-    assert kept == [("a_b.pdb", "first"), ("c.pdb", "third")]
-    assert first == "second"
-    assert collided is True
-
-    kept, first, collided = collapse_sanitization_collisions([("a.pdb", "only")])
-    assert kept == [("a.pdb", "only")]
-    assert first is None
-    assert collided is False
-
-
 def test_receipt_proves_the_exact_bytes_and_only_under_the_same_boundary(tmp_path) -> None:
     victim = tmp_path / "input.pdb"
     victim.write_bytes(b"ATOM      1  CA  ALA A   1\n")
@@ -203,33 +187,6 @@ def test_receipt_refuses_a_link_instead_of_the_admitted_private_file(tmp_path) -
     assert snapshot_mismatch_reason(receipt, str(hard)) == "input_snapshot_mismatch"
 
     assert snapshot_mismatch_reason(receipt, str(tmp_path / "missing.pdb")) == "input_snapshot_mismatch"
-
-
-def test_receipt_identity_binds_role_path_format_and_boundary() -> None:
-    base = {
-        "decision": "accepted",
-        "reason_code": None,
-        "sha256": "a" * 64,
-        "size": 10,
-        "format": "pdb",
-        "logical_type": "protein_structure",
-        "relative_path": "model.pdb",
-        "role": "structure",
-        "validator_revision": validator_revision(),
-    }
-    assert receipt_identity([base]) == receipt_identity([dict(base)])
-    # Order is not identity; content is.
-    second = {**base, "role": "ligand", "relative_path": "ligand.sdf", "format": "sdf"}
-    assert receipt_identity([base, second]) == receipt_identity([second, base])
-    for field, value in (
-        ("sha256", "b" * 64),
-        ("relative_path", "other.pdb"),
-        ("format", "mmcif"),
-        ("logical_type", "ligand"),
-        ("role", "ligand"),
-        ("validator_revision", "sha256:deadbeef"),
-    ):
-        assert receipt_identity([base]) != receipt_identity([{**base, field: value}]), field
 
 
 def test_receipt_records_the_decision_it_projects(tmp_path) -> None:
