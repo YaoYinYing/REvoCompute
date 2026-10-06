@@ -223,7 +223,7 @@ def test_gpu_live_case_seeds_isolated_authorization_and_reports_exact_settlement
     assert evidence["usage_gpu_seconds"] == 14
     assert evidence["before_remaining_gpu_seconds"] - evidence["after_remaining_gpu_seconds"] == 14
     assert evidence["allocations"][0]["status"] == "settled"
-    assert evidence["usage_entries"][0]["gpu_seconds"] == -14
+    assert evidence["usage_entries"][0]["quantity"] == -14
 
 
 @pytest.mark.parametrize("payload", [

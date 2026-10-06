@@ -111,6 +111,7 @@ from revocompute.ndarray import ArrayAccessError, MAX_PROJECTION_ELEMENTS, read_
 from revocompute.db import GPUCreditUnavailableError, TaskIdReservedError
 from revocompute.operational_events import emit_event
 from revocompute.ratelimit import rate_limit
+from revocompute.resource_ledger import SECONDS_PER_CREDIT
 from revocompute.resource_observations import observations_for_guidance
 from revocompute.resource_policy import (
     GLOBAL_RESOURCE_KEYS,
@@ -3878,32 +3879,31 @@ def _gpu_credit_payload(user_id: int, *, admin: bool = False) -> dict[str, Any]:
         # Zero-value admin_reset rows are durable idempotency markers, not
         # balance-affecting history.  Hide them from the user's own view while
         # keeping them in the administrative audit projection.
-        if not admin and entry["kind"] == "admin_reset" and entry["gpu_seconds"] == 0:
+        if not admin and entry["kind"] == "admin_reset" and entry["quantity"] == 0:
             continue
         item = {
-            key: entry[key]
-            for key in (
-                "id",
-                "period",
-                "kind",
-                "gpu_seconds",
-                "task_id",
-                "stage_id",
-                "slurm_job_id",
-                "reason",
-                "created_at",
-            )
+            "id": entry["id"],
+            "period": entry["period"],
+            "kind": entry["kind"],
+            "gpu_seconds": entry["quantity"],
+            "task_id": entry["task_id"],
+            "stage_id": entry["stage_id"],
+            "slurm_job_id": entry["slurm_job_id"],
+            "reason": entry["reason"],
+            "created_at": entry["created_at"],
         }
         if admin:
             item["actor_user_id"] = entry["actor_user_id"]
+            item["reason_code"] = entry["reason_code"]
+            item["evidence_source"] = entry["evidence_source"]
         history.append(item)
     return {
         **summary,
-        "credit_unit_gpu_seconds": 60,
-        "monthly_grant_credits": summary["monthly_grant_gpu_seconds"] / 60,
-        "usage_credits": summary["usage_gpu_seconds"] / 60,
-        "adjustment_credits": summary["adjustment_gpu_seconds"] / 60,
-        "remaining_credits": summary["remaining_gpu_seconds"] / 60,
+        "credit_unit_gpu_seconds": SECONDS_PER_CREDIT,
+        "monthly_grant_credits": summary["monthly_grant_gpu_seconds"] / SECONDS_PER_CREDIT,
+        "usage_credits": summary["usage_gpu_seconds"] / SECONDS_PER_CREDIT,
+        "adjustment_credits": summary["adjustment_gpu_seconds"] / SECONDS_PER_CREDIT,
+        "remaining_credits": summary["remaining_gpu_seconds"] / SECONDS_PER_CREDIT,
         "history": history,
     }
 
@@ -4043,7 +4043,7 @@ def _project_user_metrics(tasks: list[dict[str, Any]], *, window: str, now: floa
             # ponytail: per-Task allocation read; batch into one query if a user
             # ever accumulates enough GPU Tasks for this to show up in latency.
             for allocation in task_store.list_task_gpu_allocations(str(task["md5sum"])):
-                gpu_seconds += float(allocation.get("gpu_seconds") or 0)
+                gpu_seconds += float(allocation.get("quantity") or 0)
 
     runtimes.sort()
     if not runtimes:
@@ -4588,7 +4588,7 @@ def admin_set_user_gpu_allowance(user_id: int):
         )
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 409
-    emit_event("gpu.credit.adjusted", user_id=user_id, gpu_seconds=abs(int(entry["gpu_seconds"])), reason_code="allowance_set")
+    emit_event("gpu.credit.adjusted", user_id=user_id, gpu_seconds=abs(int(entry["quantity"])), reason_code="allowance_set")
     return jsonify({"entry_id": entry["id"], "gpu_credit": _gpu_credit_payload(user_id, admin=True)}), 200
 
 

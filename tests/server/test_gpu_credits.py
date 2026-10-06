@@ -40,7 +40,7 @@ def test_monthly_grant_is_lazy_idempotent_and_uses_utc_period(tmp_path):
     with database.engine.connect() as connection:
         assert (
             connection.execute(
-                sa.select(sa.func.count()).select_from(database.gpu_credit_ledger_table)
+                sa.select(sa.func.count()).select_from(database.resource_ledger_table)
             ).scalar_one()
             == 1
         )
@@ -62,7 +62,7 @@ def test_gpu_usage_settlement_is_actual_multi_gpu_time_and_idempotent(tmp_path):
     first = database.settle_gpu_allocation("4217", finished_at=started_at + 10.2)
     second = database.settle_gpu_allocation("4217", finished_at=started_at + 99)
 
-    assert first["gpu_seconds"] == 22
+    assert first["quantity"] == 22
     assert second == first
     assert (
         database.gpu_credit_summary(23, at=started_at)["remaining_gpu_seconds"]
@@ -71,8 +71,8 @@ def test_gpu_usage_settlement_is_actual_multi_gpu_time_and_idempotent(tmp_path):
     with database.engine.connect() as connection:
         usage_count = connection.execute(
             sa.select(sa.func.count())
-            .select_from(database.gpu_credit_ledger_table)
-            .where(database.gpu_credit_ledger_table.c.kind == "usage")
+            .select_from(database.resource_ledger_table)
+            .where(database.resource_ledger_table.c.kind == "usage")
         ).scalar_one()
     assert usage_count == 1
 
@@ -132,7 +132,7 @@ def test_cross_month_allocation_is_charged_to_its_start_month(tmp_path):
         for entry in database.list_gpu_credit_ledger(41, period="2026-09")
         if entry["kind"] == "usage"
     )
-    assert usage["gpu_seconds"] == -75
+    assert usage["quantity"] == -75
     assert database.gpu_credit_summary(41, at=september)["remaining_gpu_seconds"] == -15
     october = database.gpu_credit_summary(41, at=october_start)
     assert october["usage_gpu_seconds"] == 0
@@ -146,11 +146,11 @@ def test_ledger_rows_cannot_be_updated_or_deleted(tmp_path):
     with pytest.raises(sa.exc.DatabaseError, match="append-only"):
         with database.engine.begin() as connection:
             connection.execute(
-                sa.update(database.gpu_credit_ledger_table).values(gpu_seconds=0)
+                sa.update(database.resource_ledger_table).values(quantity=0)
             )
     with pytest.raises(sa.exc.DatabaseError, match="append-only"):
         with database.engine.begin() as connection:
-            connection.execute(sa.delete(database.gpu_credit_ledger_table))
+            connection.execute(sa.delete(database.resource_ledger_table))
 
 
 def test_admin_adjustment_requires_reason_and_is_idempotent(tmp_path):
@@ -243,15 +243,19 @@ def test_unsettled_allocations_remain_visible_for_reconciliation(tmp_path):
     assert reopened.list_unsettled_gpu_allocations() == [
         {
             "id": 1,
-            "user_id": 53,
+            "subject_type": "user",
+            "subject_id": 53,
             "task_id": "d" * 32,
             "stage_id": "relax",
             "slurm_job_id": "7001",
-            "gpu_count": 1,
+            "unit": "gpu_second",
+            "resource_class": "",
+            "resource_count": 1,
             "started_at": _timestamp(2026, 9, 4),
             "finished_at": None,
-            "gpu_seconds": None,
+            "quantity": None,
             "status": "active",
+            "evidence_source": "allocation_lifecycle",
             "ledger_entry_id": None,
         }
     ]
@@ -719,7 +723,7 @@ def test_reset_below_allowance_appends_positive_compensation(tmp_path):
     assert result["remaining_gpu_seconds"] == 60_000
     assert database.gpu_credit_summary(101, at=at + 60)["remaining_gpu_seconds"] == 60_000
     entry = next(e for e in database.list_gpu_credit_ledger(101) if e["kind"] == "admin_reset")
-    assert entry["gpu_seconds"] == 40_000
+    assert entry["quantity"] == 40_000
     assert entry["actor_user_id"] == 7
     assert entry["reason"] == "Approved new allocation cycle"
 
@@ -760,7 +764,7 @@ def test_reset_at_allowance_writes_a_durable_noop_marker(tmp_path):
     assert first["entry_id"] is not None
     markers = [e for e in database.list_gpu_credit_ledger(103) if e["kind"] == "admin_reset"]
     assert len(markers) == 1
-    assert markers[0]["gpu_seconds"] == 0
+    assert markers[0]["quantity"] == 0
     assert markers[0]["id"] == first["entry_id"]
 
 
@@ -940,9 +944,9 @@ def test_concurrent_resets_serialize_to_one_compensation(tmp_path):
     rows = [e for e in databases[0].list_gpu_credit_ledger(110) if e["kind"] == "admin_reset"]
     # The loser of the race durably records a zero marker instead of a second
     # compensation, so exactly one entry moves the balance.
-    compensations = [row for row in rows if row["gpu_seconds"] != 0]
+    compensations = [row for row in rows if row["quantity"] != 0]
     assert len(compensations) == 1
-    assert compensations[0]["gpu_seconds"] == 1_200
+    assert compensations[0]["quantity"] == 1_200
     assert len(rows) == 2
     assert databases[0].gpu_credit_summary(110, at=at + 3_600)["remaining_gpu_seconds"] == 60_000
 
@@ -988,11 +992,11 @@ def test_global_reset_respects_per_user_allowances_and_reports_a_summary(tmp_pat
     bob_rows = [e for e in database.list_gpu_credit_ledger(202) if e["kind"] == "admin_reset"]
     carol_rows = [e for e in database.list_gpu_credit_ledger(203) if e["kind"] == "admin_reset"]
     assert len(alice_rows) == 1
-    assert len(bob_rows) == 1 and bob_rows[0]["gpu_seconds"] == 0
+    assert len(bob_rows) == 1 and bob_rows[0]["quantity"] == 0
     assert len(carol_rows) == 1
     # Every considered user gets a durable batch marker, including no-ops.
     batch = database.list_gpu_credit_reset_batch(summary["batch_id"])
-    assert {row["user_id"] for row in batch} == {201, 202, 203}
+    assert {row["subject_id"] for row in batch} == {201, 202, 203}
     assert {row["reason"] for row in batch} == {"Start refreshed cycle"}
     assert {row["actor_user_id"] for row in batch} == {7}
 
@@ -1196,7 +1200,7 @@ def test_admin_global_reset_api_respects_scope_and_is_idempotent(monkeypatch, tm
     assert denied.status_code == 403
     assert first.status_code == 200
     assert first.json["users_considered"] == expected_considered
-    assert deleted["id"] not in {row["user_id"] for row in module.task_store.list_gpu_credit_reset_batch(first.json["batch_id"])}
+    assert deleted["id"] not in {row["subject_id"] for row in module.task_store.list_gpu_credit_reset_batch(first.json["batch_id"])}
     assert module.task_store.gpu_credit_summary(deleted["id"], at=at + 60)["remaining_gpu_seconds"] == 50_000
     assert module.task_store.gpu_credit_summary(alice["id"], at=at + 60)["remaining_gpu_seconds"] == 60_000
     # GPU permission is independent of the reset.

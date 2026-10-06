@@ -53,6 +53,7 @@ from revocompute.ingress_security import (
 from revocompute.input_validators.isolated_validation import VALIDATOR_RESOURCE_LIMIT_ERROR
 from revocompute.manage_db import ManageDatabase  # noqa: E402
 from revocompute.operational_events import emit_event
+from revocompute.resource_ledger import EvidenceSource
 from revocompute.resource_observations import work_items_projection
 from revocompute.resource_policy import ResolvedResources, ResourceValidationError
 from revocompute.result_projection import artifact_capability
@@ -534,7 +535,7 @@ def _gpu_allocation_callbacks(
             slurm_job_id=slurm_job_id,
             user_id=user_id,
             gpu_count=gpu_count,
-            gpu_seconds=int(allocation["gpu_seconds"]),
+            gpu_seconds=int(allocation["quantity"]),
         )
 
     return started, finished
@@ -2092,15 +2093,19 @@ def _reconcile_gpu_allocations() -> dict[str, int]:
             task_store.mark_gpu_allocation_for_review(job_id)
             result["review"] += 1
             continue
-        settled = task_store.settle_gpu_allocation_elapsed(job_id, elapsed_seconds=elapsed_seconds)
+        settled = task_store.settle_gpu_allocation_elapsed(
+            job_id,
+            elapsed_seconds=elapsed_seconds,
+            evidence_source=EvidenceSource.SLURM_LIVE.value,
+        )
         emit_event(
             "gpu.usage.settled",
             task_id=str(settled["task_id"]),
             stage_id=str(settled["stage_id"]),
             slurm_job_id=job_id,
-            user_id=int(settled["user_id"]),
-            gpu_count=int(settled["gpu_count"]),
-            gpu_seconds=int(settled["gpu_seconds"]),
+            user_id=int(settled["subject_id"]),
+            gpu_count=int(settled["resource_count"]),
+            gpu_seconds=int(settled["quantity"]),
             reason_code="scontrol_recovery",
         )
         result["settled"] += 1
