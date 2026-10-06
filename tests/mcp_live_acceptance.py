@@ -47,6 +47,20 @@ def _isolated_env(root: Path) -> None:
     shutil.copytree(REPO_ROOT / "config" / "access_policies", root / "config" / "access_policies", dirs_exist_ok=True)
     shutil.copytree(REPO_ROOT / "docker" / "runners", root / "docker" / "runners")
     shutil.copytree(REPO_ROOT / "docker" / "tools", root / "docker" / "tools")
+    # A real deployment materializes each family's Runtime Bundle before it
+    # accepts submissions; a submission fails closed without one.
+    from revocompute import runtime_bundle
+    from revocompute.plugins import PluginManager
+
+    index: dict[str, str] = {}
+    store_root = root / "runtime-bundles"
+    for manifest in PluginManager().discover(str(root / "docker" / "runners")):
+        if not manifest.runtime_overlay:
+            continue
+        index[manifest.id] = runtime_bundle.materialize(
+            root / "docker" / "runners", manifest.runtime_overlay, store_root
+        )[0]
+    runtime_bundle.write_index(store_root, index)
     os.environ.update(
         {
             "SERVER_DIR": str(root),
@@ -142,7 +156,15 @@ def _mint_handle(module, user_id: int, task_id: str) -> str:
     return handle
 
 
-async def _workflow(url: str, token_a: str, token_b: str, handle_a: str, handle_b: str) -> dict:
+async def _workflow(
+    url: str,
+    token_a: str,
+    token_b: str,
+    handle_a: str,
+    handle_b: str,
+    submit_task_type: str,
+    submit_role: str,
+) -> dict:
     """Drive the complete workflow plus the negative cases over a real client."""
     from mcp import ClientSession
     from mcp.client.streamable_http import streamablehttp_client
@@ -175,6 +197,63 @@ async def _workflow(url: str, token_a: str, token_b: str, handle_a: str, handle_
                     "error": inspected.isError,
                     "task_type": (inspected.structuredContent or {}).get("task_type"),
                     "has_schema": bool((inspected.structuredContent or {}).get("parameter_schema")),
+                }
+
+            preflight = await session.call_tool(
+                "preflight_task",
+                {
+                    "task_type": submit_task_type,
+                    "params": {},
+                    "inputs": [
+                        {
+                            "role": submit_role,
+                            "filename": "accept.fasta",
+                            "content_base64": base64.b64encode(FASTA).decode(),
+                        }
+                    ],
+                },
+            )
+            receipt["steps"]["preflight_task"] = {
+                "error": preflight.isError,
+                "valid": (preflight.structuredContent or {}).get("valid"),
+                "error_class": (preflight.structuredContent or {}).get("error_class"),
+            }
+
+            submitted = await session.call_tool(
+                "submit_task",
+                {
+                    "task_type": submit_task_type,
+                    "params": {},
+                    "inputs": [
+                        {
+                            "role": submit_role,
+                            "filename": "accept.fasta",
+                            "content_base64": base64.b64encode(FASTA).decode(),
+                        }
+                    ],
+                },
+            )
+            submitted_handle = (submitted.structuredContent or {}).get("task_handle")
+            receipt["steps"]["submit_task"] = {
+                "error": submitted.isError,
+                "handle_returned": bool(submitted_handle),
+                "error_class": (submitted.structuredContent or {}).get("error_class"),
+                "message": (submitted.structuredContent or {}).get("message"),
+            }
+            # Guarantee parity: the protocol handle is opaque, is not the
+            # canonical Task id, and is re-authorized on every access.
+            if submitted_handle:
+                receipt["handle_guarantees"] = {
+                    "opaque_prefix": submitted_handle.startswith("mcp_op_"),
+                    "sufficient_entropy": len(submitted_handle) >= 40,
+                    "is_not_canonical_task_id": not _is_hex32(submitted_handle),
+                }
+            receipt["submitted_handle"] = submitted_handle
+            if submitted_handle:
+                follow = await session.call_tool("get_task_status", {"task_handle": submitted_handle})
+                receipt["steps"]["status_submitted_handle"] = {
+                    "error": follow.isError,
+                    "status": (follow.structuredContent or {}).get("status"),
                 }
 
             unknown = await session.call_tool("inspect_task", {"task_type": "definitely-not-a-task"})
@@ -254,6 +333,16 @@ async def _workflow(url: str, token_a: str, token_b: str, handle_a: str, handle_
                 "error": stolen.isError,
                 "error_class": (stolen.structuredContent or {}).get("error_class"),
             }
+            # Re-authorization parity: the other user cannot resolve the handle
+            # the first user just created through submit_task either.
+            if receipt.get("submitted_handle"):
+                reused = await session.call_tool(
+                    "get_task_status", {"task_handle": receipt["submitted_handle"]}
+                )
+                receipt["steps"]["negative_reused_handle_other_user"] = {
+                    "error": reused.isError,
+                    "error_class": (reused.structuredContent or {}).get("error_class"),
+                }
 
     async with streamablehttp_client(url) as (read, write, _):
         async with ClientSession(read, write) as session:
@@ -265,6 +354,23 @@ async def _workflow(url: str, token_a: str, token_b: str, handle_a: str, handle_
             }
 
     return receipt
+
+
+def _is_hex32(value: str) -> bool:
+    return len(value) == 32 and all(character in "0123456789abcdefABCDEF" for character in value)
+
+
+def _submission_target(module) -> tuple[str, str]:
+    """Pick an enabled CPU single-sequence TaskType, or fail the acceptance."""
+    from revocompute.task_types import list_types
+
+    for task_type in list_types():
+        if task_type.gpus or task_type.workflow or len(task_type.inputs) != 1:
+            continue
+        role = task_type.inputs[0]
+        if role.minimum <= 1 <= role.maximum and "fasta" in role.formats:
+            return task_type.name, role.name
+    raise AssertionError("no CPU single-sequence task type available for the acceptance")
 
 
 def _second_user(module) -> tuple[str, int]:
@@ -315,6 +421,17 @@ def main(argv: list[str] | None = None) -> int:
             print("MCP listener did not start", file=sys.stderr)
             return 1
 
+        submit_type, submit_role = _submission_target(module)
+        # The canonical web process cannot execute Slurm work, and this
+        # acceptance runs without a broker or worker.  Stub only the Celery
+        # dispatch step so the *submission* path (security, contract,
+        # entitlement, readiness, resource, idempotency, persistence,
+        # handle minting) is exercised end to end; no scientific execution is
+        # claimed.
+        class _Queued:
+            id = "mcp-acceptance-queued"
+
+        module.task_runtime.run_compute_task.apply_async = lambda *_args, **_kwargs: _Queued()
         task_id, token = _seed_finished_task(module)
         db = module.app.config["user_db"]
         user = db.get_user_by_username("mcp-acceptance")
@@ -325,7 +442,7 @@ def main(argv: list[str] | None = None) -> int:
         import anyio
 
         url = f"http://127.0.0.1:{args.port}/k/mcp"
-        receipt = anyio.run(_workflow, url, token, other_token, handle, foreign_handle)
+        receipt = anyio.run(_workflow, url, token, other_token, handle, foreign_handle, submit_type, submit_role)
         receipt["transport"] = "streamable-http"
         receipt["endpoint"] = url
         receipt["client"] = "official mcp python SDK"
