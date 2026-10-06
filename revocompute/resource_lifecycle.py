@@ -83,6 +83,31 @@ def purge_task_data(
     return task_store.complete_data_purge(task_id, at=timestamp)
 
 
+def _finish_orphan_purge(task_store: TaskDatabase, task_id: str, *, at: float) -> bool:
+    """Complete the purge transaction for a Task row that no longer exists.
+
+    A lifecycle row with no owning Task is unambiguous: there is no filesystem
+    layout left to walk, so the interrupted transaction is finished and the
+    quota it still charges is released — exactly the amount that was charged, so
+    a row that never charged bytes releases nothing.  Without this, a purge
+    interrupted after its Task row was hard-removed stays ``PURGING`` forever and
+    keeps charging the subject.
+    """
+    record = task_store.get_data_lifecycle(task_id)
+    if record is None:
+        return False
+    state = str(record["state"])
+    if state == rloan.DataLifecycleState.ERROR.value:
+        task_store.requeue_data_lifecycle(task_id, at=at)
+        state = rloan.DataLifecycleState.DELETE_REQUESTED.value
+    if state == rloan.DataLifecycleState.DELETE_REQUESTED.value:
+        if not task_store.begin_data_purge(task_id, at=at):
+            return False
+    elif state != rloan.DataLifecycleState.PURGING.value:
+        return False
+    return task_store.complete_data_purge(task_id, at=at)
+
+
 def purge_requested_tasks(
     task_store: TaskDatabase,
     *,
@@ -103,8 +128,7 @@ def purge_requested_tasks(
             # No Task row owns this lifecycle row: the Task was hard-removed.
             # Finishing the purge releases nothing (nothing was charged to a
             # missing Task) and clears the orphan, which is unambiguous.
-            task_store.begin_data_purge(str(record["task_id"]), at=timestamp)
-            if task_store.complete_data_purge(str(record["task_id"]), at=timestamp):
+            if _finish_orphan_purge(task_store, str(record["task_id"]), at=timestamp):
                 purged += 1
             continue
         try:
@@ -139,7 +163,7 @@ def retry_stale_purges(
         task_id = str(record["task_id"])
         task = task_store.get_task(task_id)
         if task is None:
-            if task_store.complete_data_purge(task_id, at=timestamp):
+            if _finish_orphan_purge(task_store, task_id, at=timestamp):
                 recovered += 1
             continue
         # Re-enter the transaction from the durable request state.  ``ERROR``

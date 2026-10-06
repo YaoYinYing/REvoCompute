@@ -16,11 +16,13 @@ from revocompute.maintenance.model import PeriodicTask
 from revocompute.maintenance.tasks.admin_digest import admin_digest_task
 from revocompute.maintenance.tasks.database_backup import database_backup_task
 from revocompute.maintenance.tasks.log_rotation import log_rotation_task
+from revocompute.maintenance.tasks.resource_maintenance import resource_maintenance_task
 from revocompute.maintenance.tasks.result_cleanup import result_cleanup_task
 from revocompute.maintenance.tasks.tool_cleanup import tool_cleanup_task
 
 PERIODIC_TASKS = (
     admin_digest_task,
+    resource_maintenance_task,
     result_cleanup_task,
     tool_cleanup_task,
     database_backup_task,

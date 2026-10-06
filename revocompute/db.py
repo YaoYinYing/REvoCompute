@@ -2162,23 +2162,45 @@ class TaskDatabase:
         with self.engine.connect() as conn:
             return [dict(row) for row in conn.execute(stmt).mappings().all()]
 
-    def list_compute_ledger(
-        self, user_id: int, *, period: str | None = None, limit: int = 50
+    def list_ledger(
+        self,
+        user_id: int,
+        *,
+        unit: str | None = None,
+        period: str | None = None,
+        limit: int = 50,
     ) -> list[dict[str, Any]]:
-        """Return recent immutable GPU-compute entries for one user, newest first."""
+        """Return recent immutable append-only facts for one subject, newest first.
+
+        One reader for every unit: a compute fact and a durable-ownership fact
+        are the same kind of row, so scoping by unit is a filter rather than a
+        separate ledger.  ``period`` applies only to the periodic units; storage
+        ownership spans every period and is returned regardless.
+        """
         if limit < 1 or limit > 200:
             raise ValueError("limit must be between 1 and 200")
         stmt = select(self.resource_ledger_table).where(
             self.resource_ledger_table.c.subject_type == rloan.SUBJECT_USER,
             self.resource_ledger_table.c.subject_id == user_id,
-            self.resource_ledger_table.c.unit == rloan.UNIT_GPU_SECOND,
-            self.resource_ledger_table.c.resource_class == "",
         )
+        if unit is not None:
+            stmt = stmt.where(self.resource_ledger_table.c.unit == unit)
         if period is not None:
-            stmt = stmt.where(self.resource_ledger_table.c.period == period)
+            stmt = stmt.where(
+                or_(
+                    self.resource_ledger_table.c.period == period,
+                    self.resource_ledger_table.c.unit == rloan.UNIT_STORAGE_BYTE,
+                )
+            )
         stmt = stmt.order_by(desc(self.resource_ledger_table.c.id)).limit(limit)
         with self.engine.connect() as conn:
             return [dict(row) for row in conn.execute(stmt).mappings().all()]
+
+    def list_compute_ledger(
+        self, user_id: int, *, period: str | None = None, limit: int = 50
+    ) -> list[dict[str, Any]]:
+        """The GPU-compute projection of one subject's ledger, newest first."""
+        return self.list_ledger(user_id, unit=rloan.UNIT_GPU_SECOND, period=period, limit=limit)
 
     def list_policy_audit(self, user_id: int, *, limit: int = 50) -> list[dict[str, Any]]:
         """Return administrative policy mutations for one subject, newest first."""
