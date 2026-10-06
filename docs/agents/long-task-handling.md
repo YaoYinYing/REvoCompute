@@ -464,16 +464,16 @@ instruction explicitly grants that authority; the normal endpoint is
 ### Maintainer attention is a scarce campaign resource
 
 A Campaign must optimize not only implementation throughput and correctness but
-also **maintainer attention cost**. Two independent high-throughput campaigns
-were observed to consume roughly twelve hours of sustained supervision each —
-not because implementation stalled, but because coordination burden that the
-Commander could have absorbed was instead left with the maintainer: repeatedly
-choosing PR order, asking for status, noticing stale ancestry, requesting
-rebases, separating CI flakes from regressions, re-checking whether review
-findings were still live, and deciding when agents should continue or stop. More
-agents must not imply proportionally more interruptions; if throughput roughly
-doubles, required maintainer attention should stay roughly bounded. If it does
-not, the protocol is under-absorbing coordination work.
+also **maintainer attention cost**. A recent pair of high-throughput PR campaigns
+consumed roughly twelve hours of sustained maintainer supervision in aggregate —
+not because implementation stalled, but because too much routine convergence
+work remained with the maintainer: repeatedly choosing PR order, asking for
+status, noticing stale ancestry, requesting rebases, separating CI flakes from
+regressions, re-checking whether review findings were still live, and deciding
+when agents should continue or stop. More agents must not imply proportionally
+more interruptions; if throughput roughly doubles, required maintainer attention
+should stay roughly bounded. If it does not, the protocol is under-absorbing
+coordination work.
 
 The intended division of responsibility:
 
@@ -515,7 +515,8 @@ because several valid options exist. Escalate only when at least one holds:
 8. proceeding would contradict a previously stated maintainer constraint;
 9. evidence is insufficient to distinguish a regression from an
    infrastructure/test failure;
-10. merge authority was explicitly retained by the maintainer.
+10. an imminent merge requires maintainer approval, or a proposed change would
+    alter previously retained merge authority.
 
 Otherwise choose the best bounded option, record the reasoning concisely, and
 continue.
