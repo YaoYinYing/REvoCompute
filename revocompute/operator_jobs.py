@@ -323,6 +323,24 @@ class OperatorJobStore:
             )
         return result_row.rowcount == 1
 
+    def record_progress(self, job_id: str, *, stage: str, log_text: str | None = None) -> bool:
+        """Record a running job's current stage and bounded log without a status change.
+
+        Progress is not a transition: a job stays RUNNING while it advances
+        through the operations it planned, so this updates the stage directly
+        rather than pretending RUNNING -> RUNNING is a legal move.
+        """
+        values: dict[str, Any] = {"stage": stage}
+        if log_text is not None:
+            values["log_text"] = _bound_log(log_text)
+        with self.engine.begin() as conn:
+            result_row = conn.execute(
+                sa.update(self.table)
+                .where(self.table.c.job_id == job_id, self.table.c.status == OperatorJobStatus.RUNNING.value)
+                .values(**values)
+            )
+        return result_row.rowcount == 1
+
     def request_cancel(self, job_id: str) -> bool:
         """Move a live job toward cancellation; only its own scope is affected."""
         record = self.get(job_id)

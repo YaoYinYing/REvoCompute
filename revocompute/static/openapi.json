@@ -17,7 +17,8 @@
     {"name": "Tools", "description": "Authenticated, ephemeral, CPU-only scientific utilities executed outside Slurm."},
     {"name": "Task types"},
     {"name": "Tasks"},
-    {"name": "Results"}
+    {"name": "Results"},
+    {"name": "Runner fleet", "description": "Admin-only Runner fleet readiness, typed operator planning, and Operator Jobs."}
   ],
   "paths": {
     "/openapi.json": {
@@ -1025,6 +1026,180 @@
           "409": {"description": "Archive has not been requested"}
         }
       }
+    },
+    "/compute/api/auth/admin/runners": {
+      "get": {
+        "tags": ["Runner fleet"],
+        "summary": "List fleet readiness, capacity, access, and in-flight jobs",
+        "operationId": "adminRunnerFleet",
+        "security": [{"bearerAuth": []}],
+        "responses": {
+          "200": {
+            "description": "Every enabled Runner family's admin projection",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/RunnerFleet"}}}
+          },
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"}
+        }
+      }
+    },
+    "/compute/api/auth/admin/runners/{runner_family}": {
+      "get": {
+        "tags": ["Runner fleet"],
+        "summary": "Read one Runner family's evidence and permitted actions",
+        "operationId": "adminRunnerDetail",
+        "security": [{"bearerAuth": []}],
+        "parameters": [{"$ref": "#/components/parameters/RunnerFamily"}],
+        "responses": {
+          "200": {
+            "description": "The family's readiness, capacity, access, evidence, and actions",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/RunnerDetail"}}}
+          },
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"}
+        }
+      }
+    },
+    "/compute/api/auth/admin/runners/{runner_family}/plan": {
+      "post": {
+        "tags": ["Runner fleet"],
+        "summary": "Plan one typed operator action without executing it",
+        "operationId": "adminRunnerPlan",
+        "security": [{"bearerAuth": []}],
+        "parameters": [{"$ref": "#/components/parameters/RunnerFamily"}],
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OperatorPlanRequest"}}}
+        },
+        "responses": {
+          "200": {
+            "description": "The content-addressed plan, including the operations it will not perform",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OperatorPlan"}}}
+          },
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"}
+        }
+      }
+    },
+    "/compute/api/auth/admin/runners/{runner_family}/actions": {
+      "post": {
+        "tags": ["Runner fleet"],
+        "summary": "Execute a previously planned typed operator action",
+        "description": "The plan digest binds execution to the evidence the plan was computed against; if that evidence changed, the request is rejected with 409 stale_plan rather than executed against new state.",
+        "operationId": "adminRunnerAction",
+        "security": [{"bearerAuth": []}],
+        "parameters": [{"$ref": "#/components/parameters/RunnerFamily"}],
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OperatorJobRequest"}}}
+        },
+        "responses": {
+          "202": {
+            "description": "The mutation was accepted as a durable Operator Job",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OperatorJobAccepted"}}}
+          },
+          "200": {
+            "description": "A read action ran inline, or an idempotent replay returned the existing job",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OperatorJobAccepted"}}}
+          },
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "409": {"description": "Stale plan, or a conflicting operation holds the family lease"},
+          "503": {"$ref": "#/components/responses/Unavailable"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"}
+        }
+      }
+    },
+    "/compute/api/auth/admin/runners/{runner_family}/history": {
+      "get": {
+        "tags": ["Runner fleet"],
+        "summary": "Read the bounded operator history for one Runner family",
+        "operationId": "adminRunnerHistory",
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+          {"$ref": "#/components/parameters/RunnerFamily"},
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {"type": "integer", "minimum": 1, "maximum": 200, "default": 50}
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Newest-first operator history with requested intent and effective actions",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OperatorHistoryList"}}}
+          },
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"}
+        }
+      }
+    },
+    "/compute/api/auth/admin/operator/jobs": {
+      "get": {
+        "tags": ["Runner fleet"],
+        "summary": "List recent Operator Jobs",
+        "operationId": "adminOperatorJobs",
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+          {"name": "runner_family", "in": "query", "required": false, "schema": {"type": "string"}},
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {"type": "integer", "minimum": 1, "maximum": 200, "default": 50}
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recent Operator Jobs, newest first",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OperatorJobList"}}}
+          },
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"}
+        }
+      }
+    },
+    "/compute/api/auth/admin/operator/jobs/{job_id}": {
+      "get": {
+        "tags": ["Runner fleet"],
+        "summary": "Read one Operator Job's status, stage, log, and effect",
+        "operationId": "adminOperatorJob",
+        "security": [{"bearerAuth": []}],
+        "parameters": [{"$ref": "#/components/parameters/OperatorJobId"}],
+        "responses": {
+          "200": {
+            "description": "The Operator Job record",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OperatorJob"}}}
+          },
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"}
+        }
+      }
+    },
+    "/compute/api/auth/admin/operator/jobs/{job_id}/cancel": {
+      "post": {
+        "tags": ["Runner fleet"],
+        "summary": "Request cancellation of an owned Operator Job",
+        "operationId": "adminOperatorJobCancel",
+        "security": [{"bearerAuth": []}],
+        "parameters": [{"$ref": "#/components/parameters/OperatorJobId"}],
+        "responses": {
+          "200": {
+            "description": "The updated Operator Job record",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OperatorJob"}}}
+          },
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "409": {"description": "The job is no longer cancellable"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"}
+        }
+      }
     }
   },
   "components": {
@@ -1038,7 +1213,15 @@
       "UserId": {"name": "user_id", "in": "path", "required": true, "schema": {"type": "integer", "minimum": 1}},
       "TaskTypeName": {"name": "name", "in": "path", "required": true, "schema": {"type": "string"}, "example": "gremlin"},
       "ToolName": {"name": "name", "in": "path", "required": true, "schema": {"type": "string"}, "example": "structure_inspect"},
-      "ToolCallId": {"name": "tool_call_id", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/ToolCallId"}}
+      "ToolCallId": {"name": "tool_call_id", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/ToolCallId"}},
+      "RunnerFamily": {
+        "name": "runner_family",
+        "in": "path",
+        "required": true,
+        "schema": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,63}$"},
+        "description": "Canonical Runner family identifier resolved from the registry."
+      },
+      "OperatorJobId": {"name": "job_id", "in": "path", "required": true, "schema": {"type": "string"}}
     },
     "responses": {
       "BadRequest": {"description": "Invalid request", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}},
@@ -2231,7 +2414,304 @@
           }
         },
         "additionalProperties": false
-      }
+      },
+    "RunnerReadinessStatus": {
+      "type": "string",
+      "enum": ["NOT_CONFIGURED", "NOT_BUILT", "BUILD_STALE", "NOT_VALIDATED", "VALIDATION_STALE", "READY"],
+      "description": "The derived six-state Runner readiness verdict. Never set directly."
+    },
+    "RunnerEvidence": {
+      "type": "object",
+      "description": "The content-addressed evidence a readiness verdict was derived from.",
+      "required": [
+        "sif_path",
+        "sif_exists",
+        "build_provenance_current",
+        "receipt_exists",
+        "receipt_valid",
+        "doctor_ok"
+      ],
+      "properties": {
+        "sif_path": {"type": "string"},
+        "sif_exists": {"type": "boolean"},
+        "sif_sha256": {"type": ["string", "null"]},
+        "build_provenance_current": {"type": "boolean"},
+        "build_provenance_digest": {"type": ["string", "null"]},
+        "runtime_bundle_sha256": {"type": ["string", "null"]},
+        "receipt_exists": {"type": "boolean"},
+        "receipt_valid": {"type": "boolean"},
+        "receipt_tested_at": {"type": ["string", "null"]},
+        "required_smoke_cases": {"type": "array", "items": {"type": "string"}},
+        "passed_smoke_cases": {"type": "array", "items": {"type": "string"}},
+        "doctor_ok": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+    "RunnerReadiness": {
+      "type": "object",
+      "required": ["status", "reason_code", "message", "next_action", "evidence"],
+      "properties": {
+        "status": {"$ref": "#/components/schemas/RunnerReadinessStatus"},
+        "reason_code": {"type": "string", "description": "Stable machine-readable reason; clients localize the copy."},
+        "message": {"type": "string"},
+        "next_action": {"type": "string"},
+        "evidence": {"$ref": "#/components/schemas/RunnerEvidence"}
+      },
+      "additionalProperties": false
+    },
+    "RunnerCapacity": {
+      "type": "object",
+      "description": "Transient execution availability, reported separately from readiness.",
+      "required": ["available", "reason"],
+      "properties": {"available": {"type": ["boolean", "null"]}, "reason": {"type": "string"}},
+      "additionalProperties": false
+    },
+    "RunnerFleetAccess": {
+      "type": "object",
+      "description": "Whether the calling user may submit to a restricted family; separate from readiness.",
+      "required": ["restricted", "granted", "policy_id"],
+      "properties": {
+        "restricted": {"type": "boolean"},
+        "granted": {"type": "boolean"},
+        "policy_id": {"type": ["string", "null"]}
+      },
+      "additionalProperties": false
+    },
+    "OperatorActionParameter": {
+      "type": "object",
+      "required": ["name", "kind", "required", "maximum_length"],
+      "properties": {
+        "name": {"type": "string"},
+        "kind": {"type": "string", "enum": ["family", "collection", "task", "bool"]},
+        "required": {"type": "boolean"},
+        "maximum_length": {"type": "integer"}
+      },
+      "additionalProperties": false
+    },
+    "OperatorPlannedEffect": {
+      "type": "object",
+      "required": ["operation", "label"],
+      "properties": {"operation": {"type": "string"}, "label": {"type": "string"}},
+      "additionalProperties": false
+    },
+    "OperatorPlan": {
+      "type": "object",
+      "description": "A deterministic, content-addressed plan produced before any privileged execution.",
+      "required": [
+        "action",
+        "tier",
+        "runner_family",
+        "requested_intent",
+        "current_state",
+        "reason_code",
+        "evidence_digest",
+        "effective_actions",
+        "expected_effects",
+        "not_required",
+        "lease_scope",
+        "requires_confirmation",
+        "next_state_effect",
+        "plan_digest",
+        "evaluated_at"
+      ],
+      "properties": {
+        "action": {"type": "string"},
+        "tier": {"type": "string", "enum": ["read", "mutate", "activate"]},
+        "runner_family": {"type": "string"},
+        "requested_intent": {"type": "string"},
+        "current_state": {"$ref": "#/components/schemas/RunnerReadinessStatus"},
+        "reason_code": {"type": "string"},
+        "evidence_digest": {"type": "string"},
+        "effective_actions": {"type": "array", "items": {"type": "string"}},
+        "expected_effects": {"type": "array", "items": {"type": "string"}},
+        "not_required": {"type": "array", "items": {"$ref": "#/components/schemas/OperatorPlannedEffect"}},
+        "lease_scope": {"type": "string"},
+        "requires_confirmation": {"type": "boolean"},
+        "next_state_effect": {"type": "string"},
+        "cli_reference": {
+          "type": ["string", "null"],
+          "description": "Read-only reference text; never an execution mechanism."
+        },
+        "plan_digest": {"type": "string"},
+        "evaluated_at": {"type": "number"}
+      },
+      "additionalProperties": false
+    },
+    "OperatorAction": {
+      "type": "object",
+      "description": "One entry of the closed operator-action registry, with its plan when currently available.",
+      "required": [
+        "id",
+        "tier",
+        "lease_scope",
+        "summary",
+        "requires_confirmation",
+        "next_state_effect",
+        "parameters",
+        "available"
+      ],
+      "properties": {
+        "id": {"type": "string"},
+        "tier": {"type": "string", "enum": ["read", "mutate", "activate"]},
+        "lease_scope": {"type": "string"},
+        "summary": {"type": "string"},
+        "requires_confirmation": {"type": "boolean"},
+        "next_state_effect": {"type": "string"},
+        "parameters": {"type": "array", "items": {"$ref": "#/components/schemas/OperatorActionParameter"}},
+        "available": {"type": "boolean"},
+        "unavailable_reason": {"type": "string"},
+        "plan": {"oneOf": [{"$ref": "#/components/schemas/OperatorPlan"}, {"type": "null"}]}
+      },
+      "additionalProperties": false
+    },
+    "OperatorJobStatus": {"type": "string", "enum": ["QUEUED", "RUNNING", "SUCCEEDED", "FAILED", "CANCELLING", "CANCELLED"]},
+    "OperatorJobSummary": {
+      "type": "object",
+      "required": ["job_id", "action", "status", "actor", "created_at"],
+      "properties": {
+        "job_id": {"type": "string"},
+        "action": {"type": "string"},
+        "status": {"$ref": "#/components/schemas/OperatorJobStatus"},
+        "stage": {"type": ["string", "null"]},
+        "actor": {"type": "string"},
+        "created_at": {"type": "number"}
+      },
+      "additionalProperties": false
+    },
+    "OperatorJobEffect": {
+      "type": "object",
+      "description": "What the operator requested versus what the control core actually executed.",
+      "properties": {
+        "requested_intent": {"type": "string"},
+        "effective_actions": {"type": "array", "items": {"type": "string"}},
+        "planned_actions": {"type": "array", "items": {"type": "string"}},
+        "before": {"type": "object"},
+        "after": {"type": "object"},
+        "lease_scope": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "OperatorJob": {
+      "type": "object",
+      "description": "A bounded Operator Job record. No host paths or raw environment are exposed.",
+      "required": [
+        "job_id",
+        "action",
+        "runner_family",
+        "actor_user_id",
+        "actor_username",
+        "tier",
+        "lease_scope",
+        "status",
+        "requested_intent",
+        "plan_digest",
+        "evidence_digest",
+        "created_at",
+        "cancellable"
+      ],
+      "properties": {
+        "job_id": {"type": ["string", "null"]},
+        "action": {"type": "string"},
+        "runner_family": {"type": "string"},
+        "actor_user_id": {"type": "integer"},
+        "actor_username": {"type": "string"},
+        "tier": {"type": "string"},
+        "lease_scope": {"type": "string"},
+        "status": {"$ref": "#/components/schemas/OperatorJobStatus"},
+        "stage": {"type": ["string", "null"]},
+        "requested_intent": {"type": "string"},
+        "plan_digest": {"type": "string"},
+        "evidence_digest": {"type": "string"},
+        "failure_category": {"type": ["string", "null"]},
+        "created_at": {"type": "number"},
+        "started_at": {"type": ["number", "null"]},
+        "finished_at": {"type": ["number", "null"]},
+        "result": {"type": "object"},
+        "effect": {"$ref": "#/components/schemas/OperatorJobEffect"},
+        "log_text": {"type": ["string", "null"]},
+        "cancellable": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+    "OperatorExecutorState": {
+      "type": "object",
+      "description": "Host executor availability, a capability separate from Runner readiness.",
+      "required": ["available", "reason"],
+      "properties": {"available": {"type": "boolean"}, "reason": {"type": "string"}},
+      "additionalProperties": false
+    },
+    "RunnerFleetEntry": {
+      "type": "object",
+      "required": ["runner_family", "readiness", "capacity", "access", "in_flight"],
+      "properties": {
+        "runner_family": {"type": "string"},
+        "readiness": {"$ref": "#/components/schemas/RunnerReadiness"},
+        "capacity": {"$ref": "#/components/schemas/RunnerCapacity"},
+        "access": {"$ref": "#/components/schemas/RunnerFleetAccess"},
+        "in_flight": {"oneOf": [{"$ref": "#/components/schemas/OperatorJobSummary"}, {"type": "null"}]}
+      },
+      "additionalProperties": false
+    },
+    "RunnerFleet": {
+      "type": "object",
+      "required": ["runners", "executor"],
+      "properties": {
+        "runners": {"type": "array", "items": {"$ref": "#/components/schemas/RunnerFleetEntry"}},
+        "executor": {"$ref": "#/components/schemas/OperatorExecutorState"}
+      },
+      "additionalProperties": false
+    },
+    "RunnerDetail": {
+      "type": "object",
+      "required": ["runner_family", "readiness", "capacity", "access", "actions"],
+      "properties": {
+        "runner_family": {"type": "string"},
+        "readiness": {"$ref": "#/components/schemas/RunnerReadiness"},
+        "capacity": {"$ref": "#/components/schemas/RunnerCapacity"},
+        "access": {"$ref": "#/components/schemas/RunnerFleetAccess"},
+        "in_flight": {"oneOf": [{"$ref": "#/components/schemas/OperatorJobSummary"}, {"type": "null"}]},
+        "actions": {"type": "array", "items": {"$ref": "#/components/schemas/OperatorAction"}}
+      },
+      "additionalProperties": false
+    },
+    "OperatorPlanRequest": {
+      "type": "object",
+      "required": ["action"],
+      "properties": {"action": {"type": "string", "pattern": "^runner\\.[a-z_]+$"}},
+      "additionalProperties": false
+    },
+    "OperatorJobRequest": {
+      "type": "object",
+      "required": ["action", "plan_digest"],
+      "properties": {
+        "action": {"type": "string", "pattern": "^runner\\.[a-z_]+$"},
+        "plan_digest": {"type": "string"},
+        "idempotency_key": {"type": ["string", "null"]}
+      },
+      "additionalProperties": false
+    },
+    "OperatorJobList": {
+      "type": "object",
+      "required": ["jobs"],
+      "properties": {"jobs": {"type": "array", "items": {"$ref": "#/components/schemas/OperatorJob"}}},
+      "additionalProperties": false
+    },
+    "OperatorHistoryList": {
+      "type": "object",
+      "required": ["history"],
+      "properties": {"history": {"type": "array", "items": {"$ref": "#/components/schemas/OperatorJob"}}},
+      "additionalProperties": false
+    },
+    "OperatorJobAccepted": {
+      "type": "object",
+      "required": ["job", "plan", "accepted"],
+      "properties": {
+        "job": {"$ref": "#/components/schemas/OperatorJob"},
+        "plan": {"$ref": "#/components/schemas/OperatorPlan"},
+        "accepted": {"type": "boolean", "description": "False when an idempotent replay returned the existing job."}
+      },
+      "additionalProperties": false
+    }
     }
   }
 }

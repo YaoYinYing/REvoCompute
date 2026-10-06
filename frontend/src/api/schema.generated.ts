@@ -1313,6 +1313,145 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/compute/api/auth/admin/runners": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List fleet readiness, capacity, access, and in-flight jobs */
+        get: operations["adminRunnerFleet"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/compute/api/auth/admin/runners/{runner_family}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read one Runner family's evidence and permitted actions */
+        get: operations["adminRunnerDetail"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/compute/api/auth/admin/runners/{runner_family}/plan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Plan one typed operator action without executing it */
+        post: operations["adminRunnerPlan"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/compute/api/auth/admin/runners/{runner_family}/actions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Execute a previously planned typed operator action
+         * @description The plan digest binds execution to the evidence the plan was computed against; if that evidence changed, the request is rejected with 409 stale_plan rather than executed against new state.
+         */
+        post: operations["adminRunnerAction"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/compute/api/auth/admin/runners/{runner_family}/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the bounded operator history for one Runner family */
+        get: operations["adminRunnerHistory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/compute/api/auth/admin/operator/jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List recent Operator Jobs */
+        get: operations["adminOperatorJobs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/compute/api/auth/admin/operator/jobs/{job_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read one Operator Job's status, stage, log, and effect */
+        get: operations["adminOperatorJob"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/compute/api/auth/admin/operator/jobs/{job_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Request cancellation of an owned Operator Job */
+        post: operations["adminOperatorJobCancel"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -2410,6 +2549,177 @@ export interface components {
                 download_url?: string | null;
             };
         };
+        /**
+         * @description The derived six-state Runner readiness verdict. Never set directly.
+         * @enum {string}
+         */
+        RunnerReadinessStatus: "NOT_CONFIGURED" | "NOT_BUILT" | "BUILD_STALE" | "NOT_VALIDATED" | "VALIDATION_STALE" | "READY";
+        /** @description The content-addressed evidence a readiness verdict was derived from. */
+        RunnerEvidence: {
+            sif_path: string;
+            sif_exists: boolean;
+            sif_sha256?: string | null;
+            build_provenance_current: boolean;
+            build_provenance_digest?: string | null;
+            runtime_bundle_sha256?: string | null;
+            receipt_exists: boolean;
+            receipt_valid: boolean;
+            receipt_tested_at?: string | null;
+            required_smoke_cases?: string[];
+            passed_smoke_cases?: string[];
+            doctor_ok: boolean;
+        };
+        RunnerReadiness: {
+            status: components["schemas"]["RunnerReadinessStatus"];
+            /** @description Stable machine-readable reason; clients localize the copy. */
+            reason_code: string;
+            message: string;
+            next_action: string;
+            evidence: components["schemas"]["RunnerEvidence"];
+        };
+        /** @description Transient execution availability, reported separately from readiness. */
+        RunnerCapacity: {
+            available: boolean | null;
+            reason: string;
+        };
+        /** @description Whether the calling user may submit to a restricted family; separate from readiness. */
+        RunnerFleetAccess: {
+            restricted: boolean;
+            granted: boolean;
+            policy_id: string | null;
+        };
+        OperatorActionParameter: {
+            name: string;
+            /** @enum {string} */
+            kind: "family" | "collection" | "task" | "bool";
+            required: boolean;
+            maximum_length: number;
+        };
+        OperatorPlannedEffect: {
+            operation: string;
+            label: string;
+        };
+        /** @description A deterministic, content-addressed plan produced before any privileged execution. */
+        OperatorPlan: {
+            action: string;
+            /** @enum {string} */
+            tier: "read" | "mutate" | "activate";
+            runner_family: string;
+            requested_intent: string;
+            current_state: components["schemas"]["RunnerReadinessStatus"];
+            reason_code: string;
+            evidence_digest: string;
+            effective_actions: string[];
+            expected_effects: string[];
+            not_required: components["schemas"]["OperatorPlannedEffect"][];
+            lease_scope: string;
+            requires_confirmation: boolean;
+            next_state_effect: string;
+            /** @description Read-only reference text; never an execution mechanism. */
+            cli_reference?: string | null;
+            plan_digest: string;
+            evaluated_at: number;
+        };
+        /** @description One entry of the closed operator-action registry, with its plan when currently available. */
+        OperatorAction: {
+            id: string;
+            /** @enum {string} */
+            tier: "read" | "mutate" | "activate";
+            lease_scope: string;
+            summary: string;
+            requires_confirmation: boolean;
+            next_state_effect: string;
+            parameters: components["schemas"]["OperatorActionParameter"][];
+            available: boolean;
+            unavailable_reason?: string;
+            plan?: components["schemas"]["OperatorPlan"] | null;
+        };
+        /** @enum {string} */
+        OperatorJobStatus: "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELLING" | "CANCELLED";
+        OperatorJobSummary: {
+            job_id: string;
+            action: string;
+            status: components["schemas"]["OperatorJobStatus"];
+            stage?: string | null;
+            actor: string;
+            created_at: number;
+        };
+        /** @description What the operator requested versus what the control core actually executed. */
+        OperatorJobEffect: {
+            requested_intent?: string;
+            effective_actions?: string[];
+            planned_actions?: string[];
+            before?: Record<string, never>;
+            after?: Record<string, never>;
+            lease_scope?: string;
+        };
+        /** @description A bounded Operator Job record. No host paths or raw environment are exposed. */
+        OperatorJob: {
+            job_id: string | null;
+            action: string;
+            runner_family: string;
+            actor_user_id: number;
+            actor_username: string;
+            tier: string;
+            lease_scope: string;
+            status: components["schemas"]["OperatorJobStatus"];
+            stage?: string | null;
+            requested_intent: string;
+            plan_digest: string;
+            evidence_digest: string;
+            failure_category?: string | null;
+            created_at: number;
+            started_at?: number | null;
+            finished_at?: number | null;
+            result?: Record<string, never>;
+            effect?: components["schemas"]["OperatorJobEffect"];
+            log_text?: string | null;
+            cancellable: boolean;
+        };
+        /** @description Host executor availability, a capability separate from Runner readiness. */
+        OperatorExecutorState: {
+            available: boolean;
+            reason: string;
+        };
+        RunnerFleetEntry: {
+            runner_family: string;
+            readiness: components["schemas"]["RunnerReadiness"];
+            capacity: components["schemas"]["RunnerCapacity"];
+            access: components["schemas"]["RunnerFleetAccess"];
+            in_flight: components["schemas"]["OperatorJobSummary"] | null;
+        };
+        RunnerFleet: {
+            runners: components["schemas"]["RunnerFleetEntry"][];
+            executor: components["schemas"]["OperatorExecutorState"];
+        };
+        RunnerDetail: {
+            runner_family: string;
+            readiness: components["schemas"]["RunnerReadiness"];
+            capacity: components["schemas"]["RunnerCapacity"];
+            access: components["schemas"]["RunnerFleetAccess"];
+            in_flight?: components["schemas"]["OperatorJobSummary"] | null;
+            actions: components["schemas"]["OperatorAction"][];
+        };
+        OperatorPlanRequest: {
+            action: string;
+        };
+        OperatorJobRequest: {
+            action: string;
+            plan_digest: string;
+            idempotency_key?: string | null;
+        };
+        OperatorJobList: {
+            jobs: components["schemas"]["OperatorJob"][];
+        };
+        OperatorHistoryList: {
+            history: components["schemas"]["OperatorJob"][];
+        };
+        OperatorJobAccepted: {
+            job: components["schemas"]["OperatorJob"];
+            plan: components["schemas"]["OperatorPlan"];
+            /** @description False when an idempotent replay returned the existing job. */
+            accepted: boolean;
+        };
     };
     responses: {
         /** @description Invalid request */
@@ -2466,6 +2776,9 @@ export interface components {
         /** @example structure_inspect */
         ToolName: string;
         ToolCallId: components["schemas"]["ToolCallId"];
+        /** @description Canonical Runner family identifier resolved from the registry. */
+        RunnerFamily: string;
+        OperatorJobId: string;
     };
     requestBodies: never;
     headers: never;
@@ -4700,6 +5013,242 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             404: components["responses"]["NotFound"];
             /** @description Archive has not been requested */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    adminRunnerFleet: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every enabled Runner family's admin projection */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunnerFleet"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    adminRunnerDetail: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Canonical Runner family identifier resolved from the registry. */
+                runner_family: components["parameters"]["RunnerFamily"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The family's readiness, capacity, access, evidence, and actions */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunnerDetail"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    adminRunnerPlan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Canonical Runner family identifier resolved from the registry. */
+                runner_family: components["parameters"]["RunnerFamily"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OperatorPlanRequest"];
+            };
+        };
+        responses: {
+            /** @description The content-addressed plan, including the operations it will not perform */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperatorPlan"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    adminRunnerAction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Canonical Runner family identifier resolved from the registry. */
+                runner_family: components["parameters"]["RunnerFamily"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OperatorJobRequest"];
+            };
+        };
+        responses: {
+            /** @description A read action ran inline, or an idempotent replay returned the existing job */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperatorJobAccepted"];
+                };
+            };
+            /** @description The mutation was accepted as a durable Operator Job */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperatorJobAccepted"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            /** @description Stale plan, or a conflicting operation holds the family lease */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    adminRunnerHistory: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description Canonical Runner family identifier resolved from the registry. */
+                runner_family: components["parameters"]["RunnerFamily"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Newest-first operator history with requested intent and effective actions */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperatorHistoryList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    adminOperatorJobs: {
+        parameters: {
+            query?: {
+                runner_family?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Recent Operator Jobs, newest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperatorJobList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    adminOperatorJob: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: components["parameters"]["OperatorJobId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The Operator Job record */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperatorJob"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    adminOperatorJobCancel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: components["parameters"]["OperatorJobId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The updated Operator Job record */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperatorJob"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            /** @description The job is no longer cancellable */
             409: {
                 headers: {
                     [name: string]: unknown;

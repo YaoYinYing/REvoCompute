@@ -14,7 +14,7 @@ from __future__ import annotations
 import math
 import re
 from types import SimpleNamespace
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from jsonschema import Draft202012Validator, FormatChecker
@@ -486,10 +486,40 @@ def _coerce_param_value(param: Any, raw: Any) -> Any:
     return value
 
 
+#: A canonical Runner family identifier: lowercase, bounded, never a path.
+RunnerFamilyId = Annotated[str, Field(min_length=1, max_length=64, pattern=r"^[a-z0-9][a-z0-9_.-]{0,63}$")]
+#: A canonical operator action id from the closed registry vocabulary.
+OperatorActionId = Annotated[str, Field(pattern=r"^runner\.[a-z_]+$")]
+#: A content-addressed plan/evidence digest.
+ContentDigest = Annotated[str, Field(min_length=8, max_length=80, pattern=r"^sha256:[0-9a-f]{8,72}$")]
+
+
+class OperatorPlanRequest(BaseModel):
+    """Plan one typed operator action against current evidence, changing nothing.
+
+    The target family comes from the request path, so it is deliberately absent
+    here: there is one source for the target, and a body that names a different
+    family is rejected as an unknown field rather than silently honoured.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: OperatorActionId
+
+
+class OperatorJobRequest(BaseModel):
+    """Execute a previously planned action; the plan digest binds it to its evidence."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: OperatorActionId
+    plan_digest: ContentDigest
+    idempotency_key: str | None = Field(default=None, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
+
+
 # ---------------------------------------------------------------------------
 # Response models
 # ---------------------------------------------------------------------------
-
 
 class UserResponse(BaseModel):
     """Safe user fields for API responses — never includes sensitive columns."""
