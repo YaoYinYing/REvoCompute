@@ -419,7 +419,35 @@ There is no separate collapse-arrow button.
 
 Expansion reveals labels but does not turn the rail into a second content area.
 
-### 9.2 Mobile
+### 9.2 Navigation regions
+
+The left navigation states the product's information architecture as three
+regions, in this order:
+
+```text
+Compute        Runners, Dashboard
+Account        Profile
+Administration User control, Server logs, Configuration   (administrators only)
+```
+
+A region is a quiet label over its destinations, separated from the next region
+by a hairline and space. The grouping is carried by rule, label and spacing — it
+is not a card, not a decorative panel, and not a second icon system.
+
+Administration holds persistent system-level workspaces; Account holds the
+current user's own surfaces. They are different navigation levels and are never
+merged into one list.
+
+Region membership is authorization, not visual hiding: the Administration region
+is rendered only for a session the server projects as an administrator, so an
+ordinary user or an anonymous visitor never sees a forbidden destination. The
+route guard remains the authoritative boundary; navigation only reflects it.
+
+The structure is designed so further system surfaces can join a region as they
+are introduced. A destination is added when its route exists — not as a
+placeholder.
+
+### 9.3 Mobile
 
 Do not force the desktop rail onto mobile.
 
@@ -427,6 +455,11 @@ Mobile navigation should be designed for touch and limited width.
 
 The navigation model may differ while preserving the same information
 architecture and vocabulary.
+
+A bottom bar cannot label a group of items, so region headings are not rendered
+there; the destinations sit directly on the bar and the current one still marks
+itself. A destination added by the Administration region joins the bar the same
+way it joins the rail.
 
 ---
 
@@ -439,12 +472,14 @@ It may contain:
 - language;
 - theme;
 - notice/announcement affordance;
-- account;
-- role-dependent administration access.
+- account.
 
 Do not add a search field unless a real global search capability exists.
 
 Do not duplicate page actions into the top bar merely to make it look complete.
+
+Administration destinations live in the left navigation. The top bar must not
+carry a second Administration launcher.
 
 The best top bar is one users mostly stop noticing.
 

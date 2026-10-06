@@ -122,7 +122,7 @@ controls, and subtraction last.
   semantic separation preserved. (Rule: §22.)
 - **Does mobile recompose or merely shrink?** Object identity and primary actions
   preserved, metadata wrapping into meaningful rows, touch targets accessible,
-  no critical state hidden behind unexplained icons. (Rule: §9.2.)
+  no critical state hidden behind unexplained icons. (Rule: §9.3.)
 
 ## 11. Authorship
 

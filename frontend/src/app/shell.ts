@@ -19,6 +19,19 @@ const shellIcons = { Bell, Check, FileText, Languages, LayoutDashboard, LogOut, 
 function storedRail(): RailState { return localStorage.getItem(railKey) === 'expanded' ? 'expanded' : 'collapsed'; }
 function themeLabel(mode: ThemeMode): string { return `${t('shell.action.theme')}: ${t(`theme.${mode}`)}`; }
 
+/** A destination the left navigation can reach. */
+type NavDestination = [href: string, icon: string, label: string];
+
+/** The rail exists only where the left navigation is laid out as a column. On the
+ *  mobile bottom bar a repeat activation navigates like any other link. */
+const desktopRail = matchMedia('(min-width: 56.01rem)');
+/** Above this width the left navigation is grouped into labelled regions. */
+const navGrouped = matchMedia('(min-width: 62rem)');
+
+function currentDestination(href: string): boolean {
+  return location.pathname === href || (href === '/runners' && location.pathname.startsWith('/runners/'));
+}
+
 export function mountShell(root: HTMLElement): AppShell {
   root.replaceChildren();
   applyLocale(locale(), false);
@@ -31,21 +44,78 @@ export function mountShell(root: HTMLElement): AppShell {
   const logo = document.createElement('img'); logo.src = appAsset('logo.svg'); logo.alt = ''; logo.width = 30; logo.height = 30;
   const brandText = document.createElement('span'); brandText.textContent = 'REvoCompute'; brand.append(logo, brandText);
 
+  // The left navigation is the product's information architecture: Compute, the
+  // current user's Account, and — for an administrator — the Administration
+  // workspaces. Each region is a labelled group so the sections stay legible as
+  // more surfaces join; the grouping is a rule and a label, not a card.
   const nav = document.createElement('nav'); nav.className = 'app-nav'; nav.setAttribute('aria-label', t('shell.nav.primary'));
-  const links: Array<[string, string, string]> = [
-    ['/runners', 'workflow', t('shell.nav.runners')], ['/compute/dashboard', 'layout-dashboard', t('shell.nav.dashboard')],
+  const groups = {
+    compute: navGroup('compute', 'shell.nav.compute'),
+    account: navGroup('account', 'shell.nav.account'),
+    admin: navGroup('admin', 'shell.nav.administration'),
+  };
+  groups.admin.element.hidden = true;
+  const destinations: Array<[keyof typeof groups, Array<NavDestination>]> = [
+    ['compute', [
+      ['/runners', 'workflow', t('shell.nav.runners')],
+      ['/compute/dashboard', 'layout-dashboard', t('shell.nav.dashboard')],
+    ]],
+    // Account is the current user's own identity; Administration is system-level
+    // workspaces. They are different navigation levels and never merge into the
+    // Profile page's local section tabs.
+    ['account', [
+      ['/compute/profile', 'user-round', t('shell.nav.profile')],
+    ]],
+    ['admin', [
+      ['/compute/user_control', 'users-round', t('shell.admin.users')],
+      ['/compute/logs', 'file-text', t('shell.admin.logs')],
+      ['/compute/configuration', 'settings', t('shell.admin.configuration')],
+    ]],
   ];
-  links.forEach(([href, icon, label]) => {
+  for (const [region, links] of destinations) {
+    for (const [href, icon, label] of links) groups[region].items.append(navLink(href, icon, label));
+  }
+  Object.values(groups).forEach(group => nav.append(group.element));
+  // The Account region restates the current user's identity, so it follows the same
+  // session state as the top-bar profile affordance — one identity, two reach points.
+  const accountLink = groups.account.items.firstElementChild as HTMLAnchorElement;
+  accountLink.title = t('shell.action.profile');
+  accountLink.setAttribute('aria-label', t('shell.action.profile'));
+  // The group label is a visible heading on the desktop rail. On the mobile bar
+  // the links are laid out directly on the bar, so the headings there are removed
+  // from the accessibility tree rather than labelling a region that is not grouped.
+  const syncGroupHeadings = (grouped: boolean): void => {
+    Object.values(groups).forEach(group => group.heading.hidden = !grouped);
+  };
+  syncGroupHeadings(navGrouped.matches);
+  navGrouped.addEventListener('change', event => syncGroupHeadings(event.matches));
+
+  function navGroup(region: string, labelKey: string): { element: HTMLElement; heading: HTMLElement; items: HTMLElement } {
+    const element = document.createElement('div'); element.className = 'app-nav-group'; element.dataset.navGroup = region;
+    // The group name labels the region on the desktop rail. On the mobile bottom
+    // bar it cannot label a column of links, so it is removed there (see below).
+    const heading = document.createElement('h2'); heading.className = 'app-nav-group-label'; heading.textContent = t(labelKey);
+    const items = document.createElement('div'); items.className = 'app-nav-group-items';
+    element.append(heading, items);
+    return { element, heading, items };
+  }
+
+  function navLink(href: string, icon: string, label: string): HTMLElement {
     const link = document.createElement('a'); link.href = href; link.title = label; link.innerHTML = `<i data-lucide="${icon}" aria-hidden="true"></i><span>${label}</span>`;
-    const active = location.pathname === href || (href === '/runners' && location.pathname.startsWith('/runners/'));
-    if (active) {
+    if (currentDestination(href)) {
       link.setAttribute('aria-current', 'page');
-      // Repeated activation of the current item toggles the rail. There is no separate
-      // collapse arrow: the control that toggles the rail is the item you are already on.
-      link.addEventListener('click', event => { event.preventDefault(); toggleRail(); });
+      // Repeated activation of the current item toggles the desktop rail. There is
+      // no separate collapse arrow: the control that toggles the rail is the item
+      // you are already on. On the mobile bar there is no rail to toggle, so the
+      // item navigates like any other.
+      link.addEventListener('click', event => {
+        if (!desktopRail.matches) return;
+        event.preventDefault();
+        toggleRail();
+      });
     }
-    nav.append(link);
-  });
+    return link;
+  }
 
   function toggleRail(): void {
     shell.dataset.rail = shell.dataset.rail === 'expanded' ? 'collapsed' : 'expanded';
@@ -56,18 +126,8 @@ export function mountShell(root: HTMLElement): AppShell {
   const actions = document.createElement('div'); actions.className = 'app-header-actions';
   const noticesButton = document.createElement('button'); noticesButton.type = 'button'; noticesButton.className = 'icon-button app-notice-button'; noticesButton.title = t('shell.action.notices'); noticesButton.setAttribute('aria-label', t('shell.action.notices')); noticesButton.innerHTML = '<i data-lucide="bell" aria-hidden="true"></i>';
   noticesButton.hidden = true;
-  const adminLinks = document.createElement('details'); adminLinks.className = 'app-admin-links'; adminLinks.hidden = true;
-  const adminSummary = document.createElement('summary'); adminSummary.className = 'icon-button'; adminSummary.title = t('shell.action.administration'); adminSummary.setAttribute('aria-label', t('shell.action.administration')); adminSummary.innerHTML = '<i data-lucide="settings" aria-hidden="true"></i>';
-  const adminMenu = document.createElement('div'); adminMenu.className = 'app-admin-menu'; adminLinks.append(adminSummary, adminMenu);
-  const administrationLinks: Array<[string, string, string]> = [
-    ['/compute/user_control', 'users-round', t('shell.admin.users')],
-    ['/compute/logs', 'file-text', t('shell.admin.logs')],
-    ['/compute/configuration', 'settings', t('shell.admin.configuration')],
-  ];
-  administrationLinks.forEach(([href, icon, label]) => {
-    const link = document.createElement('a'); link.href = href; link.innerHTML = `<i data-lucide="${icon}" aria-hidden="true"></i><span>${label}</span>`;
-    if (location.pathname === href) link.setAttribute('aria-current', 'page'); adminMenu.append(link);
-  });
+  // The top bar is global chrome only. Administration lives in the left
+  // navigation, so it must not also be re-launched from a second hidden menu here.
   const userLink = document.createElement('a'); userLink.href = '/compute/profile'; userLink.className = 'app-user'; userLink.title = t('shell.action.profile'); userLink.setAttribute('aria-label', t('shell.action.profile')); userLink.innerHTML = `<i data-lucide="user-round" aria-hidden="true"></i><span>${t('shell.action.signIn')}</span>`;
   const logout = document.createElement('button'); logout.type = 'button'; logout.className = 'icon-button'; logout.title = t('shell.action.logout'); logout.setAttribute('aria-label', t('shell.action.logout')); logout.hidden = true; logout.innerHTML = '<i data-lucide="log-out" aria-hidden="true"></i>';
   logout.addEventListener('click', async () => {
@@ -81,7 +141,7 @@ export function mountShell(root: HTMLElement): AppShell {
     theme.innerHTML = `<i data-lucide="${document.documentElement.dataset.theme === 'dark' ? 'sun-medium' : 'moon-star'}" aria-hidden="true"></i>`;
     createIcons({ icons: { MoonStar, SunMedium }, root: theme });
   });
-  actions.append(languageMenu(), noticesButton, adminLinks, userLink, logout, theme);
+  actions.append(languageMenu(), noticesButton, userLink, logout, theme);
   header.append(actions);
   // The top bar holds global capability plus one primary page action, so the bar is
   // usable at any width without turning the rail into an IDE toolbar.
@@ -104,7 +164,14 @@ export function mountShell(root: HTMLElement): AppShell {
       const label = user?.full_name || user?.username || t('shell.action.signIn');
       userLink.querySelector('span')!.textContent = label;
       userLink.href = user ? '/compute/profile' : `/compute/login?return_to=${encodeURIComponent(location.pathname)}`;
-      logout.hidden = !user; adminLinks.hidden = user?.role !== 'admin';
+      logout.hidden = !user;
+      // The Account destination follows the same session state as the top-bar
+      // profile affordance: a signed-out visitor is offered the sign-in route.
+      accountLink.href = user ? '/compute/profile' : `/compute/login?return_to=${encodeURIComponent(location.pathname)}`;
+      // Authorization, not visual hiding: the Administration group is absent from
+      // the navigation for anyone the server has not projected as an administrator,
+      // so an ordinary user or an anonymous visitor never sees a forbidden link.
+      groups.admin.element.hidden = user?.role !== 'admin';
       void systemNotices.refresh();
     },
   };

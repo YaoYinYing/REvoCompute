@@ -23,8 +23,12 @@ type Dictionary = Record<string, string>;
 const en: Dictionary = {
   // Shell chrome
   'shell.nav.primary': 'Primary',
+  'shell.nav.compute': 'Compute',
+  'shell.nav.account': 'Account',
+  'shell.nav.administration': 'Administration',
   'shell.nav.runners': 'Runners',
   'shell.nav.dashboard': 'Dashboard',
+  'shell.nav.profile': 'Profile',
   'shell.nav.newTask': 'New task',
   'shell.nav.expand': 'Expand navigation',
   'shell.nav.collapse': 'Collapse navigation',
@@ -32,7 +36,6 @@ const en: Dictionary = {
   'shell.action.profile': 'Profile',
   'shell.action.signIn': 'Sign in',
   'shell.action.logout': 'Log out',
-  'shell.action.administration': 'Administration',
   'shell.action.language': 'Language',
   'shell.action.notices': 'System notices',
   'shell.admin.users': 'User control',
@@ -157,8 +160,12 @@ const en: Dictionary = {
 
 const zhCN: Dictionary = {
   'shell.nav.primary': '主导航',
+  'shell.nav.compute': '计算',
+  'shell.nav.account': '账户',
+  'shell.nav.administration': '系统管理',
   'shell.nav.runners': '计算模块',
   'shell.nav.dashboard': '任务面板',
+  'shell.nav.profile': '个人资料',
   'shell.nav.newTask': '新建任务',
   'shell.nav.expand': '展开导航',
   'shell.nav.collapse': '收起导航',
@@ -166,7 +173,6 @@ const zhCN: Dictionary = {
   'shell.action.profile': '个人资料',
   'shell.action.signIn': '登录',
   'shell.action.logout': '退出登录',
-  'shell.action.administration': '系统管理',
   'shell.action.language': '语言',
   'shell.action.notices': '系统通知',
   'shell.admin.users': '用户管理',

@@ -329,6 +329,79 @@ clean.
 
 ---
 
+# Administration information-architecture correction (PR #56)
+
+A deployed-UI review found one information-architecture defect: User control,
+Server logs, and Configuration are persistent page-level workspaces, but they
+were reachable only through a `details` menu in the top-right chrome — a hidden
+launcher for three destinations, while the top bar is defined as global chrome
+(`frontend-design-language.md` §10).
+
+## Decision
+
+The left navigation now states the product's architecture as three regions
+(§9.2): **Compute** (Runners, Dashboard), **Account** (Profile), and
+**Administration** (User control, Server logs, Configuration). Each region is a
+quiet label over its destinations, separated by a hairline and space; there is
+no Admin card, no second icon system, and no added visual weight — Discoverability
+comes from position and grouping, not from ornament.
+
+- The top-right `Administration` dropdown is **removed** (script and its CSS); the
+  top bar returns to global chrome only (language, notices, account, theme,
+  logout). There is no second hidden Administration launcher.
+- Region membership is **authorization, not visual hiding**: `shell.setUser`
+  renders the Administration region only when the server projects the session as
+  an administrator. Anonymous and ordinary-user navigation gain no forbidden link.
+- Profile's local section nav (Account/Security/API key/Runner access/GPU
+  credits/Metrics) is a *different navigation level* and is untouched; the new
+  region is deliberately not appended there, and a test asserts the global nav
+  carries no profile section tabs.
+- Extension: a region accepts destinations as their routes exist; no speculative
+  Fleet/Reports entries were added.
+- Responsive: above the bottom-bar band the rail is a column, so each region is
+  named. On the bottom bar the region wrappers dissolve (`display: contents`) and
+  the destinations sit directly on the bar, with the headings removed from the
+  accessibility tree; the current destination still marks itself there, and a
+  repeat activation navigates instead of toggling a rail that has no column form.
+- One behaviour change with the same change set: the Account (Profile) destination
+  now follows session state like the top-bar profile affordance, so anonymous
+  navigation offers the sign-in route (`/compute/login?return_to=…`) rather than a
+  protected `/compute/profile` link.
+
+## Tests updated (not screenshots)
+
+- `tests/test_playwright_soft_precision.py` — region labelling and the
+  ordinary-user/administrator visibility split, the mobile bar carrying
+  destinations without region headings, and the visible label above the
+  bottom-bar band.
+- `tests/test_playwright_application.py` — the admin dashboard case now asserts the
+  left-nav destination instead of opening a removed dropdown; the responsive admin
+  case asserts the current-page marker and that Profile's local tabs stay out of
+  the global nav; a new case asserts anonymous navigation carries no Administration
+  link or launcher at 320px and 1280px.
+
+## Delivery commands and results
+
+- `cd frontend && npm run typecheck && npm run test && npm run build` — typecheck
+  clean; 19 files / 88 tests passed; build (verify:lock, verify:provenance,
+  check:api-types, vite build, verify:build) clean.
+- `pytest tests -m "browser and not molstar_csp" -n 4 --dist=load -q` — 169 passed,
+  1 skipped, 2 xfailed.
+- `pytest tests -m "not browser" -n 4 --dist=load -q` — clean (run with `--basetemp`
+  on the repository filesystem; see the `/tmp` tmpfs note above).
+- `mkdocs build --strict` — clean.
+
+## Rendered evidence
+
+Storyboard rendered from the production bundle through the real fixture harness at
+the pre-change and post-change heads: desktop (1280) and tablet (1024) Administrator
+rail showing the three regions with the Administration destination marked current,
+ordinary-user desktop rail showing Compute + Account and no Administration region,
+anonymous rail at 1280/320, and the mobile bottom bar at 360 with the destinations
+present and no region headings. Review evidence only; no screenshot-diff test.
+
+---
+
 # Soft Precision Visual System (PR #54)
 
 This section records execution state for the Soft Precision visual pass.
