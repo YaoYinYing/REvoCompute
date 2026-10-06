@@ -25,6 +25,11 @@ execution boundaries, extension contracts, and the test policy.
 - [Frontend Design Language](frontend-design-language.md) — the visual
   vocabulary (colour, surface, type, radius, shadow, control and status roles)
   that frontend changes are judged against.
+- [Frontend Art Direction — Cared-for Precision](frontend-art-direction.md) —
+  the visual ancestry, material quality, artistic references, and authored
+  character that sit above individual tokens.
+- [Frontend Taste Review](frontend-taste-review.md) — the practical composition
+  and taste rubric used during rendered frontend review.
 - [Authenticated Tool Runtime](tool-runtime.md) — typed, ephemeral Tool calls
   and their isolation model.
 
