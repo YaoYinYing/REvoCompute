@@ -107,7 +107,10 @@ def build_server() -> FastMCP:
     )
     def inspect_task(ctx: Context, task_type: str) -> types.CallToolResult:
         try:
-            authenticate(ctx, allow_guest=True)
+            # The canonical catalog and parameter schema are public reads, so
+            # inspection stays public here too; execution is what is gated on an
+            # authenticated, entitled, ready Runner.
+            del ctx
             return _ok(services.inspect_task(_require_str(task_type, "task_type")))
         except McpError as error:
             return _error(error)
