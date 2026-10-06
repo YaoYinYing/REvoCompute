@@ -33,3 +33,34 @@ changes do not cancel already-running tasks; only new submissions are denied
 until evidence is restored. Runner authors should use the canonical
 [change-impact matrix](../runner-guide/adding-a-runner.md#runner-change-impact-model)
 before deciding which action to take.
+
+## Readiness is not capacity, access, or infrastructure
+
+Four states live side by side and none may rewrite another. The Admin fleet view
+(`/compute/runner_fleet`) reports them as separate fields, and the CLI resolves
+the same readiness evaluator, so the two surfaces agree.
+
+- **Readiness** — the derived six-state verdict above: whether the deployed
+  family has current, valid evidence for a *new* submission.
+- **Capacity** — transient execution availability (scheduler/GPU occupancy). A
+  READY family can be busy, and a busy scheduler does not make a family
+  non-READY.
+- **Access** — whether the calling user could submit to a restricted family.
+  Granting or revoking an entitlement changes access, never readiness.
+- **Infrastructure** — the platform's own readiness (Redis, workers, storage,
+  scheduler reachability). Infrastructure degradation does not rewrite Runner
+  readiness; both are shown so an operator can tell "the family is fine but the
+  platform is degraded" from "the family's evidence is stale".
+
+`READY` therefore means "eligible for a new submission", subject to all four.
+
+## Correcting a non-READY state
+
+The Admin fleet view offers only the actions a family's current state permits,
+and each is shown as the plan the server would run — including what it will
+*not* do. A `VALIDATION_STALE` family with `reason=RUNTIME_BUNDLE_CHANGED` is
+offered a live validation that explicitly will not rebuild the SIF; a
+`BUILD_STALE` family is offered prepare/build before validation. Activation and
+rollback are not offered from the Web surface: they are bound to host artifact
+identities and run through the CLI (see
+[Fleet Operations](fleet-operations.md#actions-that-intentionally-stay-cli-only)).

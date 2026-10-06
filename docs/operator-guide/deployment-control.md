@@ -67,6 +67,20 @@ The exact freshness action is therefore:
 - `READY` after a presentation-only change: do not rebuild or live-test; deploy
   the server/config change normally.
 
+## Web control plane
+
+The same control core is exposed to administrators through the Admin API and the
+fleet view at `/compute/runner_fleet`. Both surfaces resolve the *same* derived
+readiness, so a family cannot be READY on the CLI and unavailable to a
+submission. The Web surface is narrower by design: it plans a typed action,
+returns the plan (including what it will *not* do), and executes only when the
+request carries the plan digest that still matches current evidence. It never
+offers a shell, and it refuses activation and rollback, whose correctness is
+bound to host artifact identities and remains a CLI operation. See
+[Fleet Operations](fleet-operations.md) for the operational model and degraded
+mode, and [Runner Readiness](runner-readiness.md) for how the four states stay
+separate.
+
 ## Commands
 
 ```bash
