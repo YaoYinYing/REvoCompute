@@ -1,458 +1,389 @@
-# Persistent Item Correctness and Adaptive OOM Provenance
+# Admin Resource Operations and Activity Reports
 
 ## Objective
 
-Close the correctness gap around the persistent multi-item and adaptive OOM
-machinery introduced for structure-folding Runners. This is an
-**infrastructure / execution-semantics** change, and its merge-blocking claim is
-scoped to what that machinery owns:
+Build an Admin operational read-model that joins REvoCompute's canonical Task,
+resource, placement, scheduler, storage, and audit facts into one useful control
+surface.
 
-> Persistent multi-item execution preserves item identity and deterministic
-> execution semantics; restart/resume is coherent; adaptive-OOM transitions are
-> bounded, scientifically classified, fail closed for unsafe mutations, and
-> expose requested-versus-effective provenance.
+The governing rule is:
 
-The claim decomposes into the questions this PR actually answers:
+> **Admin reporting may project and explain canonical facts; it must not become
+> another source of truth.**
 
-1. **Item identity and deterministic execution semantics:** does processing
-   several inputs in one model-resident task map each input to exactly one
-   result, order-independently, with no cross-contamination, duplicate, or lost
-   item?
-2. **Restart/resume coherence:** does a restarted worker resume against the same
-   immutable input snapshot without recomputing, duplicating, or losing an item?
-3. **Adaptive-OOM provenance:** when recovery changes execution parameters, can a
-   reviewer reconstruct exactly what was requested, what was actually used for
-   each attempt/item, and whether the change can affect scientific output?
+This PR is deliberately downstream of the Resource Accounting/Data Lifecycle
+and deterministic Slurm Placement PRs, and it must integrate with PR #55's safe
+Admin Runner control plane rather than creating a competing Admin architecture.
 
-The **Mock GPU Example Runner** proves this mechanism-level claim in CI without
-physical GPU hardware. Real-model evidence is **supplemental validation** of the
-same machinery (see §11a), not a merge requirement.
+The result should let an operator answer, from the Web UI and typed APIs:
 
-The former target reference Runners, **ESMFold2 and SimpleFold**, remain the
-motivating families, but their model-specific scientific equivalence is
-supplemental evidence here and separate acceptance work elsewhere.
+- who is consuming or waiting for resources;
+- what is running and where it was planned to run;
+- why a Task was admitted/rejected/placed/blocked;
+- which users are near quota;
+- how CPU/GPU allocations and utilization differ;
+- where durable storage is growing;
+- which Runners/workloads fail or wait unusually often;
+- whether database, scheduler, accounting, and filesystem truth has drifted;
+- what Admin/operator actions recently changed policy or state.
 
-Do not redesign the persistent scheduler or build a new estimator.
+## Dependencies and ownership
 
----
+This PR should not finalize until the following canonical sources are stable:
 
-## 0. Campaign position and dependencies
+- PR #55: Runner readiness/control/operator jobs and Admin security model;
+- Resource Accounting/Data Lifecycle PR: resource ledger, quota/policy,
+  storage ownership/lifecycle, reconciliation/drift facts;
+- deterministic Slurm Placement PR: persisted stage `ExecutionPlan` and
+  placement reason/policy identity;
+- PR #56: final frontend visual language, if it lands first.
 
-This is a **Wave 3** PR.
+PR #57 MCP is not an Admin surface and must not gain these operator capabilities.
 
-It can proceed in parallel with the fleet-result/browser-golden PR after the
-Wave 2 dependencies have merged.
+Do not duplicate any of these owners in a reporting-specific database.
 
-This is an infrastructure / execution-semantics change. Its merge-blocking
-evidence is CPU-executable (the Mock GPU Example Runner and the persistent
-runner's own tests); real-model scientific equivalence is supplemental and may
-require a GPU lease coordinated through the Commander, but is **not** a
-READY_FOR_FINAL_REVIEW gate here.
+## Read-model architecture
 
-Record model-level GPU evidence when a host provides it; do not use a host that
-cannot provide a runtime and then replace real evidence with a synthetic claim.
+### 1. Define one canonical Admin projection layer
 
----
+Create typed server-side report/query models over canonical persisted state.
 
-## 1. Freeze the comparison contract before testing batch mode
+The report layer may denormalize/project for efficient reads, but every metric
+must identify its authoritative source and semantic definition.
 
-For each target Runner identify which parameters affect scientific output and
-which affect only resource/execution behavior.
+Do not make browser code:
 
-Create an explicit classification such as:
+- query SQLite directly;
+- parse `squeue`/`sacct` output;
+- inspect filesystem paths;
+- recompute quota;
+- reverse-engineer `srun` argv;
+- infer Runner readiness.
 
-```text
-scientific/effective parameters
-resource-only execution controls
-recovery controls
-provenance-only metadata
+All such facts must arrive through bounded, authorized server APIs.
+
+### 2. Near-real-time and historical views are different
+
+Support two time scales:
+
+**Operational/live**
+
+- Tasks pending/queued/running;
+- current Slurm job/allocation identity;
+- current placement/execution class;
+- active CPU/GPU allocation counts by resource class;
+- current user quota pressure;
+- current storage pressure;
+- reconciliation/drift warnings;
+- Runner/readiness/infrastructure status from #55.
+
+**Historical**
+
+For bounded windows such as 24 h, 7 d, 30 d, and a bounded custom interval:
+
+- submissions / completions / failures / cancellations;
+- queue wait and runtime distributions;
+- allocated CPU core-seconds;
+- allocated GPU-seconds by resource class;
+- utilization/peak telemetry where available;
+- logical storage growth / purge volume;
+- Runner/task-type throughput and failure rates;
+- admission and placement rejection reason counts;
+- Admin policy/control activity.
+
+Do not force historical analytics through repeated live Slurm shell calls.
+
+### 3. Metric semantics before charts
+
+Every report metric needs a definition and tests.
+
+At minimum distinguish:
+
+- allocated GPU time from GPU utilization;
+- allocated CPU time from CPU utilization;
+- queue wait from execution runtime;
+- logical user-owned bytes from physical filesystem usage;
+- Task failure from validation/admission rejection;
+- unknown telemetry from measured zero;
+- Task execution state from data lifecycle state;
+- Runner readiness from scheduler capacity.
+
+The UI must label these distinctions. A pretty chart with an ambiguous
+denominator is a bug.
+
+## Admin information architecture
+
+### 4. Overview
+
+Provide a compact operational overview with real data, not decorative cards.
+
+Candidate sections:
+
+- active Tasks by lifecycle;
+- current CPU/GPU allocations by class;
+- queue/wait summary;
+- users near or over quota;
+- logical vs physical storage pressure;
+- recent failure/rejection trends;
+- platform integrity/drift count;
+- Runner fleet status summary linked to #55.
+
+Every summary must drill into the underlying filtered records.
+
+### 5. Queue / execution view
+
+Make the operator-visible chain explicit:
+
+```
+User / Task
+  → admission decision
+  → stage ExecutionPlan
+  → Slurm job
+  → current/terminal allocation
+  → accounting settlement
 ```
 
-Do not assume chunk size, sample count, MSA controls, kernel backend, precision,
-or similar controls are scientifically neutral without checking the Runner.
+Show enough context to answer:
 
-The equivalence test must compare executions with the same **effective
-scientific parameters**, not merely the same user request.
+- why this stage targeted this execution class/partition;
+- requested CPU/memory/GPU class;
+- Slurm job ID and state;
+- queue/pending reason when reliably available;
+- submission/queue/start/end times;
+- whether accounting is settled;
+- whether the persisted plan and actual allocation disagree.
 
----
+Do not merely embed an `squeue` clone.
 
-## 2. Select a bounded sequence panel
+### 6. Users / quota view
 
-Use a small deterministic panel of approximately 3-5 protein sequences spanning
-meaningfully different lengths while remaining cheap enough for repeated GPU
-acceptance.
+For each user expose authorized Admin projections of:
 
-Requirements:
+- effective entitlement/quota;
+- current period CPU/GPU accounting;
+- GPU resource-class breakdown;
+- durable logical storage ownership;
+- concurrency where modeled;
+- quota pressure / exceeded state;
+- utilization telemetry separately from charged/allocated resources;
+- recent adjustment/policy history.
 
-- exact sequence hashes;
-- no duplicate sequences;
-- at least one short, one medium, and one longer case that exercises scheduling
-  decisions without intentionally exhausting the GPU in the baseline run;
-- fixed seeds where the Runner exposes stochastic sampling;
-- stable provenance for the panel.
+Authorized policy mutation UI may call the canonical Resource PR endpoints.
+Changes must require explicit confirmation where material and must preserve
+actor/before/after/reason audit evidence.
 
-Do not use huge proteins merely to force OOM in the equivalence phase.
+Do not expose these data to ordinary users beyond their own existing resource
+projection.
 
----
+### 7. Workload / Runner view
 
-## 3. Single-input baseline
+Aggregate by Runner family/task type without redefining readiness.
 
-Run every panel item independently with the canonical default/non-recovery path.
+Useful facts include:
 
-Capture for each item:
+- submission volume;
+- success/failure/cancel counts;
+- queue wait distribution;
+- runtime distribution;
+- CPU/GPU allocation totals;
+- GPU class distribution;
+- utilization/peak observations when available;
+- common bounded failure/rejection reasons;
+- link to canonical #55 readiness/control detail.
 
-- input hash;
-- requested parameters;
-- effective parameters;
-- model/runtime identity;
-- device profile relevant to deterministic behavior;
-- output artifact hashes;
-- scientific observables appropriate to that Runner.
+Do not rank scientific quality from operational metrics.
 
-Define the observable comparison from artifact semantics.
+### 8. Storage / lifecycle view
 
-For structure prediction this may include, as available:
+Expose:
 
-- residue count/sequence identity;
-- coordinates after appropriate atom matching/alignment;
-- per-residue confidence;
-- global confidence;
-- PAE or equivalent matrix;
-- number/order of samples.
+- logical owned bytes by user/task/data state;
+- physical deployment capacity/pressure where canonical evidence exists;
+- active/archive/purge lifecycle counts;
+- largest owned Task footprints;
+- recent growth and released bytes;
+- failed/partial cleanup;
+- orphan/missing/drift records from reconciliation.
 
-Do not rely on raw file-byte equality if harmless metadata/order makes that
-scientifically inappropriate.
+Do not allow arbitrary filesystem browsing.
 
----
+### 9. Platform Integrity / drift
 
-## 4. Persistent multi-input run
+Treat inconsistency as first-class Admin information.
 
-Run the same panel in one persistent task so the model remains loaded across
-items.
+Surface bounded records such as:
 
-Prove:
+- DB says running but scheduler job is absent;
+- active allocation has terminal Slurm evidence but is unsettled;
+- persisted artifact accounting differs from owned files;
+- Task marked purged but owned bytes remain;
+- Task owns manifest artifacts that are missing;
+- stale reservations;
+- persisted ExecutionPlan differs from observed allocation in a material way.
 
-- every input maps to exactly one result item;
-- no result is associated with another sequence;
-- item ordering changes do not cross-contaminate results;
-- the effective scientific parameter set for each item matches its single-run
-  baseline;
-- scientific observables match the single-run baseline within justified
-  Runner-specific tolerances;
-- an item failure does not silently relabel a later item's result;
-- durable item status survives process/task bookkeeping.
+The first version may be detection/reporting only. Do not auto-repair ambiguous
+drift merely because the report found it.
 
-Where deterministic exact equality is expected, assert it.
-Where floating/reduction-order differences are legitimate, derive measured
-tolerances and document them rather than widening them ad hoc.
+Where #55 or the Resource PR exposes a typed safe repair primitive, the Admin
+view may link/invoke it with existing authorization/audit semantics.
 
----
+### 10. Activity / audit report
 
-## 5. Restart/resume equivalence
+Provide an Admin-only activity stream based on canonical operational/audit
+events, including where available:
 
-Exercise a controlled interruption after at least one item has completed.
+- quota/policy changes;
+- accounting adjustments;
+- placement-policy changes;
+- data lifecycle purge/archive requests;
+- bounded repair/reconciliation actions;
+- Runner operator jobs from #55;
+- meaningful submission/admission failures.
 
-After restart/recovery prove:
+Do not turn this into raw log tailing. Events need bounded types, timestamps,
+actor/subject identity, outcome, and correlation IDs.
 
-- completed items are not recomputed unless the contract explicitly requires it;
-- pending items continue;
-- no item is duplicated or lost;
-- restored execution uses the same immutable task/input snapshot;
-- already published item results remain unchanged;
-- final aggregate manifest has one coherent item identity set.
-
-Compare resumed results against the uninterrupted persistent baseline.
-
----
-
-## 6. Forced OOM test boundary
-
-Only after ordinary single-vs-persistent equivalence is established, exercise
-the adaptive OOM path.
-
-Use deterministic test hooks or a bounded live case capable of triggering the
-existing recovery mechanism without risking node stability.
-
-Do not create an intentionally dangerous allocation simply to produce a real
-OOM if the same recovery state can be safely induced by an existing supported
-test mechanism.
-
-The purpose is to audit recovery semantics, not stress the cluster.
-
----
-
-## 7. Requested versus effective provenance
-
-For every item/attempt, persist enough provenance to reconstruct:
-
-```text
-requested parameters
-estimator recommendation
-attempt number
-recovery rung/action
-effective parameters
-device/profile identity
-OOM/failure observation that justified the transition
-final successful parameter set
-```
-
-Use existing attempt/resource observation stores when possible.
-
-Do not create a second opaque provenance database.
-
-The final Result/receipt surface must make scientifically meaningful mutations
-auditable. A user should not have to infer them from scheduler logs.
-
----
-
-## 8. Scientific-impact classification of recovery actions
-
-Audit every existing recovery action used by ESMFold2/SimpleFold.
-
-Classify it as:
-
-- resource-only, expected not to change scientific result;
-- numerical/backend change that may change floating behavior;
-- scientific-output change (for example changing samples/MSA/model behavior);
-- unsupported/unsafe for automatic mutation.
-
-For a resource-only recovery action, verify the final result remains equivalent
-to the no-recovery baseline within the established comparator.
-
-For a scientifically meaningful mutation, do **not** call the result equivalent
-to the original request. Instead prove the requested/effective divergence is
-explicit in provenance and user-visible result metadata where appropriate.
-
-Automatic recovery must never silently change a scientific parameter.
-
----
-
-## 9. Monotonicity and retry discipline
-
-Preserve the existing bounded OOM design.
-
-Verify:
-
-- no-op recovery plans do not consume a misleading scientific transition;
-- the recovery ladder is monotone with respect to intended resource relief;
-- retry count remains bounded;
-- a measurement-hook failure does not masquerade as an OOM;
-- evidence from incompatible Runner/model/device revisions is not pooled
-  silently;
-- all-failed tasks remain failed with non-zero/terminal failure semantics.
-
-Do not redesign the estimator unless a correctness defect is required to satisfy
-these invariants.
-
----
-
-## 10. Result provenance
-
-Extend the smallest existing result/provenance surface necessary so downstream
-users and tests can tell:
-
-```text
-requested == effective
-```
-
-or
-
-```text
-requested != effective because OOM recovery selected <action>
-```
-
-for each item.
-
-Keep diagnostics subordinate to the scientific result, but do not hide a
-scientific mutation.
-
-If the current ResultManifest already has an appropriate provenance channel,
-use it. Do not introduce a ResultManifest v4 merely for convenience.
-
----
-
-## 11. Required tests
-
-### Fast/unit/integration
-
-Cover:
-
-- per-item requested/effective parameter capture;
-- mapping of item identity to output;
-- order independence;
-- restart reconstruction;
-- duplicate/lost-item prevention;
-- forced OOM transition;
-- bounded retries;
-- recovery action classification;
-- provenance persistence;
-- all-failed behavior.
-
-### Merge-blocking acceptance (CPU-executable, no GPU required)
-
-Proven end-to-end on the **Mock GPU Example Runner** and the persistent runner's
-own tests. This is the claim READY_FOR_FINAL_REVIEW rests on:
-
-1. one input maps to exactly one committed result, in input order, independent of
-   execution order (no cross-contamination, duplicate, or lost item);
-2. restart/resume keeps committed items, loses none, and recomputes when the
-   immutable input snapshot differs;
-3. a real (pseudo-device) OOM walks the declared, bounded, monotone fallback
-   ladder; no-op plans consume no attempt;
-4. every recovery action carries its scientific-impact class; a plan naming a
-   scientific parameter is refused before execution and recorded;
-5. per-attempt requested-versus-effective provenance persists in `work_items.json`
-   and is republished by the server projection.
-
-### Supplemental: real-model scientific validation
-
-Recorded when a host provides the runtime; **not** a merge gate for this
-infrastructure change. See §11a for what was obtained and what remains deferred.
-
----
-
-## 11a. Evidence layers
-
-This PR rests on three distinct evidence layers, and must never blur them. The
-first is the merge-blocking one; the other two are supplemental:
-
-1. **Mock GPU reference Runner** (`docker/runners/mock_gpu_example/`) ->
-   *orchestration/recovery/provenance correctness*. It drives the real
-   `PersistentTask` lifecycle, the bounded recovery ladder, per-attempt recovery
-   provenance, restart/resume identity, and the server projection, end to end, on
-   a configurable **pseudo-device** with no GPU, model, weights, or production
-   SIF. It proves the mechanism and makes no scientific claim about any real
-   model.
-2. **Real ESMFold2 / SimpleFold runtime** -> *model-specific scientific
-   validation* (supplemental; see the SimpleFold result below; ESMFold2 is an
-   evidenced hardware limit on this device).
-3. **Production SIF + Slurm** — the *deployment/package* integration, exercised
-   by the live-test receipt and Doctor gates.
-
-Layer 1 is complete in-repo, runs in CI, and is the merge-blocking evidence here.
-Layers 2 and 3 are supplemental for this infrastructure change. On layer 2, the
-available accelerator provides model-level evidence for only one of the two
-motivating Runners:
-
-### Measured accelerator feasibility (lab309, Quadro P4000 8084 MiB, CC 6.1)
-
-Probed with the pinned upstream code and the sha256-verified released weights,
-**outside** the production SIF.
-
-#### ESMFold 2 — definitively infeasible on this device
-
-The ESMC-6B backbone alone is **23.66 GiB fp32 (25,408,148,888 bytes across six
-sha256-verified shards) = 11.83 GiB fp16**, against a device with 7.90 GiB total
-/ 7.07 GiB free. A direct device allocation of the exact backbone byte size
-fails at fp32 and at fp16 (`CUDA out of memory ... 7.90 GiB capacity ... 7.07
-GiB free`); even the fp16 representation exceeds the device before any structure
-module or activation. Pascal cc6.1 supports fp16 but not bf16/TF32, and no
-supported precision or the family's own `cpu_offload`/`chunk_size` controls
-reduce a 23.66 GiB resident backbone to fit. No forward pass is attempted
-because the first shard cannot be placed.
-
-#### SimpleFold — model-level layer-2 equivalence OBTAINED
-
-The pinned `ml-simplefold` revision (c7a5570a6be9f5c695126e27c804e77567209934)
-was run on the real P4000 (torch 2.9.0+cu126, CUDA 12.6) with the released,
-sha256-verified `simplefold_1.6B.ckpt`
-(`aaac2d73…`) and `esm2_t36_3B_UR50D.pt` (`7de8b408…`). A bounded 3-sequence
-panel was executed twice — once as independent single-input runs, once in one
-model-resident multi-item process (ESM conditioning computed once per item,
-folding model loaded once, items consumed in turn) — at **fixed effective
-scientific parameters** (model `simplefold_1.6B`, `num_steps=50`, `tau=0.01`,
-multiplicity 1, per-item seed `base_seed + item_order`).
-
-| item | length | seq sha256 (first 16) | item seed | single coords sha256 (first 16) | multi-item coords sha256 (first 16) |
-| --- | ---: | --- | ---: | --- | --- |
-| item0 | 52 | `444a15b706a32daa` | 42 | `ec99873dc04a65e5` | `ec99873dc04a65e5` |
-| item1 | 51 | `932d0841f4b170c9` | 43 | `c31a1bcb88f087fa` | `c31a1bcb88f087fa` |
-| item2 | 50 | `4538294bd1311cd9` | 44 | `aabdd1cba3efe460` | `aabdd1cba3efe460` |
-
-Single vs multi-item were **BITWISE IDENTICAL** for every item — identical
-denoised-coordinate tensors and identical output mmCIF sha256. This is per-item
-identity mapping with no cross-contamination, no duplicate or lost item, and
-result order-independence under one model-resident process. Peak device memory
-was ~6159 MiB single / ~6202 MiB multi-item.
-
-**Scope of this evidence.** This proves **model-level** determinism and
-persistence: the real pinned model, sampling algorithm, featurization, and
-per-item seeding, order-independent and reproducible across single vs multi-item
-execution. It was obtained **outside** the reviewed plugin's own
-`initialize_runtime`, which co-resides the folding model with ESM-2 3B (fp32)
-and OOMs on this 8 GiB device (folding model 6.10 GiB, then the second
-foldingdit latent module cannot be placed). Execution through the reviewed
-`SimpleFoldPlugin`/Runner path — its own `pl.seed_everything(seed + group_start)`
-seeding, its `_sample_group` loop, and its `process_fastas` path — was **not
-exercised** and remains deferred; making it fit here would be a production-CUDA
-change. This evidence does **not** assert that the reviewed plugin's persistent
-execution is scientifically verified.
-
-The comparison also established the adaptive-OOM boundary on the real model:
-multiplicity-1 draws everything; explicit-multiplicity probes measured peak 6312
-MiB (×4), 6517 (×8), 6911 (×16) and **OOM at ×32**, so a scientific-output
-`sample_group_size` rung is the natural OOM recovery and lowers instantaneous
-memory. The review panel itself ran at multiplicity 1.
-
----
-
-## 12. Gates
-
-Run existing persistent-runner tests, ESMFold2 and SimpleFold protocol tests,
-OOM estimator/recovery tests, result provenance tests, the Mock GPU Example
-Runner tests, and the appropriate non-browser repository gate.
-
-Run targeted browser/result tests only if the user-visible provenance surface is
-changed.
-
-Run `mkdocs build --strict` when docs change and `git diff --check`.
-
-The merge-blocking evidence for this infrastructure change is CPU-executable and
-present in CI: the Mock GPU Example Runner and the persistent runner's own tests.
-Real-model GPU acceptance is supplemental and is **not** required before
-`READY_FOR_FINAL_REVIEW` here.
-
----
-
-## 13. Scope exclusions
-
-Do **not**:
-
-- add Triton;
-- replace the existing estimator with a new ML architecture;
-- redesign PersistentRunner;
-- redesign Slurm scheduling;
-- generalize immediately to every batch-capable Runner;
-- treat a completed task as proof of scientific equivalence;
-- use byte equality where the format has irrelevant nondeterministic metadata;
-- hide requested/effective parameter divergence;
-- widen scientific tolerances just to make the campaign green.
-
----
-
-## 14. Definition of done
-
-The repository must be able to prove:
-
-> Persistent multi-item execution preserves item identity and deterministic
-> execution semantics; restart/resume is coherent; adaptive-OOM transitions are
-> bounded, scientifically classified, fail closed for unsafe mutations, and
-> expose requested-versus-effective provenance.
-
-This is proven for the persistent machinery, end to end, by the Mock GPU
-reference Runner and the persistent runner's own tests (§11a, §12), and runs in
-CI without physical GPU hardware. That mechanism-layer proof is the merge gate.
-
-Supplemental real-model evidence, recorded here but **not** a gate:
-
-- **SimpleFold** — model-level single vs multi-item execution is bitwise
-  identical under the tested pinned model/parameters, with sha256-verified
-  weights (§11a). The reviewed `SimpleFoldPlugin`/Runner path itself was **not**
-  exercised on this device (its `initialize_runtime` OOMs) and is **not** claimed
-  as verified.
-- **ESMFold2** — cannot fit the available P4000; the measured memory evidence is
-  recorded (§11a). Model-specific ESMFold2 equivalence is separate acceptance
-  work on a larger GPU and is not required here.
-
-The Mock GPU reference Runner proves orchestration, recovery, and provenance
-correctness only; it does **not** prove model-specific scientific equivalence.
+Do not expose secrets, API keys, raw authorization headers, arbitrary environment
+values, or unbounded user payloads.
+
+## Filtering, time, and export
+
+Support bounded filters for useful dimensions such as:
+
+- time window;
+- user;
+- task type / Runner family;
+- Task lifecycle;
+- data lifecycle;
+- resource class;
+- execution class/partition projection;
+- outcome/reason code;
+- drift category.
+
+Use UTC internally and show clear timestamps.
+
+Provide a bounded machine-readable export (JSON and/or CSV) for Admin reports
+where useful. Export must use the same filtered projection and authorization as
+the UI; do not create a separate raw-database dump endpoint.
+
+Large result sets require pagination/aggregation limits. A report request must
+not become an unbounded table scan or memory dump.
+
+## Performance and freshness
+
+Do not make the Admin page itself a scheduler load generator.
+
+- cache/aggregate historical queries where justified;
+- bound live scheduler refresh frequency;
+- reuse canonical scheduler observation/reconciliation services;
+- expose last-updated / evidence freshness where data can become stale;
+- degrade individual panels when one evidence source is unavailable rather than
+  failing the whole Admin surface.
+
+Near-real-time polling is sufficient; WebSocket/SSE infrastructure is not a
+goal unless already justified by existing architecture.
+
+## Security / authorization
+
+Admin reporting is sensitive.
+
+Merge gates must prove:
+
+- every Admin report/API requires canonical Admin authorization;
+- ordinary users cannot enumerate other users, Tasks, quotas, job IDs, storage,
+  or audit events through these endpoints;
+- filter/export parameters are typed and bounded;
+- no report endpoint permits arbitrary SQL, shell, argv, path, or environment
+  injection;
+- operator actions use the existing typed #55/resource/placement primitives,
+  never browser-supplied shell commands;
+- event/audit views redact secrets and bound payload size;
+- CSRF/auth semantics remain consistent with existing Admin APIs.
+
+## Frontend
+
+Use the merged #56 visual language rather than inventing a separate "monitoring
+dashboard" aesthetic.
+
+Prioritize information hierarchy and dense scientific/operations work:
+
+- tables where exact records matter;
+- charts only where time/distribution adds information;
+- no decorative gauges with invented thresholds;
+- explicit unknown/stale/partial states;
+- responsive tablet/desktop behavior; mobile may simplify density without
+  hiding critical warnings;
+- accessibility for status, tables, filters, and charts.
+
+Use the existing frontend fixture/browser harness with canonical report
+fixtures. Frontend fixtures prove rendering/interaction only; server report
+tests prove metric semantics.
+
+## Failure / integrity semantics
+
+Test at least:
+
+- `sacct` unavailable while persisted accounting still exists;
+- scheduler query temporarily unavailable;
+- utilization missing but allocation known;
+- quota source available but storage reconciliation stale;
+- one report panel fails while others remain useful;
+- large time windows are rejected/bounded;
+- concurrent policy changes while report data is refreshed;
+- stale ExecutionPlan vs live scheduler observation;
+- partial purge/drift records;
+- admin adjustment followed by historical query;
+- user deletion/disable does not destroy historical attribution;
+- unknown is rendered as unknown, never zero.
+
+## Tests / evidence
+
+Merge gates include:
+
+1. report-query unit tests with fixed canonical fixtures;
+2. metric-definition tests for allocation/utilization/wait/runtime/storage;
+3. authorization and cross-user enumeration negatives;
+4. bounded filter/pagination/export tests;
+5. drift/integrity projection tests;
+6. dependency-contract tests against #55 Resource and Placement APIs;
+7. OpenAPI/schema generation checks;
+8. frontend fixture/browser acceptance across overview, queue, users, storage,
+   integrity, and activity;
+9. light/dark and responsive acceptance consistent with #56;
+10. performance/bounded-query assertions for representative large fixture sets;
+11. repeated xdist tests for report/cache/shared-state races.
+
+A target-host screenshot/storyboard may supplement review but is not evidence of
+metric correctness.
+
+## Non-goals
+
+- a second Task/resource database;
+- direct Slurm scheduling/fair-share logic;
+- direct shell/squeue/sacct execution from browser input;
+- arbitrary filesystem browser;
+- generic Grafana/Prometheus replacement;
+- billing/invoicing;
+- scientific quality ranking;
+- automatic ambiguous drift repair;
+- user-facing social/activity feed;
+- MCP Admin/operator capabilities;
+- another frontend architecture rewrite.
+
+## Acceptance
+
+At the exact final head, an Admin can trace a resource-consuming Task from user
+and admission through ExecutionPlan, Slurm allocation, accounting settlement,
+artifact/storage ownership, and data lifecycle; can understand current pressure
+and bounded historical trends; can identify quota pressure and platform drift;
+and can audit material Admin/operator actions without leaving the canonical
+control plane.
+
+Every displayed metric has a tested semantic definition and authoritative
+source. Missing evidence is explicit. Ordinary users cannot access Admin
+reporting. Repository-required server/browser/documentation/security gates and
+the three-way pre-final review cell pass.
+
+Reach `READY_FOR_FINAL_REVIEW`.
+
+Do not merge.
