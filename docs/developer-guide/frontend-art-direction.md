@@ -1,7 +1,8 @@
 # Frontend Art Direction — Cared-for Precision
 
 This document is a companion to
-[Frontend Design Language](frontend-design-language.md).
+[Frontend Design Language](frontend-design-language.md), with concrete historical
+references recorded in [Frontend Visual Ancestry](frontend-visual-ancestry.md).
 
 The design-language page defines durable system behavior and visual roles.
 This page captures the more difficult layer that tokens cannot fully encode:
