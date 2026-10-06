@@ -327,7 +327,10 @@ a { color: var(--app-accent); }
   .app-nav-group:not([data-nav-group="admin"]) .app-nav-group-items { display: contents; }
   .app-nav-group[data-nav-group="admin"] { position: fixed; right: 0; bottom: 3.5rem; left: 0; z-index: 34; display: grid; padding: 0; border-top: 1px solid var(--app-line); background: var(--app-surface); }
   .app-nav-group[data-nav-group="admin"][hidden] { display: none; }
-  .app-nav-group[data-nav-group="admin"] > .app-nav-group-label { padding: .45rem .75rem .15rem; }
+  /* Only the regions whose links merge into the bar lose their heading; the
+     Administration heading names its own secondary surface and must paint. */
+  .app-nav-group:not([data-nav-group="admin"]) > .app-nav-group-label { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+  .app-nav-group[data-nav-group="admin"] > .app-nav-group-label { position: static; width: auto; height: auto; margin: 0; overflow: visible; clip: auto; white-space: normal; padding: .45rem .75rem .15rem; }
   .app-nav-group[data-nav-group="admin"] .app-nav-group-items { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; }
   .app-nav-group[data-nav-group="admin"] a { min-height: 2.75rem; flex: none; flex-direction: column; gap: .15rem; justify-content: center; padding: .3rem; border-radius: 0; font-size: .66rem; }
   /* The secondary surface carries its destinations by name, like the bar does. */

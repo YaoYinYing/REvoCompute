@@ -358,16 +358,22 @@ comes from position and grouping, not from ornament.
   carries no profile section tabs.
 - Extension: a region accepts destinations as their routes exist; no speculative
   Fleet/Reports entries were added.
-- Responsive: above the bottom-bar band the rail is a column, so each region is
-  named by a visible label. On the bottom bar the Compute and Account destinations
-  sit directly on the bar (their wrappers dissolve; their headings are removed from
-  the accessibility tree) and the current destination still marks itself there; a
-  repeat activation navigates instead of toggling a rail that has no column form.
-  Administration is a different navigation level, so on mobile it becomes a
-  deliberate **bounded secondary surface just above the bar** — one named row of
-  three destinations, cleared by the outlet padding — rather than three items
-  crowding the primary bar. It is absent for anyone not authorized, so ordinary
-  and anonymous mobile navigation are unchanged.
+- Responsive: above the bottom-bar band the rail is a column; a collapsed icon rail
+  keeps the inter-region rule and drops the word, and expanding the rail paints each
+  region name. On the bottom bar the Compute and Account destinations sit directly on
+  the bar (their wrappers dissolve; only those two headings take the 1px sr-only form)
+  and the current destination still marks itself there; a repeat activation navigates
+  instead of toggling a rail that has no column form.
+- Administration on mobile is a deliberate **bounded secondary surface just above the
+  bar** — one row of three destinations under its own painted "Administration" heading
+  (the sr-only rule is deliberately not applied to this group, since the heading is
+  what names the surface), cleared by the outlet padding — rather than three items
+  crowding the primary bar. Verified as painting real pixels, not a clipped sliver:
+  at 320/360/390px the heading's box is 320-390 x 24.45px, `position: static`,
+  `clip: auto`, it is the topmost element at its own centre, and a screenshot with the
+  heading differs from the same page with the sr-only rule re-applied.
+  It is absent for anyone not authorized, so ordinary and anonymous mobile navigation
+  are unchanged.
 - One behaviour change with the same change set: the Account (Profile) destination
   now follows session state like the top-bar profile affordance, so anonymous
   navigation offers the sign-in route (`/compute/login?return_to=…`) rather than a
@@ -378,8 +384,10 @@ comes from position and grouping, not from ornament.
 - `tests/test_playwright_soft_precision.py` — region labelling and the
   ordinary-user/administrator visibility split, the mobile bar carrying
   destinations without region headings, the administrator's bounded mobile
-  Administration surface above the bar, the ordinary user having no such surface,
-  and the visible label above the bottom-bar band.
+  Administration surface above the bar (its heading asserted to have a non-zero
+  painted box and to be the topmost element at its centre, so a clipped sr-only
+  sliver fails the test), the ordinary user having no such surface, and the
+  expanded desktop rail painting the region labels.
 - `tests/test_playwright_application.py` — the admin dashboard case now asserts the
   left-nav destination instead of opening a removed dropdown; the responsive admin
   case asserts the current-page marker and that Profile's local tabs stay out of

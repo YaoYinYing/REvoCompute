@@ -152,7 +152,18 @@ def test_mobile_administration_is_a_secondary_surface_above_the_bar(page: Page) 
     expect(page.get_by_role("heading", name="Dashboard", exact=True)).to_be_visible()
     admin_surface = page.locator(".app-nav-group[data-nav-group='admin']")
     expect(admin_surface).to_be_visible()
-    expect(admin_surface.locator(".app-nav-group-label")).to_be_visible()
+    # The heading must genuinely paint, not merely "be visible" as a clipped sr-only
+    # sliver: it has a non-zero box and it is the topmost element at its own centre.
+    heading = admin_surface.locator(".app-nav-group-label")
+    expect(heading).to_have_text("Administration")
+    painted = heading.evaluate(
+        "node => { const r = node.getBoundingClientRect();"
+        " const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);"
+        " return { width: r.width, height: r.height, color: getComputedStyle(node).color,"
+        " topmost: !!hit && (hit === node || node.contains(hit)) }; }"
+    )
+    assert painted["width"] > 0 and painted["height"] > 0, painted
+    assert painted["topmost"], painted
     expect(admin_surface.get_by_role("link", name="User control")).to_have_attribute("href", "/compute/user_control")
     box = admin_surface.bounding_box()
     bar = page.locator(".app-nav").bounding_box()
@@ -179,14 +190,19 @@ def test_ordinary_user_has_no_mobile_administration_surface(page: Page) -> None:
 
 def test_desktop_rail_states_regions_with_a_visible_label(page: Page) -> None:
     _dashboard(page)
-    page.set_viewport_size({"width": 1024, "height": 900})
+    page.set_viewport_size({"width": 1280, "height": 900})
     page.reload()
-    # Above the bottom-bar band the left navigation is a column, so each region is
-    # named. The label is quiet chrome, not a new surface.
+    # Above the bottom-bar band the rail is a column, so each region is named. The
+    # collapsed icon rail keeps the rule and hides the word; expanding it reveals the
+    # label as painted chrome, not the 1px sr-only form.
+    page.get_by_role("link", name="Dashboard", exact=True).click()
+    expect(page.locator(".app-shell")).to_have_attribute("data-rail", "expanded")
     labels = page.locator(".app-nav .app-nav-group-label:visible")
     assert labels.count() >= 2
     expect(labels.filter(has_text="Compute")).to_have_count(1)
     expect(labels.filter(has_text="Account")).to_have_count(1)
+    box = labels.filter(has_text="Compute").bounding_box()
+    assert box is not None and box["width"] > 8 and box["height"] > 8, box
 
 
 def test_tablet_navigation_reflows_and_toolbar_wraps_without_overflow(page: Page) -> None:
