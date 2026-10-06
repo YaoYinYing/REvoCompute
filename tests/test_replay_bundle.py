@@ -746,3 +746,63 @@ def test_real_gremlin_bundle_records_the_excluded_artifacts_with_hashes() -> Non
         "bcaaed6b2e2d5a85bea8df2646440e0aeb8233e0775a6d54c1f928345d220244"
     )
     assert excluded["plots/coupling_apc.png"]["reason"] == "binary payload is not checked in"
+
+
+# ── the checked-in fpocket bundle ─────────────────────────────────────────────
+
+FPOCKET_BUNDLE = ROOT / "tests/data/fpocket_replay/1suo_2pockets.json"
+
+
+def test_real_fpocket_bundle_round_trips_and_covers_the_table_renderer() -> None:
+    """The checked-in fpocket bundle loads, validates, and serves its real table.
+
+    The bundle is the golden matrix's entity-table/scalar-summary/evidence-bundle
+    representative; this binds its identity and its real table bytes so the
+    browser test cannot silently accept a drifted or hand-authored bundle.
+    """
+    if not FPOCKET_BUNDLE.is_file():
+        pytest.skip("the captured fpocket replay bundle is not present")
+    replay = ReplayBundle.load(FPOCKET_BUNDLE)
+    assert replay.bundle["task"]["type"] == "fpocket"
+    assert replay.provenance["capture"]["scheduler"].startswith("none")
+    plugins = {view["plugin"] for view in replay.manifest["views"]}
+    assert {"entity-table", "scalar-summary", "evidence-bundle"} <= plugins
+
+    page = replay.table_page("pockets.csv")
+    assert page is not None
+    assert page["columns"][:3] == ["pocket", "rank", "score"]
+    assert page["rows"][0][0] == "pocket1"
+    # The scalar-summary view declares a field label/unit and a path the captured
+    # summary.json genuinely carries, so the matrix has a real scalar source and
+    # the browser assertion binds to a value that exists rather than an absent key.
+    summary_view = next(v for v in replay.manifest["views"] if v["plugin"] == "scalar-summary")
+    field = summary_view["mapping"]["fields"][0]
+    assert field["path"] == "pocket_count"
+    assert field["label"] == "Detected pockets"
+    assert field["unit"] == "pockets"
+    assert field["path"] in json.loads(replay.payload("summary.json")[0])
+    # Every published logical file resolves to a captured or recorded artifact.
+    for file_id, entries in replay.bundle["logical_files"].items():
+        assert entries, file_id
+
+
+def test_real_fpocket_bundle_records_its_oversized_artifacts_with_hashes() -> None:
+    if not FPOCKET_BUNDLE.is_file():
+        pytest.skip("the captured fpocket replay bundle is not present")
+    replay = ReplayBundle.load(FPOCKET_BUNDLE)
+    excluded = {entry["path"]: entry for entry in replay.bundle["excluded"]}
+    # Every copy of the input structure that the run left in the result tree
+    # exceeds the per-file payload budget and is recorded by hash and size.
+    assert set(excluded) == {
+        "1SUO.pdb",
+        "debug/inputs/structure/1SUO.pdb",
+        "work/1SUO.pdb",
+        "work/1SUO_out/1SUO_out.pdb",
+    }
+    for entry in excluded.values():
+        assert entry["reason"] == "exceeds the per-file payload budget"
+        assert entry["size"] > 0 and len(entry["sha256"]) == 64
+    # The bundle is bounded: it must stay well under the size the exclusion rule
+    # exists to avoid, so a re-capture cannot quietly reintroduce a huge fixture.
+    assert len(replay.bundle["payloads"]) <= 20
+    assert FPOCKET_BUNDLE.stat().st_size < 200_000

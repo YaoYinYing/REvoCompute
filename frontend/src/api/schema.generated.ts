@@ -218,6 +218,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/compute/api/system/notices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get operator-configured system notices
+         * @description Returns the long-lived operational notices a deployment has configured. Each notice body is plain text that clients must render without enabling arbitrary HTML. An empty list means there is nothing to announce.
+         */
+        get: operations["getSystemNotices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/compute/api/auth/logout": {
         parameters: {
             query?: never;
@@ -1357,6 +1377,15 @@ export interface components {
         };
         MessageResponse: {
             message: string;
+        };
+        SystemNotices: {
+            notices: {
+                id: string;
+                /** @enum {string} */
+                level: "info" | "warning" | "critical";
+                title: string;
+                body: string;
+            }[];
         };
         LegalDocument: {
             /** @constant */
@@ -2747,6 +2776,27 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LegalDocument"];
+                };
+            };
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    getSystemNotices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Configured system notices */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemNotices"];
                 };
             };
             503: components["responses"]["Unavailable"];

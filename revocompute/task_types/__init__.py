@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 import json
 import re
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,7 @@ import yaml
 from jsonschema import Draft202012Validator, FormatChecker
 from revocompute import resource_model as rm
 from revocompute import runtime_bundle as rb
+from revocompute import access_control
 from revocompute.access_control import AccessPolicy, get_policy, load_policies, load_policy_documents, register_policies
 from revocompute.citations import Citation, load_citations
 from revocompute.io_contracts import NamedFileRole, load_named_file_roles
@@ -610,6 +612,32 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
             runner_cfg = _load_runner_config(str(runner_file)) if runner_file.is_file() else RunnerConfig()
             manager.register_contribution(family_id, "tasks", task_id, task)
             manager.register_contribution(family_id, "runner_configs", task_id, runner_cfg)
+
+
+@contextmanager
+def isolated_discovery(runners_dir: str, enabled: set[str] | None = None):
+    """Discover a runner tree into a temporary registry, then restore the globals.
+
+    ``discover_plugins`` is the production path and intentionally repoints the
+    process-global ``_plugin_manager`` and category registry. A caller that only
+    needs to *read* a different runner tree -- a static audit, a test fixture --
+    must not leave that tree installed for whatever runs next in the same
+    process. This restores the exact prior manager, categories, and access
+    policies on exit, so an inspection is never a mutation of live server state.
+    """
+    global _plugin_manager
+    previous_manager = _plugin_manager
+    previous_categories = dict(_category_registry)
+    previous_policies = dict(access_control._policies)
+    try:
+        discover_plugins(runners_dir, enabled)
+        yield _plugin_manager
+    finally:
+        _plugin_manager = previous_manager
+        _category_registry.clear()
+        _category_registry.update(previous_categories)
+        access_control._policies.clear()
+        access_control._policies.update(previous_policies)
 
 _INPUT_CAPABILITY_PLUGINS = {
     "files",

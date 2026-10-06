@@ -22,12 +22,14 @@ import subprocess
 import sys
 import uuid
 from pathlib import Path
+from urllib.parse import unquote
 
 from playwright.sync_api import Page, expect
 import pytest
 
 from browser_frontend_assets import result_dist
 from conftest import _load_pssm_module, _upsert_task_for_user
+from frontend_fixtures import project_manifest_for_serve
 
 pytestmark = pytest.mark.browser
 
@@ -101,56 +103,16 @@ def _build_manifest(module, tmp_path: Path) -> tuple[str, dict, Path]:
     return task_id, manifest, root
 
 
-def _projected_manifest(manifest: dict, root: Path, task_id: str) -> dict:
-    """Enrich the stored manifest the way the Server does at serve time.
+def _projected_manifest(manifest: dict, task_id: str) -> dict:
+    """The published manifest enriched exactly as the Server serves it.
 
-    Mirrors ``revocompute/routes.py``: artifact URLs, the logical-file projection
-    the storyboard binds to, and the storyboard entrypoint URL.  The asset itself
-    is served from the runner directory, exactly as the ``storyboard/<asset>``
-    route does for a trusted local declaration.
+    Delegates to the one projection implementation the result route itself uses,
+    so this test cannot drift from the served body it drives.
     """
-    for artifact in manifest["artifacts"]:
-        path = artifact["path"]
-        artifact["capability"] = artifact.get("preview") or "download_only"
-        artifact["url"] = f"/compute/api/results/{task_id}/artifacts/{path}"
-        if artifact["capability"] == "table":
-            artifact["table_url"] = f"/compute/api/results/{task_id}/tables/{path}"
-    logical_files: dict[str, list[dict]] = {}
-    logical_paths: dict[str, list[str]] = {}
-    for file_id, files in manifest.get("result", {}).get("files", {}).items():
-        logical_paths[file_id] = [entry["path"] for entry in files]
-        logical_files[file_id] = [
-            {
-                "id": file_id,
-                "name": Path(entry["path"]).name,
-                "media_type": entry["media_type"],
-                "size": entry["size"],
-                "role": entry["role"],
-                "cardinality": entry["cardinality"],
-                "viewer": entry.get("preview") or "download",
-                "preview": entry.get("preview"),
-                "capability": entry.get("preview") or "download_only",
-                "url": f"/compute/api/results/{task_id}/files/{file_id}?index={index}",
-            }
-            for index, entry in enumerate(files)
-        ]
-    manifest["result"] = {"files": logical_files}
-    manifest["_logical_paths"] = logical_paths
-    if manifest.get("storyboard"):
-        entrypoint = manifest["storyboard"]["entrypoint"]
-        manifest["storyboard"]["entrypoint_url"] = f"/runner/storyboard/{entrypoint}"
-    manifest.update(
-        {
-            "status": "finished",
-            "terminal": True,
-            "error": None,
-            "archive": {"ready": False, "request_url": f"/compute/api/results/{task_id}/archive"},
-        }
-    )
-    return manifest
+    return project_manifest_for_serve(manifest, task_id=task_id)
 
 
-def _serve(page: Page, manifest: dict, root: Path, task_id: str) -> list[dict]:
+def _serve(page: Page, manifest: dict, root: Path, task_id: str, logical_paths: dict[str, list[str]]) -> list[dict]:
     dist = result_dist()
     entry = json.loads((dist / ".vite" / "manifest.json").read_text(encoding="utf-8"))["index.html"]
     styles = "".join(f'<link rel="stylesheet" href="/static/app/{name}">' for name in entry.get("css", []))
@@ -183,6 +145,7 @@ def _serve(page: Page, manifest: dict, root: Path, task_id: str) -> list[dict]:
         f"{ORIGIN}/compute/api/auth/me",
         lambda route: route.fulfill(json={"id": 1, "username": "owner", "role": "user"}),
     )
+    page.route(f"{ORIGIN}/compute/api/system/notices", lambda route: route.fulfill(json={"notices": []}))
     page.route(
         f"{ORIGIN}/compute/api/running/{task_id}",
         lambda route: route.fulfill(
@@ -203,23 +166,32 @@ def _serve(page: Page, manifest: dict, root: Path, task_id: str) -> list[dict]:
     page.route(f"{ORIGIN}/compute/api/results/{task_id}/tables/**", tables)
 
     def logical_files(route):
-        # /files/<logical_id>?index=<n> — where the storyboard reads the table.
         file_id = route.request.url.split(f"/results/{task_id}/files/", 1)[1].split("?", 1)[0]
-        paths = manifest.get("_logical_paths", {}).get(file_id) or []
+        paths = logical_paths.get(file_id) or []
         if not paths:
             route.fulfill(status=404, body="")
             return
         calls.append({"path": paths[0], "source": "logical"})
         route.fulfill(status=200, content_type="text/csv", body=(root / paths[0]).read_text(encoding="utf-8"))
 
+    def artifacts(route):
+        relative = unquote(route.request.url.split(f"/results/{task_id}/artifacts/", 1)[1].split("?", 1)[0])
+        candidate = root / relative
+        if not candidate.is_file():
+            route.fulfill(status=404, body="")
+            return
+        route.fulfill(status=200, content_type="chemical/x-pdb", body=candidate.read_text(encoding="utf-8"))
+
     page.route(f"{ORIGIN}/compute/api/results/{task_id}/files/**", logical_files)
+    page.route(f"{ORIGIN}/compute/api/results/{task_id}/artifacts/**", artifacts)
+    # The task-scoped storyboard route the deployment uses, serving the trusted
+    # runner asset for the declared entrypoint.
     page.route(
-        f"{ORIGIN}/compute/api/results/{task_id}/artifacts/**",
-        lambda route: route.fulfill(status=200, body="artifact"),
-    )
-    page.route(
-        f"{ORIGIN}/runner/storyboard/**",
-        lambda route: route.fulfill(content_type="text/javascript", body=(FAMILY / "storyboard" / "index.js").read_text(encoding="utf-8")),
+        f"{ORIGIN}/compute/api/results/{task_id}/storyboard/**",
+        lambda route: route.fulfill(
+            content_type="text/javascript",
+            body=(FAMILY / "storyboard" / "index.js").read_text(encoding="utf-8"),
+        ),
     )
     page.goto(f"{ORIGIN}/compute/results/{task_id}")
     return calls
@@ -236,12 +208,18 @@ def test_fpocket_ranked_pockets_render_as_the_primary_view(monkeypatch, tmp_path
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     task_id, manifest, root = _build_manifest(module, tmp_path)
     expected_rows = list(csv.DictReader((root / "pockets.csv").open(newline="", encoding="utf-8")))
-    manifest = _projected_manifest(manifest, root, task_id)
+    # The published logical-file identity the storyboard binds to; the served
+    # projection replaces each entry's path with its authorized URL.
+    logical_paths = {
+        file_id: [entry["path"] for entry in entries]
+        for file_id, entries in manifest["result"]["files"].items()
+    }
+    manifest = _projected_manifest(manifest, task_id)
 
     errors = _errors(page)
     page.set_viewport_size({"width": 1280, "height": 900})
     page.add_init_script("localStorage.setItem('revocompute-theme', 'light');")
-    calls = _serve(page, manifest, root, task_id)
+    calls = _serve(page, manifest, root, task_id, logical_paths)
 
     # A storyboard is the primary interpretation: it opens on load and its ranked
     # selector renders the real normalized pockets.csv.

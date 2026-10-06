@@ -31,6 +31,7 @@ from playwright.sync_api import Page, expect
 import pytest
 
 from browser_frontend_assets import result_dist
+from frontend_fixtures import project_manifest_for_serve
 
 pytestmark = pytest.mark.browser
 
@@ -59,77 +60,20 @@ CSP = (
     "script-src 'self'; img-src 'self' data: blob:; worker-src 'self' blob:"
 )
 
-_TEXT_CAPABILITIES = {"text", "table", "plot", "image", "archive", "structure"}
-
-
-def _capability(artifact: dict) -> str:
-    """Project the renderer capability exactly as the Server does at serve time."""
-    declared = artifact.get("logical_type") or artifact.get("preview")
-    if declared == "structure":
-        return "molecular_structure"
-    if declared in {"table", "plot", "image", "text", "archive"}:
-        return declared
-    if declared in {"alignment", "fasta", "json"}:
-        return "text"
-    return "download_only"
-
-
 def _projected_manifest() -> dict:
-    """Return the real manifest enriched as the Server would serve it."""
+    """The real staged manifest, enriched exactly as the Server serves it.
+
+    Delegates to the one projection implementation the result route itself uses
+    (``revocompute.result_projection`` through the shared
+    ``project_manifest_for_serve``), so this test cannot drift from the served
+    body it exists to drive.
+    """
     manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
     assert manifest["task_id"] == TASK_ID, "Staged manifest is not the scientific-golden run"
     inputs = {item["path"] for item in manifest["run"]["inputs"]}
     assert "2KL8.i90c75_aln.a3m" in inputs, f"Golden browser case is not 2KL8: {inputs}"
     assert "gremlin_lh_tiny.a3m" not in inputs, "The tiny smoke case must not back the golden browser test"
-
-    for artifact in manifest["artifacts"]:
-        path = artifact["path"]
-        artifact.setdefault("capability", _capability(artifact))
-        artifact["url"] = f"/compute/api/results/{TASK_ID}/artifacts/{path}"
-        if artifact["capability"] == "table":
-            artifact["table_url"] = f"/compute/api/results/{TASK_ID}/tables/{path}"
-        if os.path.splitext(path)[1].lower() in {".csv", ".json", ".npy", ".npz", ".tsv"}:
-            artifact["ndarray_url"] = f"/compute/api/results/{TASK_ID}/ndarrays/{path}"
-
-    logical: dict[str, list[dict]] = {}
-    for file_id, files in manifest["result"]["files"].items():
-        logical[file_id] = []
-        for index, artifact in enumerate(files):
-            path = artifact["path"]
-            capability = _capability(artifact)
-            entry = {
-                "id": file_id,
-                "name": os.path.basename(path),
-                "media_type": artifact["media_type"],
-                "size": artifact["size"],
-                "role": artifact["role"],
-                "cardinality": artifact["cardinality"],
-                "viewer": artifact.get("logical_type") or artifact.get("preview") or "download",
-                "preview": artifact.get("logical_type") or artifact.get("preview"),
-                "capability": capability,
-                "url": f"/compute/api/results/{TASK_ID}/files/{file_id}?index={index}",
-            }
-            if capability == "table":
-                entry["table_url"] = f"/compute/api/results/{TASK_ID}/tables/{path}"
-            if os.path.splitext(path)[1].lower() in {".csv", ".json", ".npy", ".npz", ".tsv"}:
-                entry["ndarray_url"] = f"/compute/api/results/{TASK_ID}/ndarrays/{path}"
-            logical[file_id].append(entry)
-    manifest["result"] = {"files": logical}
-
-    # Serve-time envelope fields absent from the on-disk record.
-    manifest.update(
-        {
-            "status": "finished",
-            "terminal": True,
-            "error": None,
-            "archive": {"ready": False, "request_url": f"/compute/api/results/{TASK_ID}/archive"},
-        }
-    )
-    if manifest.get("storyboard"):
-        manifest["storyboard"]["entrypoint_url"] = (
-            f"/compute/api/results/{TASK_ID}/storyboard/{manifest['storyboard']['entrypoint']}"
-        )
-    return manifest
+    return project_manifest_for_serve(manifest, task_id=TASK_ID)
 
 
 def _csv_rows(relative_path: str) -> list[list[str]]:
@@ -225,6 +169,7 @@ def _serve(page: Page, manifest: dict, *, matrix_page: int = 3) -> dict:
         f"{ORIGIN}/compute/api/auth/me",
         lambda route: route.fulfill(json={"id": 1, "username": "owner", "role": "user"}),
     )
+    page.route(f"{ORIGIN}/compute/api/system/notices", lambda route: route.fulfill(json={"notices": []}))
     page.route(f"{ORIGIN}/compute/api/running/{TASK_ID}", lambda route: route.fulfill(json=_status()))
     page.route(f"{ORIGIN}/compute/api/results/{TASK_ID}", lambda route: route.fulfill(json=manifest))
     page.route(f"{ORIGIN}/compute/api/results/{TASK_ID}/tables/**", tables)
