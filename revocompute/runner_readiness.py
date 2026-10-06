@@ -7,24 +7,22 @@
 from __future__ import annotations
 
 import json
-import shlex
+import os
 import shutil
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Mapping
 
 from revocompute.admission import RunnerReadinessStatus
-from revocompute.doctor import diagnose
-from revocompute.live_tests import LiveTestConfigurationError, receipt_matches
-from revocompute_ctl.compose import container_fs
-from revocompute_ctl import SERVER_ROOT
-from revocompute_ctl.live_test import load_validation_identity
-from revocompute_ctl.artifact_evidence import (
+from revocompute.artifact_evidence import (
     read_build_evidence_for_provenance,
     read_receipt_for_identity,
     receipt_exists_for_provenance,
 )
-from revocompute_ctl.registry import (
+from revocompute.doctor import diagnose
+from revocompute.live_tests import LiveTestConfigurationError, receipt_matches
+from revocompute.runner_live_test import load_validation_identity
+from revocompute.runner_registry import (
     RegistryError,
     RuntimeFamily,
     _build_provenance,
@@ -33,6 +31,7 @@ from revocompute_ctl.registry import (
     runner_enabled,
     sif_stale,
 )
+from revocompute.server_root import SERVER_ROOT
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,14 +129,21 @@ def _string_field(receipt: Mapping[str, Any] | None, key: str) -> str | None:
     return value if isinstance(value, str) else None
 
 
+def _bundle_root(state) -> str:
+    """Deployment-owned Runtime Bundle store: a sibling of the image store."""
+    configured = state.get("RUNTIME_BUNDLE_DIR")
+    if configured:
+        return configured
+    return os.path.join(os.path.dirname(os.path.abspath(state.server_dir())), "runtime-bundles")
+
+
 def bundle_digest(state, family: RuntimeFamily) -> str | None:
     """The Runtime Bundle digest a *new* submission for this family would pin."""
     if not family.runtime_overlay:
         return None
     from revocompute import runtime_bundle
-    from revocompute_ctl.steps import runner_bundle_root
 
-    root = runner_bundle_root(state)
+    root = _bundle_root(state)
     try:
         # Ask the same question submission asks, so readiness cannot report
         # READY for a binding that a new submission would 503 on (an index
@@ -430,87 +436,5 @@ def _remove_host_attestation_files(state) -> None:
 
 
 def invalidate_deployment_attestations(state) -> None:
-    """Clear readiness before deployment mutation, using the service identity."""
+    """Clear published readiness before a deployment mutation."""
     _remove_host_attestation_files(state)
-    server_root = Path(state.server_dir())
-    if not any((server_root / name).exists() for name in ("readiness", ".readiness-publish")):
-        return
-    container_fs(
-        state,
-        "set -eu; rm -rf /srv/readiness /srv/.readiness-publish",
-        [(state.server_dir(), "/srv")],
-    )
-
-
-def _publish_attestation(state, family: RuntimeFamily, payload: dict[str, Any]) -> None:
-    filename = f"{family.name}.json"
-    temporary = f"/srv/.readiness-publish/.{family.name}.json.$$"
-    script = (
-        "set -eu; umask 022; mkdir -p /srv/.readiness-publish; chmod 0755 /srv/.readiness-publish; "
-        f"tmp=\"{temporary}\"; trap 'rm -f \"$tmp\"' EXIT; "
-        "cat > \"$tmp\"; chmod 0644 \"$tmp\"; "
-        f"mv -f \"$tmp\" /srv/.readiness-publish/{shlex.quote(filename)}; trap - EXIT"
-    )
-    container_fs(
-        state,
-        script,
-        [(state.server_dir(), "/srv")],
-        stdin_data=json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
-    )
-
-
-def write_runner_attestation(state, family: RuntimeFamily) -> None:
-    """Atomically refresh one Runner without revalidating unrelated SIFs."""
-    payload = resolve_runner_readiness(state, family).as_dict()
-    filename = shlex.quote(f"{family.name}.json")
-    script = (
-        "set -eu; umask 022; mkdir -p /srv/readiness; chmod 0755 /srv/readiness; "
-        f"tmp=/srv/readiness/.{filename}.$$; trap 'rm -f \"$tmp\"' EXIT; "
-        "cat > \"$tmp\"; chmod 0644 \"$tmp\"; "
-        f"mv -f \"$tmp\" /srv/readiness/{filename}; trap - EXIT"
-    )
-    try:
-        container_fs(
-            state,
-            script,
-            [(state.server_dir(), "/srv")],
-            stdin_data=json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
-        )
-    except BaseException:
-        container_fs(
-            state,
-            f"rm -f /srv/readiness/{filename}",
-            [(state.server_dir(), "/srv")],
-        )
-        raise
-
-
-def write_submission_attestation(state, families: list[RuntimeFamily]) -> None:
-    """Publish complete readiness evidence as the configured service identity."""
-    try:
-        payloads = [
-            (
-                family,
-                resolve_runner_readiness(state, family).as_dict(),
-            )
-            for family in families
-            if runner_enabled(state, family.name)
-        ]
-        container_fs(
-            state,
-            "set -eu; umask 022; rm -rf /srv/.readiness-publish; mkdir -m 0755 /srv/.readiness-publish",
-            [(state.server_dir(), "/srv")],
-        )
-        for family, payload in payloads:
-            _publish_attestation(state, family, payload)
-        container_fs(
-            state,
-            "set -eu; rm -rf /srv/readiness; mv /srv/.readiness-publish /srv/readiness; chmod 0755 /srv/readiness",
-            [(state.server_dir(), "/srv")],
-        )
-    except BaseException:
-        try:
-            invalidate_deployment_attestations(state)
-        except BaseException:
-            pass
-        raise

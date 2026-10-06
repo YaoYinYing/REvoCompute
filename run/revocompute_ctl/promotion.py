@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 
 from revocompute_ctl.compose import image_id, run_cmd
-from revocompute_ctl.registry import RuntimeFamily, _docker_tag, runner_enabled
+from revocompute.runner_registry import RuntimeFamily, _docker_tag, runner_enabled
 
 
 def taggable_images(state, families: list[RuntimeFamily]) -> dict[str, str]:
@@ -40,8 +40,8 @@ def promote_sifs(state, families: list[RuntimeFamily]) -> None:
     Every candidate is prevalidated, then old active files are retained until
     all replacements succeed so a failed multi-family activation can roll back.
     """
-    from revocompute_ctl.live_test import candidate_receipt_valid
-    from revocompute_ctl.registry import RegistryError
+    from revocompute.runner_live_test import candidate_receipt_valid
+    from revocompute.runner_registry import RegistryError
 
     candidates: list[tuple[str, str, tuple[int, int, int]]] = []
     for family in families:

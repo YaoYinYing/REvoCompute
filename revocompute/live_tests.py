@@ -6,11 +6,8 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
-import os
 import re
-import tempfile
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,9 +15,14 @@ from typing import Any, Mapping
 
 import yaml
 from jsonschema import Draft202012Validator, FormatChecker
+from revocompute.serialization import (
+    atomic_write_json,
+    canonical_digest,
+    sanitized_mapping,
+    sha256_file,
+)
 
 _IDENTIFIER = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
-_SECRET_KEY = re.compile(r"(secret|password|token|credential|private.?key)", re.IGNORECASE)
 LIVE_TEST_RECEIPT_VERSION = 2
 
 
@@ -47,34 +49,6 @@ class LiveTestPlan:
         if collection not in self.collections:
             raise LiveTestConfigurationError(f"Unknown live-test collection: {collection!r}")
         return tuple(case for case in self.collections[collection] if task is None or case.task == task)
-
-
-def sha256_file(path: str | Path) -> str:
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return f"sha256:{digest.hexdigest()}"
-
-
-def canonical_digest(value: Any) -> str:
-    encoded = json.dumps(value, ensure_ascii=True, separators=(",", ":"), sort_keys=True).encode()
-    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
-
-
-def sanitized_mapping(value: Any) -> Any:
-    """Return deterministic public configuration with likely secrets removed."""
-    if isinstance(value, Mapping):
-        return {
-            str(key): sanitized_mapping(item)
-            for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
-            if not _SECRET_KEY.search(str(key))
-        }
-    if isinstance(value, (list, tuple)):
-        return [sanitized_mapping(item) for item in value]
-    if isinstance(value, (str, int, float, bool)) or value is None:
-        return value
-    return str(value)
 
 
 _SCHEMA_ANNOTATIONS = {
@@ -250,20 +224,6 @@ class LiveTestReport:
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
-
-
-def atomic_write_json(path: str | Path, value: Mapping[str, Any]) -> None:
-    destination = Path(path)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    handle = tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=destination.parent, delete=False)
-    try:
-        json.dump(value, handle, ensure_ascii=True, indent=2, sort_keys=True)
-        handle.write("\n")
-        handle.flush()
-        os.fsync(handle.fileno())
-    finally:
-        handle.close()
-    os.replace(handle.name, destination)
 
 
 def receipt_matches(

@@ -225,7 +225,7 @@ def main() -> None:
             server_only=flags.server_only,
         )
         if subcommand == "prepare" and flags.build_sif:
-            from revocompute_ctl.registry import build_slurm_images, validate_runtime_files, validate_slurm_images
+            from revocompute.runner_registry import build_slurm_images, validate_runtime_files, validate_slurm_images
             from revocompute_ctl.steps import build_tool_images, enabled_tool_families, validate_tool_images
 
             families = validate_runtime_files(state)
@@ -244,7 +244,7 @@ def main() -> None:
         if not flags.runner and not flags.task and not flags.all_runners:
             _usage_exit("live-test requires --runner, --task, or --all.")
         from revocompute_ctl.build import resolve_proxy_args
-        from revocompute_ctl.live_test import run_live_tests
+        from revocompute.runner_live_test import run_live_tests
 
         if not run_live_tests(
             state,
@@ -261,8 +261,8 @@ def main() -> None:
             _usage_exit("--runner and --all are mutually exclusive.")
         if not flags.runner and not flags.all_runners:
             _usage_exit("runner-status requires --runner or --all.")
-        from revocompute_ctl.readiness import run_runner_status
-        from revocompute_ctl.registry import RegistryError
+        from revocompute.runner_readiness import run_runner_status
+        from revocompute.runner_registry import RegistryError
 
         try:
             run_runner_status(state, runner=flags.runner, all_runners=flags.all_runners, as_json=flags.as_json)

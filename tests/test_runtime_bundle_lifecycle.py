@@ -26,7 +26,7 @@ sys.path.insert(0, str(ROOT / "tests"))
 
 from revocompute import runtime_bundle as rb  # noqa: E402
 from revocompute_ctl import steps as steps_mod  # noqa: E402
-from revocompute_ctl.registry import RuntimeFamily  # noqa: E402
+from revocompute.runner_registry import RuntimeFamily  # noqa: E402
 
 
 class _State:

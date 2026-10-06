@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-from revocompute_ctl.live_test import (
+from revocompute.runner_live_test import (
     RunnerLiveTestError,
     RunnerLiveTestWorker,
     TaskResourceSnapshot,
@@ -18,8 +18,8 @@ from revocompute_ctl.live_test import (
     run_live_tests,
 )
 from revocompute.live_tests import LiveTestReport, sha256_file
-from revocompute_ctl.artifact_evidence import write_artifact_evidence
-from revocompute_ctl.registry import RuntimeFamily
+from revocompute.artifact_evidence import write_artifact_evidence
+from revocompute.runner_registry import RuntimeFamily
 
 
 class _State:
@@ -63,14 +63,14 @@ def test_live_worker_records_explicit_success_lifecycle(tmp_path, monkeypatch):
         worker.candidate.parent.mkdir(parents=True)
         worker.candidate.write_bytes(b"sif")
 
-    monkeypatch.setattr("revocompute_ctl.live_test.build_slurm_images", build)
+    monkeypatch.setattr("revocompute.runner_live_test.build_slurm_images", build)
     digest = "sha256:6d27641e2684684537fb3f401639558228855c1d5721fd1b4b29fd70e8cffd1e"
     monkeypatch.setattr(
-        "revocompute_ctl.live_test.read_artifact_evidence",
+        "revocompute.runner_live_test.read_artifact_evidence",
         lambda *_args: (digest, {"sif_sha256": digest, "build_provenance_digest": "build"}),
     )
     monkeypatch.setattr(
-        "revocompute_ctl.live_test._build_provenance",
+        "revocompute.runner_live_test._build_provenance",
         lambda *_args: {"build_provenance_digest": "build", "apptainer_version": "1.4"},
     )
     worker._load_identity = _identity
@@ -100,11 +100,11 @@ def test_live_worker_reports_validation_failure_and_timeout_category(tmp_path, m
     worker.candidate.write_bytes(b"sif")
     digest = "sha256:6d27641e2684684537fb3f401639558228855c1d5721fd1b4b29fd70e8cffd1e"
     monkeypatch.setattr(
-        "revocompute_ctl.live_test.read_artifact_evidence",
+        "revocompute.runner_live_test.read_artifact_evidence",
         lambda *_args: (digest, {"sif_sha256": digest, "build_provenance_digest": "build"}),
     )
     monkeypatch.setattr(
-        "revocompute_ctl.live_test._build_provenance",
+        "revocompute.runner_live_test._build_provenance",
         lambda *_args: {"build_provenance_digest": "build", "apptainer_version": "1.4"},
     )
     worker._load_identity = _identity
@@ -125,11 +125,11 @@ def test_live_worker_keeps_structured_case_when_seeding_fails(tmp_path, monkeypa
     worker.candidate.write_bytes(b"sif")
     digest = "sha256:6d27641e2684684537fb3f401639558228855c1d5721fd1b4b29fd70e8cffd1e"
     monkeypatch.setattr(
-        "revocompute_ctl.live_test.read_artifact_evidence",
+        "revocompute.runner_live_test.read_artifact_evidence",
         lambda *_args: (digest, {"sif_sha256": digest, "build_provenance_digest": "build"}),
     )
     monkeypatch.setattr(
-        "revocompute_ctl.live_test._build_provenance",
+        "revocompute.runner_live_test._build_provenance",
         lambda *_args: {"build_provenance_digest": "build", "apptainer_version": "1.4"},
     )
     worker._load_identity = _identity
@@ -178,7 +178,7 @@ def test_active_and_candidate_receipts_resolve_build_identity(tmp_path, monkeypa
     candidate.write_bytes(b"candidate-B")
     monkeypatch.setattr(RunnerLiveTestWorker, "_load_identity", lambda _self: _identity())
     monkeypatch.setattr(
-        "revocompute_ctl.live_test._build_provenance",
+        "revocompute.runner_live_test._build_provenance",
         lambda *_args: {"build_provenance_digest": "build"},
     )
     for artifact in (active, candidate):
@@ -215,12 +215,12 @@ def test_live_worker_uses_candidate_image_one_off_worker_and_contract_mount(tmp_
         "slurm_job_id": "42", "slurm_jobs": [],
     }))
     commands = []
-    monkeypatch.setattr("revocompute_ctl.live_test.build_web_images", lambda *_args: None)
-    monkeypatch.setattr("revocompute_ctl.live_test.detect_compose_cmd", lambda: ("docker", "compose"))
+    monkeypatch.setattr("revocompute_ctl.build.build_web_images", lambda *_args: None)
+    monkeypatch.setattr("revocompute.runner_live_test.detect_compose_cmd", lambda: ("docker", "compose"))
     def fake_run(argv, **_kwargs):
         commands.append(list(argv))
         return type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
-    monkeypatch.setattr("revocompute_ctl.live_test.run_cmd", fake_run)
+    monkeypatch.setattr("revocompute.runner_live_test.run_cmd", fake_run)
     result = worker._execute_in_worker("a" * 32, "predict", worker.work_root)
     assert result["execution_uid"] == 129
     command = commands[-1]
@@ -238,10 +238,10 @@ def test_live_workers_share_candidate_server_image_build(tmp_path, monkeypatch):
     artifact.parent.mkdir(parents=True)
     artifact.write_bytes(b"candidate")
     builds = []
-    monkeypatch.setattr("revocompute_ctl.live_test.build_web_images", lambda *_args: builds.append(True))
-    monkeypatch.setattr("revocompute_ctl.live_test.detect_compose_cmd", lambda: ("docker", "compose"))
+    monkeypatch.setattr("revocompute_ctl.build.build_web_images", lambda *_args: builds.append(True))
+    monkeypatch.setattr("revocompute.runner_live_test.detect_compose_cmd", lambda: ("docker", "compose"))
     monkeypatch.setattr(
-        "revocompute_ctl.live_test.run_cmd",
+        "revocompute.runner_live_test.run_cmd",
         lambda *_args, **_kwargs: type("Result", (), {"returncode": 0, "stdout": json.dumps({"task_status": "finished"}), "stderr": ""})(),
     )
 
@@ -255,18 +255,18 @@ def test_live_test_refreshes_submission_attestations_after_receipt_update(tmp_pa
     worker = _worker(tmp_path)
     published = []
     worker_build_flags = []
-    monkeypatch.setattr("revocompute_ctl.live_test.load_plugin_families", lambda _root: [worker.family])
+    monkeypatch.setattr("revocompute.runner_live_test.load_plugin_families", lambda _root: [worker.family])
     prepared = []
     monkeypatch.setattr(
-        "revocompute_ctl.live_test.prepare_live_test_server_image",
+        "revocompute.runner_live_test.prepare_live_test_server_image",
         lambda _state, build_args: prepared.append(build_args),
     )
     monkeypatch.setattr(
-        "revocompute_ctl.live_test.RunnerLiveTestWorker.run",
+        "revocompute.runner_live_test.RunnerLiveTestWorker.run",
         lambda *_args, **kwargs: (worker_build_flags.append(kwargs["build"]) or SimpleNamespace(passed=True)),
     )
     monkeypatch.setattr(
-        "revocompute_ctl.readiness.write_runner_attestation",
+        "revocompute_ctl.attestation.write_runner_attestation",
         lambda state, family: published.append((state, family)),
     )
 
@@ -286,14 +286,14 @@ def test_live_test_refreshes_submission_attestations_after_receipt_update(tmp_pa
 def test_live_test_skips_attestation_refresh_after_failure(tmp_path, monkeypatch):
     worker = _worker(tmp_path)
     published = []
-    monkeypatch.setattr("revocompute_ctl.live_test.load_plugin_families", lambda _root: [worker.family])
-    monkeypatch.setattr("revocompute_ctl.live_test.prepare_live_test_server_image", lambda _state, _args: None)
+    monkeypatch.setattr("revocompute.runner_live_test.load_plugin_families", lambda _root: [worker.family])
+    monkeypatch.setattr("revocompute.runner_live_test.prepare_live_test_server_image", lambda _state, _args: None)
     monkeypatch.setattr(
-        "revocompute_ctl.live_test.RunnerLiveTestWorker.run",
+        "revocompute.runner_live_test.RunnerLiveTestWorker.run",
         lambda *_args, **_kwargs: SimpleNamespace(passed=False),
     )
     monkeypatch.setattr(
-        "revocompute_ctl.readiness.write_runner_attestation",
+        "revocompute_ctl.attestation.write_runner_attestation",
         lambda *_args: published.append(True),
     )
 
@@ -311,7 +311,7 @@ def test_live_worker_builds_candidate_before_family_is_enabled(tmp_path, monkeyp
     worker = _worker(tmp_path)
     calls = []
     monkeypatch.setattr(
-        "revocompute_ctl.live_test.build_slurm_images",
+        "revocompute.runner_live_test.build_slurm_images",
         lambda state, families, **kwargs: calls.append((state, families, kwargs)),
     )
 

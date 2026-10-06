@@ -25,26 +25,29 @@ from revocompute.live_tests import atomic_write_json, sha256_file  # noqa: E402
 from revocompute import runtime_bundle  # noqa: E402
 from revocompute.manage_db import ManageDatabase  # noqa: E402
 from revocompute.resource_policy import ResourcePolicyValues  # noqa: E402
-from revocompute_ctl.readiness import (  # noqa: E402
+from revocompute.runner_readiness import (  # noqa: E402
     RunnerReadinessStatus,
     format_readiness_json,
     format_readiness_text,
     invalidate_deployment_attestations,
     run_runner_status,
     resolve_runner_readiness,
-    write_submission_attestation,
 )
 from revocompute_ctl import compose as compose_mod  # noqa: E402
 from revocompute_ctl import promotion  # noqa: E402
-from revocompute_ctl.artifact_evidence import (  # noqa: E402
+from revocompute_ctl.attestation import (  # noqa: E402
+    clear_deployment_attestations,
+    write_submission_attestation,
+)
+from revocompute.artifact_evidence import (  # noqa: E402
     evidence_path,
     read_artifact_evidence,
     write_artifact_evidence,
 )
-from revocompute_ctl.registry import RuntimeFamily  # noqa: E402
-from revocompute_ctl.registry import RegistryError  # noqa: E402
-from revocompute_ctl.registry import _build_provenance, load_plugin_families  # noqa: E402
-from revocompute_ctl.live_test import TaskResourceSnapshot, ValidationIdentity, load_validation_identity  # noqa: E402
+from revocompute.runner_registry import RuntimeFamily  # noqa: E402
+from revocompute.runner_registry import RegistryError  # noqa: E402
+from revocompute.runner_registry import _build_provenance, load_plugin_families  # noqa: E402
+from revocompute.runner_live_test import TaskResourceSnapshot, ValidationIdentity, load_validation_identity  # noqa: E402
 
 
 class _State:
@@ -84,11 +87,11 @@ def evidence(tmp_path: Path, monkeypatch):
         digest="sha256:test-current",
         select=lambda collection: (SimpleNamespace(id="minimal"),) if collection == "smoke" else (),
     )
-    monkeypatch.setattr("revocompute_ctl.readiness.diagnose", lambda *_args, **_kwargs: DoctorReport(()))
-    monkeypatch.setattr("revocompute_ctl.readiness._build_provenance", lambda *_args: current)
-    monkeypatch.setattr("revocompute_ctl.readiness.sif_stale", lambda *_args: False)
+    monkeypatch.setattr("revocompute.runner_readiness.diagnose", lambda *_args, **_kwargs: DoctorReport(()))
+    monkeypatch.setattr("revocompute.runner_readiness._build_provenance", lambda *_args: current)
+    monkeypatch.setattr("revocompute.runner_readiness.sif_stale", lambda *_args: False)
     monkeypatch.setattr(
-        "revocompute_ctl.readiness.load_validation_identity",
+        "revocompute.runner_readiness.load_validation_identity",
         lambda *_args, **_kwargs: ValidationIdentity(
             plan,
             "sha256:config-current",
@@ -121,10 +124,10 @@ def test_doctor_failure_is_not_configured_and_takes_precedence(evidence, monkeyp
     _write_receipt(family, active)
     diagnostic = Diagnostic("E3002", "error", "schema", "secret-free contract error", family.name)
     monkeypatch.setattr(
-        "revocompute_ctl.readiness.diagnose", lambda *_args, **_kwargs: DoctorReport((diagnostic,))
+        "revocompute.runner_readiness.diagnose", lambda *_args, **_kwargs: DoctorReport((diagnostic,))
     )
     monkeypatch.setattr(
-        "revocompute_ctl.readiness.sif_stale",
+        "revocompute.runner_readiness.sif_stale",
         lambda *_args: (_ for _ in ()).throw(AssertionError("artifact should not be inspected")),
     )
 
@@ -150,7 +153,7 @@ def test_missing_active_sif_is_not_built(evidence):
 def test_stale_build_takes_precedence_over_receipt(evidence, monkeypatch):
     state, family, active = evidence
     _write_receipt(family, active)
-    monkeypatch.setattr("revocompute_ctl.readiness.sif_stale", lambda *_args: True)
+    monkeypatch.setattr("revocompute.runner_readiness.sif_stale", lambda *_args: True)
 
     result = resolve_runner_readiness(state, family)
 
@@ -234,7 +237,7 @@ def test_staged_candidate_lifecycle_preserves_active_and_unrelated_evidence(evid
     assert other_receipt_path.read_bytes() == other_receipt
 
     monkeypatch.setattr(
-        "revocompute_ctl.live_test.candidate_receipt_valid",
+        "revocompute.runner_live_test.candidate_receipt_valid",
         lambda _state, selected, **_kwargs: read_artifact_evidence(selected, candidate, "receipt")[1] is not None,
     )
     promotion.promote_sifs(state, [family])
@@ -270,11 +273,11 @@ def test_attestation_publication_uses_service_context_and_safe_modes(evidence, m
     readiness_calls = []
     payload = {"runner_family": family.name, "status": "READY", "ready": True}
     monkeypatch.setattr(
-        "revocompute_ctl.readiness.resolve_runner_readiness",
+        "revocompute_ctl.attestation.resolve_runner_readiness",
         lambda *_args, **kwargs: readiness_calls.append(kwargs) or SimpleNamespace(as_dict=lambda: payload),
     )
     monkeypatch.setattr(
-        "revocompute_ctl.readiness.container_fs",
+        "revocompute_ctl.attestation.container_fs",
         lambda _state, script, mounts, **kwargs: calls.append((script, mounts, kwargs)),
     )
 
@@ -304,11 +307,11 @@ def test_deployment_invalidation_runs_in_service_context(tmp_path, monkeypatch):
 
     calls = []
     monkeypatch.setattr(
-        "revocompute_ctl.readiness.container_fs",
+        "revocompute_ctl.attestation.container_fs",
         lambda _state, script, mounts, **kwargs: calls.append((script, mounts, kwargs)),
     )
-    monkeypatch.setattr("revocompute_ctl.readiness._remove_host_attestation_files", lambda _state: None)
-    invalidate_deployment_attestations(State(tmp_path))
+    monkeypatch.setattr("revocompute.runner_readiness._remove_host_attestation_files", lambda _state: None)
+    clear_deployment_attestations(State(tmp_path))
 
     assert len(calls) == 1
     assert "rm -rf /srv/readiness /srv/.readiness-publish" in calls[0][0]
@@ -362,7 +365,7 @@ def test_runner_status_all_lists_enabled_families_and_json(evidence, monkeypatch
     _write_receipt(family, active)
     disabled = RuntimeFamily("disabled", "1", "disabled.def", "disabled.sif", "disabled.sif")
     state.get = lambda key: "demo" if key == "ENABLED_TASKRUNNERS" else ""
-    monkeypatch.setattr("revocompute_ctl.readiness.load_instance_families", lambda _state: [family, disabled])
+    monkeypatch.setattr("revocompute.runner_readiness.load_instance_families", lambda _state: [family, disabled])
 
     results = run_runner_status(state, runner=None, all_runners=True, as_json=True)
     payload = json.loads(capsys.readouterr().out)
@@ -374,7 +377,7 @@ def test_runner_status_all_lists_enabled_families_and_json(evidence, monkeypatch
 def test_runner_status_unknown_or_disabled_fails_cleanly(evidence, monkeypatch):
     state, family, _active = evidence
     state.get = lambda key: "other" if key == "ENABLED_TASKRUNNERS" else ""
-    monkeypatch.setattr("revocompute_ctl.readiness.load_instance_families", lambda _state: [family])
+    monkeypatch.setattr("revocompute.runner_readiness.load_instance_families", lambda _state: [family])
 
     with pytest.raises(RegistryError, match="Unknown or disabled Runner Family"):
         run_runner_status(state, runner="demo", all_runners=False, as_json=False)
@@ -382,7 +385,7 @@ def test_runner_status_unknown_or_disabled_fails_cleanly(evidence, monkeypatch):
 
 def test_runner_status_all_accepts_zero_family_instance(evidence, monkeypatch, capsys):
     state, _family, _active = evidence
-    monkeypatch.setattr("revocompute_ctl.readiness.load_instance_families", lambda _state: [])
+    monkeypatch.setattr("revocompute.runner_readiness.load_instance_families", lambda _state: [])
 
     assert run_runner_status(state, runner=None, all_runners=True, as_json=True) == []
     assert json.loads(capsys.readouterr().out) == {"runners": []}
@@ -707,7 +710,7 @@ def test_workspace_backend_entrypoint_change_and_optional_schema(tmp_path):
 
 
 def test_workspace_projection_tolerates_a_plugin_without_a_configuration_schema(tmp_path):
-    from run.revocompute_ctl.live_test import _validation_workspace_capabilities
+    from revocompute.runner_live_test import _validation_workspace_capabilities
 
     _repo, runners, _family = _copied_family(tmp_path, "placer-rfdiffusion")
     family_root = runners / "placer-rfdiffusion"

@@ -2,58 +2,24 @@
 # Distributed under the terms of the GNU General Public License v3.0.
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Docker / Compose helpers — the only subprocess path in the control module.
+"""Docker / Compose helpers — the deployment control module's subprocess surface.
 
-run_cmd never logs argv (proxy URLs must not leak into logs).  stdout and
-stderr are inherited unless capture is requested.
+Process execution itself lives in ``revocompute.compose`` so the shared Runner
+control core can start commands without importing the deployment package.
+``container_fs`` and the Compose model helpers stay here: they are deployment
+concerns, not Runner contract.
 """
 
 from __future__ import annotations
 
 import logging
 import os
-import shutil
-import subprocess
-from collections.abc import Sequence
+
+from revocompute.compose import detect_compose_cmd, run_cmd
+
+__all__ = ["run_cmd", "detect_compose_cmd", "compose_args", "container_fs", "image_id"]
 
 log = logging.getLogger("revocompute_ctl")
-
-
-def run_cmd(
-    argv: Sequence[str],
-    *,
-    env: dict[str, str] | None = None,
-    stdin: str | None = None,
-    check: bool = True,
-    capture: bool = False,
-    timeout: float | None = None,
-    cwd: str | os.PathLike[str] | None = None,
-) -> subprocess.CompletedProcess[str]:
-    """Run one command. Never log the argv — callers log their own summaries."""
-    completed = subprocess.run(
-        list(argv),
-        env=env if env is not None else dict(os.environ),
-        input=stdin,
-        text=True,
-        check=False,
-        capture_output=capture,
-        timeout=timeout,
-        cwd=cwd,
-    )
-    if check and completed.returncode != 0:
-        raise subprocess.CalledProcessError(completed.returncode, list(argv))
-    return completed
-
-
-def detect_compose_cmd() -> tuple[str, ...]:
-    """Return the compose command array (docker compose or docker-compose)."""
-    if shutil.which("docker") and run_cmd(
-        ["docker", "compose", "version"], check=False, capture=True
-    ).returncode == 0:
-        return ("docker", "compose")
-    if shutil.which("docker-compose"):
-        return ("docker-compose",)
-    raise SystemExit("docker compose plugin was not found. Install Docker Compose v2 or docker-compose.")
 
 
 def compose_args(state) -> list[str]:

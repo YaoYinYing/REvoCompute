@@ -66,7 +66,7 @@ def cmd_build(
     proxy_build_args = resolve_proxy_args(state, use_proxy_from_env, use_proxy)
     from revocompute_ctl.storage import resolve_runner_identity
 
-    from revocompute_ctl.registry import migrate_legacy_sif_evidence, validate_runtime_files
+    from revocompute.runner_registry import migrate_legacy_sif_evidence, validate_runtime_files
 
     families = validate_runtime_files(state)
     uid, gid = resolve_runner_identity(state)
