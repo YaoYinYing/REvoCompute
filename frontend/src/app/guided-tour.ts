@@ -201,10 +201,12 @@ export const guidedTour = new GuidedTour();
 /**
  * Remember a concrete result URL so the result step can visit a real task rather
  * than a dangling route. The Dashboard records the first available result it knows
- * about; a page that is itself a result records its own URL. A value without a
- * real task id is ignored, so the step skips cleanly instead of navigating wrongly.
+ * about before launching the tour. When it has no available result, the value left
+ * by an earlier tour, a deleted task, or a previous session is cleared, so the step
+ * can never navigate to a stale target.
  */
 export function recordTourResult(url: string | null | undefined): void {
   const match = url ? /^\/compute\/results\/[a-f0-9]{32}$/i.exec(url) : null;
   if (match) localStorage.setItem(resultKey, match[0]);
+  else localStorage.removeItem(resultKey);
 }

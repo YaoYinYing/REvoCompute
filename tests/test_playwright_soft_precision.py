@@ -211,6 +211,31 @@ def test_guided_tour_starts_progresses_and_is_restartable(page: Page) -> None:
     expect(page.locator(".tour-callout")).to_contain_text("Step 1 of 5")
 
 
+def test_guided_tour_clears_a_stale_result_target_and_skips_the_step(page: Page) -> None:
+    # A stale target from an interrupted tour, a deleted task, or a previous session
+    # must never be visited. This scenario publishes no result, so the Dashboard has
+    # no valid target and the stored one is cleared on load.
+    stale_id = "ffffffffffffffffffffffffffffffff"
+    router = _dashboard(page)
+    page.evaluate("(url) => localStorage.setItem('revocompute-tour-result', url)", f"/compute/results/{stale_id}")
+    page.reload()
+    expect(page.locator(".task-card").first).to_be_visible()
+    assert page.evaluate("localStorage.getItem('revocompute-tour-result')") is None
+
+    page.get_by_role("button", name="Guided tour").click()
+    expect(page.locator(".tour-callout")).to_contain_text("Step 1 of 5")
+    for _ in range(4):
+        page.locator(".tour-callout").get_by_role("button", name="Next").click()
+    # Step 4 is Create Task; the result step is skipped rather than pursued to a stale URL.
+    expect(page).to_have_url(f"{ORIGIN}/compute/create_task")
+    expect(page.locator(".tour-callout")).to_have_count(0)
+
+    stale_requests = [record.path for record in router.requests.navigation() if record.path == f"/compute/results/{stale_id}"]
+    assert stale_requests == [], stale_requests
+    result_requests = [record.path for record in router.requests.navigation() if record.path.startswith("/compute/results")]
+    assert result_requests == [], result_requests
+
+
 def test_guided_tour_result_step_visits_a_real_result_and_localizes_its_copy(page: Page) -> None:
     mount_scenario(page, controlled_scenario().with_result("minimal_success"))
     page.goto(f"{ORIGIN}/compute/dashboard")
