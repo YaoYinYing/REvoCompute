@@ -85,7 +85,7 @@ def _build_legacy_database(path: str) -> None:
         )
         connection.execute(
             "INSERT INTO gpu_credit_policies (user_id, monthly_gpu_seconds, updated_by_user_id, updated_at) "
-            "VALUES (7, 72_000, 9, ?)",
+            "VALUES (7, 72000, 9, ?)",
             (1_787_227_200.0,),
         )
         connection.executemany(
