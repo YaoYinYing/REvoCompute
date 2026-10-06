@@ -78,6 +78,16 @@ jobs:
       - name: Run Python Server and Contract Tests with Coverage
         run: make test-cov COV_REPORT=xml:coverage.xml PYTEST="python -m pytest -n 4 --dist=load"
 
+      # Bounded registry/discovery determinism gate: re-runs the discovery,
+      # workflow-composer, and AF3 runner files under several xdist
+      # distributions plus the AF3 file alone, so residual test-scheduling-order
+      # dependence surfaces here rather than intermittently in the coverage run.
+      # Reuses the canonical Makefile target (no duplicated pytest invocation);
+      # the step timeout keeps the added cost bounded.
+      - name: Registry determinism gate
+        timeout-minutes: 10
+        run: make test-registry-xdist
+
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:

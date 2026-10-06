@@ -11,22 +11,10 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from revocompute import task_types
 
 ROOT = Path(__file__).resolve().parents[3]
 FAMILY = ROOT / "docker" / "runners" / "ppiformer"
 
-
-class _RegistryContext:
-    def __enter__(self):
-        self.manager = task_types._plugin_manager
-        self.categories = dict(task_types._category_registry)
-        return self
-
-    def __exit__(self, *_):
-        task_types._plugin_manager = self.manager
-        task_types._category_registry.clear()
-        task_types._category_registry.update(self.categories)
 
 
 def _load_adapter():

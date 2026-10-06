@@ -13,31 +13,10 @@ from pathlib import Path
 
 import pytest
 from conftest import _admin_client_auth, _load_pssm_module, _test_client_auth
-from revocompute import task_types
-from revocompute.task_types import discover_plugins
+from revocompute.task_types import discover_plugins, get, isolated_discovery
 
 ROOT = Path(__file__).resolve().parents[3]
 RUNNER = ROOT / "docker/runners/alphafold3/run.sh"
-
-
-def _preserve_registry():
-    class RegistryContext:
-        def __enter__(self):
-            self.manager = task_types._plugin_manager
-            self.categories = dict(task_types._category_registry)
-            return self
-
-        def __exit__(self, *_):
-            task_types._plugin_manager = self.manager
-            task_types._category_registry.clear()
-            task_types._category_registry.update(self.categories)
-
-    return RegistryContext()
-
-
-def _load_af3_registry():
-    discover_plugins(str(ROOT / "docker/runners"), {"alphafold", "alphafold3"})
-    return task_types.get("alphafold3")
 
 
 def test_alphafold3_result_workspace_resolves_representative_outputs(monkeypatch, tmp_path):
@@ -80,12 +59,24 @@ def test_alphafold3_result_workspace_resolves_representative_outputs(monkeypatch
 
 
 def test_alphafold3_runtime_fails_preflight_when_its_policy_is_missing(tmp_path):
+    """A missing access policy is rejected, and the rejected discovery never
+    becomes the active registry.
+
+    This test installs its own snapshot rather than depending on a sibling test
+    (or an import-time side effect) having discovered the real tree first, so it
+    holds when run alone or scheduled onto any xdist worker.
+    """
     runners = tmp_path / "runners"
     shutil.copytree(ROOT / "docker/runners/alphafold3", runners / "alphafold3")
     shutil.copytree(ROOT / "docker/runners/common", runners / "common")
     (runners / "common/policy/alphafold3_noncommercial.yaml").unlink()
-    with _preserve_registry(), pytest.raises(FileNotFoundError, match="alphafold3_noncommercial"):
-        discover_plugins(str(runners), {"alphafold3"})
+    with isolated_discovery(str(ROOT / "docker/runners"), {"alphafold", "alphafold3"}):
+        before = get("alphafold3")
+        with pytest.raises(FileNotFoundError, match="alphafold3_noncommercial"):
+            discover_plugins(str(runners), {"alphafold3"})
+        # The rejected discovery never became active: the snapshot installed here
+        # is still the one readers resolve.
+        assert get("alphafold3") == before
 
 
 def _write_fake_af3(path: Path) -> None:

@@ -12,7 +12,7 @@ import sqlalchemy as sa
 import yaml
 from sqlalchemy.exc import IntegrityError
 
-from revocompute.access_control import get_policy, load_policies
+from revocompute.access_control import load_policy_documents, resolve_policy
 from revocompute.auth import UserDatabase
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -34,8 +34,8 @@ def _write_policy(directory: Path, **updates) -> None:
 
 def test_policy_loader_accepts_strict_declarative_policy(tmp_path):
     _write_policy(tmp_path, notice={"title": "Restricted", "summary": "Approval required."})
-    load_policies(str(tmp_path))
-    policy = get_policy("example_academic_runner")
+    policies = load_policy_documents(str(tmp_path))
+    policy = resolve_policy("example_academic_runner", policies)
     assert policy.requires == ("example_academic",)
     assert policy.requestable is True
 
@@ -52,7 +52,7 @@ def test_policy_loader_accepts_strict_declarative_policy(tmp_path):
 def test_policy_loader_rejects_malformed_policy(tmp_path, updates, message):
     _write_policy(tmp_path, **updates)
     with pytest.raises(ValueError, match=message):
-        load_policies(str(tmp_path))
+        load_policy_documents(str(tmp_path))
 
 
 def test_entitlement_and_request_audit_lifecycle(tmp_path):
