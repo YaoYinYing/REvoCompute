@@ -46,9 +46,6 @@ from pydantic import ValidationError
 from werkzeug.exceptions import RequestEntityTooLarge
 from revocompute.access_control import (
     authorize,
-    declared_entitlements,
-    get_policy,
-    list_policies,
     policy_state,
     project_effective_entitlements,
 )
@@ -156,7 +153,15 @@ from revocompute.task_runtime import (
     task_store,
 )
 from revocompute.task_types import default_task_type, get as get_task_type
-from revocompute.task_types import iter_capabilities, list_categories, list_types, workspace_plugin_descriptor
+from revocompute.task_types import (
+    declared_entitlements,
+    get_policy,
+    iter_capabilities,
+    list_categories,
+    list_policies,
+    list_types,
+    workspace_plugin_descriptor,
+)
 from revocompute.workspace_contracts import WorkspaceValidationError, normalize_capability, validate_capability
 from revocompute.task_types import workspace_backend
 from revocompute.tool_calls import ToolAdmissionError, new_tool_call_id, normalize_tool_call_id

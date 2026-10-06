@@ -1,1097 +1,458 @@
-# Deterministic Runner Fleet Control Plane and Admin Operations
+# Persistent Item Correctness and Adaptive OOM Provenance
 
 ## Objective
 
-Establish one canonical, typed, auditable Runner control plane with two first-class operator surfaces:
+Close the correctness gap around the persistent multi-item and adaptive OOM
+machinery introduced for structure-folding Runners. This is an
+**infrastructure / execution-semantics** change, and its merge-blocking claim is
+scoped to what that machinery owns:
 
-> **CLI for agents, automation, bootstrap, recovery, and expert operations; Web Admin UI for safe, accessible, routine human operations.**
+> Persistent multi-item execution preserves item identity and deterministic
+> execution semantics; restart/resume is coherent; adaptive-OOM transitions are
+> bounded, scientifically classified, fail closed for unsafe mutations, and
+> expose requested-versus-effective provenance.
 
-The CLI remains a supported first-class interface and keeps its current command grammar wherever practical. The Web UI must not reimplement shell commands or readiness logic. Both surfaces must call the same control/readiness core.
+The claim decomposes into the questions this PR actually answers:
 
-This PR also eliminates the recurrent nondeterministic Runner/plugin discovery failure seen under pytest-xdist, including the recurring AlphaFold3 `Unknown task type: 'alphafold3'` failure. A readiness/control plane is not trustworthy until registry construction is deterministic.
+1. **Item identity and deterministic execution semantics:** does processing
+   several inputs in one model-resident task map each input to exactly one
+   result, order-independently, with no cross-contamination, duplicate, or lost
+   item?
+2. **Restart/resume coherence:** does a restarted worker resume against the same
+   immutable input snapshot without recomputing, duplicating, or losing an item?
+3. **Adaptive-OOM provenance:** when recovery changes execution parameters, can a
+   reviewer reconstruct exactly what was requested, what was actually used for
+   each attempt/item, and whether the change can affect scientific output?
 
-The design principles are:
+The **Mock GPU Example Runner** proves this mechanism-level claim in CI without
+physical GPU hardware. Real-model evidence is **supplemental validation** of the
+same machinery (see §11a), not a merge requirement.
 
-- **one control plane, two operator surfaces;**
-- **readiness is derived from evidence, never set by an operator flag;**
-- **readiness, transient capacity, and user access are separate states;**
-- **typed operations, never arbitrary shell execution;**
-- **routine Web administration should not require SSH;**
-- **bootstrap, destructive recovery, secrets, and break-glass operations remain CLI-only;**
-- **every privileged mutation is attributable, bounded, auditable, and fail-closed.**
+The former target reference Runners, **ESMFold2 and SimpleFold**, remain the
+motivating families, but their model-specific scientific equivalence is
+supplemental evidence here and separate acceptance work elsewhere.
 
-This is not a generic observability platform, not a remote shell, and not a redesign of Slurm, Apptainer, the task scheduler, or Runner scientific contracts.
+Do not redesign the persistent scheduler or build a new estimator.
 
 ---
 
 ## 0. Campaign position and dependencies
 
-This PR begins after the Soft Precision frontend work has merged.
+This is a **Wave 3** PR.
 
-At implementation start:
+It can proceed in parallel with the fleet-result/browser-golden PR after the
+Wave 2 dependencies have merged.
 
-1. read `CLAUDE.md` and `docs/agents/long-task-handling.md`;
-2. fetch/prune and inspect current `main`;
-3. inspect the final merged state of PR #46 and PR #47 if they have landed;
-4. reconcile only the surfaces actually affected by those PRs;
-5. create/use one PR-scoped implementation worktree and keep the repository root as Commander control plane.
+This is an infrastructure / execution-semantics change. Its merge-blocking
+evidence is CPU-executable (the Mock GPU Example Runner and the persistent
+runner's own tests); real-model scientific equivalence is supplemental and may
+require a GPU lease coordinated through the Commander, but is **not** a
+READY_FOR_FINAL_REVIEW gate here.
 
-Preserve:
-
-- #46 result-contract / authentic-artifact semantics;
-- #47 persistent/OOM provenance semantics;
-- the Soft Precision visual language already merged;
-- existing CLI command names and operator workflows unless a change is required for correctness.
-
-Do not mechanically rebase merely because `main` advances.
+Record model-level GPU evidence when a host provides it; do not use a host that
+cannot provide a runtime and then replace real evidence with a synthetic claim.
 
 ---
 
-## 1. Fix registry ownership before building the control plane
+## 1. Freeze the comparison contract before testing batch mode
 
-The recurring AF3 xdist failure is evidence that current plugin/TaskType discovery has nondeterministic mutable-state ownership.
+For each target Runner identify which parameters affect scientific output and
+which affect only resource/execution behavior.
 
-Investigate and fix the root cause rather than adding a local `discover_plugins()` call to one AF3 test.
+Create an explicit classification such as:
 
-Required invariant:
+```text
+scientific/effective parameters
+resource-only execution controls
+recovery controls
+provenance-only metadata
+```
 
-> A test, request, CLI command, or service must never depend on another process/test/request having populated a module-global registry first.
+Do not assume chunk size, sample count, MSA controls, kernel backend, precision,
+or similar controls are scientifically neutral without checking the Runner.
 
-The solution should make registry construction explicit, deterministic, and context-scoped.
-
-Acceptable implementation directions include a canonical registry snapshot/factory or an explicit discovery context. Choose the smallest design compatible with the existing architecture.
-
-Do not create a second plugin system.
-
-### Registry acceptance
-
-Prove that:
-
-- the same Runner tree/configuration produces the same registry snapshot;
-- isolated discovery does not leak into another test/request;
-- parallel tests cannot remove/replace another worker's Runner registration;
-- repeated discovery is idempotent;
-- an enabled-family set is honored deterministically;
-- unknown family/task lookup fails deterministically;
-- AF3 workflow-composer tests no longer depend on xdist scheduling order.
-
-Add a focused repeated xdist/random-order regression. Prefer repeatedly exercising the relevant registry/workflow tests over repeatedly running the complete test suite.
-
-A single green run is not sufficient evidence for this previously intermittent defect.
+The equivalence test must compare executions with the same **effective
+scientific parameters**, not merely the same user request.
 
 ---
 
-## 2. Extract one canonical Runner readiness/control core
+## 2. Select a bounded sequence panel
 
-The repository already has Runner readiness concepts and `runner-status`. Do not duplicate them for the Web UI.
+Use a small deterministic panel of approximately 3-5 protein sequences spanning
+meaningfully different lengths while remaining cheap enough for repeated GPU
+acceptance.
 
-Create/refactor a canonical service boundary that can be called by:
+Requirements:
 
-- `revocompute_ctl` CLI;
-- production submission admission;
-- Admin API;
-- tests.
+- exact sequence hashes;
+- no duplicate sequences;
+- at least one short, one medium, and one longer case that exercises scheduling
+  decisions without intentionally exhausting the GPU in the baseline run;
+- fixed seeds where the Runner exposes stochastic sampling;
+- stable provenance for the panel.
 
-Conceptually:
-
-```text
-Runner manifests + deployment config + Doctor + artifact provenance
-+ runtime bundle + execution contract + resource policy + test plan
-+ target-host live-test receipts
-                         |
-                         v
-            canonical Runner control/readiness core
-              /              |               \
-             /               |                \
-            v                v                 v
-        CLI JSON        admission gate      Admin API
-```
-
-The names/classes may differ; do not add abstraction solely to match this diagram.
-
-### Readiness remains derived
-
-Preserve the current state vocabulary unless current code proves a change is needed:
-
-- `NOT_CONFIGURED`
-- `NOT_BUILT`
-- `BUILD_STALE`
-- `NOT_VALIDATED`
-- `VALIDATION_STALE`
-- `READY`
-
-There must be no API such as:
-
-```text
-set_ready(true)
-```
-
-Administrators maintain evidence and initiate corrective operations. The evaluator derives the resulting state.
-
-### Cross-surface identity invariant
-
-For the same evidence snapshot:
-
-> CLI status == Admin API status == admission decision.
-
-State, reason code, and relevant evidence identity must agree.
-
-Do not let the Web layer derive readiness independently.
+Do not use huge proteins merely to force OOM in the equivalence phase.
 
 ---
 
-## 3. Keep readiness, capacity, and access physically separate
+## 3. Single-input baseline
 
-Do not collapse these into one "available" flag.
+Run every panel item independently with the canonical default/non-recovery path.
 
-The control/API/UI model must distinguish:
+Capture for each item:
 
-### Operational readiness
+- input hash;
+- requested parameters;
+- effective parameters;
+- model/runtime identity;
+- device profile relevant to deterministic behavior;
+- output artifact hashes;
+- scientific observables appropriate to that Runner.
 
-Whether the deployed Runner family has current, valid evidence required for new submissions.
+Define the observable comparison from artifact semantics.
 
-### Capacity
+For structure prediction this may include, as available:
 
-Transient execution availability such as scheduler/GPU occupancy.
+- residue count/sequence identity;
+- coordinates after appropriate atom matching/alignment;
+- per-residue confidence;
+- global confidence;
+- PAE or equivalent matrix;
+- number/order of samples.
 
-Capacity changes must not mutate readiness.
-
-### Access
-
-Whether a user is entitled to submit to a restricted Runner.
-
-Access changes must not mutate readiness.
-
-The Admin UI should be able to show states such as:
-
-```text
-Readiness   READY
-Capacity    No GPU currently free
-Access      Restricted
-```
-
-or:
-
-```text
-Readiness   VALIDATION_STALE
-Capacity    4 GPUs idle
-Access      Allowed
-```
-
-without implying contradiction.
-
-Existing `InfrastructureReadiness` is also distinct from per-Runner readiness. Reuse it where useful but do not merge the concepts.
+Do not rely on raw file-byte equality if harmless metadata/order makes that
+scientifically inappropriate.
 
 ---
 
-## 4. Introduce typed operator actions, never an arbitrary command API
+## 4. Persistent multi-input run
 
-Web administration may operate the existing control-module capabilities, but it must do so through typed actions.
-
-A valid control API looks conceptually like:
-
-```text
-runner.status
-runner.doctor
-runner.prepare
-runner.build
-runner.live_test
-runner.promote
-runner.repair
-```
-
-The exact action set should be derived from existing safe control-module capabilities.
-
-An invalid design is:
-
-```text
-operator.exec(command: str)
-POST /admin/run-command
-{"command": "..."}
-```
-
-Do not expose shell text, arbitrary argv, arbitrary environment variables, arbitrary paths, or arbitrary executables to the browser.
-
-### Web operation scope for this PR
-
-The Web Admin surface should support the routine Runner lifecycle when the existing control module already provides a safe underlying operation:
-
-- inspect current status/evidence;
-- run/refresh Doctor;
-- prepare/build a Runner candidate;
-- run bounded smoke/live validation;
-- promote a validated candidate;
-- request the shortest valid "repair readiness" plan and execute it;
-- inspect bounded logs/receipts/history;
-- cancel a cancellable in-flight operator job.
-
-Only expose service reload/restart if it can be represented as a narrow existing typed operation with a safe host boundary.
-
-Keep the following CLI-only unless there is an already-existing narrow, well-tested primitive that clearly makes Web exposure safe:
-
-- initial machine/bootstrap setup;
-- secret management;
-- password reset/bootstrap credentials;
-- database reset/destructive recovery;
-- arbitrary filesystem migration;
-- arbitrary service/process control;
-- arbitrary command execution.
-
-The CLI remains the break-glass/recovery surface and must not be removed.
-
----
-
-## 5. Host Operator Executor boundary
-
-Many control operations are host-level while the Web server may run inside a container.
-
-Do not solve this by giving the Web application:
-
-- a Docker socket;
-- arbitrary host filesystem access;
-- passwordless unrestricted sudo;
-- a generic host shell;
-- unrestricted Slurm/Apptainer command construction from request data.
-
-If Web-triggered operations require a host-side component, add the smallest dedicated **Operator Executor** boundary.
-
-It must:
-
-- accept only typed allowlisted operations;
-- accept canonical Runner IDs resolved from the registry;
-- validate every parameter against a strict schema;
-- use fixed executable/action mappings;
-- construct argv without `shell=True` or string interpolation;
-- use an allowlisted environment;
-- use bounded, owned working directories;
-- authenticate/authorize local requests;
-- fail closed when identity, plan, lease, or evidence is stale;
-- return structured progress/result records;
-- emit bounded/redacted logs;
-- never accept arbitrary command text.
-
-Prefer local-only IPC or an equivalently narrow deployment boundary; do not create a generally reachable remote administration daemon.
-
-Reuse existing deployment lease semantics instead of inventing a competing concurrency model.
-
----
-
-## 6. Plan before execute
-
-Dangerous or long-running Web actions must have an explicit plan.
-
-Example:
-
-```text
-Runner: SimpleFold
-Current state: VALIDATION_STALE
-Reason: RUNTIME_BUNDLE_CHANGED
-
-Plan:
-- reuse active SIF
-- reuse model assets
-- run smoke validation
-- write a new receipt
-- recompute readiness
-
-Will not:
-- rebuild SIF
-- restart server
-- cancel running scientific tasks
-```
-
-The control core should expose a typed plan with:
-
-- target;
-- requested operation/intent;
-- current state;
-- reason;
-- ordered effective actions;
-- expected state-changing effects;
-- operations explicitly not required;
-- lease scope;
-- whether explicit confirmation is required;
-- immutable plan/evidence digest.
-
-At execution time, revalidate the plan against current evidence.
-
-If the relevant evidence changed after the plan was produced, reject the stale plan and require replanning.
-
-Do not silently execute a different high-impact plan.
-
----
-
-## 7. Operator Jobs for long-running work
-
-Do not keep an HTTP request open for a SIF build or live test.
-
-Represent Web-triggered mutations as bounded Operator Jobs with an explicit lifecycle, for example:
-
-```text
-QUEUED
-RUNNING
-SUCCEEDED
-FAILED
-CANCELLING
-CANCELLED
-```
-
-Use the repository's conventions where possible.
-
-An Operator Job is not a scientific Task and must not be stored as one merely for convenience.
-
-Persist enough information to recover/audit:
-
-- job id;
-- action;
-- target Runner;
-- actor/user id;
-- request timestamp;
-- plan/evidence digest;
-- effective operation;
-- lease scope;
-- current stage;
-- start/end timestamps;
-- structured result;
-- resulting evidence/receipt identity;
-- failure category;
-- bounded log reference.
-
-Server restart must not make a completed operator action disappear from history.
-
-Do not build a general workflow engine.
-
----
-
-## 8. Concurrency, leases, cancellation, and idempotency
-
-Use explicit operation scopes.
-
-Examples:
-
-```text
-runner/simplefold     exclusive for build/validate/promote
-deployment            exclusive for deployment-wide mutation
-read-only status       concurrent
-```
+Run the same panel in one persistent task so the model remains loaded across
+items.
 
 Prove:
 
-- conflicting mutations cannot run concurrently;
-- read-only status/Doctor inspection is not unnecessarily blocked;
-- retries with the same idempotency key do not duplicate a mutation;
-- a repeated request with the same key but different body is rejected;
-- cancellation kills only the owned bounded process/job scope;
-- cancellation cannot accidentally cancel scientific Tasks;
-- a stale lease cannot authorize a later unrelated operation.
+- every input maps to exactly one result item;
+- no result is associated with another sequence;
+- item ordering changes do not cross-contaminate results;
+- the effective scientific parameter set for each item matches its single-run
+  baseline;
+- scientific observables match the single-run baseline within justified
+  Runner-specific tolerances;
+- an item failure does not silently relabel a later item's result;
+- durable item status survives process/task bookkeeping.
+
+Where deterministic exact equality is expected, assert it.
+Where floating/reduction-order differences are legitimate, derive measured
+tolerances and document them rather than widening them ad hoc.
 
 ---
 
-## 9. Admin Fleet Readiness UI
+## 5. Restart/resume equivalence
 
-Use the merged Soft Precision design language. Do not create a separate "ops dashboard" visual system.
+Exercise a controlled interruption after at least one item has completed.
 
-The Admin configuration/control surface should provide a fleet-level view with, at minimum:
+After restart/recovery prove:
 
-- Runner family;
-- enabled/deployed state;
-- readiness;
-- machine-readable reason rendered as understandable human copy;
-- transient capacity as a separate field;
-- access restriction as a separate field;
-- active artifact/runtime identity;
-- last validation time/evidence;
-- evidence freshness;
-- recommended corrective action;
-- in-flight operator action, if any.
+- completed items are not recomputed unless the contract explicitly requires it;
+- pending items continue;
+- no item is duplicated or lost;
+- restored execution uses the same immutable task/input snapshot;
+- already published item results remain unchanged;
+- final aggregate manifest has one coherent item identity set.
 
-Support useful filtering/sorting such as readiness state, stale/failed, enabled, and family name.
+Compare resumed results against the uninterrupted persistent baseline.
 
-Avoid decorative charts unless the repository has real aggregate data that genuinely benefits from one.
+---
 
-### Runner detail
+## 6. Forced OOM test boundary
 
-A Runner detail/operator drawer/page should expose evidence lanes such as:
+Only after ordinary single-vs-persistent equivalence is established, exercise
+the adaptive OOM path.
+
+Use deterministic test hooks or a bounded live case capable of triggering the
+existing recovery mechanism without risking node stability.
+
+Do not create an intentionally dangerous allocation simply to produce a real
+OOM if the same recovery state can be safely induced by an existing supported
+test mechanism.
+
+The purpose is to audit recovery semantics, not stress the cluster.
+
+---
+
+## 7. Requested versus effective provenance
+
+For every item/attempt, persist enough provenance to reconstruct:
 
 ```text
-Doctor
-Build / active SIF identity
-Runtime bundle
-Execution contract
-Resource policy
-test.yaml / required smoke coverage
-Live-test receipt
-Target host / scheduler identity
-Current invalidation reason
+requested parameters
+estimator recommendation
+attempt number
+recovery rung/action
+effective parameters
+device/profile identity
+OOM/failure observation that justified the transition
+final successful parameter set
 ```
 
-Where reliable evidence already exists, also show clearly separate non-operational evidence such as result-contract coverage or scientific/reference evidence.
+Use existing attempt/resource observation stores when possible.
 
-Do not manufacture new "PASS" badges when no authoritative source exists.
+Do not create a second opaque provenance database.
 
-### Corrective actions
+The final Result/receipt surface must make scientifically meaningful mutations
+auditable. A user should not have to infer them from scheduler logs.
 
-Actions shown in the UI must be state-aware.
+---
 
-Examples:
+## 8. Scientific-impact classification of recovery actions
+
+Audit every existing recovery action used by ESMFold2/SimpleFold.
+
+Classify it as:
+
+- resource-only, expected not to change scientific result;
+- numerical/backend change that may change floating behavior;
+- scientific-output change (for example changing samples/MSA/model behavior);
+- unsupported/unsafe for automatic mutation.
+
+For a resource-only recovery action, verify the final result remains equivalent
+to the no-recovery baseline within the established comparator.
+
+For a scientifically meaningful mutation, do **not** call the result equivalent
+to the original request. Instead prove the requested/effective divergence is
+explicit in provenance and user-visible result metadata where appropriate.
+
+Automatic recovery must never silently change a scientific parameter.
+
+---
+
+## 9. Monotonicity and retry discipline
+
+Preserve the existing bounded OOM design.
+
+Verify:
+
+- no-op recovery plans do not consume a misleading scientific transition;
+- the recovery ladder is monotone with respect to intended resource relief;
+- retry count remains bounded;
+- a measurement-hook failure does not masquerade as an OOM;
+- evidence from incompatible Runner/model/device revisions is not pooled
+  silently;
+- all-failed tasks remain failed with non-zero/terminal failure semantics.
+
+Do not redesign the estimator unless a correctness defect is required to satisfy
+these invariants.
+
+---
+
+## 10. Result provenance
+
+Extend the smallest existing result/provenance surface necessary so downstream
+users and tests can tell:
 
 ```text
-VALIDATION_STALE + RUNTIME_BUNDLE_CHANGED
-→ Validate now
-→ no rebuild required
-
-BUILD_STALE
-→ Prepare/rebuild candidate
-→ validate
-→ promote
+requested == effective
 ```
 
-Provide an intent-level "Repair readiness" flow only when the canonical control core can produce a safe plan.
-
-Admin should understand the planned impact before confirmation.
-
----
-
-## 10. Readiness and operator history
-
-Add/reuse a bounded append-only operational history sufficient to answer:
-
-> Why was this Runner READY yesterday and not READY now, and what operation restored it?
-
-Prefer existing operational-event/audit infrastructure.
-
-Record meaningful transitions and operations, not every polling refresh.
-
-A useful timeline can contain:
+or
 
 ```text
-READY
-→ runtime bundle changed
-→ VALIDATION_STALE
-→ admin requested repair
-→ live-test started
-→ receipt written
-→ READY
+requested != effective because OOM recovery selected <action>
 ```
 
-Each mutation entry must include actor, action, target, timestamps, before/after evidence/state, outcome, and relevant receipt/job identity.
+for each item.
 
-Do not create a second general event platform.
+Keep diagnostics subordinate to the scientific result, but do not hide a
+scientific mutation.
 
----
-
-## 11. Security model and multi-level test coverage
-
-Security acceptance is a first-class merge gate.
-
-Implement layered tests. Do not rely on one browser test or one route-level authorization assertion.
-
-### Level 0 — pure schema/state-machine tests
-
-Test the lowest-level typed control model without HTTP/process execution.
-
-Required cases:
-
-- action names are a closed enum/registry;
-- unknown actions fail closed;
-- Runner IDs must resolve canonically from the discovered registry;
-- illegal state transitions are rejected;
-- plans are deterministic for identical evidence;
-- stale plan/evidence digests are rejected;
-- operation parameters have explicit type/range/length bounds;
-- no action model contains generic command/argv/env/path injection fields;
-- logs/events apply control-character normalization and secret redaction;
-- operator job state transitions reject impossible regressions.
-
-### Level 1 — API authentication/authorization tests
-
-For every privileged mutation endpoint prove:
-
-- anonymous request -> rejected;
-- authenticated non-admin -> rejected;
-- admin without the required strong mutation-auth boundary -> rejected;
-- authorized admin -> only allowed typed operation;
-- wrong HTTP method -> rejected;
-- malformed body -> rejected;
-- extra/unknown fields -> rejected where practical;
-- oversized body/parameter -> rejected or bounded;
-- invalid/stale idempotency key semantics -> rejected;
-- sensitive evidence is omitted from non-admin projections.
-
-Preserve the repository's existing bearer-auth requirement for privileged admin mutations. Do not weaken an existing state-changing route to session-only authorization merely for UI convenience.
-
-### Level 2 — injection and input-boundary tests
-
-Use adversarial parameter cases, including at least:
-
-```text
-;
-&&
-|
-$(...)
-`...`
-newline / CRLF
-../
-absolute paths
-slashes in Runner IDs
-leading dash
-Unicode confusables where relevant
-NUL/control characters
-very long identifiers
-URL-encoded traversal forms
-```
-
-Prove these values cannot:
-
-- select another Runner;
-- inject an argv element;
-- add an environment variable;
-- alter a path outside the owned root;
-- forge a log line/event;
-- reach a shell.
-
-Do not add a generic shell parser to "sanitize" arbitrary commands; arbitrary commands must not exist in the API.
-
-### Level 3 — executor/process/IPC boundary tests
-
-If a host Operator Executor is introduced, test:
-
-- only allowlisted operations are accepted;
-- forged/unauthenticated local requests fail;
-- stale plan digests fail;
-- Runner identity is re-resolved server-side;
-- argv is fixed/structured and never shell-evaluated;
-- environment is allowlisted;
-- working directory is bounded and symlink-safe;
-- output/log size is bounded;
-- secrets/tokens/environment credentials do not appear in returned logs;
-- timeout terminates the whole owned process group;
-- cancellation cannot kill unrelated processes;
-- executor unavailable -> Web operation fails closed with no partial readiness mutation.
-
-### Level 4 — concurrency/idempotency tests
-
-Test:
-
-- two conflicting mutations on one Runner;
-- build vs promote race;
-- validate vs promote race;
-- duplicate submission/retry;
-- stale lease recovery;
-- non-conflicting read while mutation runs;
-- restart/recovery of an Operator Job record;
-- no double receipt/promotion from retries.
-
-### Level 5 — server/integration tests
-
-Prove with real control-core objects that:
-
-- CLI JSON, Admin API, and admission evaluate the same readiness state/reason/evidence;
-- receipt invalidation changes `READY -> VALIDATION_STALE`;
-- build-input change changes readiness according to the existing contract;
-- valid revalidation restores `READY`;
-- capacity changes do not mutate readiness;
-- access changes do not mutate readiness;
-- infrastructure readiness changes do not silently rewrite Runner readiness;
-- an operation that fails midway leaves evidence in a safe, explainable state.
-
-Use fakes for expensive external execution where the contract is what is under test. Do not require real GPU/SIF merely to test authorization and orchestration.
-
-### Level 6 — browser acceptance
-
-Using the existing browser/fixture harness, cover at least:
-
-- non-admin cannot enter/use the operator surface;
-- Admin fleet table shows distinct readiness/capacity/access;
-- READY, NOT_BUILT, BUILD_STALE, NOT_VALIDATED, VALIDATION_STALE, NOT_CONFIGURED render with meaningful corrective guidance;
-- a plan is displayed before a state-changing routine operation;
-- confirmation is required for activation/promotion-class actions;
-- an Operator Job progresses through state without blocking the page;
-- failure/cancellation is visible and actionable;
-- stale evidence forces replanning;
-- history shows the resulting transition;
-- no arbitrary text field accepts a shell command.
-
-### Level 7 — deterministic parallel-registry regression
-
-Add a focused CI regression that repeatedly exercises discovery and the AF3 workflow-composer path under xdist/parallel execution.
-
-The regression should fail if plugin state depends on test scheduling.
-
-Do not mask the failure with retries that merely rerun until green.
+If the current ResultManifest already has an appropriate provenance channel,
+use it. Do not introduce a ResultManifest v4 merely for convenience.
 
 ---
 
-## 12. Permission tiers
+## 11. Required tests
 
-Document and enforce a conservative Web/CLI capability matrix.
+### Fast/unit/integration
 
-Suggested model:
+Cover:
 
-| Capability | CLI | Admin Web |
-| --- | --- | --- |
-| status/evidence | yes | yes |
-| Doctor | yes | yes |
-| live/smoke validation | yes | yes |
-| prepare/build | yes | yes, typed job |
-| promote/activate | yes | yes, explicit confirmation |
-| readiness repair plan | yes | yes |
-| bounded logs/history | yes | yes |
-| service-wide restart | yes | only if a narrow safe primitive already exists |
-| bootstrap/setup | yes | no |
-| secrets | yes/operator-only | no |
-| destructive reset/recovery | yes/break-glass | no |
-| arbitrary shell | no control API requirement | never |
+- per-item requested/effective parameter capture;
+- mapping of item identity to output;
+- order independence;
+- restart reconstruction;
+- duplicate/lost-item prevention;
+- forced OOM transition;
+- bounded retries;
+- recovery action classification;
+- provenance persistence;
+- all-failed behavior.
 
-The CLI may remain more powerful because it operates in an explicit operator/SSH context.
+### Merge-blocking acceptance (CPU-executable, no GPU required)
 
-Do not remove CLI capability merely because Web coverage exists.
+Proven end-to-end on the **Mock GPU Example Runner** and the persistent runner's
+own tests. This is the claim READY_FOR_FINAL_REVIEW rests on:
 
----
+1. one input maps to exactly one committed result, in input order, independent of
+   execution order (no cross-contamination, duplicate, or lost item);
+2. restart/resume keeps committed items, loses none, and recomputes when the
+   immutable input snapshot differs;
+3. a real (pseudo-device) OOM walks the declared, bounded, monotone fallback
+   ladder; no-op plans consume no attempt;
+4. every recovery action carries its scientific-impact class; a plan naming a
+   scientific parameter is refused before execution and recorded;
+5. per-attempt requested-versus-effective provenance persists in `work_items.json`
+   and is republished by the server projection.
 
-## 13. API contract
+### Supplemental: real-model scientific validation
 
-Expose the smallest typed Admin API necessary for:
-
-- fleet readiness list;
-- family detail/evidence;
-- readiness history;
-- operation planning;
-- operation creation;
-- operator job status/logs;
-- cancellation where supported.
-
-Keep schema ownership in OpenAPI and regenerate checked-in frontend types.
-
-Never hand-edit generated TypeScript.
-
-Do not expose host paths, secret values, raw environment dumps, unrestricted command lines, or sensitive credentials in API responses.
-
-Use stable machine-readable reason/action/state codes and let the frontend localize explanatory copy.
+Recorded when a host provides the runtime; **not** a merge gate for this
+infrastructure change. See §11a for what was obtained and what remains deferred.
 
 ---
 
-## 14. CLI compatibility
+## 11a. Evidence layers
 
-The existing control CLI remains first-class.
+This PR rests on three distinct evidence layers, and must never blur them. The
+first is the merge-blocking one; the other two are supplemental:
 
-Where implementation is refactored into the shared control core:
+1. **Mock GPU reference Runner** (`docker/runners/mock_gpu_example/`) ->
+   *orchestration/recovery/provenance correctness*. It drives the real
+   `PersistentTask` lifecycle, the bounded recovery ladder, per-attempt recovery
+   provenance, restart/resume identity, and the server projection, end to end, on
+   a configurable **pseudo-device** with no GPU, model, weights, or production
+   SIF. It proves the mechanism and makes no scientific claim about any real
+   model.
+2. **Real ESMFold2 / SimpleFold runtime** -> *model-specific scientific
+   validation* (supplemental; see the SimpleFold result below; ESMFold2 is an
+   evidenced hardware limit on this device).
+3. **Production SIF + Slurm** — the *deployment/package* integration, exercised
+   by the live-test receipt and Doctor gates.
 
-- preserve existing command names and documented flags unless correctness requires otherwise;
-- preserve stable JSON output contracts where already documented/consumed;
-- preserve agent-friendly non-interactive execution;
-- do not require Web/server availability for CLI bootstrap/recovery commands;
-- preserve the ability to diagnose a server that cannot start.
+Layer 1 is complete in-repo, runs in CI, and is the merge-blocking evidence here.
+Layers 2 and 3 are supplemental for this infrastructure change. On layer 2, the
+available accelerator provides model-level evidence for only one of the two
+motivating Runners:
 
-CLI must not become an HTTP client to the running Web application for operations that need to work during Web/server failure.
+### Measured accelerator feasibility (lab309, Quadro P4000 8084 MiB, CC 6.1)
 
----
+Probed with the pinned upstream code and the sha256-verified released weights,
+**outside** the production SIF.
 
-## 15. Documentation
+#### ESMFold 2 — definitively infeasible on this device
 
-Update durable docs to explain:
+The ESMC-6B backbone alone is **23.66 GiB fp32 (25,408,148,888 bytes across six
+sha256-verified shards) = 11.83 GiB fp16**, against a device with 7.90 GiB total
+/ 7.07 GiB free. A direct device allocation of the exact backbone byte size
+fails at fp32 and at fp16 (`CUDA out of memory ... 7.90 GiB capacity ... 7.07
+GiB free`); even the fp16 representation exceeds the device before any structure
+module or activation. Pascal cc6.1 supports fp16 but not bf16/TF32, and no
+supported precision or the family's own `cpu_offload`/`chunk_size` controls
+reduce a 23.66 GiB resident backbone to fit. No forward pass is attempted
+because the first shard cannot be placed.
 
-- one control plane / two surfaces;
-- the Runner readiness derivation model;
-- readiness vs capacity vs access vs infrastructure;
-- CLI vs Admin Web permission boundary;
-- typed operator actions;
-- Operator Job lifecycle;
-- plan/execute/revalidate semantics;
-- lease/concurrency semantics;
-- audit/history;
-- recovery when the Web UI or executor is unavailable;
-- which operations intentionally remain CLI-only;
-- security threat model and trust boundaries.
+#### SimpleFold — model-level layer-2 equivalence OBTAINED
 
-Do not duplicate the complete CLI manual into the Admin guide.
+The pinned `ml-simplefold` revision (c7a5570a6be9f5c695126e27c804e77567209934)
+was run on the real P4000 (torch 2.9.0+cu126, CUDA 12.6) with the released,
+sha256-verified `simplefold_1.6B.ckpt`
+(`aaac2d73…`) and `esm2_t36_3B_UR50D.pt` (`7de8b408…`). A bounded 3-sequence
+panel was executed twice — once as independent single-input runs, once in one
+model-resident multi-item process (ESM conditioning computed once per item,
+folding model loaded once, items consumed in turn) — at **fixed effective
+scientific parameters** (model `simplefold_1.6B`, `num_steps=50`, `tau=0.01`,
+multiplicity 1, per-item seed `base_seed + item_order`).
 
----
+| item | length | seq sha256 (first 16) | item seed | single coords sha256 (first 16) | multi-item coords sha256 (first 16) |
+| --- | ---: | --- | ---: | --- | --- |
+| item0 | 52 | `444a15b706a32daa` | 42 | `ec99873dc04a65e5` | `ec99873dc04a65e5` |
+| item1 | 51 | `932d0841f4b170c9` | 43 | `c31a1bcb88f087fa` | `c31a1bcb88f087fa` |
+| item2 | 50 | `4538294bd1311cd9` | 44 | `aabdd1cba3efe460` | `aabdd1cba3efe460` |
 
-## 16. Explicit scope exclusions
+Single vs multi-item were **BITWISE IDENTICAL** for every item — identical
+denoised-coordinate tensors and identical output mmCIF sha256. This is per-item
+identity mapping with no cross-contamination, no duplicate or lost item, and
+result order-independence under one model-resident process. Peak device memory
+was ~6159 MiB single / ~6202 MiB multi-item.
 
-Do not:
+**Scope of this evidence.** This proves **model-level** determinism and
+persistence: the real pinned model, sampling algorithm, featurization, and
+per-item seeding, order-independent and reproducible across single vs multi-item
+execution. It was obtained **outside** the reviewed plugin's own
+`initialize_runtime`, which co-resides the folding model with ESM-2 3B (fp32)
+and OOMs on this 8 GiB device (folding model 6.10 GiB, then the second
+foldingdit latent module cannot be placed). Execution through the reviewed
+`SimpleFoldPlugin`/Runner path — its own `pl.seed_everything(seed + group_start)`
+seeding, its `_sample_group` loop, and its `process_fastas` path — was **not
+exercised** and remains deferred; making it fit here would be a production-CUDA
+change. This evidence does **not** assert that the reviewed plugin's persistent
+execution is scientifically verified.
 
-- remove or deprecate the CLI;
-- add a generic shell/command endpoint;
-- expose Docker socket or unrestricted sudo to the Web app;
-- build a generic workflow engine;
-- build a new scheduler;
-- redesign Slurm;
-- redesign Apptainer/SIF packaging;
-- redesign Runner scientific contracts;
-- make queue occupancy part of readiness;
-- make user entitlement part of readiness;
-- make infrastructure readiness equivalent to Runner readiness;
-- add Prometheus/Grafana merely for this feature;
-- bulk-"fix" every unaudited Runner from #46;
-- add new scientific Runners;
-- reopen Soft Precision visual redesign;
-- silently mark a Runner READY from an admin button.
-
----
-
-## 17. Test and quality gates
-
-At minimum run the affected:
-
-- registry/plugin discovery tests;
-- AF3 workflow-composer regression repeatedly under xdist;
-- Runner readiness/admission tests;
-- control CLI tests;
-- Admin auth/security tests;
-- Operator Executor/job tests;
-- concurrency/idempotency tests;
-- OpenAPI/type generation checks;
-- frontend unit tests;
-- Admin browser tests;
-- ServerComposeFullStack where the host/executor boundary changes;
-- `mkdocs build --strict`;
-- `git diff --check`.
-
-Do not waive a new security failure as a flaky test.
-
-The known historical AF3 xdist failure is part of this PR's target and may no longer be treated as an unrelated accepted flake after this PR claims to fix it.
-
----
-
-## 18. Pre-final review cell
-
-Before `READY_FOR_FINAL_REVIEW`, run three independent reviews at the exact implementation-complete head:
-
-1. **Security / privilege-boundary review**
-   - authentication/authorization;
-   - command injection;
-   - host boundary;
-   - least privilege;
-   - logs/secrets;
-   - concurrency/idempotency;
-   - fail-closed behavior.
-
-2. **Control/readiness correctness review**
-   - registry determinism;
-   - readiness derivation;
-   - CLI/API/admission equivalence;
-   - invalidation/restoration semantics;
-   - evidence ownership.
-
-3. **Admin UX / integration review**
-   - usable routine operations;
-   - plan/execute clarity;
-   - readiness/capacity/access separation;
-   - browser acceptance;
-   - Soft Precision consistency;
-   - no frontend-owned operational truth.
-
-Reviewers are independent until findings are submitted. Consolidate findings into one bounded correction set. Use targeted rechecks after fixes.
-
-A security reviewer may block the PR even when functional tests are green.
+The comparison also established the adaptive-OOM boundary on the real model:
+multiplicity-1 draws everything; explicit-multiplicity probes measured peak 6312
+MiB (×4), 6517 (×8), 6911 (×16) and **OOM at ×32**, so a scientific-output
+`sample_group_size` rung is the natural OOM recovery and lowers instantaneous
+memory. The review panel itself ran at multiplicity 1.
 
 ---
 
-## 19. Definition of done
+## 12. Gates
 
-This PR is complete when the repository can prove all of the following:
+Run existing persistent-runner tests, ESMFold2 and SimpleFold protocol tests,
+OOM estimator/recovery tests, result provenance tests, the Mock GPU Example
+Runner tests, and the appropriate non-browser repository gate.
 
-> Plugin/Runner discovery is deterministic under parallel test execution.
+Run targeted browser/result tests only if the user-visible provenance surface is
+changed.
 
-> Runner readiness has one canonical evaluator used by CLI, admission, and Admin API.
+Run `mkdocs build --strict` when docs change and `git diff --check`.
 
-> Admin can inspect and maintain routine Runner readiness through a usable Web UI without SSH.
-
-> CLI remains available, automation-friendly, and more powerful for bootstrap/recovery.
-
-> Web-triggered control operations are typed, planned, auditable Operator Jobs rather than arbitrary shell commands.
-
-> Readiness is derived from current evidence and cannot be manually toggled.
-
-> Readiness, transient capacity, access entitlement, and infrastructure state remain separate.
-
-> Privileged operations are protected by multiple independent layers of authentication, authorization, schema validation, executor isolation, lease/idempotency controls, bounded/redacted output, and adversarial tests.
-
-> A failed or unavailable executor fails closed and cannot silently create READY evidence.
-
-> For one representative Runner, an Admin can observe a stale state, inspect why, obtain a corrective plan, execute the allowed remediation, watch progress, inspect evidence/history, and observe the same final readiness in Admin UI, CLI JSON, and submission admission.
-
-The final PR report must include:
-
-- exact final head;
-- registry/AF3 repeated parallel-regression evidence;
-- security test matrix and results;
-- CLI/API/admission equivalence evidence;
-- representative Admin repair-flow browser evidence;
-- any deliberately CLI-only operations;
-- known limitations;
-- three-way pre-final review disposition.
-
-Do not merge.
+The merge-blocking evidence for this infrastructure change is CPU-executable and
+present in CI: the Mock GPU Example Runner and the persistent runner's own tests.
+Real-model GPU acceptance is supplemental and is **not** required before
+`READY_FOR_FINAL_REVIEW` here.
 
 ---
 
-## 20. Operational resilience, rollback, and failure-drill requirements
-
-The control plane must remain understandable and recoverable when operations fail, the Server restarts, the executor disappears, or evidence changes mid-flight.
-
-The governing invariant is:
-
-> **No operator action may leave REvoCompute in a state that is less explainable than before the action.**
-
-After any build, validate, promote, repair, cancel, crash, restart, timeout, or executor failure, an administrator must still be able to answer:
-
-- what state the Runner is in now;
-- why it is in that state;
-- which operation was requested;
-- which effective actions actually ran;
-- how far the operation progressed;
-- whether the active artifact changed;
-- which evidence/receipt was created or invalidated;
-- what the next safe corrective action is.
-
-These requirements are part of the merge gate.
-
-### 20.1 Promotion atomicity and rollback
-
-Treat activation/promotion as an atomic control-plane transition.
-
-A promotion must bind:
-
-```text
-previous active identity
-candidate identity
-validation receipt identity
-expected evidence digest
-new active identity
-```
-
-The candidate validated must be the candidate promoted.
-
-Reject the operation if the candidate, receipt, runtime bundle, policy, or relevant evidence identity changes between plan and execution.
-
-A partially completed promotion must never leave admission pointing at an artifact whose provenance cannot be reconstructed.
-
-Where the existing runtime/deployment model can support it safely, expose a typed rollback to the immediately previous **known validated** active artifact.
-
-Rollback must:
-
-- target only a control-core-known artifact identity;
-- never accept an arbitrary filesystem path;
-- preserve provenance of the rollback source and destination;
-- not affect already-running scientific Tasks;
-- apply only to later submissions;
-- require explicit confirmation in Web;
-- record actor, reason, before/after identities, and outcome.
-
-Do not invent a generic artifact browser merely to support rollback.
-
-If safe rollback cannot be implemented within the existing deployment model, keep it CLI-only and document the limitation rather than approximating it unsafely.
-
-### 20.2 Snapshot identity and stale-page protection
-
-Every Runner readiness/detail response used for planning a mutation must expose a stable current snapshot identity, such as:
-
-```text
-evaluated_at
-evidence_digest / revision
-```
-
-The exact representation may follow existing repository conventions.
-
-Plans must bind to that snapshot identity.
-
-Before execution, the server/control core must re-evaluate relevant evidence and reject a stale plan if the snapshot changed.
-
-This protects against:
-
-- an Admin tab left open for a long time;
-- a second administrator changing the same Runner;
-- an agent/CLI operation occurring between plan and confirm;
-- a new receipt being written;
-- a runtime bundle or policy change;
-- deployment reconciliation changing active identity.
-
-The Web UI must surface stale-plan rejection as:
-
-> State changed; review the new plan.
-
-Do not silently re-plan and execute a materially different mutation under the old confirmation.
-
-### 20.3 Operator Job restart/orphan reconciliation
-
-Persisted Operator Jobs must have explicit recovery semantics.
-
-After Server or executor restart, a job previously recorded as `RUNNING` must not:
-
-- remain permanently RUNNING without investigation;
-- be blindly marked FAILED;
-- be automatically executed again;
-- repeat a promotion or receipt-writing side effect.
-
-On recovery, reconcile the durable job record with the actual owned execution/evidence state.
-
-Use a state such as `RECONCILING` / `ORPHANED` only if useful to the existing state model; do not add states merely to mirror this wording.
-
-Recovery must determine, where possible:
-
-- whether the owned process/job still exists;
-- whether the operation completed before the restart;
-- whether a candidate/receipt/promotion was actually produced;
-- whether a lease is still valid;
-- whether cancellation was requested;
-- whether a retry is safe.
-
-Irreversible or idempotency-sensitive operations must never be repeated automatically without proof that the prior attempt had no effect.
-
-### 20.4 Executor unavailable is a supported degraded mode
-
-The Admin control surface must remain useful when the Host Operator Executor is unavailable.
-
-In that state:
-
-- readiness/evidence/history remain viewable when their server-side sources are available;
-- mutation actions are disabled/fail closed;
-- the UI clearly reports `Operator executor unavailable`;
-- no existing READY evidence is fabricated, cleared, or rewritten merely because the executor is offline;
-- no long-running HTTP retry loop blocks the Admin page.
-
-Executor availability is an operational capability, not Runner readiness itself.
-
-Do not make the whole Admin configuration page depend on the executor being online.
-
-### 20.5 Bounded operator queue and anti-flood behavior
-
-Protect the control plane from accidental operation floods, browser retries, automation loops, and multiple administrators.
-
-Add bounded controls appropriate to the existing architecture, including:
-
-- one conflicting mutation lease per Runner scope;
-- a bounded global/operator queue;
-- idempotency for mutation creation;
-- rejection or coalescing of duplicate in-flight intents where safe;
-- conservative request/rate bounds for mutation endpoints;
-- no unbounded job creation from repeated clicks or network retries.
-
-This is operational safety, not user-throttling policy.
-
-Do not create a general rate-limiting framework if a small bounded mechanism is sufficient.
-
-### 20.6 Requested intent versus effective actions
-
-Audit/history must record both what the operator requested and what the control core actually executed.
-
-Example:
-
-```text
-requested_intent = repair_readiness
-effective_actions = [live_test]
-```
-
-Do not collapse this into only:
-
-```text
-repair succeeded
-```
-
-For each mutation record, preserve where applicable:
-
-- requested intent;
-- plan identity;
-- effective action sequence;
-- target;
-- before snapshot;
-- after snapshot;
-- actor;
-- timestamps;
-- outcome;
-- created/invalidated artifact or receipt identities;
-- cancellation/timeout/failure reason.
-
-This is especially important for agent-driven CLI operations and later forensic review.
-
-### 20.7 Equivalent CLI visibility
-
-Where a Web operation has a stable existing CLI equivalent, the Admin plan/detail view may show it as **read-only reference text**.
-
-This is for operator understanding and handoff between human/Web and agent/SSH workflows.
-
-It must never be used as the execution mechanism and must never become an editable shell field.
-
-The Web implementation still calls the typed control core / Operator Job path, not the displayed command.
-
-Do not fabricate an equivalent CLI string when no stable CLI operation exists.
-
-### 20.8 Prefer bounded polling over new realtime infrastructure
-
-Operator Job progress must be usable without introducing a new realtime stack.
-
-Prefer bounded polling using the existing frontend/API architecture.
-
-Do not add WebSocket/SSE infrastructure solely for this PR unless evidence demonstrates that polling cannot satisfy the required UX or load envelope.
-
-### 20.9 End-to-end failure drill
-
-In addition to the successful representative repair flow required above, add one representative failure/recovery acceptance path.
-
-It should prove a sequence equivalent to:
-
-```text
-VALIDATION_STALE
-→ plan repair
-→ start Operator Job
-→ effective validation begins
-→ operation fails
-→ no false READY state is produced
-→ failure and partial progress are recorded
-→ active artifact identity remains explainable
-→ Admin obtains a fresh plan
-→ retry/recovery succeeds
-→ new receipt is recorded
-→ READY
-```
-
-The test may use bounded fakes/reference execution where the control contract is the subject under test.
-
-It must not require a real GPU or large scientific runtime merely to prove control-plane failure semantics.
-
-### 20.10 Additional security/resilience tests
-
-Extend the multi-level security matrix with explicit cases for:
-
-- TOCTOU between plan and execute;
-- candidate/receipt mismatch at promotion;
-- rollback to an unknown/unvalidated artifact;
-- duplicate promotion request;
-- Server restart during an Operator Job;
-- executor restart during an Operator Job;
-- orphaned RUNNING job reconciliation;
-- executor unavailable before job creation;
-- executor loss during execution;
-- stale browser snapshot;
-- two Admins planning/executing against the same Runner;
-- mutation flood / repeated-click behavior;
-- audit log preservation of requested versus effective action;
-- secret redaction after subprocess failure;
-- cancellation followed immediately by a conflicting mutation;
-- active-artifact invariants after failed promote/rollback.
-
-At least one integration/browser path must demonstrate that a failed privileged operation leaves the Admin UI with an accurate, explainable state and a safe next action.
-
-### 20.11 Supplement to Definition of done
-
-Before `READY_FOR_FINAL_REVIEW`, additionally prove:
-
-> Promotion cannot activate an artifact different from the one validated by the accepted plan.
-
-> Stale plans fail closed rather than silently executing against new evidence.
-
-> Server/executor restart cannot duplicate an irreversible operator action.
-
-> Executor unavailability degrades mutation capability without destroying observability.
-
-> Failed/cancelled operations preserve an explainable active-artifact/readiness state and auditable requested/effective history.
-
-> Routine Admin operation floods and conflicting mutations are bounded by leases, idempotency, and queue limits.
-
-> One failure drill demonstrates failure → no false READY → replan/retry → successful evidence restoration.
-
-These additions strengthen the existing control-plane scope; they must not be used as justification to introduce a generic workflow engine, remote shell, new scheduler, or unrelated deployment framework.
-
+## 13. Scope exclusions
+
+Do **not**:
+
+- add Triton;
+- replace the existing estimator with a new ML architecture;
+- redesign PersistentRunner;
+- redesign Slurm scheduling;
+- generalize immediately to every batch-capable Runner;
+- treat a completed task as proof of scientific equivalence;
+- use byte equality where the format has irrelevant nondeterministic metadata;
+- hide requested/effective parameter divergence;
+- widen scientific tolerances just to make the campaign green.
+
+---
+
+## 14. Definition of done
+
+The repository must be able to prove:
+
+> Persistent multi-item execution preserves item identity and deterministic
+> execution semantics; restart/resume is coherent; adaptive-OOM transitions are
+> bounded, scientifically classified, fail closed for unsafe mutations, and
+> expose requested-versus-effective provenance.
+
+This is proven for the persistent machinery, end to end, by the Mock GPU
+reference Runner and the persistent runner's own tests (§11a, §12), and runs in
+CI without physical GPU hardware. That mechanism-layer proof is the merge gate.
+
+Supplemental real-model evidence, recorded here but **not** a gate:
+
+- **SimpleFold** — model-level single vs multi-item execution is bitwise
+  identical under the tested pinned model/parameters, with sha256-verified
+  weights (§11a). The reviewed `SimpleFoldPlugin`/Runner path itself was **not**
+  exercised on this device (its `initialize_runtime` OOMs) and is **not** claimed
+  as verified.
+- **ESMFold2** — cannot fit the available P4000; the measured memory evidence is
+  recorded (§11a). Model-specific ESMFold2 equivalence is separate acceptance
+  work on a larger GPU and is not required here.
+
+The Mock GPU reference Runner proves orchestration, recovery, and provenance
+correctness only; it does **not** prove model-specific scientific equivalence.

@@ -12,16 +12,18 @@ that make the snapshot reproducible regardless of which test ran before.
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 import pytest
-from revocompute.access_control import list_policies, set_active_policies
+from revocompute.access_control import AccessPolicy
 from revocompute.task_types import (
     active_plugin_manager,
     discover_plugins,
     get,
     isolated_discovery,
     list_categories,
+    list_policies,
     list_types,
 )
 
@@ -163,8 +165,7 @@ def test_reads_without_an_installed_snapshot_are_empty_not_stale(tmp_path):
 
     original = task_types._state
     try:
-        set_active_policies({})
-        task_types._state = task_types._RegistryState()
+        task_types._install_snapshot(task_types._RegistryState())
         assert list_types() == []
         assert list_categories() == []
         assert list_policies() == []
@@ -172,3 +173,92 @@ def test_reads_without_an_installed_snapshot_are_empty_not_stale(tmp_path):
             get("alpha")
     finally:
         task_types._install_snapshot(original)
+
+
+def test_access_policies_have_a_single_owner(tmp_path):
+    """The installed snapshot is the only source of the active access policies.
+
+    Registry discovery used to publish policies in *two* places: the snapshot
+    and an ``access_control`` module global updated by a second call.  A reader
+    that resolved the two via different paths could pair new tasks with old (or
+    half-cleared) policies.  Pin the invariant that removed the second owner.
+    """
+    import revocompute.access_control as access_control
+    import revocompute.task_types as task_types
+
+    # No process-global active-policy store survives in access_control: it owns
+    # parsing and admission only, not live state.
+    for stale in ("_policies", "set_active_policies", "list_policies", "get_policy", "declared_entitlements"):
+        assert not hasattr(access_control, stale), f"access_control still owns live policy state via {stale!r}"
+
+    # The registry snapshot is where a reader resolves policies from: discovery
+    # publishes the policies it parsed together with the tasks it parsed.
+    _family(tmp_path, "alpha", policy="alpha_policy")
+    discover_plugins(str(tmp_path))
+    assert [policy.id for policy in task_types.list_policies()] == ["alpha_policy"]
+
+
+def test_tasks_categories_and_policies_switch_in_one_published_step(tmp_path):
+    """A reader can never pair a new task set with the previous policy set.
+
+    Drive a reader thread across rapid installs: every resolution of the active
+    snapshot must yield a *whole* snapshot, so the task set and the policy set
+    it observes always belong to the same generation.
+    """
+    import revocompute.task_types as task_types
+
+    original = task_types._state
+    try:
+        old = task_types._RegistryState(
+            plugin_manager=None,
+            categories={"old": "old"},
+            policies={"old": AccessPolicy("old", "Old", "old", ("old_terms",), True)},
+        )
+        new = task_types._RegistryState(
+            plugin_manager=None,
+            categories={"new": "new"},
+            policies={"new": AccessPolicy("new", "New", "new", ("new_terms",), True)},
+        )
+        task_types._install_snapshot(old)
+        assert [policy.id for policy in list_policies()] == ["old"]
+
+        observed: list[tuple[tuple[str, ...], tuple[str, ...]]] = []
+        stop = threading.Event()
+
+        def sample() -> None:
+            while not stop.is_set():
+                # One resolution of the active snapshot is a whole snapshot.
+                snapshot = task_types._active()
+                pair = (tuple(sorted(snapshot.categories)), tuple(sorted(snapshot.policies)))
+                assert pair in {(("new",), ("new",)), (("old",), ("old",))}, pair
+                observed.append(pair)
+
+        reader = threading.Thread(target=sample)
+        reader.start()
+        try:
+            for _ in range(2000):
+                task_types._install_snapshot(new if task_types._active() is old else old)
+        finally:
+            stop.set()
+            reader.join()
+
+        assert observed
+        task_types._install_snapshot(new)
+        assert task_types._active().policies is new.policies
+    finally:
+        task_types._install_snapshot(original)
+
+
+def test_isolated_discovery_restores_policies_from_the_same_snapshot(tmp_path):
+    """Isolated discovery restores tasks *and* policies by one rebind."""
+    _family(tmp_path / "installed", "installed", policy="installed_policy")
+    discover_plugins(str(tmp_path / "installed"))
+
+    other = tmp_path / "other"
+    _family(other, "other")
+    with isolated_discovery(str(other)):
+        assert tuple(task.name for task in list_types()) == ("other_task",)
+        assert list_policies() == []
+
+    assert tuple(task.name for task in list_types()) == ("installed_task",)
+    assert [policy.id for policy in list_policies()] == ["installed_policy"]

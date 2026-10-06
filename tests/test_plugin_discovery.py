@@ -4,8 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from revocompute.access_control import list_policies
-from revocompute.task_types import discover_plugins, get, list_types
+from revocompute.task_types import discover_plugins, get, list_policies, list_types
 
 
 ROOT = Path(__file__).resolve().parents[1]

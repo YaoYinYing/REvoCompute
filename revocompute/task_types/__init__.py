@@ -24,7 +24,6 @@ import yaml
 from jsonschema import Draft202012Validator, FormatChecker
 from revocompute import resource_model as rm
 from revocompute import runtime_bundle as rb
-from revocompute import access_control
 from revocompute.access_control import AccessPolicy, load_policy_documents, resolve_policy
 from revocompute.citations import Citation, load_citations
 from revocompute.io_contracts import NamedFileRole, load_named_file_roles
@@ -343,17 +342,16 @@ def _active() -> _RegistryState:
 
 
 def _install_snapshot(snapshot: _RegistryState) -> None:
-    """Make one snapshot the active registry.
+    """Make one snapshot the active registry in a single published step.
 
-    Readers resolve the plugin manager and categories from ``_state`` and the
-    access-policy set from ``access_control``, so both are replaced together
-    here: the plugin manager and categories are installed by a single
-    assignment, and the policy set is replaced wholesale (never merged), so no
-    reader can observe a partially built set of any of the three.
+    The plugin manager, categories, and access policies all live in this one
+    object, so rebinding ``_state`` switches all three together: a concurrent
+    reader that resolved ``_active()`` observes either the whole previous
+    snapshot or the whole new one, never a new task set paired with the old
+    policy set.
     """
     global _state
     _state = snapshot
-    access_control.set_active_policies(snapshot.policies)
 
 
 def _load_task_inputs(raw: Any, task_id: str) -> tuple[TaskInputRole, ...]:
@@ -449,7 +447,9 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
     manifest has validated, so a caller never observes a half-populated registry
     and a failed discovery leaves the previously active snapshot readable.  The
     snapshot is installed by replacing the whole registry (see
-    ``_install_snapshot``), never by mutating it in place.
+    ``_install_snapshot``), never by mutating it in place.  The installed
+    snapshot carries the policies too, so tasks, categories, and access policies
+    all become visible together.
     """
     root = os.path.abspath(runners_dir)
     try:
@@ -675,6 +675,7 @@ def isolated_discovery(runners_dir: str, enabled: set[str] | None = None):
     finally:
         _install_snapshot(previous)
 
+
 _INPUT_CAPABILITY_PLUGINS = {
     "files",
     "sequence",
@@ -824,6 +825,26 @@ def iter_capabilities(task_type: TaskType) -> tuple[InputCapability, ...]:
 def active_plugin_manager():
     """Return the plugin manager of the active registry snapshot, or ``None`` when none is installed."""
     return _active().plugin_manager
+
+
+def list_policies() -> list[AccessPolicy]:
+    """Return the access policies of the active registry snapshot in declared order."""
+    return list(_active().policies.values())
+
+
+def get_policy(policy_id: str) -> AccessPolicy:
+    """Resolve an access policy from the active registry snapshot."""
+    return resolve_policy(policy_id, _active().policies)
+
+
+def declared_entitlements(*, requestable_only: bool = False) -> set[str]:
+    """Return the entitlements declared by the active snapshot's access policies."""
+    return {
+        entitlement
+        for policy in _active().policies.values()
+        if not requestable_only or policy.requestable
+        for entitlement in policy.requires
+    }
 
 
 def workspace_plugin_descriptor(identifier: str, *, owner: str | None = None):

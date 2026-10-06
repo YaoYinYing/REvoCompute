@@ -2,7 +2,14 @@
 # Distributed under the terms of the GNU General Public License v3.0.
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Declarative Runner access policies and centralized admission checks."""
+"""Declarative Runner access policy parsing and admission checks.
+
+This module owns policy *semantics* — strict parsing, resolution against an
+explicit registry, and admission decisions.  It deliberately holds no process
+global: the active policy set is part of the task/runner registry snapshot
+(``revocompute.task_types``), so a policy can never be read out of step with
+the tasks and categories discovered alongside it.
+"""
 
 from __future__ import annotations
 
@@ -28,9 +35,6 @@ class AccessPolicy:
     requestable: bool
     notice: dict[str, str] | None = None
     license: dict[str, str] | None = None
-
-
-_policies: dict[str, AccessPolicy] = {}
 
 
 def valid_identifier(value: Any) -> bool:
@@ -107,21 +111,6 @@ def load_policy_documents(directory: str | os.PathLike[str]) -> dict[str, Access
     return loaded
 
 
-def set_active_policies(policies: dict[str, AccessPolicy]) -> None:
-    """Replace the active policy registry with a complete, validated mapping.
-
-    Registry discovery installs one whole policy set at a time so a partially
-    built set can never be observed, and an isolated discovery can restore the
-    prior set exactly.
-    """
-    _policies.clear()
-    _policies.update(policies)
-
-
-def get_policy(policy_id: str) -> AccessPolicy:
-    return resolve_policy(policy_id, _policies)
-
-
 def resolve_policy(policy_id: Any, policies: dict[str, AccessPolicy]) -> AccessPolicy:
     """Resolve a validated policy reference against an explicit registry."""
     if not valid_identifier(policy_id):
@@ -130,19 +119,6 @@ def resolve_policy(policy_id: Any, policies: dict[str, AccessPolicy]) -> AccessP
         return policies[policy_id]
     except KeyError:
         raise KeyError(f"Unknown access policy: {policy_id!r}") from None
-
-
-def list_policies() -> list[AccessPolicy]:
-    return list(_policies.values())
-
-
-def declared_entitlements(*, requestable_only: bool = False) -> set[str]:
-    return {
-        entitlement
-        for policy in _policies.values()
-        if not requestable_only or policy.requestable
-        for entitlement in policy.requires
-    }
 
 
 def policy_state(
