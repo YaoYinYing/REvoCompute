@@ -411,13 +411,54 @@ def load_instance_families(state) -> list[RuntimeFamily]:
     ]
 
 
-def run_runner_status(state, *, runner: str | None, all_runners: bool, as_json: bool) -> list[RunnerReadiness]:
+def evaluate_runner_readiness(state, runner_family: str) -> RunnerReadiness:
+    """Evaluate one named family against current evidence, or fail closed.
+
+    This is the canonical entry point: the CLI, production admission, and the
+    Admin API all resolve ``(state, runner_family) -> RunnerReadiness`` here, so
+    they cannot disagree about a family's state, reason code, or evidence
+    identity.  An unknown or disabled family is a *missing configuration*, never
+    a readiness verdict another surface could read as permission.
+    """
+    families = [family for family in load_instance_families(state) if family.name == runner_family]
+    if not families or not runner_enabled(state, runner_family):
+        return RunnerReadiness(
+            runner_family=runner_family,
+            status=RunnerReadinessStatus.NOT_CONFIGURED,
+            reason_code="RUNNER_UNKNOWN",
+            message="Runner Family is not configured or not enabled on this deployment",
+            doctor_ok=False,
+            sif_path="",
+            next_action="doctor",
+        )
+    return resolve_runner_readiness(state, families[0])
+
+
+def evaluate_fleet_readiness(state) -> list[RunnerReadiness]:
+    """Evaluate every enabled family in deterministic family order."""
+    families = sorted(
+        (family for family in load_instance_families(state) if runner_enabled(state, family.name)),
+        key=lambda family: family.name,
+    )
+    return [resolve_runner_readiness(state, family) for family in families]
+
+
+def runner_status_snapshot(state, *, runner: str | None, all_runners: bool) -> list[RunnerReadiness]:
+    """The readiness rows the CLI status command reports, without rendering.
+
+    Kept separate from rendering so the CLI JSON contract and any other surface
+    read the same evaluated rows.
+    """
     families = load_instance_families(state)
     enabled = [family for family in families if runner_enabled(state, family.name)]
     selected = enabled if all_runners else [family for family in enabled if family.name == runner]
     if not selected and not all_runners:
         raise RegistryError(f"Unknown or disabled Runner Family: {runner}")
-    readiness = [resolve_runner_readiness(state, family) for family in selected]
+    return [resolve_runner_readiness(state, family) for family in selected]
+
+
+def run_runner_status(state, *, runner: str | None, all_runners: bool, as_json: bool) -> list[RunnerReadiness]:
+    readiness = runner_status_snapshot(state, runner=runner, all_runners=all_runners)
     print(format_readiness_json(readiness) if as_json else format_readiness_text(readiness, detailed=not all_runners))
     return readiness
 

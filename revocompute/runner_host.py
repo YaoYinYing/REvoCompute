@@ -20,6 +20,8 @@ import os
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
+from revocompute.server_root import SERVER_ROOT
+
 
 @runtime_checkable
 class HostPaths(Protocol):
@@ -83,4 +85,24 @@ class ServerHostPaths:
         return self.executor.strip().lower() == "slurm"
 
 
-__all__ = ["HostPaths", "ServerHostPaths"]
+def build_server_host(config) -> ServerHostPaths:
+    """Build the web process's host view from its resolved server configuration.
+
+    Discovery in this process already honors ``ENABLED_TASKRUNNERS`` by filtering
+    the registry, so no enabled-family override is projected here: the families
+    the active registry holds are exactly the enabled ones.
+    """
+    return ServerHostPaths(
+        server=config.server_dir,
+        config=os.environ.get("CONFIG_DIR") or os.path.join(config.server_dir, "config"),
+        root=str(SERVER_ROOT),
+        settings={
+            "RUNTIME_BUNDLE_DIR": config.runtime_bundle_root,
+            "SLURM_ALLOWED_QUEUES": ",".join(config.slurm_allowed_queues),
+            "MANAGE_DB_PATH": config.manage_db_path,
+        },
+        executor=config.job_executor,
+    )
+
+
+__all__ = ["HostPaths", "ServerHostPaths", "build_server_host"]
