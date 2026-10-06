@@ -12,6 +12,7 @@ export type AppRoute =
   | { id: 'create-task' }
   | { id: 'result'; taskId: string }
   | { id: 'profile' }
+  | { id: 'admin-fleet' }
   | { id: 'admin-users' }
   | { id: 'admin-configuration' }
   | { id: 'admin-logs' }
@@ -32,6 +33,7 @@ export function resolveRoute(pathname: string): AppRoute {
   if (path === '/compute/dashboard') return { id: 'dashboard' };
   if (path === '/compute/create_task') return { id: 'create-task' };
   if (path === '/compute/profile') return { id: 'profile' };
+  if (path === '/compute/runner_fleet') return { id: 'admin-fleet' };
   if (path === '/compute/user_control') return { id: 'admin-users' };
   if (path === '/compute/configuration') return { id: 'admin-configuration' };
   if (path === '/compute/logs') return { id: 'admin-logs' };
@@ -46,7 +48,7 @@ export function resolveRoute(pathname: string): AppRoute {
 }
 
 const protectedRoutes = new Set<AppRoute['id']>([
-  'dashboard', 'create-task', 'result', 'profile', 'admin-users', 'admin-configuration', 'admin-logs',
+  'dashboard', 'create-task', 'result', 'profile', 'admin-fleet', 'admin-users', 'admin-configuration', 'admin-logs',
 ]);
 const publicShellRoutes = new Set<AppRoute['id']>([
   'home', 'api-docs', 'login', 'register', 'reset-password', 'verify-email', 'terms', 'not-found',
@@ -54,5 +56,5 @@ const publicShellRoutes = new Set<AppRoute['id']>([
 
 export const protectedRoute = (route: AppRoute): boolean => protectedRoutes.has(route.id);
 export const adminRoute = (route: AppRoute): boolean =>
-  route.id === 'admin-users' || route.id === 'admin-configuration' || route.id === 'admin-logs';
+  route.id === 'admin-fleet' || route.id === 'admin-users' || route.id === 'admin-configuration' || route.id === 'admin-logs';
 export const publicShellRoute = (route: AppRoute): boolean => publicShellRoutes.has(route.id);

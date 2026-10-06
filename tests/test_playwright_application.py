@@ -184,7 +184,7 @@ def _install_app(page: Page) -> list[str]:
     for pattern in (
         "/", "/api-docs", "/runners", "/runners/*", "/compute/login**", "/compute/register",
         "/compute/reset_password**", "/compute/user_verify**", "/compute/terms", "/compute/profile**",
-        "/compute/user_control", "/compute/configuration", "/compute/logs", "/compute/create_task**",
+        "/compute/runner_fleet", "/compute/user_control", "/compute/configuration", "/compute/logs", "/compute/create_task**",
         "/compute/dashboard", "/compute/results/*",
     ):
         page.route(f"{ORIGIN}{pattern}", lambda route: route.fulfill(headers=html_headers, body=html))
@@ -1038,6 +1038,118 @@ def test_admin_user_access_and_credit_mutations(page: Page) -> None:
     adjustment = next(body for url, method, body in posted if url.endswith("/gpu-credit/adjustments") and method == "POST")
     assert adjustment["gpu_seconds"] == 720
     assert adjustment["reason"] == "Approved research allocation"
+
+
+def _fleet_payload() -> dict:
+    return {
+        "runners": [
+            {
+                "runner_family": "stale_runner",
+                "readiness": {
+                    "status": "VALIDATION_STALE",
+                    "reason_code": "RUNTIME_BUNDLE_CHANGED",
+                    "message": "Runtime bundle changed",
+                    "next_action": "live-test",
+                    "evidence": {
+                        "sif_path": "/images/stale_runner.sif", "sif_exists": True, "sif_sha256": "sha256:sif",
+                        "build_provenance_current": True, "build_provenance_digest": "sha256:build",
+                        "runtime_bundle_sha256": "sha256:bundle", "receipt_exists": True, "receipt_valid": False,
+                        "receipt_tested_at": "2026-01-01T00:00:00Z",
+                        "required_smoke_cases": ["smoke"], "passed_smoke_cases": [], "doctor_ok": True,
+                    },
+                },
+                "capacity": {"available": True, "reason": "scheduler_available"},
+                "access": {"restricted": False, "granted": True, "policy_id": None},
+                "in_flight": None,
+            },
+            {
+                "runner_family": "healthy_runner",
+                "readiness": {
+                    "status": "READY", "reason_code": "READY", "message": "ok", "next_action": "none",
+                    "evidence": {
+                        "sif_path": "/images/healthy_runner.sif", "sif_exists": True, "sif_sha256": "sha256:sif",
+                        "build_provenance_current": True, "build_provenance_digest": "sha256:build",
+                        "runtime_bundle_sha256": None, "receipt_exists": True, "receipt_valid": True,
+                        "receipt_tested_at": "2026-02-02T00:00:00Z",
+                        "required_smoke_cases": ["smoke"], "passed_smoke_cases": ["smoke"], "doctor_ok": True,
+                    },
+                },
+                "capacity": {"available": True, "reason": "scheduler_available"},
+                "access": {"restricted": False, "granted": True, "policy_id": None},
+                "in_flight": None,
+            },
+        ],
+        "executor": {"available": True, "reason": "operator_executor_available"},
+    }
+
+
+def _plan_payload(family: str) -> dict:
+    return {
+        "action": "runner.live_test", "tier": "mutate", "runner_family": family,
+        "requested_intent": "runner.live_test", "current_state": "VALIDATION_STALE",
+        "reason_code": "RUNTIME_BUNDLE_CHANGED", "evidence_digest": "sha256:" + "e" * 16,
+        "effective_actions": ["live_test"], "expected_effects": ["Run bounded smoke acceptance and write a receipt on success"],
+        "not_required": [{"operation": "build_sif", "label": "Build a new Runner SIF"}],
+        "lease_scope": "runner/" + family, "requires_confirmation": False,
+        "next_state_effect": "receipt written", "cli_reference": "restart.sh live-test --runner " + family,
+        "plan_digest": "sha256:" + "a" * 16, "evaluated_at": 1.0,
+    }
+
+
+def test_admin_runner_fleet_plans_revalidates_and_runs_typed_actions(page: Page) -> None:
+    """The fleet surface reads real readiness and runs an action through the plan contract."""
+    _install_app(page)
+    page.route(f"{ORIGIN}/compute/api/auth/me", lambda route: route.fulfill(json=_current_user("admin")))
+    posted: list[tuple[str, str, dict | None]] = []
+    page.on("request", lambda request: posted.append(
+        (request.url, request.method, request.post_data_json if request.post_data else None),
+    ))
+    page.route(f"{ORIGIN}/compute/api/auth/admin/runners", lambda route: route.fulfill(json=_fleet_payload()))
+    page.route(
+        f"{ORIGIN}/compute/api/auth/admin/runners/*",
+        lambda route: route.fulfill(json={
+            "runner_family": "stale_runner",
+            "readiness": _fleet_payload()["runners"][0]["readiness"],
+            "capacity": {"available": True, "reason": "scheduler_available"},
+            "access": {"restricted": False, "granted": True, "policy_id": None},
+            "actions": [{
+                "id": "runner.live_test", "tier": "mutate", "lease_scope": "runner/stale_runner",
+                "summary": "Run bounded smoke acceptance", "requires_confirmation": False,
+                "next_state_effect": "receipt written", "parameters": [{"name": "runner_family", "kind": "family", "required": True, "maximum_length": 64}],
+                "available": True, "plan": _plan_payload("stale_runner"),
+            }],
+        }),
+    )
+    page.route(f"{ORIGIN}/compute/api/auth/admin/runners/*/history?*", lambda route: route.fulfill(json={"history": []}))
+    page.route(f"{ORIGIN}/compute/api/auth/admin/runners/*/actions", lambda route: route.fulfill(status=202, json={
+        "job": {"job_id": "opjob_1", "action": "runner.live_test", "runner_family": "stale_runner", "status": "RUNNING"},
+        "plan": _plan_payload("stale_runner"), "accepted": True,
+    }))
+
+    page.goto(f"{ORIGIN}/compute/runner_fleet")
+    expect(page.get_by_role("heading", name="Runner fleet", level=1)).to_be_visible()
+    # Readiness and capacity are separate columns; the machine reason is human copy.
+    stale_row = page.locator("tr[data-family='stale_runner']")
+    expect(stale_row).to_contain_text("Validation stale")
+    expect(stale_row).to_contain_text("revalidation")
+    ready_row = page.locator("tr[data-family='healthy_runner']")
+    expect(ready_row).to_contain_text("Ready")
+
+    stale_row.get_by_role("button", name="stale_runner").click()
+    expect(page.get_by_role("heading", name="stale_runner", level=2)).to_be_visible()
+    expect(page.get_by_text("This plan will not")).to_have_count(0)
+    page.get_by_role("button", name="Review and run").click()
+    expect(page.get_by_text("This plan will not")).to_be_visible()
+    expect(page.get_by_text("Build a new Runner SIF")).to_be_visible()
+    page.get_by_label("Reason").fill("Revalidate after the runtime bundle change.")
+    with page.expect_response(lambda response: response.url.endswith("/actions") and response.request.method == "POST"):
+        page.get_by_role("button", name="Run", exact=True).click()
+    page.wait_for_load_state("networkidle")
+
+    run = next(body for url, method, body in posted if url.endswith("/actions") and method == "POST")
+    assert run == {"action": "runner.live_test", "plan_digest": "sha256:" + "a" * 16, "idempotency_key": run["idempotency_key"]}
+    assert run["idempotency_key"]
+    assert page.evaluate("window.__cspViolations") == []
 
 
 def test_admin_configuration_and_logs_use_live_controls(page: Page) -> None:
