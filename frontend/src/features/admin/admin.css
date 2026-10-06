@@ -121,6 +121,9 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .admin-badge[data-status="READY"] { border-color: color-mix(in srgb, var(--app-success) 55%, var(--app-line)); color: var(--app-success); }
 .admin-badge[data-status="VALIDATION_STALE"], .admin-badge[data-status="BUILD_STALE"], .admin-badge[data-status="BUILD_STALE"] { border-color: color-mix(in srgb, var(--app-warning, var(--app-accent-2)) 55%, var(--app-line)); color: var(--app-accent-2); }
 .admin-badge[data-status="NOT_CONFIGURED"], .admin-badge[data-status="NOT_BUILT"] { color: var(--app-muted); }
+.admin-badge[data-job-status="SUCCEEDED"] { border-color: color-mix(in srgb, var(--app-success) 55%, var(--app-line)); color: var(--app-success); }
+.admin-badge[data-job-status="FAILED"] { border-color: color-mix(in srgb, var(--app-warning, var(--app-accent-2)) 55%, var(--app-line)); color: var(--app-accent-2); }
+.admin-badge[data-job-status="CANCELLING"], .admin-badge[data-job-status="CANCELLED"], .admin-badge[data-job-status="QUEUED"], .admin-badge[data-job-status="RUNNING"] { color: var(--app-muted); }
 .fleet-detail:empty { display: none; }
 .fleet-detail-panel { margin-top: 1.25rem; padding: 1.1rem; border: 1px solid var(--app-line); border-radius: var(--r-surface); background: var(--app-surface); box-shadow: var(--shadow-surface); }
 .fleet-detail-panel > button { margin-top: 1rem; }

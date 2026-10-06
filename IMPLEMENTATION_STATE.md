@@ -567,7 +567,9 @@ matches the "consistent formatting" contract in
 
 `TODO.md` is the design contract for this PR. This section records execution
 state; the committed tests and the named commands are the machine-verifiable
-record. Observed `main` at dispatch: `e6407758`.
+record. Observed `main` at dispatch: `e6407758`; the branch was later rebased
+onto `1f1f3c1`, which landed the registry-determinism fix (#62) this branch
+consumes.
 
 ## What landed
 
@@ -594,10 +596,16 @@ record. Observed `main` at dispatch: `e6407758`.
   the schema and the generated TS is regenerated.
 - **Admin Fleet UI** (`frontend/src/features/admin/fleet/FleetAdmin.ts`) in the
   merged Soft Precision language; state-aware corrective actions showing what a
-  plan will and will not do; executor-unavailable degraded banner.
+  plan will and will not do; executor-unavailable degraded banner. Operator Job
+  history renders the job's own lifecycle vocabulary (`operator_jobs` statuses),
+  never a readiness-state badge.
 - **Activation/rollback** (`runner_promotion.py`): plan-bound atomic activation
   preserving the replaced artifact, and rollback to a control-core-known
   validated artifact. Deliberately **not** wired to the Web: refused there.
+- **Readiness core is consumed, not duplicated**: `runner_registry` and
+  `access_control` only *parse* policy documents; the active registry snapshot
+  is owned by `task_types` (#62). The admin view and the fleet list resolve
+  readiness through the one `runner_readiness` evaluator.
 
 ## Delivery commands and results
 
@@ -606,7 +614,7 @@ record. Observed `main` at dispatch: `e6407758`.
 - `pytest tests -m "browser and not molstar_csp" -n 4 --dist=load` → 165 passed,
   1 skipped, 2 xfailed, against the built bundle.
 - `cd frontend && npm run typecheck && npm run test && npm run build` → clean;
-  96 unit tests passed.
+  97 unit tests passed.
 - `mkdocs build --strict` → clean.
 
 ## Not done, by decision

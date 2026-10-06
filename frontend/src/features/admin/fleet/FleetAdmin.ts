@@ -46,6 +46,16 @@ const STATUS_LABEL: Record<string, string> = {
   READY: 'Ready',
 };
 
+/** Human copy for an Operator Job's lifecycle, a vocabulary of its own. */
+const JOB_STATUS_LABEL: Record<string, string> = {
+  QUEUED: 'Queued',
+  RUNNING: 'Running',
+  SUCCEEDED: 'Succeeded',
+  FAILED: 'Failed',
+  CANCELLING: 'Cancelling',
+  CANCELLED: 'Cancelled',
+};
+
 const CAPACITY_COPY: Record<string, string> = {
   scheduler_available: 'Compute available',
   scheduler_busy: 'Compute busy',
@@ -74,6 +84,11 @@ export function reasonText(readiness: RunnerReadiness): string {
 
 export function statusLabel(status: string): string {
   return STATUS_LABEL[status] || status;
+}
+
+/** An Operator Job's lifecycle word; job state never shares a readiness badge. */
+export function jobStatusLabel(status: string): string {
+  return JOB_STATUS_LABEL[status] || status;
 }
 
 export function capacityLabel(reason: string, available: boolean | null | undefined): string {
@@ -108,6 +123,16 @@ function statusBadge(status: string): HTMLElement {
   badge.dataset.status = status;
   if (status === 'READY') badge.classList.add('is-good');
   else if (status === 'NOT_CONFIGURED' || status === 'NOT_BUILT') badge.classList.add('is-muted');
+  else badge.classList.add('is-attention');
+  return badge;
+}
+
+/** A job lifecycle badge: its own word, its own status axis, its own colour. */
+function jobStatusBadge(status: string): HTMLElement {
+  const badge = text('span', jobStatusLabel(status), 'admin-badge');
+  badge.dataset.jobStatus = status;
+  if (status === 'SUCCEEDED') badge.classList.add('is-good');
+  else if (status === 'QUEUED' || status === 'RUNNING') badge.classList.add('is-muted');
   else badge.classList.add('is-attention');
   return badge;
 }
@@ -384,7 +409,7 @@ export class FleetAdmin {
   private renderHistory(job: OperatorJob): HTMLElement {
     const row = element('div', 'fleet-history-row');
     const head = element('div', '');
-    head.append(text('strong', job.action), statusBadge(job.status === 'SUCCEEDED' ? 'READY' : job.status === 'FAILED' ? 'BUILD_STALE' : 'VALIDATION_STALE'));
+    head.append(text('strong', job.action), jobStatusBadge(job.status));
     const detail: string[] = [formatDate(job.finished_at || job.created_at)];
     if (job.actor_username) detail.push(job.actor_username);
     const effect = job.effect;

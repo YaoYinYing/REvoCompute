@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { clearSessionCredential } from '../src/app/session';
 import { adminApi, type RunnerFleetEntry } from '../src/features/admin/api';
-import { capacityLabel, filterFleet, reasonText, workflowLabel } from '../src/features/admin/fleet/FleetAdmin';
+import { capacityLabel, filterFleet, jobStatusLabel, reasonText, workflowLabel } from '../src/features/admin/fleet/FleetAdmin';
 
 type RequestRecord = { url: string; init: RequestInit };
 
@@ -59,6 +59,16 @@ describe('fleet view helpers', () => {
     expect(reasonText({ status: 'READY', reason_code: 'UNMAPPED_CODE', message: 'server copy' } as never)).toBe('server copy');
     expect(workflowLabel('live_test')).toBe('Live validation');
     expect(workflowLabel('unknown_stage')).toBe('unknown_stage');
+  });
+
+  it('labels a job lifecycle word, never a readiness state', () => {
+    // A SUCCEEDED job is not "READY" and a FAILED job is not "BUILD_STALE":
+    // the two axes use disjoint vocabularies.
+    expect(jobStatusLabel('SUCCEEDED')).toBe('Succeeded');
+    expect(jobStatusLabel('RUNNING')).toBe('Running');
+    expect(jobStatusLabel('FAILED')).toBe('Failed');
+    expect(jobStatusLabel('CANCELLED')).toBe('Cancelled');
+    expect(jobStatusLabel('UNKNOWN_STATE')).toBe('UNKNOWN_STATE');
   });
 });
 
