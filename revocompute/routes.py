@@ -97,6 +97,7 @@ from revocompute.auth import (
     validate_reset_token,
 )
 from revocompute.input_validators import validate_input_file, validate_logical_input
+from revocompute.input_validators.isolated_validation import VALIDATOR_RESOURCE_LIMIT_ERROR
 from revocompute.input_validators.json_file import json_error_message, parse_bounded_json
 from revocompute.ingress_security import (
     ValidationReceipt,
@@ -1071,6 +1072,22 @@ def _validate_input_uploads(task_type: str | None = None):
             )
         seen_paths.add(key)
         validated.append((uploaded, safe_path, role_name, format_name))
+    # A path may not also be a directory prefix of another path in the same role:
+    # ``x.pdb`` cannot be both a file and the directory ``x.pdb/`` the other path
+    # needs.  The collision set above only catches exact repeats, so a prefix
+    # pair would otherwise reach materialization, where ``copyfile`` fails and the
+    # request dies as a 500 with a durable failed row and orphan state.
+    for _uploaded, safe_path, role_name, _format in validated:
+        prefix = safe_path + "/"
+        if any(
+            other_role == role_name and other_path.startswith(prefix)
+            for _other_uploaded, other_path, other_role, _other_format in validated
+        ):
+            return None, _input_contract_error(
+                "input_namespace_collision",
+                f"Input path {safe_path!r} is also used as a directory by another input.",
+                role=role_name,
+            )
     return validated, None
 
 
@@ -1129,6 +1146,12 @@ def _quarantine_uploaded_inputs(
                 error = validate_logical_input(item["blob_path"], item["format"], logical_type)
                 code = "input_logical_type_invalid"
             if error is not None:
+                # A resource-limit outcome carries the bounded code itself, so a
+                # hostile input that exhausted the isolated parser is reported as
+                # a resource limit rather than as an indistinguishable malformed
+                # file whose only distinguishing detail is prose.
+                if error == VALIDATOR_RESOURCE_LIMIT_ERROR:
+                    code = VALIDATOR_RESOURCE_LIMIT_ERROR
                 raise InputPreflightError(item, code, error)
             # Bind the admission decision to the exact bytes just validated.  The
             # digest is computed from the quarantine file that validation read,
@@ -1781,7 +1804,7 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
                     runner_family=tt.runtime.name,
                     user_id=user_id,
                     gpu_seconds=0,
-                    reason_code="credit_exhausted",
+                    reason_code="gpu_credit_exhausted",
                 )
                 return (
                     jsonify(
@@ -1893,9 +1916,10 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
                 "format": item["format"],
                 "logical_type": role.type if role else "file",
                 # The receipt is the validation decision bound to this item's
-                # exact immutable bytes; ``status`` is a projection of it, not a
-                # separate assertion.
-                "validation": item["validation_receipt"],
+                # exact immutable bytes.  This is the key the worker reads to
+                # prove the snapshot it will execute is this byte stream; a
+                # status projection would be a second, weaker assertion.
+                "validation_receipt": item["validation_receipt"],
                 "snapshot_path": _safe_join(snapshot_root, item["role"], *item["relative_path"].split("/")),
                 "snapshot_root": snapshot_root,
                 "workspace_key": workspace_key,
@@ -1957,7 +1981,7 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
                 "logical_type": entity["logical_type"],
                 "sha256": entity["hash"],
                 "size": entity["size"],
-                "validation": entity["validation"],
+                "validation_receipt": entity["validation_receipt"],
             }
         )
     # Runner protocol v4: additive.  ``params`` and ``inputs`` are byte-for-byte

@@ -6,9 +6,11 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import resource
+import signal
 import socket
 import sys
 from pathlib import Path
@@ -31,6 +33,26 @@ def _apply_restrictions() -> None:
     socket.create_connection = _deny_network
 
 
+def _resource_limit_reached(_signum=None, _frame=None):
+    """Turn a resource-limit fatal signal into the bounded sentinel response.
+
+    Under ``RLIMIT_AS`` an allocation failure very often surfaces as the kernel
+    or CPython's fatal-error handler raising SIGSEGV/SIGABRT/SIGBUS rather than
+    as a catchable ``MemoryError``, so the exception handlers below never see it.
+    Converting those signals into an ``OSError`` here lets the normal path report
+    the sentinel instead of dying with an opaque exit status.
+    """
+    raise OSError(errno.ENOMEM, "input parser resource limit reached")
+
+
+def _install_resource_signal_handlers() -> None:
+    for signum in (signal.SIGSEGV, signal.SIGABRT, signal.SIGBUS):
+        try:
+            signal.signal(signum, _resource_limit_reached)
+        except (ValueError, OSError):  # not settable on this platform/thread
+            continue
+
+
 def _validate(format_name: str, path: str) -> str | None:
     if format_name not in {"yaml", "yml"}:
         raise ValueError("Unsupported isolated parser")
@@ -39,21 +61,30 @@ def _validate(format_name: str, path: str) -> str | None:
     return validate_yaml(path)
 
 
+def _run(format_name: str, path: str) -> tuple[int, dict[str, object]]:
+    """Validate one input, mapping a resource limit to the bounded sentinel.
+
+    A resource limit is a normal validation failure, not an isolation crash: the
+    parent classifies the sentinel as ``validator_resource_limit`` so a caller
+    never has to read prose to tell a hostile input from a malformed one.  The
+    OSError case covers what the signal handler raises; MemoryError and
+    RecursionError cover the in-band allocation and depth failures.
+    """
+    try:
+        return 0, {"error": _validate(format_name, path)}
+    except (MemoryError, RecursionError, OSError):
+        return 0, {"error": ISOLATED_RESOURCE_SENTINEL}
+
+
 def main() -> int:
     if len(sys.argv) != 3:
         return 2
     _apply_restrictions()
-    try:
-        error = _validate(sys.argv[1], sys.argv[2])
-        response = json.dumps({"error": error}, separators=(",", ":"))
-    except MemoryError:
-        # Address-space exhaustion is a validation failure with its own bounded
-        # reason code, distinct from a parser crash: the caller classifies it as
-        # a resource limit rather than an opaque isolation failure.
-        response = json.dumps({"error": ISOLATED_RESOURCE_SENTINEL})
-    except BaseException:
-        return 1
-    sys.stdout.write(response)
+    _install_resource_signal_handlers()
+    status, payload = _run(sys.argv[1], sys.argv[2])
+    if status != 0:
+        return status
+    sys.stdout.write(json.dumps(payload, separators=(",", ":")))
     return 0
 
 

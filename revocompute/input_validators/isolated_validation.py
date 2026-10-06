@@ -15,10 +15,18 @@ import sys
 import tempfile
 from pathlib import Path
 
-from revocompute.input_validators.common import ISOLATED_RESOURCE_SENTINEL, RESOURCE_LIMIT_ERROR
+from revocompute.input_validators.common import ISOLATED_RESOURCE_SENTINEL
+
+#: The bounded machine-readable reason code every resource-limit failure is
+#: reported with, so a caller classifies the outcome without reading prose.
+VALIDATOR_RESOURCE_LIMIT_ERROR = "validator_resource_limit"
 
 ISOLATED_TIMEOUT_SECONDS = 3.0
 _MAX_PROTOCOL_BYTES = 64 * 1024
+
+#: Exit statuses a bounded worker cannot report in band: 137 is the shell's
+#: 128+SIGKILL convention (an OOM kill, or the parent's escalation).
+_RESOURCE_KILL_CODES = frozenset({-signal.SIGKILL, 128 + signal.SIGKILL})
 
 # One authoritative limit table, installed by the parent before the worker
 # interpreter starts and re-applied in-process by isolated_worker.
@@ -87,12 +95,18 @@ def validate_in_subprocess(path: str, format_name: str) -> str | None:
                 except subprocess.TimeoutExpired:
                     _kill_group(process.pid, signal.SIGKILL)
                     process.communicate()
-                return "Core input parser exceeded its isolated validation time limit"
+                return VALIDATOR_RESOURCE_LIMIT_ERROR
     except (OSError, subprocess.SubprocessError):
         return "Core input parser failed in isolation"
     finally:
         os.close(descriptor)
-    if process.returncode != 0 or len(stdout.encode("utf-8")) > _MAX_PROTOCOL_BYTES:
+    if process.returncode in _RESOURCE_KILL_CODES or len(stdout.encode("utf-8")) > _MAX_PROTOCOL_BYTES:
+        # A worker killed by SIGKILL (-9) or exiting 137 died from a resource
+        # limit it could not report in band (an OOM kill, or the parent's own
+        # escalation).  Classify it as the bounded resource limit rather than an
+        # opaque isolation failure, matching the in-band sentinel path.
+        return VALIDATOR_RESOURCE_LIMIT_ERROR
+    if process.returncode != 0:
         return "Core input parser failed in isolation"
     try:
         payload = json.loads(stdout)
@@ -104,5 +118,5 @@ def validate_in_subprocess(path: str, format_name: str) -> str | None:
     if error is not None and not isinstance(error, str):
         return "Core input parser returned an invalid isolation response"
     if error == ISOLATED_RESOURCE_SENTINEL:
-        return RESOURCE_LIMIT_ERROR
+        return VALIDATOR_RESOURCE_LIMIT_ERROR
     return error

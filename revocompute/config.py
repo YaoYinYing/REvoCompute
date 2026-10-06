@@ -172,6 +172,14 @@ class ComputeConfig:
     # Deployment-owned store of immutable Runtime Bundles.  A sibling of the
     # image store, so it survives the atomic replacement of the runner tree.
     runtime_bundle_root: str = ""
+    # Publication capacity guards.  Runner output is an untrusted filesystem
+    # namespace, so the registered ResultManifest is bounded in both entry count
+    # and aggregate bytes.  The defaults sit far above any real family's output
+    # (a large complex run emits thousands of per-item files, not hundreds of
+    # thousands), and a deployment that ships a genuinely larger family raises
+    # them rather than having its manifest silently truncated.
+    max_published_artifacts: int = 100_000
+    max_published_bytes: int = 8 * 1024 * 1024 * 1024
 
     def __post_init__(self) -> None:
         if self.job_executor != "slurm":
@@ -180,6 +188,8 @@ class ComputeConfig:
             raise ValueError("REvoCompute uses Apptainer as its container runtime")
         if self.scratch_backend not in {"disk", "ram"}:
             raise ValueError("scratch_backend must be 'disk' or 'ram'")
+        if self.max_published_artifacts < 1 or self.max_published_bytes < 1:
+            raise ValueError("Publication capacity limits must be positive")
 
     @classmethod
     def from_env(cls) -> ComputeConfig:
@@ -203,6 +213,8 @@ class ComputeConfig:
             runtime_bundle_root=env_path(
                 "RUNTIME_BUNDLE_DIR", os.path.join(server_dir, "..", "runtime-bundles")
             ),
+            max_published_artifacts=env_int("MAX_PUBLISHED_ARTIFACTS", 100_000),
+            max_published_bytes=env_int("MAX_PUBLISHED_BYTES", 8 * 1024 * 1024 * 1024),
         )
 
 

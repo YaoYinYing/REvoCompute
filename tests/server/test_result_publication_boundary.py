@@ -436,23 +436,28 @@ def test_an_over_capacity_result_tree_is_bounded_not_published_whole(monkeypatch
     """The published namespace is bounded in entry count before it is registered."""
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     task_id = _finished_task(module, tmp_path)
-    monkeypatch.setattr(module.task_runtime, "MAX_PUBLISHED_ARTIFACTS", 4)
+    monkeypatch.setattr(module.task_runtime, "_published_artifact_limit", lambda: 4)
 
     def build(result_dir: Path) -> None:
-        for index in range(12):
-            (result_dir / f"item_{index:02d}.txt").write_text("data\n", encoding="utf-8")
+        # Spread across many directories: the guard must stop the walk, not
+        # re-trip once per directory.
+        for directory in range(12):
+            child = result_dir / f"d{directory:02d}"
+            child.mkdir()
+            (child / "item.txt").write_text("data\n", encoding="utf-8")
 
     manifest, _result_dir = _finalize_dir(module, task_id, build)
 
     assert len(manifest["artifacts"]) == 4
+    assert sum("capacity limit" in problem for problem in manifest["output_check"]["problems"]) == 1
     assert manifest["output_check"]["state"] == "failed"
-    assert any("published artifact limit" in problem for problem in manifest["output_check"]["problems"])
+    assert any("publication capacity limit" in problem for problem in manifest["output_check"]["problems"])
 
 
 def test_an_over_capacity_byte_total_is_bounded(monkeypatch, tmp_path) -> None:
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     task_id = _finished_task(module, tmp_path)
-    monkeypatch.setattr(module.task_runtime, "MAX_PUBLISHED_BYTES", 10)
+    monkeypatch.setattr(module.task_runtime, "_published_byte_limit", lambda: 10)
 
     def build(result_dir: Path) -> None:
         (result_dir / "big_a.bin").write_bytes(b"a" * 8)
@@ -463,7 +468,7 @@ def test_an_over_capacity_byte_total_is_bounded(monkeypatch, tmp_path) -> None:
     assert manifest["total_size"] <= 10
     assert len(manifest["artifacts"]) == 1
     assert manifest["output_check"]["state"] == "failed"
-    assert any("published artifact limit" in problem for problem in manifest["output_check"]["problems"])
+    assert any("publication capacity limit" in problem for problem in manifest["output_check"]["problems"])
 
 
 def test_a_swapped_file_after_the_manifest_is_not_reachable(monkeypatch, tmp_path) -> None:
@@ -484,6 +489,31 @@ def test_a_swapped_file_after_the_manifest_is_not_reachable(monkeypatch, tmp_pat
     task = module.task_store.get_task(task_id)
     resolved = module.app.config["storage_resolver"].resolve_artifact(task, "result.txt")
     assert resolved is None
+
+
+def test_the_refusal_record_is_bounded_for_a_hostile_tree(monkeypatch, tmp_path) -> None:
+    """A tree of refused entries does not grow the manifest one problem per file."""
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id = _finished_task(module, tmp_path)
+    outside = tmp_path / "target.bin"
+    outside.write_bytes(b"x")
+
+    def build(result_dir: Path) -> None:
+        many = result_dir / "many"
+        many.mkdir()
+        for index in range(60):
+            (many / f"link_{index:02d}.txt").symlink_to(outside)
+        (result_dir / "real.txt").write_text("real\n", encoding="utf-8")
+
+    manifest, _result_dir = _finalize_dir(module, task_id, build)
+
+    problems = manifest["output_check"]["problems"]
+    # Bounded: a handful of named refusals plus one summary, not 60 entries.
+    assert len(problems) <= 30
+    assert any("further non-publishable" in problem for problem in problems)
+    published = {artifact["path"] for artifact in manifest["artifacts"]}
+    assert "real.txt" in published
+    assert manifest["output_check"]["state"] == "failed"
 
 
 def test_a_refused_tree_never_falls_back_to_publishing_it(monkeypatch, tmp_path) -> None:

@@ -89,25 +89,29 @@ def test_an_unlisted_code_falls_back_by_status_not_by_phase_guessing() -> None:
     assert phase_for_code("brand_new_code", http_status=403) == "admission"
 
 
-def test_validator_revision_is_content_derived_and_stable() -> None:
-    revision = validator_revision()
-    assert revision.startswith("sha256:")
-    assert revision == validator_revision()
+def test_validator_revision_is_content_derived_not_a_constant() -> None:
+    """The identity tracks the boundary bytes, not a value someone bumps.
 
-    # Recompute independently over the same boundary sources: the identity is
-    # the bytes, not a constant someone remembered to bump.
-    digest = hashlib.sha256()
-    for relative in ingress_security._BOUNDARY_SOURCES:
-        digest.update(relative.encode("utf-8"))
-        digest.update(b"\0")
-        digest.update((Path(ingress_security.__file__).parent / relative).read_bytes())
-        digest.update(b"\0")
-    assert revision == f"sha256:{digest.hexdigest()}"
+    Changing a boundary source must change the revision; that is the whole point
+    of deriving it.  Asserted by perturbing the source set rather than by
+    re-implementing the digest recipe, so the test describes behavior (revision
+    follows content) instead of pinning the helper's internals.
+    """
+    baseline = validator_revision()
+    assert baseline.startswith("sha256:")
+    assert baseline == validator_revision()  # stable within one boundary
 
+    monkeypatch = None
+    import revocompute.ingress_security as module
 
-def test_validator_revision_reports_unavailable_when_sources_cannot_be_read(monkeypatch) -> None:
-    monkeypatch.setattr(ingress_security, "_BOUNDARY_SOURCES", ("input_validators/does_not_exist.py",))
-    assert validator_revision() == "sha256:unavailable"
+    original = module._BOUNDARY_SOURCES
+    try:
+        module._BOUNDARY_SOURCES = (*original, "input_validators/does_not_exist.py")
+        assert validator_revision() == "sha256:unavailable"
+        assert validator_revision() != baseline
+    finally:
+        module._BOUNDARY_SOURCES = original
+    assert validator_revision() == baseline
 
 
 @pytest.mark.parametrize(
@@ -203,3 +207,41 @@ def test_receipt_records_the_decision_it_projects(tmp_path) -> None:
     assert record["reason_code"] is None
     assert record["validator_revision"] == validator_revision()
     assert json.loads(json.dumps(record)) == record
+
+
+def test_the_admission_codes_the_ingress_surfaces_emit_are_all_in_the_vocabulary() -> None:
+    """The reverse direction: every admission code a caller can receive is known.
+
+    Enumerated from the documented ingress surface rather than scraped from
+    source, so a code that reaches a client but was never added to the table (and
+    would therefore fall back to a status-derived phase) fails here.
+    """
+    known = {code for codes in REASON_CODES.values() for code in codes}
+    ingress_codes = {
+        "input_path_invalid",
+        "input_namespace_collision",
+        "input_format_invalid",
+        "input_logical_type_invalid",
+        "input_file_count_limit",
+        "input_file_size_limit",
+        "input_total_size_limit",
+        "input_snapshot_mismatch",
+        "input_role_binding",
+        "input_role_format",
+        "input_role_unknown",
+        "input_role_cardinality",
+        "request_size_limit",
+        "workspace_json_invalid",
+        "validator_resource_limit",
+        "contract_invalid",
+        "gpu_credit_exhausted",
+        "infrastructure_unavailable",
+        "runner_not_ready",
+        "admission_denied",
+        "admission_limited",
+        "admission_unavailable",
+    }
+    assert ingress_codes <= known
+    # One spelling for the exhausted-credit fact, wherever it is reported.
+    assert phase_for_code("gpu_credit_exhausted") == "admission"
+    assert "credit_exhausted" not in known

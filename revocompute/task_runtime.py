@@ -50,6 +50,7 @@ from revocompute.ingress_security import (
     ValidationReceipt,
     snapshot_mismatch_reason,
 )
+from revocompute.input_validators.isolated_validation import VALIDATOR_RESOURCE_LIMIT_ERROR
 from revocompute.manage_db import ManageDatabase  # noqa: E402
 from revocompute.operational_events import emit_event
 from revocompute.resource_observations import work_items_projection
@@ -390,7 +391,9 @@ def _gpu_allocation_callbacks(
                 required_entitlements=required_entitlements,
             )
         except (GPUAuthorizationUnavailableError, GPUCreditUnavailableError) as exc:
-            reason_code = "credit_exhausted"
+            # One spelling for one admission fact: the preflight detail code
+            # and this operational event both name the exhausted credit.
+            reason_code = "gpu_credit_exhausted"
             if isinstance(exc, GPUAuthorizationUnavailableError):
                 reason_code = (
                     "runner_readiness_unavailable"
@@ -741,13 +744,24 @@ def _public_run_record(task: dict[str, Any], task_type: Any, finished_at: float)
 _COMPLETION_SENTINEL = "task_finished"
 
 # Publication capacity guards.  Runner output is an untrusted filesystem
-# namespace, so the manifest the Server registers is bounded in both entry
-# count and aggregate bytes rather than assumed to be a scientific result set.
-# The limits sit far above any real family's output: a large complex run emits
-# thousands of per-item files, not hundreds of thousands, and the byte ceiling
-# is the existing per-task result budget.
-MAX_PUBLISHED_ARTIFACTS = 100_000
-MAX_PUBLISHED_BYTES = 8 * 1024 * 1024 * 1024
+# namespace, so the manifest the Server registers is bounded in both entry count
+# and aggregate bytes rather than assumed to be a scientific result set.  The
+# limits are server-owned configuration (``ComputeConfig.max_published_*``), not
+# module constants, so a deployment that ships a genuinely larger family raises
+# them instead of having its manifest silently truncated.
+def _published_artifact_limit() -> int:
+    return CONFIG.max_published_artifacts
+
+
+def _published_byte_limit() -> int:
+    return CONFIG.max_published_bytes
+
+
+#: How many refused result entries are named individually in the output check
+#: before the rest are summarized as a count.  The manifest is the durable
+#: record, so it must describe that a tree was refused without becoming one
+#: entry per hostile file.
+_MAX_RECORDED_REFUSALS = 20
 
 
 def _publishable_artifact(path: str, relative_path: str) -> tuple[dict[str, Any] | None, str | None]:
@@ -803,26 +817,43 @@ def _publishable_artifact(path: str, relative_path: str) -> tuple[dict[str, Any]
     )
 
 
-def _revalidate_legacy_blob(fe: dict[str, Any], upload_file: str) -> str | None:
-    """Re-run the canonical boundary on a blob that carries no admission receipt.
+def _revalidate_blob(fe: dict[str, Any], physical_path: str) -> str | None:
+    """Re-run the canonical Core boundary on one input's bytes.
 
-    A Task row written before admission receipts existed still names its input
-    in the same shape; instead of trusting the content-addressed blob by digest
-    alone, it is passed back through the same Core validators that admitted live
-    submissions.  Returns a bounded reason code when it does not validate.
+    This is the actual admission decision for the bytes about to execute.  It is
+    run for every input — a row that predates receipts and a row that carries one
+    alike — so a forged or stale receipt can never stand in for real validation.
+    Returns a bounded reason code when the bytes do not validate.
     """
     from revocompute.input_validators import validate_input_file, validate_logical_input
 
     logical_type = str(fe.get("logical_type") or "file")
     format_name = str(fe.get("format") or "")
     relative_path = str(fe.get("relative_path") or fe.get("value") or "")
-    error = validate_input_file(upload_file, relative_path, logical_type=logical_type)
+    error = validate_input_file(physical_path, relative_path, logical_type=logical_type)
     if error is None:
-        error = validate_logical_input(upload_file, format_name, logical_type)
+        error = validate_logical_input(physical_path, format_name, logical_type)
     if error is not None:
-        logging.error("Legacy input blob failed Core revalidation: %s", error)
-        return "input_snapshot_mismatch"
+        logging.error("Input failed Core revalidation before dispatch: %s", error)
+        return VALIDATOR_RESOURCE_LIMIT_ERROR if error == VALIDATOR_RESOURCE_LIMIT_ERROR else "input_snapshot_mismatch"
     return None
+
+
+def _verify_snapshot(fe: dict[str, Any], snapshot_path: str, receipt: Any) -> str | None:
+    """Prove the snapshot is a Core-admitted byte stream, or return a reason code.
+
+    Two independent checks, and revalidation is mandatory rather than skipped:
+    the receipt (when present) proves the snapshot is the exact immutable byte
+    stream admission recorded, and the canonical boundary is re-run on those
+    bytes so a forged or stale receipt cannot substitute a decision for real
+    validation.  This is what lets ``_derive_task_id`` trust a duplicate
+    submission as reproducible: the id is only reusable when the bytes and the
+    boundary that admitted them are the same.
+    """
+    receipt_reason = snapshot_mismatch_reason(receipt, snapshot_path) if isinstance(receipt, dict) else None
+    if receipt_reason is not None:
+        return receipt_reason
+    return _revalidate_blob(fe, snapshot_path)
 
 
 def _default_artifact_role(relative_path: str) -> str:
@@ -1071,7 +1102,14 @@ def _finalize_results_manifest(
     publication_capacity_guard = False
     total_published_bytes = 0
     published_paths: set[str] = set()
+    skipped_unpublishable = 0
     for root, dirs, files in os.walk(result_dir, followlinks=False):
+        if publication_capacity_guard:
+            # The tree is over capacity: stop walking rather than re-tripping
+            # the guard once per remaining directory, which would grow the
+            # manifest's ``problems`` list one entry at a time for an untrusted
+            # tree.  The capacity problem is recorded once, below.
+            break
         dirs[:] = sorted(directory for directory in dirs if not os.path.islink(os.path.join(root, directory)))
         for filename in sorted(files):
             path = os.path.join(root, filename)
@@ -1092,25 +1130,37 @@ def _finalize_results_manifest(
             if record is None:
                 # A symlink, hard link, special file, or unreadable entry is not
                 # a publishable artifact.  It is excluded — never followed, never
-                # downgraded to "publish whatever is there" — and the anomaly is
-                # recorded so the output check reflects it.
-                publication_problems.append(f"Rejected non-publishable result entry {relative_path}: {reason}")
+                # downgraded to "publish whatever is there".  The first few are
+                # named so the output check says which file was refused; the
+                # remainder are counted, so an untrusted tree cannot grow the
+                # manifest one detail entry per file.
+                skipped_unpublishable += 1
+                if len(publication_problems) < _MAX_RECORDED_REFUSALS:
+                    publication_problems.append(
+                        f"Rejected non-publishable result entry {relative_path}: {reason}"
+                    )
                 continue
-            if len(artifacts) >= MAX_PUBLISHED_ARTIFACTS:
-                publication_problems.append(
-                    f"Result tree exceeds the {MAX_PUBLISHED_ARTIFACTS} published artifact limit"
-                )
+            if len(artifacts) >= _published_artifact_limit():
                 publication_capacity_guard = True
                 break
             total_published_bytes += record["size"]
-            if total_published_bytes > MAX_PUBLISHED_BYTES:
-                publication_problems.append(
-                    f"Result tree exceeds the {MAX_PUBLISHED_BYTES} byte published artifact limit"
-                )
+            if total_published_bytes > _published_byte_limit():
                 publication_capacity_guard = True
                 break
             published_paths.add(relative_path)
             artifacts.append(record)
+    if publication_capacity_guard:
+        # One bounded entry per guard, whether the ceiling is the artifact count
+        # or the aggregate bytes; the walk above has already stopped.
+        limit = (
+            _published_artifact_limit()
+            if len(artifacts) >= _published_artifact_limit()
+            else _published_byte_limit()
+        )
+        publication_problems.append(f"Result tree exceeds the {limit} publication capacity limit")
+    if skipped_unpublishable > _MAX_RECORDED_REFUSALS:
+        remainder = skipped_unpublishable - _MAX_RECORDED_REFUSALS
+        publication_problems.append(f"... and {remainder} further non-publishable result entries were refused")
     # The runner owns its files' presentation roles in expected_files.yaml.
     # Read that declaration first so view resolution can rank it, but resolve
     # the views before building the logical-file projection: view resolution
@@ -1557,18 +1607,14 @@ def _execute_compute_task(
             )
             logging.error("Input snapshot verification failed for task %s", md5sum)
             return
-        # The snapshot is the immutable byte stream the Runner consumes, so it
-        # is the thing the admission receipt must still describe.  With a
-        # receipt the identity is proven directly; without one (a row that
-        # predates receipts) the snapshot is re-run through the same canonical
-        # boundary rather than assumed safe.  Either way a swap between
-        # admission and execution is a failure, not a silently substituted
-        # input.
+        # The snapshot is the immutable byte stream the Runner consumes, so the
+        # admission receipt names it.  A trusted receipt is necessary but not
+        # sufficient: the snapshot is re-run through the same canonical Core
+        # boundary execution would have applied, so a forged or stale receipt can
+        # never substitute a decision for real validation, and a swap between
+        # admission and execution is a failure rather than a silent substitution.
         receipt = fe.get("validation_receipt")
-        if isinstance(receipt, dict):
-            reason = snapshot_mismatch_reason(receipt, snapshot_path)
-        else:
-            reason = _revalidate_legacy_blob(fe, snapshot_path)
+        reason = _verify_snapshot(fe, snapshot_path, receipt)
         if reason is not None:
             _record_failure(
                 md5sum,
@@ -1591,7 +1637,7 @@ def _execute_compute_task(
         if not isinstance(receipt, dict):
             # Record the freshly proven decision on the execution description,
             # so downstream provenance names the boundary that admitted these
-            # bytes even for a legacy row.
+            # bytes even for a row that predates receipts.
             fe["validation_receipt"] = ValidationReceipt(
                 sha256=str(fe["hash"]),
                 size=int(fe.get("size") or os.path.getsize(snapshot_path)),

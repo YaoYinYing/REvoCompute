@@ -114,6 +114,10 @@ REASON_CODES: dict[Phase, frozenset[str]] = {
 ARTIFACT_PUBLICATION_REJECTED = "artifact_publication_rejected"
 ARTIFACT_CAPACITY_GUARD = "artifact_capacity_guard"
 
+#: The complete artifact reason-code set, so a caller can assert membership
+#: the way it does for the ingress phases.
+ARTIFACT_PUBLICATION_REASON_CODES = frozenset({ARTIFACT_PUBLICATION_REJECTED, ARTIFACT_CAPACITY_GUARD})
+
 _PHASE_BY_CODE = {
     code: phase.value for phase, codes in REASON_CODES.items() for code in codes
 }

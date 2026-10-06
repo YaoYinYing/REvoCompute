@@ -173,7 +173,7 @@ def test_the_snapshot_carries_a_receipt_bound_to_the_admitted_bytes(monkeypatch,
     manifest = json.loads((snapshot_root / "task.json").read_text(encoding="utf-8"))
 
     entry = manifest["inputs"]["sequence"][0]
-    receipt = entry["validation"]
+    receipt = entry["validation_receipt"]
     assert receipt["decision"] == "accepted"
     assert receipt["reason_code"] is None
     assert receipt["sha256"] == hashlib.sha256(FASTA).hexdigest()
@@ -491,3 +491,272 @@ def test_the_workspace_normalize_post_carries_the_shared_csrf_gate(monkeypatch, 
         headers=token_only,
     )
     assert authorized.status_code in {200, 400}
+
+
+def test_a_live_receipted_row_actually_takes_the_receipt_branch(monkeypatch, tmp_path):
+    """The ingress writes `validation_receipt` and the worker reads it.
+
+    This is the regression that made the execution-time check dead code: the
+    writer and reader must agree on one key.  The guard is asserted to have been
+    *reached* on a real submission, not merely to exist.
+    """
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    queued = _recording_dispatch(module)
+    response = module.app.test_client().post(
+        "/compute/api/post",
+        headers=_test_client_auth(module),
+        data={
+            "task_type": "gremlin",
+            "file": (io.BytesIO(FASTA), "2KL8.fasta"),
+            "input_roles": "sequence",
+        },
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 302, response.get_data(as_text=True)[:300]
+    task_id = response.headers["Location"].rsplit("/", 1)[-1]
+    task = module.task_store.get_task(task_id)
+
+    # The row and the snapshot manifest both carry the receipt under the one key
+    # the worker reads.
+    form = json.loads(task["input_form"])
+    entity = next(item for item in form["entities"] if item["type"] == "file")
+    assert isinstance(entity.get("validation_receipt"), dict)
+    snapshot_root = Path(module.app.config["storage_resolver"].get_input_root(task)) / "inputs"
+    manifest = json.loads((snapshot_root / "task.json").read_text(encoding="utf-8"))
+    assert isinstance(manifest["inputs"]["sequence"][0]["validation_receipt"], dict)
+
+    seen: list[object] = []
+    real = module.task_runtime.snapshot_mismatch_reason
+
+    def _spy(receipt, path):
+        seen.append(receipt)
+        return real(receipt, path)
+
+    monkeypatch.setattr(module.task_runtime, "snapshot_mismatch_reason", _spy)
+    monkeypatch.setattr(
+        module.task_runtime,
+        "_run_compute_job",
+        lambda *args, **kwargs: module.task_runtime.JobState.COMPLETED,
+    )
+    module.run_compute_task(task_id)
+
+    # Reached, with a real receipt — not the legacy fallback.
+    assert seen and isinstance(seen[0], dict)
+
+
+def test_a_stale_validator_revision_is_refused_even_with_matching_bytes(monkeypatch, tmp_path):
+    """A stale receipt must fail; the pre-existing digest check cannot catch it."""
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    queued = _recording_dispatch(module)
+    response = module.app.test_client().post(
+        "/compute/api/post",
+        headers=_test_client_auth(module),
+        data={
+            "task_type": "gremlin",
+            "file": (io.BytesIO(FASTA), "2KL8.fasta"),
+            "input_roles": "sequence",
+        },
+        content_type="multipart/form-data",
+    )
+    task_id = response.headers["Location"].rsplit("/", 1)[-1]
+    task = module.task_store.get_task(task_id)
+    form = json.loads(task["input_form"])
+    for entity in form["entities"]:
+        if entity["type"] == "file":
+            entity["validation_receipt"]["validator_revision"] = "sha256:stale"
+    module.task_store.update_task(task_id, input_form=json.dumps(form))
+
+    executed: list[str] = []
+    monkeypatch.setattr(
+        module.task_runtime,
+        "_run_compute_job",
+        lambda *args, **kwargs: executed.append(kwargs["task_id"]) or module.task_runtime.JobState.COMPLETED,
+    )
+
+    module.run_compute_task(task_id)
+
+    # Bytes on disk still match the recorded digest, so only the revision check
+    # can refuse this; nothing may execute.
+    assert executed == []
+    assert module.task_store.get_task(task_id)["status"] == "failed"
+
+
+def test_a_forged_receipt_cannot_skip_real_validation(monkeypatch, tmp_path):
+    """A receipt that names valid bytes cannot excuse bytes that do not validate."""
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    queued = _recording_dispatch(module)
+    response = module.app.test_client().post(
+        "/compute/api/post",
+        headers=_test_client_auth(module),
+        data={
+            "task_type": "gremlin",
+            "file": (io.BytesIO(FASTA), "2KL8.fasta"),
+            "input_roles": "sequence",
+        },
+        content_type="multipart/form-data",
+    )
+    task_id = response.headers["Location"].rsplit("/", 1)[-1]
+    task = module.task_store.get_task(task_id)
+    snapshot = Path(module.app.config["storage_resolver"].get_input_root(task)) / "inputs" / "sequence" / "2KL8.fasta"
+    # Replace the bytes with something that is not the admitted FASTA and forge a
+    # fully self-consistent receipt for the new bytes.
+    snapshot.chmod(0o640)
+    snapshot.write_bytes(b"#!/bin/sh\necho pwned\n")
+    digest = hashlib.sha256(b"#!/bin/sh\necho pwned\n").hexdigest()
+    form = json.loads(task["input_form"])
+    for entity in form["entities"]:
+        if entity["type"] != "file":
+            continue
+        entity["hash"] = digest
+        entity["validation_receipt"] = {
+            **entity["validation_receipt"],
+            "sha256": digest,
+        }
+    # The snapshot digest check at the top of the worker also needs the file's
+    # declared hash to match, which the forge above arranges; make the snapshot
+    # trailing-digest agree by keeping the forged hash consistent.
+    module.task_store.update_task(task_id, input_form=json.dumps(form))
+
+    executed: list[str] = []
+    monkeypatch.setattr(
+        module.task_runtime,
+        "_run_compute_job",
+        lambda *args, **kwargs: executed.append(kwargs["task_id"]) or module.task_runtime.JobState.COMPLETED,
+    )
+
+    module.run_compute_task(task_id)
+
+    assert executed == []
+    assert module.task_store.get_task(task_id)["status"] == "failed"
+
+
+def test_a_file_and_directory_path_prefix_pair_is_rejected_not_a_500(monkeypatch, tmp_path):
+    """`x.pdb` and `x.pdb/y.pdb` cannot both exist; fail closed at the boundary."""
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    _pdb_only(module, maximum=2)
+    queued = _recording_dispatch(module)
+    roots = [Path(module.app.config[key]) for key in ("UPLOAD_FOLDER", "WORKSPACE_FOLDER", "RESULTS_FOLDER")]
+    before = {root: sorted(path.relative_to(root) for path in root.rglob("*") if path.is_file()) for root in roots}
+
+    response = module.app.test_client().post(
+        "/compute/api/post",
+        headers=_test_client_auth(module),
+        data={
+            "task_type": "pdb_only",
+            "files": [
+                (io.BytesIO(RECEPTOR), "x.pdb"),
+                (io.BytesIO(RECEPTOR), "y.pdb"),
+            ],
+            "input_roles": ["structure", "structure"],
+            "input_paths": ["x.pdb", "x.pdb/y.pdb"],
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 400
+    assert response.get_json()["details"][0]["code"] == "input_namespace_collision"
+    assert module.task_store.list_tasks() == []
+    assert queued == []
+    after = {root: sorted(path.relative_to(root) for path in root.rglob("*") if path.is_file()) for root in roots}
+    assert after == before
+
+
+def test_a_prefix_pair_across_different_roles_is_allowed(monkeypatch, tmp_path):
+    """Only a same-role prefix is a collision; distinct roles have distinct roots."""
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    base, runner = module.task_runtime._get_task_type("gremlin")
+    conftest._inject_task_type(
+        module,
+        __import__("dataclasses").replace(
+            base,
+            name="two_role_pdb",
+            inputs=(
+                TaskInputRole("first", "First", "protein_structure", ("pdb",), 1, 1),
+                TaskInputRole("second", "Second", "protein_structure", ("pdb",), 1, 1),
+            ),
+            params=(),
+        ),
+        runner,
+    )
+    queued = _recording_dispatch(module)
+
+    response = module.app.test_client().post(
+        "/compute/api/post",
+        headers=_test_client_auth(module),
+        data={
+            "task_type": "two_role_pdb",
+            "files": [
+                (io.BytesIO(RECEPTOR), "x.pdb"),
+                (io.BytesIO(RECEPTOR), "y.pdb"),
+            ],
+            "input_roles": ["first", "second"],
+            "input_paths": ["x.pdb", "x.pdb/y.pdb"],
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 302, response.get_data(as_text=True)[:300]
+    assert len(queued) == 1
+
+
+def test_an_isolated_resource_limit_surfaces_its_bounded_code(monkeypatch, tmp_path):
+    """A resource-limit parser failure is not reported as an indistinguishable bad file."""
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    _pdb_only(module, maximum=1)
+    # Reuse the isolated validator on a format this synthetic role accepts by
+    # forcing the YAML path through the family's declared format set.
+    base, runner = module.task_runtime._get_task_type("gremlin")
+    conftest._inject_task_type(
+        module,
+        __import__("dataclasses").replace(
+            base,
+            name="yaml_only",
+            inputs=(TaskInputRole("config", "Config", "config", ("yaml",), 1, 1),),
+            params=(),
+        ),
+        runner,
+    )
+    from revocompute.input_validators import isolated_validation
+
+    monkeypatch.setattr(isolated_validation, "ISOLATED_TIMEOUT_SECONDS", 0.001)
+    queued = _recording_dispatch(module)
+
+    response = module.app.test_client().post(
+        "/compute/api/post",
+        headers=_test_client_auth(module),
+        data={
+            "task_type": "yaml_only",
+            "file": (io.BytesIO(b"version: 1\n"), "config.yaml"),
+            "input_roles": "config",
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 400
+    assert response.get_json()["details"][0]["code"] == "validator_resource_limit"
+    assert module.task_store.list_tasks() == []
+    assert queued == []

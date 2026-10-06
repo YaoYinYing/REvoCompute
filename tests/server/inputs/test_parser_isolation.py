@@ -42,21 +42,25 @@ def test_yaml_validation_runs_through_isolated_protocol(tmp_path):
     assert validate_input_file(str(unsafe), unsafe.name) is not None
 
 
-def test_isolated_parser_timeout_is_a_validation_failure(monkeypatch, tmp_path):
+def test_isolated_parser_timeout_is_a_bounded_resource_failure(monkeypatch, tmp_path):
     source = tmp_path / "input.yaml"
     source.write_text("version: 1\n", encoding="utf-8")
     monkeypatch.setattr(isolated_validation, "ISOLATED_TIMEOUT_SECONDS", 0.001)
 
-    assert "time limit" in validate_input_file(str(source), source.name)
+    # A parser that runs past its budget is a resource-limit failure, reported
+    # with the bounded code rather than a prose-only message.
+    assert validate_input_file(str(source), source.name) == isolated_validation.VALIDATOR_RESOURCE_LIMIT_ERROR
 
 
 def test_isolated_parser_crash_is_a_validation_failure(monkeypatch, tmp_path):
     source = tmp_path / "input.yaml"
     source.write_text("version: 1\n", encoding="utf-8")
+    # A worker that errored out (nonzero but not a resource kill) is a parser
+    # crash, not a resource limit.
     monkeypatch.setattr(
         isolated_validation.subprocess,
         "Popen",
-        lambda *_args, **_kwargs: _Completed(-9),
+        lambda *_args, **_kwargs: _Completed(1),
     )
 
     assert "failed in isolation" in validate_input_file(str(source), source.name)
@@ -127,7 +131,7 @@ def test_isolated_parser_memory_limit_is_a_bounded_validation_failure(monkeypatc
     )
 
     error = validate_input_file(str(source), source.name)
-    assert error == isolated_validation.RESOURCE_LIMIT_ERROR
+    assert error == isolated_validation.VALIDATOR_RESOURCE_LIMIT_ERROR
 
 
 @pytest.mark.parametrize(
@@ -189,7 +193,7 @@ def test_a_slow_isolated_parser_is_killed_with_its_whole_group(monkeypatch, tmp_
 
     error = validate_input_file(str(source), source.name)
 
-    assert "time limit" in error
+    assert error == isolated_validation.VALIDATOR_RESOURCE_LIMIT_ERROR
     assert signalled and signalled[0] == (4242, isolated_validation.signal.SIGTERM)
 
 
