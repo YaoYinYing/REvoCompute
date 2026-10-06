@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 from typing import Any
 
 _STORAGE_KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{2,119}\Z")
@@ -44,12 +45,49 @@ def safe_join(base_dir: str, *parts: str) -> str:
     return candidate
 
 
-def _sha256_file(path: str) -> str:
+# Stream a published artifact in bounded chunks: artifacts are scientific files
+# that can be gigabytes wide, so nothing here ever reads one wholly into memory.
+_HASH_CHUNK_BYTES = 1024 * 1024
+
+
+class ArtifactIdentityError(Exception):
+    """A candidate does not satisfy the published-artifact identity contract."""
+
+
+def _open_published_file(path: str) -> Any:
+    """Open an artifact as a verified descriptor under the private-link contract.
+
+    ``O_NOFOLLOW`` refuses a final-component symlink atomically at open time, and
+    the ``fstat`` runs on the *opened descriptor* rather than on a pathname, so a
+    regular single-linked file is the only thing this descriptor can be reading.
+    The caller must close the returned handle.
+    """
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    handle = os.fdopen(descriptor, "rb")
+    try:
+        status = os.fstat(handle.fileno())
+        if not stat.S_ISREG(status.st_mode) or status.st_nlink != 1:
+            raise ArtifactIdentityError(f"not a private regular file: {path}")
+    except BaseException:
+        handle.close()
+        raise
+    return handle
+
+
+def _hash_open_file(handle: Any) -> tuple[str, int]:
+    """Stream-hash an open descriptor, returning ``(sha256, size)`` in bounded chunks."""
     digest = hashlib.sha256()
+    size = 0
+    while chunk := handle.read(_HASH_CHUNK_BYTES):
+        digest.update(chunk)
+        size += len(chunk)
+    return digest.hexdigest(), size
+
+
+def _sha256_file(path: str) -> str:
     with open(path, "rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+        digest, _size = _hash_open_file(handle)
+    return digest
 
 
 class StorageResolver:
@@ -100,37 +138,81 @@ class StorageResolver:
 
     manifest_path = get_manifest_path
 
-    def resolve_artifact(self, task: dict[str, Any], relative_path: str) -> dict[str, Any] | None:
+    def load_manifest(self, task: dict[str, Any]) -> dict[str, Any] | None:
+        """Return the finalized results manifest, or ``None`` when unreadable."""
+        try:
+            with open(self.get_manifest_path(task), encoding="utf-8") as handle:
+                manifest = json.load(handle)
+        except (AttributeError, OSError, ValueError, TypeError):
+            return None
+        return manifest if isinstance(manifest, dict) else None
+
+    def resolve_declared_artifact(
+        self, task: dict[str, Any], relative_path: str, manifest: dict[str, Any] | None = None
+    ) -> tuple[str, dict[str, Any]] | None:
+        """Resolve a manifest-declared artifact to its path and manifest entry.
+
+        Path normalization and declaration lookup only.  Both the download
+        resolver and the results archive verify the bytes with
+        ``open_verified_artifact``, so both consume one identity contract.  A
+        caller that already holds the parsed manifest passes it in rather than
+        re-reading it once per artifact.
+        """
         normalized = relative_path.replace("\\", "/")
         parts = normalized.split("/")
         if not normalized or normalized.startswith("/") or any(part in {"", ".", ".."} for part in parts):
             return None
+        if manifest is None:
+            manifest = self.load_manifest(task)
+        if manifest is None:
+            return None
+        artifact = next((item for item in manifest.get("artifacts", []) if item.get("path") == normalized), None)
+        if artifact is None:
+            return None
         try:
-            with open(self.get_manifest_path(task), encoding="utf-8") as handle:
-                manifest = json.load(handle)
-            artifact = next(item for item in manifest.get("artifacts", []) if item.get("path") == normalized)
             path = safe_join(self.get_task_root(task), *parts)
-        except (AttributeError, OSError, ValueError, StopIteration, TypeError):
+        except (AttributeError, ValueError):
             return None
-        if not os.path.isfile(path) or os.path.islink(path):
-            return None
+        return path, artifact
+
+    @staticmethod
+    def open_verified_artifact(path: str, artifact: dict[str, Any]) -> Any:
+        """Open a published artifact and verify it against its manifest entry.
+
+        This is *the* published-artifact identity contract: a private regular
+        file (no symlink, single link) whose observed size and SHA-256 match the
+        manifest — verified on the exact descriptor the caller then reads.
+        Returns the open handle rewound to the start; the caller must close it.
+        """
+        handle = _open_published_file(path)
         try:
-            if os.stat(path, follow_symlinks=False).st_nlink != 1:
-                return None
-        except OSError:
+            digest, size = _hash_open_file(handle)
+            if artifact.get("size") is not None and artifact["size"] != size:
+                raise ArtifactIdentityError("published artifact does not match its declared size")
+            if artifact.get("sha256") and artifact["sha256"] != digest:
+                raise ArtifactIdentityError("published artifact does not match its declared digest")
+            handle.seek(0)
+        except BaseException:
+            handle.close()
+            raise
+        return handle
+
+    def resolve_artifact(self, task: dict[str, Any], relative_path: str) -> dict[str, Any] | None:
+        resolved = self.resolve_declared_artifact(task, relative_path)
+        if resolved is None:
             return None
-        digest = _sha256_file(path)
-        size = os.path.getsize(path)
-        if artifact.get("sha256") and artifact["sha256"] != digest:
-            return None
-        if artifact.get("size") is not None and artifact["size"] != size:
+        path, artifact = resolved
+        try:
+            with self.open_verified_artifact(path, artifact) as handle:
+                size = os.fstat(handle.fileno()).st_size
+        except (ArtifactIdentityError, OSError, ValueError):
             return None
         return {
             **artifact,
-            "path": normalized,
+            "path": relative_path.replace("\\", "/"),
             "physical_path": path,
-            "sha256": digest,
-            "size": size,
+            "sha256": artifact.get("sha256") or _sha256_file(path),
+            "size": size if artifact.get("size") is None else artifact["size"],
             "type": artifact.get("type") or artifact.get("media_type"),
         }
 

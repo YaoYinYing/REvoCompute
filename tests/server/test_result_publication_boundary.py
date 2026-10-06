@@ -19,6 +19,7 @@ import os
 from pathlib import Path
 import stat
 import uuid
+import zipfile
 
 import pytest
 from revocompute.result_storyboard import ResultContractError, declared_file_roles, load_expected_file_tree
@@ -538,3 +539,90 @@ def test_a_refused_tree_never_falls_back_to_publishing_it(monkeypatch, tmp_path)
     assert (result_dir / "manifest.json").is_file()
     assert manifest["output_check"]["state"] == "failed"
     assert "secret" not in json.dumps(manifest)
+
+
+# ---------------------------------------------------------------------------
+# The downloadable ZIP is a publication path, so it consumes the same
+# published-artifact identity contract as an ordinary download.  These cases
+# replace a finalized artifact out from under the manifest and assert the bytes
+# never reach the archive.
+# ---------------------------------------------------------------------------
+
+
+def _archive_manifest(module, task_id: str) -> dict:
+    archive_path = Path(module.task_runtime._build_results_archive(module.task_store.get_task(task_id)))
+    with zipfile.ZipFile(archive_path) as archive:
+        return {name: archive.read(name) for name in archive.namelist()}
+
+
+def _single_artifact_task(module, tmp_path, content: bytes) -> tuple[str, Path, dict]:
+    task_id = _finished_task(module, tmp_path)
+    manifest, result_dir = _finalize_dir(module, task_id, lambda root: (root / "result.txt").write_bytes(content))
+    return task_id, result_dir, manifest
+
+
+def test_unchanged_published_artifact_archives_with_its_manifest_identity(monkeypatch, tmp_path) -> None:
+    """The ordinary case still works and the ZIP entry matches the manifest."""
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    content = b"score\n1.0\n"
+    task_id, _result_dir, manifest = _single_artifact_task(module, tmp_path, content)
+    artifact = next(item for item in manifest["artifacts"] if item["path"] == "result.txt")
+
+    entries = _archive_manifest(module, task_id)
+
+    assert entries["result.txt"] == content
+    assert artifact["sha256"] == hashlib.sha256(content).hexdigest()
+    assert artifact["size"] == len(content)
+    assert "manifest.json" in entries
+
+
+def test_a_regular_file_replaced_after_finalization_fails_the_archive_closed(monkeypatch, tmp_path) -> None:
+    """Different regular bytes under the declared name must not be archived."""
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id, result_dir, _manifest = _single_artifact_task(module, tmp_path, b"original bytes\n")
+    result_dir.joinpath("result.txt").write_bytes(b"substituted bytes\n")
+
+    with pytest.raises(FileNotFoundError):
+        module.task_runtime._build_results_archive(module.task_store.get_task(task_id))
+
+
+def test_a_symlink_substitution_after_finalization_cannot_reach_the_archive(monkeypatch, tmp_path) -> None:
+    """A post-publication symlink cannot pull target bytes into the ZIP."""
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id, result_dir, _manifest = _single_artifact_task(module, tmp_path, b"original bytes\n")
+    outside = tmp_path / "outside.txt"
+    outside.write_bytes(b"secret target bytes\n")
+    artifact = result_dir / "result.txt"
+    artifact.unlink()
+    artifact.symlink_to(outside)
+
+    with pytest.raises(FileNotFoundError):
+        module.task_runtime._build_results_archive(module.task_store.get_task(task_id))
+
+
+def test_a_hardlink_substitution_after_finalization_cannot_reach_the_archive(monkeypatch, tmp_path) -> None:
+    """A second link defeats the private-link assumption and fails closed."""
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id, result_dir, _manifest = _single_artifact_task(module, tmp_path, b"original bytes\n")
+    outside = tmp_path / "outside.txt"
+    outside.write_bytes(b"original bytes\n")
+    artifact = result_dir / "result.txt"
+    artifact.unlink()
+    artifact.hardlink_to(outside)
+
+    with pytest.raises(FileNotFoundError):
+        module.task_runtime._build_results_archive(module.task_store.get_task(task_id))
+
+
+def test_a_manifest_path_escaping_the_result_root_fails_closed(monkeypatch, tmp_path) -> None:
+    """An entry naming bytes outside the published root is never archived."""
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id, result_dir, _manifest = _single_artifact_task(module, tmp_path, b"original bytes\n")
+    outside = tmp_path / "outside.txt"
+    outside.write_bytes(b"outside bytes\n")
+    (result_dir / "manifest.json").write_text(
+        json.dumps({"artifacts": [{"path": "../outside.txt"}]}), encoding="utf-8"
+    )
+
+    with pytest.raises(FileNotFoundError):
+        module.task_runtime._build_results_archive(module.task_store.get_task(task_id))

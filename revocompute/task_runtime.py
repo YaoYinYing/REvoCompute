@@ -63,7 +63,7 @@ from revocompute.result_storyboard import (
     resolve_expected_files,
     storyboard_declaration,
 )
-from revocompute.storage import StorageResolver
+from revocompute.storage import ArtifactIdentityError, StorageResolver
 from revocompute.citations import citations_bibtex
 from revocompute.task_types import default_task_type, get as _get_task_type
 from revocompute.task_types import discover_plugins as _discover_plugins
@@ -202,6 +202,48 @@ def _task_result_dir(task: dict[str, Any]) -> str:
 def _storage() -> StorageResolver:
     """Build from current config so tests and controlled reloads stay isolated."""
     return StorageResolver(CONFIG.results_folder, CONFIG.workspace_folder)
+
+
+# Stream a verified artifact into the ZIP in bounded chunks: a scientific result
+# can be gigabytes wide, so it is never held in memory to be archived.
+_ARCHIVE_CHUNK_BYTES = 1024 * 1024
+# The ZIP format stores MS-DOS timestamps, whose epoch is 1980; an older mtime
+# (a restored archive, a clock-skewed runner host) must not fail the archive.
+_ZIP_EPOCH = 315_532_800
+
+
+def _write_verified_artifact(
+    archive: zipfile.ZipFile, storage: StorageResolver, task: dict, manifest: dict, artifact: dict
+) -> None:
+    """Add one manifest-declared artifact from its verified open descriptor.
+
+    The bytes reaching the ZIP are streamed from the same descriptor the
+    published-artifact identity contract was checked on, so a file swapped after
+    manifest finalization -- a new inode, a symlink, a hard-link substitute --
+    cannot land in the download: ``open_verified_artifact`` refuses it before a
+    byte is copied.
+    """
+    relative_path = artifact.get("path", "")
+    resolved = storage.resolve_declared_artifact(task, relative_path, manifest)
+    if resolved is None:
+        # A path the manifest never declared -- an undeclared file, an escaping
+        # relative path, a malformed entry -- is not a publication, so it is
+        # refused here exactly like a swapped one.
+        raise FileNotFoundError(f"Published result artifact is unavailable: {relative_path}")
+    path, declared = resolved
+    try:
+        handle = storage.open_verified_artifact(path, declared)
+    except (ArtifactIdentityError, OSError, ValueError) as exc:
+        raise FileNotFoundError(f"Published result artifact is unavailable: {relative_path}") from exc
+    with handle:
+        status = os.fstat(handle.fileno())
+        info = zipfile.ZipInfo(relative_path, date_time=time.localtime(max(status.st_mtime, _ZIP_EPOCH))[:6])
+        info.compress_type = zipfile.ZIP_DEFLATED
+        info.file_size = status.st_size
+        # ``file_size`` is the verified size, so ``ZipFile`` can decide the ZIP64
+        # format up front instead of striding the artifact through memory.
+        with archive.open(info, "w") as destination:
+            shutil.copyfileobj(handle, destination, _ARCHIVE_CHUNK_BYTES)
 
 
 def _virtual_upload_path(filename: str) -> str:
@@ -1266,7 +1308,14 @@ def _finalize_results_manifest(
 
 
 def _build_results_archive(task: dict) -> str:
-    """Build an optional ZIP from the artifacts published in the manifest."""
+    """Build an optional ZIP from the artifacts published in the manifest.
+
+    The ZIP is a publication path, so it consumes the same published-artifact
+    identity contract as the ordinary artifact download: every entry comes from
+    a verified open descriptor, never from a pathname that is re-opened after
+    the check.  A file replaced after the manifest was finalized therefore fails
+    the whole archive closed instead of being smuggled into the download.
+    """
     zip_filename = _task_zip_path(task)
     result_dir = _task_result_dir(task)
     manifest_path = _safe_join(result_dir, "manifest.json")
@@ -1275,19 +1324,13 @@ def _build_results_archive(task: dict) -> str:
             manifest = json.load(handle)
     except (OSError, json.JSONDecodeError) as exc:
         raise FileNotFoundError("Result manifest is not finalized") from exc
+    storage = _storage()
     temporary_zip = f"{os.path.splitext(zip_filename)[0]}.tmp-{os.getpid()}-{time.time_ns()}.zip"
     try:
         with zipfile.ZipFile(temporary_zip, "w", compression=zipfile.ZIP_DEFLATED) as archive:
             archive.write(manifest_path, "manifest.json")
             for artifact in manifest.get("artifacts", []):
-                relative_path = artifact.get("path", "")
-                parts = relative_path.split("/")
-                if not relative_path or any(part in {"", ".", ".."} for part in parts):
-                    raise ValueError("Result manifest contains an invalid artifact path")
-                path = _safe_join(result_dir, *parts)
-                if os.path.islink(path) or not os.path.isfile(path):
-                    raise FileNotFoundError(f"Published result artifact is unavailable: {relative_path}")
-                archive.write(path, relative_path)
+                _write_verified_artifact(archive, storage, task, manifest, artifact)
         os.replace(temporary_zip, zip_filename)
     finally:
         if os.path.exists(temporary_zip):

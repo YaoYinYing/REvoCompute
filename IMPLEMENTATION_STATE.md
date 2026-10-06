@@ -727,6 +727,31 @@ Gates on this head: full non-browser suite 1834 passed / 24 skipped / 1 failed
 (the accepted opendde `/tmp`-prefix basetemp artifact); the frontend typecheck /
 test / build gates are unchanged and green.
 
+## Archive publication identity (rebased head)
+
+The downloadable results ZIP was a second publication path: `_build_results_archive`
+re-opened each manifest path and checked only `islink()`/`isfile()` before
+`ZipFile.write()`, so a file replaced after manifest finalization (a new inode, a
+symlink, a hard-link substitute) could land in the archive although the ordinary
+download path rejects it. Archive construction now consumes the same
+published-artifact identity contract:
+
+- `StorageResolver.open_verified_artifact` is the one contract: open with
+  `O_NOFOLLOW`, `fstat` the *opened* descriptor (regular file, `st_nlink == 1`),
+  stream-hash that descriptor, compare size and SHA-256 to the manifest entry,
+  then rewind. `resolve_declared_artifact` does path normalization and declaration
+  lookup only and is shared by both paths, and `resolve_artifact` wraps the same
+  primitive, so download and archive cannot diverge.
+- `_write_verified_artifact` streams from that verified descriptor straight into
+  `ZipFile.open(ZipInfo, "w")` in 1 MiB chunks: no check-then-reopen (the old
+  `archive.write(path, …)` re-opened by pathname) and no whole-artifact read into
+  memory.
+- Regression evidence in `tests/server/test_result_publication_boundary.py`: an
+  unchanged artifact archives normally with its ZIP entry matching the manifest
+  size/sha256, while different regular bytes, a symlink substitution, a hard-link
+  substitution, and a manifest path escaping the result root each fail the archive
+  closed.
+
 ## Named follow-ups (tracked, not silent)
 
 - `validator_revision()` reports `sha256:unavailable` when a boundary source
