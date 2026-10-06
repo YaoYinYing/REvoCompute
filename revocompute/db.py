@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
 import logging
 import math
@@ -13,6 +14,7 @@ import os
 import re
 import secrets
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Iterable
@@ -647,23 +649,56 @@ class TaskDatabase:
                 database_name="task database",
                 forbidden_columns={"tasks": {"scope_type", "scope_id"}},
             )
+        # Every process of a multi-process deployment runs this startup pass at
+        # once, so the whole pass is serialized on the database file itself: the
+        # schema must be created, the legacy tables copied, and those tables
+        # dropped as one exclusive unit.  SQLite transactions cannot give that —
+        # ``BEGIN IMMEDIATE`` serializes writers but a peer's committed
+        # ``DROP TABLE`` is still visible to a statement that has already been
+        # parsed, and a peer's uncommitted DDL is not visible to a reader at all,
+        # so one process can commit "resource_ledger exists" while another is
+        # still creating it and then fail to resolve the name.  The file lock
+        # makes the existence any process observes remain true for the whole
+        # pass, which is the property every step here relies on.
+        with self._startup_lock():
+            with self.engine.begin() as conn:
+                try:
+                    self.metadata.create_all(conn, checkfirst=True)
+                except OperationalError as exc:
+                    # A peer that predates the startup lock — an older release
+                    # still rolling out — can still race ``create_all``.  The
+                    # loser observes an "already exists" error, which is benign.
+                    if "already exists" not in str(exc).lower():
+                        raise
+                    logging.warning("TaskDatabase metadata already present, skipping creation")
+                self._migrate_subject_columns(conn)
+            # The legacy copy normalizes idempotency keys in place, so it must
+            # run before the append-only guards exist, and under the same lock
+            # so nothing can re-create the legacy tables between the copy and
+            # the drop.
+            self._migrate_legacy_gpu_tables()
+            with self.engine.begin() as conn:
+                self._install_append_only_guards(conn)
+
+    @contextmanager
+    def _startup_lock(self):
+        """Serialize the whole startup pass across processes on this database.
+
+        The lock is a file ``fcntl.flock`` beside the database rather than a
+        database lock: it is held for the duration of the pass, it is released
+        by the kernel if the process dies, and it needs no schema of its own.  It
+        guards a startup-only, short, finite section, so waiting is bounded and
+        cannot deadlock against the database's own locks.
+        """
+        lock_path = f"{self.path}.startup.lock"
+        directory = os.path.dirname(lock_path) or "."
+        os.makedirs(directory, exist_ok=True)
+        with open(lock_path, "a+b") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
             try:
-                self.metadata.create_all(conn, checkfirst=True)
-            except OperationalError as exc:
-                # Gunicorn can spawn multiple workers simultaneously which may try to
-                # initialize the SQLite schema at the same time. The loser of that
-                # race observes an "already exists" error; we can safely ignore it.
-                if "already exists" not in str(exc).lower():
-                    raise
-                logging.warning("TaskDatabase metadata already present, skipping creation")
-            self._migrate_subject_columns(conn)
-        # The legacy copy normalizes idempotency keys in place, so it must run
-        # before the append-only guards exist, and it takes its own write
-        # transaction because every process of a multi-process deployment runs
-        # this startup pass concurrently.
-        self._migrate_legacy_gpu_tables()
-        with self.engine.begin() as conn:
-            self._install_append_only_guards(conn)
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
     @staticmethod
     def _legacy_key(key: str, user_id: int) -> str:
@@ -711,20 +746,15 @@ class TaskDatabase:
         never rewrites the past.  The legacy tables are dropped only after the
         copy, so an interrupted migration is simply retried on the next start.
 
-        A multi-process deployment starts every worker at once and each runs this
-        pass, so it runs in one ``BEGIN IMMEDIATE`` transaction and re-reads the
-        legacy tables *inside* that lock: a peer that migrates first drops them,
-        and inspecting before taking the lock would still see tables that are
-        about to disappear, turning a benign race into "no such table".
+        Runs inside :meth:`_startup_lock`, which is what makes "the legacy tables
+        are present" a stable observation for the whole copy: a peer's committed
+        ``DROP TABLE`` cannot interleave, and a peer's half-created destination
+        table cannot be observed as finished.  One transaction then makes the
+        copy itself atomic, so a failure leaves the legacy tables in place and
+        the next start retries.
         """
-        with self.engine.connect() as conn:
-            conn.exec_driver_sql("BEGIN IMMEDIATE")
-            try:
-                self._copy_legacy_gpu_tables(conn)
-                conn.commit()
-            except Exception:
-                conn.rollback()
-                raise
+        with self.engine.begin() as conn:
+            self._copy_legacy_gpu_tables(conn)
 
     def _copy_legacy_gpu_tables(self, conn) -> None:
         inspector = sa_inspect(conn)

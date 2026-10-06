@@ -91,9 +91,6 @@ guard_seconds="${3:?guard interval is required}"
 stop_file="${4:?stop file is required}"
 result_file="${5:?result file is required}"
 
-# du reports KiB; the ceiling is a byte count, so round the ceiling up,
-# never down: the guard must not let a task past the limit it was given.
-limit_kib=$(( (limit_bytes + 1023) / 1024 ))
 
 peak_kib=0
 samples=0
@@ -130,7 +127,17 @@ while :; do
     # The wrapper removes the scratch directory after the task exits, which is
     # the guard's normal end: there is nothing left to measure.
     test -d "${scratch_dir}" || break
-    current_kib="$(du -sk -- "${scratch_dir}" 2>/dev/null | cut -f1)" || current_kib=0
+    # Sum the *allocated blocks of regular files* only.  ``du`` on the tree
+    # would count the directory entries themselves, and an empty directory
+    # occupies one filesystem block on ext4 — a task that wrote nothing would
+    # be reported as having written 4096 bytes, and an empty scratch would not
+    # read as zero.  Allocated blocks rather than apparent size keeps a sparse
+    # file from counting as capacity it never used.
+    # ``stat -c %b`` prints one file's allocated 512-byte blocks per line,
+    # which needs no quoting of its own and cannot be confused with the
+    # directory entries by accident.
+    current_kib="$(find "${scratch_dir}" -type f -exec stat -c %b {} + 2>/dev/null |
+        awk '{ total += $1 } END { print int(total / 2) }')" || current_kib=0
     case "${current_kib}" in (*[!0-9]*|"") current_kib=0 ;; esac
     samples=$((samples + 1))
     if (( current_kib > peak_kib )); then
@@ -147,7 +154,7 @@ while :; do
     # wrapper observes that the guard returned early and fails the
     # allocation, so the node is protected and the task is the thing that
     # ends.
-    if (( peak_kib > limit_kib )); then
+    if (( peak_kib * 1024 > limit_bytes )); then
         exceeded=1
         write_result
         exit 0

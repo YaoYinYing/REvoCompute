@@ -207,15 +207,43 @@ def _migrate_in_subprocess(path: str, start, results, index: int) -> None:
         results[index] = f"{type(exc).__name__}: {exc}"
 
 
+def _start_and_join(context, path, count: int):
+    """Run *count* concurrent startup passes and return what each one observed."""
+    start = context.Event()
+    manager = context.Manager()
+    results = manager.dict()
+    processes = [
+        context.Process(target=_migrate_in_subprocess, args=(path, start, results, index))
+        for index in range(count)
+    ]
+    for process in processes:
+        process.start()
+    try:
+        start.set()
+        for process in processes:
+            process.join(timeout=120)
+    finally:
+        for process in processes:
+            if process.is_alive():  # pragma: no cover - a hang is the failure
+                process.terminate()
+                process.join(timeout=10)
+    return [results.get(index) for index in range(count)]
+
+
 def test_concurrent_startup_processes_migrate_exactly_once(tmp_path):
     """A multi-process deploy starts every worker at once, each on the same DB.
 
-    Every process runs the migration pass.  ``BEGIN IMMEDIATE`` plus re-reading
-    the legacy tables *inside* the lock makes that benign: whoever runs first
-    copies and drops them, and the peers find nothing left to do.  Inspecting
-    before taking the lock would instead let a peer drop the table between the
-    check and the ``INSERT ... SELECT``, which is a "no such table" crash on a
-    startup that should have succeeded.
+    Every process runs the whole startup pass, so every step has to tolerate a
+    peer doing it too: the schema is created, the legacy tables are copied, and
+    those tables are dropped as one serialized unit.  A first pass racing solely
+    on SQLite transactions is not enough — a peer's committed ``DROP TABLE``
+    interleaves with another's already-parsed ``INSERT ... SELECT``, and a peer's
+    uncommitted ``CREATE TABLE`` is invisible to a reader — so a process can
+    observe "resource_ledger exists" and still fail to resolve the name.  The
+    startup lock is what makes the observation remain true for the whole pass.
+
+    Repeated here because the interleaving that breaks it is timing-dependent:
+    one round proves nothing about a race.
     """
     import multiprocessing
 
@@ -223,22 +251,31 @@ def test_concurrent_startup_processes_migrate_exactly_once(tmp_path):
     _build_legacy_database(path)
 
     context = multiprocessing.get_context("spawn")
-    start = context.Event()
-    manager = context.Manager()
-    results = manager.dict()
-    processes = [
-        context.Process(target=_migrate_in_subprocess, args=(path, start, results, index))
-        for index in range(4)
-    ]
-    for process in processes:
-        process.start()
-    start.set()
-    for process in processes:
-        process.join(timeout=60)
+    for _round in range(5):
+        outcomes = _start_and_join(context, path, 4)
+        assert all(isinstance(outcome, int) for outcome in outcomes), outcomes
+        # Every process observed the same migrated history, and it was copied once.
+        assert outcomes == [len(LEGACY_LEDGER_ROWS)] * 4
 
-    outcomes = [results.get(index) for index in range(4)]
-    assert all(isinstance(outcome, int) for outcome in outcomes), outcomes
-    # Every process observed the same migrated history, and it was copied once.
-    assert outcomes == [len(LEGACY_LEDGER_ROWS)] * 4
     assert "gpu_credit_ledger" not in _tables(path)
     assert TaskDatabase(path).compute_entitlement(7, at=1_787_227_200.0).used == 900
+
+
+def test_a_concurrent_start_before_any_schema_exists_still_lands(tmp_path):
+    """The cold-start case the lock also has to cover: no canonical schema yet.
+
+    Every process finds an empty database with only the legacy tables.  Each one
+    must create the canonical schema, migrate, and drop the legacy tables
+    without observing another's half-finished state.
+    """
+    import multiprocessing
+
+    path = str(tmp_path / "tasks.sqlite3")
+    _build_legacy_database(path)
+
+    context = multiprocessing.get_context("spawn")
+    outcomes = _start_and_join(context, path, 6)
+
+    assert all(isinstance(outcome, int) for outcome in outcomes), outcomes
+    assert outcomes == [len(LEGACY_LEDGER_ROWS)] * 6
+    assert "gpu_credit_ledger" not in _tables(path)

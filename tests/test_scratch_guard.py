@@ -98,7 +98,14 @@ def test_scratch_within_the_ceiling_is_measured_and_reported_as_not_exceeded(tmp
 
 
 def test_an_empty_scratch_is_a_measured_zero_not_an_unknown(tmp_path):
-    """A completed measurement of an empty directory really is zero bytes."""
+    """A completed measurement of an empty directory really is zero bytes.
+
+    The measurement sums the allocated blocks of *files*, so it does not count
+    the directory entries themselves.  That is the invariant, not a property of
+    one filesystem: an empty directory occupies a block on ext4 and none on
+    tmpfs, and a guard that reported either as usage would call a Task that
+    wrote nothing a consumer of 4 KiB.
+    """
     scratch = tmp_path / "scratch"
     scratch.mkdir()
     control = tmp_path / "control"
