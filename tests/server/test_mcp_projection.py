@@ -957,3 +957,149 @@ def test_oversized_artifact_returns_metadata_not_content(mcp_app, tmp_path):
     assert result["size"] == len(payload_bytes)
     assert result["resource_uri"].startswith("revocompute://artifact/")
     assert result["truncated"] is False
+
+
+# ---------------------------------------------------------------------------
+# Level 1 -- authentication and authorization through the canonical path
+# ---------------------------------------------------------------------------
+
+
+def _restrict_gremlin(module, *, requestable: bool = True) -> None:
+    """Restrict the gremlin TaskType with an access policy the caller lacks."""
+    import shutil
+
+    import yaml
+
+    from revocompute.task_types import discover_plugins
+
+    source_family = Path(__file__).resolve().parents[2] / "docker" / "runners" / "pssm_gremlin"
+    family_dir = Path(module.CONFIG.runners_dir) / "pssm_gremlin"
+    shutil.copytree(source_family, family_dir, dirs_exist_ok=True)
+    policy_dir = Path(module.CONFIG.runners_dir) / "common" / "policy"
+    policy_dir.mkdir(parents=True, exist_ok=True)
+    (policy_dir / "example.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "id": "example_academic_runner",
+                "label": "Example academic access",
+                "description": "Operator approval is required.",
+                "requires": ["example_academic"],
+                "match": "all",
+                "requestable": requestable,
+                "notice": {"title": "Restricted access", "summary": "This Runner requires operator approval."},
+                "license": {"name": "Example Academic License", "url": "https://example.invalid/license"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    manifest_path = family_dir / "plugin.yaml"
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["access_policies"] = ["common/policy/example.yaml"]
+    manifest["contributions"] = {"access_policies": ["example_academic_runner"]}
+    manifest.setdefault("runtime", {})["access_policy"] = "example_academic_runner"
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+    discover_plugins(module.CONFIG.runners_dir, {"gremlin"})
+
+
+def _submit_payload(role: str = "sequence") -> list[dict[str, object]]:
+    return [
+        {
+            "role": role,
+            "filename": "x.fasta",
+            "content_base64": base64.b64encode(FASTA).decode(),
+        }
+    ]
+
+
+def test_missing_entitlement_is_denied_through_the_canonical_admission_path(mcp_app):
+    """A restricted Runner denies an unentitled MCP caller with ACCESS_DENIED.
+
+    The decision is the canonical entitlement check: the MCP layer neither
+    reads the policy nor decides access itself.
+    """
+    from revocompute.mcp.errors import McpError
+    from revocompute.mcp.handles import canonical_state
+    from revocompute.mcp.services import submit_task
+
+    _restrict_gremlin(mcp_app)
+    principal = _principal(mcp_app)
+    with pytest.raises(McpError) as excinfo:
+        submit_task(
+            principal,
+            task_type="gremlin",
+            params={},
+            inputs=_submit_payload(),
+            handle_store=canonical_state().handles,
+            now=1000.0,
+        )
+    assert excinfo.value.error_class == "ACCESS_DENIED"
+    assert len(mcp_app.task_store.list_tasks()) == 0, "a denied submission must create no Task"
+
+
+def test_entitled_caller_passes_the_same_admission_path(mcp_app):
+    """Granting the canonical entitlement admits the MCP submission.
+
+    The admission verdict flips only because the canonical entitlement changed,
+    which is the equivalence claim: MCP adds no rule of its own.
+    """
+    from revocompute.mcp.handles import canonical_state
+    from revocompute.mcp.services import submit_task
+
+    _restrict_gremlin(mcp_app)
+    principal = _principal(mcp_app)
+    db = mcp_app.app.config["user_db"]
+    db.grant_entitlement(
+        principal.user_id,
+        "example_academic",
+        granted_by=principal.user_id,
+        basis="lab_member",
+        note="test grant",
+    )
+    payload = submit_task(
+        principal,
+        task_type="gremlin",
+        params={},
+        inputs=_submit_payload(),
+        handle_store=canonical_state().handles,
+        now=1000.0,
+    )
+    assert payload["task_handle"].startswith("mcp_op_")
+    assert len(mcp_app.task_store.list_tasks()) == 1
+
+
+def test_non_ready_runner_is_not_admitted(mcp_app):
+    """A Runner without readiness evidence fails admission before any side effect."""
+    from revocompute.mcp.errors import McpError
+    from revocompute.mcp.handles import canonical_state
+    from revocompute.mcp.services import submit_task
+
+    mcp_app.app.config["manage_db"].resource_set("slurm_enabled", "1")
+    principal = _principal(mcp_app)
+    try:
+        submit_task(
+            principal,
+            task_type="gremlin",
+            params={},
+            inputs=_submit_payload(),
+            handle_store=canonical_state().handles,
+            now=1000.0,
+        )
+    except McpError as error:
+        assert error.error_class == "NOT_READY"
+    else:  # pragma: no cover - only if readiness evidence unexpectedly exists
+        raise AssertionError("a non-ready Runner must not admit a submission")
+
+
+def test_ordinary_admin_credential_does_not_grant_operator_capability(mcp_app):
+    """An admin's ordinary credential sees only the scientific surface."""
+    from revocompute.mcp.server import build_server
+
+    admin_headers = _conftest._admin_client_auth(mcp_app)
+    admin = mcp_app.app.config["user_db"].get_user_by_username("sysadmin")
+    assert admin is not None and admin["role"] == "admin"
+    assert admin_headers  # the credential exists
+
+    server = build_server()
+    names = {tool.name for tool in server._tool_manager.list_tools()}
+    # No operator primitive is reachable, so no credential can select one.
+    assert not [name for name in names if "admin" in name or "operator" in name or "sif" in name]
