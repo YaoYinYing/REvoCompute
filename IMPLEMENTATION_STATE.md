@@ -199,6 +199,89 @@ the fixture architecture.
 
 ---
 
+# Cared-for Precision Refinement (PR #56)
+
+`TODO.md` is the design contract; `docs/developer-guide/frontend-design-language.md`
+is the single canonical source of the durable visual rules. This section records
+execution state for the post-Soft-Precision taste refinement.
+
+## Starting point
+
+- Observed `main`: `e64077589ff6c3583bb4b27b528daa2b1551abce`.
+- Feature branch: `design/cared-for-precision-refinement`; worktree
+  `/home/yinying/repo/.rc-worktrees/cared-for-precision-refinement`.
+- Scope: frontend presentation and the design documentation set only. No
+  behavior, DOM contract, i18n, Result contract, server ownership, auth, or
+  validation-identity change.
+
+## Rendered baseline (§5) — where the UI felt generic
+
+The pre-pass bundle was competent but **undersaturated and soft-generic**: a
+cool blue-grey field, a shadowless flat result preview, and a gradient structure
+toolbar. The correct structure (hairline stat strip rather than floating cards,
+text-only status with a shape cue, tinted result stage, editorial runner
+heading) was already in place and was retained.
+
+## What the refinement changed
+
+- **Environmental neutral (§6, §7)** — the light canvas moved from a sterile
+  blue-grey to a sub-threshold warm grey-green (`--app-bg`, `--app-surface`,
+  `--app-stage`, `--app-line`, `--app-ink`). The bias stays below a visible cast;
+  REvo blue remains ink (action/selection/focus/links only, §5.2) and the
+  scientific content stays the richest colour.
+- **Elevation as depth, not polish (§6.2)** — `--shadow-surface` gained a
+  restrained ground shadow so work surfaces read as laid on the bench rather
+  than floating; most surfaces still stand on border + tone.
+- **Scientific stage (§10/§18)** — `.result-preview` lost its border and is now
+  defined by tone plus ground shadow; `.structure-viewport` moved its border to
+  `var(--result-line)`; the structure toolbar is a flat `var(--result-surface)`
+  with a hairline (chrome above the science), replacing a gradient.
+- **Create Task (§12)** — `.ct-primary` elevation is derived from the accent via
+  `color-mix()` instead of a hardcoded teal literal.
+
+## Documentation consolidation
+
+`frontend-design-language.md` now declares itself the single canonical rule
+source. `frontend-art-direction.md` keeps only the judgment layer (emotional
+target, wild-rose metaphor, laboratory-not-industrial character, Monet as
+relational art direction, authorship, composition over decoration) and cites the
+rule sections; `frontend-taste-review.md` is a review instrument (ordered
+questions, each pointing at its governing rule) plus the fast rubric;
+`frontend-visual-ancestry.md` is the historical-evidence record that cites the
+current rules rather than re-deriving them from the 2026 palette.
+
+## §27 subtraction pass
+
+Removed dead CSS with no rendered consumer (verified repo-wide, excluding built
+`dist/`): the unused `--space-*` scale (the single `var(--space-4)` use inlined),
+the unused `.tnum` utility, the unrendered `.list-heading` rules (with
+`.catalog-count` folded into the aligned toolbar as a tabular machine fact), and
+the dead `.dashboard-controls` selector. No second visual system remains.
+
+## Delivery commands and results
+
+- `cd frontend && npm run typecheck && npm run test && npm run build` ->
+  typecheck clean; 19 test files / 88 tests passed; build runs verify:lock,
+  verify:provenance, check:api-types, verify:build.
+- `pytest tests/test_playwright_soft_precision.py -q` -> 18 passed (the Soft
+  Precision contract matrix: rail, mobile nav, i18n, notices, guided tour,
+  advanced-search subordination, view-switch independence, text-only status, WCAG
+  light+dark, touch targets, reduced motion).
+- `pytest tests/test_playwright_application.py -q` -> 38 passed.
+- `pytest tests/test_playwright_results.py -q` -> 18 passed.
+- `mkdocs build --strict` -> clean (docs toolchain via `uv run --with`; the
+  repository venv does not carry it).
+
+## Review evidence
+
+A bounded after-storyboard (10 surfaces: Dashboard desktop light/dark and
+mobile, structure Result, Runner catalog, Runner detail, Create Task,
+Admin/User Control, Profile, login) was rendered from the production bundle
+through the real fixture harness. It is review evidence, not a pixel-golden
+corpus; no screenshot-diff test was added.
+
+---
+
 # Soft Precision Visual System (PR #54)
 
 This section records execution state for the Soft Precision visual pass.
