@@ -35,10 +35,12 @@ from revocompute.db import TaskDatabase
 from revocompute.maintenance.model import PeriodicTask
 from revocompute.maintenance.tasks.result_cleanup import delete_task_artifacts
 
-#: Default cadence.  A purge is a bounded filesystem walk and a reconciliation
-#: pass is a handful of indexed reads, so this is a cheap timer rather than a
-#: workload; the value only bounds how long an authorized deletion waits.
-DEFAULT_RESOURCE_MAINTENANCE_SECONDS = 300
+#: Opt-in cadence, in seconds.  Zero (the default) leaves the task unregistered:
+#: a deployment that never sets it is exactly as it was before, and an operator
+#: who wants interrupted deletions finished turns it on deliberately — the same
+#: opt-in shape as result retention.  A purge is a bounded filesystem walk and a
+#: reconciliation pass is a handful of indexed reads, so a small value is cheap.
+DEFAULT_RESOURCE_MAINTENANCE_SECONDS = 0
 
 
 def _remove_artifacts(results_folder: str) -> Callable[[dict[str, Any]], None]:

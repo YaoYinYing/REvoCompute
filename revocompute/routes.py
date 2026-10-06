@@ -4027,6 +4027,24 @@ def _gpu_credit_payload(user_id: int, *, admin: bool = False) -> dict[str, Any]:
     }
 
 
+def _entitlement_payload(user_id: int) -> dict[str, Any]:
+    """The canonical resource envelope, as the typed projection #60 consumes.
+
+    One shape for compute entitlement, admission state, and durable-storage
+    ownership: a later placement or reporting consumer reads this rather than
+    re-deriving a balance, and ``enforceable`` distinguishes a unit this
+    deployment actually gates from one it only accounts.
+    """
+    return task_store.resource_envelope(user_id).to_dict()
+
+
+@app.route("/compute/api/resource-entitlement", methods=["GET"])
+@login_required
+def current_resource_entitlement():
+    """Return only the authenticated user's canonical resource envelope."""
+    return jsonify(_entitlement_payload(int(g.current_user["id"]))), 200
+
+
 @app.route("/compute/api/gpu-credit", methods=["GET"])
 @login_required
 def current_gpu_credit():
@@ -4637,6 +4655,18 @@ def admin_users():
         item["gpu_credit"] = task_store.gpu_credit_summary(int(user["id"]))
         safe.append(item)
     return jsonify({"users": safe}), 200
+
+
+@app.route("/compute/api/auth/admin/users/<int:user_id>/resource-entitlement", methods=["GET"])
+@login_required
+def admin_user_resource_entitlement(user_id: int):
+    """Return one existing user's canonical resource envelope for operators."""
+    if _blocked := require_admin():
+        return _blocked
+    user = _get_user_db().get_user(user_id)
+    if user is None or user.get("deleted"):
+        return jsonify({"error": "User not found"}), 404
+    return jsonify(_entitlement_payload(user_id)), 200
 
 
 @app.route("/compute/api/auth/admin/users/<int:user_id>/gpu-credit", methods=["GET"])

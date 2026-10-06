@@ -12,6 +12,7 @@
     {"name": "Authentication"},
     {"name": "Administration"},
     {"name": "Infrastructure"},
+    {"name": "Resource entitlement"},
     {"name": "GPU credits"},
     {"name": "Runner access"},
     {"name": "Tools", "description": "Authenticated, ephemeral, CPU-only scientific utilities executed outside Slurm."},
@@ -384,6 +385,34 @@
           "200": {"description": "Fresh detailed infrastructure evidence", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/InfrastructureReadiness"}}}},
           "401": {"$ref": "#/components/responses/Unauthorized"},
           "403": {"$ref": "#/components/responses/Forbidden"}
+        }
+      }
+    },
+    "/compute/api/resource-entitlement": {
+      "get": {
+        "tags": ["Resource entitlement"],
+        "summary": "Get the current user's canonical resource envelope",
+        "description": "The canonical per-subject position: compute entitlement and durable-storage ownership in base units. Placement and reporting consume this projection rather than re-deriving a balance. A unit with enforced false is recorded and reported but not gated.",
+        "operationId": "getCurrentResourceEntitlement",
+        "security": [{"bearerAuth": []}, {"apiKeyAuth": []}],
+        "responses": {
+          "200": {"description": "Current user's resource envelope", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ResourceEntitlement"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"}
+        }
+      }
+    },
+    "/compute/api/auth/admin/users/{user_id}/resource-entitlement": {
+      "get": {
+        "tags": ["Resource entitlement"],
+        "summary": "Get one user's canonical resource envelope",
+        "operationId": "adminGetUserResourceEntitlement",
+        "security": [{"bearerAuth": []}],
+        "parameters": [{"name": "user_id", "in": "path", "required": true, "schema": {"type": "integer"}}],
+        "responses": {
+          "200": {"description": "That user's resource envelope", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ResourceEntitlement"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "404": {"$ref": "#/components/responses/NotFound"}
         }
       }
     },
@@ -1688,6 +1717,50 @@
             "task_type": {"type": "string"}, "label": {"type": "string"}, "gpu": {"type": "boolean"}, "tasks": {"type": "integer", "minimum": 0}}}},
           "activity": {"type": "array", "items": {"type": "object", "required": ["period", "count"], "properties": {
             "period": {"type": "string", "format": "date"}, "count": {"type": "integer", "minimum": 0}}}}
+        },
+        "additionalProperties": false
+      },
+      "ComputeEntitlement": {
+        "type": "object",
+        "description": "One (unit, resource class) entitlement and its position. remaining already subtracts settled usage, live admission holds, and the conservative reserve for usage whose authoritative measurement has not arrived, so unsettled_allocations plus usage_complete false means the true balance is not yet known - never that it is zero.",
+        "required": ["unit", "resource_class", "enforced", "allowance", "used", "reserved", "unsettled_allocations", "unsettled_quantity", "remaining", "usage_complete", "evidence_sources"],
+        "properties": {
+          "unit": {"type": "string", "enum": ["gpu_second", "cpu_core_second", "storage_byte"]},
+          "resource_class": {"type": "string", "description": "Slurm GRES class (for example a100); empty for the class-agnostic allowance."},
+          "enforced": {"type": "boolean"},
+          "allowance": {"type": ["integer", "null"], "description": "Null when the unit is not gated."},
+          "used": {"type": "integer", "minimum": 0},
+          "reserved": {"type": "integer", "minimum": 0},
+          "unsettled_allocations": {"type": "integer", "minimum": 0},
+          "unsettled_quantity": {"type": "integer", "minimum": 0},
+          "remaining": {"type": ["integer", "null"]},
+          "usage_complete": {"type": "boolean"},
+          "evidence_sources": {"type": "array", "items": {"type": "string"}}
+        },
+        "additionalProperties": false
+      },
+      "StorageEntitlement": {
+        "type": "object",
+        "description": "Logical user-owned durable bytes, tracked separately from physical filesystem capacity. A successful computation that crosses soft_limit_bytes keeps its result; only later admission is restricted.",
+        "required": ["logical_owned_bytes", "soft_limit_bytes", "remaining_bytes", "over_soft_limit"],
+        "properties": {
+          "logical_owned_bytes": {"type": "integer", "minimum": 0},
+          "soft_limit_bytes": {"type": ["integer", "null"]},
+          "remaining_bytes": {"type": ["integer", "null"]},
+          "over_soft_limit": {"type": "boolean"}
+        },
+        "additionalProperties": false
+      },
+      "ResourceEntitlement": {
+        "type": "object",
+        "description": "The canonical per-subject resource position that downstream consumers project.",
+        "required": ["subject_type", "subject_id", "period", "compute", "storage"],
+        "properties": {
+          "subject_type": {"type": "string", "enum": ["user"]},
+          "subject_id": {"type": "integer"},
+          "period": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}$"},
+          "compute": {"type": "array", "items": {"$ref": "#/components/schemas/ComputeEntitlement"}},
+          "storage": {"$ref": "#/components/schemas/StorageEntitlement"}
         },
         "additionalProperties": false
       },
