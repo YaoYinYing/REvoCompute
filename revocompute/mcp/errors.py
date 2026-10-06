@@ -1,0 +1,160 @@
+# Copyright (c) 2026 The REvoDesign Developers.
+# Distributed under the terms of the GNU General Public License v3.0.
+# SPDX-License-Identifier: GPL-3.0-only
+
+from __future__ import annotations
+
+import json
+from typing import Any
+
+from mcp import types
+
+# ---------------------------------------------------------------------------
+# Stable machine-readable error taxonomy
+# ---------------------------------------------------------------------------
+#
+# An agent recovers from a failure by branching on a small, stable code.  It
+# must never be asked to parse a Flask traceback, Slurm stderr, Runner stderr,
+# or an arbitrary HTTP error string, so every domain failure is projected into
+# exactly one of these classes and any human-readable message travels beside it
+# as secondary detail.
+
+INVALID_PARAMETERS = "INVALID_PARAMETERS"
+AUTH_REQUIRED = "AUTH_REQUIRED"
+ACCESS_DENIED = "ACCESS_DENIED"
+NOT_READY = "NOT_READY"
+RESOURCE_LIMIT = "RESOURCE_LIMIT"
+TASK_NOT_FOUND = "TASK_NOT_FOUND"
+TASK_NOT_CANCELLABLE = "TASK_NOT_CANCELLABLE"
+RESULT_NOT_READY = "RESULT_NOT_READY"
+ARTIFACT_NOT_FOUND = "ARTIFACT_NOT_FOUND"
+CONTENT_TOO_LARGE = "CONTENT_TOO_LARGE"
+
+ERROR_CLASSES = frozenset(
+    {
+        INVALID_PARAMETERS,
+        AUTH_REQUIRED,
+        ACCESS_DENIED,
+        NOT_READY,
+        RESOURCE_LIMIT,
+        TASK_NOT_FOUND,
+        TASK_NOT_CANCELLABLE,
+        RESULT_NOT_READY,
+        ARTIFACT_NOT_FOUND,
+        CONTENT_TOO_LARGE,
+    }
+)
+
+# HTTP status -> protocol class, used when a canonical handler answers with a
+# status and no domain code.  The map is intentionally coarse: a canonical
+# handler that knows a more specific class supplies it explicitly.
+_STATUS_TO_CLASS = {
+    400: INVALID_PARAMETERS,
+    401: AUTH_REQUIRED,
+    403: ACCESS_DENIED,
+    404: TASK_NOT_FOUND,
+    409: TASK_NOT_CANCELLABLE,
+    413: CONTENT_TOO_LARGE,
+    422: RESULT_NOT_READY,
+    429: RESOURCE_LIMIT,
+    503: NOT_READY,
+}
+
+# Canonical detail codes (the ``code`` field of a canonical error payload) ->
+# protocol class.  These are the vocabulary the submission/preflight/tool
+# boundaries already emit; mapping them here keeps the projection declarative
+# instead of re-deriving admission semantics.
+_DETAIL_CODE_TO_CLASS = {
+    "input_role_unknown": INVALID_PARAMETERS,
+    "input_role_cardinality": INVALID_PARAMETERS,
+    "input_role_binding": INVALID_PARAMETERS,
+    "input_role_format": INVALID_PARAMETERS,
+    "input_path_invalid": INVALID_PARAMETERS,
+    "input_format_invalid": INVALID_PARAMETERS,
+    "input_logical_type_invalid": INVALID_PARAMETERS,
+    "input_file_count_limit": CONTENT_TOO_LARGE,
+    "input_file_size_limit": CONTENT_TOO_LARGE,
+    "input_total_size_limit": CONTENT_TOO_LARGE,
+    "request_size_limit": CONTENT_TOO_LARGE,
+    "workspace_json_invalid": INVALID_PARAMETERS,
+    "infrastructure_unavailable": NOT_READY,
+    "gpu_credit_exhausted": RESOURCE_LIMIT,
+    "invalid_parameters": INVALID_PARAMETERS,
+    "invalid_input": INVALID_PARAMETERS,
+    "runtime_unavailable": NOT_READY,
+}
+
+
+class McpError(Exception):
+    """A protocol-level error with a stable class and optional agent guidance."""
+
+    def __init__(
+        self,
+        error_class: str,
+        message: str,
+        *,
+        detail: str | None = None,
+        retryable: bool = False,
+        retry_after_seconds: int | None = None,
+    ):
+        if error_class not in ERROR_CLASSES:
+            raise ValueError(f"unknown MCP error class: {error_class!r}")
+        super().__init__(message)
+        self.error_class = error_class
+        self.message = message
+        self.detail = detail
+        self.retryable = retryable
+        self.retry_after_seconds = retry_after_seconds
+
+    def payload(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "error_class": self.error_class,
+            "message": self.message,
+            "retryable": self.retryable,
+        }
+        if self.detail:
+            payload["detail"] = self.detail
+        if self.retry_after_seconds is not None:
+            payload["retry_after_seconds"] = self.retry_after_seconds
+        return payload
+
+
+def classify(canonical: Any, *, status: int) -> McpError:
+    """Project a canonical error response into a protocol error.
+
+    ``canonical`` is the parsed JSON body of a canonical handler response (or
+    ``None`` when the body was not JSON).  The function reads only the
+    ``error``/``message``/``details[0].code`` fields the existing API already
+    produces; it never re-derives an admission decision.
+    """
+    body = canonical if isinstance(canonical, dict) else {}
+    message = str(body.get("error") or body.get("message") or "Request rejected")
+    detail_code = ""
+    details = body.get("details")
+    if isinstance(details, list) and details and isinstance(details[0], dict):
+        detail_code = str(details[0].get("code") or "")
+    error_class = _DETAIL_CODE_TO_CLASS.get(detail_code) or _STATUS_TO_CLASS.get(status)
+    if error_class is None:
+        error_class = ACCESS_DENIED if status >= 400 and status < 500 else NOT_READY
+    retry_after = body.get("retry_after_seconds")
+    return McpError(
+        error_class,
+        message,
+        detail=detail_code or None,
+        retryable=status in {429, 503} or bool(body.get("retryable")),
+        retry_after_seconds=int(retry_after) if isinstance(retry_after, int) else None,
+    )
+
+
+def render(text: str) -> types.TextContent:
+    return types.TextContent(type="text", text=text)
+
+
+def render_error(error: McpError) -> str:
+    return json.dumps({"error": error.payload()}, ensure_ascii=True, sort_keys=True)
+
+
+def text(payload: Any) -> types.TextContent:
+    if isinstance(payload, str):
+        return types.TextContent(type="text", text=payload)
+    return types.TextContent(type="text", text=json.dumps(payload, ensure_ascii=True, sort_keys=True))
