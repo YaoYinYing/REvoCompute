@@ -384,18 +384,20 @@ def _extract_md5(location: str) -> str:
 
 
 def _inject_task_type(module, task_type, runner):
-    """Register a synthetic TaskType in the live contributions registry.
+    """Register a synthetic TaskType in the active contributions registry.
 
     Production reads task types only from ``PluginManager.contributions``, and
     ``task_types.discover_plugins`` registers discovered families there the same
     way. ``revocompute.task_types`` is a module-level singleton shared by the
-    per-test application copy, so its active manager is the one to write to.
+    per-test application copy, so its active registry snapshot is the one to
+    write to.
     """
-    from revocompute.task_types import _plugin_manager
+    from revocompute.task_types import active_plugin_manager
 
-    if _plugin_manager is None:
+    manager = active_plugin_manager()
+    if manager is None:
         raise RuntimeError("task_types has no active plugin manager; run discover first")
-    contributions = _plugin_manager.contributions
+    contributions = manager.contributions
     contributions.register("tasks", task_type.name, task_type, plugin_id="test")
     contributions.register("runner_configs", task_type.name, runner, plugin_id="test")
     return task_type

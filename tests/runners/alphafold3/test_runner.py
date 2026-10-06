@@ -13,31 +13,10 @@ from pathlib import Path
 
 import pytest
 from conftest import _admin_client_auth, _load_pssm_module, _test_client_auth
-from revocompute import task_types
-from revocompute.task_types import discover_plugins
+from revocompute.task_types import discover_plugins, get
 
 ROOT = Path(__file__).resolve().parents[3]
 RUNNER = ROOT / "docker/runners/alphafold3/run.sh"
-
-
-def _preserve_registry():
-    class RegistryContext:
-        def __enter__(self):
-            self.manager = task_types._plugin_manager
-            self.categories = dict(task_types._category_registry)
-            return self
-
-        def __exit__(self, *_):
-            task_types._plugin_manager = self.manager
-            task_types._category_registry.clear()
-            task_types._category_registry.update(self.categories)
-
-    return RegistryContext()
-
-
-def _load_af3_registry():
-    discover_plugins(str(ROOT / "docker/runners"), {"alphafold", "alphafold3"})
-    return task_types.get("alphafold3")
 
 
 def test_alphafold3_result_workspace_resolves_representative_outputs(monkeypatch, tmp_path):
@@ -84,8 +63,12 @@ def test_alphafold3_runtime_fails_preflight_when_its_policy_is_missing(tmp_path)
     shutil.copytree(ROOT / "docker/runners/alphafold3", runners / "alphafold3")
     shutil.copytree(ROOT / "docker/runners/common", runners / "common")
     (runners / "common/policy/alphafold3_noncommercial.yaml").unlink()
-    with _preserve_registry(), pytest.raises(FileNotFoundError, match="alphafold3_noncommercial"):
+    before = get("alphafold3")
+    with pytest.raises(FileNotFoundError, match="alphafold3_noncommercial"):
         discover_plugins(str(runners), {"alphafold3"})
+    # A rejected discovery never becomes the active registry: the previously
+    # installed snapshot is still readable, so nothing observed a half-built one.
+    assert get("alphafold3") == before
 
 
 def _write_fake_af3(path: Path) -> None:

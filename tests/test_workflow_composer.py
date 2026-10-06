@@ -13,34 +13,28 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from revocompute import access_control
 from revocompute.access_control import AccessPolicy
 from revocompute.job import JobState
 from revocompute.job.runners.slurm_runner import SlurmJob
 from revocompute.resource_policy import ResolvedResources
-from revocompute.task_types import RunnerConfig, RuntimeFamily, TaskType, WorkflowStage, discover_plugins, get
+from revocompute.task_types import RunnerConfig, RuntimeFamily, TaskType, WorkflowStage, get
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# Import task_runtime at collection time. Its first import in a process runs a
-# module-level discover_plugins that repopulates the shared contributions
-# registry; if that import happens lazily inside a test (after this module's
-# ``_discover_af3_runners`` autouse fixture has already run), the registry is
-# left empty and a later ``get("alphafold3")`` raises. Pulling it in here makes
-# the side effect happen before any fixture.
+# The composer drives the real task_runtime module object. Import it at
+# collection time so every test resolves the same module the discovery fixture
+# installs its snapshot into, and so a test that only reads the registry never
+# triggers an import that repoints it.
 from revocompute import task_runtime as _task_runtime  # noqa: E402,F401
 
 
 def _live_task_runtime():
-    """The task_runtime bound to the process-global discovery this module depends on.
+    """The task_runtime module object the composer binds to.
 
     A prior test in the same xdist worker can pop ``sys.modules['revocompute.task_runtime']``
-    (conftest's import-isolation dance does exactly that for isolated-app tests), and a
-    later lazy ``from revocompute import task_runtime`` re-imports the module -- whose
-    import-time ``discover_plugins`` repoints the global registry at whatever config the
-    importing test happens to have, dropping the real families the autouse fixture here
-    installed. Resolving through ``sys.modules`` first keeps the composer tests reading
-    the same registry the fixture repopulates.
+    (conftest's import-isolation dance does exactly that for isolated-app tests). Resolving
+    through ``sys.modules`` first keeps the composer tests reading the module whose registry
+    the autouse fixture repopulates.
     """
     return sys.modules.get("revocompute.task_runtime") or _task_runtime
 
@@ -417,25 +411,14 @@ def _drive_stage_stdout(stage_tt, runner, tmp_path, stdout: str) -> list[str]:
 
 @pytest.fixture(autouse=True)
 def _discover_af3_runners():
-    # Restore the shared contributions registry to whatever it held before this
-    # module repointed it at the AF3 subset, so this fixture never leaks a
-    # narrowed (or, on a first-import race, emptied) registry into a later test
-    # in the same worker. The registries are process-global, so isolation here is
-    # save/restore rather than a per-test manager.
-    import revocompute.task_types as task_types
+    # Discover the AF3 subset into the active registry for the duration of each
+    # test, then restore the exact prior snapshot. isolated_discovery owns that
+    # save/restore, so this fixture never leaks a narrowed registry into a later
+    # test in the same worker.
+    from revocompute.task_types import isolated_discovery
 
-    previous_manager = task_types._plugin_manager
-    previous_categories = dict(task_types._category_registry)
-    previous_policies = dict(access_control._policies)
-    try:
-        discover_plugins(str(ROOT / "docker" / "runners"), {"alphafold", "alphafold3", "colabfold_af2"})
+    with isolated_discovery(str(ROOT / "docker" / "runners"), {"alphafold", "alphafold3", "colabfold_af2"}):
         yield
-    finally:
-        task_types._plugin_manager = previous_manager
-        task_types._category_registry.clear()
-        task_types._category_registry.update(previous_categories)
-        access_control._policies.clear()
-        access_control._policies.update(previous_policies)
 
 
 def _transitions(seen: list[str]) -> list[str]:

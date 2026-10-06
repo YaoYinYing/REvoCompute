@@ -109,17 +109,18 @@ def load_policy_documents(directory: str | os.PathLike[str]) -> dict[str, Access
 
 def load_policies(directory: str | os.PathLike[str]) -> None:
     """Load validated policy YAML files into the server's active registry."""
-    loaded = load_policy_documents(directory)
+    set_active_policies(load_policy_documents(directory))
+
+
+def set_active_policies(policies: dict[str, AccessPolicy]) -> None:
+    """Replace the active policy registry with a complete, validated mapping.
+
+    Registry discovery installs one whole policy set at a time so a partially
+    built set can never be observed, and an isolated discovery can restore the
+    prior set exactly.
+    """
     _policies.clear()
-    _policies.update(loaded)
-
-
-def register_policies(policies: dict[str, AccessPolicy]) -> None:
-    """Register validated plugin-contributed policies in the active registry."""
-    for policy_id, policy in policies.items():
-        if policy_id in _policies:
-            raise ValueError(f"Duplicate access policy identifier: {policy_id!r}")
-        _policies[policy_id] = policy
+    _policies.update(policies)
 
 
 def get_policy(policy_id: str) -> AccessPolicy:

@@ -25,7 +25,7 @@ from jsonschema import Draft202012Validator, FormatChecker
 from revocompute import resource_model as rm
 from revocompute import runtime_bundle as rb
 from revocompute import access_control
-from revocompute.access_control import AccessPolicy, get_policy, load_policies, load_policy_documents, register_policies
+from revocompute.access_control import AccessPolicy, load_policy_documents, resolve_policy
 from revocompute.citations import Citation, load_citations
 from revocompute.io_contracts import NamedFileRole, load_named_file_roles
 
@@ -318,10 +318,35 @@ class RunnerConfig:
 # Registry
 # ---------------------------------------------------------------------------
 
-_category_registry: dict[str, Category] = {}
-_plugin_manager = None
+
+@dataclass
+class _RegistryState:
+    """One complete, self-consistent discovery snapshot.
+
+    Every read goes through the active state object rather than a bare module
+    global, so a context-scoped discovery (``isolated_discovery``) can install a
+    whole snapshot — plugin manager, categories, access policies — and restore
+    the prior one without leaving either half behind.
+    """
+
+    plugin_manager: Any = None
+    categories: dict[str, Category] = field(default_factory=dict)
+    policies: dict[str, AccessPolicy] = field(default_factory=dict)
 
 
+_state = _RegistryState()
+
+
+def _active() -> _RegistryState:
+    """Return the currently installed registry snapshot."""
+    return _state
+
+
+def _install_snapshot(snapshot: _RegistryState) -> None:
+    """Install a complete snapshot as the active registry, in one step."""
+    global _state
+    _state = snapshot
+    access_control.set_active_policies(snapshot.policies)
 
 
 def _load_task_inputs(raw: Any, task_id: str) -> tuple[TaskInputRole, ...]:
@@ -412,9 +437,12 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
 
     This is the sole production discovery path.  Manifests are intentionally
     small and declarative; task-specific schemas remain in each task directory.
+
+    Discovery builds one complete snapshot and installs it in a single step, so
+    a caller never observes a half-populated registry and an isolated discovery
+    can be restored exactly.  The snapshot is installed only after every manifest
+    has validated; a failure leaves the previously active snapshot untouched.
     """
-    global _plugin_manager
-    _category_registry.clear()
     root = os.path.abspath(runners_dir)
     try:
         artifact_overrides = json.loads(os.environ.get("REVOCOMPUTE_RUNTIME_ARTIFACT_OVERRIDES", "{}"))
@@ -425,11 +453,11 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
         for name, path in artifact_overrides.items()
     ):
         raise ValueError("Runtime artifact overrides must map family IDs to absolute SIF paths")
-    load_policies(os.path.join(root, "__no_global_policies__"))
+    policies: dict[str, AccessPolicy] = {}
     from revocompute.plugins import PluginManager
     manager = PluginManager()
     manifests = manager.discover(root, enabled=enabled)
-    _plugin_manager = manager
+    categories: dict[str, Category] = {}
     capability_schemas: dict[str, dict[str, Any]] = {}
     workspace_schemas_by_owner: dict[str, dict[str, dict[str, Any]]] = {}
     for discovered in manifests:
@@ -471,10 +499,12 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
             resolved_policy_path = family_dir.parent / policy_path
             if not resolved_policy_path.is_file() and not resolved_policy_path.is_dir():
                 raise FileNotFoundError(f"Access policy file is missing: {resolved_policy_path}")
-            policies = load_policy_documents(resolved_policy_path)
-            for policy_id, policy in policies.items():
+            declared_policies = load_policy_documents(resolved_policy_path)
+            for policy_id, policy in declared_policies.items():
+                if policy_id in policies:
+                    raise ValueError(f"Duplicate access policy identifier: {policy_id!r}")
+                policies[policy_id] = policy
                 manager.register_contribution(family_id, "access_policies", policy_id, policy)
-            register_policies(policies)
         runtime_data = dict(manifest_obj.runtime)
         for field_name in ("definition", "image_artifact"):
             runtime_path = Path(str(runtime_data.get(field_name, "")))
@@ -539,7 +569,10 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
             version=manifest_obj.version,
             image_artifact=image_artifact,
             build_inputs=tuple(raw_build_inputs),
-            access_policy=get_policy(str(runtime_data["access_policy"])) if runtime_data.get("access_policy") else None,
+            access_policy=(
+                resolve_policy(str(runtime_data["access_policy"]), policies)
+                if runtime_data.get("access_policy") else None
+            ),
             root=str(family_dir),
             runtime_overlay=runtime_overlay,
         )
@@ -601,43 +634,38 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
             # Categories are part of the task contribution when the central
             # registry is absent.  Preserve a deterministic fallback order so
             # independently materialized plugin trees remain renderable.
-            if task.category not in _category_registry:
-                _category_registry[task.category] = Category(
+            if task.category not in categories:
+                categories[task.category] = Category(
                     name=task.category,
                     label=task.category.replace("_", " ").title(),
                     description="",
-                    order=len(_category_registry),
+                    order=len(categories),
                 )
             runner_file = family_dir / "runner.yaml"
             runner_cfg = _load_runner_config(str(runner_file)) if runner_file.is_file() else RunnerConfig()
             manager.register_contribution(family_id, "tasks", task_id, task)
             manager.register_contribution(family_id, "runner_configs", task_id, runner_cfg)
+    _install_snapshot(_RegistryState(plugin_manager=manager, categories=categories, policies=policies))
 
 
 @contextmanager
 def isolated_discovery(runners_dir: str, enabled: set[str] | None = None):
-    """Discover a runner tree into a temporary registry, then restore the globals.
+    """Discover a runner tree into a temporary registry, then restore the active one.
 
-    ``discover_plugins`` is the production path and intentionally repoints the
-    process-global ``_plugin_manager`` and category registry. A caller that only
-    needs to *read* a different runner tree -- a static audit, a test fixture --
-    must not leave that tree installed for whatever runs next in the same
-    process. This restores the exact prior manager, categories, and access
-    policies on exit, so an inspection is never a mutation of live server state.
+    ``discover_plugins`` is the production path and installs a new snapshot of
+    the process-wide registry.  A caller that only needs to *read* a different
+    runner tree -- a static audit, a test fixture -- must not leave that tree
+    installed for whatever runs next in the same process.  The active snapshot is
+    saved whole and reinstalled on exit, so an inspection is never a mutation of
+    live server state and the plugin manager, categories, and access policies can
+    never disagree with one another.
     """
-    global _plugin_manager
-    previous_manager = _plugin_manager
-    previous_categories = dict(_category_registry)
-    previous_policies = dict(access_control._policies)
+    previous = _active()
     try:
         discover_plugins(runners_dir, enabled)
-        yield _plugin_manager
+        yield _active().plugin_manager
     finally:
-        _plugin_manager = previous_manager
-        _category_registry.clear()
-        _category_registry.update(previous_categories)
-        access_control._policies.clear()
-        access_control._policies.update(previous_policies)
+        _install_snapshot(previous)
 
 _INPUT_CAPABILITY_PLUGINS = {
     "files",
@@ -746,11 +774,14 @@ _RESULT_TRAJECTORY_FORMATS = {"pdb", "xtc", "dcd"}
 
 
 def get(name: str) -> tuple[TaskType, RunnerConfig]:
-    """Look up a discovered task type + runner config."""
+    """Look up a discovered task type + runner config from the active registry."""
+    manager = _active().plugin_manager
+    if manager is None:
+        raise KeyError(f"Unknown task type: {name!r}") from None
     try:
         return (
-            _plugin_manager.contributions.resolve("tasks", name),
-            _plugin_manager.contributions.resolve("runner_configs", name),
+            manager.contributions.resolve("tasks", name),
+            manager.contributions.resolve("runner_configs", name),
         )
     except KeyError:
         raise KeyError(f"Unknown task type: {name!r}") from None
@@ -758,7 +789,10 @@ def get(name: str) -> tuple[TaskType, RunnerConfig]:
 
 def list_types() -> list[TaskType]:
     """Return all discovered task types (for ``GET /api/types``)."""
-    return [value for _identifier, value in _plugin_manager.contributions.items("tasks")]
+    manager = _active().plugin_manager
+    if manager is None:
+        return []
+    return [value for _identifier, value in manager.contributions.items("tasks")]
 
 
 def default_task_type() -> str:
@@ -771,7 +805,7 @@ def default_task_type() -> str:
 
 def list_categories() -> list[Category]:
     """Return scientific categories in their server-owned display order."""
-    return sorted(_category_registry.values(), key=lambda category: (category.order, category.name))
+    return sorted(_active().categories.values(), key=lambda category: (category.order, category.name))
 
 
 def iter_capabilities(task_type: TaskType) -> tuple[InputCapability, ...]:
@@ -779,14 +813,21 @@ def iter_capabilities(task_type: TaskType) -> tuple[InputCapability, ...]:
     return tuple(capability for step in task_type.input_workspace for capability in step.capabilities)
 
 
+def active_plugin_manager():
+    """Return the plugin manager of the active registry snapshot, or ``None`` when none is installed."""
+    return _active().plugin_manager
+
+
 def workspace_plugin_descriptor(identifier: str, *, owner: str | None = None):
     """Return a validated deployed workspace plugin descriptor."""
-    return _plugin_manager.workspace_plugin(identifier, owner=owner) if _plugin_manager is not None else None
+    manager = _active().plugin_manager
+    return manager.workspace_plugin(identifier, owner=owner) if manager is not None else None
 
 
 def workspace_backend(identifier: str, *, owner: str | None = None):
     """Resolve a runner-owned workspace backend from the active plugin graph."""
-    return _plugin_manager.workspace_backend(identifier, owner=owner) if _plugin_manager is not None else None
+    manager = _active().plugin_manager
+    return manager.workspace_backend(identifier, owner=owner) if manager is not None else None
 
 
 def _valid_identifier(value: Any) -> bool:
