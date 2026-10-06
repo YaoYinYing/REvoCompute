@@ -1,578 +1,196 @@
 # Frontend Taste Review
 
-This page is a practical review companion for
-[Frontend Design Language](frontend-design-language.md) and
-[Frontend Art Direction](frontend-art-direction.md).
+> **This page is a review instrument, not a rule source.**
+> The durable rules live in
+> [Frontend Design Language](frontend-design-language.md) — it is the single
+> canonical source for surfaces, colour roles, status encoding, typography,
+> density, boundaries, per-page composition, motion, dark mode, and the
+> accessibility/anti-pattern contracts. The judgment behind those rules lives in
+> [Frontend Art Direction](frontend-art-direction.md); historical evidence lives
+> in [Frontend Visual Ancestry](frontend-visual-ancestry.md).
+>
+> Everything below is a **question to ask of a rendered page**, each pointing at
+> the rule that answers it. Nothing here defines a second visual system.
 
-It is deliberately not a visual linter.
+It is deliberately not a visual linter. Its purpose is to help a human or coding
+agent distinguish a page that merely complies with the system from a page that is
+genuinely well composed for REvoCompute. Use it during implementation and again
+before final review.
 
-The purpose is to help a human or coding agent distinguish:
-
-- a page that merely complies with a design system;
-- a page that is genuinely well composed for REvoCompute.
-
-Use this during implementation and again before final review.
-
----
-
-## 1. The first question
-
-Before checking tokens, ask:
-
-> **Does this page feel composed, or does it feel assembled?**
-
-A composed page has a clear visual center, reading path, density, and reason for
-each boundary.
-
-An assembled page may be perfectly consistent but still look like a collection
-of library components.
-
-If the answer is “assembled”, do not immediately tune radii or colours.
-
-Revisit the page-level composition.
+Ask the questions **in order** — meaning before decoration, composition before
+controls, and subtraction last.
 
 ---
 
-## 2. Primary-object test
-
-Identify the primary object of the page.
-
-Examples:
-
-- Dashboard → Task collection;
-- Runner catalog → available methods;
-- Runner detail → the method and its contract;
-- Create Task → the user's inputs and parameters;
-- Result → the scientific result;
-- Admin → system/user state;
-- Profile → account/settings state.
-
-Then ask:
-
-> **Is that object visually more important than the controls around it?**
-
-Failure patterns include:
-
-- a toolbar stronger than the data it controls;
-- statistics dominating the Task list;
-- a file tree competing with the scientific result;
-- a large title/header consuming too much viewport;
-- every card having equal weight.
-
----
-
-## 3. Component-seam test
-
-Look at the page from a distance.
-
-Can you reconstruct the component tree immediately because every semantic group
-has:
-
-- a rounded rectangle;
-- its own border;
-- its own background;
-- its own header;
-- its own shadow?
-
-If yes, the visual implementation may be exposing engineering boundaries.
-
-Remember:
-
-> **A component is a code boundary, not necessarily a visual boundary.**
-
-Try hierarchy in this order:
-
-```text
-spacing
-→ alignment
-→ typography
-→ tonal contrast
-→ hairline
-→ explicit boundary
-→ elevation
-```
-
-Do not jump directly to another card.
-
----
-
-## 4. Card legitimacy test
-
-For every card-like object, ask:
-
-1. Is this a stable domain object?
-2. Does the boundary improve scanning or interaction?
-3. Would removing the card make relationships less clear?
-
-Good candidates:
-
-- Task;
-- Runner when used as a catalog object;
-- dialog/popover;
-- bounded scientific stage;
-- genuinely independent settings group.
-
-Weak candidates:
-
-- one heading plus two lines of text;
-- a filter bar that could be a tool band;
-- a metadata group that could be aligned text;
-- an icon and description used only to fill space.
-
-The goal is not fewer cards.
-The goal is **earned cards**.
-
----
-
-## 5. Colour legitimacy test
-
-For every non-neutral colour, ask:
-
-> **What does this colour mean?**
-
-Acceptable answers include:
-
-- primary action;
-- active selection;
-- running state;
-- warning;
-- failure;
-- scientific data;
-- method-defined categorical encoding.
-
-Weak answers include:
-
-- “this area looked empty”;
-- “the design needed more personality”;
-- “the component library uses this variant”;
-- “every card needs an accent”.
-
-Also ask:
-
-> **If the page were converted to grayscale, would hierarchy still work?**
-
-If not, colour may be carrying too much structural responsibility.
-
----
-
-## 6. Status-encoding test
-
-Status may legitimately use more than one channel.
-
-For a Task, for example:
-
-- a thin coloured rail can support fast scanning;
-- a text label can confirm exact state;
-- iconography may help where it adds meaning.
-
-This is useful redundancy when each channel has a job.
-
-It becomes noise when all channels are equally loud.
-
-Never reject a status rail solely because it is common.
-
-Reject it when it is decorative.
-
----
-
-## 7. Boundary test
-
-For each border or separator, ask:
-
-> **What relationship does this boundary clarify?**
-
-A border is justified when it:
-
-- protects an interactive target;
-- separates independent objects;
-- establishes a scientific stage;
-- keeps a dense table readable;
-- defines a popover/dialog layer.
-
-A border is suspect when it merely repeats grouping already made obvious by
-spacing and alignment.
-
-Likewise, a shadow should mean elevation rather than “polish”.
-
----
-
-## 8. Material/substance test
-
-REvoCompute should not feel fragile.
-
-Ask:
-
-- do surfaces feel substantial enough for repeated expert use?
-- are controls too translucent or visually thin?
-- is the page so low-contrast that it feels washed out?
-- does every panel float, making the application feel weightless?
-- does dark mode feel like black glass rather than a work surface?
-
-The target is:
-
-> **soft surface, substantial structure**
-
----
-
-## 9. Scientific-authority test
-
-On a Result page, ask:
-
-> **What is the most visually interesting thing on the screen?**
-
-Usually, the answer should be the scientific artifact.
-
-A colourful molecular structure, heatmap, alignment, or plot should not need to
-fight:
-
-- a gradient header;
-- bright card accents;
-- oversized file chrome;
-- colourful navigation;
-- decorative icons.
-
-If removing the scientific result still leaves a “hero screenshot” that feels
-complete, the interface may be too visually self-important.
-
----
-
-## 10. Data-honesty test
-
-Never add visual data that do not exist.
-
-Reject:
-
-- fake sparklines;
-- decorative trend charts;
-- arbitrary progress rings;
-- “health” scores without a real metric;
-- illustrative scientific-looking plots.
-
-Scientific software must be especially strict here.
-
-> **Never visualize data that does not exist.**
-
----
-
-## 11. Typography test
-
-Ask:
-
-- is page identity clear without exaggerated type?
-- are machine facts exact and easy to compare?
-- do labels recede appropriately?
-- are values visually stronger than their labels?
-- is monospace used for identity/code-like facts rather than as “scientific
-  styling”?
-- does any serif/display treatment improve composition, or is it merely a
-  branding flourish?
-
-Typography should create hierarchy before another box is added.
-
----
-
-## 12. Density test
-
-Use the rule:
-
-> **macro-space, micro-density**
-
-Ask:
-
-- does the page breathe between major systems?
-- are Tasks, files, parameters, tables, and result facts compact enough to scan?
-- has “clean design” diluted useful information?
-- is Admin artificially sparse?
-- is mobile cluttered because desktop density was merely squeezed?
-
-Different pages may legitimately have different density.
-
-Consistency does not require equal whitespace everywhere.
-
----
-
-## 13. Interaction-weight test
-
-Button visual weight should match action importance and consequence.
-
-Reject a row where every action is:
-
-- outlined;
-- pill-shaped;
-- equal width;
-- equal colour;
-- equal prominence.
-
-Ask:
-
-- what is the primary contextual action?
-- what is secondary?
-- what is destructive?
-- what is rare/operator-only?
-- what can become a menu item without hiding important work?
-
-Do not hide frequent expert actions merely to make the screen cleaner.
-
----
-
-## 14. Motion test
-
-For each transition or animation, ask:
-
-> **What becomes easier to understand because this moves?**
-
-Good reasons:
-
-- preserving spatial continuity;
-- showing open/closed state;
-- confirming an action;
-- preventing abrupt layout shifts;
-- showing where a panel went.
-
-Weak reasons:
-
-- “premium feel”;
-- visual excitement;
-- every card should lift;
-- scroll-triggered spectacle.
-
-Respect reduced-motion preferences.
-
-The best motion is usually noticed when it is absent.
-
----
-
-## 15. Authorship test
-
-Ask:
-
-> **Is there any evidence that this page was made for this specific product?**
-
-This does not mean adding decoration.
-
-Evidence of authorship may be:
-
-- a page-specific composition;
-- a strong but justified operator action;
-- a Result layout that yields to the science;
-- a carefully worded empty state;
-- a semantic status rail;
-- a selective typographic decision;
-- an unusually good file/provenance layout.
-
-Then ask the inverse:
-
-> **Could this page be dropped into a CRM by changing nouns?**
-
-If yes, the product character may have been over-generalized.
-
----
-
-## 16. Convention / cliché / misuse test
-
-When an element feels “too common”, classify it before removing it.
-
-### Convention
-
-A mature pattern that improves comprehension.
-
-Examples may include:
-
-- red for destructive action;
-- tabs for sibling views;
-- checkboxes for selection;
-- status labels;
-- cards for stable objects.
-
-Use confidently when appropriate.
-
-### Cliché
-
-A widely repeated pattern that may still be useful.
-
-Examples may include:
-
-- rounded cards;
-- pills;
-- soft shadows;
-- icon rails.
-
-Question the implementation, not the existence.
-
-### Misuse
-
-A pattern present without contextual reason.
-
-Examples:
-
-- an icon tile on every heading;
-- hover lift on static informational blocks;
-- colour accents on every card;
-- gradients added to empty space;
-- a badge for every metadata value.
-
-Remove misuse.
+## 1. Composition
+
+- **Does this page feel composed, or assembled?** A composed page has a clear
+  visual center, reading path, and reason for each boundary. If it reads as
+  assembled, revisit page-level composition before tuning radii or colour.
+  (Rules: §3 one working surface, §4 visual gravity.)
+- **Is the primary object the most visually important thing on the page?** The
+  center of gravity per page is named in §4. Failure signs: a toolbar stronger
+  than its data, statistics dominating the Task list, a header eating the
+  viewport, every card at equal weight.
+- **Can you reconstruct the component tree from a screenshot?** If every
+  semantic group has its own rounded rectangle, border, background, header, and
+  shadow, the implementation is exposing engineering boundaries as visual ones.
+  (Rule: §3; escalate hierarchy in order — spacing, alignment, tonal contrast,
+  hairline, explicit boundary, elevation.)
+- **Does complexity reveal itself progressively?** Disclosures, advanced panels,
+  and secondary controls should not compete with the primary object up front.
+  (Rules: §14 Dashboard search/filter, §17 Create Task.)
+
+## 2. Composition order and density
+
+- **Was composition settled before component polish?** Identify the primary
+  object, the reading path, and the macro spacing before refining a control.
+  (Rule: §3; art direction §13.)
+- **Is it macro-space, micro-density?** The page should breathe between major
+  systems while Tasks, files, parameters, and result facts stay compact enough
+  to scan. Consistency does not mean equal whitespace everywhere — Admin and
+  Result may legitimately be denser than a public page. (Rule: §8.)
+
+## 3. Colour
+
+- **What does each non-neutral colour mean?** Every strong colour must answer:
+  primary action, active selection, running state, warning, failure, scientific
+  data, or method-defined categorical encoding. “The area looked empty” is not an
+  answer. (Rules: §5.2 ink not paint, §5.4 no decorative data colour.)
+- **Would hierarchy survive in grayscale?** If not, colour is carrying structural
+  work that spacing and typography should carry. (Rule: §5.)
+- **Is scientific content the richest colour on the page?** Chrome should not
+  out-saturate the science. (Rules: §5, §18; art direction §2 wild rose.)
+
+## 4. Status encoding
+
+- **Is any status conveyed by colour alone?** It must not be. A shape cue plus a
+  textual label accompany status colour. (Rule: §15.1.)
+- **Does a status cue earn its place?** A compact peripheral cue is valid when it
+  speeds batch scanning; it is decoration when the card merely “feels unfinished
+  without an accent.” (Rules: §2, §15.1.)
+
+## 5. Boundaries and material
+
+- **What relationship does each border or separator clarify?** A border is
+  justified when it protects an interactive target, separates independent
+  objects, establishes a scientific stage, keeps a dense table readable, or
+  defines a popover/dialog layer. (Rules: §3, §6.1.)
+- **Does a shadow mean elevation or just polish?** Most surfaces should stand on
+  border plus tone. (Rule: §6.2.)
+- **Do surfaces feel substantial enough for daily expert use?** Not fragile,
+  translucent, washed out, or floating. (Rule: §6.)
+
+## 6. Typography and machine facts
+
+- **Are machine facts exact and easy to compare?** IDs, job IDs, hashes,
+  filenames, versions, wall times, and numeric metrics use machine-text
+  conventions and consistent formatting. (Rules: §7.2, §15.3.)
+- **Do labels recede and values lead?** Is monospace reserved for identity-like
+  facts rather than used as “scientific styling”? (Rules: §7.2, §7.3.)
+- **Does any display/serif treatment improve composition, or is it a branding
+  flourish?** (Rule: §7; art direction §3.)
+
+## 7. Actions and interaction weight
+
+- **Does button weight match importance and consequence?** A flat row of equally
+  prominent buttons is a hierarchy failure. (Rule: §20.)
+- **Are frequent expert actions still reachable?** Do not hide them merely to
+  make a screen look cleaner. (Rules: §15.4, §20.)
+
+## 8. Scientific authority
+
+- **What is the most visually interesting thing on a Result page?** It should be
+  the scientific artifact. (Rule: §18.)
+- **If the artifact disappeared, would the page still look like a finished
+  product screenshot?** If yes, the chrome is too loud. (Rule: §18.)
+- **Was any visual data invented?** Never add fabricated sparklines, trend
+  charts, progress rings, “health” scores, or scientific-looking decoration.
+  (Rules: §5.4, §18.)
+
+## 9. Motion
+
+- **What becomes easier to understand because this moves?** Valid: spatial
+  continuity, open/closed state, action confirmation, avoiding layout shift,
+  showing where a panel went. Invalid: “premium feel”, hover-lift on static
+  content, scroll spectacle. Respect reduced motion. (Rule: §21.)
+
+## 10. Dark mode and responsive
+
+- **Does dark mode feel independently composed?** Not inverted light mode, not
+  green-black industrial, not neon, not black glass; scientific colour and
+  semantic separation preserved. (Rule: §22.)
+- **Does mobile recompose or merely shrink?** Object identity and primary actions
+  preserved, metadata wrapping into meaningful rows, touch targets accessible,
+  no critical state hidden behind unexplained icons. (Rule: §19.)
+
+## 11. Authorship
+
+- **Is there evidence this page was made for this product?** A page-specific
+  composition, a justified operator action, a Result layout that yields to the
+  science, a carefully worded empty state — none of it decoration.
+  (Art direction: §11.)
+- **Could this page be dropped into a CRM by changing nouns?** If yes, its
+  product character may be over-generalized. (Rule: §2.)
+
+## 12. Convention, cliché, misuse
+
+When something feels “too common”, classify it before removing it:
+
+- **Convention** — a mature pattern that improves comprehension (status labels,
+  tabs, checkboxes, cards for stable objects). Use it confidently.
+- **Cliché** — widely repeated but possibly valid (rounded cards, pills, soft
+  shadows). Question the implementation, not the existence.
+- **Misuse** — present without contextual reason (an icon tile on every heading,
+  hover-lift on static blocks, an accent on every card). Remove it.
 
 Do not confuse fashion fatigue with functional invalidity.
+(Art direction: §14; rules: §2, §25.)
+
+## 13. Exception test
+
+When you break a system rule, state the reason in one sentence. A good rationale
+sounds like “the molecular stage breaks max-width because the structure is the
+primary scientific object.” A weak one sounds like “it looks cooler.” If no clear
+reason exists, prefer the system rule. (Rule: §16 authored exceptions; art
+direction: §11.)
+
+## 14. Metaphor safety
+
+The art-direction metaphors are judgment aids, not themes. Before shipping
+anything inspired by them, confirm you have implemented the *quality* (care,
+materiality, air, weight, colour hierarchy, authorship) and not the *literal*
+metaphor — no flowers, botanical patterns, fabric grain, lab imagery, Monet-like
+gradients, or brush textures. (Rules: §22 anti-literalization; art direction:
+§2, §7.1.)
+
+## 15. Accessibility preservation
+
+Refinement must not regress keyboard navigation, visible focus, screen-reader
+names, WCAG AA contrast, reduced motion, touch targets, semantic HTML, route and
+auth behavior, notices, guided learning, downloadable results, Result semantics,
+or task-action safety. A more tasteful screen that is harder to use is a
+regression. (Rule: §23.)
+
+## 16. Cared-for details
+
+- **Does the interface feel like someone noticed the small things?** Look for
+  awkward truncation, stale empty gaps, mismatched control heights, bad label
+  wrapping, inconsistent number formatting, jarring transitions, dark-mode
+  colour casts, duplicated actions, panels that do not return space when
+  collapsed, unexplained disabled states, or a loading state that shifts the
+  page. (Art direction: §15.)
+
+## 17. Subtraction
+
+**What can now be removed?** Obsolete CSS, duplicated surface/button/status
+treatments, unused tokens, classes no longer rendered, redundant visual
+wrappers, decoration that no longer earns its space. Do not leave two visual
+systems fighting. (Rule: §25 anti-pattern checklist; art direction §16.)
 
 ---
 
-## 17. Framework-independence test
-
-Ask:
-
-> **If the current UI library disappeared tomorrow, would we still know what this
-> object should look and behave like?**
-
-If not, the design may be mentally coupled to the framework.
-
-Semantic components should own REvoCompute meaning.
-
-Interaction libraries may own mechanics.
-
-No framework should own the product's taste.
-
----
-
-## 18. Exception test
-
-When breaking a design-system rule, write one sentence explaining why.
-
-A good exception rationale sounds like:
-
-- “The molecular stage breaks max-width because the structure is the primary
-  scientific object.”
-- “The Task rail remains because it improves peripheral status scanning.”
-- “The GPU reset action is visually strong because its scope and consequence are
-  unusually broad.”
-- “Admin remains dense because operators need to compare many users/actions in
-  one viewport.”
-
-A weak rationale sounds like:
-
-- “It looks cooler.”
-- “We need more personality.”
-- “The design felt boring.”
-
-If no clear reason exists, prefer the system rule.
-
----
-
-## 19. Metaphor safety test
-
-The art-direction metaphors are judgment aids.
-
-Before shipping anything inspired by them, ask:
-
-> **Have I implemented the literal metaphor instead of the quality it was meant
-> to communicate?**
-
-Reject literal translations such as:
-
-- flowers;
-- botanical patterns;
-- fabric grain;
-- lab imagery;
-- Monet-like gradients;
-- watercolor backgrounds;
-- decorative brush textures.
-
-Translate:
-
-- care;
-- materiality;
-- air;
-- weight;
-- colour hierarchy;
-- authorship.
-
-Nothing else.
-
----
-
-## 20. Light/dark parity test
-
-Do not treat dark mode as an afterthought.
-
-Check:
-
-- neutral hue drift;
-- readable hierarchy;
-- semantic colour distinction;
-- structure/plot colour integrity;
-- border visibility;
-- surface weight;
-- focus visibility;
-- warning/destructive clarity.
-
-A dark UI can remain soft without turning green, neon, or glassy.
-
----
-
-## 21. Responsive composition test
-
-At mobile/tablet widths, ask:
-
-- has the layout been recomposed or merely shrunk?
-- is the primary object still obvious?
-- are controls still grouped semantically?
-- are frequent actions reachable?
-- did metadata collapse into an unreadable pile?
-- did icon-only controls lose meaning?
-- are result surfaces given enough space?
-
-Mobile consistency means preserving judgment, not geometry.
-
----
-
-## 22. “Cared for” test
-
-This is the least measurable and most important final question:
-
-> **Does the interface feel like someone noticed the small things?**
-
-Look for:
-
-- awkward truncation;
-- stale empty gaps;
-- mismatched control heights;
-- inexplicable alignment;
-- labels wrapping badly;
-- inconsistent numerical formatting;
-- jarring state transitions;
-- dark-mode colour casts;
-- duplicated actions;
-- panels that do not return space when collapsed;
-- unexplained disabled states;
-- a loading state that shifts the whole page.
-
-A page may have no dramatic visual feature and still feel excellent when these
-details are resolved.
-
----
-
-## 23. Final review sequence
-
-Use this order:
-
-1. **meaning** — what is this page for?
-2. **composition** — where should attention go?
-3. **density** — what must be visible together?
-4. **hierarchy** — what is primary/secondary/supporting?
-5. **boundaries** — what truly needs framing?
-6. **colour** — where does meaning deserve colour?
-7. **type** — can typography do more of the work?
-8. **controls** — is action hierarchy clear?
-9. **motion** — does transition help understanding?
-10. **details** — does it feel cared for?
-11. **accessibility** — did refinement preserve usability?
-12. **subtraction** — what can now be removed?
-
-Do not review taste in the reverse order.
-
----
-
-## 24. Fast scoring rubric
+## 18. Fast scoring rubric
 
 For a quick review, score each dimension from 0 to 2:
 
@@ -589,9 +207,6 @@ For a quick review, score each dimension from 0 to 2:
 | Authorship | generic | some character | unmistakably REvoCompute |
 | Care | rough edges | competent | thoroughly considered |
 
-The score is not a release gate.
-
-It is a way to identify where a page still feels generic.
-
-A perfect numeric score with a lifeless page still fails the purpose of this
-document.
+The score is not a release gate; it locates where a page still feels generic. A
+perfect numeric score on a lifeless page still fails the purpose of this
+document, and no score excuses a regression against §15 above.

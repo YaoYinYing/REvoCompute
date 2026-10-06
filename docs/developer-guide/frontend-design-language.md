@@ -1,26 +1,29 @@
 # Frontend Design Language
 
-This page is the durable visual contract for REvoCompute's frontend.
-
-It defines the principles by which pages, controls, scientific workspaces, and
-system chrome are judged. It intentionally describes **roles and behavior**
-rather than copying live token values. The live values remain owned by
+This page is the durable visual contract for REvoCompute's frontend. It defines
+the principles by which pages, controls, scientific workspaces, and system chrome
+are judged. It intentionally describes **roles and behavior** rather than copying
+live token values. The live values remain owned by
 `frontend/src/styles/app.css`.
 
-The design language has one working name:
+The design language has one working name: **Soft Precision**.
 
-# Soft Precision
+**This page is the single canonical source of REvoCompute's visual rules.** If
+another frontend document appears to state a rule differently, this page wins.
 
-Soft Precision is the durable system contract. For the post-PR #54 art direction
-and the practical human/agent review rubric, also read:
+Three companion pages support it without restating it:
 
-- [Frontend Art Direction — Cared-for Precision](frontend-art-direction.md)
-- [Frontend Visual Ancestry](frontend-visual-ancestry.md)
-- [Frontend Taste Review](frontend-taste-review.md)
+- [Frontend Art Direction — Cared-for Precision](frontend-art-direction.md) —
+  the judgment and relational art references behind these rules: the
+  *Cared-for Precision* refinement of Soft Precision (why it should feel cared
+  for, laboratory-not-industrial character, authorship).
+- [Frontend Visual Ancestry](frontend-visual-ancestry.md) — the historical
+  evidence (REvoDesign PR #163, exemplars) that justifies these rules.
+- [Frontend Taste Review](frontend-taste-review.md) — the ordered questions to
+  ask of a rendered page, each pointing back here.
 
-Those companion pages do not replace this contract. They explain how to preserve
-authorship, historical character, and contextual judgment without turning taste
-into another rigid token system.
+Those pages explain how to preserve authorship, historical character, and
+contextual judgment. They are not a second rulebook.
 
 > **Precise without sharpness. Professional without industrial coldness.
 > Complex without disorder. Restrained without emptiness.**

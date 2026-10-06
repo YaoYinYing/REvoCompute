@@ -1,23 +1,23 @@
 # Frontend Art Direction — Cared-for Precision
 
-This document is a companion to
-[Frontend Design Language](frontend-design-language.md), with concrete historical
-references recorded in [Frontend Visual Ancestry](frontend-visual-ancestry.md).
-
-The design-language page defines durable system behavior and visual roles.
-This page captures the more difficult layer that tokens cannot fully encode:
-**art direction, visual ancestry, and taste**.
+> **The rules live in [Frontend Design Language](frontend-design-language.md).**
+> That page is the single canonical source for every durable visual rule:
+> surfaces, colour roles, status encoding, typography, density, elevation,
+> boundaries, task cards, the result workspace, Create Task, and the
+> accessibility/anti-pattern contracts. This page does **not** restate those
+> rules; when a rule is named here it is a pointer, not a second definition.
+>
+> This page owns one thing only: the layer tokens cannot encode —
+> **the judgment behind the direction** (why it should feel cared for, the
+> relational art references, authorship, and laboratory-not-industrial
+> character). Historical evidence referenced from a rule belongs to
+> [Frontend Visual Ancestry](frontend-visual-ancestry.md); the review questions
+> belong to [Frontend Taste Review](frontend-taste-review.md).
 
 It exists because a frontend can satisfy every token and accessibility rule and
-still feel generic.
-
-The working phrase is:
-
-# Cared-for Precision
-
-It is not a replacement for **Soft Precision**.
-It is a refinement of what Soft Precision should feel like when the product is
-fully composed.
+still feel generic. The working phrase is **Cared-for Precision** — not a
+replacement for **Soft Precision**, but a refinement of what Soft Precision
+should feel like when the product is fully composed.
 
 ---
 
@@ -25,30 +25,20 @@ fully composed.
 
 REvoCompute should not feel new for the sake of feeling new.
 
-It should feel like a tool that has been:
+It should feel like a tool that has been used, cleaned, adjusted, maintained,
+repaired when necessary, and returned to the bench ready for another day of
+work.
 
-- used;
-- cleaned;
-- adjusted;
-- maintained;
-- repaired when necessary;
-- returned to the bench ready for another day of work.
+The most useful metaphor is not a new lab coat. It is a **well-used lab coat
+after being washed, dried, and cared for**: clean, but not sterile; soft at the
+surface; thick enough to feel safe; familiar rather than showroom-new;
+professional without becoming ceremonial; quiet enough that the work, not the
+garment, remains the point.
 
-The most useful metaphor is not a new lab coat.
-
-It is a **well-used lab coat after being washed, dried, and cared for**:
-
-- clean, but not sterile;
-- soft at the surface;
-- thick enough to feel safe;
-- familiar rather than showroom-new;
-- professional without becoming ceremonial;
-- quiet enough that the work, not the garment, remains the point.
-
-The phrase “cared for” is more important than “soft”.
-
-Softness can be mimicked with radius and low contrast.
-Care is revealed through hundreds of small decisions being right.
+The phrase “cared for” is more important than “soft”. Softness can be mimicked
+with radius and low contrast; care is revealed through hundreds of small
+decisions being right — whose reviewable form is
+[Frontend Taste Review](frontend-taste-review.md) §16.
 
 ---
 
@@ -81,309 +71,161 @@ Dashboard or Admin may simply be the clean working garment.
 
 ## 3. Historical visual ancestry
 
-REvoCompute did not begin from a blank visual history.
+REvoCompute did not begin from a blank visual history, and the direction is not
+novelty for its own sake.
 
-A particularly important ancestor is the REvoDesign server rewrite:
+The lineage, the concrete REvoDesign PR #163 evidence, the historical palette
+values, and the Result / Dashboard / User Control exemplars are recorded in
+[Frontend Visual Ancestry](frontend-visual-ancestry.md).
 
-- **REvoDesign PR #163**
-  — `feat(server): full server stack in docker`
-- merged 2026-02-23;
-- later inherited into REvoCompute's history.
+That page is the single source for historical evidence. This page does not
+restate it.
 
-Reference:
-
-<https://github.com/YaoYinYing/REvoDesign/pull/163>
-
-That rewrite changed the server UI from a relatively generic Tailwind/Open Sans
-surface into a distinct visual system.
-
-Historically notable values included:
-
-```css
---bg: #eef2ed;
---paper: #f8faf7;
---ink: #1d2a2f;
---muted: #5d6c72;
---line: #d4ddd8;
---accent: #0f4f63;
---accent-2: #0d6e66;
---warn: #b06c14;
-```
-
-and it used IBM Plex Sans with Source Serif 4.
-
-These values are not a palette specification for the current frontend.
-
-Their importance is evidence of several successful judgments:
-
-- the “white” surface was not optically sterile;
-- the page field carried a quiet grey-green environmental tone;
-- deep teal could anchor structure without becoming a glowing brand colour;
-- serif contrast could give high-level identity without turning the whole
-  product editorial;
-- cards and panels could feel substantial without becoming industrial;
-- status colour could be visible without becoming the product identity;
-- scientific content could remain the most colourful thing on the screen.
-
-The goal is to recover **why it worked**, not its exact CSS.
+What matters here is the judgment the ancestry proves, which the design language
+now owns as rules rather than as a palette spec: **the “white” surface was never
+optically sterile, the page field carried a quiet environmental tone, and the
+interface could stay quiet because the scientific content was already the most
+colourful thing on the screen.** The current token values are owned by
+`frontend/src/styles/app.css`; the roles they play are owned by
+[Frontend Design Language](frontend-design-language.md) §5–§6.
 
 ---
 
-## 4. What was good about the early Result page
+## 4. The interface yields to the work
 
-The early Result page is a useful model because the interface willingly stepped
-back.
+The early Result page is the clearest ancestor of the current rule that
+**the scientific artifact is the loudest thing on the page**
+([Frontend Design Language](frontend-design-language.md) §18).
 
-The molecular structure occupied most of the visual authority.
-Files and diagnostics remained available but quieter.
-The surrounding canvas was pale and calm.
-The structure itself supplied vivid magenta, ochre, green, purple, and other
-scientific colours.
-
-The important principle is:
+The judgment worth carrying forward is not a layout ratio:
 
 > **The interface is quiet where information can speak.**
 
-A scientific result page should not compete with its own result.
+A scientific Result page should not compete with its own result, and the thing
+the scientist came to inspect should look like the reason the page exists.
 
-This is not an argument for sparse UI.
-Dense controls and provenance remain valid when they are useful.
-
-It is an argument for **visual authority**:
-the thing the scientist came to inspect should look like the reason the page
-exists.
+This is not an argument for sparse UI — dense controls and provenance remain
+valid when they are useful. The rule is visual authority, not emptiness.
 
 ---
 
-## 5. What was good about the early Dashboard
+## 5. Redundancy, not decoration
 
-The early Dashboard used a thin colour rail on Task cards for state.
+A status cue can legitimately combine a compact peripheral mark with a textual
+label. That is useful visual redundancy when each channel has a job.
 
-That rail is worth treating carefully.
+The durable rule is owned by [Frontend Design Language](frontend-design-language.md)
+§15.1: **a status cue may exist when it improves scanning; it must not exist
+merely because a card feels unfinished without an accent.**
 
-It is not inherently “AI UI”.
-It can provide:
-
-- rapid pre-attentive scanning;
-- low-area state encoding;
-- a stable peripheral cue across many Tasks.
-
-A textual status label still confirms the exact state and maintains
-accessibility.
-
-This is useful visual redundancy.
-
-The rule is not “no status rails”.
-
-The rule is:
-
-> **A status rail may exist when it improves scanning. It must not exist merely
-> because a card feels unfinished without an accent.**
-
-This distinction should apply to every conventional visual device.
+Do not reject a conventional visual device merely because it is common; judge
+its reason and its attention cost.
 
 ---
 
-## 6. What was good about the early User Control page
+## 6. Authorship survives the system
 
-The early User Control page combined two qualities that are easy to separate by
-mistake:
+REvoCompute is a working application, and it should not remove useful density to
+make screenshots quieter. Admin may look busy when the work is genuinely busy.
 
-- editorial identity;
-- unapologetically functional administration.
-
-A large expressive page title coexisted with a dense table, compact status,
-multiple operator actions, and strong active navigation.
-
-That combination matters.
-
-REvoCompute is a working application.
-It should not remove useful density to make screenshots quieter.
-
-The Admin area is allowed to look busy when the work is genuinely busy.
-
-One memorable example is the large red GPU credit reset action.
-
-Its strength is justified by:
-
-- broad consequence;
-- destructive/reset semantics;
-- operator context;
-- a small piece of project humour.
-
-The point is not to manufacture more jokes.
-
-The point is that **design-system consistency should not erase authorship**.
+A design system prevents accidental inconsistency; it must not erase justified
+authorship. The concrete forms that authorship may take, and the one-sentence
+standard an exception must satisfy, belong to §11 below. The historical User
+Control page — an editorial page title beside a dense operational table and a
+deliberately strong destructive reset action — is the ancestor of that judgment
+(evidence in [Frontend Visual Ancestry](frontend-visual-ancestry.md)).
 
 ---
 
 ## 7. Precision: laboratory, not industrial
 
-REvoCompute needs precision, but not necessarily **machine precision as an
-aesthetic**.
+REvoCompute needs precision, but not **machine precision as an aesthetic**.
 
-Industrial visual precision tends to suggest:
+Industrial visual precision tends to suggest metal, hard grids, black/grey
+instrumentation, cold blue light, mechanical separators, extreme rectilinearity.
 
-- metal;
-- hard grids;
-- black/grey instrumentation;
-- cold blue light;
-- mechanical separators;
-- extreme rectilinearity.
+Laboratory precision can be different: clean fabric, glass, labels, paper,
+measured markings, real sample colour, durable work surfaces, instruments used
+by human hands.
 
-Laboratory precision can be different:
+The distinction is not decorative. It is the target the design language states as
+**soft surface, substantial structure**
+([Frontend Design Language](frontend-design-language.md) §6): controls may have
+clear boundaries, tables may be dense, cards may have weight, actions may be
+direct — but the product should not feel fragile, translucent, weightless, or
+showroom-like.
 
-- clean fabric;
-- glass;
-- labels;
-- paper;
-- measured markings;
-- real sample colour;
-- durable work surfaces;
-- instruments used by human hands.
+### 7.1 Monet as art direction
 
-The distinction is not decorative.
+The strongest artistic reference for the refinement is **Claude Monet —
+_Woman with a Parasol_**, with **Water Lilies** as a secondary reference.
 
-It affects how the frontend should feel:
+These references must never become literal UI themes (see §12 on metaphor
+safety in [Frontend Taste Review](frontend-taste-review.md) §19).
 
-> **soft surface, substantial structure**
+The useful qualities of _Woman with a Parasol_: air around substantial objects;
+cloth with weight but movement; white that contains environmental colour;
+grass/sky/light connecting the whole scene; colour that feels natural rather than
+assigned; composition that is gentle without becoming weak. The white dress
+reads as white without being a flat white swatch — light, blue sky, shadow, and
+reflected colour all participate in it. For REvoCompute this means neutral
+surfaces can carry subtle environmental relationships without becoming visibly
+tinted themes.
 
-Controls may have clear boundaries.
-Tables may be dense.
-Cards may have weight.
-Actions may be direct.
+The useful quality of _Water Lilies_ is not “blue-green”: it is how boundaries
+can soften while depth remains — water, reflection, sky, plant, and colour
+overlapping without every region needing a hard contour. That is useful when
+thinking about adjacent work surfaces, tool bands, Result stages, control
+regions, and page-level grouping. Do not translate it into gradients; the lesson
+is **relational**, not stylistic.
 
-The product should not feel fragile, translucent, weightless, or showroom-like.
+A useful translation of both references:
 
----
-
-## 8. Monet as art direction
-
-The strongest artistic reference for the current refinement is:
-
-**Claude Monet — _Woman with a Parasol_**
-
-A secondary reference is Monet's **_Water Lilies_** series.
-
-These references must never become literal UI themes.
-
-### 8.1 Woman with a Parasol
-
-The useful qualities are:
-
-- air around substantial objects;
-- cloth with weight but movement;
-- white that contains environmental colour;
-- grass/sky/light connecting the whole scene;
-- colour that feels natural rather than assigned;
-- composition that is gentle without becoming weak.
-
-A useful translation is:
-
-> **Structure has weight. Surfaces have air. Colour comes from meaning. The
-> page is connected by light rather than by boxes.**
-
-The white dress is especially relevant.
-
-It reads as white without being a flat white swatch.
-Light, blue sky, shadow, and reflected colour all participate in it.
-
-For REvoCompute, this suggests that neutral surfaces can carry subtle
-environmental relationships without becoming visibly tinted themes.
-
-### 8.2 Water Lilies
-
-The useful quality is not “blue-green”.
-
-It is the way boundaries can soften while depth remains.
-
-Water, reflection, sky, plant, and colour overlap without every region needing a
-hard contour.
-
-This is useful when thinking about:
-
-- adjacent work surfaces;
-- tool bands;
-- Result stages;
-- control regions;
-- page-level grouping.
-
-Do not translate this into gradients.
-
-The lesson is **relational**, not stylistic.
+> **Structure has weight. Surfaces have air. Colour comes from meaning. The page
+> is connected by light rather than by boxes.**
 
 ---
 
-## 9. Colour should not behave like component paint
+## 8. Colour should not behave like component paint
 
-A common generic-product failure is distributing the accent everywhere:
+The rule that the identity accent is **ink, not paint** — sprayed only on action,
+selection, focus, links, and real semantic state — and that no colour is added
+to decorate data is owned by [Frontend Design Language](frontend-design-language.md)
+§5.2 and §5.4.
 
-- blue button;
-- blue badge;
-- blue icon tile;
-- blue active nav;
-- blue focus ring;
-- blue metric;
-- blue chart;
-- blue gradient.
-
-The accent becomes omnipresent and therefore meaningless.
+What belongs here is the reasoning, in the direction's own language:
 
 REvoCompute should use colour more like a scientific manuscript or a painting:
-**where colour appears matters as much as which colour appears.**
-
-The surrounding interface can be quiet enough that:
-
-- a molecular representation is vivid;
-- a warning is genuinely visible;
-- a running state is easy to scan;
-- a primary action carries authority;
-- a meaningful selection can be unmistakable.
-
-Colour should not be added to “finish” an empty area.
+**where colour appears matters as much as which colour appears.** The surrounding
+interface can be quiet enough that a molecular representation is vivid, a warning
+is genuinely visible, a running state is easy to scan, and a primary action
+carries authority. Colour should not be added to “finish” an empty area.
 
 ---
 
-## 10. Componentization is not the enemy
+## 9. Componentization is not the enemy
 
 REvoCompute should remain strongly componentized in implementation.
-
-Componentization improves:
-
-- behavioral reuse;
-- accessibility;
-- testability;
-- state ownership;
-- migration;
-- maintenance.
+Componentization improves behavioral reuse, accessibility, testability, state
+ownership, migration, and maintenance.
 
 The problem appears when implementation boundaries automatically become visual
-boundaries.
+boundaries. This is stated as a durable rule — and as the page-composition order
+(spacing → alignment → tonal contrast → hairline → boundary → elevation) — in
+[Frontend Design Language](frontend-design-language.md) §3.
 
-A component should not receive, by default:
+The judgment to carry: a component should not receive, by default, its own
+rounded container, background, title, icon tile, shadow, or hover effect. The
+user should see a Task, a Runner, a scientific Result, a parameter group, a file
+tree, or a user record — not “Card components”.
 
-- its own rounded container;
-- its own background;
-- its own title;
-- its own icon tile;
-- its own shadow;
-- its own hover effect.
-
-The durable rule is:
-
-> **A component is a code boundary, not necessarily a visual boundary.**
-
-And:
-
-> **Componentize behavior aggressively; componentize visual framing
+> **A component is a code boundary, not necessarily a visual boundary.
+> Componentize behavior aggressively; componentize visual framing
 > conservatively.**
-
-The user should see a Task, a Runner, a scientific Result, a parameter group, a
-file tree, or a user record — not “Card components”.
 
 ---
 
-## 11. Frameworks must remain below taste
+## 10. Frameworks must remain below taste
 
 No framework or component library should become a mental dependency.
 
@@ -413,7 +255,7 @@ It must not outsource taste.
 
 ---
 
-## 12. Authorship and exceptions
+## 11. Authorship and exceptions
 
 A completely systematized product can become anonymous.
 
@@ -441,7 +283,7 @@ If yes, and usability/accessibility remain sound, it may belong.
 
 ---
 
-## 13. Serious work, not a serious face
+## 12. Serious work, not a serious face
 
 REvoCompute handles serious scientific computation.
 
@@ -469,7 +311,7 @@ Humanity is more often visible through restraint:
 
 ---
 
-## 14. The design should feel composed, not decorated
+## 13. The design should feel composed, not decorated
 
 A useful final sentence for visual review is:
 
@@ -494,69 +336,48 @@ Prefer composition.
 
 ---
 
-## 15. Avoid aesthetic over-correction
+## 14. Avoid aesthetic over-correction
 
-Do not let dislike of generic AI-generated UI create a new formula.
-
-It is easy to replace one cliché with another:
+Do not let dislike of generic AI-generated UI create a new formula. It is easy
+to replace one cliché with another:
 
 ```text
-rounded SaaS cards
-→
-editorial minimalism
-→
-thin borders
-→
-huge whitespace
-→
-monochrome
-→
-oversized type
+rounded SaaS cards → editorial minimalism → thin borders
+→ huge whitespace → monochrome → oversized type
 ```
 
 That is still a template.
 
-Do not reject a useful convention merely because it is common.
-
-Taste requires distinguishing:
-
-- **convention** — mature, useful pattern;
-- **cliché** — overused pattern that may still be valid;
-- **misuse** — a pattern with no contextual reason.
-
-Eliminate misuse.
-Question cliché.
-Use convention confidently when it helps.
+The classification that keeps this honest — **convention** (mature, useful),
+**cliché** (overused but possibly valid), **misuse** (no contextual reason) — and
+the test to apply it are owned by
+[Frontend Taste Review](frontend-taste-review.md) §16. The direction's summary:
+eliminate misuse, question cliché, use convention confidently when it helps.
 
 ---
 
-## 16. What “cared for” looks like in implementation
+## 15. What “cared for” looks like
 
-“Care” should emerge from details such as:
+“Care” is not a branding motif. It emerges from details being right: text not
+truncating unexpectedly, machine values aligning predictably, Result controls
+not moving when data loads, sensible empty states, theme transitions not
+flashing, a collapsed panel giving its space back, focus looking intentional,
+failure states exposing enough information to act.
 
-- text not truncating unexpectedly;
-- machine values aligning predictably;
-- Result controls not moving when data loads;
-- sensible empty states;
-- theme transitions not flashing;
-- a side panel giving space back when collapsed;
-- clear asynchronous feedback;
-- button hierarchy matching consequences;
-- mobile layouts recomposing rather than squeezing;
-- focus state looking intentional;
-- precise file-tree density;
-- long notices remaining readable;
-- failure states exposing enough information to act.
-
-None of these is a branding motif.
-
-Together, they produce character.
+None of these is individually remarkable; together they produce character. The
+reviewable checklist lives in
+[Frontend Taste Review](frontend-taste-review.md) §22.
 
 ---
 
-## 17. Things this art direction does not prescribe
+## 16. What this page deliberately leaves open
 
-This page intentionally does **not** prescribe:
+The durable rules — colour roles, surface/elevation/radius roles, typography,
+density, per-page composition, motion, dark mode — are owned by
+[Frontend Design Language](frontend-design-language.md). This page states the
+judgment behind them, not their values.
+
+It therefore does **not** pin:
 
 - one universal radius;
 - one mandatory serif;
@@ -567,15 +388,15 @@ This page intentionally does **not** prescribe:
 - one fixed density;
 - one layout for every page.
 
-Those belong to rendered judgment and the live implementation.
-
-The art direction should survive future framework or token changes.
+Those values live in the implementation and are judged by rendered evidence. The
+direction should survive future framework or token changes.
 
 ---
 
-## 18. Short art-direction checklist
+## 17. Short art-direction checklist
 
-When making a visual decision, prefer the option that is:
+When a decision is genuinely open — where the rules allow more than one honest
+answer — prefer the option that is:
 
 - more useful before it is more novel;
 - more composed before it is more decorated;
@@ -587,8 +408,7 @@ When making a visual decision, prefer the option that is:
 - conventional when convention is the clearest answer;
 - exceptional only when the context earns it.
 
-A page that satisfies every design-system rule but feels anonymous is not done.
-
-A page that has character but makes scientific work slower is also not done.
-
-The target is both.
+This checklist resolves ties; it does not override a rule in
+[Frontend Design Language](frontend-design-language.md). A page that satisfies
+every rule but feels anonymous is not done, and a page with character that makes
+scientific work slower is also not done. The target is both.
