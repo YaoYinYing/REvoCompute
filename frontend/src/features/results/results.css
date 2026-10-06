@@ -69,8 +69,8 @@
 .result-file-open span { margin-top: .18rem; color: var(--result-muted); font-size: .72rem; }
 .result-file-open[aria-current="true"] { border-color: color-mix(in srgb, var(--result-accent) 45%, var(--result-line)); background: var(--result-accent-soft); }
 .result-file-download { border-color: transparent; border-radius: var(--r-util); }
-/* Toolbar is chrome above the science: flat surface and a hairline, not a gradient. */
 .structure-viewport { display: grid; grid-template-rows: auto minmax(32rem, 72vh); min-height: 36rem; overflow: hidden; border: 1px solid var(--result-line); border-radius: var(--r-surface-lg); background: var(--result-stage); box-shadow: var(--shadow-surface); }
+/* Toolbar is chrome above the science: flat surface and a hairline, not a gradient. */
 .structure-toolbar { flex-wrap: wrap; gap: .5rem; padding: .55rem .7rem; border-bottom: 1px solid var(--result-line); background: var(--result-surface); }
 .structure-mode-group { display: inline-flex; flex-wrap: wrap; max-width: 100%; padding: 2px; border: 1px solid var(--result-line); border-radius: var(--r-control); background: color-mix(in srgb, var(--result-line) 25%, var(--result-surface)); }
 .structure-mode-group .result-button { border-width: 0; background: transparent; white-space: nowrap; }

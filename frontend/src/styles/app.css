@@ -175,7 +175,7 @@ a { color: var(--app-accent); }
 .dashboard-stats div { display: grid; min-width: 0; gap: .4rem; padding: 1.35rem 1.25rem 1.4rem; border-right: 1px solid var(--app-line); }
 .dashboard-stats div:first-child { padding-left: 0; }
 .dashboard-stats div:last-child { border-right: 0; }
-.dashboard-stats span { color: var(--app-muted); font-size: .72rem; font-weight: 600; letter-spacing: .005em; }
+.dashboard-stats span { color: var(--app-muted); font-size: .72rem; font-weight: 600; }
 .dashboard-stats strong { font-family: var(--font-display); font-size: 2.5rem; font-weight: 600; line-height: .95; letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
 /* The attention figure is the only one that may carry local semantic weight. */
 .dashboard-stats div[data-attention] strong { color: var(--app-warning); }
