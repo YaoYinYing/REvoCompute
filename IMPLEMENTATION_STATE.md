@@ -624,3 +624,81 @@ consumes.
 - The Host Operator Executor stays at its two real host operations; the Web
   surface refuses activation and rollback rather than approximating them.
 - §20.9 end-to-end failure drill is deprioritized by the Campaign Commander.
+
+
+# Untrusted Scientific Input and Artifact Boundary Hardening (PR #58)
+
+`TODO.md` is the design contract for this PR. This section is its execution
+state; the committed tests and the named commands are the machine-verifiable
+record.
+
+## Starting point
+
+- Branch base: `e64077589ff6c3583bb4b27b528daa2b1551abce` (current `main`).
+- Feature branch: `security/untrusted-scientific-boundaries`; worktree
+  `security-untrusted-scientific-boundaries`.
+- Scope: Core scientific-ingress validation and Runner artifact-publication
+  hardening only. No #55 readiness/control, no #56 frontend, no #57 MCP, no
+  accounting/quota, no Slurm placement.
+
+## Ingress audit (complete)
+
+Every surface that accepts untrusted scientific bytes reaches the same canonical
+Core path — `validate_input_file` + `validate_logical_input` under the quarantine
+window — before promotion, snapshot creation, or dispatch:
+
+| Surface | Entry | Canonical? | Bypass? |
+| --- | --- | --- | --- |
+| Browser multipart `/compute/api/post` | `_handle_submission` | yes | no |
+| Preflight `/compute/api/preflight/<tt>` | `_rate_limited_preflight` | yes | no (returns before promote/claim/dispatch) |
+| API-key auth | `auth.load_current_user` | yes (same routes) | no |
+| Tool call `/compute/api/tools/<name>/call` | `submit_tool_call` | yes | no |
+| Cross-Task artifact ref (in a Tool call) | `_tool_task_artifact` | yes (content re-validated) | no (cross-user 403) |
+| Workspace normalize POST | `normalize_workspace` | n/a (no file bytes) | CSRF gate added |
+| live-test CLI | `live_test_executor` | yes | n/a (not HTTP) |
+| MCP | absent on this branch | — | reconcile as a projection after #57 |
+
+## What changed
+
+- `revocompute/ingress_security.py` (new): the bounded admission vocabulary
+  (reason code -> phase), the content-derived `validator_revision()`, the
+  `ValidationReceipt`, `canonical_relative_path`, receipt verification, and the
+  collision-collapse helper. It owns reason codes and their phase only; the
+  operational event names it routes to are the existing
+  `operational_events.EVENT_NAMES` entries — no second event family.
+- `revocompute/routes.py`: collision -> `input_namespace_collision`; receipt
+  recorded per admitted item and carried into `task.json`; type+size bound into
+  the task identity; `preflight_task` uses the shared phase/event vocabulary; the
+  routes-local path shim removed; workspace-normalize CSRF gate added.
+- `revocompute/task_runtime.py`: publication boundary (`_publishable_artifact`
+  with `O_NOFOLLOW`+`fstat`, symlink/special/hard-link refusal, entry-count and
+  byte-total guards, duplicate-path refusal, output-check problems and a bounded
+  `manifest.published` reason code); worker verifies the snapshot against the
+  receipt before dispatch and revalidates legacy rows; debug capture copies
+  instead of hard-linking.
+- `revocompute/input_validators/*`: bounded resource-limit classification for the
+  isolated worker.
+
+## Delivery commands and results
+
+- `TMPDIR=<root-fs> pytest tests -m "not browser" -n 4 --dist=load -q -p no:cacheprovider`
+  -> 1829 passed, 24 skipped, 1 failed.
+  The single failure is `tests/runners/opendde/test_opendde_protocol.py` asserting
+  an absolute `/tmp/` scratch prefix; it fails only when the pytest basetemp is
+  relocated off the tmpfs (the shared `/tmp` tmpfs on this host has ~1M inodes and
+  concurrent runs exhaust it). It passes with the default basetemp, so it is a
+  fixture-path assumption of the relocation, not a product regression.
+- `pytest tests/server tests/test_ingress_boundary.py tests/test_input_validation.py -q`
+  -> 468 passed, 1 skipped.
+- `cd frontend && npm ci && npm run typecheck && npm test && npm run build`
+  -> typecheck clean (incl. `check:api-types`), 19 files / 88 tests passed, build
+  passes `verify:lock`/`verify:provenance`/`check:api-types`/`verify:build`.
+  The frontend bundle is unchanged; no `openapi.json` regeneration was needed
+  because the receipt rides inside existing free-form objects.
+
+## Known deferred
+
+- MCP reconciliation after #57 lands (projection only; #57 does not exist on this
+  branch).
+- The `boltz_predict` `considerations` manifest defect noted in the previous
+  section is unrelated and still open.
