@@ -20,15 +20,12 @@ from __future__ import annotations
 import json
 import secrets
 import time
-from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable, Mapping
 
 import sqlalchemy as sa
 
 from revocompute.operator_jobs_schema import operator_jobs_table
-
-OPERATOR_JOB_ID_PATTERN = r"opjob_[A-Za-z0-9_-]{32}"
 
 
 class OperatorJobStatus(str, Enum):
@@ -85,14 +82,6 @@ class OperatorConflictError(OperatorJobError):
 
 def new_job_id() -> str:
     return f"opjob_{secrets.token_urlsafe(24)}"
-
-
-@dataclass(frozen=True, slots=True)
-class JobLease:
-    """The exclusive operation scope a job holds while it runs."""
-
-    scope: str
-    job_id: str
 
 
 class OperatorJobStore:
@@ -400,7 +389,6 @@ def _bound_log(text: str, limit: int = 16384) -> str:
 __all__ = [
     "ALLOWED_TRANSITIONS",
     "FAILURE_CATEGORIES",
-    "JobLease",
     "OperatorConflictError",
     "OperatorJobError",
     "OperatorJobStatus",
