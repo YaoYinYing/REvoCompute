@@ -280,6 +280,53 @@ Admin/User Control, Profile, login) was rendered from the production bundle
 through the real fixture harness. It is review evidence, not a pixel-golden
 corpus; no screenshot-diff test was added.
 
+## Reopened strength pass (composition over token tuning)
+
+The first delivery was judged technically sound but too subtle. This pass raises
+strength of authorship by composition, not tokens: a page opens on one
+editorial-scale masthead set off by a rule, and identity → primary content →
+controls → metadata descend in weight instead of reading as equal bands. Commit
+`3527b61`; the §27 subtraction followed in a second commit.
+
+Changed surfaces (composition only; no behaviour, DOM, i18n, contract, or
+a11y change):
+
+- **Shell / page frames** — taller page padding; `.page-heading`,
+  `.runner-detail-heading` and `route-error` h1 at editorial scale with a
+  tighter display tracking; runner-group and detail-section gutters widened to a
+  16rem index column with a 2px spine rule so a category/section reads as an
+  authored divider, not a caption. Dashboard stat figures scaled to 2.5rem; the
+  attention figure stays the only locally-weighted one.
+- **Create Task** — method groups are ruled chapters; the protocol reads as
+  numbered stages on a measured gutter; the snapshot panel scales its method
+  identity. No parameter/validation/one-click-submit change.
+- **Result** — the result's own identity is now the loudest text in the
+  workspace; the scientific stage opens taller. The structure toolbar comment
+  was moved onto the rule it explains (subtraction).
+- **Admin** — the toolbar is a bordered instrument panel (dense but framed), the
+  table header carries a 2px rule, the stat strip figures scale. Density kept.
+- **Profile / auth** — relaxed page rhythm and scaled section headings.
+
+Rendered judgment was made against the deployed baseline
+(`cp-after` vs the after-set) on Dashboard, Runner catalog/detail, Create Task,
+a structure Result, Admin/User Control, Profile and login, in both themes and at
+desktop plus tablet/mobile widths. The strengthened composition reads as
+intended rather than as decoration: hierarchy is carried by scale, gutter and
+rule, not by added ornament; soft-surface/border-vs-tone decisions are
+unchanged.
+
+§27 subtraction applied in this pass: removed a non-composition dashboard
+stat-label tracking that changed no rhythm, and relocated the misplaced
+structure-toolbar rationale comment. Net change is composition-only.
+
+Re-ran at the delivered head: `npm run typecheck` clean, `npm run test` 19 files
+/ 88 tests passed, `npm run build` (verify:lock, verify:provenance,
+check:api-types, vite build, verify:build) clean; browser gates
+(`test_playwright_soft_precision`, `test_playwright_application`,
+`test_playwright_runner_fixtures`, `test_playwright_results`) 96 passed /
+2 xfailed; Molstar CSP case 2 skipped as designed; `mkdocs build --strict`
+clean.
+
 ---
 
 # Soft Precision Visual System (PR #54)
