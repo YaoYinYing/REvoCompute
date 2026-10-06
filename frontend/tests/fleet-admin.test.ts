@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { clearSessionCredential } from '../src/app/session';
-import { adminApi } from '../src/features/admin/api';
+import { adminApi, type RunnerFleetEntry } from '../src/features/admin/api';
 import { capacityLabel, filterFleet, reasonText, workflowLabel } from '../src/features/admin/fleet/FleetAdmin';
 
 type RequestRecord = { url: string; init: RequestInit };
@@ -20,9 +20,18 @@ const body = (request: RequestRecord): Record<string, unknown> => JSON.parse(Str
 
 afterEach(() => { clearSessionCredential(); vi.unstubAllGlobals(); });
 
-const entry = (family: string, status: string, available: boolean | null = true) => ({
+const evidence = (): RunnerFleetEntry['readiness']['evidence'] => ({
+  sif_path: '/images/demo/demo.sif',
+  sif_exists: true,
+  build_provenance_current: true,
+  receipt_exists: true,
+  receipt_valid: true,
+  doctor_ok: true,
+});
+
+const entry = (family: string, status: RunnerFleetEntry['readiness']['status'], available: boolean | null = true): RunnerFleetEntry => ({
   runner_family: family,
-  readiness: { status, reason_code: 'READY', message: '', next_action: 'none', evidence: {} },
+  readiness: { status, reason_code: 'READY', message: '', next_action: 'none', evidence: evidence() },
   capacity: { available, reason: available === null ? 'capacity_unknown' : 'scheduler_available' },
   access: { restricted: false, granted: true, policy_id: null },
   in_flight: null,
