@@ -51,6 +51,7 @@ from revocompute.operator_jobs import (
 )
 from revocompute.operator_plan import (
     OperatorPlan,
+    OperatorPlanError,
     StalePlanError,
     build_plan,
     verify_plan,
@@ -65,6 +66,11 @@ _EFFECT_TO_ACTION = {
     "inspect": "runner.status",
     "live_test": "runner.live_test",
 }
+
+
+#: Actions whose plan is bound to host artifact identities rather than to derived
+#: readiness, and which therefore never flow through the readiness-derived plan.
+ARTIFACT_TRANSITION_ACTIONS = frozenset({"runner.promote", "runner.rollback"})
 
 
 class OperatorServiceError(ValueError):
@@ -175,7 +181,18 @@ class OperatorService:
         *,
         parameters: Mapping[str, Any] | None = None,
     ) -> OperatorPlan:
-        """Produce the deterministic plan for one action against current evidence."""
+        """Produce the deterministic plan for one action against current evidence.
+
+        Activation and rollback are host-artifact transitions with their own
+        typed plans (candidate / receipt / previous identities), so this generic
+        readiness-derived plan does not claim to drive them: they are planned and
+        verified by :mod:`revocompute.runner_promotion` and would run through the
+        host boundary's own command.
+        """
+        if action_id in ARTIFACT_TRANSITION_ACTIONS:
+            raise OperatorPlanError(
+                f"{action_id} is planned against its artifact identities, not derived readiness"
+            )
         readiness = self.readiness(runner_family)
         return build_plan(
             action_id, runner_family=runner_family, readiness=readiness, parameters=dict(parameters or {})

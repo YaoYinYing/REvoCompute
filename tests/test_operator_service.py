@@ -239,6 +239,22 @@ def test_available_actions_are_state_aware(monkeypatch, host):
     assert actions["runner.repair"]["plan"]["effective_actions"] == ["live_test"]
 
 
+def test_artifact_transitions_are_not_planned_from_derived_readiness(monkeypatch, host):
+    """Activation and rollback are bound to artifact identities, so the
+    readiness-derived planner refuses to stand in for them."""
+    service, _state, _calls = _service(monkeypatch, host)
+    from revocompute.operator_plan import OperatorPlanError
+
+    for action in ("runner.promote", "runner.rollback"):
+        with pytest.raises(OperatorPlanError, match="artifact identities"):
+            service.plan(action, "demo")
+    # They are offered as present but not available from this planner, so the UI
+    # never presents a readiness-derived button for an activation.
+    offered = {action["id"]: action for action in service.available_actions("demo")}
+    assert offered["runner.promote"]["available"] is False
+    assert offered["runner.promote"]["unavailable_reason"] == "no_safe_plan_for_current_state"
+
+
 def test_detail_reports_unknown_families_as_not_found(monkeypatch, host):
     service, _state, _calls = _service(monkeypatch, host)
     from revocompute.operator_service import OperatorNotFound
