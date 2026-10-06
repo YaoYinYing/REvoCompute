@@ -318,13 +318,22 @@ a { color: var(--app-accent); }
   .app-brand { justify-content: start; padding: 0 .75rem; }
   .app-brand span { display: none; }
   .app-nav { position: fixed; top: auto; right: 0; bottom: 0; left: 0; z-index: 35; flex-direction: row; justify-content: space-around; align-items: stretch; gap: 0; height: 3.5rem; padding: 0; border-top: 1px solid var(--app-line); border-right: 0; }
-  /* The bottom bar has no room for region separation, so the group wrappers
-     dissolve and the destinations become the bar's own items; the group headings
-     are removed from the tree in script (see shell.ts). */
-  .app-nav-group, .app-nav-group-items { display: contents; }
-  .app-nav-group + .app-nav-group { padding-top: 0; border-top: 0; }
+  /* The bottom bar has no room for region separation, so the Compute and Account
+     destinations sit directly on it (their wrappers dissolve; their headings are
+     removed from the tree in script). Administration is a different navigation
+     level, so on mobile it becomes a deliberate secondary surface just above the
+     bar rather than three more items competing inside the primary bar. */
+  .app-nav-group:not([data-nav-group="admin"]),
+  .app-nav-group:not([data-nav-group="admin"]) .app-nav-group-items { display: contents; }
+  .app-nav-group[data-nav-group="admin"] { position: fixed; right: 0; bottom: 3.5rem; left: 0; z-index: 34; display: grid; padding: 0; border-top: 1px solid var(--app-line); background: var(--app-surface); }
+  .app-nav-group[data-nav-group="admin"][hidden] { display: none; }
+  .app-nav-group[data-nav-group="admin"] > .app-nav-group-label { padding: .45rem .75rem .15rem; }
+  .app-nav-group[data-nav-group="admin"] .app-nav-group-items { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; }
+  .app-nav-group[data-nav-group="admin"] a { min-height: 2.75rem; flex: none; flex-direction: column; gap: .15rem; justify-content: center; padding: .3rem; border-radius: 0; font-size: .66rem; }
+  /* The secondary surface carries its destinations by name, like the bar does. */
+  .app-shell[data-rail] .app-nav-group[data-nav-group="admin"] a > span { display: inline; }
   .app-nav a { flex: 1; flex-direction: column; gap: .15rem; justify-content: center; padding: .3rem; border-radius: 0; font-size: .66rem; }
-  .app-shell[data-rail] .app-nav a > span { display: inline; }
+  .app-shell[data-rail] .app-nav > .app-nav-group:not([data-nav-group="admin"]) a > span { display: inline; }
   .app-header { grid-area: header; min-width: 0; min-height: 3.5rem; padding: 0 .6rem; background: var(--app-surface); backdrop-filter: none; }
   .app-header-actions { gap: .3rem; min-width: 0; }
   .app-header .app-new-task { width: 2.15rem; min-width: 2.15rem; justify-content: center; padding: 0; }
@@ -332,6 +341,9 @@ a { color: var(--app-accent); }
   .app-user span { display: none; }
   .app-header #lang-menu-value, .lang-menu .lang-menu-value { display: none; }
   .app-outlet { padding-bottom: 3.5rem; }
+  /* When the Administration surface is present it stands above the bar, so the page
+     clears it too — the surface never covers the end of the page. */
+  .app-shell:has(.app-nav-group[data-nav-group="admin"]:not([hidden])) .app-outlet { padding-bottom: 7.5rem; }
   .page-heading, .runner-detail-heading { grid-template-columns: 1fr; align-items: start; gap: 1rem; }
   .dashboard-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .dashboard-stats div:nth-child(3n) { border-right: 0; }

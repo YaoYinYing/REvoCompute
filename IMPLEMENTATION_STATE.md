@@ -359,10 +359,15 @@ comes from position and grouping, not from ornament.
 - Extension: a region accepts destinations as their routes exist; no speculative
   Fleet/Reports entries were added.
 - Responsive: above the bottom-bar band the rail is a column, so each region is
-  named. On the bottom bar the region wrappers dissolve (`display: contents`) and
-  the destinations sit directly on the bar, with the headings removed from the
-  accessibility tree; the current destination still marks itself there, and a
+  named by a visible label. On the bottom bar the Compute and Account destinations
+  sit directly on the bar (their wrappers dissolve; their headings are removed from
+  the accessibility tree) and the current destination still marks itself there; a
   repeat activation navigates instead of toggling a rail that has no column form.
+  Administration is a different navigation level, so on mobile it becomes a
+  deliberate **bounded secondary surface just above the bar** — one named row of
+  three destinations, cleared by the outlet padding — rather than three items
+  crowding the primary bar. It is absent for anyone not authorized, so ordinary
+  and anonymous mobile navigation are unchanged.
 - One behaviour change with the same change set: the Account (Profile) destination
   now follows session state like the top-bar profile affordance, so anonymous
   navigation offers the sign-in route (`/compute/login?return_to=…`) rather than a
@@ -372,8 +377,9 @@ comes from position and grouping, not from ornament.
 
 - `tests/test_playwright_soft_precision.py` — region labelling and the
   ordinary-user/administrator visibility split, the mobile bar carrying
-  destinations without region headings, and the visible label above the
-  bottom-bar band.
+  destinations without region headings, the administrator's bounded mobile
+  Administration surface above the bar, the ordinary user having no such surface,
+  and the visible label above the bottom-bar band.
 - `tests/test_playwright_application.py` — the admin dashboard case now asserts the
   left-nav destination instead of opening a removed dropdown; the responsive admin
   case asserts the current-page marker and that Profile's local tabs stay out of
@@ -385,7 +391,7 @@ comes from position and grouping, not from ornament.
 - `cd frontend && npm run typecheck && npm run test && npm run build` — typecheck
   clean; 19 files / 88 tests passed; build (verify:lock, verify:provenance,
   check:api-types, vite build, verify:build) clean.
-- `pytest tests -m "browser and not molstar_csp" -n 4 --dist=load -q` — 169 passed,
+- `pytest tests -m "browser and not molstar_csp" -n 4 --dist=load -q` — 171 passed,
   1 skipped, 2 xfailed.
 - `pytest tests -m "not browser" -n 4 --dist=load -q` — clean (run with `--basetemp`
   on the repository filesystem; see the `/tmp` tmpfs note above).
@@ -394,11 +400,13 @@ comes from position and grouping, not from ornament.
 ## Rendered evidence
 
 Storyboard rendered from the production bundle through the real fixture harness at
-the pre-change and post-change heads: desktop (1280) and tablet (1024) Administrator
-rail showing the three regions with the Administration destination marked current,
-ordinary-user desktop rail showing Compute + Account and no Administration region,
-anonymous rail at 1280/320, and the mobile bottom bar at 360 with the destinations
-present and no region headings. Review evidence only; no screenshot-diff test.
+the pre-change and post-change heads: desktop (1280) Administrator rail showing the
+three regions with the Administration destination marked current, ordinary-user
+desktop rail showing Compute + Account and no Administration region, anonymous rail
+at 1280/320, the collapsed and expanded tablet rail at 1024, and the mobile bar at
+360 in both the administrator state (primary bar plus the bounded Administration
+surface above it) and the ordinary-user state (primary bar only). Review evidence
+only; no screenshot-diff test.
 
 ---
 

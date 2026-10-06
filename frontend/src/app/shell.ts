@@ -81,19 +81,19 @@ export function mountShell(root: HTMLElement): AppShell {
   const accountLink = groups.account.items.firstElementChild as HTMLAnchorElement;
   accountLink.title = t('shell.action.profile');
   accountLink.setAttribute('aria-label', t('shell.action.profile'));
-  // The group label is a visible heading on the desktop rail. On the mobile bar
-  // the links are laid out directly on the bar, so the headings there are removed
-  // from the accessibility tree rather than labelling a region that is not grouped.
+  // The group label names the region on the desktop rail. On the mobile bar the
+  // Compute and Account destinations sit directly on the bar, so their headings are
+  // removed from the tree there; the Administration heading is kept because on mobile
+  // it names the bounded secondary surface above the bar (see app.css).
   const syncGroupHeadings = (grouped: boolean): void => {
-    Object.values(groups).forEach(group => group.heading.hidden = !grouped);
+    [groups.compute, groups.account].forEach(group => group.heading.hidden = !grouped);
   };
   syncGroupHeadings(navGrouped.matches);
   navGrouped.addEventListener('change', event => syncGroupHeadings(event.matches));
 
   function navGroup(region: string, labelKey: string): { element: HTMLElement; heading: HTMLElement; items: HTMLElement } {
     const element = document.createElement('div'); element.className = 'app-nav-group'; element.dataset.navGroup = region;
-    // The group name labels the region on the desktop rail. On the mobile bottom
-    // bar it cannot label a column of links, so it is removed there (see below).
+    // The heading names the region wherever the links are grouped into a column.
     const heading = document.createElement('h2'); heading.className = 'app-nav-group-label'; heading.textContent = t(labelKey);
     const items = document.createElement('div'); items.className = 'app-nav-group-items';
     element.append(heading, items);

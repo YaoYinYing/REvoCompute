@@ -136,11 +136,45 @@ def test_mobile_navigation_is_bottom_anchored_not_a_thin_rail(page: Page) -> Non
     expect(page.get_by_role("heading", name="Dashboard", exact=True)).to_be_visible()
     position = page.locator(".app-nav").evaluate("node => getComputedStyle(node).position")
     assert position == "fixed"
-    # The bar carries the destinations directly: region headings would name groups a
-    # bottom bar cannot group, so they are absent from the rendered bar.
-    assert page.locator(".app-nav .app-nav-group-label:visible").count() == 0
-    expect(page.locator(".app-nav a[aria-current='page']")).to_have_attribute("href", "/compute/dashboard")
+    # Compute and Account sit directly on the bar; their region headings would name
+    # groups a bottom bar cannot group, so they are absent from the rendered bar.
+    assert page.locator(".app-nav-group:not([data-nav-group='admin']) .app-nav-group-label:visible").count() == 0
+    expect(page.locator(".app-nav [data-nav-group='compute'] a[aria-current='page']")).to_have_attribute("href", "/compute/dashboard")
     assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+
+
+def test_mobile_administration_is_a_secondary_surface_above_the_bar(page: Page) -> None:
+    # For an administrator the Administration destinations do not crowd the primary
+    # bar: they form one bounded surface standing just above it, named by its heading.
+    mount_scenario(page, controlled_scenario(session=ADMIN_AUTH))
+    page.set_viewport_size({"width": 360, "height": 780})
+    page.goto(f"{ORIGIN}/compute/dashboard")
+    expect(page.get_by_role("heading", name="Dashboard", exact=True)).to_be_visible()
+    admin_surface = page.locator(".app-nav-group[data-nav-group='admin']")
+    expect(admin_surface).to_be_visible()
+    expect(admin_surface.locator(".app-nav-group-label")).to_be_visible()
+    expect(admin_surface.get_by_role("link", name="User control")).to_have_attribute("href", "/compute/user_control")
+    box = admin_surface.bounding_box()
+    bar = page.locator(".app-nav").bounding_box()
+    assert box is not None and bar is not None
+    # The surface sits above the bar (never inside or behind it) and within the page.
+    assert box["y"] + box["height"] <= bar["y"] + 1
+    assert box["x"] >= 0 and box["x"] + box["width"] <= 361
+    # The primary bar still carries Compute and Account, uncluttered.
+    bar_labels = page.locator(".app-nav [aria-current='page']").first.inner_text()
+    assert bar_labels.strip() == "Dashboard"
+    assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+
+
+def test_ordinary_user_has_no_mobile_administration_surface(page: Page) -> None:
+    _dashboard(page)
+    page.set_viewport_size({"width": 360, "height": 780})
+    page.reload()
+    expect(page.get_by_role("heading", name="Dashboard", exact=True)).to_be_visible()
+    expect(page.locator(".app-nav-group[data-nav-group='admin']")).to_be_hidden()
+    assert page.get_by_role("link", name="User control").count() == 0
+    assert page.get_by_role("link", name="Server logs").count() == 0
+    assert page.get_by_role("link", name="Configuration").count() == 0
 
 
 def test_desktop_rail_states_regions_with_a_visible_label(page: Page) -> None:
