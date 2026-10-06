@@ -53,6 +53,7 @@ from revocompute.ingress_security import (
 from revocompute.input_validators.isolated_validation import VALIDATOR_RESOURCE_LIMIT_ERROR
 from revocompute.manage_db import ManageDatabase  # noqa: E402
 from revocompute.operational_events import emit_event
+from revocompute import resource_ledger as rloan
 from revocompute.resource_ledger import AdmissionReason, EvidenceSource, LedgerReason
 from revocompute.resource_observations import work_items_projection
 from revocompute.resource_policy import ResolvedResources, ResourceValidationError
@@ -427,9 +428,9 @@ def _create_job(
 
 
 def _gpu_count(resource_policy: ResolvedResources) -> int:
-    if not resource_policy.requires_gpu or not resource_policy.gres:
+    if not resource_policy.requires_gpu:
         return 0
-    return int(resource_policy.gres.rsplit(":", 1)[1])
+    return rloan.units_for_gres(resource_policy.gres)
 
 
 def _gpu_allocation_callbacks(
@@ -458,6 +459,7 @@ def _gpu_allocation_callbacks(
                 gpu_count=gpu_count,
                 started_at=started_at,
                 required_entitlements=required_entitlements,
+                gres=resource_policy.gres or "",
             )
         except (GPUAuthorizationUnavailableError, GPUCreditUnavailableError) as exc:
             reason_code = AdmissionReason.COMPUTE_EXHAUSTED.value

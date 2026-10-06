@@ -2159,7 +2159,9 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
     # after the preparation claim and the row write, and it is recorded in the
     # ledger as what *this Task* owes, so a concurrent submission competing for
     # the same final entitlement loses here instead of both being dispatched.
-    # A CPU-only Task holds nothing: GPU compute is the only enforced unit today.
+    # The hold is taken on the class-agnostic scope: the allowance is one
+    # deployment budget, and the requested GRES class is preserved on the hold
+    # rather than opening a per-class balance.  A CPU-only Task holds nothing.
     if tt.gpus:
         reservation = task_store.reserve_compute_admission(
             user_id=int(g.current_user["id"]),

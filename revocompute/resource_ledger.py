@@ -407,6 +407,17 @@ def periods_for_unit(unit: str) -> bool:
     return unit in PERIODIC_UNITS
 
 
+def class_in_scope(resource_class: str, scoped_class: str) -> bool:
+    """Whether a fact recorded under *resource_class* belongs to *scoped_class*.
+
+    The class-agnostic scope (``""``) is the deployment's single allowance, so
+    it covers every accelerator class: an ``a100`` second still consumes the
+    balance it was admitted against.  A named scope is the per-class report,
+    which selects the same facts filtered rather than reading a second ledger.
+    """
+    return scoped_class == "" or resource_class == scoped_class
+
+
 def summarize_ledger(
     rows: Iterable[Mapping[str, Any]], *, unit: str, resource_class: str = "", period: str | None = None
 ) -> dict[str, int]:
@@ -419,7 +430,9 @@ def summarize_ledger(
     """
     allowance = used = 0
     for row in rows:
-        if str(row.get("unit")) != unit or str(row.get("resource_class") or "") != resource_class:
+        if str(row.get("unit")) != unit or not class_in_scope(
+            str(row.get("resource_class") or ""), resource_class
+        ):
             continue
         if period is not None and periods_for_unit(unit) and str(row.get("period")) != period:
             continue

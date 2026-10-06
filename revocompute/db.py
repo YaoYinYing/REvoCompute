@@ -47,10 +47,20 @@ from revocompute.schema_epoch import require_current_schema
 
 DEFAULT_MONTHLY_GPU_SECONDS = 60_000
 
-#: The digest shape a result-publication anchor must carry.  The same shape
-#: ``StorageResolver`` accepts for a published artifact's declared digest, so an
-#: anchor can never be recorded in a form the publication reader cannot match.
 _MANIFEST_SHA256 = re.compile("[0-9a-f]{64}\\Z")
+
+
+def _class_scope(column, resource_class: str):
+    """The rows one entitlement scope covers.
+
+    The class-agnostic scope (``""``) is the deployment's single allowance, so
+    it covers *every* accelerator class: a recorded ``a100`` allocation still
+    consumes the balance it was admitted against.  A named class is the
+    per-class view, which reports the same facts filtered rather than a second
+    ledger.
+    """
+    return column == resource_class if resource_class else column.isnot(None)
+
 
 #: Default per-subject durable-storage ceiling, in logical bytes.  Soft: a
 #: result that crosses it is preserved and only later admission is restricted.
@@ -1351,39 +1361,68 @@ class TaskDatabase:
         gres: str = "",
         at: float | None = None,
     ) -> rloan.ComputeEntitlement:
-        """The canonical per-(subject, unit, class) position, as a typed value."""
+        """The canonical per-(subject, unit, class) position, as a typed value.
+
+        Every requested class is admitted against the one deployment allowance,
+        so every class reports that allowance: a class is a *view* of the same
+        ledger, filtered to the facts recorded under it.  Reporting ``None`` or a
+        zero allowance for a named class would create a second, contradictory
+        answer to "may this user run?" — the class-agnostic scope is the
+        authority, and admission uses it directly.
+        """
         checked_at = time.time() if at is None else at
         resource_class = rloan.resource_class_for_gres(gres)
         enforce = unit == rloan.UNIT_GPU_SECOND
         period = self._gpu_period(checked_at) if rloan.periods_for_unit(unit) else ""
         with self.engine.begin() as conn:
             if enforce:
-                self._ensure_monthly_grant(conn, user_id, period, resource_class, checked_at)
+                self._ensure_monthly_grant(conn, user_id, period, "", checked_at)
             rows = conn.execute(
                 select(self.resource_ledger_table).where(
                     self.resource_ledger_table.c.subject_type == rloan.SUBJECT_USER,
                     self.resource_ledger_table.c.subject_id == user_id,
                     self.resource_ledger_table.c.unit == unit,
-                    self.resource_ledger_table.c.resource_class == resource_class,
+                    _class_scope(self.resource_ledger_table.c.resource_class, resource_class),
                 )
             ).mappings().all()
             reserved = conn.execute(
                 select(func.coalesce(func.sum(self.resource_reservations_table.c.quantity), 0)).where(
                     self.resource_reservations_table.c.subject_id == user_id,
                     self.resource_reservations_table.c.unit == unit,
-                    self.resource_reservations_table.c.resource_class == resource_class,
+                    _class_scope(self.resource_reservations_table.c.resource_class, resource_class),
                     self.resource_reservations_table.c.state == rloan.ReservationState.HELD.value,
                 )
             ).scalar_one()
             unsettled, unsettled_quantity = self._unsettled_in_connection(
                 conn, user_id, unit, resource_class, checked_at
             )
+            # The allowance is one deployment policy rather than a per-class
+            # budget, so a class view reports that allowance and only its own
+            # usage.  Grant and adjustment facts are always recorded
+            # class-agnostically, so a class-scoped sum of them would be an empty
+            # and misleading zero.
+            allowance = (
+                rloan.summarize_ledger(
+                    conn.execute(
+                        select(self.resource_ledger_table).where(
+                            self.resource_ledger_table.c.subject_id == user_id,
+                            self.resource_ledger_table.c.unit == unit,
+                            self.resource_ledger_table.c.period == period,
+                        )
+                    ).mappings().all(),
+                    unit=unit,
+                    resource_class="",
+                    period=period or None,
+                )["allowance"]
+                if enforce
+                else None
+            )
         totals = rloan.summarize_ledger(rows, unit=unit, resource_class=resource_class, period=period or None)
         sources = tuple(sorted({str(row["evidence_source"]) for row in rows if row["evidence_source"]}))
         return rloan.ComputeEntitlement(
             unit=unit,
             resource_class=resource_class,
-            allowance=totals["allowance"] if enforce else None,
+            allowance=allowance,
             used=totals["used"],
             reserved=int(reserved),
             unsettled=int(unsettled),
@@ -1411,7 +1450,7 @@ class TaskDatabase:
             ).where(
                 self.resource_allocations_table.c.subject_id == user_id,
                 self.resource_allocations_table.c.unit == unit,
-                self.resource_allocations_table.c.resource_class == resource_class,
+                _class_scope(self.resource_allocations_table.c.resource_class, resource_class),
                 self.resource_allocations_table.c.status.in_(
                     (rloan.AllocationStatus.ACTIVE.value, rloan.AllocationStatus.REVIEW.value)
                 ),
@@ -1461,7 +1500,7 @@ class TaskDatabase:
         period = self._gpu_period(checked_at)
         resource_class = rloan.resource_class_for_gres(None)
         with self.engine.begin() as conn:
-            self._ensure_monthly_grant(conn, user_id, period, resource_class, checked_at)
+            self._ensure_monthly_grant(conn, user_id, period, "", checked_at)
         totals = self._period_totals(user_id, period, resource_class)
         return {
             "user_id": user_id,
@@ -1525,7 +1564,6 @@ class TaskDatabase:
                     select(func.sum(self.resource_ledger_table.c.quantity)).where(
                         self.resource_ledger_table.c.subject_id == user_id,
                         self.resource_ledger_table.c.unit == rloan.UNIT_GPU_SECOND,
-                        self.resource_ledger_table.c.resource_class == "",
                         self.resource_ledger_table.c.period == period,
                         self.resource_ledger_table.c.kind.in_(rloan.ALLOWANCE_KINDS),
                     )
@@ -1751,7 +1789,6 @@ class TaskDatabase:
             .where(
                 self.resource_ledger_table.c.subject_id == user_id,
                 self.resource_ledger_table.c.unit == rloan.UNIT_GPU_SECOND,
-                self.resource_ledger_table.c.resource_class == resource_class,
                 self.resource_ledger_table.c.period == period,
             )
             .group_by(self.resource_ledger_table.c.kind)
@@ -2228,6 +2265,7 @@ class TaskDatabase:
         gpu_count: int,
         started_at: float | None = None,
         required_entitlements: tuple[str, ...] | None = None,
+        gres: str = "",
     ) -> dict[str, Any]:
         """Record the instant a real Slurm GPU allocation becomes observable.
 
@@ -2235,9 +2273,15 @@ class TaskDatabase:
         reservation has done its job — the resource is now genuinely allocated —
         and leaving it held would double-count against the next admission.  The
         allocation itself, not the hold, is what the balance is charged for.
+
+        ``gres`` is preserved as the allocation's resource class, so a historical
+        A100 second is never collapsed into an anonymous GPU-second; it is
+        admitted against the deployment's single class-agnostic allowance, which
+        spans every class.
         """
         if gpu_count < 1:
             raise ValueError("gpu_count must be positive")
+        resource_class = rloan.resource_class_for_gres(gres)
         timestamp = time.time() if started_at is None else started_at
         with self.engine.begin() as conn:
             existing = (
@@ -2250,12 +2294,13 @@ class TaskDatabase:
                 .one_or_none()
             )
             if existing is not None:
-                expected = (user_id, task_id, stage_id, gpu_count)
+                expected = (user_id, task_id, stage_id, gpu_count, resource_class)
                 actual = (
                     existing["subject_id"],
                     existing["task_id"],
                     existing["stage_id"],
                     existing["resource_count"],
+                    existing["resource_class"],
                 )
                 if actual != expected:
                     raise ValueError(
@@ -2270,7 +2315,6 @@ class TaskDatabase:
                 select(func.sum(self.resource_ledger_table.c.quantity)).where(
                     self.resource_ledger_table.c.subject_id == user_id,
                     self.resource_ledger_table.c.unit == rloan.UNIT_GPU_SECOND,
-                    self.resource_ledger_table.c.resource_class == "",
                     self.resource_ledger_table.c.period == period,
                 )
             ).scalar()
@@ -2284,7 +2328,7 @@ class TaskDatabase:
                     stage_id=stage_id,
                     slurm_job_id=slurm_job_id,
                     unit=rloan.UNIT_GPU_SECOND,
-                    resource_class="",
+                    resource_class=resource_class,
                     resource_count=gpu_count,
                     started_at=timestamp,
                     finished_at=None,
@@ -2309,8 +2353,14 @@ class TaskDatabase:
                 .mappings()
                 .one()
             )
-        expected = (user_id, task_id, stage_id, gpu_count)
-        actual = (row["subject_id"], row["task_id"], row["stage_id"], row["resource_count"])
+        expected = (user_id, task_id, stage_id, gpu_count, resource_class)
+        actual = (
+            row["subject_id"],
+            row["task_id"],
+            row["stage_id"],
+            row["resource_count"],
+            row["resource_class"],
+        )
         if actual != expected:
             raise ValueError(
                 "Slurm job ID is already associated with a different GPU allocation"
@@ -2482,6 +2532,12 @@ class TaskDatabase:
         remaining balance, so the *last* unit of entitlement admits exactly one
         submission and the other gets an explicit refusal instead of being
         dispatched anyway.
+
+        The allowance is deployment-wide, so the decision is made on the
+        class-agnostic scope: a request for ``a100`` consumes the same balance a
+        request for an untyped GPU would, and the requested class is preserved on
+        the hold and the resulting allocation rather than opening a per-class
+        budget.  ``gres`` is therefore recorded, not enforced.
         """
         timestamp = time.time() if at is None else at
         resource_class = rloan.resource_class_for_gres(gres)
@@ -2489,24 +2545,22 @@ class TaskDatabase:
         with self.engine.connect() as conn:
             conn.exec_driver_sql("BEGIN IMMEDIATE")
             try:
-                self._ensure_monthly_grant(conn, user_id, period, resource_class, timestamp)
+                self._ensure_monthly_grant(conn, user_id, period, "", timestamp)
                 rows = conn.execute(
                     select(self.resource_ledger_table).where(
                         self.resource_ledger_table.c.subject_type == rloan.SUBJECT_USER,
                         self.resource_ledger_table.c.subject_id == user_id,
                         self.resource_ledger_table.c.unit == rloan.UNIT_GPU_SECOND,
-                        self.resource_ledger_table.c.resource_class == resource_class,
                         self.resource_ledger_table.c.period == period,
                     )
                 ).mappings().all()
                 totals = rloan.summarize_ledger(
-                    rows, unit=rloan.UNIT_GPU_SECOND, resource_class=resource_class, period=period
+                    rows, unit=rloan.UNIT_GPU_SECOND, resource_class="", period=period
                 )
                 held = conn.execute(
                     select(func.coalesce(func.sum(self.resource_reservations_table.c.quantity), 0)).where(
                         self.resource_reservations_table.c.subject_id == user_id,
                         self.resource_reservations_table.c.unit == rloan.UNIT_GPU_SECOND,
-                        self.resource_reservations_table.c.resource_class == resource_class,
                         self.resource_reservations_table.c.state == rloan.ReservationState.HELD.value,
                     )
                 ).scalar_one()
@@ -2517,7 +2571,7 @@ class TaskDatabase:
                 # elapsed time is still unknown is never admitted as if they had
                 # consumed nothing.
                 _, unsettled = self._unsettled_in_connection(
-                    conn, user_id, rloan.UNIT_GPU_SECOND, resource_class, timestamp
+                    conn, user_id, rloan.UNIT_GPU_SECOND, "", timestamp
                 )
                 remaining -= unsettled
                 quantity = rloan.admission_hold_quantity(remaining, rloan.UNIT_GPU_SECOND)

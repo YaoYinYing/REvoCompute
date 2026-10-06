@@ -42,6 +42,7 @@ def _start(
     at: float,
     gpus: int = 1,
     task_id: str | None = None,
+    gres: str = "",
 ) -> None:
     database.record_allocation_start(
         user_id=user_id,
@@ -50,6 +51,7 @@ def _start(
         slurm_job_id=job_id,
         gpu_count=gpus,
         started_at=at,
+        gres=gres,
     )
 
 
@@ -325,3 +327,89 @@ def test_a_policy_change_never_rewrites_recorded_usage(tmp_path):
     assert after[0]["quantity"] == -400
     assert database.compute_entitlement(92, at=at + 500).allowance == 500
     assert database.compute_entitlement(92, at=at + 500).remaining == 100
+
+
+# ---------------------------------------------------------------------------
+# The resource class is preserved; the allowance is not per class
+# ---------------------------------------------------------------------------
+
+
+def test_a_named_class_is_recorded_and_admitted_against_the_one_allowance(tmp_path):
+    """A GRES class is evidence, not a separate budget.
+
+    A request for ``gpu:a100:2`` is admitted against the deployment's single
+    allowance (so the class-agnostic scope is the authority on "may this user
+    run?"), and the class is preserved on both the hold and the allocation so a
+    historical A100 second is never collapsed into an anonymous one.
+    """
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"), monthly_gpu_seconds=1_000)
+    at = _timestamp(2026, 9, 12)
+
+    decision = database.reserve_compute_admission(
+        user_id=89, task_id="c" * 32, gres="gpu:a100:2", at=at
+    )
+    assert decision["allowed"] is True
+    assert decision["resource_class"] == "a100"
+    hold = database.list_reservations(user_id=89, state=ReservationState.HELD.value)[0]
+    assert hold["resource_class"] == "a100"
+
+    _start(database, 89, job_id="9800", at=at, gpus=2, gres="gpu:a100:2", task_id="c" * 32)
+    database.settle_allocation_elapsed("9800", elapsed_seconds=100, finished_at=at + 100)
+
+    allocation = database.list_task_allocations("c" * 32)[0]
+    assert allocation["resource_class"] == "a100"
+    assert allocation["resource_count"] == 2
+    assert allocation["quantity"] == 200
+    # The class view and the class-agnostic view agree on the same single
+    # allowance, so neither can contradict the other's admission answer.
+    assert database.compute_entitlement(89, at=at + 100).allowance == 1_000
+    assert database.compute_entitlement(89, at=at + 100, gres="gpu:a100:2").allowance == 1_000
+    assert database.compute_entitlement(89, at=at + 100).used == 200
+
+
+def test_typed_gpu_usage_consumes_the_shared_allowance(tmp_path):
+    """Usage recorded under one class reduces the balance every class draws on."""
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"), monthly_gpu_seconds=1_000)
+    at = _timestamp(2026, 9, 12)
+    database.record_allocation_start(
+        user_id=90,
+        task_id="d" * 32,
+        stage_id="model",
+        slurm_job_id="9801",
+        gpu_count=1,
+        started_at=at,
+        gres="gpu:a100:1",
+    )
+    database.settle_allocation_elapsed("9801", elapsed_seconds=600, finished_at=at + 600)
+
+    # An untyped request draws on the same balance the typed usage consumed.
+    decision = database.reserve_compute_admission(user_id=90, task_id="e" * 32, at=at + 600)
+    assert decision["allowed"] is True
+    assert decision["quantity"] == 400
+    assert decision["remaining"] == 0
+    centralized = database.compute_entitlement(90, at=at + 600)
+    assert centralized.used == 600
+    assert centralized.remaining == 400 - 400
+
+
+def test_a_different_class_does_not_open_a_second_budget(tmp_path):
+    """Switching accelerator class cannot mint entitlement: the balance is one."""
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"), monthly_gpu_seconds=500)
+    at = _timestamp(2026, 9, 12)
+    database.record_allocation_start(
+        user_id=91,
+        task_id="f" * 32,
+        stage_id="model",
+        slurm_job_id="9802",
+        gpu_count=1,
+        started_at=at,
+        gres="gpu:a100:1",
+    )
+    database.settle_allocation_elapsed("9802", elapsed_seconds=500, finished_at=at + 500)
+    assert database.compute_entitlement(91, at=at + 500).remaining == 0
+
+    decision = database.reserve_compute_admission(
+        user_id=91, task_id="a" * 32, gres="gpu:h100:1", at=at + 500
+    )
+    assert decision["allowed"] is False
+    assert decision["reason_code"] == AdmissionReason.COMPUTE_EXHAUSTED.value
