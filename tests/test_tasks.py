@@ -107,6 +107,8 @@ def test_public_openapi_exposes_the_client_contract(monkeypatch, tmp_path):
         "/compute/api/auth/admin/logs/archives": {"get"},
         "/compute/api/auth/admin/logs/archives/{archive_name}": {"get"},
         "/compute/api/gpu-credit": {"get"},
+        "/compute/api/resource-entitlement": {"get"},
+        "/compute/api/auth/admin/users/{user_id}/resource-entitlement": {"get"},
         "/compute/api/user-metrics": {"get"},
         "/compute/api/auth/admin/gpu-credit/reconciliation": {"get", "post"},
         "/compute/api/auth/admin/gpu-credit/reset": {"post"},
@@ -777,6 +779,9 @@ def test_run_compute_task_finalizes_uncompressed_result_manifest(monkeypatch, tm
         "runner.stage.finished",
         "runner.stage.started",
         "runner.stage.finished",
+        # Publishing a result charges the durable bytes it owns, in the same
+        # step that makes it immutable.
+        "resource.storage.charged",
         "manifest.published",
         "task.finished",
         "worker.task.finished",

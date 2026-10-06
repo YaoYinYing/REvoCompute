@@ -60,13 +60,88 @@ signature, expiry, user state, and token version where applicable.
 version. The repository document is the only legal-text source; clients render
 that text without enabling arbitrary embedded HTML.
 
+## Resource Entitlement
+
+`GET /compute/api/resource-entitlement` returns the authenticated user's
+canonical resource envelope; the administrator counterpart
+`GET /compute/api/auth/admin/users/{user_id}/resource-entitlement` returns the
+same shape for one user. This is the single projection for resource state:
+placement, reporting, and other consumers read it rather than re-deriving a
+balance from the ledger.
+
+Everything is reported in base units — integer seconds, bytes, and counts —
+with a `unit` field naming which. Four concepts stay separate: **accounting**
+records what was actually allocated or owned; **policy** is what a subject may
+consume or retain; **telemetry** describes how effectively an allocation was
+used and is never quota consumption; **lifecycle** is whether durable data is
+retained, independent of the Task's execution status.
+
+The envelope contains:
+
+- `compute`: one entry per `(unit, resource_class)`. GPU compute
+  (`gpu_second`) is the enforced unit today; CPU core-seconds and storage bytes
+  are recorded and reported with `enforced: false` and `allowance: null`. A GPU
+  entry keeps its Slurm GRES class (`gpu:a100:2` reports class `a100` with count
+  2) rather than collapsing every accelerator into one opaque total.
+- `storage`: `logical_owned_bytes` — user-facing quota consumption, measured
+  from a Task's published result manifest — kept separate from physical
+  filesystem capacity. `soft_limit_bytes` is a policy ceiling; a successful
+  computation that crosses it keeps its scientific result and only later
+  submission is restricted.
+
+### Accounting facts are append-only
+
+Compute and durable-ownership facts share one append-only ledger. Database
+triggers reject `UPDATE` and `DELETE` on it, so an administrative change is an
+appended compensating entry, never a rewrite: allowance changes, adjustments,
+and resets add rows, and the derived balance is a sum. Storage ownership is
+charged once when a result is published and released once when a purge
+completes, each with a unique idempotency key so a retry changes nothing.
+
+### Unknown is not zero
+
+Usage whose authoritative measurement has not arrived is reported as unknown,
+not as zero. `used` counts only settled facts, while `unsettled_allocations`
+counts allocations with no authoritative elapsed time yet and
+`unsettled_quantity` is a conservative reserve for them; `remaining` already
+subtracts that reserve, and `usage_complete` is `false` while any allocation is
+unsettled. Admission applies the same rule, so a user with running work is not
+admitted as if that work had consumed nothing. Each ledger fact also records an
+`evidence_source` (`allocation_lifecycle`, `slurm_live`, `slurm_accounting`,
+`runner_observation`, `reconciliation`, `policy`, or `unknown`).
+
+When a lost GPU finish callback cannot be resolved from controller evidence, the
+allocation stays unsettled and is left for review; it is never estimated and
+never charged as zero.
+
+## Data Lifecycle
+
+Durable data has its own lifecycle, orthogonal to the Task's execution status: a
+finished computation stays finished when its data is later archived or purged.
+States are `ACTIVE`, `ARCHIVED`, `DELETE_REQUESTED`, `PURGING`, `PURGED`, and a
+bounded `ERROR` for a purge that failed.
+
+Deletion is a transaction, never "remove the files, then mark deleted". The
+Task moves to `DELETE_REQUESTED` durably before any filesystem work, one worker
+claims it into `PURGING`, and the quota that was charged is released only when
+the owned bytes are actually gone. A crash anywhere in that sequence leaves a
+resumable deletion, and a failed purge keeps the charge and its error so a later
+pass can retry it. A partial purge therefore frees nothing, and a completed purge
+releases exactly the bytes it charged, once.
+
+Automatic age-based purge is not enabled by default. An operator can turn on the
+`resource-maintenance` periodic task with `RESOURCE_MAINTENANCE_SECONDS` (see
+the configuration reference); it finishes *authorized* deletions and runs a
+bounded reconciliation pass, and it never decides on its own that data is old
+enough to delete.
+
 ## GPU Credits
 
-GPU accounting uses integer GPU-seconds; 60 GPU-seconds equal one displayed
-credit. Each user receives a lazy, idempotent grant of 60,000 GPU-seconds for
-each UTC calendar month. A new period starts at its configured allowance rather
-than adding to the previous balance, so unused credits and overdrafts do not
-roll over.
+GPU accounting is the displayed projection of the `gpu_second` entitlement
+above; 60 GPU-seconds equal one displayed credit. Each user receives a lazy,
+idempotent grant of 60,000 GPU-seconds for each UTC calendar month. A new period
+starts at its configured allowance rather than adding to the previous balance,
+so unused credits and overdrafts do not roll over.
 
 Only active Slurm GPU allocation time is charged. Upload, preflight, Celery,
 queue, and CPU-stage time are free. A positive balance admits an allocation;
