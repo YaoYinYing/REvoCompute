@@ -147,10 +147,10 @@ def test_gpu_task_identity_and_gpu_minutes_follow_the_task_type_contract(monkeyp
         runner,
     )
     charged = 600
-    module.task_store.record_gpu_allocation_start(
+    module.task_store.record_allocation_start(
         user_id=1, task_id="a" * 32, stage_id="predict", slurm_job_id="metrics-9001", gpu_count=2
     )
-    module.task_store.settle_gpu_allocation_elapsed("metrics-9001", elapsed_seconds=charged // 2)
+    module.task_store.settle_allocation_elapsed("metrics-9001", elapsed_seconds=charged // 2)
     now = time.time()
     task = _task(now - 3600, "finished", 60.0, task_type="gpu_metrics_test")
     task["md5sum"] = "a" * 32

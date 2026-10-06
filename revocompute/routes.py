@@ -111,7 +111,8 @@ from revocompute.ndarray import ArrayAccessError, MAX_PROJECTION_ELEMENTS, read_
 from revocompute.db import GPUCreditUnavailableError, TaskIdReservedError
 from revocompute.operational_events import emit_event
 from revocompute.ratelimit import rate_limit
-from revocompute.resource_ledger import SECONDS_PER_CREDIT
+from revocompute import resource_lifecycle
+from revocompute.resource_ledger import AdmissionReason, SECONDS_PER_CREDIT
 from revocompute.resource_observations import observations_for_guidance
 from revocompute.resource_policy import (
     GLOBAL_RESOURCE_KEYS,
@@ -1844,18 +1845,52 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
         gpu_credit = None
         if tt.gpus:
             user_id = int(g.current_user["id"])
+            # Core-owned admission against the canonical resource envelope.  A
+            # soft storage overrun does not refuse the submission here: a user
+            # who is over their durable ceiling may still run a computation, and
+            # their *next* one is what the policy restricts.  A storage-only
+            # overrun is reported with its own reason code so the client can
+            # explain it, while GPU entitlement is enforced now.
+            envelope = task_store.resource_envelope(user_id)
+            if envelope.storage.over_soft_limit:
+                emit_event(
+                    "resource.admission.denied",
+                    level="WARNING",
+                    request_id=g.request_id,
+                    task_type=task_type,
+                    runner_family=tt.runtime.name,
+                    user_id=user_id,
+                    reason_code=AdmissionReason.STORAGE_SOFT_LIMIT.value,
+                )
+                return (
+                    jsonify(
+                        {
+                            "error": "Durable storage quota exceeded",
+                            "details": [
+                                {
+                                    "code": "storage_soft_limit_exceeded",
+                                    "message": (
+                                        "Delete or archive retained results before submitting "
+                                        "new compute."
+                                    ),
+                                }
+                            ],
+                        }
+                    ),
+                    403,
+                )
             try:
-                gpu_credit = task_store.require_gpu_credit(user_id)
+                gpu_credit = task_store.require_compute_entitlement(user_id)
             except GPUCreditUnavailableError:
                 emit_event(
-                    "gpu.credit.denied",
+                    "resource.admission.denied",
                     level="WARNING",
                     request_id=g.request_id,
                     task_type=task_type,
                     runner_family=tt.runtime.name,
                     user_id=user_id,
                     gpu_seconds=0,
-                    reason_code="gpu_credit_exhausted",
+                    reason_code=AdmissionReason.COMPUTE_EXHAUSTED.value,
                 )
                 return (
                     jsonify(
@@ -1872,12 +1907,13 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
                     403,
                 )
             emit_event(
-                "gpu.credit.checked",
+                "resource.admission.checked",
                 request_id=g.request_id,
                 task_type=task_type,
                 runner_family=tt.runtime.name,
                 user_id=user_id,
                 gpu_seconds=max(0, int(gpu_credit["remaining_gpu_seconds"])),
+                reason_code=AdmissionReason.ADMITTED.value,
             )
 
         # ponytail: per-user cap on active tasks — the expensive resource is the
@@ -2119,6 +2155,60 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
         task_store.release_task_preparation(md5sum, token=claim.token)
         return jsonify({"error": "Task preparation failed; please retry."}), 500
 
+    # Reserve this submission's entitlement before dispatch.  The hold is taken
+    # after the preparation claim and the row write, and it is recorded in the
+    # ledger as what *this Task* owes, so a concurrent submission competing for
+    # the same final entitlement loses here instead of both being dispatched.
+    # A CPU-only Task holds nothing: GPU compute is the only enforced unit today.
+    if tt.gpus:
+        reservation = task_store.reserve_compute_admission(
+            user_id=int(g.current_user["id"]),
+            task_id=md5sum,
+            gres=(resource_policy.gres if resource_policy is not None else None) or "",
+        )
+        if not reservation["allowed"]:
+            task_store.release_task_preparation(md5sum, token=claim.token)
+            task_store.update_task(
+                md5sum,
+                status="failed",
+                finished_at=time.time(),
+                error="Task not admitted: the remaining entitlement is already reserved",
+            )
+            emit_event(
+                "resource.admission.denied",
+                level="WARNING",
+                request_id=g.request_id,
+                task_id=md5sum,
+                task_type=task_type,
+                runner_family=tt.runtime.name,
+                user_id=int(g.current_user["id"]),
+                reason_code=reservation["reason_code"],
+            )
+            return (
+                jsonify(
+                    {
+                        "error": "GPU credit balance is exhausted for the current UTC month",
+                        "details": [
+                            {
+                                "code": "gpu_credit_exhausted",
+                                "message": "A positive GPU credit balance is required for a new allocation.",
+                            }
+                        ],
+                    }
+                ),
+                403,
+            )
+        emit_event(
+            "resource.admission.reserved",
+            request_id=g.request_id,
+            task_id=md5sum,
+            task_type=task_type,
+            runner_family=tt.runtime.name,
+            user_id=int(g.current_user["id"]),
+            gpu_seconds=int(reservation["quantity"]),
+            reason_code=reservation["reason_code"],
+        )
+
     try:
         async_result = run_compute_task.apply_async(
             args=[md5sum],
@@ -2128,6 +2218,11 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
         logging.exception("Failed to submit compute task %s to Celery", md5sum)
         error_message = "Task queue unavailable — please try again later"
         finished_at = time.time()
+        # A dispatch that never reached the queue still releases its hold: the
+        # Task is failed, so its reservation must not keep entitlement the user
+        # cannot use.  The release is idempotent, so the worker's own release
+        # after a successful allocation is unaffected.
+        task_store.release_reservation(task_id=md5sum, reason_code="dispatch_failed", at=finished_at)
         failed_task = task_store.get_task(md5sum) or dict(md5sum=md5sum, **base_record)
         _finalize_failed_results(failed_task, error_message, finished_at=finished_at)
         _cleanup_task_workspace(failed_task)
@@ -3030,7 +3125,31 @@ def _soft_delete_task(md5sum: str, task: dict[str, Any]) -> bool:
     if task["status"] in {"pending", "queued", "running"}:
         _revoke_celery_task(task)
 
-    _delete_task_artifacts(task)
+    # A Task that never started holds entitlement it will never consume, so its
+    # admission hold is released with the deletion.  Idempotent: a Task whose
+    # allocation already started consumed its hold at allocation time.
+    task_store.release_reservation(task_id=md5sum, reason_code="task_deleted", at=time.time())
+
+    # Durable data is deleted as a transaction, not by ``rm -rf, then mark``:
+    # the request is persisted first, then the removal is claimed, and only a
+    # completed removal releases the quota that was charged for these bytes.  A
+    # crash mid-way leaves a resumable row, so a partial purge never creates
+    # phantom free quota.
+    resource_lifecycle.request_data_deletion(
+        task_store,
+        task,
+        actor_user_id=int(g.current_user["id"]),
+    )
+    # A failure here propagates: the row is still in its ``deleting:*`` claim,
+    # which is exactly what maintenance resumes, so the request keeps its 500
+    # contract and leaves a resumable cleanup rather than an intact tree whose
+    # row still reads ``finished``.
+    if not resource_lifecycle.purge_task_data(
+        task_store,
+        task,
+        remove_artifacts=_delete_task_artifacts,
+    ):
+        logging.warning("Data purge for task %s did not complete; it will be retried", md5sum)
     now = time.time()
     started_at = task.get("started_at")
     walltime = task.get("walltime")
@@ -3873,7 +3992,7 @@ def auth_me():
 
 def _gpu_credit_payload(user_id: int, *, admin: bool = False) -> dict[str, Any]:
     summary = task_store.gpu_credit_summary(user_id)
-    entries = task_store.list_gpu_credit_ledger(user_id, period=summary["period"])
+    entries = task_store.list_compute_ledger(user_id, period=summary["period"])
     history = []
     for entry in entries:
         # Zero-value admin_reset rows are durable idempotency markers, not
@@ -4042,7 +4161,7 @@ def _project_user_metrics(tasks: list[dict[str, Any]], *, window: str, now: floa
         if gpu:
             # ponytail: per-Task allocation read; batch into one query if a user
             # ever accumulates enough GPU Tasks for this to show up in latency.
-            for allocation in task_store.list_task_gpu_allocations(str(task["md5sum"])):
+            for allocation in task_store.list_task_allocations(str(task["md5sum"])):
                 gpu_seconds += float(allocation.get("quantity") or 0)
 
     runtimes.sort()
@@ -4547,7 +4666,7 @@ def admin_adjust_user_gpu_credit(user_id: int):
     if isinstance(req, tuple):
         return req
     try:
-        entry = task_store.adjust_gpu_credit(
+        entry = task_store.adjust_compute_account(
             user_id=user_id,
             gpu_seconds=req.gpu_seconds,
             actor_user_id=int(g.current_user["id"]),
@@ -4580,7 +4699,7 @@ def admin_set_user_gpu_allowance(user_id: int):
     if isinstance(req, tuple):
         return req
     try:
-        entry = task_store.set_gpu_monthly_allowance(
+        entry = task_store.set_compute_allowance(
             user_id=user_id,
             monthly_gpu_seconds=req.monthly_gpu_seconds,
             actor_user_id=int(g.current_user["id"]),
@@ -4611,7 +4730,7 @@ def admin_reset_user_gpu_credit(user_id: int):
     if isinstance(req, tuple):
         return req
     try:
-        result = task_store.reset_gpu_credit(
+        result = task_store.reset_compute_account(
             user_id=user_id,
             actor_user_id=int(g.current_user["id"]),
             reason=req.reason,
@@ -4646,7 +4765,7 @@ def admin_reset_all_gpu_credits():
         return req
     user_ids = [int(user["id"]) for user in _get_user_db().list_users()]
     try:
-        result = task_store.reset_all_gpu_credits(
+        result = task_store.reset_all_compute_accounts(
             user_ids=user_ids,
             actor_user_id=int(g.current_user["id"]),
             reason=req.reason,
@@ -4679,7 +4798,7 @@ def admin_gpu_credit_reconciliation():
             return jsonify({"error": "GPU reconciliation worker is unavailable"}), 503
     else:
         result = None
-    return jsonify({"result": result, "allocations": task_store.list_unsettled_gpu_allocations()}), 200
+    return jsonify({"result": result, "allocations": task_store.list_unsettled_allocations()}), 200
 
 
 @app.route("/compute/api/auth/admin/users", methods=["POST"])

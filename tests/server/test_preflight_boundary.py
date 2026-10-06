@@ -611,7 +611,7 @@ def test_exhausted_gpu_credit_fails_after_security_without_durable_side_effects(
     headers = _test_client_auth(module)
     user = module.app.config["user_db"].get_user_by_username("tester")
     module.app.config["user_db"].update_user(user["id"], allow_gpu_use=True)
-    module.task_store.adjust_gpu_credit(
+    module.task_store.adjust_compute_account(
         user_id=user["id"],
         gpu_seconds=-60_000,
         actor_user_id=user["id"],
@@ -676,7 +676,7 @@ def test_cpu_preflight_is_accepted_with_exhausted_gpu_credit(monkeypatch, tmp_pa
     )
     headers = _test_client_auth(module)
     user = module.app.config["user_db"].get_user_by_username("tester")
-    module.task_store.adjust_gpu_credit(
+    module.task_store.adjust_compute_account(
         user_id=user["id"],
         gpu_seconds=-60_000,
         actor_user_id=user["id"],

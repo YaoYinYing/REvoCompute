@@ -242,6 +242,7 @@ class ComputeEntitlement:
     used: int
     reserved: int
     unsettled: int = 0
+    unsettled_quantity: int = 0
     evidence_sources: tuple[str, ...] = ()
 
     @property
@@ -250,9 +251,16 @@ class ComputeEntitlement:
 
     @property
     def remaining(self) -> int | None:
+        """Balance after settled usage, live holds, and unsettled worst case.
+
+        ``unsettled_quantity`` is subtracted rather than omitted: an allocation
+        whose authoritative elapsed time is not yet known has definitely
+        consumed *something*, so a balance that ignored it would overstate the
+        entitlement available to the next submission.
+        """
         if self.allowance is None:
             return None
-        return self.allowance - self.used - self.reserved
+        return self.allowance - self.used - self.reserved - self.unsettled_quantity
 
     @property
     def usage_complete(self) -> bool:
@@ -266,8 +274,9 @@ class ComputeEntitlement:
             "allowance": self.allowance,
             "used": self.used,
             "reserved": self.reserved,
-            "remaining": self.remaining,
             "unsettled_allocations": self.unsettled,
+            "unsettled_quantity": self.unsettled_quantity,
+            "remaining": self.remaining,
             "usage_complete": self.usage_complete,
             "evidence_sources": list(self.evidence_sources),
         }

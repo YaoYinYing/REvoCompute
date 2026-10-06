@@ -1373,15 +1373,9 @@ class TaskDatabase:
                     self.resource_reservations_table.c.state == rloan.ReservationState.HELD.value,
                 )
             ).scalar_one()
-            unsettled = conn.execute(
-                select(func.count()).select_from(self.resource_allocations_table).where(
-                    self.resource_allocations_table.c.subject_id == user_id,
-                    self.resource_allocations_table.c.unit == unit,
-                    self.resource_allocations_table.c.status.in_(
-                        (rloan.AllocationStatus.ACTIVE.value, rloan.AllocationStatus.REVIEW.value)
-                    ),
-                )
-            ).scalar_one()
+            unsettled, unsettled_quantity = self._unsettled_in_connection(
+                conn, user_id, unit, resource_class, checked_at
+            )
         totals = rloan.summarize_ledger(rows, unit=unit, resource_class=resource_class, period=period or None)
         sources = tuple(sorted({str(row["evidence_source"]) for row in rows if row["evidence_source"]}))
         return rloan.ComputeEntitlement(
@@ -1391,8 +1385,44 @@ class TaskDatabase:
             used=totals["used"],
             reserved=int(reserved),
             unsettled=int(unsettled),
+            unsettled_quantity=int(unsettled_quantity),
             evidence_sources=sources,
         )
+
+    def _unsettled_in_connection(
+        self, conn, user_id: int, unit: str, resource_class: str, now: float
+    ) -> tuple[int, int]:
+        """Unsettled allocations: how many, and a conservative base-unit reserve.
+
+        An allocation whose authoritative elapsed time is unavailable has
+        definitely consumed something, so it is never treated as zero.  Each one
+        reserves at least as much as a single admission hold would — the same
+        quantum that bounds a pending submission — which keeps the reserve
+        proportional to concurrency instead of stampeding to the full scheduler
+        window, and means a user with running work cannot be admitted as if that
+        work had consumed nothing.
+        """
+        rows = conn.execute(
+            select(
+                self.resource_allocations_table.c.resource_count,
+                self.resource_allocations_table.c.started_at,
+            ).where(
+                self.resource_allocations_table.c.subject_id == user_id,
+                self.resource_allocations_table.c.unit == unit,
+                self.resource_allocations_table.c.resource_class == resource_class,
+                self.resource_allocations_table.c.status.in_(
+                    (rloan.AllocationStatus.ACTIVE.value, rloan.AllocationStatus.REVIEW.value)
+                ),
+            )
+        ).all()
+        if not rows:
+            return 0, 0
+        quantum = int(rloan.DEFAULT_ADMISSION_QUANTUM.get(unit, 0))
+        total = 0
+        for count, started_at in rows:
+            elapsed = max(0.0, now - float(started_at))
+            total += int(count) * max(quantum, 0, int(elapsed))
+        return len(rows), total
 
     def storage_entitlement(self, user_id: int) -> rloan.StorageEntitlement:
         """Logical owned bytes for one subject, with its configured soft ceiling."""
@@ -1456,7 +1486,7 @@ class TaskDatabase:
         """
         return sum(totals.get(kind, 0) for kind in rloan.ADJUSTMENT_KINDS)
 
-    def set_gpu_monthly_allowance(
+    def set_compute_allowance(
         self,
         *,
         user_id: int,
@@ -1613,7 +1643,7 @@ class TaskDatabase:
             .on_conflict_do_nothing(index_elements=[self.resource_policy_audit_table.c.idempotency_key])
         )
 
-    def require_gpu_credit(
+    def require_compute_entitlement(
         self, user_id: int, *, at: float | None = None
     ) -> dict[str, Any]:
         """Fail when the current UTC-month balance cannot admit a new allocation."""
@@ -1622,7 +1652,7 @@ class TaskDatabase:
             raise GPUCreditUnavailableError("GPU credit balance is exhausted")
         return summary
 
-    def adjust_gpu_credit(
+    def adjust_compute_account(
         self,
         *,
         user_id: int,
@@ -1726,7 +1756,7 @@ class TaskDatabase:
         ).all()
         return {str(kind): int(total or 0) for kind, total in rows}
 
-    def _reset_gpu_credit_in_connection(
+    def _reset_account_in_connection(
         self,
         conn,
         *,
@@ -1820,7 +1850,7 @@ class TaskDatabase:
             "entry_id": int(result.inserted_primary_key[0]),
         }
 
-    def reset_gpu_credit(
+    def reset_compute_account(
         self,
         *,
         user_id: int,
@@ -1839,7 +1869,7 @@ class TaskDatabase:
         with self.engine.connect() as conn:
             conn.exec_driver_sql("BEGIN IMMEDIATE")
             try:
-                result = self._reset_gpu_credit_in_connection(
+                result = self._reset_account_in_connection(
                     conn,
                     user_id=user_id,
                     actor_user_id=actor_user_id,
@@ -1854,7 +1884,7 @@ class TaskDatabase:
                 raise
         return result
 
-    def reset_all_gpu_credits(
+    def reset_all_compute_accounts(
         self,
         *,
         user_ids: Iterable[int],
@@ -1879,7 +1909,7 @@ class TaskDatabase:
             conn.exec_driver_sql("BEGIN IMMEDIATE")
             try:
                 for user_id in user_ids:
-                    result = self._reset_gpu_credit_in_connection(
+                    result = self._reset_account_in_connection(
                         conn,
                         user_id=int(user_id),
                         actor_user_id=actor_user_id,
@@ -2119,7 +2149,7 @@ class TaskDatabase:
         with self.engine.connect() as conn:
             return [dict(row) for row in conn.execute(stmt).mappings().all()]
 
-    def list_gpu_credit_reset_batch(self, batch_id: str) -> list[dict[str, Any]]:
+    def list_reset_batch(self, batch_id: str) -> list[dict[str, Any]]:
         """Return the ledger rows written by one administrative reset batch."""
         prefix = f"admin_reset:user:{batch_id}:"
         stmt = (
@@ -2130,7 +2160,7 @@ class TaskDatabase:
         with self.engine.connect() as conn:
             return [dict(row) for row in conn.execute(stmt).mappings().all()]
 
-    def list_gpu_credit_ledger(
+    def list_compute_ledger(
         self, user_id: int, *, period: str | None = None, limit: int = 50
     ) -> list[dict[str, Any]]:
         """Return recent immutable GPU-compute entries for one user, newest first."""
@@ -2164,7 +2194,7 @@ class TaskDatabase:
         with self.engine.connect() as conn:
             return [dict(row) for row in conn.execute(stmt).mappings().all()]
 
-    def record_gpu_allocation_start(
+    def record_allocation_start(
         self,
         *,
         user_id: int,
@@ -2263,7 +2293,7 @@ class TaskDatabase:
             )
         return dict(row)
 
-    def settle_gpu_allocation(
+    def settle_allocation(
         self, slurm_job_id: str, *, finished_at: float | None = None
     ) -> dict[str, Any]:
         """Append actual GPU usage once and return the durable allocation record."""
@@ -2277,13 +2307,13 @@ class TaskDatabase:
         if row is None:
             raise ValueError(f"Unknown Slurm GPU allocation: {slurm_job_id}")
         elapsed_seconds = max(0, math.ceil(timestamp - float(row["started_at"])))
-        return self.settle_gpu_allocation_elapsed(
+        return self.settle_allocation_elapsed(
             slurm_job_id,
             elapsed_seconds=elapsed_seconds,
             finished_at=timestamp,
         )
 
-    def settle_gpu_allocation_elapsed(
+    def settle_allocation_elapsed(
         self,
         slurm_job_id: str,
         *,
@@ -2366,7 +2396,7 @@ class TaskDatabase:
             )
         return dict(settled)
 
-    def mark_gpu_allocation_for_review(self, slurm_job_id: str) -> bool:
+    def mark_allocation_for_review(self, slurm_job_id: str) -> bool:
         """Expose an allocation whose authoritative elapsed time is unavailable."""
         stmt = (
             update(self.resource_allocations_table)
@@ -2379,7 +2409,7 @@ class TaskDatabase:
         with self.engine.begin() as conn:
             return conn.execute(stmt).rowcount == 1
 
-    def list_unsettled_gpu_allocations(self) -> list[dict[str, Any]]:
+    def list_unsettled_allocations(self) -> list[dict[str, Any]]:
         stmt = (
             select(self.resource_allocations_table)
             .where(
@@ -2392,7 +2422,7 @@ class TaskDatabase:
         with self.engine.connect() as conn:
             return [dict(row) for row in conn.execute(stmt).mappings().all()]
 
-    def list_task_gpu_allocations(self, task_id: str) -> list[dict[str, Any]]:
+    def list_task_allocations(self, task_id: str) -> list[dict[str, Any]]:
         """Return allocation audit rows for one Task, ordered by allocation start."""
         stmt = (
             select(self.resource_allocations_table)
@@ -2457,6 +2487,15 @@ class TaskDatabase:
                     )
                 ).scalar_one()
                 remaining = int(totals["remaining"]) - int(held)
+                # Unsettled usage is a known lower bound, not a zero.  The hold
+                # is taken against the balance *after* reserving the worst case
+                # of what is already running, so a user whose authoritative
+                # elapsed time is still unknown is never admitted as if they had
+                # consumed nothing.
+                _, unsettled = self._unsettled_in_connection(
+                    conn, user_id, rloan.UNIT_GPU_SECOND, resource_class, timestamp
+                )
+                remaining -= unsettled
                 quantity = rloan.admission_hold_quantity(remaining, rloan.UNIT_GPU_SECOND)
                 if quantity <= 0:
                     conn.commit()
@@ -2466,6 +2505,7 @@ class TaskDatabase:
                         "reservation_id": None,
                         "quantity": 0,
                         "remaining": remaining,
+                        "unsettled": unsettled,
                         "resource_class": resource_class,
                         "period": period,
                     }
@@ -2496,6 +2536,7 @@ class TaskDatabase:
             "reservation_id": reservation_id,
             "quantity": quantity,
             "remaining": remaining - quantity,
+            "unsettled": unsettled,
             "resource_class": resource_class,
             "period": period,
         }
@@ -2796,6 +2837,20 @@ class TaskDatabase:
                 self.data_lifecycle_table.c.state == rloan.DataLifecycleState.PURGING.value,
             )
             .values(state=rloan.DataLifecycleState.ERROR.value, error=str(error)[:2000], updated_at=timestamp)
+        )
+        with self.engine.begin() as conn:
+            return conn.execute(stmt).rowcount == 1
+
+    def requeue_data_lifecycle(self, task_id: str, *, at: float | None = None) -> bool:
+        """Return a failed purge to ``DELETE_REQUESTED`` so a later pass retries it."""
+        timestamp = time.time() if at is None else at
+        stmt = (
+            update(self.data_lifecycle_table)
+            .where(
+                self.data_lifecycle_table.c.task_id == task_id,
+                self.data_lifecycle_table.c.state == rloan.DataLifecycleState.ERROR.value,
+            )
+            .values(state=rloan.DataLifecycleState.DELETE_REQUESTED.value, updated_at=timestamp)
         )
         with self.engine.begin() as conn:
             return conn.execute(stmt).rowcount == 1

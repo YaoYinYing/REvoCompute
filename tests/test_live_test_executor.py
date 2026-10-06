@@ -207,7 +207,7 @@ def test_gpu_live_case_seeds_isolated_authorization_and_reports_exact_settlement
     assert readiness["ready"] is True
 
     started_at = time.time()
-    database.record_gpu_allocation_start(
+    database.record_allocation_start(
         user_id=1,
         task_id="a" * 32,
         stage_id="model",
@@ -216,7 +216,7 @@ def test_gpu_live_case_seeds_isolated_authorization_and_reports_exact_settlement
         started_at=started_at,
         required_entitlements=("licensed",),
     )
-    database.settle_gpu_allocation_elapsed("42", elapsed_seconds=7, finished_at=started_at + 7)
+    database.settle_allocation_elapsed("42", elapsed_seconds=7, finished_at=started_at + 7)
 
     evidence = live_test_executor._gpu_accounting_evidence("a" * 32, context)
     assert evidence is not None

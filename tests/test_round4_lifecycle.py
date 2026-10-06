@@ -59,7 +59,7 @@ def test_concurrent_allowance_update_is_locked_out(tmp_path):
         return original_grant(conn, *args, **kwargs)
 
     database._ensure_monthly_grant = _probe_grant
-    database.set_gpu_monthly_allowance(
+    database.set_compute_allowance(
         user_id=user_id, monthly_gpu_seconds=9_000, actor_user_id=1, idempotency_key="locked"
     )
 

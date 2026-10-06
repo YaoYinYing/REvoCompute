@@ -285,10 +285,10 @@ def _gpu_accounting_evidence(task_id: str, context: dict[str, Any] | None) -> di
     user_id = int(context["user_id"])
     before = context["before"]
     after = task_runtime.task_store.gpu_credit_summary(user_id)
-    allocations = task_runtime.task_store.list_task_gpu_allocations(task_id)
+    allocations = task_runtime.task_store.list_task_allocations(task_id)
     usage_entries = [
         entry
-        for entry in task_runtime.task_store.list_gpu_credit_ledger(user_id, period=before["period"], limit=200)
+        for entry in task_runtime.task_store.list_compute_ledger(user_id, period=before["period"], limit=200)
         if entry["kind"] == "usage" and entry["task_id"] == task_id
     ]
     return {

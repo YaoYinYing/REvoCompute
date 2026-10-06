@@ -449,8 +449,8 @@ def _gpu_allocation_callbacks(
         try:
             if runner_family and not resolve_submission_readiness(CONFIG.server_dir, runner_family).ready:
                 raise GPUAuthorizationUnavailableError("Runner readiness is unavailable")
-            summary = task_store.require_gpu_credit(user_id, at=started_at)
-            task_store.record_gpu_allocation_start(
+            summary = task_store.require_compute_entitlement(user_id, at=started_at)
+            task_store.record_allocation_start(
                 user_id=user_id,
                 task_id=task_id,
                 stage_id=stage_id,
@@ -505,13 +505,13 @@ def _gpu_allocation_callbacks(
         # a completed Runner as a failed Task.  Keep the allocation recoverable
         # for reconciliation and surface it as evidence instead.
         try:
-            allocation = task_store.settle_gpu_allocation(
+            allocation = task_store.settle_allocation(
                 slurm_job_id, finished_at=finished_at
             )
         except Exception:
             logging.exception("GPU allocation settlement failed for Slurm job %s", slurm_job_id)
             try:
-                task_store.mark_gpu_allocation_for_review(slurm_job_id)
+                task_store.mark_allocation_for_review(slurm_job_id)
             except Exception:
                 logging.exception(
                     "Could not mark GPU allocation %s for review after settlement failure",
@@ -560,7 +560,7 @@ def _run_compute_job(
         and resource_policy.requires_gpu
         and submitted_by_user_id > 0
     ):
-        task_store.require_gpu_credit(submitted_by_user_id)
+        task_store.require_compute_entitlement(submitted_by_user_id)
         started_callback, finished_callback = _gpu_allocation_callbacks(
             task_id=task_id,
             user_id=submitted_by_user_id,
@@ -637,7 +637,7 @@ def _run_compute_workflow(
         if policy.requires_gpu:
             user_id = int(task.get("submitted_by_user_id") or 0)
             if user_id > 0:
-                task_store.require_gpu_credit(user_id)
+                task_store.require_compute_entitlement(user_id)
                 started_callback, finished_callback = _gpu_allocation_callbacks(
                     task_id=task_id,
                     user_id=user_id,
@@ -1377,6 +1377,7 @@ def _finalize_results_manifest(
             pass
         raise
     os.replace(temporary, destination)
+    _charge_logical_storage(task, manifest)
     emit_event(
         "manifest.published",
         request_id=_task_request_id(task),
@@ -1392,6 +1393,38 @@ def _finalize_results_manifest(
         ),
     )
     return manifest
+
+
+def _charge_logical_storage(task: dict[str, Any], manifest: dict[str, Any]) -> None:
+    """Charge the durable bytes one published Task logically owns.
+
+    The ownership boundary is the published result, measured here once from the
+    manifest's own artifacts rather than inferred later from a directory size:
+    a shared read-only asset, a Runner SIF, or a deployment database is never a
+    user's bytes, and a directory walk would charge them.  A failure to record
+    it must not withdraw a completed scientific result, so this is total.
+    """
+    user_id = int(task.get("submitted_by_user_id") or 0)
+    if user_id <= 0:
+        return
+    try:
+        owned = sum(int(item.get("size") or 0) for item in manifest.get("artifacts", []))
+        task_store.ensure_data_lifecycle(
+            str(task["md5sum"]),
+            user_id=user_id,
+            logical_bytes=owned,
+            at=time.time(),
+        )
+        emit_event(
+            "resource.storage.charged",
+            request_id=_task_request_id(task),
+            task_id=str(task["md5sum"]),
+            user_id=user_id,
+            storage_bytes=owned,
+            reason_code="storage_charged",
+        )
+    except Exception:
+        logging.exception("Could not charge logical storage for task %s", task.get("md5sum"))
 
 
 def _build_results_archive(task: dict) -> str:
@@ -2064,13 +2097,13 @@ def _reconcile_gpu_allocations() -> dict[str, int]:
     plus a trustworthy runtime.  No ``sacct``/SlurmDBD dependency, no estimate:
     anything ambiguous is left for manual review.
     """
-    allocations = task_store.list_unsettled_gpu_allocations()
+    allocations = task_store.list_unsettled_allocations()
     result = {"settled": 0, "active": 0, "review": 0}
     scontrol = shutil.which("scontrol")
     for allocation in allocations:
         job_id = str(allocation["slurm_job_id"])
         if not scontrol:
-            task_store.mark_gpu_allocation_for_review(job_id)
+            task_store.mark_allocation_for_review(job_id)
             result["review"] += 1
             continue
         try:
@@ -2082,7 +2115,7 @@ def _reconcile_gpu_allocations() -> dict[str, int]:
                 check=True,
             )
         except (OSError, subprocess.SubprocessError):
-            task_store.mark_gpu_allocation_for_review(job_id)
+            task_store.mark_allocation_for_review(job_id)
             result["review"] += 1
             continue
         state, elapsed_seconds = _parse_scontrol_job(completed.stdout)
@@ -2090,10 +2123,10 @@ def _reconcile_gpu_allocations() -> dict[str, int]:
             result["active"] += 1
             continue
         if state not in _TERMINAL_SLURM_STATES or elapsed_seconds is None:
-            task_store.mark_gpu_allocation_for_review(job_id)
+            task_store.mark_allocation_for_review(job_id)
             result["review"] += 1
             continue
-        settled = task_store.settle_gpu_allocation_elapsed(
+        settled = task_store.settle_allocation_elapsed(
             job_id,
             elapsed_seconds=elapsed_seconds,
             evidence_source=EvidenceSource.SLURM_LIVE.value,

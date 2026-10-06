@@ -50,7 +50,7 @@ def test_gpu_usage_settlement_is_actual_multi_gpu_time_and_idempotent(tmp_path):
     database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
     started_at = _timestamp(2026, 9, 2)
     database.gpu_credit_summary(23, at=started_at)
-    database.record_gpu_allocation_start(
+    database.record_allocation_start(
         user_id=23,
         task_id="a" * 32,
         stage_id="model",
@@ -59,8 +59,8 @@ def test_gpu_usage_settlement_is_actual_multi_gpu_time_and_idempotent(tmp_path):
         started_at=started_at,
     )
 
-    first = database.settle_gpu_allocation("4217", finished_at=started_at + 10.2)
-    second = database.settle_gpu_allocation("4217", finished_at=started_at + 99)
+    first = database.settle_allocation("4217", finished_at=started_at + 10.2)
+    second = database.settle_allocation("4217", finished_at=started_at + 99)
 
     assert first["quantity"] == 22
     assert second == first
@@ -80,8 +80,8 @@ def test_gpu_usage_settlement_is_actual_multi_gpu_time_and_idempotent(tmp_path):
 def test_active_allocation_may_overdraft_but_next_allocation_is_denied(tmp_path):
     database = TaskDatabase(str(tmp_path / "tasks.sqlite3"), monthly_gpu_seconds=60)
     started_at = _timestamp(2026, 9, 3)
-    assert database.require_gpu_credit(31, at=started_at)["remaining_gpu_seconds"] == 60
-    database.record_gpu_allocation_start(
+    assert database.require_compute_entitlement(31, at=started_at)["remaining_gpu_seconds"] == 60
+    database.record_allocation_start(
         user_id=31,
         task_id="b" * 32,
         stage_id="inference",
@@ -90,15 +90,15 @@ def test_active_allocation_may_overdraft_but_next_allocation_is_denied(tmp_path)
         started_at=started_at,
     )
 
-    database.settle_gpu_allocation("5001", finished_at=started_at + 75)
+    database.settle_allocation("5001", finished_at=started_at + 75)
 
     assert (
         database.gpu_credit_summary(31, at=started_at)["remaining_gpu_seconds"] == -15
     )
     with pytest.raises(GPUCreditUnavailableError, match="exhausted"):
-        database.require_gpu_credit(31, at=started_at + 80)
+        database.require_compute_entitlement(31, at=started_at + 80)
     with pytest.raises(GPUCreditUnavailableError, match="exhausted"):
-        database.record_gpu_allocation_start(
+        database.record_allocation_start(
             user_id=31,
             task_id="e" * 32,
             stage_id="inference",
@@ -116,7 +116,7 @@ def test_cross_month_allocation_is_charged_to_its_start_month(tmp_path):
     october_start = september + 75  # 2026-10-01 00:00:45 UTC
     assert database._gpu_period(september) == "2026-09"
     assert database._gpu_period(october_start) == "2026-10"
-    database.record_gpu_allocation_start(
+    database.record_allocation_start(
         user_id=41,
         task_id="c" * 32,
         stage_id="model",
@@ -125,11 +125,11 @@ def test_cross_month_allocation_is_charged_to_its_start_month(tmp_path):
         started_at=september,
     )
     # The allocation finishes after the September→October boundary.
-    database.settle_gpu_allocation("6001", finished_at=october_start)
+    database.settle_allocation("6001", finished_at=october_start)
 
     usage = next(
         entry
-        for entry in database.list_gpu_credit_ledger(41, period="2026-09")
+        for entry in database.list_compute_ledger(41, period="2026-09")
         if entry["kind"] == "usage"
     )
     assert usage["quantity"] == -75
@@ -157,7 +157,7 @@ def test_admin_adjustment_requires_reason_and_is_idempotent(tmp_path):
     database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
     at = _timestamp(2026, 9, 5)
 
-    first = database.adjust_gpu_credit(
+    first = database.adjust_compute_account(
         user_id=47,
         gpu_seconds=12_000,
         actor_user_id=3,
@@ -165,7 +165,7 @@ def test_admin_adjustment_requires_reason_and_is_idempotent(tmp_path):
         idempotency_key="request-1",
         created_at=at,
     )
-    retry = database.adjust_gpu_credit(
+    retry = database.adjust_compute_account(
         user_id=47,
         gpu_seconds=12_000,
         actor_user_id=3,
@@ -176,10 +176,10 @@ def test_admin_adjustment_requires_reason_and_is_idempotent(tmp_path):
 
     assert retry == first
     assert database.gpu_credit_summary(47, at=at)["remaining_gpu_seconds"] == 72_000
-    entries = database.list_gpu_credit_ledger(47, period="2026-09")
+    entries = database.list_compute_ledger(47, period="2026-09")
     assert [entry["kind"] for entry in entries] == ["admin_adjustment", "monthly_grant"]
     with pytest.raises(ValueError, match="different adjustment"):
-        database.adjust_gpu_credit(
+        database.adjust_compute_account(
             user_id=47,
             gpu_seconds=-60,
             actor_user_id=3,
@@ -188,7 +188,7 @@ def test_admin_adjustment_requires_reason_and_is_idempotent(tmp_path):
             created_at=at + 2,
         )
     with pytest.raises(ValueError, match="reason is required"):
-        database.adjust_gpu_credit(
+        database.adjust_compute_account(
             user_id=47,
             gpu_seconds=60,
             actor_user_id=3,
@@ -203,14 +203,14 @@ def test_per_user_monthly_allowance_is_immediate_future_and_idempotent(tmp_path)
     september = _timestamp(2026, 9, 5)
     assert database.gpu_credit_summary(49, at=september)["monthly_grant_gpu_seconds"] == 60_000
 
-    first = database.set_gpu_monthly_allowance(
+    first = database.set_compute_allowance(
         user_id=49,
         monthly_gpu_seconds=72_000,
         actor_user_id=3,
         idempotency_key="allowance-1",
         updated_at=september,
     )
-    retry = database.set_gpu_monthly_allowance(
+    retry = database.set_compute_allowance(
         user_id=49,
         monthly_gpu_seconds=72_000,
         actor_user_id=3,
@@ -221,14 +221,14 @@ def test_per_user_monthly_allowance_is_immediate_future_and_idempotent(tmp_path)
     assert retry == first
     assert database.gpu_credit_summary(49, at=september)["monthly_grant_gpu_seconds"] == 72_000
     assert database.gpu_credit_summary(49, at=_timestamp(2026, 10))["monthly_grant_gpu_seconds"] == 72_000
-    entries = database.list_gpu_credit_ledger(49, period="2026-09")
+    entries = database.list_compute_ledger(49, period="2026-09")
     assert [entry["kind"] for entry in entries].count("allowance_adjustment") == 1
 
 
 def test_unsettled_allocations_remain_visible_for_reconciliation(tmp_path):
     path = tmp_path / "tasks.sqlite3"
     database = TaskDatabase(str(path))
-    database.record_gpu_allocation_start(
+    database.record_allocation_start(
         user_id=53,
         task_id="d" * 32,
         stage_id="relax",
@@ -240,7 +240,7 @@ def test_unsettled_allocations_remain_visible_for_reconciliation(tmp_path):
 
     reopened = TaskDatabase(str(path))
 
-    assert reopened.list_unsettled_gpu_allocations() == [
+    assert reopened.list_unsettled_allocations() == [
         {
             "id": 1,
             "subject_type": "user",
@@ -301,7 +301,7 @@ def test_gpu_allocation_callback_checks_projected_authorization_before_recording
     with pytest.raises(GPUAuthorizationUnavailableError):
         started("8901", _timestamp(2026, 9, 6))
 
-    assert module.task_store.list_unsettled_gpu_allocations() == []
+    assert module.task_store.list_unsettled_allocations() == []
     module.task_store.project_gpu_authorization(
         63,
         account_enabled=True,
@@ -309,10 +309,10 @@ def test_gpu_allocation_callback_checks_projected_authorization_before_recording
         entitlements={"licensed_runner": None},
     )
     started("8901", _timestamp(2026, 9, 6))
-    assert module.task_store.list_unsettled_gpu_allocations()[0]["slurm_job_id"] == "8901"
+    assert module.task_store.list_unsettled_allocations()[0]["slurm_job_id"] == "8901"
     module.task_store.deny_gpu_authorization(63)
     started("8901", _timestamp(2026, 9, 6))
-    assert len(module.task_store.list_unsettled_gpu_allocations()) == 1
+    assert len(module.task_store.list_unsettled_allocations()) == 1
 
 
 def test_gpu_allocation_callback_rechecks_runner_readiness(monkeypatch, tmp_path):
@@ -343,7 +343,7 @@ def test_gpu_allocation_callback_rechecks_runner_readiness(monkeypatch, tmp_path
     with pytest.raises(GPUAuthorizationUnavailableError, match="readiness"):
         started("8902", _timestamp(2026, 9, 7))
 
-    assert module.task_store.list_unsettled_gpu_allocations() == []
+    assert module.task_store.list_unsettled_allocations() == []
 
 
 def test_reconciliation_settles_terminal_slurm_elapsed_time_once(monkeypatch, tmp_path):
@@ -353,7 +353,7 @@ def test_reconciliation_settles_terminal_slurm_elapsed_time_once(monkeypatch, tm
         extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
     )
     started_at = _timestamp(2026, 9, 4)
-    module.task_store.record_gpu_allocation_start(
+    module.task_store.record_allocation_start(
         user_id=59,
         task_id="f" * 32,
         stage_id="inference",
@@ -396,7 +396,7 @@ def test_reconciliation_never_charges_ambiguous_slurm_evidence(monkeypatch, tmp_
         tmp_path,
         extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
     )
-    module.task_store.record_gpu_allocation_start(
+    module.task_store.record_allocation_start(
         user_id=61,
         task_id="1" * 32,
         stage_id="model",
@@ -412,7 +412,7 @@ def test_reconciliation_never_charges_ambiguous_slurm_evidence(monkeypatch, tmp_
     )
 
     assert module.task_runtime._reconcile_gpu_allocations() == expected
-    allocation = module.task_store.list_unsettled_gpu_allocations()[0]
+    allocation = module.task_store.list_unsettled_allocations()[0]
     assert allocation["status"] == ("active" if expected["active"] else "review")
     assert module.task_store.gpu_credit_summary(61, at=_timestamp(2026, 9, 5))["usage_gpu_seconds"] == 0
 
@@ -424,7 +424,7 @@ def test_reconciliation_uses_scontrol_without_slurm_accounting(monkeypatch, tmp_
         tmp_path,
         extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
     )
-    module.task_store.record_gpu_allocation_start(
+    module.task_store.record_allocation_start(
         user_id=71,
         task_id="9" * 32,
         stage_id="relax",
@@ -470,7 +470,7 @@ def test_user_gpu_credit_api_is_self_scoped_and_hides_admin_actor(monkeypatch, t
     users = module.app.config["user_db"]
     alice = _active_user(users, "credit-alice")
     bob = _active_user(users, "credit-bob")
-    module.task_store.adjust_gpu_credit(
+    module.task_store.adjust_compute_account(
         user_id=alice["id"],
         gpu_seconds=600,
         actor_user_id=bob["id"],
@@ -507,7 +507,7 @@ def test_admin_gpu_adjustment_requires_admin_and_is_idempotent(monkeypatch, tmp_
     assert retry.status_code == 201
     assert first.json["entry_id"] == retry.json["entry_id"]
     assert first.json["gpu_credit"]["remaining_gpu_seconds"] == 59_400
-    entries = module.task_store.list_gpu_credit_ledger(target["id"])
+    entries = module.task_store.list_compute_ledger(target["id"])
     assert [entry["kind"] for entry in entries].count("admin_adjustment") == 1
     detail = client.get(f"/compute/api/auth/admin/users/{target['id']}/gpu-credit", headers=_bearer(admin))
     assert detail.status_code == 200
@@ -662,7 +662,7 @@ def test_settlement_failure_keeps_allocation_recoverable(monkeypatch, tmp_path):
         allow_gpu_use=True,
         entitlements={},
     )
-    module.task_store.record_gpu_allocation_start(
+    module.task_store.record_allocation_start(
         user_id=83,
         task_id="8" * 32,
         stage_id="prediction",
@@ -680,13 +680,13 @@ def test_settlement_failure_keeps_allocation_recoverable(monkeypatch, tmp_path):
     def failing_settlement(*args, **kwargs):
         raise RuntimeError("database is locked")
 
-    monkeypatch.setattr(module.task_store, "settle_gpu_allocation", failing_settlement)
+    monkeypatch.setattr(module.task_store, "settle_allocation", failing_settlement)
 
     # The finish callback must swallow the accounting failure instead of
     # escaping poll() and failing an already-completed Runner.
     finished("8903", _timestamp(2026, 9, 8, second=30))
 
-    allocations = module.task_store.list_unsettled_gpu_allocations()
+    allocations = module.task_store.list_unsettled_allocations()
     assert [item["slurm_job_id"] for item in allocations] == ["8903"]
     assert allocations[0]["status"] == "review"
 
@@ -697,7 +697,7 @@ def test_settlement_failure_keeps_allocation_recoverable(monkeypatch, tmp_path):
 
 
 def _seed_usage(database: TaskDatabase, user_id: int, *, seconds: int, at: float, job_id: str) -> None:
-    database.record_gpu_allocation_start(
+    database.record_allocation_start(
         user_id=user_id,
         task_id=f"{user_id:032d}",
         stage_id="model",
@@ -705,7 +705,7 @@ def _seed_usage(database: TaskDatabase, user_id: int, *, seconds: int, at: float
         gpu_count=1,
         started_at=at,
     )
-    database.settle_gpu_allocation(job_id, finished_at=at + seconds)
+    database.settle_allocation(job_id, finished_at=at + seconds)
 
 
 def test_reset_below_allowance_appends_positive_compensation(tmp_path):
@@ -713,7 +713,7 @@ def test_reset_below_allowance_appends_positive_compensation(tmp_path):
     at = _timestamp(2026, 9, 4)
     _seed_usage(database, 101, seconds=40_000, at=at, job_id="7201")
 
-    result = database.reset_gpu_credit(
+    result = database.reset_compute_account(
         user_id=101, actor_user_id=7, reason="Approved new allocation cycle", idempotency_key="reset-101", at=at + 60
     )
 
@@ -722,7 +722,7 @@ def test_reset_below_allowance_appends_positive_compensation(tmp_path):
     assert result["reset_delta_gpu_seconds"] == 40_000
     assert result["remaining_gpu_seconds"] == 60_000
     assert database.gpu_credit_summary(101, at=at + 60)["remaining_gpu_seconds"] == 60_000
-    entry = next(e for e in database.list_gpu_credit_ledger(101) if e["kind"] == "admin_reset")
+    entry = next(e for e in database.list_compute_ledger(101) if e["kind"] == "admin_reset")
     assert entry["quantity"] == 40_000
     assert entry["actor_user_id"] == 7
     assert entry["reason"] == "Approved new allocation cycle"
@@ -732,11 +732,11 @@ def test_reset_above_allowance_appends_negative_compensation(tmp_path):
     database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
     at = _timestamp(2026, 9, 4)
     database.gpu_credit_summary(102, at=at)
-    database.adjust_gpu_credit(
+    database.adjust_compute_account(
         user_id=102, gpu_seconds=18_000, actor_user_id=1, reason="Approved extension", idempotency_key="top-up-102", created_at=at
     )
 
-    result = database.reset_gpu_credit(
+    result = database.reset_compute_account(
         user_id=102, actor_user_id=7, reason="Normalize to allowance", idempotency_key="reset-102", at=at + 60
     )
 
@@ -751,10 +751,10 @@ def test_reset_at_allowance_writes_a_durable_noop_marker(tmp_path):
     at = _timestamp(2026, 9, 4)
     database.gpu_credit_summary(103, at=at)
 
-    first = database.reset_gpu_credit(
+    first = database.reset_compute_account(
         user_id=103, actor_user_id=7, reason="Refresh", idempotency_key="reset-103", at=at + 60
     )
-    second = database.reset_gpu_credit(
+    second = database.reset_compute_account(
         user_id=103, actor_user_id=7, reason="Refresh", idempotency_key="reset-103", at=at + 120
     )
 
@@ -762,7 +762,7 @@ def test_reset_at_allowance_writes_a_durable_noop_marker(tmp_path):
     assert first["changed"] is False
     assert first["reset_delta_gpu_seconds"] == 0
     assert first["entry_id"] is not None
-    markers = [e for e in database.list_gpu_credit_ledger(103) if e["kind"] == "admin_reset"]
+    markers = [e for e in database.list_compute_ledger(103) if e["kind"] == "admin_reset"]
     assert len(markers) == 1
     assert markers[0]["quantity"] == 0
     assert markers[0]["id"] == first["entry_id"]
@@ -774,7 +774,7 @@ def test_noop_reset_key_survives_a_later_balance_change(tmp_path):
     at = _timestamp(2026, 9, 4)
     database.gpu_credit_summary(112, at=at)
 
-    noop = database.reset_gpu_credit(
+    noop = database.reset_compute_account(
         user_id=112, actor_user_id=7, reason="Refresh", idempotency_key="reset-noop-112", at=at + 60
     )
     assert noop["changed"] is False
@@ -782,7 +782,7 @@ def test_noop_reset_key_survives_a_later_balance_change(tmp_path):
     _seed_usage(database, 112, seconds=40_000, at=at, job_id="7212")
     assert database.gpu_credit_summary(112, at=at + 120)["remaining_gpu_seconds"] == 20_000
 
-    retry = database.reset_gpu_credit(
+    retry = database.reset_compute_account(
         user_id=112, actor_user_id=7, reason="Refresh", idempotency_key="reset-noop-112", at=at + 180
     )
 
@@ -790,7 +790,7 @@ def test_noop_reset_key_survives_a_later_balance_change(tmp_path):
     assert retry["entry_id"] == noop["entry_id"]
     # The retry must not have compensated the post-no-op change.
     assert database.gpu_credit_summary(112, at=at + 180)["remaining_gpu_seconds"] == 20_000
-    assert len([e for e in database.list_gpu_credit_ledger(112) if e["kind"] == "admin_reset"]) == 1
+    assert len([e for e in database.list_compute_ledger(112) if e["kind"] == "admin_reset"]) == 1
 
 
 def test_noop_reset_key_is_reserved_against_conflicting_reuse(tmp_path):
@@ -798,12 +798,12 @@ def test_noop_reset_key_is_reserved_against_conflicting_reuse(tmp_path):
     at = _timestamp(2026, 9, 4)
     database.gpu_credit_summary(113, at=at)
 
-    database.reset_gpu_credit(
+    database.reset_compute_account(
         user_id=113, actor_user_id=7, reason="Refresh", idempotency_key="reset-noop-113", at=at + 60
     )
 
     with pytest.raises(ValueError, match="different reset"):
-        database.reset_gpu_credit(
+        database.reset_compute_account(
             user_id=113, actor_user_id=8, reason="Different reason", idempotency_key="reset-noop-113", at=at + 120
         )
 
@@ -811,21 +811,21 @@ def test_noop_reset_key_is_reserved_against_conflicting_reuse(tmp_path):
 def test_reset_respects_custom_and_zero_allowances(tmp_path):
     database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
     at = _timestamp(2026, 9, 4)
-    database.set_gpu_monthly_allowance(
+    database.set_compute_allowance(
         user_id=104, monthly_gpu_seconds=72_000, actor_user_id=1, idempotency_key="allow-104", updated_at=at
     )
-    database.set_gpu_monthly_allowance(
+    database.set_compute_allowance(
         user_id=105, monthly_gpu_seconds=0, actor_user_id=1, idempotency_key="allow-105", updated_at=at
     )
-    database.adjust_gpu_credit(
+    database.adjust_compute_account(
         user_id=105, gpu_seconds=5_000, actor_user_id=1, reason="Manual top-up", idempotency_key="adjust-105", created_at=at
     )
     _seed_usage(database, 104, seconds=12_000, at=at, job_id="7204")
 
-    custom = database.reset_gpu_credit(
+    custom = database.reset_compute_account(
         user_id=104, actor_user_id=7, reason="Custom allowance reset", idempotency_key="reset-104", at=at + 60
     )
-    zero = database.reset_gpu_credit(
+    zero = database.reset_compute_account(
         user_id=105, actor_user_id=7, reason="Zero allowance reset", idempotency_key="reset-105", at=at + 60
     )
 
@@ -840,16 +840,16 @@ def test_reset_preserves_usage_and_adjustment_history(tmp_path):
     database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
     at = _timestamp(2026, 9, 4)
     _seed_usage(database, 106, seconds=40_000, at=at, job_id="7206")
-    database.adjust_gpu_credit(
+    database.adjust_compute_account(
         user_id=106, gpu_seconds=6_000, actor_user_id=3, reason="Collaboration extension", idempotency_key="adjust-106", created_at=at
     )
-    before = [dict(entry) for entry in database.list_gpu_credit_ledger(106)]
+    before = [dict(entry) for entry in database.list_compute_ledger(106)]
 
-    database.reset_gpu_credit(
+    database.reset_compute_account(
         user_id=106, actor_user_id=7, reason="Cycle reset", idempotency_key="reset-106", at=at + 60
     )
 
-    after = {entry["id"]: entry for entry in database.list_gpu_credit_ledger(106)}
+    after = {entry["id"]: entry for entry in database.list_compute_ledger(106)}
     for entry in before:
         assert after[entry["id"]] == entry
     recall = database.gpu_credit_summary(106, at=at + 60)
@@ -862,17 +862,17 @@ def test_reset_is_idempotent_and_rejects_conflicting_reuse(tmp_path):
     at = _timestamp(2026, 9, 4)
     _seed_usage(database, 107, seconds=40_000, at=at, job_id="7207")
 
-    first = database.reset_gpu_credit(
+    first = database.reset_compute_account(
         user_id=107, actor_user_id=7, reason="Cycle reset", idempotency_key="reset-107", at=at + 60
     )
-    retry = database.reset_gpu_credit(
+    retry = database.reset_compute_account(
         user_id=107, actor_user_id=7, reason="Cycle reset", idempotency_key="reset-107", at=at + 90
     )
 
     assert first["entry_id"] == retry["entry_id"]
-    assert len([e for e in database.list_gpu_credit_ledger(107) if e["kind"] == "admin_reset"]) == 1
+    assert len([e for e in database.list_compute_ledger(107) if e["kind"] == "admin_reset"]) == 1
     with pytest.raises(ValueError, match="different reset"):
-        database.reset_gpu_credit(
+        database.reset_compute_account(
             user_id=107, actor_user_id=8, reason="Cycle reset", idempotency_key="reset-107", at=at + 120
         )
 
@@ -883,7 +883,7 @@ def test_reset_only_affects_the_current_period(tmp_path):
     october = _timestamp(2026, 10, 4)
     _seed_usage(database, 108, seconds=40_000, at=october, job_id="7208")
 
-    result = database.reset_gpu_credit(
+    result = database.reset_compute_account(
         user_id=108, actor_user_id=7, reason="September reset", idempotency_key="reset-108", at=september
     )
 
@@ -896,17 +896,17 @@ def test_reset_is_not_blocked_by_an_active_allocation_and_settles_afterward(tmp_
     database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
     at = _timestamp(2026, 9, 4)
     database.gpu_credit_summary(109, at=at)
-    database.record_gpu_allocation_start(
+    database.record_allocation_start(
         user_id=109, task_id="9" * 32, stage_id="model", slurm_job_id="7209", gpu_count=1, started_at=at
     )
 
     # A running allocation never blocks an administrative reset ...
-    result = database.reset_gpu_credit(
+    result = database.reset_compute_account(
         user_id=109, actor_user_id=7, reason="Refresh while running", idempotency_key="reset-109", at=at + 60
     )
     assert result["remaining_gpu_seconds"] == 60_000
     # ... and the later actual usage is appended normally.
-    database.settle_gpu_allocation("7209", finished_at=at + 1_800)
+    database.settle_allocation("7209", finished_at=at + 1_800)
     assert database.gpu_credit_summary(109, at=at + 1_800)["remaining_gpu_seconds"] == 58_200
 
 
@@ -924,7 +924,7 @@ def test_concurrent_resets_serialize_to_one_compensation(tmp_path):
     def worker(index: int) -> None:
         try:
             barrier.wait(timeout=10)
-            databases[index].reset_gpu_credit(
+            databases[index].reset_compute_account(
                 user_id=110,
                 actor_user_id=7,
                 reason="Concurrent reset",
@@ -941,7 +941,7 @@ def test_concurrent_resets_serialize_to_one_compensation(tmp_path):
         thread.join(timeout=30)
 
     assert errors == []
-    rows = [e for e in databases[0].list_gpu_credit_ledger(110) if e["kind"] == "admin_reset"]
+    rows = [e for e in databases[0].list_compute_ledger(110) if e["kind"] == "admin_reset"]
     # The loser of the race durably records a zero marker instead of a second
     # compensation, so exactly one entry moves the balance.
     compensations = [row for row in rows if row["quantity"] != 0]
@@ -957,26 +957,26 @@ def test_reset_rejects_blank_and_oversized_reasons(tmp_path):
     database.gpu_credit_summary(111, at=at)
 
     with pytest.raises(ValueError, match="reason is required"):
-        database.reset_gpu_credit(user_id=111, actor_user_id=7, reason="   ", idempotency_key="reset-111", at=at)
+        database.reset_compute_account(user_id=111, actor_user_id=7, reason="   ", idempotency_key="reset-111", at=at)
     with pytest.raises(ValueError, match="at most 1000"):
-        database.reset_gpu_credit(user_id=111, actor_user_id=7, reason="x" * 1001, idempotency_key="reset-112", at=at)
+        database.reset_compute_account(user_id=111, actor_user_id=7, reason="x" * 1001, idempotency_key="reset-112", at=at)
 
 
 def test_global_reset_respects_per_user_allowances_and_reports_a_summary(tmp_path):
     database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
     at = _timestamp(2026, 9, 4)
     _seed_usage(database, 201, seconds=50_000, at=at, job_id="7301")  # Alice: 10000/60000
-    database.set_gpu_monthly_allowance(
+    database.set_compute_allowance(
         user_id=202, monthly_gpu_seconds=72_000, actor_user_id=1, idempotency_key="allow-202", updated_at=at
     )  # Bob: 72000/72000
-    database.set_gpu_monthly_allowance(
+    database.set_compute_allowance(
         user_id=203, monthly_gpu_seconds=30_000, actor_user_id=1, idempotency_key="allow-203", updated_at=at
     )
-    database.adjust_gpu_credit(
+    database.adjust_compute_account(
         user_id=203, gpu_seconds=20_000, actor_user_id=1, reason="Extension", idempotency_key="adjust-203", created_at=at
     )  # Carol: 50000/30000
 
-    summary = database.reset_all_gpu_credits(
+    summary = database.reset_all_compute_accounts(
         user_ids=[201, 202, 203], actor_user_id=7, reason="Start refreshed cycle", idempotency_key="global-1", at=at + 60
     )
 
@@ -988,14 +988,14 @@ def test_global_reset_respects_per_user_allowances_and_reports_a_summary(tmp_pat
     assert database.gpu_credit_summary(202, at=at + 60)["remaining_gpu_seconds"] == 72_000
     assert database.gpu_credit_summary(203, at=at + 60)["remaining_gpu_seconds"] == 30_000
 
-    alice_rows = [e for e in database.list_gpu_credit_ledger(201) if e["kind"] == "admin_reset"]
-    bob_rows = [e for e in database.list_gpu_credit_ledger(202) if e["kind"] == "admin_reset"]
-    carol_rows = [e for e in database.list_gpu_credit_ledger(203) if e["kind"] == "admin_reset"]
+    alice_rows = [e for e in database.list_compute_ledger(201) if e["kind"] == "admin_reset"]
+    bob_rows = [e for e in database.list_compute_ledger(202) if e["kind"] == "admin_reset"]
+    carol_rows = [e for e in database.list_compute_ledger(203) if e["kind"] == "admin_reset"]
     assert len(alice_rows) == 1
     assert len(bob_rows) == 1 and bob_rows[0]["quantity"] == 0
     assert len(carol_rows) == 1
     # Every considered user gets a durable batch marker, including no-ops.
-    batch = database.list_gpu_credit_reset_batch(summary["batch_id"])
+    batch = database.list_reset_batch(summary["batch_id"])
     assert {row["subject_id"] for row in batch} == {201, 202, 203}
     assert {row["reason"] for row in batch} == {"Start refreshed cycle"}
     assert {row["actor_user_id"] for row in batch} == {7}
@@ -1007,10 +1007,10 @@ def test_global_reset_retry_does_not_duplicate_entries(tmp_path):
     _seed_usage(database, 211, seconds=10_000, at=at, job_id="7311")
     _seed_usage(database, 212, seconds=20_000, at=at, job_id="7312")
 
-    first = database.reset_all_gpu_credits(
+    first = database.reset_all_compute_accounts(
         user_ids=[211, 212], actor_user_id=7, reason="Cycle reset", idempotency_key="global-retry", at=at + 60
     )
-    retry = database.reset_all_gpu_credits(
+    retry = database.reset_all_compute_accounts(
         user_ids=[211, 212], actor_user_id=7, reason="Cycle reset", idempotency_key="global-retry", at=at + 120
     )
 
@@ -1019,7 +1019,7 @@ def test_global_reset_retry_does_not_duplicate_entries(tmp_path):
     assert retry["users_changed"] == 2
     assert retry["total_delta_gpu_seconds"] == first["total_delta_gpu_seconds"]
     for user_id in (211, 212):
-        assert len([e for e in database.list_gpu_credit_ledger(user_id) if e["kind"] == "admin_reset"]) == 1
+        assert len([e for e in database.list_compute_ledger(user_id) if e["kind"] == "admin_reset"]) == 1
         assert database.gpu_credit_summary(user_id, at=at + 120)["remaining_gpu_seconds"] == 60_000
 
 
@@ -1030,7 +1030,7 @@ def test_global_reset_batch_key_covers_initially_unchanged_users(tmp_path):
     _seed_usage(database, 231, seconds=10_000, at=at, job_id="7331")
     database.gpu_credit_summary(232, at=at)  # already exactly at the allowance
 
-    first = database.reset_all_gpu_credits(
+    first = database.reset_all_compute_accounts(
         user_ids=[231, 232], actor_user_id=7, reason="Cycle reset", idempotency_key="global-scope", at=at + 60
     )
     assert first["users_changed"] == 1
@@ -1039,14 +1039,14 @@ def test_global_reset_batch_key_covers_initially_unchanged_users(tmp_path):
     _seed_usage(database, 232, seconds=25_000, at=at, job_id="7332")
     assert database.gpu_credit_summary(232, at=at + 120)["remaining_gpu_seconds"] == 35_000
 
-    retry = database.reset_all_gpu_credits(
+    retry = database.reset_all_compute_accounts(
         user_ids=[231, 232], actor_user_id=7, reason="Cycle reset", idempotency_key="global-scope", at=at + 180
     )
 
     assert retry["batch_id"] == first["batch_id"]
     assert database.gpu_credit_summary(232, at=at + 180)["remaining_gpu_seconds"] == 35_000
     assert retry["users_changed"] == 1
-    assert len([e for e in database.list_gpu_credit_ledger(232) if e["kind"] == "admin_reset"]) == 1
+    assert len([e for e in database.list_compute_ledger(232) if e["kind"] == "admin_reset"]) == 1
 
 
 def test_global_reset_batch_is_all_or_nothing(tmp_path):
@@ -1055,22 +1055,22 @@ def test_global_reset_batch_is_all_or_nothing(tmp_path):
     _seed_usage(database, 221, seconds=10_000, at=at, job_id="7321")
     _seed_usage(database, 222, seconds=20_000, at=at, job_id="7322")
 
-    original = database._reset_gpu_credit_in_connection
+    original = database._reset_account_in_connection
 
     def explode(conn, **kwargs):
         if kwargs["user_id"] == 222:
             raise RuntimeError("accounting write failed")
         return original(conn, **kwargs)
 
-    database._reset_gpu_credit_in_connection = explode  # type: ignore[method-assign]
+    database._reset_account_in_connection = explode  # type: ignore[method-assign]
     with pytest.raises(RuntimeError, match="accounting write failed"):
-        database.reset_all_gpu_credits(
+        database.reset_all_compute_accounts(
             user_ids=[221, 222], actor_user_id=7, reason="Atomic reset", idempotency_key="global-atomic", at=at + 60
         )
-    database._reset_gpu_credit_in_connection = original  # type: ignore[method-assign]
+    database._reset_account_in_connection = original  # type: ignore[method-assign]
 
-    assert [e for e in database.list_gpu_credit_ledger(221) if e["kind"] == "admin_reset"] == []
-    assert [e for e in database.list_gpu_credit_ledger(222) if e["kind"] == "admin_reset"] == []
+    assert [e for e in database.list_compute_ledger(221) if e["kind"] == "admin_reset"] == []
+    assert [e for e in database.list_compute_ledger(222) if e["kind"] == "admin_reset"] == []
     assert database.gpu_credit_summary(221, at=at + 60)["remaining_gpu_seconds"] == 50_000
 
 
@@ -1178,13 +1178,13 @@ def test_admin_global_reset_api_respects_scope_and_is_idempotent(monkeypatch, tm
 
     monkeypatch.setattr(_db_module.time, "time", lambda: at + 60)
     _seed_usage(module.task_store, alice["id"], seconds=50_000, at=at, job_id="7501")
-    module.task_store.set_gpu_monthly_allowance(
+    module.task_store.set_compute_allowance(
         user_id=bob["id"], monthly_gpu_seconds=72_000, actor_user_id=admin["id"], idempotency_key="global-allow-bob", updated_at=at
     )
-    module.task_store.set_gpu_monthly_allowance(
+    module.task_store.set_compute_allowance(
         user_id=carol["id"], monthly_gpu_seconds=30_000, actor_user_id=admin["id"], idempotency_key="global-allow-carol", updated_at=at
     )
-    module.task_store.adjust_gpu_credit(
+    module.task_store.adjust_compute_account(
         user_id=carol["id"], gpu_seconds=50_000, actor_user_id=admin["id"], reason="Extension", idempotency_key="global-adjust-carol", created_at=at
     )
     _seed_usage(module.task_store, deleted["id"], seconds=10_000, at=at, job_id="7502")
@@ -1200,7 +1200,7 @@ def test_admin_global_reset_api_respects_scope_and_is_idempotent(monkeypatch, tm
     assert denied.status_code == 403
     assert first.status_code == 200
     assert first.json["users_considered"] == expected_considered
-    assert deleted["id"] not in {row["subject_id"] for row in module.task_store.list_gpu_credit_reset_batch(first.json["batch_id"])}
+    assert deleted["id"] not in {row["subject_id"] for row in module.task_store.list_reset_batch(first.json["batch_id"])}
     assert module.task_store.gpu_credit_summary(deleted["id"], at=at + 60)["remaining_gpu_seconds"] == 50_000
     assert module.task_store.gpu_credit_summary(alice["id"], at=at + 60)["remaining_gpu_seconds"] == 60_000
     # GPU permission is independent of the reset.
@@ -1211,7 +1211,7 @@ def test_admin_global_reset_api_respects_scope_and_is_idempotent(monkeypatch, tm
     assert first.json["users_unchanged"] == expected_considered - 2
     assert retry.json["batch_id"] == first.json["batch_id"]
     assert retry.json["total_delta_gpu_seconds"] == first.json["total_delta_gpu_seconds"]
-    assert len(module.task_store.list_gpu_credit_reset_batch(first.json["batch_id"])) == expected_considered
+    assert len(module.task_store.list_reset_batch(first.json["batch_id"])) == expected_considered
 
 
 def test_admin_global_reset_api_validates_request(monkeypatch, tmp_path):
