@@ -467,20 +467,16 @@ def _compute_allocation_callbacks(
     def dispatched(slurm_job_id: str, dispatched_at: float, wrapper_executed: bool = False) -> None:
         if user_id <= 0:
             return
-        # The scheduler identity is persisted as part of this same transition,
-        # so a queued reservation always carries the request's own name: a
-        # maintenance pass reading it can never conclude "no request exists"
-        # during the window before the Task row is updated.
-        task_store.record_reservation_dispatch(task_id=task_id, slurm_job_id=str(slurm_job_id))
-        # The wrapper's own stdout id line — not the srun stderr banner — obtains
-        # its scheduler identity *inside* the allocation, so seeing it is already
-        # evidence the wrapper occupied a compute node.  That fact is persisted
-        # here, before and independently of the admission decision, so a crash
-        # between the observation and the grant cannot leave a genuinely executed
-        # request recorded as "reservation only".  Recording it is idempotent and
-        # cheap; ``record_allocation_start`` later promotes the same rows and
-        # makes the grant decision.
         if wrapper_executed:
+            # The wrapper's own stdout id line — not the srun stderr banner —
+            # obtains its scheduler identity *inside* the allocation, so seeing
+            # it is already evidence the wrapper occupied a compute node.  The
+            # observation and the scheduler-owned reservation are written as ONE
+            # store transition: a process death can land before the write, but
+            # never between a queued reservation and the allocation its job id
+            # proves, so a genuinely executed request can never be reclaimed as
+            # "reservation only".  ``record_allocation_start`` later promotes the
+            # same rows and grants or denies the command.
             task_store.observe_allocation_start(
                 user_id=user_id,
                 task_id=task_id,
@@ -491,6 +487,12 @@ def _compute_allocation_callbacks(
                 started_at=dispatched_at,
                 gres=resource_policy.gres or "",
             )
+            return
+        # Identity without execution evidence, so only the request exists: the
+        # reservation is handed to the scheduler here so a maintenance pass
+        # reading it can never conclude "no request exists" during the window
+        # before the Task row is updated.
+        task_store.record_reservation_dispatch(task_id=task_id, slurm_job_id=str(slurm_job_id))
 
     def started(slurm_job_id: str, started_at: float) -> None:
         # Runner readiness is checked here because only the caller knows the
