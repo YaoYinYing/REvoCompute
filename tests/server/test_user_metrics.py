@@ -148,7 +148,7 @@ def test_gpu_task_identity_and_gpu_minutes_follow_the_task_type_contract(monkeyp
     )
     charged = 600
     module.task_store.record_allocation_start(
-        user_id=1, task_id="a" * 32, stage_id="predict", slurm_job_id="metrics-9001", gpu_count=2
+        user_id=1, task_id="a" * 32, stage_id="predict", slurm_job_id="metrics-9001", gpu_count=2, cpu_cores=1
     )
     module.task_store.settle_allocation_elapsed("metrics-9001", elapsed_seconds=charged // 2)
     now = time.time()

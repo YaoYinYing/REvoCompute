@@ -112,6 +112,7 @@ from revocompute.db import GPUCreditUnavailableError, TaskIdReservedError
 from revocompute.operational_events import emit_event
 from revocompute.ratelimit import rate_limit
 from revocompute import resource_lifecycle
+from revocompute import resource_ledger as rloan
 from revocompute.resource_ledger import (
     AdmissionReason,
     LedgerReason,
@@ -175,7 +176,7 @@ from revocompute.task_runtime import (
     _task_zip_path,
     build_results_archive,
     cancel_compute_resources,
-    reconcile_gpu_allocations,
+    reconcile_slurm_allocations,
     run_compute_task,
     task_store,
 )
@@ -4201,7 +4202,12 @@ def _project_user_metrics(tasks: list[dict[str, Any]], *, window: str, now: floa
         if gpu:
             # ponytail: per-Task allocation read; batch into one query if a user
             # ever accumulates enough GPU Tasks for this to show up in latency.
+            # Only the ``gpu_second`` fact is GPU time: every Slurm allocation
+            # also records the CPU core-seconds it held, and summing both units
+            # into one figure would report 10 GPU-minutes as 15.
             for allocation in task_store.list_task_allocations(str(task["md5sum"])):
+                if str(allocation.get("unit")) != rloan.UNIT_GPU_SECOND:
+                    continue
                 gpu_seconds += float(allocation.get("quantity") or 0)
 
     runtimes.sort()
@@ -4849,10 +4855,10 @@ def admin_gpu_credit_reconciliation():
         if _blocked := require_bearer_auth():
             return _blocked
         try:
-            result = reconcile_gpu_allocations.apply_async().get(timeout=20)
+            result = reconcile_slurm_allocations.apply_async().get(timeout=20)
         except Exception:
-            logging.exception("GPU allocation reconciliation request failed")
-            return jsonify({"error": "GPU reconciliation worker is unavailable"}), 503
+            logging.exception("Allocation reconciliation request failed")
+            return jsonify({"error": "Resource reconciliation worker is unavailable"}), 503
     else:
         result = None
     return jsonify({"result": result, "allocations": task_store.list_unsettled_allocations()}), 200

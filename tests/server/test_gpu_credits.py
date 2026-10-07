@@ -56,6 +56,7 @@ def test_gpu_usage_settlement_is_actual_multi_gpu_time_and_idempotent(tmp_path):
         stage_id="model",
         slurm_job_id="4217",
         gpu_count=2,
+        cpu_cores=1,
         started_at=started_at,
     )
 
@@ -72,7 +73,10 @@ def test_gpu_usage_settlement_is_actual_multi_gpu_time_and_idempotent(tmp_path):
         usage_count = connection.execute(
             sa.select(sa.func.count())
             .select_from(database.resource_ledger_table)
-            .where(database.resource_ledger_table.c.kind == "usage")
+            .where(
+                database.resource_ledger_table.c.kind == "usage",
+                database.resource_ledger_table.c.unit == "gpu_second",
+            )
         ).scalar_one()
     assert usage_count == 1
 
@@ -87,6 +91,7 @@ def test_active_allocation_may_overdraft_but_next_allocation_is_denied(tmp_path)
         stage_id="inference",
         slurm_job_id="5001",
         gpu_count=1,
+        cpu_cores=1,
         started_at=started_at,
     )
 
@@ -104,6 +109,7 @@ def test_active_allocation_may_overdraft_but_next_allocation_is_denied(tmp_path)
             stage_id="inference",
             slurm_job_id="5002",
             gpu_count=1,
+            cpu_cores=1,
             started_at=started_at + 80,
         )
 
@@ -122,6 +128,7 @@ def test_cross_month_allocation_is_charged_to_its_start_month(tmp_path):
         stage_id="model",
         slurm_job_id="6001",
         gpu_count=1,
+        cpu_cores=1,
         started_at=september,
     )
     # The allocation finishes after the September→October boundary.
@@ -234,31 +241,30 @@ def test_unsettled_allocations_remain_visible_for_reconciliation(tmp_path):
         stage_id="relax",
         slurm_job_id="7001",
         gpu_count=1,
+        cpu_cores=1,
         started_at=_timestamp(2026, 9, 4),
     )
     database.engine.dispose()
 
     reopened = TaskDatabase(str(path))
 
-    assert reopened.list_unsettled_allocations() == [
-        {
-            "id": 1,
-            "subject_type": "user",
-            "subject_id": 53,
-            "task_id": "d" * 32,
-            "stage_id": "relax",
-            "slurm_job_id": "7001",
-            "unit": "gpu_second",
-            "resource_class": "",
-            "resource_count": 1,
-            "started_at": _timestamp(2026, 9, 4),
-            "finished_at": None,
-            "quantity": None,
-            "status": "active",
-            "evidence_source": "allocation_lifecycle",
-            "ledger_entry_id": None,
-        }
+    # One Slurm allocation produces two facts — the GPUs it held and the CPU
+    # cores it held — and both are unsettled until the authoritative elapsed
+    # duration arrives, so reconciliation sees them without either unit standing
+    # in for the other.
+    unsettled = reopened.list_unsettled_allocations()
+    assert [(row["unit"], row["resource_count"]) for row in unsettled] == [
+        ("cpu_core_second", 1),
+        ("gpu_second", 1),
     ]
+    assert {row["slurm_job_id"] for row in unsettled} == {"7001"}
+    assert {row["subject_id"] for row in unsettled} == {53}
+    assert {row["task_id"] for row in unsettled} == {"d" * 32}
+    assert {row["stage_id"] for row in unsettled} == {"relax"}
+    assert all(row["status"] == "active" for row in unsettled)
+    assert all(row["quantity"] is None and row["finished_at"] is None for row in unsettled)
+    assert all(row["evidence_source"] == "allocation_lifecycle" for row in unsettled)
+    assert all(row["started_at"] == _timestamp(2026, 9, 4) for row in unsettled)
 
 
 def test_gpu_authorization_projection_checks_permission_entitlement_and_expiry(tmp_path):
@@ -290,11 +296,11 @@ def test_gpu_allocation_callback_checks_projected_authorization_before_recording
         tmp_path,
         extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
     )
-    started, _finished = module.task_runtime._gpu_allocation_callbacks(
+    _dispatched, started, _finished = module.task_runtime._compute_allocation_callbacks(
         task_id="2" * 32,
         user_id=63,
         stage_id="prediction",
-        resource_policy=SimpleNamespace(requires_gpu=True, gres="gpu:1"),
+        resource_policy=SimpleNamespace(requires_gpu=True, gres="gpu:1", cpus=1),
         required_entitlements=("licensed_runner",),
     )
 
@@ -312,7 +318,11 @@ def test_gpu_allocation_callback_checks_projected_authorization_before_recording
     assert module.task_store.list_unsettled_allocations()[0]["slurm_job_id"] == "8901"
     module.task_store.deny_gpu_authorization(63)
     started("8901", _timestamp(2026, 9, 6))
-    assert len(module.task_store.list_unsettled_allocations()) == 1
+    # One fact per unit, and a repeat call is idempotent rather than appending a
+    # second set.
+    unsettled = module.task_store.list_unsettled_allocations()
+    assert {row["unit"] for row in unsettled} == {"gpu_second", "cpu_core_second"}
+    assert len(unsettled) == 2
 
 
 def test_gpu_allocation_callback_rechecks_runner_readiness(monkeypatch, tmp_path):
@@ -332,11 +342,11 @@ def test_gpu_allocation_callback_rechecks_runner_readiness(monkeypatch, tmp_path
         "resolve_submission_readiness",
         lambda server_dir, runner_family: SimpleNamespace(ready=False),
     )
-    started, _finished = module.task_runtime._gpu_allocation_callbacks(
+    _dispatched, started, _finished = module.task_runtime._compute_allocation_callbacks(
         task_id="3" * 32,
         user_id=67,
         stage_id="prediction",
-        resource_policy=SimpleNamespace(requires_gpu=True, gres="gpu:1"),
+        resource_policy=SimpleNamespace(requires_gpu=True, gres="gpu:1", cpus=1),
         runner_family="licensed",
     )
 
@@ -359,6 +369,7 @@ def test_reconciliation_settles_terminal_slurm_elapsed_time_once(monkeypatch, tm
         stage_id="inference",
         slurm_job_id="8801",
         gpu_count=2,
+        cpu_cores=1,
         started_at=started_at,
     )
     monkeypatch.setattr(module.task_runtime.shutil, "which", lambda command: "/usr/bin/scontrol")
@@ -370,12 +381,15 @@ def test_reconciliation_settles_terminal_slurm_elapsed_time_once(monkeypatch, tm
         ),
     )
 
-    first = module.task_runtime._reconcile_gpu_allocations()
-    second = module.task_runtime._reconcile_gpu_allocations()
+    first = module.task_runtime._reconcile_slurm_allocations()
+    second = module.task_runtime._reconcile_slurm_allocations()
 
     assert first == {"settled": 1, "active": 0, "review": 0}
     assert second == {"settled": 0, "active": 0, "review": 0}
     assert module.task_store.gpu_credit_summary(59, at=started_at)["usage_gpu_seconds"] == 146
+    # The same authoritative elapsed duration also settles the CPU allocation
+    # this Task held: 1 core x 73 s, recorded as its own unit.
+    assert module.task_store.cpu_core_second_summary(59, at=started_at)["used_cpu_core_seconds"] == 73
 
 
 @pytest.mark.parametrize(
@@ -402,6 +416,7 @@ def test_reconciliation_never_charges_ambiguous_slurm_evidence(monkeypatch, tmp_
         stage_id="model",
         slurm_job_id="8802",
         gpu_count=1,
+        cpu_cores=1,
         started_at=_timestamp(2026, 9, 5),
     )
     monkeypatch.setattr(module.task_runtime.shutil, "which", lambda command: "/usr/bin/scontrol")
@@ -411,7 +426,7 @@ def test_reconciliation_never_charges_ambiguous_slurm_evidence(monkeypatch, tmp_
         lambda *args, **kwargs: SimpleNamespace(stdout=stdout),
     )
 
-    assert module.task_runtime._reconcile_gpu_allocations() == expected
+    assert module.task_runtime._reconcile_slurm_allocations() == expected
     allocation = module.task_store.list_unsettled_allocations()[0]
     assert allocation["status"] == ("active" if expected["active"] else "review")
     assert module.task_store.gpu_credit_summary(61, at=_timestamp(2026, 9, 5))["usage_gpu_seconds"] == 0
@@ -430,6 +445,7 @@ def test_reconciliation_uses_scontrol_without_slurm_accounting(monkeypatch, tmp_
         stage_id="relax",
         slurm_job_id="8803",
         gpu_count=1,
+        cpu_cores=1,
         started_at=_timestamp(2026, 9, 5),
     )
     commands: list[list[str]] = []
@@ -441,7 +457,7 @@ def test_reconciliation_uses_scontrol_without_slurm_accounting(monkeypatch, tmp_
     monkeypatch.setattr(module.task_runtime.shutil, "which", lambda command: f"/usr/bin/{command}")
     monkeypatch.setattr(module.task_runtime.subprocess, "run", fake_run)
 
-    assert module.task_runtime._reconcile_gpu_allocations() == {"settled": 1, "active": 0, "review": 0}
+    assert module.task_runtime._reconcile_slurm_allocations() == {"settled": 1, "active": 0, "review": 0}
     assert commands == [["/usr/bin/scontrol", "show", "job", "8803"]]
     assert module.task_store.gpu_credit_summary(71, at=_timestamp(2026, 9, 5))["usage_gpu_seconds"] == 86_410
 
@@ -581,7 +597,7 @@ def test_admin_gpu_reconciliation_requires_admin_bearer_and_returns_worker_resul
         calls.append(True)
         return _Result()
 
-    monkeypatch.setattr(module.task_runtime.reconcile_gpu_allocations, "apply_async", _apply_async)
+    monkeypatch.setattr(module.task_runtime.reconcile_slurm_allocations, "apply_async", _apply_async)
     client = module.app.test_client()
 
     denied = client.post(path, headers=_bearer(regular))
@@ -668,13 +684,14 @@ def test_settlement_failure_keeps_allocation_recoverable(monkeypatch, tmp_path):
         stage_id="prediction",
         slurm_job_id="8903",
         gpu_count=1,
+        cpu_cores=1,
         started_at=_timestamp(2026, 9, 8),
     )
-    _started, finished = module.task_runtime._gpu_allocation_callbacks(
+    _dispatched, _started, finished = module.task_runtime._compute_allocation_callbacks(
         task_id="8" * 32,
         user_id=83,
         stage_id="prediction",
-        resource_policy=SimpleNamespace(requires_gpu=True, gres="gpu:1"),
+        resource_policy=SimpleNamespace(requires_gpu=True, gres="gpu:1", cpus=1),
     )
 
     def failing_settlement(*args, **kwargs):
@@ -687,8 +704,10 @@ def test_settlement_failure_keeps_allocation_recoverable(monkeypatch, tmp_path):
     finished("8903", _timestamp(2026, 9, 8, second=30))
 
     allocations = module.task_store.list_unsettled_allocations()
-    assert [item["slurm_job_id"] for item in allocations] == ["8903"]
-    assert allocations[0]["status"] == "review"
+    assert {item["slurm_job_id"] for item in allocations} == {"8903"}
+    # Every unit of the lost allocation stays recoverable, not just the first.
+    assert {item["unit"] for item in allocations} == {"gpu_second", "cpu_core_second"}
+    assert all(item["status"] == "review" for item in allocations)
 
 
 # ---------------------------------------------------------------------------
@@ -703,6 +722,7 @@ def _seed_usage(database: TaskDatabase, user_id: int, *, seconds: int, at: float
         stage_id="model",
         slurm_job_id=job_id,
         gpu_count=1,
+        cpu_cores=1,
         started_at=at,
     )
     database.settle_allocation(job_id, finished_at=at + seconds)
@@ -897,7 +917,7 @@ def test_reset_is_not_blocked_by_an_active_allocation_and_settles_afterward(tmp_
     at = _timestamp(2026, 9, 4)
     database.gpu_credit_summary(109, at=at)
     database.record_allocation_start(
-        user_id=109, task_id="9" * 32, stage_id="model", slurm_job_id="7209", gpu_count=1, started_at=at
+        user_id=109, task_id="9" * 32, stage_id="model", slurm_job_id="7209", gpu_count=1, cpu_cores=1, started_at=at
     )
 
     # A running allocation never blocks an administrative reset ...

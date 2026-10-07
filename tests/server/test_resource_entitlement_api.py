@@ -95,6 +95,7 @@ def test_unsettled_usage_is_visible_on_the_wire_as_unknown_not_zero(monkeypatch,
         stage_id="model",
         slurm_job_id="9700",
         gpu_count=2,
+        cpu_cores=1,
         started_at=time.time(),
     )
 

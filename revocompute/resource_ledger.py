@@ -64,6 +64,16 @@ PERIODIC_UNITS = (UNIT_GPU_SECOND, UNIT_CPU_CORE_SECOND)
 #: Seconds per displayed GPU credit.  A projection unit, never a stored one.
 SECONDS_PER_CREDIT = 60
 
+#: Core-seconds per displayed CPU-hour.  Also a projection unit: CPU
+#: core-seconds are stored raw, and a display that rescaled them would be a
+#: second number for the same fact.
+CORE_SECONDS_PER_CPU_HOUR = 3600
+
+
+def cpu_hours_from_core_seconds(core_seconds: int) -> float:
+    """Displayed CPU-hours for a stored CPU core-second quantity."""
+    return round(core_seconds / CORE_SECONDS_PER_CPU_HOUR, 3)
+
 _GRES_CLASS = re.compile(r"^gpu:(?:(?P<class>[A-Za-z][A-Za-z0-9_.-]*):)?(?P<count>[1-9][0-9]*)$")
 
 
@@ -156,11 +166,34 @@ class AllocationStatus(str, Enum):
 
 
 class ReservationState(str, Enum):
-    """Lifecycle of one admission hold."""
+    """Lifecycle of one admission reservation.
+
+    ``HELD`` is a *pre-dispatch* admission reservation: it exists between the
+    admission decision and the moment the Slurm request is dispatched, and it is
+    the only state a wall-clock TTL may reclaim, because a crash before dispatch
+    is legitimately recoverable.
+
+    ``QUEUED`` is a *scheduler-owned commitment*: the Slurm request exists, so
+    the reservation is owned by that Task until a canonical release transition
+    (allocation starts, dispatch definitively failed, Task cancelled/deleted, or
+    reconciliation proves against scheduler evidence that the request no longer
+    exists).  It is never reclaimed by a bare timeout, because a request may sit
+    in the scheduler's queue longer than any wall-clock bound — reclaiming it
+    then would hand the same entitlement to a second submission whose allocation
+    has not started either.
+    """
 
     HELD = "held"
+    QUEUED = "queued"
     RELEASED = "released"
     EXPIRED = "expired"
+
+
+#: Reservation states that count as committed entitlement for admission.  Both
+#: spellings are the same claim on the balance; the difference is only *who owns
+#: the release*, so a consumer that counted just one of them could hand out the
+#: final entitlement twice.
+COMMITTED_RESERVATION_STATES = (ReservationState.HELD.value, ReservationState.QUEUED.value)
 
 
 class AdmissionReason(str, Enum):
@@ -205,6 +238,7 @@ class ReservationReason(str, Enum):
     """Bounded reason code for the release (or living hold) of a reservation."""
 
     ADMISSION_RESERVED = "admission_reserved"
+    DISPATCHED = "dispatched"
     ALLOCATION_STARTED = "allocation_started"
     DISPATCH_FAILED = "dispatch_failed"
     TASK_DELETED = "task_deleted"
@@ -248,9 +282,13 @@ DEFAULT_ADMISSION_QUANTUM: Mapping[str, int] = {
     UNIT_CPU_CORE_SECOND: 3600,
 }
 
-#: How long an unconsumed admission hold may live before reconciliation
-#: releases it.  A hold only spans submit -> allocation start, so this bounds a
-#: request that died in that window.
+#: How long a *pre-dispatch* admission reservation may live before
+#: reconciliation releases it, and the ceiling on any deployment-configured TTL.
+#: A reservation only spans submit -> dispatch, so this bounds a request that
+#: died in that window.  It never applies to a scheduler-owned commitment: once
+#: the Slurm request exists the reservation is bound to that Task until a
+#: canonical release transition, because a request may legitimately sit in the
+#: scheduler's queue longer than any wall-clock bound.
 RESERVATION_TTL_SECONDS = 3600.0
 
 
@@ -545,6 +583,7 @@ class ReconciliationReport:
     review_allocations: int = 0
     active_allocations: int = 0
     expired_reservations: int = 0
+    reclaimed_reservations: int = 0
     released_reservations: int = 0
     charged_tasks: int = 0
     purged_tasks: int = 0
@@ -556,6 +595,7 @@ class ReconciliationReport:
             "review_allocations": self.review_allocations,
             "active_allocations": self.active_allocations,
             "expired_reservations": self.expired_reservations,
+            "reclaimed_reservations": self.reclaimed_reservations,
             "released_reservations": self.released_reservations,
             "charged_tasks": self.charged_tasks,
             "purged_tasks": self.purged_tasks,

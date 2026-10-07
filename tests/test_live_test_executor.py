@@ -260,6 +260,7 @@ def test_gpu_live_case_seeds_isolated_authorization_and_reports_exact_settlement
         stage_id="model",
         slurm_job_id="42",
         gpu_count=2,
+        cpu_cores=1,
         started_at=started_at,
         required_entitlements=("licensed",),
     )

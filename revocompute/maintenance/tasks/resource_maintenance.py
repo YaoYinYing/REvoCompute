@@ -127,13 +127,19 @@ def run_resource_maintenance(
     recovered = resource_lifecycle.retry_stale_purges(
         store, remove_artifacts=remove_artifacts, now=timestamp
     )
-    report = resource_lifecycle.reconcile_resources(store, owned_paths=owned_paths, now=timestamp)
-    if purged["purged"] or recovered["recovered"] or report.drift:
+    report = resource_lifecycle.reconcile_resources(
+        store,
+        settle_allocations=_settle_slurm_allocations,
+        owned_paths=owned_paths,
+        now=timestamp,
+    )
+    if purged["purged"] or recovered["recovered"] or report.drift or report.reclaimed_reservations:
         logging.info(
-            "Resource maintenance: purged=%d recovered=%d expired_reservations=%d drift=%d",
+            "Resource maintenance: purged=%d recovered=%d expired_reservations=%d released_reservations=%d drift=%d",
             purged["purged"],
             recovered["recovered"],
             report.expired_reservations,
+            report.reclaimed_reservations,
             len(report.drift),
         )
     for drift in report.drift:
@@ -142,9 +148,23 @@ def run_resource_maintenance(
         "purged": purged["purged"],
         "purge_failures": purged["failed"],
         "recovered_purges": recovered["recovered"],
+        "settled_allocations": report.settled_allocations,
         "expired_reservations": report.expired_reservations,
+        "released_reservations": report.reclaimed_reservations,
         "drift": [item.to_dict() for item in report.drift],
     }
+
+
+def _settle_slurm_allocations() -> dict[str, int]:
+    """The worker-owned scheduler-evidence step, published as a Docker-free boundary.
+
+    ``task_runtime`` is imported lazily: it constructs the production Celery
+    app at import time, which the maintenance scheduler must not do just to run
+    this pass.
+    """
+    from revocompute import task_runtime
+
+    return task_runtime.reconcile_slurm_allocations.run()
 
 
 class ResourceMaintenanceTask(PeriodicTask):

@@ -199,6 +199,7 @@ class SlurmJob(Job):
         username: str = "",
         resource_policy: ResolvedResources | None = None,
         scratch_backend: str = "disk",
+        allocation_dispatched_callback: Any = None,
         allocation_started_callback: Any = None,
         allocation_finished_callback: Any = None,
         task_store: Any = None,
@@ -222,6 +223,7 @@ class SlurmJob(Job):
         self._allocation_started_at: float | None = None
         self._allocation_tracking_started = False
         self._allocation_finished_notified = False
+        self._allocation_dispatched_callback = allocation_dispatched_callback
         self._allocation_started_callback = allocation_started_callback
         self._allocation_finished_callback = allocation_finished_callback
         self._job_id_event = threading.Event()
@@ -294,19 +296,38 @@ class SlurmJob(Job):
             )
             raise RuntimeError(f"SLURM submission did not return a scheduler job ID{suffix}")
         self._job_id = self._slurm_job_id
-        self._allocation_started = time.monotonic()
         self._allocation_started_at = time.time()
+        # Snapshot before the callbacks run: each may itself block the wrapper,
+        # so this is the only stable answer to "does the wrapper wait?".
+        accounting_enabled = (
+            self._allocation_dispatched_callback is not None
+            or self._allocation_started_callback is not None
+        )
         try:
+            if self._allocation_dispatched_callback is not None:
+                # The scheduler request now exists, so the Task's admission
+                # reservation is handed to it here rather than after the
+                # allocation starts: a request that waits in the queue longer
+                # than the pre-dispatch TTL must not lose its entitlement to a
+                # competing admission whose own allocation has not started
+                # either.
+                self._allocation_dispatched_callback(self._slurm_job_id, time.time())
             if self._allocation_started_callback is not None:
                 self._allocation_started_callback(
                     self._slurm_job_id, self._allocation_started_at
                 )
                 self._allocation_tracking_started = True
-                self._approve_allocation()
         except Exception:
             self.cancel()
             self._remove_wrapper_script()
             raise
+        # Released after the accounting edges are recorded, so the wrapper runs
+        # only once the allocation is durably known: the request stays in the
+        # scheduler's queue until then, which is what keeps the deferred hold
+        # consistent with a queue wait that outlives the TTL.
+        if accounting_enabled:
+            self._approve_allocation()
+        self._allocation_started = time.monotonic()
         emit_event("slurm.allocation.granted", **self._event_fields())
 
         logging.info(
@@ -603,7 +624,7 @@ class SlurmJob(Job):
             # banner (which SLURM 19.05 does not always print in time).
             'echo "REVODESIGN_JOB_ID=${SLURM_JOB_ID}"',
         ]
-        if self._allocation_started_callback is not None:
+        if self._allocation_dispatched_callback is not None or self._allocation_started_callback is not None:
             lines.extend(
                 [
                     f"approval={_sh_quote(self._allocation_approval_path)}",

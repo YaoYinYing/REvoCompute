@@ -189,7 +189,7 @@ def test_reconciliation_is_repeatable_and_double_charges_nothing(tmp_path):
     """Running the whole pass twice must not settle, expire, or release twice."""
     database = TaskDatabase(str(tmp_path / "tasks.sqlite3"), monthly_gpu_seconds=10_000)
     database.record_allocation_start(
-        user_id=18, task_id="4" * 32, stage_id="model", slurm_job_id="9500", gpu_count=1, started_at=1_000.0
+        user_id=18, task_id="4" * 32, stage_id="model", slurm_job_id="9500", gpu_count=1, cpu_cores=1, started_at=1_000.0
     )
     database.reserve_compute_admission(user_id=18, task_id="5" * 32, at=1_000.0, ttl_seconds=60)
     _charge(database, "6" * 32, user_id=18, owned=GIB)
@@ -227,6 +227,7 @@ def test_drift_reports_stale_reservations_and_terminal_tasks_with_unsettled_usag
         stage_id="model",
         slurm_job_id="9600",
         gpu_count=1,
+        cpu_cores=1,
         started_at=1_000.0,
     )
     database.reserve_compute_admission(user_id=19, task_id="8" * 32, at=1_000.0, ttl_seconds=60)

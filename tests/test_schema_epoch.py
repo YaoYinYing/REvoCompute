@@ -79,6 +79,53 @@ def test_current_task_database_adds_gpu_accounting_tables_without_resetting_task
     assert {"resource_ledger", "resource_allocations", "resource_policies"}.issubset(tables)
 
 
+def test_released_resource_indexes_are_widened_in_place(tmp_path):
+    """A database from the released revision gains the new index shape.
+
+    ``(slurm_job_id, unit)`` is the allocation identity, because one Slurm
+    allocation now records both its GPU and its CPU core-second facts: an index
+    that still made the job id alone unique would refuse the second unit's row,
+    and the live-reservation index has to cover both ownership modes or a queued
+    Task could take a second reservation.
+    """
+    path = tmp_path / "tasks.sqlite3"
+    database = TaskDatabase(str(path))
+    database.upsert_task(
+        "a" * 32,
+        filename="input.fasta",
+        file_path="/tmp/input.fasta",
+        uploaded_at=1.0,
+        status="pending",
+        is_binary=0,
+        task_type="example",
+        storage_key="alice",
+        submitted_by_user_id=7,
+        artifact_provenance="[]",
+    )
+    with database.engine.begin() as connection:
+        connection.exec_driver_sql("DROP INDEX idx_resource_allocations_job_unit")
+        connection.exec_driver_sql("DROP INDEX idx_resource_reservations_live_task")
+    database.engine.dispose()
+
+    reopened = TaskDatabase(str(path))
+
+    with reopened.engine.connect() as connection:
+        indexes = {
+            index["name"]: index
+            for index in sa.inspect(connection).get_indexes("resource_allocations")
+        }
+        reservation_indexes = {
+            index["name"] for index in sa.inspect(connection).get_indexes("resource_reservations")
+        }
+    assert indexes["idx_resource_allocations_job_unit"]["column_names"] == [
+        "slurm_job_id",
+        "unit",
+    ]
+    assert indexes["idx_resource_allocations_job_unit"]["unique"] == 1
+    assert "idx_resource_reservations_live_task" in reservation_indexes
+    assert reopened.get_task("a" * 32)["submitted_by_user_id"] == 7
+
+
 def test_project_era_task_schema_fails_without_altering_rows(tmp_path):
     path = tmp_path / "tasks.sqlite3"
     current = TaskDatabase(str(path))

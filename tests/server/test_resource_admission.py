@@ -50,6 +50,7 @@ def _start(
         stage_id="model",
         slurm_job_id=job_id,
         gpu_count=gpus,
+        cpu_cores=1,
         started_at=at,
         gres=gres,
     )
@@ -382,6 +383,7 @@ def test_typed_gpu_usage_consumes_the_shared_allowance(tmp_path):
         stage_id="model",
         slurm_job_id="9801",
         gpu_count=1,
+        cpu_cores=1,
         started_at=at,
         gres="gpu:a100:1",
     )
@@ -407,6 +409,7 @@ def test_a_different_class_does_not_open_a_second_budget(tmp_path):
         stage_id="model",
         slurm_job_id="9802",
         gpu_count=1,
+        cpu_cores=1,
         started_at=at,
         gres="gpu:a100:1",
     )

@@ -402,6 +402,7 @@ def _create_job(
     stage_callback=None,
     username: str = "",
     resource_policy: ResolvedResources | None = None,
+    allocation_dispatched_callback=None,
     allocation_started_callback=None,
     allocation_finished_callback=None,
 ) -> Job:
@@ -422,6 +423,7 @@ def _create_job(
         # The deployment's Runtime Bundle store, so the adapter resolves the
         # task's pinned digest exactly where the submission path recorded it.
         runtime_bundle_root=CONFIG.runtime_bundle_root,
+        allocation_dispatched_callback=allocation_dispatched_callback,
         allocation_started_callback=allocation_started_callback,
         allocation_finished_callback=allocation_finished_callback,
     )
@@ -433,7 +435,7 @@ def _gpu_count(resource_policy: ResolvedResources) -> int:
     return rloan.units_for_gres(resource_policy.gres)
 
 
-def _gpu_allocation_callbacks(
+def _compute_allocation_callbacks(
     *,
     task_id: str,
     user_id: int,
@@ -441,10 +443,31 @@ def _gpu_allocation_callbacks(
     resource_policy: ResolvedResources,
     required_entitlements: tuple[str, ...] = (),
     runner_family: str = "",
-) -> tuple[Any, Any]:
+) -> tuple[Any, Any, Any]:
+    """The three resource-accounting edges of one Slurm allocation.
+
+    ``dispatched`` fires once the scheduler accepted the request: the Task's
+    admission reservation stops being a pre-dispatch hold and becomes a
+    scheduler-owned commitment, so a long queue wait can never free entitlement
+    the request is about to consume.
+
+    ``started`` fires when the allocation is observably running: it records the
+    allocation the balance is actually charged for (which releases the
+    reservation — the allocation, not the reservation, is the charge) and lets
+    the wrapper proceed.
+
+    ``finished`` settles.  Settlement always happens for an allocation that
+    started, whatever the outcome: a failed or cancelled allocation consumed its
+    CPUs and GPUs for the time they were held, so its measured elapsed time is a
+    real charge and only *unknown* evidence stays unsettled.
+    """
     gpu_count = _gpu_count(resource_policy)
-    if not gpu_count:
-        return None, None
+    cpu_cores = max(1, int(resource_policy.cpus or 0))
+
+    def dispatched(slurm_job_id: str, _dispatched_at: float) -> None:
+        if user_id <= 0:
+            return
+        task_store.record_reservation_dispatch(task_id=task_id)
 
     def started(slurm_job_id: str, started_at: float) -> None:
         try:
@@ -457,6 +480,7 @@ def _gpu_allocation_callbacks(
                 stage_id=stage_id,
                 slurm_job_id=slurm_job_id,
                 gpu_count=gpu_count,
+                cpu_cores=cpu_cores,
                 started_at=started_at,
                 required_entitlements=required_entitlements,
                 gres=resource_policy.gres or "",
@@ -535,10 +559,10 @@ def _gpu_allocation_callbacks(
             slurm_job_id=slurm_job_id,
             user_id=user_id,
             gpu_count=gpu_count,
-            gpu_seconds=int(allocation["quantity"]),
+            gpu_seconds=int(allocation["quantity"] or 0),
         )
 
-    return started, finished
+    return dispatched, started, finished
 
 
 def _run_compute_job(
@@ -552,16 +576,13 @@ def _run_compute_job(
     resource_policy: ResolvedResources | None = None,
 ) -> JobState:
     """Submit and poll through the production Slurm adapter."""
-    started_callback = finished_callback = None
+    dispatched_callback = started_callback = finished_callback = None
     stored_task = task_store.get_task(task_id) or {}
     submitted_by_user_id = int(stored_task.get("submitted_by_user_id") or 0)
-    if (
-        resource_policy is not None
-        and resource_policy.requires_gpu
-        and submitted_by_user_id > 0
-    ):
-        task_store.require_compute_entitlement(submitted_by_user_id)
-        started_callback, finished_callback = _gpu_allocation_callbacks(
+    if resource_policy is not None and submitted_by_user_id > 0:
+        if resource_policy.requires_gpu:
+            task_store.require_compute_entitlement(submitted_by_user_id)
+        dispatched_callback, started_callback, finished_callback = _compute_allocation_callbacks(
             task_id=task_id,
             user_id=submitted_by_user_id,
             stage_id=tt.name,
@@ -578,6 +599,7 @@ def _run_compute_job(
         stage_callback,
         username=username,
         resource_policy=resource_policy,
+        allocation_dispatched_callback=dispatched_callback,
         allocation_started_callback=started_callback,
         allocation_finished_callback=finished_callback,
     )
@@ -633,19 +655,19 @@ def _run_compute_workflow(
         first_marker = next(iter(markers))
         if not task_store.update_task(task_id, status="queued", run_stage=first_marker):
             return JobState.CANCELLED
-        started_callback = finished_callback = None
-        if policy.requires_gpu:
-            user_id = int(task.get("submitted_by_user_id") or 0)
-            if user_id > 0:
+        dispatched_callback = started_callback = finished_callback = None
+        user_id = int(task.get("submitted_by_user_id") or 0)
+        if user_id > 0:
+            if policy.requires_gpu:
                 task_store.require_compute_entitlement(user_id)
-                started_callback, finished_callback = _gpu_allocation_callbacks(
-                    task_id=task_id,
-                    user_id=user_id,
-                    stage_id=stage.name,
-                    resource_policy=policy,
-                    required_entitlements=(tt.runtime.access_policy.requires if tt.runtime.access_policy else ()),
-                    runner_family=tt.runtime.name,
-                )
+            dispatched_callback, started_callback, finished_callback = _compute_allocation_callbacks(
+                task_id=task_id,
+                user_id=user_id,
+                stage_id=stage.name,
+                resource_policy=policy,
+                required_entitlements=(tt.runtime.access_policy.requires if tt.runtime.access_policy else ()),
+                runner_family=tt.runtime.name,
+            )
         job = _create_job(
             task_id,
             stage_tt,
@@ -655,6 +677,7 @@ def _run_compute_workflow(
             stage_callback,
             username=task.get("username", ""),
             resource_policy=policy,
+            allocation_dispatched_callback=dispatched_callback,
             allocation_started_callback=started_callback,
             allocation_finished_callback=finished_callback,
         )
@@ -1501,6 +1524,14 @@ def _build_results_archive(task: dict) -> str:
 
 
 def _finalize_failed_results(task: dict, error: Any, *, finished_at: float) -> None:
+    task_id = str(task.get("md5sum") or "")
+    if task_id and not _data_still_owned(task_id):
+        # A completed purge is authoritative over this worker's failure report.
+        # Creating the tree first and letting publication refuse it would leave
+        # an unpaid, unpublished ``task_failed.txt`` no charge accounts for, so
+        # ownership is decided before anything is written.
+        logging.info("Task %s data is no longer owned; skipping failure report", task_id)
+        return
     try:
         result_dir = _task_result_dir(task)
     except ValueError:
@@ -2168,7 +2199,7 @@ def _parse_scontrol_job(output: str) -> tuple[str, int | None]:
     return state, elapsed
 
 
-def _reconcile_gpu_allocations() -> dict[str, int]:
+def _reconcile_slurm_allocations() -> dict[str, int]:
     """Settle lost finish callbacks from best-effort ``scontrol`` evidence.
 
     The target deployment runs without Slurm accounting storage, so recovery
@@ -2179,8 +2210,11 @@ def _reconcile_gpu_allocations() -> dict[str, int]:
     allocations = task_store.list_unsettled_allocations()
     result = {"settled": 0, "active": 0, "review": 0}
     scontrol = shutil.which("scontrol")
-    for allocation in allocations:
-        job_id = str(allocation["slurm_job_id"])
+    # One scheduler question per Slurm job, not per accounting unit: a job's GPU
+    # and CPU facts settle from the one authoritative elapsed duration that
+    # question answers.
+    job_ids = list(dict.fromkeys(str(allocation["slurm_job_id"]) for allocation in allocations))
+    for job_id in job_ids:
         if not scontrol:
             task_store.mark_allocation_for_review(job_id)
             result["review"] += 1
@@ -2217,11 +2251,68 @@ def _reconcile_gpu_allocations() -> dict[str, int]:
             slurm_job_id=job_id,
             user_id=int(settled["subject_id"]),
             gpu_count=int(settled["resource_count"]),
-            gpu_seconds=int(settled["quantity"]),
+            gpu_seconds=int(settled["quantity"] or 0),
             reason_code=LedgerReason.SLURM_LIVE.value,
         )
         result["settled"] += 1
     return result
+
+
+def _reclaim_abandoned_reservations(*, now: float | None = None) -> int:
+    """Free scheduler-owned reservations whose Slurm request no longer exists.
+
+    The complement of :func:`_reconcile_slurm_allocations`: that pass settles
+    allocations that *did* start, this one releases the reservation of a Task
+    whose request never produced an allocation and is provably gone from the
+    scheduler.  Both are evidence-driven.  A reservation whose Job is still
+    active in Slurm belongs to that Job and is left alone — that is the case a
+    bare timeout used to get wrong — and an ambiguous answer (no scheduler, or
+    an unreadable state) leaves the reservation committed rather than guessing.
+    Capacity is therefore returned as soon as the request is knowably gone, and
+    never merely because time passed.
+    """
+    timestamp = time.time() if now is None else now
+    reservations = task_store.list_queued_reservations()
+    if not reservations:
+        return 0
+    scontrol = shutil.which("scontrol")
+    released = 0
+    for reservation in reservations:
+        task_id = str(reservation["task_id"])
+        task = task_store.get_task(task_id)
+        job_id = str((task or {}).get("slurm_job_id") or "").strip()
+        if not job_id or not job_id.isdigit() or task is None:
+            # The request was never dispatched (or the Task row is gone), so
+            # there is nothing in the scheduler to keep the claim alive.  This
+            # reservation is not TTL-eligible any more, so it is freed here
+            # rather than leaked forever.
+            if task_store.reclaim_queued_reservation(
+                task_id=task_id, reason_code=ReservationReason.RELEASED.value, at=timestamp
+            ):
+                released += 1
+            continue
+        if not scontrol:
+            continue  # ambiguous: keep the commitment rather than guess
+        try:
+            completed = subprocess.run(
+                [scontrol, "show", "job", job_id],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=True,
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+        state, _elapsed = _parse_scontrol_job(completed.stdout)
+        if state in _ACTIVE_SLURM_STATES:
+            continue
+        if state not in _TERMINAL_SLURM_STATES:
+            continue
+        if task_store.reclaim_queued_reservation(
+            task_id=task_id, reason_code=ReservationReason.RELEASED.value, at=timestamp
+        ):
+            released += 1
+    return released
 
 
 def _recover_orphaned_tasks() -> int:
@@ -2471,9 +2562,14 @@ try:
                 logging.info("Handled %d orphaned task(s)", count)
             else:
                 logging.info("Recovery: no orphaned tasks found")
-            reconciliation = _reconcile_gpu_allocations()
-            if reconciliation["settled"] or reconciliation["review"]:
-                logging.info("GPU allocation reconciliation: %s", reconciliation)
+            reconciliation = _reconcile_slurm_allocations()
+            released = _reclaim_abandoned_reservations()
+            if reconciliation["settled"] or reconciliation["review"] or released:
+                logging.info(
+                    "Allocation reconciliation: %s (%d abandoned reservation(s) released)",
+                    reconciliation,
+                    released,
+                )
             publications = _reconcile_result_publications()
             unreadable = sum(
                 count for state, count in publications.items() if state != PUBLICATION_AVAILABLE
@@ -2509,10 +2605,17 @@ def probe_compute_infrastructure():
     return collect_infrastructure_evidence()
 
 
-@celery.task(name="reconcile_gpu_allocations", max_retries=0)
-def reconcile_gpu_allocations():
-    """Reconcile durable unsettled GPU allocations from worker-side Slurm evidence."""
-    return _reconcile_gpu_allocations()
+@celery.task(name="reconcile_slurm_allocations", max_retries=0)
+def reconcile_slurm_allocations():
+    """Reconcile durable unsettled allocations from worker-side Slurm evidence.
+
+    Two evidence-driven passes, no wall-clock guesswork: settle the allocations
+    the scheduler proves ran, then give back the entitlement of a queued request
+    the scheduler proves no longer exists.
+    """
+    outcome = _reconcile_slurm_allocations()
+    outcome["reservations_released"] = _reclaim_abandoned_reservations()
+    return outcome
 
 
 @celery.task(name="run_compute_task", bind=True, max_retries=0)

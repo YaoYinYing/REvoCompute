@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from revocompute import resource_ledger as rloan
@@ -375,17 +375,42 @@ def detect_drift(
                         repairable=True,
                     )
                 )
-    for record in task_store.list_reservations(state=rloan.ReservationState.HELD.value, limit=2000):
-        if float(record.get("expires_at") or 0.0) <= timestamp:
+    for record in task_store.list_live_reservations(limit=2000):
+        state = str(record["state"])
+        if state == rloan.ReservationState.HELD.value and float(
+            record.get("expires_at") or 0.0
+        ) <= timestamp:
             drift.append(
                 rloan.ReconciliationDrift(
                     kind="stale_reservation",
                     subject=str(record["task_id"]),
-                    detail="an admission hold outlived its TTL",
+                    detail="a pre-dispatch admission hold outlived its TTL",
+                    repairable=True,
+                )
+            )
+        elif state == rloan.ReservationState.QUEUED.value and not _request_may_exist(
+            task_store, record
+        ):
+            # A scheduler-owned commitment whose Task no longer names a Slurm
+            # request cannot be waiting in a queue: there is nothing to wait for,
+            # so the claim on entitlement would leak.  Repairing it is the
+            # worker's evidence-driven reclaim, not a timeout, so this pass only
+            # reports it.
+            drift.append(
+                rloan.ReconciliationDrift(
+                    kind="queued_reservation_without_request",
+                    subject=str(record["task_id"]),
+                    detail="a scheduler-owned commitment has no Slurm request to justify it",
                     repairable=True,
                 )
             )
     return drift
+
+
+def _request_may_exist(task_store: TaskDatabase, record: Mapping[str, Any]) -> bool:
+    """Whether a queued commitment still has a Slurm request that could be live."""
+    task = task_store.get_task(str(record["task_id"]))
+    return bool(task) and bool(str((task or {}).get("slurm_job_id") or "").strip())
 
 
 def reconcile_resources(
@@ -397,26 +422,30 @@ def reconcile_resources(
 ) -> rloan.ReconciliationReport:
     """Run one bounded reconciliation pass.  Safe to repeat.
 
-    ``settle_allocations`` is the worker-side scheduler-evidence step (the
-    ``scontrol`` recovery); it is optional so this pass is still meaningful on a
-    host with no scheduler, and it is never allowed to charge an ambiguous
-    allocation.  ``owned_paths`` is the storage-layout measurement the
-    filesystem-vs-accounting drift checks need; without it those checks are
-    skipped rather than guessed.
+    ``settle_allocations`` is the worker-side scheduler-evidence step: it settles
+    allocations ``scontrol`` proves ran and frees the reservations it proves are
+    gone.  It is optional so this pass is still meaningful on a host with no
+    scheduler, and it is never allowed to charge an ambiguous allocation —
+    ``expire_stale_reservations`` here only reclaims pre-dispatch holds, never a
+    scheduler-owned commitment.  ``owned_paths`` is the storage-layout
+    measurement the filesystem-vs-accounting drift checks need; without it those
+    checks are skipped rather than guessed.
     """
     timestamp = time.time() if now is None else now
-    settled = review = active = 0
+    settled = review = active = released = 0
     if settle_allocations is not None:
         outcome = settle_allocations() or {}
         settled = int(outcome.get("settled", 0))
         review = int(outcome.get("review", 0))
         active = int(outcome.get("active", 0))
+        released = int(outcome.get("reservations_released", 0))
     expired = task_store.expire_stale_reservations(now=timestamp)
     report = rloan.ReconciliationReport(
         settled_allocations=settled,
         review_allocations=review,
         active_allocations=active,
         expired_reservations=expired,
+        reclaimed_reservations=released,
         drift=tuple(detect_drift(task_store, now=timestamp, owned_paths=owned_paths)),
     )
     _emit(
