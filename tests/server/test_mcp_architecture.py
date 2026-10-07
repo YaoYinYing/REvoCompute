@@ -38,8 +38,43 @@ FORBIDDEN_PREFIXES = (
     'revocompute_ctl',
     # Operator maintenance tasks.
     'revocompute.maintenance',
+    # The Runner fleet control plane: Operator Jobs, the Admin operator service,
+    # planned activation/rollback, readiness derivation, typed host actions, and
+    # the host command executor they all terminate in.  The scientific MCP
+    # surface is a protocol projection, not a second operator plane, so reaching
+    # any of these is the drift this gate exists to stop.
+    'revocompute.operator_actions',
+    'revocompute.operator_executor',
+    'revocompute.operator_jobs',
+    'revocompute.operator_jobs_schema',
+    'revocompute.operator_plan',
+    'revocompute.operator_service',
+    'revocompute.runner_admin_view',
+    'revocompute.runner_promotion',
+    'revocompute.runner_readiness',
+    'revocompute.compose',
     # Raw process execution.
     'subprocess',
+)
+
+#: Canonical modules that are operator/administrative surfaces.  The adapter
+#: must not name them directly: it projects the scientific surface only, and the
+#: readiness/admission it does consume arrives through the canonical submission
+#: and tool paths, never by reaching into #55's operator internals.
+_OPERATOR_SURFACES = frozenset(
+    {
+        'revocompute.operator_actions',
+        'revocompute.operator_executor',
+        'revocompute.operator_jobs',
+        'revocompute.operator_jobs_schema',
+        'revocompute.operator_plan',
+        'revocompute.operator_service',
+        'revocompute.runner_admin_view',
+        'revocompute.runner_promotion',
+        'revocompute.runner_readiness',
+        'revocompute.compose',
+        'revocompute.routes',
+    }
 )
 
 
@@ -144,6 +179,9 @@ def test_adapter_reaches_the_application_only_through_canonical_modules():
     for path in _mcp_modules():
         for module in _imports(path):
             if not module.startswith('revocompute'):
+                continue
+            if module in _OPERATOR_SURFACES:
+                violations.append(f'{path.name}: operator surface {module}')
                 continue
             top = '.'.join(module.split('.')[:2])
             if top not in allowed and module not in allowed:

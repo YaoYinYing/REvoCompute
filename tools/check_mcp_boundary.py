@@ -37,6 +37,20 @@ FORBIDDEN_PREFIXES = (
     "revocompute.tool_runtime_manager",
     "revocompute_ctl",
     "revocompute.maintenance",
+    # The Runner fleet control plane: Operator Jobs, the Admin operator service,
+    # planned activation/rollback, readiness derivation, and typed host actions.
+    "revocompute.operator_actions",
+    "revocompute.operator_executor",
+    "revocompute.operator_jobs",
+    "revocompute.operator_jobs_schema",
+    "revocompute.operator_plan",
+    "revocompute.operator_service",
+    "revocompute.runner_admin_view",
+    "revocompute.runner_promotion",
+    "revocompute.runner_readiness",
+    # Host command execution for the control plane.
+    "revocompute.compose",
+    # Raw process execution.
     "subprocess",
 )
 
