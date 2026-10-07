@@ -177,18 +177,35 @@ are telemetry and are deliberately not the accounting fact.
 Admission takes a reservation before dispatch, and that reservation is the
 Task's own authority at allocation start: the hold which admitted a submission
 is not also counted against it, so a Task holding the period's final second is
-never refused by its own reservation. The start decision is one transactional
-transition — it consumes that reservation and records the allocation together,
-while every *other* Task's committed reservation and every unsettled allocation
-still counts against the balance. A reservation has two ownership modes: a
-pre-dispatch hold with a TTL, and a scheduler-owned commitment, from the moment
-the Slurm request exists, which no wall-clock timeout may reclaim because the
-request may legitimately still be queued. The commitment records the scheduler's
-own job id in the same write that makes it scheduler-owned, so a reservation is
-never queued without the identity that names its request, and reconciliation
-decides whether to free it from that identity and the scheduler's answer — never
-from a Task-row handle that is persisted separately, and never from elapsed
-time. A commitment the scheduler proves is gone is released by that evidence.
+never refused by its own reservation. Every *other* Task's committed reservation
+and every unsettled allocation still counts against the balance. A reservation
+has two ownership modes: a pre-dispatch hold with a TTL, and a scheduler-owned
+commitment, from the moment the Slurm request exists, which no wall-clock
+timeout may reclaim because the request may legitimately still be queued. The
+commitment records the scheduler's own job id in the same write that makes it
+scheduler-owned, so a reservation is never queued without the identity that
+names its request, and reconciliation decides whether to free it from that
+identity and the scheduler's answer — never from a Task-row handle that is
+persisted separately, and never from elapsed time. A commitment the scheduler
+proves is gone is released by that evidence, but a commitment over a request
+that already has a recorded allocation is settled from that evidence instead:
+the claim is consumed by the allocation, never handed back as if nothing ran.
+
+### The allocation fact and the admission grant are separate
+
+The scheduler handing over resources is a fact; whether a subject may run the
+scientific command is a policy decision. The two are recorded separately, so a
+policy outcome can never rewrite the scheduler's fact. Recording the allocation
+writes one active fact per accounting unit first, unconditionally and
+idempotently, keyed by the scheduler's job id. The grant decision then runs in
+the same transaction and records its outcome *on* that fact: `granted`, a
+bounded `denial_code`, and the instant it was adjudicated. A denied allocation
+stays active and is still settled for what the wrapper actually held; the
+scientific command is withheld, not the fact erased. Running out of credit, an
+unavailable authorization, or a runner that is not ready are all denials of the
+grant, never of the allocation. A retry — after a crash, a duplicate callback,
+or a workflow re-entry — reads the recorded decision instead of making a second
+one against a balance the first already moved.
 
 Knowing a scheduler job id is not the same as holding an allocation. The
 wrapper publishes its job id as soon as it starts, and that identity alone
@@ -198,6 +215,14 @@ scheduler's own state that its job is `RUNNING` and reports that before it runs
 the scientific command. A request that waits in the queue, or is cancelled
 before it ever runs, therefore charges nothing and holds nothing after the
 release, however long it waited.
+
+The wrapper printing its *own* job id is itself execution evidence, because it
+can only do so from inside the allocation. That earliest evidence is persisted
+the instant it is read, before and independently of the admission decision, so a
+process failure between the observation and the grant leaves a settleable fact
+rather than a request the server would later downgrade to "reservation only".
+The observation carries unknown elapsed time, never zero, and the later start
+completes the same fact under full lifecycle provenance.
 
 Immediately before approving a real GPU allocation, the worker atomically
 checks the current server-published account, GPU-permission, entitlement, and
