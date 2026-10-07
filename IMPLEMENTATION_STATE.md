@@ -752,6 +752,42 @@ published-artifact identity contract:
   substitution, and a manifest path escaping the result root each fail the archive
   closed.
 
+## Consumer descriptor binding (rebased head)
+
+The invariant is now enforced at every published-result consumer: *after
+publication identity has been verified, a consumer must consume the verified
+object/descriptor, not reopen its pathname.*
+
+- `StorageResolver.resolve_artifact` returns the verified open descriptor
+  (`verified_stream`) alongside the manifest entry. The direct Result download,
+  the ndarray projection, and the table preview read from that descriptor; the
+  download no longer delegates an `X-Accel-Redirect`, which would have nginx
+  reopen the mutable pathname. Single-`bytes` Range reads are served from the
+  same descriptor (206 + `Content-Range`, 416 when unsatisfiable), HEAD still
+  returns 200, and the tradeoff is recorded in the route: keeping the offload
+  would need an immutable publication store, which is out of scope here.
+- `read_array_projection` takes the verified binary stream plus the artifact
+  name for suffix dispatch: JSON reads a bounded descriptor chunk, CSV/TSV wrap
+  the descriptor in a `TextIOWrapper`, NPY bound-checks the header on the
+  descriptor before seeking to the data offset and calling `read_array` (no
+  pathname mmap, no unbounded read before the size check), and NPZ opens
+  `zipfile.ZipFile` over the descriptor.
+- `_tool_task_artifact` materializes through `materialize_stream` from the
+  verified handle, and `_build_results_archive` writes the exact manifest bytes
+  it verified.
+- `StorageResolver.load_manifest`/`read_manifest_bytes` are the single manifest
+  authority (`O_NOFOLLOW`, `fstat`, `S_ISREG`, `st_nlink == 1`, bounded size);
+  `/compute/api/results/<task>/files/<file_id>` consumes it instead of a plain
+  pathname open. `ArtifactIdentityError` derives from `OSError`, so every
+  existing fail-closed branch covers it with no second contract.
+- Regression evidence: replaced bytes refuse the direct download and the
+  projection (a replacement injected between resolution and parse still projects
+  the original descriptor), a single bounded Range is served from the verified
+  descriptor, a Task artifact replaced between resolution and Tool
+  materialization cannot enter the Tool workspace, the archive writes the
+  manifest bytes it verified, and the `/files/` route fails closed on a
+  symlinked or hard-linked manifest.
+
 ## Named follow-ups (tracked, not silent)
 
 - `validator_revision()` reports `sha256:unavailable` when a boundary source
