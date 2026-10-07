@@ -464,7 +464,7 @@ def _compute_allocation_callbacks(
     gpu_count = _gpu_count(resource_policy)
     cpu_cores = max(1, int(resource_policy.cpus or 0))
 
-    def dispatched(slurm_job_id: str, _dispatched_at: float) -> None:
+    def dispatched(slurm_job_id: str, dispatched_at: float, wrapper_executed: bool = False) -> None:
         if user_id <= 0:
             return
         # The scheduler identity is persisted as part of this same transition,
@@ -472,36 +472,54 @@ def _compute_allocation_callbacks(
         # maintenance pass reading it can never conclude "no request exists"
         # during the window before the Task row is updated.
         task_store.record_reservation_dispatch(task_id=task_id, slurm_job_id=str(slurm_job_id))
-
-    def started(slurm_job_id: str, started_at: float) -> None:
-        try:
-            if runner_family and not resolve_submission_readiness(CONFIG.server_dir, runner_family).ready:
-                raise GPUAuthorizationUnavailableError("Runner readiness is unavailable")
-            # The quota decision is made *by* this call, inside one transaction
-            # that also consumes the Task's own reservation and records the
-            # allocation.  There is deliberately no separate entitlement read
-            # here: a bare read cannot see that the hold which admitted this Task
-            # is the Task's own authority, and would refuse it for holding the
-            # final entitlement.
-            entitlement = task_store.record_allocation_start(
+        # The wrapper's own stdout id line — not the srun stderr banner — obtains
+        # its scheduler identity *inside* the allocation, so seeing it is already
+        # evidence the wrapper occupied a compute node.  That fact is persisted
+        # here, before and independently of the admission decision, so a crash
+        # between the observation and the grant cannot leave a genuinely executed
+        # request recorded as "reservation only".  Recording it is idempotent and
+        # cheap; ``record_allocation_start`` later promotes the same rows and
+        # makes the grant decision.
+        if wrapper_executed:
+            task_store.observe_allocation_start(
                 user_id=user_id,
                 task_id=task_id,
                 stage_id=stage_id,
-                slurm_job_id=slurm_job_id,
+                slurm_job_id=str(slurm_job_id),
                 gpu_count=gpu_count,
                 cpu_cores=cpu_cores,
-                started_at=started_at,
-                required_entitlements=required_entitlements,
+                started_at=dispatched_at,
                 gres=resource_policy.gres or "",
             )
-        except (GPUAuthorizationUnavailableError, GPUCreditUnavailableError) as exc:
-            reason_code = AdmissionReason.COMPUTE_EXHAUSTED.value
-            if isinstance(exc, GPUAuthorizationUnavailableError):
-                reason_code = (
-                    AdmissionReason.RUNNER_READINESS_UNAVAILABLE.value
-                    if str(exc) == "Runner readiness is unavailable"
-                    else AdmissionReason.AUTHORIZATION_UNAVAILABLE.value
-                )
+
+    def started(slurm_job_id: str, started_at: float) -> None:
+        # Runner readiness is checked here because only the caller knows the
+        # runner family, but the outcome is handed to the store as the grant
+        # decision: the allocation fact is written first and unconditionally, so
+        # a not-ready runner denies the *command* without erasing the allocation
+        # the scheduler already handed this Task.
+        denied_reason = None
+        if runner_family and not resolve_submission_readiness(CONFIG.server_dir, runner_family).ready:
+            denied_reason = "Runner readiness is unavailable"
+        # The allocation is recorded here — fact first, then the grant decision
+        # in the same transaction.  There is deliberately no separate entitlement
+        # read: a bare read cannot see that the hold which admitted this Task is
+        # the Task's own authority, and would refuse it for holding the final
+        # entitlement.
+        entitlement = task_store.record_allocation_start(
+            user_id=user_id,
+            task_id=task_id,
+            stage_id=stage_id,
+            slurm_job_id=slurm_job_id,
+            gpu_count=gpu_count,
+            cpu_cores=cpu_cores,
+            started_at=started_at,
+            required_entitlements=required_entitlements,
+            denied_reason=denied_reason,
+            gres=resource_policy.gres or "",
+        )
+        if not entitlement.get("granted", True):
+            reason_code = str(entitlement.get("reason_code") or AdmissionReason.COMPUTE_EXHAUSTED.value)
             emit_event(
                 "resource.admission.denied",
                 level="WARNING",
@@ -513,7 +531,7 @@ def _compute_allocation_callbacks(
                 gpu_count=gpu_count,
                 gpu_seconds=0,
             )
-            raise
+            raise GPUCreditUnavailableError(reason_code)
         emit_event(
             "resource.admission.checked",
             task_id=task_id,
@@ -620,12 +638,13 @@ def _run_compute_job(
         if isinstance(job, SlurmJob):
             task_store.update_task(task_id, slurm_job_id=jid)
     state = job.poll()
-    if isinstance(job, SlurmJob) and not job.allocation_started:
-        # The request never held a running allocation: it was queued and then
-        # cancelled, rejected, or lost.  No allocation was ever recorded for it,
-        # so its scheduler-owned reservation would otherwise stay committed
-        # forever.  Release it now.  A request that did run had its reservation
-        # consumed by the allocation start, so this release is a no-op there.
+    if isinstance(job, SlurmJob) and not job.wrapper_executed:
+        # The request produced no allocation evidence: it was queued and then
+        # cancelled, rejected, or lost, and no wrapper ever executed.  Its
+        # scheduler-owned reservation would otherwise stay committed forever, so
+        # it is given back here.  A request whose wrapper did execute already has
+        # a durable allocation fact (and a consumed reservation), so this release
+        # is skipped rather than denying resources that were really held.
         task_store.release_reservation(
             task_id=task_id, reason_code=ReservationReason.RELEASED.value, at=time.time()
         )
@@ -712,11 +731,11 @@ def _run_compute_workflow(
             job.cancel()
             return JobState.CANCELLED
         result = job.poll()
-        if isinstance(job, SlurmJob) and not job.allocation_started:
-            # This stage never held a running allocation, so no allocation fact
-            # exists for it and the Task's scheduler-owned reservation (if it is
-            # still the one from the first stage) must go back rather than stay
-            # committed with nothing left to consume it.
+        if isinstance(job, SlurmJob) and not job.wrapper_executed:
+            # This stage never produced allocation evidence, so no allocation
+            # fact exists for it and the Task's scheduler-owned reservation (if it
+            # is still the one from an earlier stage that was never dispatched)
+            # goes back rather than staying committed with nothing to consume it.
             task_store.release_reservation(
                 task_id=task_id, reason_code=ReservationReason.RELEASED.value, at=time.time()
             )
@@ -2328,6 +2347,13 @@ def _reclaim_abandoned_reservations(*, now: float | None = None) -> int:
             continue
         if not job_id or not job_id.isdigit():
             continue  # no scheduler identity: ambiguous, keep the commitment
+        if task_store.allocation_row_exists(job_id):
+            # The wrapper's own evidence already recorded an allocation for this
+            # request — possibly before the process that was watching it died.
+            # The scheduler step below is what settles it from authoritative
+            # elapsed time; this pass must never free the claim underneath an
+            # allocation that is known to have occupied resources.
+            continue
         if not scontrol:
             continue  # ambiguous: keep the commitment rather than guess
         try:
