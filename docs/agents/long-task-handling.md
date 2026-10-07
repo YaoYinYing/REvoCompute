@@ -461,6 +461,47 @@ owner. The Commander does not merge or squash-merge unless the launch
 instruction explicitly grants that authority; the normal endpoint is
 `READY_FOR_FINAL_REVIEW`.
 
+#### Control-plane quiescence
+
+The Commander is a control plane, not a permanently resident worker. Its durable
+control state stays small and reconstructable — merge status, broad blocker
+category, owner, Advisor assessment, exact head, CI/acceptance state, and
+material dependencies/leases — so that detail lives in PR threads (see Findings
+live in PR threads) rather than in a large private working set.
+
+When no immediate coordination decision exists, the Commander checkpoints that
+state, confirms active owners and dependencies are known, and yields its active
+slot to executable implementation, review, or validation work. Where the harness
+cannot literally suspend an agent, it approximates this by ending the active
+turn after checkpointing and recovering from GitHub plus durable campaign state
+on the next invocation.
+
+A quiescent Commander resumes only on a bounded set of wake events:
+
+```text
+WAKE
+owner checkpoint or READY_FOR_FINAL_REVIEW
+a new reviewer blocker
+a new commit to an active PR
+CI completion needing classification
+an upstream merge
+a dependency becoming satisfiable
+a shared-resource or deployment-lease request
+an owner escalation
+a material Advisor advisory
+a maintainer instruction
+```
+
+This is the coordination subset of the Dynamic-orchestration re-evaluation
+events: a wake resumes coordination, while DAG re-evaluation itself is governed
+there.
+
+None of the following is Commander work: waiting for subagents, polling with no
+new event, rewriting the same campaign summary, requesting status before an owner
+has produced a checkpoint, speculatively replanning an unchanged DAG, or
+manufacturing auxiliary work to hold a slot. Busy polling to emulate presence is
+forbidden; react to state changes instead.
+
 ### Maintainer attention is a scarce campaign resource
 
 A Campaign must optimize not only implementation throughput and correctness but
@@ -593,6 +634,13 @@ Commander. It has no implementation, deployment, merge, or routine approval
 authority. Platform-wide concurrency limits still apply and the Advisor consumes a
 slot like any other agent.
 
+The Advisor is subject to the same slot economics as the Commander. "The Advisor
+must remain active" means the role stays instantiated and available across the
+whole Campaign, not that it must hold an execution slot while it has no advisory
+question, checkpoint, or evidence to inspect. When it has none, it checkpoints
+any pending advisory and yields its slot like the Commander, and re-engages when
+an event or a human request makes its independent challenge useful.
+
 The Advisor spans the full Campaign lifecycle but is not a mandatory gate on any
 PR. It performs:
 
@@ -674,29 +722,36 @@ this evidence can be smaller
 ### Concurrency budget
 
 The hard ceiling is six total slots. Five useful active slots is the normal
-target, not merely an upper bound: typically one Commander, up to three
-implementation owners, and one active reviewer/integration agent. The sixth slot
-is elastic and preemptible — borrowed temporarily for review, specialist
-validation, debugging, or another eligible implementation PR, and released or
-preempted the moment replacement, recovery, or urgent-coordination capacity is
-actually needed. Do not leave the sixth slot idle merely to preserve a nominal
-reserve, and do not treat six-of-six saturation as a goal: idle is correct when no
-useful, conflict-free work exists. Prefer at most three implementation PRs in
-flight — more PRs may exist in the Campaign but stay queued until capacity or
-dependency order allows them to start (see Dynamic orchestration for how that
-eligibility is decided). A specialist reuses or releases another slot rather than
-becoming a seventh participant. If the launch context supplies a different
-current limit, that limit overrides the default.
+target, not merely an upper bound: typically up to three implementation owners,
+one or two active reviewers/integration agents, and coordination that is actually
+required at the moment. No slot — including the Commander's — is permanently
+reserved: the Commander and the Advisor occupy a slot only while executing
+coordination or worth-it campaign-level work, and yield it when quiescent (see
+Control-plane quiescence). One slot stays elastic and preemptible, borrowed
+temporarily for review, specialist validation, debugging, or another eligible
+implementation PR, and released the moment replacement, recovery, or
+urgent-coordination capacity is needed. Do not leave a slot idle merely to
+preserve a nominal reserve, and do not treat six-of-six saturation as a goal:
+idle is correct when no useful, conflict-free work exists. Prefer at most three
+implementation PRs in flight — more PRs may exist in the Campaign but stay queued
+until capacity or dependency order allows them to start (see Dynamic orchestration
+for how that eligibility is decided). A specialist reuses or releases another
+slot rather than becoming a seventh participant. If the launch context supplies a
+different current limit, that limit overrides the default.
 
 When a slot is free, prefer the work in this order:
 
 ```text
-1. review of a fresh coherent checkpoint
-2. specialist validation
-3. unblock / debug
-4. another eligible implementation PR
-5. idle
+1. implementation / blocker resolution on an eligible PR
+2. merge-grade or checkpoint review with fresh evidence
+3. specialist validation / integration evidence
+4. bounded coordination that unlocks or reconciles work
+5. passive monitoring
+6. idle
 ```
+
+A dormant Commander is preferable to an occupied slot while executable campaign
+work is queued.
 
 ### Dynamic orchestration
 
@@ -1049,6 +1104,131 @@ not spend multiple slots duplicating one review. The three-perspective Pre-final
 review cell is the one place a substantive PR is reviewed from three independent
 angles at once, and only at implementation-complete. The rule in `CLAUDE.md`
 against retriggering automated review after every small push still applies.
+
+#### Review risk tiers
+
+Scale review effort to systemic risk rather than applying one review depth
+everywhere. This is a scheduling aid, not a new label or metadata file.
+
+```text
+R1  low systemic risk       prose/docs, local copy changes, visual polish with
+                            preserved behavior, bounded fixtures, non-semantic
+                            metadata -> ordinary independent review
+R2  ordinary implementation ordinary API behavior, Runner adapters, bounded
+    risk                    business logic, protocol projections, non-privileged
+                            state -> independent correctness review at exact head
+R3  system-boundary risk    security/trust boundaries, auth/authz, filesystem
+                            publication, persistent state, database transactions,
+                            quota/accounting, concurrency, scheduler lifecycle,
+                            privileged control-plane operations, irreversible
+                            migrations, cross-process crash recovery
+                            -> merge-grade, fresh-framing, counterexample-driven
+                            adversarial review at a high reasoning budget
+```
+
+#### Reviewer quality and independence
+
+A reviewer is not merge-grade merely because it is independent of the
+implementation worktree. Review quality has separate dimensions — model and
+reasoning capability, context independence, review mandate, review budget, access
+to primary evidence, and the ability to reject the existing framing. The reviewer
+of a high-risk PR must not be intentionally weaker than the implementation owner
+because review looks cheaper; for system-boundary PRs, prefer the strongest
+reasoning configuration the campaign can afford, and avoid a topology in which
+implementation, review, and final challenge all inherit the same model, framing,
+and author summary — one strong independent challenge beats several correlated
+shallow reviews. Do not encode vendor-specific model names in this protocol.
+
+#### Fresh-context merge review
+
+The merge-grade reviewer for R3 work minimizes framing inheritance. Prefer this
+evidence order:
+
+```text
+governing invariants
+-> current main / base
+-> exact PR diff and runtime/data-flow
+-> tests and acceptance evidence
+-> PR review threads
+-> owner / Commander READY summaries
+```
+
+The reviewer forms an independent failure model before reading the author's
+conclusion that the PR is ready. A reviewer may conclude that the implementation
+satisfies the stated TODO while the TODO or acceptance model still misses a
+system invariant, without being out of scope.
+
+#### Counterexamples and transition evidence
+
+Merge review of R3 work attempts to falsify the design rather than confirm
+expected behavior. Consider the categories materially relevant to the changed
+boundary and construct at least one plausible counterexample sequence before
+declaring the PR clean:
+
+```text
+TOCTOU
+crash between adjacent state transitions
+duplicate / replayed / out-of-order events
+lost acknowledgements
+concurrent actors and stale snapshots
+authority duplication or self-authorizing metadata
+unknown interpreted as zero
+identity / event conflation
+cleanup / reconciliation races
+partial persistence, or retry after partial side effects
+```
+
+For lifecycle, scheduler, accounting, cleanup, migration, or operator-control
+changes, review the transition edges, not only the states. For each material edge
+`State A --[physical evidence / durable event]--> State B` the reviewer asks who
+triggers it, what physical evidence proves it, where that evidence becomes
+durable, what a crash immediately before or after does, whether the event can
+repeat or arrive out of order, and how reconciliation distinguishes the resulting
+cases. A state model with correct nouns but incorrect transition evidence is not
+merge-ready.
+
+#### READY is non-transitive
+
+Owner `READY_FOR_FINAL_REVIEW`, Advisor confidence, a prior reviewer's approval,
+and green CI are evidence; none implies merge-ready by itself. A merge-grade
+reviewer forms its own verdict against the exact current head, and any material
+new commit invalidates exact-head evidence that depended on the previous head.
+Do not rerun a full expensive review for a trivial docs-only change when the
+reviewer can bound the invalidated evidence precisely, but never carry a
+correctness or security verdict across a material code change by assumption.
+
+#### Findings live in PR threads
+
+The PR review thread is the canonical detailed technical record of a finding;
+Commander control state carries only the compact coordination summary described
+in Control-plane quiescence. When a reviewer finds a blocker, it writes the
+finding and its evidence to the PR thread and tells the Commander only whether
+the PR may merge and the broad blocker class. The owning subagent then reads the
+thread itself, restates the finding in its own words, verifies it against the
+exact current head, makes the smallest correct fix, adds regression or adversarial
+evidence that covers the governing invariant, and returns to
+`READY_FOR_FINAL_REVIEW`. The full technical review is not copied into campaign
+control state.
+
+The Advisor may independently check, while a finding is being resolved, whether
+the subagent understood the finding rather than patched its symptom, whether the
+fix stays inside the PR's scope and preserves the architectural owner without
+creating a second source of truth, whether the regression evidence covers the
+governing invariant, whether repeated review churn signals a missing
+campaign-level assumption, and whether the PR is converging toward merge or
+expanding into a framework. For R3 PRs and repeated conceptual blockers such an
+out-of-cycle challenge is expected rather than optional. The Advisor does not
+duplicate line-by-line findings, gate approval, or take implementation ownership.
+
+#### Review stopping rule
+
+Stop review when governing invariants are explicit, all known blocking findings
+are closed, the exact head has green required CI/acceptance evidence, a fresh
+merge-grade reviewer cannot construct a new material counterexample, the relevant
+transition/crash/adversarial cases have evidence, and the remaining observations
+are explicitly non-blocking hardening or future work. The goal is not to prove
+absence of all bugs but to have no known reason the exact head is unsafe or
+architecturally incorrect to merge.
 
 #### Checkpoint-driven review
 

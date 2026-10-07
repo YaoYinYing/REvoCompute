@@ -23,6 +23,7 @@ Guidance for work in the standalone REvoCompute repository.
 - For CUDA runners, match the direct Apptainer base and compiled wheels to the same CUDA minor version. Preserve validated dependency stacks in isolated SIFs unless a runner-specific test requires a change.
 - For long-running engineering tasks, read `LONG_TASK_HANDLING.md` for methodology guidance. When the work is a coordinated multi-PR effort — a Campaign, a Campaign Commander role, or an explicitly named PR group — read and follow its Multi-agent Campaign Protocol before assigning or editing work.
 - Parallel PR owners each work in an isolated worktree. When mutable execution state is needed, it must be PR-owned and never shared across concurrent worktrees. Shared campaign resources — deployment/live-test windows, review passes, and the agent-slot budget — are coordinated through the Campaign Commander, not consumed independently. `READY_FOR_FINAL_REVIEW` is the normal handoff point; do not merge unless the launch instruction grants it.
+- Campaign review is risk-tiered and its evidence is non-transitive: a system-boundary PR needs a merge-grade, fresh-framing, counterexample-driven reviewer against the exact head, and no owner READY, Advisor confidence, prior approval, or green CI substitutes for that. Control-plane roles (Commander, Advisor) yield their slot when no immediate decision exists rather than polling.
 
 ## Repository conventions
 
