@@ -152,12 +152,23 @@ bounded reconciliation pass, and it never decides on its own that data is old
 enough to delete.
 
 That interval is also what makes *recurring* allocation recovery periodic. A
-worker restart always runs one recovery pass (`worker_ready`), so a worker that
-comes back after a crash repairs itself immediately; a deployment that never
-restarts its worker, and leaves `RESOURCE_MAINTENANCE_SECONDS` at its default
-`0`, has no periodic pass at all — a receipt file left by a worker that died
-mid-allocation then waits for the next restart instead of being adopted within
-minutes. Deployments that care about that latency should set the interval.
+worker restart always runs one recovery pass (`worker_ready`), and each dispatch
+runs one before it asks the scheduler for a new allocation, so a worker that
+comes back after a crash repairs itself immediately and a worker that keeps
+running adopts a predecessor's evidence as soon as it next dispatches. A
+deployment that neither restarts nor dispatches for a long time, and leaves
+`RESOURCE_MAINTENANCE_SECONDS` at its default `0`, has no *periodic* pass at all
+— a receipt file left by a worker that died mid-allocation then waits for the
+next restart or the next dispatch instead of being adopted within minutes.
+Deployments that care about that latency should set the interval.
+
+The evidence those passes read lives in the host-only allocation namespace
+(`<results root>/users/<storage key>/tasks/<task id>.allocation/`), which is
+owned by the server and is not garbage-collected, deleted by result cleanup, or
+aged out before a recovery pass reads it. Recovery therefore assumes only that
+the directory survives until the next restart, dispatch, or maintenance pass —
+not that it survives indefinitely, because an operator who removes it by hand is
+removing the same evidence a recovery pass would have adopted.
 
 ## GPU Credits
 
@@ -267,13 +278,14 @@ per-job file in the same host-only directory the instant a job is allocated a
 node — before the wrapper's first statement, gates, or output. A job preempted,
 OOM-killed, or timed out in that instant therefore leaves a durable trace, and
 reconciliation adopts it from the scheduler's corroborating answer: what the
-scheduler reports it granted (`AllocTRES`) becomes the fact's shape, and if the
-scheduler cannot report it the fact is recorded with an *unknown* shape — never
-zero, and never a policy default — and stays for an operator rather than being
-settled to a number. Only stderr is redirected: the wrapper's own stdout
-protocol stays on the pipe the worker reads. A job the scheduler never allocated
-a node writes no such file, so a queued request still leaves nothing and is
-released from evidence like any other.
+scheduler reports it granted (`AllocTRES`, whose GPU term is read by prefix so a
+typed request such as `gres/gpu:a100=2` counts as two GPUs rather than none)
+becomes the fact's shape, and if the scheduler cannot report it the fact is
+recorded with an *unknown* shape — never zero, and never a policy default — and
+stays for an operator rather than being settled to a number. Only stderr is
+redirected: the wrapper's own stdout protocol stays on the pipe the worker reads.
+A job the scheduler never allocated a node writes no such file, so a queued
+request still leaves nothing and is released from evidence like any other.
 
 The observation and the scheduler-owned reservation transition are one atomic
 store write, so there is no durable state in which a request is queued with a

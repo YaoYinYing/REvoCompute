@@ -279,3 +279,100 @@ def test_a_concurrent_start_before_any_schema_exists_still_lands(tmp_path):
     assert all(isinstance(outcome, int) for outcome in outcomes), outcomes
     assert outcomes == [len(LEGACY_LEDGER_ROWS)] * 6
     assert "gpu_credit_ledger" not in _tables(path)
+
+
+# The canonical ``resource_allocations`` shape as the released revision created
+# it — before ``denial_*``/``adjudicated_at`` were added and while
+# ``resource_count`` was still NOT NULL.  Written as literal DDL because the
+# point of the test is a database the current tree no longer creates.
+PRIOR_ALLOCATIONS_SCHEMA = """
+CREATE TABLE resource_allocations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    subject_type VARCHAR NOT NULL,
+    subject_id INTEGER NOT NULL,
+    task_id VARCHAR(32) NOT NULL,
+    stage_id VARCHAR NOT NULL,
+    slurm_job_id VARCHAR NOT NULL UNIQUE,
+    unit VARCHAR NOT NULL,
+    resource_class VARCHAR NOT NULL,
+    resource_count INTEGER NOT NULL,
+    started_at FLOAT NOT NULL,
+    finished_at FLOAT,
+    quantity INTEGER,
+    status VARCHAR NOT NULL,
+    evidence_source VARCHAR NOT NULL,
+    ledger_entry_id INTEGER
+);
+CREATE INDEX idx_resource_allocations_task_stage
+    ON resource_allocations (task_id, stage_id);
+CREATE INDEX idx_resource_allocations_status
+    ON resource_allocations (status, started_at);
+CREATE INDEX idx_resource_allocations_subject
+    ON resource_allocations (subject_id, unit);
+"""
+
+# (task, stage, job, unit, count, started, quantity, status)
+PRIOR_ALLOCATION_ROWS = (
+    ("t" * 32, "model", "8901", "gpu_second", 3, 1_787_227_200.0, 900, "settled"),
+    ("u" * 32, "model", "8902", "gpu_second", 1, 1_787_230_800.0, None, "active"),
+)
+
+
+def _column_nullable(path: str, table: str, column: str) -> bool:
+    connection = sqlite3.connect(path)
+    try:
+        for row in connection.execute(f"PRAGMA table_info({table})"):
+            if row[1] == column:
+                return not row[3]
+    finally:
+        connection.close()
+    raise AssertionError(f"{table}.{column} does not exist")
+
+
+def test_the_prior_allocation_schema_widens_without_rewriting_counts(tmp_path):
+    """Widening ``resource_count`` to nullable must be a pure shape change.
+
+    A deployment already carrying canonical allocations was written by the
+    released ``NOT NULL`` table, so the startup pass has to rebuild it to admit a
+    later unknown-shape row — and that rebuild must not move a single recorded
+    count.  Reading the facts back through the current code proves the columns
+    were carried verbatim rather than backfilled or recomputed.
+    """
+    path = str(tmp_path / "tasks.sqlite3")
+    connection = sqlite3.connect(path)
+    try:
+        connection.executescript(PRIOR_ALLOCATIONS_SCHEMA)
+        connection.executemany(
+            "INSERT INTO resource_allocations "
+            "(subject_type, subject_id, task_id, stage_id, slurm_job_id, unit, resource_class, "
+            " resource_count, started_at, quantity, status, evidence_source) "
+            "VALUES ('user', 7, ?, ?, ?, ?, '', ?, ?, ?, ?, 'allocation_lifecycle')",
+            PRIOR_ALLOCATION_ROWS,
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    assert _column_nullable(path, "resource_allocations", "resource_count") is False
+
+    database = TaskDatabase(path)
+
+    # The widening applied, and every recorded count survived unchanged.
+    assert _column_nullable(path, "resource_allocations", "resource_count") is True
+    settled = database.list_task_allocations("t" * 32)
+    assert {row["unit"]: row["resource_count"] for row in settled} == {"gpu_second": 3}
+    assert all(row["status"] == "settled" for row in settled)
+    assert settled[0]["quantity"] == 900
+
+    active = database.list_task_allocations("u" * 32)
+    assert {row["unit"]: row["resource_count"] for row in active} == {"gpu_second": 1}
+    assert [row["slurm_job_id"] for row in database.list_unsettled_allocations()] == ["8902"]
+
+    # A NULL shape is now admissible, so an unknown-shape row can be recorded
+    # beside the preserved counts rather than being rejected by the old column.
+    unknown = database.observe_unknown_shape_allocation(
+        user_id=7, task_id="v" * 32, slurm_job_id="8903", started_at=1_787_240_000.0
+    )
+    assert unknown["resource_count"] is None
+
+    # Reopening the widened database is a no-op: the shape is already current.
+    assert TaskDatabase(path).list_task_allocations("t" * 32)[0]["resource_count"] == 3

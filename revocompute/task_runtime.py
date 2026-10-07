@@ -648,6 +648,28 @@ def _compute_allocation_callbacks(
     return dispatched, started, finished
 
 
+def _recover_surviving_host_allocations() -> None:
+    """Adopt host-only allocation evidence a dead worker left behind, now.
+
+    A scheduler per-job file or a wrapper receipt is the only trace of an
+    allocation whose worker died before it wrote anything, and the passes that
+    adopt them are a worker restart and the ``resource-maintenance`` cadence.  A
+    deployment that never restarts, and leaves ``RESOURCE_MAINTENANCE_SECONDS``
+    unset, has neither until the next restart — and the files sit in a directory
+    nothing garbage-collects before a recovery pass sees them.
+
+    A dispatch is a natural extra occasion: the worker is already up and about to
+    start the next allocation, and adopting a predecessor's evidence first means
+    an old claim can never be mistaken for the new one.  Best-effort and bounded:
+    a scheduler that cannot be asked just leaves the evidence for the next pass,
+    and nothing here may ever keep a dispatch from being attempted.
+    """
+    try:
+        _reconcile_slurm_allocations()
+    except Exception:  # recovery is best-effort; dispatch must still proceed
+        logging.exception("Dispatch-time allocation recovery failed")
+
+
 def _run_compute_job(
     task_id: str,
     tt,
@@ -2040,6 +2062,14 @@ def _execute_compute_task(
     if not task.get("started_at"):
         update_fields["started_at"] = start_time
     task_store.update_task(md5sum, **update_fields)
+    if is_slurm:
+        # The worker is up and about to ask the scheduler for an allocation of
+        # its own, so this is a natural extra occasion to adopt whatever a dead
+        # predecessor left in the host-only allocation namespace — the same
+        # evidence a restart or a maintenance pass would pick up, but without
+        # waiting for either.  Best-effort: a cluster that cannot be asked never
+        # keeps this Task from running.
+        _recover_surviving_host_allocations()
     if task.get("request_headers"):
         logging.info("Request headers for task %s: %s", md5sum, _sanitize_for_log(task["request_headers"]))
 
@@ -2295,15 +2325,43 @@ def _parse_slurm_runtime(value: str) -> int | None:
     return days * 86_400 + hours * 3_600 + minutes * 60 + seconds
 
 
+def _tres_units(tres: str) -> tuple[int | None, int | None]:
+    """Return ``(cpu_cores, gpu_count)`` from one Slurm ``TRES`` string.
+
+    The GPU term is matched by *prefix*, never by the literal ``gres/gpu``: a
+    typed request — which this deployment supports and uses — is reported as
+    ``gres/gpu:a100=N``, and matching only the untyped spelling silently loses
+    the count, which then settles as a fabricated zero.  Every typed term is
+    summed, exactly as :meth:`RunnerLiveTest._allocated_gpu_count` does.  A term
+    the scheduler does not report is ``None`` — unknown, never zero.
+    """
+    cpu_cores: int | None = None
+    gpu_count: int | None = None
+    for term in tres.split(","):
+        name, separator, raw = term.partition("=")
+        if not separator or not raw:
+            continue
+        try:
+            value = int(raw)
+        except ValueError:
+            continue
+        if name == "cpu":
+            cpu_cores = value
+        elif name.startswith("gres/gpu"):
+            gpu_count = (gpu_count or 0) + value
+    return cpu_cores, gpu_count
+
+
 def _parse_scontrol_allocation(output: str) -> tuple[str, int | None, int | None, int | None]:
     """Return ``(state, elapsed_seconds, cpu_cores, gpu_count)`` from one query.
 
     The same ``scontrol show job`` output already answers the shape question, so
     the scheduler's own numbers corroborate what a receipt reported rather than
-    trusting the compute node's environment.  The allocated GPU count comes from
-    ``TRES=`` (its ``gres/gpu=N`` term), never from a request term, so a job that
-    was granted fewer GPUs than it asked for cannot over-charge; a query with no
-    GPU TRES at all returns ``None`` — unknown, not zero.
+    trusting the compute node's environment.  ``AllocTRES`` is what was granted
+    and ``TRES`` is the request, used only for a unit the granted term does not
+    report at all — so a job granted fewer GPUs than it asked for cannot
+    over-charge.  A unit the scheduler does not report is ``None``: unknown, not
+    zero.
     """
     state, elapsed = _parse_scontrol_job(output)
     fields: dict[str, str] = {}
@@ -2311,26 +2369,14 @@ def _parse_scontrol_allocation(output: str) -> tuple[str, int | None, int | None
         key, separator, value = token.partition("=")
         if separator and key not in fields:
             fields[key] = value
-    cpu_cores: int | None = None
-    gpu_count: int | None = None
-    for key in ("AllocTRES", "TRES"):
-        # ``AllocTRES`` is what was granted; ``TRES`` is the request, used only
-        # when the scheduler does not report an allocation term at all.
-        for term in fields.get(key, "").split(","):
-            name, _, raw = term.partition("=")
-            if not raw:
-                continue
-            try:
-                value = int(raw)
-            except ValueError:
-                continue
-            if name == "cpu":
-                cpu_cores = value
-            elif name == "gres/gpu":
-                gpu_count = value
-        if cpu_cores is not None or gpu_count is not None:
-            break
-    return state, elapsed, cpu_cores, gpu_count
+    granted_cpu, granted_gpu = _tres_units(fields.get("AllocTRES", ""))
+    requested_cpu, requested_gpu = _tres_units(fields.get("TRES", ""))
+    return (
+        state,
+        elapsed,
+        granted_cpu if granted_cpu is not None else requested_cpu,
+        granted_gpu if granted_gpu is not None else requested_gpu,
+    )
 
 
 def _parse_scontrol_job(output: str) -> tuple[str, int | None]:
@@ -2583,20 +2629,28 @@ def _reconcile_host_scheduler_logs() -> dict[str, int]:
                 result["surviving"] += 1
             result["recovered"] += 1
             continue
-        if cpu_cores is not None or gpu_count is not None:
+        if gpu_count is not None or cpu_cores is not None:
             # The scheduler can still report what it granted, so this claim is
             # not shapeless after all: it is recorded as a normal observation
             # from the scheduler's own numbers, which reconciles and settles it
             # like every other allocation.  The GPU's string class is not what
             # admission gates on — the balance is class-agnostic — so the
             # scheduler's *count* is the part that matters here.
+            #
+            # Each unit is taken independently: a unit the scheduler reported —
+            # including a typed GRES such as ``gres/gpu:a100=2``, which
+            # :func:`_parse_scontrol_allocation` sums by prefix — is used exactly
+            # as granted, and a unit it did not report at all falls to the floor.
+            # An absent ``gres/gpu`` term on a granted allocation means the job
+            # held no GPU, which is a fact rather than a guess; the failure this
+            # guards against was a *reported* count being read as zero.
             observed = task_store.observe_allocation_start(
                 user_id=user_id,
                 task_id=task_id,
                 stage_id=str((owner or {}).get("run_stage") or ""),
                 slurm_job_id=job_id,
-                gpu_count=max(0, int(gpu_count or 0)),
-                cpu_cores=max(1, int(cpu_cores or 1)),
+                gpu_count=max(0, int(gpu_count)) if gpu_count is not None else 0,
+                cpu_cores=max(1, int(cpu_cores)) if cpu_cores is not None else 1,
                 started_at=float(entry["observed_at"]) or time.time(),
             )
         else:

@@ -1194,6 +1194,58 @@ def test_a_scheduler_log_with_no_reported_shape_is_review_never_zero(monkeypatch
     assert module.task_store.gpu_credit_summary(102, at=at + 100)["usage_gpu_seconds"] == 0
 
 
+def test_a_typed_gres_grant_is_charged_not_read_as_zero(monkeypatch, tmp_path):
+    """A typed GRES term (gres/gpu:a100=N) is a grant, not an absent GPU.
+
+    Slurm reports a typed request -- which this deployment resolves and which the
+    runner profiles use -- as ``gres/gpu:a100=N`` rather than the untyped
+    ``gres/gpu=N``.  A parser that matched only the untyped spelling would lose
+    the count, leave it unknown, and (via the "cpu was reported" branch) settle a
+    job that really held two A100s as a fabricated zero GPU-seconds.  The
+    scheduler's count must be read regardless of the GRES type string, so the
+    settled charge is exactly two GPUs times the elapsed time.
+    """
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    at = _timestamp(2026, 9, 5)
+    task_id = "e" * 31 + "1"
+    _own_task(module.task_store, task_id, user_id=106)
+    module.task_store.reserve_compute_admission(user_id=106, task_id=task_id, at=at)
+    task = module.task_store.get_task(task_id)
+    log = _plant_scheduler_log(module, task, job_id="8821", observed_at=at + 2)
+
+    monkeypatch.setattr(module.task_runtime.shutil, "which", lambda command: f"/usr/bin/{command}")
+    monkeypatch.setattr(
+        module.task_runtime.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            stdout="JobId=8821 JobState=COMPLETED RunTime=00:00:45 "
+            "AllocTRES=cpu=4,mem=8G,node=1,billing=4,gres/gpu:a100=2\n"
+        ),
+    )
+
+    # The pure parser reads the typed term as two GPUs, alongside the CPUs.
+    state, elapsed, cpu_cores, gpu_count = module.task_runtime._parse_scontrol_allocation(
+        "JobId=8821 JobState=COMPLETED RunTime=00:00:45 "
+        "AllocTRES=cpu=4,mem=8G,node=1,billing=4,gres/gpu:a100=2\n"
+    )
+    assert (state, elapsed, cpu_cores, gpu_count) == ("COMPLETED", 45, 4, 2)
+
+    assert module.task_runtime._reconcile_slurm_allocations() == {"settled": 1, "active": 0, "review": 0}
+    facts = module.task_store.list_task_allocations(task_id)
+    assert {row["unit"]: row["resource_count"] for row in facts} == {
+        "gpu_second": 2,
+        "cpu_core_second": 4,
+    }
+    assert {row["status"] for row in facts} == {"settled"}
+    # Two A100s for 45 seconds: a real charge, never a zero.
+    assert module.task_store.gpu_credit_summary(106, at=at + 100)["usage_gpu_seconds"] == 90
+    assert not log.exists()
+
+
 def test_an_uncorroborated_scheduler_log_is_never_deleted(monkeypatch, tmp_path):
     """A file the scheduler does not own stays exactly where it is.
 
@@ -2210,3 +2262,83 @@ def test_noop_reset_marker_is_hidden_from_user_history_but_kept_for_admin(monkey
     marker = next(entry for entry in admin_view.json["history"] if entry["kind"] == "admin_reset")
     assert marker["gpu_seconds"] == 0
     assert marker["actor_user_id"] == admin["id"]
+
+
+def test_a_dispatch_adopts_surviving_evidence_before_asking_for_more(monkeypatch, tmp_path):
+    """Host-only evidence is adopted at the next dispatch, not only at restart.
+
+    A worker that never restarts, in a deployment that leaves
+    ``RESOURCE_MAINTENANCE_SECONDS`` unset, still dispatches Tasks all day, so a
+    dispatch is the one occasion that reliably recurs.  Adopting a predecessor's
+    evidence there is what keeps a worker's death from leaving a real allocation
+    unaccounted until some unrelated restart, and it reads the same files the
+    restart pass does — including a typed GRES term.
+    """
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    at = _timestamp(2026, 9, 5)
+    task_id = "f" * 31 + "1"
+    _own_task(module.task_store, task_id, user_id=107)
+    module.task_store.reserve_compute_admission(user_id=107, task_id=task_id, at=at)
+    task = module.task_store.get_task(task_id)
+    log = _plant_scheduler_log(module, task, job_id="8822", observed_at=at + 2)
+
+    monkeypatch.setattr(module.task_runtime.shutil, "which", lambda command: f"/usr/bin/{command}")
+    monkeypatch.setattr(
+        module.task_runtime.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            stdout="JobId=8822 JobState=COMPLETED RunTime=00:00:45 "
+            "AllocTRES=cpu=2,mem=1G,node=1,billing=2,gres/gpu:a100=1\n"
+        ),
+    )
+
+    module.task_runtime._recover_surviving_host_allocations()
+
+    facts = module.task_store.list_task_allocations(task_id)
+    assert {row["unit"]: row["resource_count"] for row in facts} == {
+        "gpu_second": 1,
+        "cpu_core_second": 2,
+    }
+    assert module.task_store.gpu_credit_summary(107, at=at + 100)["usage_gpu_seconds"] == 45
+    assert not log.exists()
+
+
+def test_a_dispatch_survives_a_failing_recovery_pass(monkeypatch, tmp_path):
+    """Recovery is best-effort: a scheduler that cannot be asked never blocks a run.
+
+    The dispatch is about to create a fresh allocation of its own.  A recovery
+    pass that raised here would turn an unanswerable scheduler question into a
+    refusal to run anything, which is a worse failure than leaving the evidence
+    for the next pass.
+    """
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    at = _timestamp(2026, 9, 5)
+    task_id = "f" * 31 + "2"
+    _own_task(module.task_store, task_id, user_id=108)
+    module.task_store.reserve_compute_admission(user_id=108, task_id=task_id, at=at)
+    task = module.task_store.get_task(task_id)
+    log = _plant_scheduler_log(module, task, job_id="8823", observed_at=at + 2)
+
+    def _explode(*args, **kwargs):
+        raise OSError("scheduler unavailable")
+
+    # Any of the three passes may fail this way; the guards are what make the
+    # whole occasion non-fatal.
+    monkeypatch.setattr(module.task_runtime, "_reconcile_host_scheduler_logs", _explode)
+    monkeypatch.setattr(module.task_runtime, "_reconcile_host_allocation_receipts", _explode)
+    monkeypatch.setattr(module.task_runtime, "_reconcile_allocation_receipts", _explode)
+
+    module.task_runtime._recover_surviving_host_allocations()  # must not raise
+
+    # Nothing was adopted, so nothing was deleted: the evidence stays for a pass
+    # that can corroborate it.
+    assert log.exists()
+    assert module.task_store.list_task_allocations(task_id) == []
