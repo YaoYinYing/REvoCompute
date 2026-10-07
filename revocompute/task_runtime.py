@@ -64,6 +64,7 @@ from revocompute.result_storyboard import (
     storyboard_declaration,
 )
 from revocompute.storage import (
+    PUBLICATION_AVAILABLE,
     PUBLICATION_QUARANTINE_STATES,
     ArtifactIdentityError,
     ResultPublicationError,
@@ -2351,8 +2352,10 @@ try:
             if reconciliation["settled"] or reconciliation["review"]:
                 logging.info("GPU allocation reconciliation: %s", reconciliation)
             publications = _reconcile_result_publications()
-            quarantined = sum(count for state, count in publications.items() if state != "available")
-            if quarantined:
+            unreadable = sum(
+                count for state, count in publications.items() if state != PUBLICATION_AVAILABLE
+            )
+            if unreadable:
                 logging.warning("Result publication states: %s", publications)
             else:
                 logging.info("Result publication reconciliation: %s", publications)
