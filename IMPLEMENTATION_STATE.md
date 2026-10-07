@@ -801,6 +801,38 @@ object/descriptor, not reopen its pathname.*
   primary results route and the `/files/` route fail closed on a symlinked,
   hard-linked, unreadable, or oversized manifest.
 
+## Finalized-manifest publication anchor (rebased head)
+
+The manifest is self-describing: it declares its artifacts, their sizes, and
+their digests. Because the runner's Unix identity writes both the manifest and
+the files it names, nothing *inside* the result tree can say whether the
+manifest being read is the one Core finalized — a post-finalization replacement
+with another ordinary single-link regular JSON manifest would redefine the
+published namespace and self-authorize its own publication.
+
+- `_finalize_results_manifest` publishes one serialized payload and, in the same
+  step, records its SHA-256 and size in `result_publications` (the Task store,
+  server-owned state outside the runner-writable result namespace), with an
+  advancing `revision`. A re-finalization is a new revision of the same task's
+  publication. Chmod/read-only bits are not treated as a trust boundary; there
+  is no new immutable publication store and no DB-of-blobs.
+- `StorageResolver.read_manifest_bytes` verifies the on-disk manifest against
+  that anchor (streamed SHA-256 plus size of the one verified descriptor) and
+  fails closed on mismatch, so the check is inherited by every consumer of the
+  reader: the results route, download, ndarray/table/logical projection, Tool
+  materialization, results archive, `get_results`, and
+  `_result_manifest_available`. The resolver is constructed with the Task store
+  by the web app, the worker runtime, and the live-test executor, so all three
+  processes resolve the same authority.
+- Regression evidence: `tests/server/test_result_publication_boundary.py` drives
+  the readable-but-unanchored case end to end — an unchanged finalized manifest
+  still serves every surface; a valid single-link regular JSON replacement is
+  refused by the canonical reader, the readiness probe, the results route, and
+  the archive; a replacement that declares a previously-undeclared file with
+  that file's *correct* size and SHA-256 still cannot publish it; the download,
+  ndarray, logical-file, archive, and probe verdicts all agree; and the existing
+  symlink, hard-link, oversized, and escaping-path refusals stay closed.
+
 ## Named follow-ups (tracked, not silent)
 
 - `validator_revision()` reports `sha256:unavailable` when a boundary source

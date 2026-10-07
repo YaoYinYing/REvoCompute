@@ -19,12 +19,15 @@ task visibility remains independent of filesystem paths.
 
 Finished-task artifacts are published through `manifest.json`. Retrieval
 validates the logical path, confinement, regular-file status, SHA-256, and size
-before exposing content. A user may reference an artifact from another one of
-their finalized tasks with `@<task-id>/<logical-path>`. The server verifies the
-manifest entry and copies an immutable downstream input snapshot; execution
-never reads a mutable upstream result path. Provenance records the source task,
-logical artifact path, digest, size, media type, and timestamp without carrying
-authorization state.
+before exposing content. The finalized manifest's own digest and size are
+recorded in server-owned task state at finalization, and every retrieval checks
+the on-disk manifest against that record first, so a manifest replaced after
+finalization is refused rather than trusted as a new publication. A user may
+reference an artifact from another one of their finalized tasks with
+`@<task-id>/<logical-path>`. The server verifies the manifest entry and copies
+an immutable downstream input snapshot; execution never reads a mutable upstream
+result path. Provenance records the source task, logical artifact path, digest,
+size, media type, and timestamp without carrying authorization state.
 
 ## Persistent-state epoch
 

@@ -754,15 +754,17 @@ def _manifest_task(module, tmp_path, content: bytes = b"score\n1.0\n") -> tuple[
     return task_id, result_dir, headers
 
 
-@pytest.mark.parametrize("tamper", ["symlink", "hardlink", "corrupt", "oversized"])
+@pytest.mark.parametrize("tamper", ["symlink", "hardlink", "corrupt", "oversized", "replacement"])
 def test_the_primary_results_route_fails_closed_on_a_tampered_manifest(monkeypatch, tmp_path, tamper) -> None:
     """A manifest the canonical reader refuses is not served by the results route.
 
     The manifest authorizes the whole publication and is its own root of trust,
-    so a linked, unreadable, or oversized one must produce the route's not-found
-    answer rather than a partial payload.  (A replacement with different *valid*
-    manifest bytes is, by construction, a different publication: the manifest
-    has no declared identity above it to check against.)
+    so a linked, unreadable, oversized, or *replaced* one must produce the
+    route's not-found answer rather than a partial payload.  A replacement is
+    the hardest case: the substituted file is an ordinary single-link regular
+    JSON manifest describing real artifacts, so nothing about the file itself is
+    wrong — it is refused because it is not the manifest Core finalized, which
+    only the anchor recorded outside the result tree can say.
     """
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     task_id, result_dir, headers = _manifest_task(module, tmp_path)
@@ -780,6 +782,20 @@ def test_the_primary_results_route_fails_closed_on_a_tampered_manifest(monkeypat
         manifest_path.hardlink_to(outside)
     elif tamper == "corrupt":
         manifest_path.write_bytes(b"{not a manifest")
+    elif tamper == "replacement":
+        (result_dir / "smuggled.txt").write_text("undeclared bytes\n", encoding="utf-8")
+        replacement = {
+            "schema_version": 3,
+            "task_id": task_id,
+            "artifacts": [
+                {
+                    "path": "smuggled.txt",
+                    "size": len(b"undeclared bytes\n"),
+                    "sha256": hashlib.sha256(b"undeclared bytes\n").hexdigest(),
+                }
+            ],
+        }
+        manifest_path.write_text(json.dumps(replacement), encoding="utf-8")
     else:
         manifest_path.write_bytes(published + b" " * (9 * 1024 * 1024))
 
@@ -879,3 +895,283 @@ def test_suffix_and_unsatisfiable_ranges_are_served_from_the_verified_descriptor
     assert beyond.headers["Content-Range"] == f"bytes */{len(content)}"
     assert head.status_code == 200
     assert head.headers["Content-Length"] == str(len(content))
+
+
+# ---------------------------------------------------------------------------
+# The publication anchor.  A finalized manifest is self-describing, so nothing
+# under the runner-writable result root can prove it is the manifest Core
+# published.  These cases drive the public surfaces with a manifest replaced by
+# another ordinary single-link regular JSON manifest after finalization: the
+# replacement is structurally valid and can declare its own sizes and digests,
+# and every consumer must still agree that it is not the publication.
+# ---------------------------------------------------------------------------
+
+
+def _replace_manifest(module, result_dir: Path, payload: dict) -> bytes:
+    """Substitute the on-disk manifest with valid regular-JSON bytes."""
+    body = json.dumps(payload).encode("utf-8")
+    manifest_path = result_dir / "manifest.json"
+    manifest_path.unlink()
+    manifest_path.write_bytes(body)
+    return body
+
+
+def _replacement_declaring(module, task_id: str, result_dir: Path, relative_path: str, payload: bytes) -> dict:
+    """A replacement manifest that declares one ordinary file correctly."""
+    return {
+        "schema_version": 3,
+        "task_id": task_id,
+        "artifacts": [
+            {
+                "path": relative_path,
+                "size": len(payload),
+                "sha256": hashlib.sha256(payload).hexdigest(),
+                "media_type": "text/plain",
+                "preview": "text",
+                "role": "primary",
+            }
+        ],
+        "result": {"files": {}},
+    }
+
+
+def _result_manifest_available(module, task: dict) -> bool:
+    """The readiness probe the status and Task-list routes publish.
+
+    Resolved through the registered route rather than by importing a second copy
+    of the module: the endpoint reports availability through the same canonical
+    reader every other consumer uses, so it is observed the way a client does.
+    """
+    client = module.app.test_client()
+    headers = _test_client_auth(module)
+    task_id = str(task["md5sum"])
+    body = client.get(f"/compute/api/running/{task_id}", headers=headers).get_json() or {}
+    return bool(body.get("result_available"))
+
+
+def _first_logical_url(module, task_id: str) -> str:
+    """The published logical-file URL for the first logical identity with bytes.
+
+    The identity and its index come from the finalized manifest, so the URL is
+    one the publication really declares and really resolves -- a declared but
+    absent identity would be answered with a not-found by construction.
+    """
+    manifest = module.app.config["storage_resolver"].load_manifest(module.task_store.get_task(task_id))
+    for file_id, entries in manifest["result"]["files"].items():
+        if entries:
+            return f"/compute/api/results/{task_id}/files/{file_id}?index=0"
+    raise AssertionError("the finalized manifest declares no logical file with bytes")
+
+
+def _anchored_task(module, tmp_path) -> tuple[str, Path, dict[str, str]]:
+    """A finalized task that publishes an artifact, an array, and a logical file.
+
+    ``result.txt`` is the ordinary artifact every consumer can address by path,
+    ``scores.json`` is a real numeric projection target, and the alignment file
+    is what the runner family's declaration publishes as a logical identity, so
+    the logical-file surface is exercised on a real declaration rather than a
+    guessed file id.
+    """
+    headers = _test_client_auth(module)
+    task_id = _finished_task(module, tmp_path)
+
+    def build(root: Path) -> None:
+        (root / "result.txt").write_bytes(b"score\n1.0\n")
+        (root / "scores.json").write_text(json.dumps({"plddt": [0.9, 0.8]}), encoding="utf-8")
+        (root / "gremlin_msa").mkdir()
+        (root / "gremlin_msa" / "input.i90c75.a3m").write_text(">query\nACDE\n", encoding="utf-8")
+
+    manifest, result_dir = _finalize_dir(module, task_id, build)
+    assert manifest["result"]["files"]["alignment"], manifest["result"]["files"]
+    return task_id, result_dir, headers
+
+
+def test_an_unchanged_finalized_manifest_keeps_working_for_every_consumer(monkeypatch, tmp_path) -> None:
+    """The anchored manifest is the ordinary case: nothing is refused.
+
+    The same finalized task is read through the canonical reader (the authority
+    each consumer delegates to), the status probe, the results route, a
+    logical-file URL, the artifact and ndarray projections' resolver, and the
+    archive builder — they must all agree that the publication is available.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id, result_dir, headers = _anchored_task(module, tmp_path)
+    task = module.task_store.get_task(task_id)
+    storage = module.app.config["storage_resolver"]
+    logical_url = _first_logical_url(module, task_id)
+    client = module.app.test_client()
+
+    # The canonical reader every consumer delegates to.
+    assert storage.load_manifest(task) is not None
+    # The readiness probe the Task list and status endpoints publish.
+    assert _result_manifest_available(module, task) is True
+    # The results manifest route.
+    assert client.get(f"/compute/api/results/{task_id}", headers=headers).status_code == 200
+    # A logical-file URL resolved through the manifest.
+    assert client.get(_first_logical_url(module, task_id), headers=headers).status_code == 200
+    # Artifact download, ndarray projection, and archive creation.
+    assert client.get(f"/compute/api/results/{task_id}/artifacts/result.txt", headers=headers).status_code == 200
+    assert client.get(
+        f"/compute/api/results/{task_id}/ndarrays/scores.json?key=plddt&max_elements=2", headers=headers
+    ).status_code == 200
+    assert storage.resolve_artifact(task, "result.txt") is not None
+    assert Path(module.task_runtime._build_results_archive(task)).is_file()
+    assert storage.load_manifest(task) is not None
+
+
+def test_a_valid_regular_manifest_replacement_is_rejected_as_a_publication(monkeypatch, tmp_path) -> None:
+    """Replacement by another valid single-link regular JSON manifest fails closed.
+
+    The replacement is a well-formed manifest for a real result tree, so its
+    shape proves nothing: the anchored publication identity does, and it is
+    resolved from server-owned state the result tree cannot rewrite.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    content = b"score\n1.0\n"
+    task_id, result_dir, headers = _manifest_task(module, tmp_path, content)
+    task = module.task_store.get_task(task_id)
+    replacement = _replacement_declaring(module, task_id, result_dir, "result.txt", b"replaced\n")
+    (result_dir / "result.txt").write_bytes(b"replaced\n")
+    _replace_manifest(module, result_dir, replacement)
+
+    assert module.app.config["storage_resolver"].load_manifest(task) is None
+    assert _result_manifest_available(module, task) is False
+    assert module.app.test_client().get(f"/compute/api/results/{task_id}", headers=headers).status_code == 404
+    with pytest.raises(FileNotFoundError):
+        module.task_runtime._build_results_archive(task)
+
+
+def test_a_replacement_cannot_publish_an_undeclared_file_with_correct_size_and_digest(monkeypatch, tmp_path) -> None:
+    """Even a perfectly self-consistent replacement cannot publish new bytes.
+
+    The replacement declares ``smuggled.txt`` with that file's true size and
+    SHA-256 — the substitution is internally consistent and would pass every
+    check the manifest performs on its own declarations.  It is refused because
+    the anchor, not the substituted manifest, is the publication authority, and
+    the smuggled file was never declared by what Core published.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id, result_dir, headers = _manifest_task(module, tmp_path, b"score\n1.0\n")
+    task = module.task_store.get_task(task_id)
+    smuggled = b"undeclared payload\n"
+    (result_dir / "smuggled.txt").write_bytes(smuggled)
+    replacement = _replacement_declaring(module, task_id, result_dir, "smuggled.txt", smuggled)
+    declared = replacement["artifacts"][0]
+    # The replacement is self-consistent: it declares the true size and digest.
+    assert declared["size"] == (result_dir / "smuggled.txt").stat().st_size
+    assert declared["sha256"] == hashlib.sha256(smuggled).hexdigest()
+    _replace_manifest(module, result_dir, replacement)
+
+    client = module.app.test_client()
+    assert client.get(f"/compute/api/results/{task_id}/artifacts/smuggled.txt", headers=headers).status_code == 404
+    assert client.get(f"/compute/api/results/{task_id}/files/smuggled?index=0", headers=headers).status_code == 404
+    body = client.get(f"/compute/api/results/{task_id}", headers=headers)
+    assert body.status_code == 404
+    assert b"smuggled" not in body.data
+
+
+def test_every_publication_consumer_agrees_on_the_anchored_authority(monkeypatch, tmp_path) -> None:
+    """The archive, Tool materialization, the projections, and the probe agree.
+
+    A manifest replaced after finalization must be refused by *all* of them; a
+    consumer that read the pathname instead of the anchored authority would
+    disagree, which is the failure this asserts against.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id, result_dir, headers = _anchored_task(module, tmp_path)
+    task = module.task_store.get_task(task_id)
+    storage = module.app.config["storage_resolver"]
+    logical_url = _first_logical_url(module, task_id)
+    _replace_manifest(module, result_dir, _replacement_declaring(module, task_id, result_dir, "result.txt", b"score\n1.0\n"))
+
+    client = module.app.test_client()
+    verdicts = {
+        "canonical_reader": storage.load_manifest(task) is not None,
+        "artifact_download": client.get(
+            f"/compute/api/results/{task_id}/artifacts/result.txt", headers=headers
+        ).status_code
+        == 200,
+        "ndarray_projection": client.get(
+            f"/compute/api/results/{task_id}/ndarrays/result.txt", headers=headers
+        ).status_code
+        == 200,
+        "logical_file": client.get(logical_url, headers=headers).status_code == 200,
+        "result_available": _result_manifest_available(module, task),
+    }
+    assert verdicts == {
+        "canonical_reader": False,
+        "artifact_download": False,
+        "ndarray_projection": False,
+        "logical_file": False,
+        "result_available": False,
+    }
+    # Archive creation and Tool materialization consume the same authority: a
+    # Task artifact reference resolves through the archived manifest, and the
+    # unanchored replacement makes that reference unavailable.  The Tool path is
+    # observed through the call route's own fail-closed answer for an
+    # unavailable source Task, which is where that decision is made.
+    with pytest.raises(FileNotFoundError):
+        module.task_runtime._build_results_archive(task)
+    assert storage.resolve_artifact(task, "result.txt") is None
+    assert _source_task_artifact_is_unavailable(module, task_id, "result.txt")
+
+
+def _source_task_artifact_is_unavailable(module, task_id: str, relative_path: str) -> bool:
+    """Whether the Tool call route refuses an artifact from that source Task.
+
+    The route resolves the reference through the publication authority before it
+    materializes anything, so an unanchored manifest makes the reference
+    unavailable and the call is refused rather than queued.
+    """
+    headers = _test_client_auth(module, "tester")
+    response = module.app.test_client().post(
+        "/compute/api/tools/fasta_inspect/call",
+        headers=headers,
+        data={
+            "parameters": "{}",
+            "artifact_references": f"@{task_id}/{relative_path}",
+            "artifact_roles": "sequence",
+        },
+    )
+    return response.status_code in {400, 403, 404, 409}
+
+
+def test_the_existing_link_and_size_refusals_stay_closed_under_the_anchor(monkeypatch, tmp_path) -> None:
+    """The anchor adds a check; it does not replace the descriptor contract.
+
+    Symlink, hard link, oversized, and escaping-path cases are refused for their
+    own reasons, and the anchored reader keeps refusing them.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    content = b"score\n1.0\n"
+    task_id, result_dir, headers = _manifest_task(module, tmp_path, content)
+    task = module.task_store.get_task(task_id)
+    manifest_path = result_dir / "manifest.json"
+    published = manifest_path.read_bytes()
+    outside = tmp_path / "outside-manifest.json"
+    storage = module.app.config["storage_resolver"]
+
+    outside.write_bytes(published)
+    manifest_path.unlink()
+    manifest_path.symlink_to(outside)
+    assert storage.load_manifest(task) is None
+
+    manifest_path.unlink()
+    outside.write_bytes(published)
+    manifest_path.hardlink_to(outside)
+    assert storage.load_manifest(task) is None
+
+    manifest_path.unlink()
+    manifest_path.write_bytes(published + b" " * (9 * 1024 * 1024))
+    assert storage.load_manifest(task) is None
+
+    # A manifest entry naming bytes outside the published root is never resolved,
+    # anchor or not: path containment is checked before the declaration is used.
+    manifest_path.unlink()
+    manifest_path.write_bytes(published)
+    assert storage.resolve_declared_artifact(task, "../outside.txt") is None
+    assert storage.resolve_declared_artifact(task, "/etc/passwd") is None
+    # The restored, still-anchored manifest is served again: the refusals above
+    # were about the tampering, not about the anchor being permanent.
+    restored = module.app.test_client().get(f"/compute/api/results/{task_id}", headers=headers)
+    assert restored.status_code == 200

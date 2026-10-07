@@ -13,7 +13,7 @@ import uuid
 from pathlib import Path
 from types import SimpleNamespace
 
-from conftest import _load_pssm_module, _test_client_auth
+from conftest import _anchor_result_publication, _load_pssm_module, _test_client_auth
 from revocompute.tool_calls import new_tool_call_id
 
 
@@ -162,6 +162,7 @@ def test_task_artifact_to_tool_is_materialized_for_owner_only(monkeypatch, tmp_p
         storage_key=owner["storage_key"],
         task_type="gremlin",
     )
+    _anchor_result_publication(module, source_id)
 
     response = module.app.test_client().post(
         "/compute/api/tools/fasta_inspect/call",
@@ -225,6 +226,7 @@ def _artifact_source_task(module, content: bytes) -> tuple[str, Path]:
         storage_key=owner["storage_key"],
         task_type="gremlin",
     )
+    _anchor_result_publication(module, source_id)
     return source_id, artifact
 
 

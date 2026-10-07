@@ -379,8 +379,10 @@ def test_an_array_replaced_before_resolution_is_refused(monkeypatch, tmp_path) -
 def test_a_linked_or_replaced_manifest_fails_the_logical_file_route_closed(monkeypatch, tmp_path) -> None:
     """The /files/ route consumes the canonical verified manifest reader.
 
-    A manifest that is a symlink, a hard link, or oversized is refused rather
-    than read through a plain pathname open.
+    A manifest that is a symlink, a hard link, oversized, or replaced by other
+    valid manifest bytes is refused rather than read through a plain pathname
+    open: the manifest's own identity is anchored in server-owned state, so a
+    substitution is detectable even when the substituted file is well formed.
     """
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     client = module.app.test_client()
@@ -405,4 +407,9 @@ def test_a_linked_or_replaced_manifest_fails_the_logical_file_route_closed(monke
     hard.write_bytes(published)
     manifest_path.unlink()
     manifest_path.hardlink_to(hard)
+    assert client.get(url, headers=headers).status_code == 404
+
+    # A different, structurally valid manifest is not this task's publication.
+    manifest_path.unlink()
+    manifest_path.write_text(json.dumps({"artifacts": [], "result": {"files": {}}}), encoding="utf-8")
     assert client.get(url, headers=headers).status_code == 404

@@ -22,7 +22,7 @@ import pytest
 import requests
 import yaml
 import conftest
-from conftest import _extract_md5, _load_pssm_module, _relocate_task_artifacts, _task_owner
+from conftest import _anchor_result_publication, _extract_md5, _load_pssm_module, _relocate_task_artifacts, _task_owner
 from jsonschema import Draft202012Validator
 from revocompute.task_types import TaskInputRole
 from werkzeug.utils import secure_filename
@@ -1118,6 +1118,10 @@ def test_gremlin_logical_file_api_preserves_declared_viewer_and_download(monkeyp
     for stored_artifact in stored_manifest["artifacts"]:
         stored_artifact.pop("capability", None)
     manifest_path.write_text(json.dumps(stored_manifest), encoding="utf-8")
+    # Publishing is Core's, and Core anchors what it publishes: a manifest
+    # rewritten on disk becomes readable again only because the same authority
+    # that rewrote it re-anchored it, which is what re-publishing is.
+    _anchor_result_publication(module, md5sum)
 
     manifest_response = client.get(f"/compute/api/results/{md5sum}", headers=auth_header)
     manifest = manifest_response.get_json()

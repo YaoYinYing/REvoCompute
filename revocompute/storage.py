@@ -94,12 +94,39 @@ def _hash_open_file(handle: Any) -> tuple[str, int]:
     return digest.hexdigest(), size
 
 
+class PublicationAnchor:
+    """The identity of a published manifest, as recorded outside the result tree.
+
+    A published manifest is self-describing: it declares the artifacts, their
+    sizes, and their digests.  Nothing *inside* the result tree can therefore
+    say whether the manifest being read is the one Core finalized — the runner's
+    Unix identity writes both.  This is that statement, resolved from
+    server-owned state: the digest and size recorded when Core published, plus
+    the revision, so a re-publication is a new revision of the same task's
+    publication rather than an unanchored replacement.
+    """
+
+    __slots__ = ("sha256", "size", "revision")
+
+    def __init__(self, sha256: str, size: int, revision: int):
+        self.sha256 = sha256
+        self.size = size
+        self.revision = revision
+
+    def matches(self, digest: str, size: int) -> bool:
+        return self.sha256 == digest and self.size == size
+
+
 class StorageResolver:
     """Resolve every task path from its immutable user storage identity."""
 
-    def __init__(self, results_dir: str, workspace_dir: str):
+    def __init__(self, results_dir: str, workspace_dir: str, task_store: Any = None):
         self.results_dir = os.path.abspath(results_dir)
         self.workspace_dir = os.path.abspath(workspace_dir)
+        # The task store owns the finalized-manifest publication anchor; a
+        # resolver built without it can still resolve paths but cannot verify a
+        # publication, so it refuses one rather than trusting the result tree.
+        self.task_store = task_store
 
     @staticmethod
     def _task_parts(task: dict[str, Any]) -> tuple[str, str]:
@@ -149,6 +176,15 @@ class StorageResolver:
         artifacts from the manifest and republish it (the results archive) must
         use *these* bytes, so the entries in the republished manifest can never
         describe a different manifest than the one that selected them.
+
+        The bytes are additionally checked against the publication anchor Core
+        recorded outside the result tree, so "is this the manifest Core
+        finalized?" is answered with evidence the runner's Unix identity cannot
+        rewrite.  The anchor is resolved through the caller's own task store, so
+        every consumer of this reader -- every web surface, worker path, and
+        maintenance job -- inherits the check and agrees on the same authority.
+        A manifest that is unreadable, unanchored, or that no longer matches its
+        anchor is ``None``.
         """
         try:
             handle = _open_published_file(self.get_manifest_path(task))
@@ -158,7 +194,37 @@ class StorageResolver:
             if os.fstat(handle.fileno()).st_size > _MAX_MANIFEST_BYTES:
                 return None
             data = handle.read(_MAX_MANIFEST_BYTES + 1)
-        return data if len(data) <= _MAX_MANIFEST_BYTES else None
+        if len(data) > _MAX_MANIFEST_BYTES:
+            return None
+        anchor = self._publication_anchor(task)
+        if anchor is None or not anchor.matches(hashlib.sha256(data).hexdigest(), len(data)):
+            return None
+        return data
+
+    def _publication_anchor(self, task: dict[str, Any]) -> PublicationAnchor | None:
+        """Resolve the finalized-manifest identity Core recorded for one task.
+
+        Resolved from the task store this resolver was built with — the one
+        authority the web, worker, and maintenance processes already share — so
+        every consumer of this reader agrees on the same anchor.  A resolver
+        built without that store cannot answer the question at all, and a
+        publication read that cannot answer it fails closed like any other
+        unverifiable manifest.
+        """
+        task_id = str(task.get("md5sum") or "").lower()
+        if self.task_store is None or not _TASK_ID.fullmatch(task_id):
+            return None
+        try:
+            record = self.task_store.get_result_publication(task_id)
+        except Exception:  # pylint: disable=broad-except
+            return None
+        if not record:
+            return None
+        digest = str(record.get("manifest_sha256") or "")
+        size = record.get("manifest_size")
+        if not _SHA256.fullmatch(digest) or not isinstance(size, int) or isinstance(size, bool) or size < 0:
+            return None
+        return PublicationAnchor(digest, size, int(record.get("revision") or 1))
 
     def load_manifest(self, task: dict[str, Any]) -> dict[str, Any] | None:
         """Return the finalized results manifest, or ``None`` when unreadable.

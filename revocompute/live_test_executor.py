@@ -361,7 +361,7 @@ def execute(request_path: str | os.PathLike[str]) -> dict[str, Any]:
     submission = TaskSubmissionRequest.model_validate({"task_type": task_type, "params": request["parameters"]})
     parameters = submission.coerce_params()
     storage_key = f"live-test-{os.environ.get('ENABLED_TASKRUNNERS', 'runner')}"
-    resolver = StorageResolver(str(scratch / "results"), str(scratch / "workspaces"))
+    resolver = StorageResolver(str(scratch / "results"), str(scratch / "workspaces"), task_runtime.task_store)
     identity = {"md5sum": task_id, "storage_key": storage_key}
     snapshot_root = Path(resolver.get_input_root(identity)) / "inputs"
     output_root = Path(resolver.get_output_root(identity))

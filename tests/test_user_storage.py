@@ -26,6 +26,35 @@ def _task(**overrides):
     return task
 
 
+class _ManifestAnchorStore:
+    """The task store's publication anchor, as the resolver consumes it.
+
+    Publication identity lives in server-owned state rather than in the result
+    tree, so a resolver-only test supplies the same anchor Core would record at
+    finalization instead of writing a digest the reader could not verify.
+    """
+
+    def __init__(self) -> None:
+        self.records: dict[str, dict] = {}
+
+    def publish(self, task: dict, data: bytes) -> None:
+        self.records[task["md5sum"]] = {
+            "manifest_sha256": hashlib.sha256(data).hexdigest(),
+            "manifest_size": len(data),
+            "revision": 1,
+        }
+
+    def get_result_publication(self, task_id: str) -> dict | None:
+        return self.records.get(task_id)
+
+
+def _publish_manifest(resolver: StorageResolver, store: _ManifestAnchorStore, task: dict, manifest: dict) -> None:
+    """Write a finalized manifest and anchor it, as Core finalization does."""
+    data = json.dumps(manifest).encode("utf-8")
+    Path(resolver.get_manifest_path(task)).write_bytes(data)
+    store.publish(task, data)
+
+
 def test_task_roots_are_derived_from_immutable_user_storage_key(tmp_path):
     resolver = StorageResolver(str(tmp_path / "results"), str(tmp_path / "workspaces"))
     task_root = resolver.get_task_root(_task())
@@ -58,23 +87,28 @@ def test_user_storage_keys_are_unique_and_immutable_across_rename(tmp_path):
 
 
 def test_manifest_artifact_resolution_rejects_traversal_tampering_and_symlink_escape(tmp_path):
-    resolver = StorageResolver(str(tmp_path / "results"), str(tmp_path / "workspaces"))
+    store = _ManifestAnchorStore()
+    resolver = StorageResolver(str(tmp_path / "results"), str(tmp_path / "workspaces"), store)
     task = _task()
     root = Path(resolver.get_task_root(task))
     root.mkdir(parents=True)
     artifact = root / "model.pdb"
     content = b"ATOM\n"
     artifact.write_bytes(content)
-    manifest = {
-        "artifacts": [
-            {
-                "path": "model.pdb",
-                "sha256": hashlib.sha256(content).hexdigest(),
-                "size": len(content),
-            }
-        ]
-    }
-    (root / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    _publish_manifest(
+        resolver,
+        store,
+        task,
+        {
+            "artifacts": [
+                {
+                    "path": "model.pdb",
+                    "sha256": hashlib.sha256(content).hexdigest(),
+                    "size": len(content),
+                }
+            ]
+        },
+    )
     assert resolver.resolve_artifact(task, "model.pdb") is not None
     for unsafe in ("../model.pdb", "../../etc/passwd", "/etc/passwd", "..\\model.pdb"):
         assert resolver.resolve_artifact(task, unsafe) is None
@@ -90,26 +124,27 @@ def test_manifest_artifact_resolution_rejects_traversal_tampering_and_symlink_es
 def test_manifest_artifact_resolution_rejects_a_second_hardlink(tmp_path):
     """A published artifact must be reachable only through its manifest entry.
     A second link would let the bytes be replaced under a verified digest."""
-    resolver = StorageResolver(str(tmp_path / "results"), str(tmp_path / "workspaces"))
+    store = _ManifestAnchorStore()
+    resolver = StorageResolver(str(tmp_path / "results"), str(tmp_path / "workspaces"), store)
     task = _task()
     root = Path(resolver.get_task_root(task))
     root.mkdir(parents=True)
     artifact = root / "model.pdb"
     content = b"ATOM\n"
     artifact.write_bytes(content)
-    (root / "manifest.json").write_text(
-        json.dumps(
-            {
-                "artifacts": [
-                    {
-                        "path": "model.pdb",
-                        "sha256": hashlib.sha256(content).hexdigest(),
-                        "size": len(content),
-                    }
-                ]
-            }
-        ),
-        encoding="utf-8",
+    _publish_manifest(
+        resolver,
+        store,
+        task,
+        {
+            "artifacts": [
+                {
+                    "path": "model.pdb",
+                    "sha256": hashlib.sha256(content).hexdigest(),
+                    "size": len(content),
+                }
+            ]
+        },
     )
     assert resolver.resolve_artifact(task, "model.pdb") is not None
 

@@ -200,8 +200,14 @@ def _task_result_dir(task: dict[str, Any]) -> str:
 
 
 def _storage() -> StorageResolver:
-    """Build from current config so tests and controlled reloads stay isolated."""
-    return StorageResolver(CONFIG.results_folder, CONFIG.workspace_folder)
+    """Build from current config so tests and controlled reloads stay isolated.
+
+    The Task store is bound here because it owns the finalized-manifest
+    publication anchor: a reader that could not reach it would be unable to
+    verify that a manifest is the one Core published, and would refuse every
+    publication.
+    """
+    return StorageResolver(CONFIG.results_folder, CONFIG.workspace_folder, task_store)
 
 
 # Stream a verified artifact into the ZIP in bounded chunks: a scientific result
@@ -1135,6 +1141,32 @@ def _resolve_result_views(
     return views, checks, list(dict.fromkeys(problems))
 
 
+def _anchor_result_manifest(task: dict[str, Any], payload: bytes, *, published_at: float) -> None:
+    """Record the finalized manifest's identity in server-owned state.
+
+    This is the one piece of publication identity that does not live under the
+    result root.  ``StorageResolver`` reads it back on every manifest read, so a
+    replacement manifest -- a valid single-link regular JSON file that declares
+    its own artifacts, sizes, and digests -- cannot redefine the published
+    namespace: the anchor describes what Core published, and the replacement
+    does not match it.
+
+    Finalization must not fail because the anchor could not be persisted: a
+    failed persistence leaves the manifest readable-but-unanchored, which every
+    consumer already fails closed on, so the outcome is a refused publication
+    rather than a task finalized with no durable record at all.
+    """
+    try:
+        task_store.record_result_publication(
+            str(task["md5sum"]),
+            manifest_sha256=hashlib.sha256(payload).hexdigest(),
+            manifest_size=len(payload),
+            published_at=published_at,
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        logging.warning("Could not anchor result manifest for task %s: %s", task.get("md5sum"), exc)
+
+
 def _finalize_results_manifest(
     task: dict[str, Any],
     *,
@@ -1298,12 +1330,23 @@ def _finalize_results_manifest(
     # no artifacts) rather than degrading to "publish the unsafe tree".
     temporary = _safe_join(result_dir, ".manifest.json.tmp")
     destination = _safe_join(result_dir, "manifest.json")
+    # One serialization, written once: the bytes anchored below are the exact
+    # bytes published, not a second serialization that could differ from them.
+    payload = json.dumps(manifest, ensure_ascii=True, indent=2, sort_keys=True) + "\n"
     with open(temporary, "w", encoding="utf-8") as handle:
-        json.dump(manifest, handle, ensure_ascii=True, indent=2, sort_keys=True)
-        handle.write("\n")
+        handle.write(payload)
         handle.flush()
         os.fsync(handle.fileno())
     os.replace(temporary, destination)
+    # The manifest is self-describing — it declares its artifacts, their sizes,
+    # and their digests — and it is written by the runner's Unix identity inside
+    # the runner-owned result tree, so nothing *in* that tree can say whether the
+    # file just published is the one Core finalized.  Anchoring the finalized
+    # bytes in server-owned state is what makes that question answerable: every
+    # later read of the manifest is checked against this record, so a
+    # post-finalization replacement (which could otherwise declare its own sizes
+    # and digests and thereby authorize its own publication) fails closed.
+    _anchor_result_manifest(task, payload.encode("utf-8"), published_at=finished_at)
     emit_event(
         "manifest.published",
         request_id=_task_request_id(task),
