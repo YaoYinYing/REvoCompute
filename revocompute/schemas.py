@@ -517,6 +517,124 @@ class OperatorJobRequest(BaseModel):
     idempotency_key: str | None = Field(default=None, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
 
 
+#: A deployment execution-class name, accelerator class name, or partition name.
+PlacementName = Annotated[str, Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")]
+#: A Slurm workload manager command (a memory or time string, a GRES, a
+#: constraint expression).  Deliberately permissive in *shape* only: the
+#: canonical resource normalizer is what actually validates the value, so a
+#: constraint expression like ``[a100|h100]&nvlink`` is representable here.
+SlurmValue = Annotated[str, Field(min_length=1, max_length=256)]
+
+
+class PlacementClassDocument(BaseModel):
+    """One deployment-local execution class, as an operator writes it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: PlacementName
+    partition: PlacementName
+    accelerator: Literal["none", "cuda"] = "none"
+    accelerator_class: str = Field(default="", max_length=64)
+    qos: str | None = Field(default=None, max_length=64)
+    account: str | None = Field(default=None, max_length=64)
+    constraint: SlurmValue | None = None
+    exclusive: bool = False
+    cpus: int | None = Field(default=None, ge=1, le=1024)
+    memory_mb: int | None = Field(default=None, ge=1)
+    vram_mb: int | None = Field(default=None, ge=1)
+    fallback_classes: list[PlacementName] = Field(default_factory=list)
+
+
+class PlacementPolicyDocument(BaseModel):
+    """The proposed class list for the deployment's placement policy."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    classes: list[PlacementClassDocument] = Field(default_factory=list)
+
+
+class PlacementExplainRequest(BaseModel):
+    """Resolve one hypothetical stage against policy, changing nothing.
+
+    A dry run takes workload facts, never deployment names: an operator asks
+    "where would a 16-CPU, 2-accelerator stage land?" and the answer is the
+    decision real dispatch would make for the same inputs and policy revision.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    cpus: int = Field(default=1, ge=1, le=1024)
+    memory_mb: int = Field(default=4096, ge=1)
+    max_runtime_seconds: int = Field(default=86400, ge=1)
+    accelerator: Literal["none", "cuda"] = "none"
+    gpu_count: int = Field(default=0, ge=0, le=64)
+    min_vram_mb: int = Field(default=0, ge=0)
+    exclusive: bool = False
+    requires_network: bool = False
+    #: Optional explicit Admin override to evaluate, using the same precedence
+    #: model dispatch applies — so an operator can see whether their override
+    #: refines a placement or contradicts it.
+    overrides: dict[str, SlurmValue] | None = None
+
+
+class PlacementStoredClass(BaseModel):
+    """A stored execution class, as the admin read route reports it."""
+
+    name: str
+    accelerator: str
+    partition: str
+    accelerator_class: str = ""
+    qos: str | None = None
+    account: str | None = None
+    constraint: str | None = None
+    exclusive: bool = False
+    cpus: int | None = None
+    memory_mb: int | None = None
+    vram_mb: int | None = None
+    fallback_classes: list[str] = Field(default_factory=list)
+
+
+class PlacementPolicyView(BaseModel):
+    """The placement policy in force, with the identity a plan records."""
+
+    declared: bool
+    revision: int
+    policy_digest: str
+    updated_at: float | None = None
+    updated_by_user_id: int | None = None
+
+
+class PlacementPlanView(PlacementPolicyView):
+    """One persisted placement plan: what a stage requested, and why."""
+
+    task_id: str
+    stage_id: str
+    plan_revision: int
+    state: str
+    matched_class: str
+    reason_code: str
+    resolved: dict[str, Any]
+    policy_revision: int
+    plan_digest: str
+    created_at: float
+    submitted_at: float | None = None
+    slurm_job_id: str | None = None
+    policy_changed_since_plan: bool = False
+
+
+class PlacementDryRunResult(BaseModel):
+    """The outcome of a dry run, placed or refused, in one stable shape."""
+
+    placed: bool
+    reason_code: str
+    message: str = ""
+    requirement: dict[str, Any]
+    resolved: dict[str, Any] | None = None
+    matched_class: str = ""
+    notes: list[str] = Field(default_factory=list)
+    plan_digest: str = ""
+
+
 # ---------------------------------------------------------------------------
 # Response models
 # ---------------------------------------------------------------------------

@@ -725,6 +725,74 @@ class TaskDatabase:
             Column("revision", Integer, nullable=False, default=1),
             Column("published_at", Float, nullable=False),
         )
+        # The immutable, explainable record of one stage's placement decision,
+        # written before the scheduler is asked and never rewritten afterwards.
+        #
+        # ``state``/``slurm_job_id`` are the plan's own lifecycle, not a copy of
+        # the allocation: a plan row is the durable answer to "what did
+        # REvoCompute decide, and did that decision reach Slurm?", which is what
+        # makes a repeated dispatch unable to replan a submitted stage.  The
+        # resource facts (what was actually allocated and consumed) stay in
+        # ``resource_allocations``; this row never duplicates a quantity.
+        #
+        # A separate table rather than columns on ``tasks`` for the reason
+        # recorded on ``result_publications_table``: ``require_current_schema``
+        # rejects a database whose ``tasks`` table lacks a declared column, so a
+        # new table is the addition that cannot invalidate a deployment's rows.
+        self.placement_plans_table = Table(
+            "placement_plans",
+            self.metadata,
+            Column("id", Integer, primary_key=True, autoincrement=True),
+            Column("task_id", String(32), nullable=False),
+            Column("stage_id", String, nullable=False),
+            # Monotonic per (task, stage): the revision this row supersedes and
+            # the revision that supersedes it are both readable, in order.
+            Column("revision", Integer, nullable=False),
+            Column("state", String(16), nullable=False, default="planned"),
+            Column("plan_digest", String(80), nullable=False),
+            # The decision, frozen.  Both JSON blobs are the canonical public
+            # projections, so a historical plan is readable without today's
+            # policy and without the admin configuration database.
+            Column("requirement_json", Text, nullable=False, default="{}"),
+            Column("resolved_json", Text, nullable=False, default="{}"),
+            Column("matched_class", String(64), nullable=False, default=""),
+            Column("reason_code", String(48), nullable=False),
+            Column("notes_json", Text, nullable=False, default="[]"),
+            Column("policy_revision", Integer, nullable=False, default=0),
+            Column("policy_digest", String(80), nullable=False, default=""),
+            Column("created_at", Float, nullable=False),
+            # When this worker began asking the scheduler for this plan's
+            # request.  Deliberately separate from ``state``: it is the one fact
+            # that makes the deliberately ambiguous window — srun launched, its
+            # answer lost, this process dead before anything recorded — readable
+            # afterwards.  A plan with this set and no ``submitted_at`` is an
+            # unresolved submission, and a retry must surface that to an
+            # operator instead of asking the scheduler a second time.
+            Column("submission_started_at", Float),
+            Column("submitted_at", Float),
+            Column("slurm_job_id", String(64)),
+        )
+        Index(
+            "idx_placement_plans_stage_revision",
+            self.placement_plans_table.c.task_id,
+            self.placement_plans_table.c.stage_id,
+            self.placement_plans_table.c.revision,
+            unique=True,
+        )
+        # One *live* plan per stage: a not-yet-dispatched plan may be superseded
+        # by an explicit replan, but two plans can never both be the one dispatch
+        # will consume.
+        Index(
+            "idx_placement_plans_live_stage",
+            self.placement_plans_table.c.task_id,
+            self.placement_plans_table.c.stage_id,
+            unique=True,
+            sqlite_where=text("state IN ('planned', 'submitted')"),
+        )
+        Index(
+            "idx_placement_plans_slurm_job",
+            self.placement_plans_table.c.slurm_job_id,
+        )
         self._initialize()
 
     def _initialize(self) -> None:
@@ -2496,6 +2564,248 @@ class TaskDatabase:
         )
         with self.engine.connect() as conn:
             return [dict(row) for row in conn.execute(stmt).mappings().all()]
+
+    def get_live_placement_plan(self, task_id: str, stage_id: str) -> dict[str, Any] | None:
+        """The one plan a dispatch of this stage may still consume, if any.
+
+        A stage has at most one live plan — ``planned`` (written, not yet
+        dispatched) or ``submitted`` (the scheduler owns the request).  A
+        ``submitted`` plan is returned in preference to a bare ``planned`` row,
+        which is what makes "already submitted" answerable: recovery reads this
+        row instead of re-deriving a placement, so a restarted worker cannot
+        silently replan a job the scheduler already owns.
+        """
+        stmt = (
+            select(self.placement_plans_table)
+            .where(
+                self.placement_plans_table.c.task_id == task_id,
+                self.placement_plans_table.c.stage_id == stage_id,
+                self.placement_plans_table.c.state.in_(("planned", "submitted")),
+            )
+            .order_by(desc(self.placement_plans_table.c.revision))
+        )
+        with self.engine.connect() as conn:
+            for row in conn.execute(stmt).mappings().all():
+                return dict(row)
+        return None
+
+    def get_placement_plan(
+        self, task_id: str, stage_id: str, *, revision: int | None = None
+    ) -> dict[str, Any] | None:
+        """One recorded plan for a stage, newest first unless a revision is named."""
+        stmt = select(self.placement_plans_table).where(
+            self.placement_plans_table.c.task_id == task_id,
+            self.placement_plans_table.c.stage_id == stage_id,
+        )
+        if revision is not None:
+            stmt = stmt.where(self.placement_plans_table.c.revision == revision)
+        stmt = stmt.order_by(desc(self.placement_plans_table.c.revision)).limit(1)
+        with self.engine.connect() as conn:
+            row = conn.execute(stmt).mappings().one_or_none()
+        return dict(row) if row is not None else None
+
+    def list_placement_plans(
+        self,
+        *,
+        task_id: str | None = None,
+        stage_id: str | None = None,
+        state: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """Recorded plans, newest first, for the reports that consume them."""
+        if limit < 1 or limit > 1000:
+            raise ValueError("limit must be between 1 and 1000")
+        stmt = select(self.placement_plans_table)
+        if task_id is not None:
+            stmt = stmt.where(self.placement_plans_table.c.task_id == task_id)
+        if stage_id is not None:
+            stmt = stmt.where(self.placement_plans_table.c.stage_id == stage_id)
+        if state is not None:
+            stmt = stmt.where(self.placement_plans_table.c.state == state)
+        stmt = stmt.order_by(desc(self.placement_plans_table.c.id)).limit(limit)
+        with self.engine.connect() as conn:
+            return [dict(row) for row in conn.execute(stmt).mappings().all()]
+
+    def record_placement_plan(self, *, record: dict[str, Any], at: float | None = None) -> dict[str, Any]:
+        """Persist one stage's placement decision under a monotonic revision.
+
+        Idempotent, and that is the crash-safety property the dispatch path
+        depends on: recording the same decision again returns the row already
+        stored instead of appending a second revision, so a worker that died
+        after writing the plan and retried cannot produce two revisions of one
+        decision.
+
+        A *different* decision for a stage that already has a live plan is
+        either a legal replan or a hard refusal:
+
+        * the live plan is ``planned`` — nothing has been dispatched, so this is
+          the explicit deterministic replan the design allows: the old row is
+          marked ``superseded`` and the new revision is written in the same
+          transaction;
+        * the live plan is ``submitted`` — the scheduler owns that request, so
+          replanning would silently change a decision already made.  Refused.
+        """
+        task_id = str(record["task_id"])
+        stage_id = str(record["stage_id"])
+        digest = str(record["plan_digest"])
+        created_at = float(record["created_at"] if at is None else at)
+        with self.engine.connect() as conn:
+            conn.exec_driver_sql("BEGIN IMMEDIATE")
+            try:
+                existing = (
+                    conn.execute(
+                        select(self.placement_plans_table)
+                        .where(
+                            self.placement_plans_table.c.task_id == task_id,
+                            self.placement_plans_table.c.stage_id == stage_id,
+                            self.placement_plans_table.c.state.in_(("planned", "submitted")),
+                        )
+                        .order_by(desc(self.placement_plans_table.c.revision))
+                    )
+                    .mappings()
+                    .all()
+                )
+                live = existing[0] if existing else None
+                if live is not None and str(live["plan_digest"]) == digest:
+                    conn.commit()
+                    return dict(live)
+                if live is not None and str(live["state"]) == "submitted":
+                    raise ValueError(
+                        f"Stage {stage_id!r} of task {task_id!r} already has a submitted placement plan; "
+                        "a dispatched request is historical fact and may not be replanned"
+                    )
+                revision = int(live["revision"]) + 1 if live is not None else 1
+                if live is not None:
+                    conn.execute(
+                        update(self.placement_plans_table)
+                        .where(self.placement_plans_table.c.id == live["id"])
+                        .values(state="superseded")
+                    )
+                inserted = conn.execute(
+                    sqlite_insert(self.placement_plans_table)
+                    .values(
+                        task_id=task_id,
+                        stage_id=stage_id,
+                        revision=revision,
+                        state=str(record.get("state") or "planned"),
+                        plan_digest=digest,
+                        requirement_json=str(record.get("requirement_json") or "{}"),
+                        resolved_json=str(record.get("resolved_json") or "{}"),
+                        matched_class=str(record.get("matched_class") or ""),
+                        reason_code=str(record.get("reason_code") or ""),
+                        notes_json=str(record.get("notes_json") or "[]"),
+                        policy_revision=int(record.get("policy_revision") or 0),
+                        policy_digest=str(record.get("policy_digest") or ""),
+                        created_at=created_at,
+                        submitted_at=None,
+                        slurm_job_id=None,
+                    )
+                )
+                plan_id = int(inserted.lastrowid)
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        return self.get_placement_plan_row(plan_id)
+
+    def get_placement_plan_row(self, plan_id: int) -> dict[str, Any]:
+        with self.engine.connect() as conn:
+            row = (
+                conn.execute(
+                    select(self.placement_plans_table).where(self.placement_plans_table.c.id == plan_id)
+                )
+                .mappings()
+                .one()
+            )
+        return dict(row)
+
+    def supersede_placement_plan(self, plan_id: int) -> bool:
+        """Close out a live plan whose outcome this deployment can no longer name.
+
+        Used by recovery for a stage that was killed mid-run: the plan stays as
+        history, and the stage becomes replannable because *this* deployment has
+        already stopped whatever allocation it could have had (the workflow
+        recovery cancels the recorded job before it resumes).  Without it, a
+        resumed workflow would be blocked forever by its own interrupted
+        predecessor.  A ``submitted`` plan is deliberately not supersedable
+        here: a submitted request is historical fact, and only the dispatch
+        path — which can see the job — decides what to do with it.
+        """
+        stmt = (
+            update(self.placement_plans_table)
+            .where(
+                self.placement_plans_table.c.id == plan_id,
+                self.placement_plans_table.c.state == "planned",
+            )
+            .values(state="superseded")
+        )
+        with self.engine.begin() as conn:
+            return conn.execute(stmt).rowcount == 1
+
+    def mark_placement_plan_submission_started(self, plan_id: int, *, at: float | None = None) -> bool:
+        """Record that this worker is about to ask the scheduler.  Once.
+
+        The window between "srun launched" and "its answer recorded" is the one
+        window no transition can close: the scheduler may already own a request
+        this process can no longer name.  Writing the attempt *first* turns that
+        window from unknown into readable — a plan with a start stamp and no
+        ``submitted_at`` is an unresolved submission, and a retry must stop and
+        surface it rather than silently launch a second request.
+        """
+        timestamp = time.time() if at is None else at
+        stmt = (
+            update(self.placement_plans_table)
+            .where(
+                self.placement_plans_table.c.id == plan_id,
+                self.placement_plans_table.c.state == "planned",
+                self.placement_plans_table.c.submission_started_at.is_(None),
+            )
+            .values(submission_started_at=timestamp)
+        )
+        with self.engine.begin() as conn:
+            return conn.execute(stmt).rowcount == 1
+
+    def clear_placement_plan_submission(self, plan_id: int) -> bool:
+        """Return a plan to dispatchable after a submission that never started.
+
+        Only legal while the plan is still ``planned`` *and* still unresolved:
+        the caller has established, from this process's own outcome, that no
+        scheduler request exists.  It is deliberately not a time-based
+        recovery — a stamp older than some threshold proves nothing about a
+        request the scheduler may still own.
+        """
+        stmt = (
+            update(self.placement_plans_table)
+            .where(
+                self.placement_plans_table.c.id == plan_id,
+                self.placement_plans_table.c.state == "planned",
+            )
+            .values(submission_started_at=None)
+        )
+        with self.engine.begin() as conn:
+            return conn.execute(stmt).rowcount == 1
+
+    def mark_placement_plan_submitted(
+        self, plan_id: int, *, slurm_job_id: str, at: float | None = None
+    ) -> bool:
+        """Record that the scheduler owns this plan's request.  Once.
+
+        ``planned -> submitted`` only: the transition is the durable fact that
+        makes "do not replan or resubmit this stage" answerable after a crash, so
+        a second call — a retry, a reconciliation re-reading the same job — is a
+        no-op rather than a second state change.
+        """
+        timestamp = time.time() if at is None else at
+        stmt = (
+            update(self.placement_plans_table)
+            .where(
+                self.placement_plans_table.c.id == plan_id,
+                self.placement_plans_table.c.state == "planned",
+            )
+            .values(state="submitted", submitted_at=timestamp, slurm_job_id=str(slurm_job_id))
+        )
+        with self.engine.begin() as conn:
+            return conn.execute(stmt).rowcount == 1
 
     def record_allocation_start(
         self,

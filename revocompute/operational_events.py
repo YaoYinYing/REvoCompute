@@ -69,6 +69,14 @@ EVENT_NAMES = frozenset(
         "resource.lifecycle.requested",
         "resource.lifecycle.purged",
         "resource.lifecycle.error",
+        # Placement planning: the decided request for a stage, and the two
+        # bounded refusals that keep a retry from asking the scheduler for a
+        # request that may already exist.  Distinct from ``resource.*``
+        # accounting events because placement is a decision, never a consumed
+        # quantity.
+        "resource.placement.planned",
+        "resource.placement.refused",
+        "resource.policy.updated",
         "resource.reconciliation.completed",
     }
 )

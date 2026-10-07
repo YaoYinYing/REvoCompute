@@ -57,6 +57,15 @@ from revocompute.ingress_security import (
 from revocompute.input_validators.isolated_validation import VALIDATOR_RESOURCE_LIMIT_ERROR
 from revocompute.manage_db import ManageDatabase  # noqa: E402
 from revocompute.operational_events import emit_event
+from revocompute.placement_dispatch import (
+    PlacementDispatchRefused,
+    abandon_stage_submission,
+    begin_stage_submission,
+    confirm_stage_submitted,
+    plan_stage_for_dispatch,
+)
+from revocompute.placement_policy import PlacementPolicy, WorkloadRequirement
+from revocompute.placement_store import load_placement_policy
 from revocompute import resource_ledger as rloan
 from revocompute.resource_ledger import AdmissionReason, EvidenceSource, LedgerReason, ReservationReason
 from revocompute.resource_observations import work_items_projection
@@ -108,6 +117,45 @@ def _get_job_executor() -> str:
     loaded from the task registry.
     """
     return CONFIG.job_executor
+
+
+def _deployment_placement_policy() -> PlacementPolicy:
+    """The placement policy in force, re-read per dispatch.
+
+    Read every time rather than cached: an Admin editing the policy must affect
+    the *next* dispatch, and a policy change never rewrites the plan of a stage
+    the scheduler already owns (that plan is a stored row, not a computation).
+
+    A malformed document raises: a deployment that declared a policy and now
+    cannot read it must fail closed, because silently placing every stage
+    through the unmanaged path is exactly the failure an operator would never
+    see.
+    """
+    return load_placement_policy(CONFIG.placement_policy_path, allowed_queues=_manage_db.slurm_allowed_queues())
+
+
+def _dispatch_stage_placement(
+    *,
+    task_id: str,
+    stage_id: str,
+    resolved: ResolvedResources,
+    requires_network: bool,
+):
+    """Resolve (or reuse) the persisted placement plan for one stage.
+
+    The plan is written *before* the job adapter is constructed, so the request
+    Slurm is asked for is the request the plan recorded.  A stage that already
+    has a live plan reuses it verbatim; a stage whose scheduler request may
+    already exist is refused rather than resubmitted.
+    """
+    return plan_stage_for_dispatch(
+        task_store,
+        task_id=task_id,
+        stage_id=stage_id,
+        requirement=WorkloadRequirement.from_resolved(resolved, requires_network=requires_network),
+        resolved=resolved,
+        policy=_deployment_placement_policy(),
+    )
 
 _CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
 _TASK_ID_PATTERN = re.compile(r"[a-fA-F0-9]{32}$")
@@ -406,11 +454,21 @@ def _create_job(
     stage_callback=None,
     username: str = "",
     resource_policy: ResolvedResources | None = None,
+    stage_placement=None,
     allocation_dispatched_callback=None,
     allocation_started_callback=None,
     allocation_finished_callback=None,
 ) -> Job:
-    """Create the production Slurm/Apptainer job adapter."""
+    """Create the production Slurm/Apptainer job adapter.
+
+    ``stage_placement`` is the persisted placement plan this stage dispatches
+    from.  It is separate from ``resource_policy`` on purpose: the policy is the
+    resolved request (which the adapter reads to build its argv), while the plan
+    is the durable decision record whose submission transitions the adapter must
+    report — the plan is closed before ``srun`` is launched and confirmed once
+    the scheduler names a job, so a crash in between cannot become a silent
+    resubmission.
+    """
     return SlurmJob(
         task_id,
         tt,
@@ -423,6 +481,7 @@ def _create_job(
         # outcome, and resource observations into it.
         task_store=task_store,
         resource_policy=resource_policy,
+        placement_dispatch=stage_placement,
         scratch_backend=CONFIG.scratch_backend,
         # The deployment's Runtime Bundle store, so the adapter resolves the
         # task's pinned digest exactly where the submission path recorded it.
@@ -699,6 +758,19 @@ def _run_compute_job(
     dispatched_callback = started_callback = finished_callback = None
     stored_task = task_store.get_task(task_id) or {}
     submitted_by_user_id = int(stored_task.get("submitted_by_user_id") or 0)
+    stage_placement = None
+    if resource_policy is not None:
+        # The placement plan is resolved and persisted here, before the adapter
+        # exists, so the request Slurm is asked for is the request the plan
+        # recorded — and so a stage that already has a submitted plan is refused
+        # instead of launching a second job.
+        stage_placement = _dispatch_stage_placement(
+            task_id=task_id,
+            stage_id=tt.name,
+            resolved=resource_policy,
+            requires_network=bool(tt.requires_network),
+        )
+        resource_policy = stage_placement.resolved
     if resource_policy is not None and submitted_by_user_id > 0:
         # No entitlement read here: the decision belongs to the atomic
         # allocation-start transition, which knows whether this Task holds a
@@ -720,6 +792,7 @@ def _run_compute_job(
         stage_callback,
         username=username,
         resource_policy=resource_policy,
+        stage_placement=stage_placement,
         allocation_dispatched_callback=dispatched_callback,
         allocation_started_callback=started_callback,
         allocation_finished_callback=finished_callback,
@@ -787,6 +860,16 @@ def _run_compute_workflow(
         first_marker = next(iter(markers))
         if not task_store.update_task(task_id, status="queued", run_stage=first_marker):
             return JobState.CANCELLED
+        # Placement is planned per stage, and before the adapter exists, so a
+        # CPU stage of a CPU -> GPU -> CPU workflow requests CPU resources and a
+        # submitted stage is never planned or launched a second time.
+        stage_placement = _dispatch_stage_placement(
+            task_id=task_id,
+            stage_id=stage.name,
+            resolved=policy,
+            requires_network=bool(stage.requires_network),
+        )
+        policy = stage_placement.resolved
         dispatched_callback = started_callback = finished_callback = None
         user_id = int(task.get("submitted_by_user_id") or 0)
         if user_id > 0:
@@ -811,6 +894,7 @@ def _run_compute_workflow(
             stage_callback,
             username=task.get("username", ""),
             resource_policy=policy,
+            stage_placement=stage_placement,
             allocation_dispatched_callback=dispatched_callback,
             allocation_started_callback=started_callback,
             allocation_finished_callback=finished_callback,
@@ -2205,6 +2289,14 @@ def _execute_compute_task(
             run_stage=final_stage,
         )
         _cleanup_task_workspace(task)
+    except PlacementDispatchRefused as exc:
+        # Placement refused this stage explicitly, so nothing was submitted and
+        # the reason is already durable in the plan row and the operational
+        # event.  Recorded as itself rather than as an unexpected failure: an
+        # operator reading the task error must see "this stage may already have
+        # a request", not a generic crash.
+        logging.error("Placement refused dispatch for task %s: %s", md5sum, exc)
+        _record_failure(md5sum, task, start_time, stage_state["current"], str(exc))
     except Exception as exc:  # pylint: disable=broad-except
         emit_event(
             "runner.stage.failed",
@@ -2891,9 +2983,18 @@ def _recover_orphaned_tasks() -> int:
                 handled += 1
                 continue
             state = _workflow_state(task)
-            for step in state.values():
+            for name, step in state.items():
                 if step.get("status") == "running":
                     step["status"] = "interrupted"
+                    # A stage killed mid-run has no known scheduler outcome, so
+                    # its placement plan must be resolved rather than replayed:
+                    # the plan stays recorded as history, but it is no longer
+                    # live, so the resumed worker makes a fresh decision instead
+                    # of reusing a request whose job may still be winding down.
+                    for record in task_store.list_placement_plans(
+                        task_id=md5sum, stage_id=name, state="planned"
+                    ):
+                        task_store.supersede_placement_plan(int(record["id"]))
             if not task_store.update_task(
                 md5sum,
                 status="pending",

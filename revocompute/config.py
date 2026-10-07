@@ -172,6 +172,11 @@ class ComputeConfig:
     # Deployment-owned store of immutable Runtime Bundles.  A sibling of the
     # image store, so it survives the atomic replacement of the runner tree.
     runtime_bundle_root: str = ""
+    # Deployment-owned placement policy: the mapping from workload requirements
+    # to this site's partitions, QoS, accounts, and GRES classes.  Absent (the
+    # default) means the deployment declares no execution classes and the
+    # canonical per-task resource policy is the placement.
+    placement_policy_path: str = ""
     # Publication capacity guards.  Runner output is an untrusted filesystem
     # namespace, so the registered ResultManifest is bounded in both entry count
     # and aggregate bytes.  The defaults sit far above any real family's output
@@ -212,6 +217,9 @@ class ComputeConfig:
             scratch_backend=env_choice("REVOCOMPUTE_SCRATCH_BACKEND", "disk", {"disk", "ram"}),
             runtime_bundle_root=env_path(
                 "RUNTIME_BUNDLE_DIR", os.path.join(server_dir, "..", "runtime-bundles")
+            ),
+            placement_policy_path=env_path(
+                "PLACEMENT_POLICY_PATH", os.path.join(server_dir, "placement-policy.json")
             ),
             max_published_artifacts=env_int("MAX_PUBLISHED_ARTIFACTS", 100_000),
             max_published_bytes=env_int("MAX_PUBLISHED_BYTES", 8 * 1024 * 1024 * 1024),

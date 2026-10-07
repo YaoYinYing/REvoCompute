@@ -28,6 +28,11 @@ from revocompute.job import ExecutionBuilder, ExecutionPlan, Job, JobState
 from revocompute.job._stages import extract_stage_from_log_line
 from revocompute import runtime_bundle
 from revocompute.operational_events import emit_event
+from revocompute.placement_dispatch import (
+    abandon_stage_submission,
+    begin_stage_submission,
+    confirm_stage_submitted,
+)
 from revocompute.resource_observations import (
     OBSERVATION_PREFIX,
     PROGRESS_PREFIX,
@@ -250,6 +255,7 @@ class SlurmJob(Job):
         manage_db: Any = None,
         username: str = "",
         resource_policy: ResolvedResources | None = None,
+        placement_dispatch: Any = None,
         scratch_backend: str = "disk",
         allocation_dispatched_callback: Any = None,
         allocation_started_callback: Any = None,
@@ -297,6 +303,12 @@ class SlurmJob(Job):
         self._job_id_event = threading.Event()
         self._allocation_live_lock = threading.Lock()
         self._resolved_resource_policy = resource_policy
+        # The persisted placement plan this stage dispatches from.  The plan,
+        # not the resolved snapshot, owns the submission transitions: closing it
+        # before srun is launched and confirming it once the scheduler names a
+        # job is what makes a crash between those two moments a visible
+        # ambiguity rather than a silent second request.
+        self._placement_dispatch = placement_dispatch
         if scratch_backend not in {"disk", "ram"}:
             raise ValueError("scratch_backend must be 'disk' or 'ram'")
         self.scratch_backend = scratch_backend
@@ -313,6 +325,11 @@ class SlurmJob(Job):
             raise RuntimeError("SLURM is disabled — set slurm_enabled=true in admin config")
 
         emit_event("slurm.allocation.requested", **self._event_fields())
+        if self._placement_dispatch is not None:
+            # Opened before anything else on this path touches the scheduler, so
+            # the one window no transition can close — a request that exists and
+            # whose answer this process never recorded — leaves a durable trace.
+            begin_stage_submission(self._task_store, self._placement_dispatch)
         try:
             self._prepare_scratch_dir()
             self._remove_allocation_approval()
@@ -337,6 +354,11 @@ class SlurmJob(Job):
                 reason_code="submission_failed",
                 **self._event_fields(),
             )
+            # Nothing was launched, so no scheduler request can exist for this
+            # plan: it returns to dispatchable rather than leaving the stage
+            # blocked on an attempt that never reached Slurm.
+            if self._placement_dispatch is not None:
+                abandon_stage_submission(self._task_store, self._placement_dispatch)
             self._remove_wrapper_script()
             self._cleanup_scratch_dir()
             raise
@@ -370,6 +392,13 @@ class SlurmJob(Job):
             )
             raise RuntimeError(f"SLURM submission did not return a scheduler job ID{suffix}")
         self._job_id = self._slurm_job_id
+        if self._placement_dispatch is not None:
+            # The scheduler owns a request for this stage now, so the plan is
+            # historical fact: a later dispatch of the same stage reuses it
+            # rather than resolving a fresh (and possibly different) placement.
+            confirm_stage_submitted(
+                self._task_store, self._placement_dispatch, slurm_job_id=self._slurm_job_id
+            )
         # Snapshot before the callbacks run: each may block, and this is the only
         # stable answer to "does the wrapper gate on resource accounting?".
         accounting_enabled = (

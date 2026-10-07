@@ -24,7 +24,7 @@ import re
 import shutil
 import time
 import unicodedata
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -124,7 +124,20 @@ from revocompute.resource_policy import (
     GLOBAL_RESOURCE_KEYS,
     ResourceValidationError,
     normalize_resource_value,
+    resolve_resources,
     resolve_submission_resources,
+)
+from revocompute.placement_policy import (
+    PlacementError,
+    PlacementPlan,
+    PlacementPolicy,
+    WorkloadRequirement,
+    explain_placement,
+)
+from revocompute.placement_store import (
+    load_placement_policy,
+    policy_document,
+    write_placement_policy,
 )
 from revocompute.result_projection import project_result_manifest
 from revocompute.storage import (
@@ -152,6 +165,12 @@ from revocompute.schemas import (
     LoginRequest,
     OperatorJobRequest,
     OperatorPlanRequest,
+    PlacementDryRunResult,
+    PlacementExplainRequest,
+    PlacementPlanView,
+    PlacementPolicyDocument,
+    PlacementPolicyView,
+    PlacementStoredClass,
     PreflightAdmission,
     PreflightFinding,
     PreflightPhase,
@@ -5338,3 +5357,258 @@ def admin_set_config():
     count = manage_db.apply_resource_updates(pending_task_updates, pending_resources)
 
     return jsonify({"message": f"{count} setting(s) updated"}), 200
+
+
+# ---------------------------------------------------------------------------
+# Placement policy API
+#
+# Placement is where a workload requirement becomes a local Slurm request.  The
+# policy is a deployment document (its own JSON file), the read/update surface is
+# admin-only, and the dry run resolves a requirement without submitting anything.
+# ---------------------------------------------------------------------------
+
+
+def _placement_policy_or_503():
+    """The policy in force, or a stable 503 when the stored document is unusable.
+
+    A malformed policy fails closed at every entry point: a deployment that
+    declared classes and can no longer read them must not silently place stages
+    through the unmanaged path.
+    """
+    try:
+        return load_placement_policy(CONFIG.placement_policy_path, allowed_queues=_slurm_allowed_queues())
+    except (PlacementError, OSError, ValueError) as exc:
+        logging.error("Placement policy is unusable: %s", exc)
+        return (jsonify({"error": str(exc), "code": "placement_policy_invalid"}), 503)
+
+
+def _slurm_allowed_queues() -> list[str]:
+    manage_db = current_app.config.get("manage_db")
+    if manage_db is None:
+        return []
+    return manage_db.slurm_allowed_queues()
+
+
+def _policy_changed(stored_digest: str, policy) -> bool:
+    """Whether today's policy differs from the one a stored plan recorded.
+
+    Reported, never applied: a stored plan is historical fact, and the reader
+    needs to see that the policy moved on without the recorded request changing.
+    """
+    return bool(stored_digest) and stored_digest != policy.policy_digest
+
+
+def _plan_view(record: dict, policy) -> dict:
+    try:
+        plan = PlacementPlan.from_record(record)
+    except (PlacementError, ValueError, KeyError, TypeError) as exc:
+        logging.error("Stored placement plan %s is unreadable: %s", record.get("id"), exc)
+        return {"error": "Stored placement plan is unreadable", "code": "placement_plan_unreadable"}
+    return {
+        "task_id": plan.task_id,
+        "stage_id": plan.stage_id,
+        "plan_revision": plan.revision,
+        "state": plan.state,
+        "matched_class": plan.matched_class,
+        "reason_code": plan.reason_code,
+        "resolved": plan.resolved.public_dict(),
+        "policy_revision": plan.policy_revision,
+        "policy_digest": plan.policy_digest,
+        "plan_digest": plan.plan_digest,
+        "created_at": plan.created_at,
+        "submitted_at": plan.submitted_at,
+        "slurm_job_id": plan.slurm_job_id,
+        "policy_changed_since_plan": _policy_changed(plan.policy_digest, policy),
+    }
+
+
+@app.route("/compute/api/auth/admin/placement-policy", methods=["GET"])
+@login_required
+def admin_get_placement_policy():
+    """Return the placement policy in force and the local surface it must fit.
+
+    Response::
+
+        {
+          "declared": true,
+          "revision": 3,
+          "policy_digest": "sha256:...",
+          "classes": [...],
+          "slurm": {"allowed_queues": [...], "enabled": true}
+        }
+    """
+    if _blocked := require_admin():
+        return _blocked
+    if _blocked := require_bearer_auth():
+        return _blocked
+    policy = _placement_policy_or_503()
+    if isinstance(policy, tuple):
+        return policy
+    manage_db = current_app.config.get("manage_db")
+    return jsonify(
+        {
+            "declared": policy.declared,
+            "revision": policy.revision,
+            "policy_digest": policy.policy_digest,
+            "updated_at": policy.updated_at or None,
+            "updated_by_user_id": policy.updated_by_user_id,
+            "classes": [PlacementStoredClass(**item).model_dump() for item in policy.public_dict()["classes"]],
+            "slurm": {
+                "enabled": bool(manage_db.slurm_enabled()) if manage_db is not None else False,
+                "allowed_queues": _slurm_allowed_queues(),
+            },
+        }
+    )
+
+
+@app.route("/compute/api/auth/admin/placement-policy", methods=["PUT"])
+@login_required
+def admin_set_placement_policy():
+    """Replace the deployment's execution classes, validated before anything is written.
+
+    The proposed classes are checked against the deployment's allowed queue list
+    *and* re-checked against the persisted surface, so a policy that would name
+    a partition this deployment cannot see is refused with the previous policy
+    still in force.  An empty ``classes`` list is a legitimate update: it returns
+    the deployment to the canonical per-task resource policy.
+    """
+    if _blocked := require_admin():
+        return _blocked
+    if _blocked := require_bearer_auth():
+        return _blocked
+    body = _parse_body(PlacementPolicyDocument)
+    if isinstance(body, tuple):
+        return body
+    allowed = _slurm_allowed_queues()
+    try:
+        policy = write_placement_policy(
+            CONFIG.placement_policy_path,
+            [item.model_dump() for item in body.classes],
+            allowed_queues=allowed,
+            actor_user_id=int(g.current_user["id"]),
+        )
+    except PlacementError as exc:
+        return jsonify({"error": str(exc), "code": exc.reason_code}), 400
+    except OSError as exc:
+        logging.error("Placement policy could not be written: %s", exc)
+        return jsonify({"error": "Placement policy could not be written"}), 503
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    emit_event(
+        "resource.policy.updated",
+        request_id=g.request_id,
+        user_id=int(g.current_user["id"]),
+        reason_code="placement_policy_revision",
+        state=str(policy.revision),
+    )
+    return jsonify(policy_document(policy)), 200
+
+
+@app.route("/compute/api/auth/admin/placement-policy/explain", methods=["POST"])
+@login_required
+def admin_explain_placement():
+    """Resolve a hypothetical stage against policy without submitting anything.
+
+    The dry run consumes the same resolution path real dispatch uses, so it
+    returns the decision dispatch would make for the same immutable inputs and
+    policy revision — including the bounded reason code when there is none.
+    """
+    if _blocked := require_admin():
+        return _blocked
+    if _blocked := require_bearer_auth():
+        return _blocked
+    body = _parse_body(PlacementExplainRequest)
+    if isinstance(body, tuple):
+        return body
+    policy = _placement_policy_or_503()
+    if isinstance(policy, tuple):
+        return policy
+    try:
+        requirement = WorkloadRequirement(
+            cpus=body.cpus,
+            memory_mb=body.memory_mb,
+            max_runtime_seconds=body.max_runtime_seconds,
+            accelerator=body.accelerator,
+            gpu_count=body.gpu_count,
+            min_vram_mb=body.min_vram_mb,
+            exclusive=body.exclusive,
+            requires_network=body.requires_network,
+        )
+        resolved = _explain_base_snapshot(requirement, body.overrides or {})
+    except (PlacementError, ResourceValidationError) as exc:
+        return jsonify({"error": str(exc)}), 400
+    outcome = explain_placement(requirement, resolved, policy, allowed_queues=_slurm_allowed_queues())
+    return jsonify(PlacementDryRunResult(**outcome).model_dump()), 200
+
+
+def _explain_base_snapshot(requirement, overrides):
+    """The canonical snapshot a dry run evaluates against.
+
+    A dry run has no task, so it starts from the deployment's global resource
+    values — the same `resolve_resources` every submission uses — and applies the
+    caller's explicit overrides through the canonical normalizer.  There is no
+    second precedence model: overrides enter exactly where an Admin's per-task
+    values enter, and placement then refines or refuses them identically.
+    """
+    manage_db = current_app.config.get("manage_db")
+    global_values = manage_db.resource_all() if manage_db is not None else {}
+    requires_gpu = requirement.requires_accelerator
+    resolved = resolve_resources(
+        lambda _field: None,
+        global_values.get,
+        requires_gpu=requires_gpu,
+        allowed_queues=tuple(_slurm_allowed_queues()),
+        default_timeout_seconds=requirement.max_runtime_seconds,
+    )
+    if not overrides:
+        return resolved
+    fields = {}
+    for key, value in overrides.items():
+        field = _PLACEMENT_OVERRIDE_FIELDS.get(key)
+        if field is None:
+            raise PlacementError(f"Unknown placement override: {key!r}")
+        fields[field] = normalize_resource_value(field, value)
+    return replace(resolved, **fields)
+
+
+#: The explicit override vocabulary a dry run may evaluate.  Keys are the
+#: operator-facing names; values are the canonical resource field they set, so
+#: an override can never introduce a field placement does not already consume.
+_PLACEMENT_OVERRIDE_FIELDS = {
+    "partition": "partition",
+    "qos": "qos",
+    "account": "account",
+    "constraint": "constraint",
+    "gres": "gres",
+    "exclusive": "exclusive",
+}
+
+
+@app.route("/compute/api/auth/admin/tasks/<md5sum>/placement", methods=["GET"])
+@login_required
+def admin_task_placement(md5sum):
+    """Every persisted placement plan for one Task, newest first.
+
+    The reader Admin Reports (#61) consumes: it answers what each stage
+    requested, which rule matched, which local request was resolved, and why —
+    without scraping an ``srun`` command line.
+    """
+    if _blocked := require_admin():
+        return _blocked
+    md5sum = _normalize_task_id(md5sum)
+    if md5sum is None:
+        return jsonify({"error": "Invalid task id"}), 400
+    policy = _placement_policy_or_503()
+    if isinstance(policy, tuple):
+        return policy
+    records = task_store.list_placement_plans(task_id=md5sum)
+    if not records and task_store.get_task(md5sum) is None:
+        return jsonify({"error": "Unknown task"}), 404
+    return jsonify(
+        {
+            "task_id": md5sum,
+            "policy_revision": policy.revision,
+            "policy_digest": policy.policy_digest,
+            "plans": [_plan_view(record, policy) for record in records],
+        }
+    ), 200
