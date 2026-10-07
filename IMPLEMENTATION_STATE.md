@@ -199,6 +199,225 @@ the fixture architecture.
 
 ---
 
+# Cared-for Precision Refinement (PR #56)
+
+`TODO.md` is the design contract; `docs/developer-guide/frontend-design-language.md`
+is the single canonical source of the durable visual rules. This section records
+execution state for the post-Soft-Precision taste refinement.
+
+## Starting point
+
+- Observed `main`: `e64077589ff6c3583bb4b27b528daa2b1551abce`.
+- Feature branch: `design/cared-for-precision-refinement`; worktree
+  `/home/yinying/repo/.rc-worktrees/cared-for-precision-refinement`.
+- Scope: frontend presentation and the design documentation set only. No
+  behavior, DOM contract, i18n, Result contract, server ownership, auth, or
+  validation-identity change.
+
+## Rendered baseline (§5) — where the UI felt generic
+
+The pre-pass bundle was competent but **undersaturated and soft-generic**: a
+cool blue-grey field, a shadowless flat result preview, and a gradient structure
+toolbar. The correct structure (hairline stat strip rather than floating cards,
+text-only status with a shape cue, tinted result stage, editorial runner
+heading) was already in place and was retained.
+
+## What the refinement changed
+
+- **Environmental neutral (§6, §7)** — the light canvas moved from a sterile
+  blue-grey to a sub-threshold warm grey-green (`--app-bg`, `--app-surface`,
+  `--app-stage`, `--app-line`, `--app-ink`). The bias stays below a visible cast;
+  REvo blue remains ink (action/selection/focus/links only, §5.2) and the
+  scientific content stays the richest colour.
+- **Elevation as depth, not polish (§6.2)** — `--shadow-surface` gained a
+  restrained ground shadow so work surfaces read as laid on the bench rather
+  than floating; most surfaces still stand on border + tone.
+- **Scientific stage (§10/§18)** — `.result-preview` lost its border and is now
+  defined by tone plus ground shadow; `.structure-viewport` moved its border to
+  `var(--result-line)`; the structure toolbar is a flat `var(--result-surface)`
+  with a hairline (chrome above the science), replacing a gradient.
+- **Create Task (§12)** — `.ct-primary` elevation is derived from the accent via
+  `color-mix()` instead of a hardcoded teal literal.
+
+## Documentation consolidation
+
+`frontend-design-language.md` now declares itself the single canonical rule
+source. `frontend-art-direction.md` keeps only the judgment layer (emotional
+target, wild-rose metaphor, laboratory-not-industrial character, Monet as
+relational art direction, authorship, composition over decoration) and cites the
+rule sections; `frontend-taste-review.md` is a review instrument (ordered
+questions, each pointing at its governing rule) plus the fast rubric;
+`frontend-visual-ancestry.md` is the historical-evidence record that cites the
+current rules rather than re-deriving them from the 2026 palette.
+
+## §27 subtraction pass
+
+Removed dead CSS with no rendered consumer (verified repo-wide, excluding built
+`dist/`): the unused `--space-*` scale (the single `var(--space-4)` use inlined),
+the unused `.tnum` utility, the unrendered `.list-heading` rules (with
+`.catalog-count` folded into the aligned toolbar as a tabular machine fact), and
+the dead `.dashboard-controls` selector. No second visual system remains.
+
+## Delivery commands and results
+
+- `cd frontend && npm run typecheck && npm run test && npm run build` ->
+  typecheck clean; 19 test files / 88 tests passed; build runs verify:lock,
+  verify:provenance, check:api-types, verify:build.
+- `pytest tests/test_playwright_soft_precision.py -q` -> 18 passed (the Soft
+  Precision contract matrix: rail, mobile nav, i18n, notices, guided tour,
+  advanced-search subordination, view-switch independence, text-only status, WCAG
+  light+dark, touch targets, reduced motion).
+- `pytest tests/test_playwright_application.py -q` -> 38 passed.
+- `pytest tests/test_playwright_results.py -q` -> 18 passed.
+- `mkdocs build --strict` -> clean (docs toolchain via `uv run --with`; the
+  repository venv does not carry it).
+
+## Review evidence
+
+A bounded after-storyboard (10 surfaces: Dashboard desktop light/dark and
+mobile, structure Result, Runner catalog, Runner detail, Create Task,
+Admin/User Control, Profile, login) was rendered from the production bundle
+through the real fixture harness. It is review evidence, not a pixel-golden
+corpus; no screenshot-diff test was added.
+
+## Reopened strength pass (composition over token tuning)
+
+The first delivery was judged technically sound but too subtle. This pass raises
+strength of authorship by composition, not tokens: a page opens on one
+editorial-scale masthead set off by a rule, and identity → primary content →
+controls → metadata descend in weight instead of reading as equal bands. Commit
+`3527b61`; the §27 subtraction followed in a second commit.
+
+Changed surfaces (composition only; no behaviour, DOM, i18n, contract, or
+a11y change):
+
+- **Shell / page frames** — taller page padding; `.page-heading`,
+  `.runner-detail-heading` and `route-error` h1 at editorial scale with a
+  tighter display tracking; runner-group and detail-section gutters widened to a
+  16rem index column with a 2px spine rule so a category/section reads as an
+  authored divider, not a caption. Dashboard stat figures scaled to 2.5rem; the
+  attention figure stays the only locally-weighted one.
+- **Create Task** — method groups are ruled chapters; the protocol reads as
+  numbered stages on a measured gutter; the snapshot panel scales its method
+  identity. No parameter/validation/one-click-submit change.
+- **Result** — the result's own identity is now the loudest text in the
+  workspace; the scientific stage opens taller. The structure toolbar comment
+  was moved onto the rule it explains (subtraction).
+- **Admin** — the toolbar is a bordered instrument panel (dense but framed), the
+  table header carries a 2px rule, the stat strip figures scale. Density kept.
+- **Profile / auth** — relaxed page rhythm and scaled section headings.
+
+Rendered judgment was made against the deployed baseline
+(`cp-after` vs the after-set) on Dashboard, Runner catalog/detail, Create Task,
+a structure Result, Admin/User Control, Profile and login, in both themes and at
+desktop plus tablet/mobile widths. The strengthened composition reads as
+intended rather than as decoration: hierarchy is carried by scale, gutter and
+rule, not by added ornament; soft-surface/border-vs-tone decisions are
+unchanged.
+
+§27 subtraction applied in this pass: removed a non-composition dashboard
+stat-label tracking that changed no rhythm, and relocated the misplaced
+structure-toolbar rationale comment. Net change is composition-only.
+
+Re-ran at the delivered head: `npm run typecheck` clean, `npm run test` 19 files
+/ 88 tests passed, `npm run build` (verify:lock, verify:provenance,
+check:api-types, vite build, verify:build) clean; browser gates
+(`test_playwright_soft_precision`, `test_playwright_application`,
+`test_playwright_runner_fixtures`, `test_playwright_results`) 96 passed /
+2 xfailed; Molstar CSP case 2 skipped as designed; `mkdocs build --strict`
+clean.
+
+---
+
+# Administration information-architecture correction (PR #56)
+
+A deployed-UI review found one information-architecture defect: User control,
+Server logs, and Configuration are persistent page-level workspaces, but they
+were reachable only through a `details` menu in the top-right chrome — a hidden
+launcher for three destinations, while the top bar is defined as global chrome
+(`frontend-design-language.md` §10).
+
+## Decision
+
+The left navigation now states the product's architecture as three regions
+(§9.2): **Compute** (Runners, Dashboard), **Account** (Profile), and
+**Administration** (User control, Server logs, Configuration). Each region is a
+quiet label over its destinations, separated by a hairline and space; there is
+no Admin card, no second icon system, and no added visual weight — Discoverability
+comes from position and grouping, not from ornament.
+
+- The top-right `Administration` dropdown is **removed** (script and its CSS); the
+  top bar returns to global chrome only (language, notices, account, theme,
+  logout). There is no second hidden Administration launcher.
+- Region membership is **authorization, not visual hiding**: `shell.setUser`
+  renders the Administration region only when the server projects the session as
+  an administrator. Anonymous and ordinary-user navigation gain no forbidden link.
+- Profile's local section nav (Account/Security/API key/Runner access/GPU
+  credits/Metrics) is a *different navigation level* and is untouched; the new
+  region is deliberately not appended there, and a test asserts the global nav
+  carries no profile section tabs.
+- Extension: a region accepts destinations as their routes exist; no speculative
+  Fleet/Reports entries were added.
+- Responsive: above the bottom-bar band the rail is a column; a collapsed icon rail
+  keeps the inter-region rule and drops the word, and expanding the rail paints each
+  region name. On the bottom bar the Compute and Account destinations sit directly on
+  the bar (their wrappers dissolve; only those two headings take the 1px sr-only form)
+  and the current destination still marks itself there; a repeat activation navigates
+  instead of toggling a rail that has no column form.
+- Administration on mobile is a deliberate **bounded secondary surface just above the
+  bar** — one row of three destinations under its own painted "Administration" heading
+  (the sr-only rule is deliberately not applied to this group, since the heading is
+  what names the surface), cleared by the outlet padding — rather than three items
+  crowding the primary bar. Verified as painting real pixels, not a clipped sliver:
+  at 320/360/390px the heading's box is 320-390 x 24.45px, `position: static`,
+  `clip: auto`, it is the topmost element at its own centre, and a screenshot with the
+  heading differs from the same page with the sr-only rule re-applied.
+  It is absent for anyone not authorized, so ordinary and anonymous mobile navigation
+  are unchanged.
+- One behaviour change with the same change set: the Account (Profile) destination
+  now follows session state like the top-bar profile affordance, so anonymous
+  navigation offers the sign-in route (`/compute/login?return_to=…`) rather than a
+  protected `/compute/profile` link.
+
+## Tests updated (not screenshots)
+
+- `tests/test_playwright_soft_precision.py` — region labelling and the
+  ordinary-user/administrator visibility split, the mobile bar carrying
+  destinations without region headings, the administrator's bounded mobile
+  Administration surface above the bar (its heading asserted to have a non-zero
+  painted box and to be the topmost element at its centre, so a clipped sr-only
+  sliver fails the test), the ordinary user having no such surface, and the
+  expanded desktop rail painting the region labels.
+- `tests/test_playwright_application.py` — the admin dashboard case now asserts the
+  left-nav destination instead of opening a removed dropdown; the responsive admin
+  case asserts the current-page marker and that Profile's local tabs stay out of
+  the global nav; a new case asserts anonymous navigation carries no Administration
+  link or launcher at 320px and 1280px.
+
+## Delivery commands and results
+
+- `cd frontend && npm run typecheck && npm run test && npm run build` — typecheck
+  clean; 19 files / 88 tests passed; build (verify:lock, verify:provenance,
+  check:api-types, vite build, verify:build) clean.
+- `pytest tests -m "browser and not molstar_csp" -n 4 --dist=load -q` — 171 passed,
+  1 skipped, 2 xfailed.
+- `pytest tests -m "not browser" -n 4 --dist=load -q` — clean (run with `--basetemp`
+  on the repository filesystem; see the `/tmp` tmpfs note above).
+- `mkdocs build --strict` — clean.
+
+## Rendered evidence
+
+Storyboard rendered from the production bundle through the real fixture harness at
+the pre-change and post-change heads: desktop (1280) Administrator rail showing the
+three regions with the Administration destination marked current, ordinary-user
+desktop rail showing Compute + Account and no Administration region, anonymous rail
+at 1280/320, the collapsed and expanded tablet rail at 1024, and the mobile bar at
+360 in both the administrator state (primary bar plus the bounded Administration
+surface above it) and the ordinary-user state (primary bar only). Review evidence
+only; no screenshot-diff test.
+
+---
+
 # Soft Precision Visual System (PR #54)
 
 This section records execution state for the Soft Precision visual pass.

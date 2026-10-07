@@ -1,15 +1,29 @@
 # Frontend Design Language
 
-This page is the durable visual contract for REvoCompute's frontend.
-
-It defines the principles by which pages, controls, scientific workspaces, and
-system chrome are judged. It intentionally describes **roles and behavior**
-rather than copying live token values. The live values remain owned by
+This page is the durable visual contract for REvoCompute's frontend. It defines
+the principles by which pages, controls, scientific workspaces, and system chrome
+are judged. It intentionally describes **roles and behavior** rather than copying
+live token values. The live values remain owned by
 `frontend/src/styles/app.css`.
 
-The design language has one working name:
+The design language has one working name: **Soft Precision**.
 
-# Soft Precision
+**This page is the single canonical source of REvoCompute's visual rules.** If
+another frontend document appears to state a rule differently, this page wins.
+
+Three companion pages support it without restating it:
+
+- [Frontend Art Direction — Cared-for Precision](frontend-art-direction.md) —
+  the judgment and relational art references behind these rules: the
+  *Cared-for Precision* refinement of Soft Precision (why it should feel cared
+  for, laboratory-not-industrial character, authorship).
+- [Frontend Visual Ancestry](frontend-visual-ancestry.md) — the historical
+  evidence (REvoDesign PR #163, exemplars) that justifies these rules.
+- [Frontend Taste Review](frontend-taste-review.md) — the ordered questions to
+  ask of a rendered page, each pointing back here.
+
+Those pages explain how to preserve authorship, historical character, and
+contextual judgment. They are not a second rulebook.
 
 > **Precise without sharpness. Professional without industrial coldness.
 > Complex without disorder. Restrained without emptiness.**
@@ -57,7 +71,7 @@ REvoCompute must not depend on one visual gimmick for recognition.
 
 Do not create identity from:
 
-- coloured task rails;
+- coloured task rails used as a decorative signature;
 - computation-trace lines;
 - molecule/DNA decoration;
 - unusual card clipping;
@@ -81,6 +95,31 @@ product:
 
 If those decisions are consistent, the product becomes recognizable without
 needing a decorative signature.
+
+This is not a ban on conventional visual devices. A thin status rail, card,
+pill, shadow, or other familiar pattern is valid when it carries semantic or
+interaction value. Judge the reason and attention cost, not whether the pattern
+has become fashionable or overused elsewhere.
+
+### 2.1 Metaphors stay judgment aids, never themes
+
+The art-direction metaphors — the cared-for lab coat, the wild rose, Monet's
+relational light and colour — exist to guide decisions about quality: care,
+materiality, air, weight, colour hierarchy, authorship. They are **never themes
+to implement literally**.
+
+Before shipping anything inspired by a metaphor, confirm you implemented the
+*quality* and not the *literal* image. There must be no floral or botanical
+motif, no rose logo or embroidery effect, no fabric grain, no lab imagery, no
+Monet-like gradients, and no brush textures.
+
+A structure, heatmap, molecular representation, sequence colouring, or real
+scientific plot can be "the rose". Chrome must never be. Some pages need no rose
+at all — Dashboard or Admin may simply be the clean working garment.
+
+The judgment behind the metaphors belongs to
+[Frontend Art Direction](frontend-art-direction.md); the metaphor-safety review
+questions are [Frontend Taste Review](frontend-taste-review.md) §14.
 
 ---
 
@@ -162,9 +201,15 @@ Colour is a semantic resource.
 
 The canvas and content surfaces should be neutral.
 
-The background may have a cool bias, but it should not read as visibly blue,
-green, or teal. A strong hue in the neutral field muddies both identity colour
-and status colour.
+The neutral field carries a **warm environmental bias** — a sub-threshold warm
+grey-green, not a sterile cool blue-grey. "Warm" here is a relationship, not a
+tint: the background should not read as visibly yellow, green, or teal. A strong
+hue in the neutral field muddies both identity colour and status colour, so the
+bias must stay below the threshold of a perceived colour.
+
+The rationale is the *cared-for*, laboratory-not-industrial character: a working
+surface that has been used and maintained, not a showroom-cool instrument panel.
+The current values are owned by `frontend/src/styles/app.css`.
 
 Dark mode must be recalibrated independently and must not inherit a green cast.
 
@@ -374,7 +419,35 @@ There is no separate collapse-arrow button.
 
 Expansion reveals labels but does not turn the rail into a second content area.
 
-### 9.2 Mobile
+### 9.2 Navigation regions
+
+The left navigation states the product's information architecture as three
+regions, in this order:
+
+```text
+Compute        Runners, Dashboard
+Account        Profile
+Administration User control, Server logs, Configuration   (administrators only)
+```
+
+A region is a quiet label over its destinations, separated from the next region
+by a hairline and space. The grouping is carried by rule, label and spacing — it
+is not a card, not a decorative panel, and not a second icon system.
+
+Administration holds persistent system-level workspaces; Account holds the
+current user's own surfaces. They are different navigation levels and are never
+merged into one list.
+
+Region membership is authorization, not visual hiding: the Administration region
+is rendered only for a session the server projects as an administrator, so an
+ordinary user or an anonymous visitor never sees a forbidden destination. The
+route guard remains the authoritative boundary; navigation only reflects it.
+
+The structure is designed so further system surfaces can join a region as they
+are introduced. A destination is added when its route exists — not as a
+placeholder.
+
+### 9.3 Mobile
 
 Do not force the desktop rail onto mobile.
 
@@ -382,6 +455,11 @@ Mobile navigation should be designed for touch and limited width.
 
 The navigation model may differ while preserving the same information
 architecture and vocabulary.
+
+A bottom bar cannot label a group of items, so region headings are not rendered
+there; the destinations sit directly on the bar and the current one still marks
+itself. A destination added by the Administration region joins the bar the same
+way it joins the rail.
 
 ---
 
@@ -394,12 +472,14 @@ It may contain:
 - language;
 - theme;
 - notice/announcement affordance;
-- account;
-- role-dependent administration access.
+- account.
 
 Do not add a search field unless a real global search capability exists.
 
 Do not duplicate page actions into the top bar merely to make it look complete.
+
+Administration destinations live in the left navigation. The top bar must not
+carry a second Administration launcher.
 
 The best top bar is one users mostly stop noticing.
 
@@ -725,6 +805,26 @@ Shared identity comes from:
 - data treatment.
 
 Not from repeating the same card layout.
+
+### 19.1 Authored exceptions
+
+A completely systematized product can become anonymous. A small amount of
+authored character is allowed when the context earns it, and it is not a bug in
+consistency.
+
+Examples:
+
+- a Result stage breaking normal page width;
+- a strong operator reset action;
+- a semantic Task status rail;
+- an Admin page staying dense;
+- selective typographic contrast;
+- a page-specific relationship between primary and secondary surfaces.
+
+An exception becomes a defect only when it is arbitrary. The test is: **can the
+reason for the exception be stated clearly?** If yes, and usability and
+accessibility remain sound, it may belong. Judge exceptions against
+[Frontend Taste Review](frontend-taste-review.md) §13.
 
 ---
 

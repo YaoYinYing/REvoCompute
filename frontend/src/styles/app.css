@@ -7,21 +7,24 @@
  */
 :root {
   color-scheme: light;
-  /* Neutral canvas with a hairline cool bias — never a visible blue/green/teal cast.
+  /* Environmental neutral: the field carries a whisper of warm grey-green (the
+     lab-coat / working-surface relationship of the visual ancestry) rather than a
+     sterile blue-grey. The bias stays below the threshold of a visible cast, so
+     it never competes with identity or status colour.
      REvo blue is ink, not paint: it marks action, selection, focus and links only. */
-  --app-bg: #f5f6f7; --app-surface: #fbfbfc; --app-raised: #fff; --app-stage: #eceef0;
-  --app-ink: #1a1e22; --app-muted: #5d6771; --app-line: #e1e4e7; --app-line-strong: #c9cfd5;
-  --app-accent: #1d5c8f; --app-accent-2: #17486f; --app-soft: #e9eff5;
+  --app-bg: #f2f3ef; --app-surface: #fbfbf8; --app-raised: #fff; --app-stage: #e7e9e4;
+  --app-ink: #1a1e1d; --app-muted: #5c6763; --app-line: #e0e3dd; --app-line-strong: #c6ccc3;
+  --app-accent: #1d5c8f; --app-accent-2: #17486f; --app-soft: #e7eef4;
   --app-success: #2f7c5c; --app-danger: #af4438; --app-warning: #8a5a12; --app-running: #2b6da4; --app-focus: #3a7cba;
-  --app-scrim: rgb(18 22 26 / 48%);
+  --app-scrim: rgb(18 22 20 / 48%);
   /* Radius scale: curvature communicates role. Softened rectangles, not bubbles. */
   --r-surface-lg: 14px; --r-surface: 10px; --r-control: 8px; --r-util: 6px; --r-pill: 999px;
-  /* Elevation: shadow means elevation, so most surfaces stand on border + tone. */
-  --shadow-surface: 0 1px 2px rgb(22 30 38 / 4%);
-  --shadow-raised: 0 2px 6px rgb(22 30 38 / 7%), 0 14px 30px -22px rgb(22 30 38 / 40%);
-  --shadow-dialog: 0 24px 60px -32px rgb(12 18 24 / 50%);
-  /* Spacing rhythm. */
-  --space-1: .35rem; --space-2: .6rem; --space-3: 1rem; --space-4: 1.5rem; --space-5: 2.25rem; --space-6: 3.5rem;
+  /* Elevation: shadow means elevation, so most surfaces stand on border + tone.
+     A restrained ground shadow keeps work surfaces feeling laid on the bench
+     rather than floating above it. */
+  --shadow-surface: 0 1px 2px rgb(22 30 26 / 6%), 0 8px 18px -16px rgb(22 30 26 / 34%);
+  --shadow-raised: 0 2px 6px rgb(22 30 26 / 8%), 0 14px 30px -22px rgb(22 30 26 / 42%);
+  --shadow-dialog: 0 24px 60px -32px rgb(12 18 16 / 50%);
   /* One sans carries UI and display; mono is reserved for machine identity. */
   --font-sans: 'IBM Plex Sans', Inter, system-ui, -apple-system, sans-serif;
   --font-display: var(--font-sans);
@@ -55,7 +58,6 @@ a { color: var(--app-accent); }
 /* Focus is clear without harsh enterprise-software chrome. */
 :focus-visible { outline: 2px solid var(--app-focus); outline-offset: 2px; border-radius: 2px; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
-.tnum { font-variant-numeric: tabular-nums; }
 
 /* --- Application shell ---------------------------------------------------- */
 /* One working surface: a quiet navigation rail beside a global top bar and the
@@ -69,7 +71,20 @@ a { color: var(--app-accent); }
 .app-shell[data-rail="collapsed"] .app-brand span { display: none; }
 .app-shell[data-rail="expanded"] .app-brand { justify-content: start; padding: 0 1rem; }
 
-.app-nav { grid-area: nav; display: flex; flex-direction: column; gap: .2rem; padding: .6rem .5rem 1rem; border-right: 1px solid var(--app-line); background: var(--app-surface); }
+.app-nav { grid-area: nav; display: flex; flex-direction: column; gap: 1.15rem; padding: .75rem .5rem 1rem; border-right: 1px solid var(--app-line); background: var(--app-surface); }
+/* A navigation region: a quiet label over its destinations, separated by a
+   hairline so the sections read as authored divisions rather than one flat list.
+   The grouping is carried by rule, label and space — never by a card. */
+.app-nav-group { display: grid; gap: .3rem; }
+.app-nav-group + .app-nav-group { padding-top: 1.05rem; border-top: 1px solid var(--app-line); }
+/* The region label is a word, so it appears only when a word fits: a collapsed
+   icon rail and a tablet-width rail both keep the rule and drop the label. */
+.app-nav-group-label { margin: 0; padding: 0 .8rem .1rem; color: var(--app-muted); font-size: .62rem; font-weight: 650; letter-spacing: .06em; text-transform: uppercase; }
+.app-nav-group-items { display: grid; gap: .15rem; }
+.app-shell[data-rail="collapsed"] .app-nav { gap: .8rem; padding-top: .6rem; }
+.app-shell[data-rail="collapsed"] .app-nav-group + .app-nav-group { padding-top: .7rem; }
+.app-shell[data-rail="collapsed"] .app-nav-group-label { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+@media (max-width: 62rem) { .app-nav-group-label { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; } }
 .app-nav a { position: relative; justify-content: center; padding: .7rem; border-radius: var(--r-control); color: var(--app-muted); font-size: .86rem; font-weight: 600; text-decoration: none; transition: color .15s ease, background .15s ease; }
 .app-nav a:hover { color: var(--app-ink); background: color-mix(in srgb, var(--app-ink) 4%, transparent); }
 /* Active state is quiet: accent ink and a soft fill, not a heavy status stripe. */
@@ -81,10 +96,6 @@ a { color: var(--app-accent); }
 
 .app-header { grid-area: header; position: sticky; top: 0; z-index: 30; display: flex; min-height: 3.9rem; align-items: center; justify-content: end; gap: .5rem; padding: 0 1.25rem; border-bottom: 1px solid var(--app-line); background: color-mix(in srgb, var(--app-surface) 88%, transparent); backdrop-filter: blur(14px); }
 .app-header-actions { display: flex; align-items: center; gap: .5rem; }
-.app-admin-links { position: relative; }
-.app-admin-links > summary { list-style: none; }.app-admin-links > summary::-webkit-details-marker { display: none; }
-.app-admin-menu { position: absolute; top: calc(100% + .4rem); right: 0; display: grid; min-width: 11rem; padding: .3rem; border: 1px solid var(--app-line); border-radius: var(--r-control); background: var(--app-raised); box-shadow: var(--shadow-raised); }
-.app-admin-menu a { display: flex; align-items: center; gap: .55rem; padding: .55rem .65rem; border-radius: var(--r-util); color: var(--app-ink); font-size: .78rem; text-decoration: none; }.app-admin-menu a:hover { background: var(--app-soft); }.app-admin-menu svg { width: 1rem; }
 .app-new-task { display: inline-flex; min-height: 2.2rem; align-items: center; gap: .4rem; padding: 0 .85rem; border: 1px solid transparent; border-radius: var(--r-control); background: var(--app-accent); color: var(--app-bg); font-size: .82rem; font-weight: 650; text-decoration: none; transition: background .15s ease; }
 .app-new-task:hover, .app-new-task:focus-visible { background: var(--app-accent-2); }
 .app-new-task svg { width: .95rem; height: .95rem; }
@@ -140,10 +151,13 @@ a { color: var(--app-accent); }
 .tour-close { position: absolute; top: .4rem; right: .4rem; }
 
 /* --- Page shell and headings --------------------------------------------- */
-.dashboard-page, .runners-page, .runner-detail-page { width: min(100% - 2rem, 96rem); margin: 0 auto; padding: 2.25rem 0 5rem; }
-.page-heading { display: flex; justify-content: space-between; align-items: end; gap: 2rem; padding-bottom: 1.4rem; border-bottom: 1px solid var(--app-line); }
-.page-heading h1, .runner-detail-heading h1, .route-error h1 { margin: .1rem 0 .1rem; font: 600 clamp(1.75rem, 2.6vw, 2.2rem)/1.15 var(--font-display); letter-spacing: -.012em; }
-.page-heading p, .runner-intro { max-width: 52rem; margin: .4rem 0 0; color: var(--app-muted); font-size: .92rem; line-height: 1.6; }
+.dashboard-page, .runners-page, .runner-detail-page { width: min(100% - 2rem, 96rem); margin: 0 auto; padding: 2.6rem 0 5rem; }
+/* A page opens on its identity: one masthead at editorial scale, set off by a
+   rule. Identity, primary work, controls and metadata then descend in weight
+   rather than reading as a row of equal bands. */
+.page-heading { display: flex; justify-content: space-between; align-items: end; gap: 2rem; padding-bottom: 1.6rem; border-bottom: 1px solid var(--app-line); }
+.page-heading h1, .runner-detail-heading h1, .route-error h1 { margin: .15rem 0 .15rem; font: 600 clamp(2rem, 3.2vw, 2.7rem)/1.1 var(--font-display); letter-spacing: -.022em; }
+.page-heading p, .runner-intro { max-width: 54rem; margin: .55rem 0 0; color: var(--app-muted); font-size: .95rem; line-height: 1.6; }
 .page-kicker { margin: 0; color: var(--app-accent-2); font-size: .72rem; font-weight: 650; }
 .page-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
 
@@ -166,18 +180,18 @@ a { color: var(--app-accent); }
 .task-action:disabled { opacity: .5; cursor: not-allowed; }
 
 /* --- Dashboard: calm overview, dense facts ------------------------------- */
-.dashboard-stats { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0; margin-top: var(--space-4); border-block: 1px solid var(--app-line); }
-.dashboard-stats div { display: grid; min-width: 0; gap: .3rem; padding: 1rem 1.1rem 1.05rem; border-right: 1px solid var(--app-line); }
+.dashboard-stats { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0; margin-top: 2rem; border-block: 1px solid var(--app-line); }
+.dashboard-stats div { display: grid; min-width: 0; gap: .4rem; padding: 1.35rem 1.25rem 1.4rem; border-right: 1px solid var(--app-line); }
 .dashboard-stats div:first-child { padding-left: 0; }
 .dashboard-stats div:last-child { border-right: 0; }
 .dashboard-stats span { color: var(--app-muted); font-size: .72rem; font-weight: 600; }
-.dashboard-stats strong { font-family: var(--font-display); font-size: 1.95rem; font-weight: 600; line-height: 1; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.dashboard-stats strong { font-family: var(--font-display); font-size: 2.5rem; font-weight: 600; line-height: .95; letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
 /* The attention figure is the only one that may carry local semantic weight. */
 .dashboard-stats div[data-attention] strong { color: var(--app-warning); }
 .dashboard-stats div[data-attention][data-empty] strong { color: var(--app-ink); }
 
 /* Toolbar: one aligned system. Filtering and view mode stay conceptually separate. */
-.work-toolbar, .dashboard-controls { margin: 1.35rem 0; }
+.work-toolbar { margin: 1.35rem 0; }
 .work-toolbar { display: grid; grid-template-columns: minmax(15rem, 2fr) repeat(auto-fit, minmax(9rem, 1fr)); align-items: end; gap: .7rem .9rem; }
 .work-toolbar label, .layout-switch { display: grid; gap: .3rem; margin: 0; border: 0; padding: 0; min-width: 0; }
 .work-toolbar label > span:first-child, .layout-switch legend { color: var(--app-muted); font-size: .68rem; font-weight: 650; }
@@ -202,8 +216,8 @@ a { color: var(--app-accent); }
 .layout-switch button { min-height: 2.2rem; padding: .35rem .8rem; border: 1px solid var(--app-line-strong); background: var(--app-surface); color: var(--app-muted); cursor: pointer; font-size: .76rem; font-weight: 600; }
 .layout-switch button:first-of-type { border-radius: var(--r-util) 0 0 var(--r-util); }.layout-switch button:last-of-type { border-radius: 0 var(--r-util) var(--r-util) 0; }.layout-switch button + button { margin-left: -1px; }
 .layout-switch button[aria-pressed="true"] { position: relative; border-color: var(--app-accent); background: var(--app-soft); color: var(--app-accent); font-weight: 650; }
-.list-heading { display: flex; min-height: 2.5rem; align-items: center; justify-content: space-between; gap: 1rem; }
-.list-heading p, .catalog-count { margin: 0; color: var(--app-muted); font-size: .76rem; }
+/* The result count is a machine fact; it lives in the aligned toolbar. */
+.catalog-count { margin: 0; color: var(--app-muted); font-size: .76rem; font-variant-numeric: tabular-nums; }
 
 /* --- Task cards: an object earns a boundary; status lives inside ---------- */
 .task-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .9rem; }
@@ -240,10 +254,13 @@ a { color: var(--app-accent); }
 .access-banner { width: fit-content; margin: 1rem 0; padding: .35rem .8rem; border-left: 2px solid var(--app-accent); background: var(--app-surface); color: var(--app-muted); font-size: .78rem; }.access-banner.restricted { border-color: var(--app-warning); }
 
 /* --- Runner catalog: a scientific method registry ------------------------ */
-.runner-toolbar { margin-bottom: .55rem; }.runner-toolbar .catalog-count { margin: 0; }
+.runner-toolbar { margin-bottom: .55rem; }
 .runner-catalog { display: grid; gap: 2.25rem; }
-.runner-group { display: grid; grid-template-columns: 14rem minmax(0, 1fr); gap: 1.5rem; padding-top: 1.5rem; }
-.runner-group > header h2 { margin: 0; font: 600 1.4rem/1.15 var(--font-display); }.runner-group > header span { display: block; margin-top: .3rem; color: var(--app-muted); font-size: .72rem; font-variant-numeric: tabular-nums; }
+/* A group is a registry shelf: its heading anchors a wider gutter than the page
+   grid, so the category reads as an authored divider rather than a caption. */
+.runner-group { display: grid; grid-template-columns: 16rem minmax(0, 1fr); gap: 2.25rem; padding-top: 1.9rem; }
+.runner-group > header { padding-top: .4rem; border-top: 2px solid var(--app-line-strong); }
+.runner-group > header h2 { margin: 0; font: 600 1.6rem/1.1 var(--font-display); letter-spacing: -.015em; }.runner-group > header span { display: block; margin-top: .45rem; color: var(--app-muted); font-size: .72rem; font-variant-numeric: tabular-nums; }
 .runner-grid { display: grid; grid-template-columns: 1fr; }
 .runner-card { display: flex; min-width: 0; flex-direction: column; }
 .runner-card h3 { font-family: var(--font-display); font-weight: 600; line-height: 1.2; }
@@ -251,11 +268,11 @@ a { color: var(--app-accent); }
 .runner-catalog[data-density="comfortable"] { gap: 2.5rem; }
 .runner-catalog[data-density="comfortable"] .runner-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr)); gap: 1.15rem; }
 /* Comfortable cards state method identity; no hover lift, no pastel icon tile. */
-.runner-catalog[data-density="comfortable"] .runner-card { max-width: 42rem; min-height: 14rem; padding: 1.4rem; border: 1px solid var(--app-line); border-radius: var(--r-surface); background: var(--app-surface); transition: border-color .15s ease; }
+.runner-catalog[data-density="comfortable"] .runner-card { max-width: 42rem; min-height: 15rem; padding: 1.55rem; border: 1px solid var(--app-line); border-radius: var(--r-surface); background: var(--app-surface); transition: border-color .15s ease; }
 .runner-catalog[data-density="comfortable"] .runner-card:hover { border-color: var(--app-line-strong); }
-.runner-catalog[data-density="comfortable"] .runner-card h3 { margin: 1rem 0 .3rem; font-size: 1.3rem; }
-.runner-catalog[data-density="comfortable"] .runner-summary { font-size: .84rem; line-height: 1.6; }
-.runner-catalog[data-density="comfortable"] .runner-card footer { padding-top: 1rem; border-top: 1px solid var(--app-line); }
+.runner-catalog[data-density="comfortable"] .runner-card h3 { margin: 1.1rem 0 .4rem; font-size: 1.4rem; letter-spacing: -.01em; }
+.runner-catalog[data-density="comfortable"] .runner-summary { font-size: .85rem; line-height: 1.6; }
+.runner-catalog[data-density="comfortable"] .runner-card footer { padding-top: 1.1rem; border-top: 1px solid var(--app-line); }
 /* Compact mode becomes registry-like rather than a shrunken card wall. */
 .runner-catalog[data-density="compact"] { gap: 1.5rem; }
 .runner-catalog[data-density="compact"] .runner-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0; border-top: 1px solid var(--app-line); }
@@ -265,13 +282,15 @@ a { color: var(--app-accent); }
 .runner-catalog[data-density="compact"] .runner-card footer { padding-top: .55rem; }
 
 /* --- Runner detail ------------------------------------------------------- */
-.runner-detail-heading { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(18rem, .6fr); gap: 3rem; padding: 1.5rem 0 2.5rem; border-bottom: 1px solid var(--app-line); }.runner-detail-heading h1 { font-size: clamp(1.95rem, 3.6vw, 2.6rem); }
+.runner-detail-heading { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(18rem, .6fr); gap: 3rem; padding: 1.6rem 0 2.75rem; border-bottom: 1px solid var(--app-line); }.runner-detail-heading h1 { font-size: clamp(2.2rem, 4.2vw, 3rem); }
 .back-link { width: fit-content; margin-bottom: 1.4rem; color: var(--app-muted); font-size: .78rem; }.back-link:hover { color: var(--app-accent); }.back-link svg { width: .9rem; }
-.runner-facts { margin: 0; padding: 1rem 1.15rem; border: 1px solid var(--app-line); border-radius: var(--r-surface); background: var(--app-surface); }.runner-facts div { display: flex; justify-content: space-between; gap: 1rem; padding: .65rem 0; border-bottom: 1px solid var(--app-line); }.runner-facts div:last-child { border-bottom: 0; }.runner-facts dt { color: var(--app-muted); font-size: .72rem; }.runner-facts dd { margin: 0; font-size: .76rem; font-weight: 650; text-align: right; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
-.detail-section { display: grid; grid-template-columns: 14rem minmax(0, 1fr); gap: 2rem; padding: 2.5rem 0; border-bottom: 1px solid var(--app-line); }.detail-section > header h2 { margin: .35rem 0; font: 600 1.5rem/1.15 var(--font-display); }
-.guidance-grid, .input-role-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0; border-top: 1px solid var(--app-line); }.guidance-grid article, .input-role-list article { padding: 1rem 1.1rem 1rem 0; border-bottom: 1px solid var(--app-line); }.guidance-grid article:nth-child(even), .input-role-list article:nth-child(even) { padding-left: 1.1rem; border-left: 1px solid var(--app-line); }.guidance-grid h3, .input-role-list h3 { margin: 0; font-size: .86rem; }.guidance-grid p, .guidance-grid ul, .input-role-list p { margin: .5rem 0 0; color: var(--app-muted); font-size: .8rem; line-height: 1.6; }.input-role-list code { color: var(--app-accent); font-family: var(--font-mono); font-size: .68rem; }.input-role-list .role-formats { font-family: var(--font-mono); }
+.runner-facts { margin: 0; padding: 1.1rem 1.25rem; border: 1px solid var(--app-line); border-radius: var(--r-surface); background: var(--app-surface); }.runner-facts div { display: flex; justify-content: space-between; gap: 1rem; padding: .7rem 0; border-bottom: 1px solid var(--app-line); }.runner-facts div:last-child { border-bottom: 0; }.runner-facts dt { color: var(--app-muted); font-size: .72rem; }.runner-facts dd { margin: 0; font-size: .76rem; font-weight: 650; text-align: right; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+/* A reference document reads down a narrow index gutter: sections are marked by
+   a rule on the spine, and each heading is large enough to navigate by. */
+.detail-section { display: grid; grid-template-columns: 16rem minmax(0, 1fr); gap: 2.75rem; padding: 3rem 0; border-bottom: 1px solid var(--app-line); }.detail-section > header { padding-top: .5rem; }.detail-section > header h2 { margin: .4rem 0; font: 600 1.8rem/1.12 var(--font-display); letter-spacing: -.018em; }
+.guidance-grid, .input-role-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0; border-top: 1px solid var(--app-line); }.guidance-grid article, .input-role-list article { padding: 1.15rem 1.25rem 1.15rem 0; border-bottom: 1px solid var(--app-line); }.guidance-grid article:nth-child(even), .input-role-list article:nth-child(even) { padding-left: 1.25rem; border-left: 1px solid var(--app-line); }.guidance-grid h3, .input-role-list h3 { margin: 0; font-size: .9rem; }.guidance-grid p, .guidance-grid ul, .input-role-list p { margin: .5rem 0 0; color: var(--app-muted); font-size: .82rem; line-height: 1.62; }.input-role-list code { color: var(--app-accent); font-family: var(--font-mono); font-size: .68rem; }.input-role-list .role-formats { font-family: var(--font-mono); }
 .stage-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .6rem; margin: 0; padding: 0; list-style: none; }.stage-list li { display: grid; grid-template-columns: 2rem 1fr; gap: .1rem .7rem; padding: .9rem; border: 1px solid var(--app-line); border-radius: var(--r-control); background: var(--app-surface); }.stage-list li > span { grid-row: 1 / 3; color: var(--app-accent); font: .68rem var(--font-mono); }.stage-list strong { font-size: .82rem; }.stage-list small { color: var(--app-muted); font-size: .7rem; }
-.parameter-list { border-top: 1px solid var(--app-line); }.parameter-list article { display: grid; grid-template-columns: minmax(9rem, .5fr) 1fr minmax(10rem, .65fr) auto; gap: 1rem; padding: .95rem 0; border-bottom: 1px solid var(--app-line); }.parameter-list h3 { margin: 0; font-size: .84rem; }.parameter-list code { color: var(--app-accent); font-family: var(--font-mono); font-size: .66rem; }.parameter-list article > p { margin: 0; color: var(--app-muted); font-size: .76rem; line-height: 1.55; }.parameter-list dl { margin: 0; }.parameter-list dl div { display: grid; grid-template-columns: 4.5rem 1fr; font-size: .7rem; font-variant-numeric: tabular-nums; }.parameter-list dt { color: var(--app-muted); }.parameter-list dd { margin: 0; overflow-wrap: anywhere; }.parameter-flags { display: flex; flex-direction: column; gap: .2rem; }.parameter-flags span { color: var(--app-warning); font-size: .62rem; font-weight: 650; }.citation-list { margin: 0; padding-left: 1.2rem; }.citation-list li { padding: .35rem; color: var(--app-muted); font-size: .78rem; }.runner-detail-cta { display: flex; align-items: center; justify-content: space-between; gap: 2rem; padding: 1.6rem 0; font: 600 1.1rem var(--font-display); }
+.parameter-list { border-top: 1px solid var(--app-line); }.parameter-list article { display: grid; grid-template-columns: minmax(9rem, .5fr) 1fr minmax(10rem, .65fr) auto; gap: 1rem; padding: .95rem 0; border-bottom: 1px solid var(--app-line); }.parameter-list h3 { margin: 0; font-size: .84rem; }.parameter-list code { color: var(--app-accent); font-family: var(--font-mono); font-size: .66rem; }.parameter-list article > p { margin: 0; color: var(--app-muted); font-size: .76rem; line-height: 1.55; }.parameter-list dl { margin: 0; }.parameter-list dl div { display: grid; grid-template-columns: 4.5rem 1fr; font-size: .7rem; font-variant-numeric: tabular-nums; }.parameter-list dt { color: var(--app-muted); }.parameter-list dd { margin: 0; overflow-wrap: anywhere; }.parameter-flags { display: flex; flex-direction: column; gap: .2rem; }.parameter-flags span { color: var(--app-warning); font-size: .62rem; font-weight: 650; }.citation-list { margin: 0; padding-left: 1.2rem; }.citation-list li { padding: .35rem; color: var(--app-muted); font-size: .78rem; }.runner-detail-cta { display: flex; align-items: center; justify-content: space-between; gap: 2rem; padding: 2rem 0 0; font: 600 1.25rem var(--font-display); letter-spacing: -.01em; }
 .route-error { width: min(100% - 2rem, 45rem); margin: 5rem auto; text-align: center; }.route-error .primary-button { margin-top: 1rem; }
 
 /* --- Dialogs ------------------------------------------------------------- */
@@ -299,8 +318,25 @@ a { color: var(--app-accent); }
   .app-brand { justify-content: start; padding: 0 .75rem; }
   .app-brand span { display: none; }
   .app-nav { position: fixed; top: auto; right: 0; bottom: 0; left: 0; z-index: 35; flex-direction: row; justify-content: space-around; align-items: stretch; gap: 0; height: 3.5rem; padding: 0; border-top: 1px solid var(--app-line); border-right: 0; }
+  /* The bottom bar has no room for region separation, so the Compute and Account
+     destinations sit directly on it (their wrappers dissolve; their headings are
+     removed from the tree in script). Administration is a different navigation
+     level, so on mobile it becomes a deliberate secondary surface just above the
+     bar rather than three more items competing inside the primary bar. */
+  .app-nav-group:not([data-nav-group="admin"]),
+  .app-nav-group:not([data-nav-group="admin"]) .app-nav-group-items { display: contents; }
+  .app-nav-group[data-nav-group="admin"] { position: fixed; right: 0; bottom: 3.5rem; left: 0; z-index: 34; display: grid; padding: 0; border-top: 1px solid var(--app-line); background: var(--app-surface); }
+  .app-nav-group[data-nav-group="admin"][hidden] { display: none; }
+  /* Only the regions whose links merge into the bar lose their heading; the
+     Administration heading names its own secondary surface and must paint. */
+  .app-nav-group:not([data-nav-group="admin"]) > .app-nav-group-label { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+  .app-nav-group[data-nav-group="admin"] > .app-nav-group-label { position: static; width: auto; height: auto; margin: 0; overflow: visible; clip: auto; white-space: normal; padding: .45rem .75rem .15rem; }
+  .app-nav-group[data-nav-group="admin"] .app-nav-group-items { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; }
+  .app-nav-group[data-nav-group="admin"] a { min-height: 2.75rem; flex: none; flex-direction: column; gap: .15rem; justify-content: center; padding: .3rem; border-radius: 0; font-size: .66rem; }
+  /* The secondary surface carries its destinations by name, like the bar does. */
+  .app-shell[data-rail] .app-nav-group[data-nav-group="admin"] a > span { display: inline; }
   .app-nav a { flex: 1; flex-direction: column; gap: .15rem; justify-content: center; padding: .3rem; border-radius: 0; font-size: .66rem; }
-  .app-shell[data-rail] .app-nav a > span { display: inline; }
+  .app-shell[data-rail] .app-nav > .app-nav-group:not([data-nav-group="admin"]) a > span { display: inline; }
   .app-header { grid-area: header; min-width: 0; min-height: 3.5rem; padding: 0 .6rem; background: var(--app-surface); backdrop-filter: none; }
   .app-header-actions { gap: .3rem; min-width: 0; }
   .app-header .app-new-task { width: 2.15rem; min-width: 2.15rem; justify-content: center; padding: 0; }
@@ -308,6 +344,9 @@ a { color: var(--app-accent); }
   .app-user span { display: none; }
   .app-header #lang-menu-value, .lang-menu .lang-menu-value { display: none; }
   .app-outlet { padding-bottom: 3.5rem; }
+  /* When the Administration surface is present it stands above the bar, so the page
+     clears it too — the surface never covers the end of the page. */
+  .app-shell:has(.app-nav-group[data-nav-group="admin"]:not([hidden])) .app-outlet { padding-bottom: 7.5rem; }
   .page-heading, .runner-detail-heading { grid-template-columns: 1fr; align-items: start; gap: 1rem; }
   .dashboard-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .dashboard-stats div:nth-child(3n) { border-right: 0; }

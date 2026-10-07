@@ -672,13 +672,34 @@ def test_admin_dashboard_batch_action_uses_authorized_api(page: Page) -> None:
     page.on("dialog", lambda dialog: dialog.accept())
 
     page.goto(f"{ORIGIN}/compute/dashboard")
-    page.get_by_label("Administration").click()
-    expect(page.get_by_role("link", name="Server logs")).to_have_attribute("href", "/compute/logs")
+    # Administration is a navigation region, not a top-bar menu: the admin sees the
+    # pages in the left navigation and the top bar carries no Administration launcher.
+    expect(page.locator("[data-nav-group='admin']").get_by_role("link", name="Server logs")).to_have_attribute("href", "/compute/logs")
+    assert page.get_by_label("Administration").count() == 0
     expect(page.get_by_role("button", name="Delete selected (0)")).to_be_hidden()
     page.get_by_role("checkbox", name="Select", exact=True).check()
     page.get_by_role("button", name="Delete selected (1)").click()
     expect(page.get_by_text("Selected tasks deleted.")).to_be_visible()
     assert deleted and TASK_ID in deleted[0]
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+def test_anonymous_shell_offers_no_forbidden_administration_links(page: Page, width: int) -> None:
+    _install_app(page)
+    page.route(f"{ORIGIN}/compute/api/auth/me", lambda route: route.fulfill(status=401, json={"error": "Authentication required"}))
+    page.set_viewport_size({"width": width, "height": 800})
+    page.goto(f"{ORIGIN}/runners")
+    expect(page.get_by_role("heading", name="Runner catalog", exact=True)).to_be_visible()
+    # Anonymous navigation carries no Administration destinations at any width, and
+    # there is no second hidden Administration launcher in the top bar.
+    expect(page.locator("[data-nav-group='admin']")).to_be_hidden()
+    assert page.get_by_role("link", name="User control").count() == 0
+    assert page.get_by_role("link", name="Server logs").count() == 0
+    assert page.get_by_role("link", name="Configuration").count() == 0
+    assert page.get_by_label("Administration").count() == 0
+    # Account is the only other region, and it is a sign-in affordance.
+    expect(page.locator("[data-nav-group='account']")).to_be_visible()
+    expect(page.locator("[data-nav-group='account'] a")).to_have_attribute("href", "/compute/login?return_to=%2Frunners")
 
 
 def test_mid_session_expiry_redirects_after_mutation(page: Page) -> None:
@@ -957,10 +978,16 @@ def test_auth_profile_and_admin_views_are_responsive_under_production_csp(page: 
     page.goto(f"{ORIGIN}/compute/profile")
     expect(page.get_by_role("heading", name="Profile")).to_be_visible()
     assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+    # Profile is its own navigation level: the local account sections stay in the
+    # page, and they are never mixed into the global Compute/Account/Administration nav.
+    expect(page.get_by_role("tab", name="GPU credits")).to_be_visible()
+    assert page.locator(".app-nav [data-section]").count() == 0
 
     page.route(f"{ORIGIN}/compute/api/auth/me", lambda route: route.fulfill(json=_current_user("admin")))
     page.goto(f"{ORIGIN}/compute/user_control")
     expect(page.get_by_role("heading", name="User control")).to_be_visible()
+    expect(page.locator("[data-nav-group='admin'] a[aria-current='page']")).to_have_attribute("href", "/compute/user_control")
+    assert page.locator("[data-nav-group='compute'] a[aria-current='page']").count() == 0
     assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
     assert page.evaluate("window.__cspViolations") == []
     assert errors == []
