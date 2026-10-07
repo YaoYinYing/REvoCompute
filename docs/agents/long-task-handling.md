@@ -487,6 +487,7 @@ CI completion needing classification
 an upstream merge
 a dependency becoming satisfiable, or a PR becoming blocked because one is not
 a shared-resource request, a deployment/live-test lease request, or a lease release
+a shared write surface becoming free, or an agent slot becoming available
 an owner escalation
 a material Advisor advisory
 a maintainer instruction
@@ -1251,11 +1252,15 @@ are closed, the exact head has green required, branch-protected CI/acceptance
 evidence, a fresh merge-grade reviewer cannot construct a new material
 counterexample, the relevant transition/crash/adversarial cases have evidence,
 and the remaining observations are explicitly non-blocking hardening or future
-work. A claimed new counterexample counts only as a concrete reproducible
-sequence touching the changed boundary; the Commander records any finding it
-judges non-concrete as explicit non-blocking hardening rather than leaving it an
-open blocker. The goal is not to prove absence of all bugs but to have no known
-reason the exact head is unsafe or architecturally incorrect to merge.
+work. A claimed new counterexample counts as material only when it is a concrete
+reproducible sequence touching the changed boundary, or — for R3 work — an
+identified gap in durable transition evidence, since an absence of evidence is a
+legitimate blocker that no reproducible sequence can express. The merge-grade
+reviewer, or the Advisor when the reviewer cannot be recalled, must concur before
+a blocking finding is downgraded; the Commander alone must not reclassify an R3
+blocker as non-blocking hardening, and a downgrade records its reason. The goal
+is not to prove absence of all bugs but to have no known reason the exact head is
+unsafe or architecturally incorrect to merge.
 
 #### Checkpoint-driven review
 
