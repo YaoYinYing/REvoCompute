@@ -1295,6 +1295,26 @@ def _publication_report(task: dict[str, Any]) -> dict[str, Any]:
     return {"state": state, "reason": None if state == PUBLICATION_AVAILABLE else _PUBLICATION_REASON_TEXT.get(state)}
 
 
+def _publication_refusal_response(md5sum: str, publication: str):
+    """The one 409 body for a result the publication reader will not serve.
+
+    Requesting a new archive and downloading a cached one are the same
+    publication decision, so both answer with this: the bounded state and its
+    reason, never bytes assembled from a result Core's reader refuses.
+    """
+    return (
+        jsonify(
+            {
+                "status": "error",
+                "md5sum": md5sum,
+                "message": _PUBLICATION_REASON_TEXT.get(publication) or "result manifest not found",
+                "result_publication": publication,
+            }
+        ),
+        409,
+    )
+
+
 def _task_display_name(task: dict[str, Any], task_id: str) -> str:
     raw = ntpath.basename(os.path.basename(str(task.get("filename") or "")))
     display = "".join(character for character in unicodedata.normalize("NFC", raw) if not unicodedata.category(character).startswith("C"))
@@ -2629,17 +2649,7 @@ def request_results_archive(md5sum: str):
     # reason instead of an archive assembled from a quarantine.
     publication = _result_publication_state(task)
     if publication != PUBLICATION_AVAILABLE:
-        return (
-            jsonify(
-                {
-                    "status": "error",
-                    "md5sum": md5sum,
-                    "message": _PUBLICATION_REASON_TEXT.get(publication) or "result manifest not found",
-                    "result_publication": publication,
-                }
-            ),
-            409,
-        )
+        return _publication_refusal_response(md5sum, publication)
     if os.path.isfile(_task_zip_path(task)):
         return jsonify({"status": "ready", "download_url": f"/compute/api/download/{md5sum}"}), 200
     async_result = build_results_archive.apply_async(args=[md5sum])
@@ -2669,6 +2679,14 @@ def download_results(md5sum):
             ),
             400,
         )
+
+    # Serving a cached ZIP is the same publication decision as building one: a
+    # result Core's reader refuses is refused here too.  The cached archive may
+    # predate the publication anchor, so "the bytes are on disk" never decides
+    # this -- the canonical state does, and a quarantined ZIP is not served.
+    publication = _result_publication_state(task)
+    if publication != PUBLICATION_AVAILABLE:
+        return _publication_refusal_response(md5sum, publication)
 
     zip_filename = _task_zip_path(task)
     if not os.path.exists(zip_filename):
@@ -2807,14 +2825,14 @@ def _task_list_summary(task: dict[str, Any], *, include_owner: bool) -> dict[str
     task_id = str(task["md5sum"])
     status = str(task["status"]).strip().lower()
     structure = _task_structure_input(task)
-    try:
-        archive_ready = os.path.isfile(_task_zip_path(task))
-    except (OSError, ValueError):
-        archive_ready = False
-    # One classification serves both fields, so the dashboard never reads a
-    # boolean from one authority and a state from another.
+    # One classification serves every affordance on this card, so the dashboard
+    # never reads a boolean from one authority and a state from another.
     publication = _result_publication_state(task)
     result_available = publication == PUBLICATION_AVAILABLE
+    try:
+        archive_ready = os.path.isfile(_task_zip_path(task)) and result_available
+    except (OSError, ValueError):
+        archive_ready = False
     can_cancel = _task_mutation_allowed(task) and status in {"pending", "queued", "running"}
     can_delete = (
         g.current_user.get("role") != "guest"
@@ -2842,8 +2860,11 @@ def _task_list_summary(task: dict[str, Any], *, include_owner: bool) -> dict[str
             "publication": publication,
             "page_url": f"/compute/results/{task_id}",
             "manifest_url": f"/compute/api/results/{task_id}",
+            # Both archive affordances answer for the same publication the
+            # download route serves: an unreadable result offers neither a link
+            # that would 409 nor a request that would be refused.
             "archive_ready": archive_ready,
-            "archive_request_allowed": status in {"finished", "failed"} and not archive_ready,
+            "archive_request_allowed": status in {"finished", "failed"} and result_available and not archive_ready,
             "archive_request_url": f"/compute/api/results/{task_id}/archive",
             "download_url": f"/compute/api/download/{task_id}" if archive_ready else None,
         },
