@@ -48,6 +48,10 @@ def safe_join(base_dir: str, *parts: str) -> str:
 # Stream a published artifact in bounded chunks: artifacts are scientific files
 # that can be gigabytes wide, so nothing here ever reads one wholly into memory.
 _HASH_CHUNK_BYTES = 1024 * 1024
+# The manifest authorizes artifact exposure, so it must not have a weaker trust
+# boundary than the artifacts it governs: it is opened as a private file like
+# any artifact and bounded like any other file a hostile result tree wrote.
+_MAX_MANIFEST_BYTES = 8 * 1024 * 1024
 
 
 class ArtifactIdentityError(Exception):
@@ -138,12 +142,38 @@ class StorageResolver:
 
     manifest_path = get_manifest_path
 
-    def load_manifest(self, task: dict[str, Any]) -> dict[str, Any] | None:
-        """Return the finalized results manifest, or ``None`` when unreadable."""
+    def read_manifest_bytes(self, task: dict[str, Any]) -> bytes | None:
+        """Return the exact verified bytes of the finalized results manifest.
+
+        One verified descriptor, one bounded read: callers that both select
+        artifacts from the manifest and republish it (the results archive) must
+        use *these* bytes, so the entries in the republished manifest can never
+        describe a different manifest than the one that selected them.
+        """
         try:
-            with open(self.get_manifest_path(task), encoding="utf-8") as handle:
-                manifest = json.load(handle)
-        except (AttributeError, OSError, ValueError, TypeError):
+            handle = _open_published_file(self.get_manifest_path(task))
+        except (AttributeError, OSError, ValueError):
+            return None
+        with handle:
+            if os.fstat(handle.fileno()).st_size > _MAX_MANIFEST_BYTES:
+                return None
+            data = handle.read(_MAX_MANIFEST_BYTES + 1)
+        return data if len(data) <= _MAX_MANIFEST_BYTES else None
+
+    def load_manifest(self, task: dict[str, Any]) -> dict[str, Any] | None:
+        """Return the finalized results manifest, or ``None`` when unreadable.
+
+        The manifest is the publication authority, so it is read from one
+        verified descriptor -- private regular file, no symlink, single link,
+        bounded size -- and never from a pathname that could be swapped for a
+        second manifest between the read and an artifact lookup.
+        """
+        data = self.read_manifest_bytes(task)
+        if data is None:
+            return None
+        try:
+            manifest = json.loads(data)
+        except ValueError:
             return None
         return manifest if isinstance(manifest, dict) else None
 

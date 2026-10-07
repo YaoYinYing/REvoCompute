@@ -212,6 +212,20 @@ _ARCHIVE_CHUNK_BYTES = 1024 * 1024
 _ZIP_EPOCH = 315_532_800
 
 
+def _write_manifest_entry(archive: zipfile.ZipFile, manifest_bytes: bytes) -> None:
+    """Write the already-verified manifest bytes into the ZIP as ``manifest.json``.
+
+    The bytes are the ones read from the verified descriptor that selected the
+    artifact entries, so the archived manifest and the archive contents can
+    never describe two different publications.
+    """
+    info = zipfile.ZipInfo("manifest.json", date_time=time.localtime()[0:6])
+    info.compress_type = zipfile.ZIP_DEFLATED
+    info.file_size = len(manifest_bytes)
+    with archive.open(info, "w") as destination:
+        destination.write(manifest_bytes)
+
+
 def _write_verified_artifact(
     archive: zipfile.ZipFile, storage: StorageResolver, task: dict, manifest: dict, artifact: dict
 ) -> None:
@@ -1313,22 +1327,25 @@ def _build_results_archive(task: dict) -> str:
     The ZIP is a publication path, so it consumes the same published-artifact
     identity contract as the ordinary artifact download: every entry comes from
     a verified open descriptor, never from a pathname that is re-opened after
-    the check.  A file replaced after the manifest was finalized therefore fails
+    the check.  The manifest itself is read once from a verified descriptor and
+    *those* bytes are the ones written into the ZIP, so the archived manifest
+    can never describe a different manifest than the one that selected the
+    entries.  A file replaced after the manifest was finalized therefore fails
     the whole archive closed instead of being smuggled into the download.
     """
     zip_filename = _task_zip_path(task)
-    result_dir = _task_result_dir(task)
-    manifest_path = _safe_join(result_dir, "manifest.json")
-    try:
-        with open(manifest_path, encoding="utf-8") as handle:
-            manifest = json.load(handle)
-    except (OSError, json.JSONDecodeError) as exc:
-        raise FileNotFoundError("Result manifest is not finalized") from exc
     storage = _storage()
+    manifest_bytes = storage.read_manifest_bytes(task)
+    if manifest_bytes is None:
+        raise FileNotFoundError("Result manifest is not finalized")
+    try:
+        manifest = json.loads(manifest_bytes)
+    except json.JSONDecodeError as exc:
+        raise FileNotFoundError("Result manifest is not finalized") from exc
     temporary_zip = f"{os.path.splitext(zip_filename)[0]}.tmp-{os.getpid()}-{time.time_ns()}.zip"
     try:
         with zipfile.ZipFile(temporary_zip, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-            archive.write(manifest_path, "manifest.json")
+            _write_manifest_entry(archive, manifest_bytes)
             for artifact in manifest.get("artifacts", []):
                 _write_verified_artifact(archive, storage, task, manifest, artifact)
         os.replace(temporary_zip, zip_filename)

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import io
 import json
 import logging
 import mimetypes
@@ -44,6 +45,7 @@ from flask import (
 )
 from pydantic import ValidationError
 from werkzeug.exceptions import RequestEntityTooLarge
+from werkzeug.wsgi import FileWrapper
 from revocompute.access_control import (
     authorize,
     policy_state,
@@ -2278,13 +2280,36 @@ def get_result_storyboard_asset(md5sum: str, asset: str):
     return response
 
 
-def _result_artifact(task: dict[str, Any], relative_path: str) -> tuple[str, dict[str, Any]] | None:
-    """Resolve only regular files published by the task's finalized manifest."""
+def _result_artifact(task: dict[str, Any], relative_path: str) -> tuple[str, Any, dict[str, Any]] | None:
+    """Resolve only regular files published by the task's finalized manifest.
+
+    Returns the path, the verified open descriptor, and the manifest entry.  The
+    descriptor's bytes and identity were just checked against the manifest, so a
+    consumer must consume *it* rather than reopen ``path``: after publication
+    identity has been verified, a pathname reopen would let a replaced file serve
+    bytes that never satisfied the manifest identity.
+    """
     resolved = current_app.config["storage_resolver"].resolve_artifact(task, relative_path)
     if resolved is None:
         return None
-    path = resolved.pop("physical_path")
-    return path, resolved
+    stream = resolved.pop("verified_stream")
+    return resolved.pop("physical_path"), stream, resolved
+
+
+def _verified_payload(stream: Any) -> Response:
+    """Stream a verified descriptor directly, never reopening its pathname.
+
+    ``FileWrapper`` reads exactly the verified length from the open descriptor and
+    closes it, so no later pathname open can substitute different bytes.
+    """
+    size = os.fstat(stream.fileno()).st_size
+    if request.method == "HEAD":
+        stream.close()
+        response = Response(status=200)
+    else:
+        response = Response(FileWrapper(stream, size), direct_passthrough=True)
+    response.headers["Content-Length"] = str(size)
+    return response
 
 
 @app.route("/compute/api/results/<md5sum>/artifacts/<path:relative_path>", methods=["GET"])
@@ -2301,34 +2326,30 @@ def get_result_artifact(md5sum: str, relative_path: str):
     resolved = _result_artifact(task, relative_path)
     if resolved is None:
         return jsonify({"error": "Artifact not found"}), 404
-    path, artifact = resolved
+    path, stream, artifact = resolved
     if not _task_artifact_access_allowed(task, artifact):
+        stream.close()
         return jsonify({"error": "Artifact not found"}), 404
     # Artifacts are untrusted runner output — default to attachment so they
     # are never rendered same-origin.  `?download=1` still forces a download
     # and `?download=0` explicitly opts back into inline rendering.
     as_attachment = request.args.get("download", "1") in {"1", "true", "yes"}
-    if app.config["RESULT_DOWNLOAD_MODE"] == "nginx":
-        internal_path = quote(os.path.relpath(path, app.config["RESULTS_FOLDER"]).replace(os.sep, "/"), safe="/")
-        response = Response(status=200, mimetype=artifact.get("media_type") or "application/octet-stream")
-        response.headers["X-Accel-Redirect"] = f"/_protected_results/{internal_path}"
-        response.headers.set(
-            "Content-Disposition",
-            "attachment" if as_attachment else "inline",
-            filename=os.path.basename(path),
-        )
-        response.headers["Cache-Control"] = "private, no-store"
-        return response
-    response = send_from_directory(
-        os.path.dirname(path),
-        os.path.basename(path),
-        as_attachment=as_attachment,
-        download_name=os.path.basename(path),
-        mimetype=artifact.get("media_type") or None,
+    # Delivery always consumes the verified descriptor.  ``RESULT_DOWNLOAD_MODE``
+    # is accepted for deployment compatibility, but X-Accel-Redirect is NOT used
+    # here: the offload would have nginx reopen this mutable pathname, which
+    # could serve bytes that never satisfied the manifest identity.  Descriptor-
+    # bound delivery therefore replaces the offload on this endpoint; a redesign
+    # that could keep the offload needs an immutable publication store, which is
+    # out of scope for this change.
+    response = _verified_payload(stream)
+    response.mimetype = artifact.get("media_type") or "application/octet-stream"
+    response.headers.set(
+        "Content-Disposition",
+        "attachment" if as_attachment else "inline",
+        filename=os.path.basename(path),
     )
+    response.headers["Cache-Control"] = "private, no-store"
     # Defense in depth: even an explicitly-inline artifact runs no scripts.
-    # (In nginx mode the served body comes from the internal location, which
-    # sets the same header in docker/nginx/default.conf.template.)
     response.headers["Content-Security-Policy"] = "sandbox"
     return response
 
@@ -2348,8 +2369,9 @@ def get_result_ndarray(md5sum: str, relative_path: str):
     resolved = _result_artifact(task, relative_path)
     if resolved is None:
         return jsonify({"error": "Array artifact not found"}), 404
-    path, artifact = resolved
+    path, stream, artifact = resolved
     if not _task_artifact_access_allowed(task, artifact):
+        stream.close()
         return jsonify({"error": "Array artifact not found"}), 404
     if set(request.args) - {"key", "kind", "max_elements"}:
         return jsonify({"error": "Invalid array query"}), 400
@@ -2375,9 +2397,15 @@ def get_result_ndarray(md5sum: str, relative_path: str):
     key = keys[0] if keys else None
     kind = kinds[0] if kinds else "numeric"
     try:
+        # A projection parses by pathname, so the verified descriptor stays open
+        # for the whole read: the container cannot be swapped for a different file
+        # between verification and the projection, and any replacement is a
+        # new inode rather than the file this descriptor still names.
         return jsonify(read_array_projection(path, key=key, kind=kind, max_elements=max_elements))
     except ArrayAccessError as error:
         return jsonify({"error": str(error)}), 400
+    finally:
+        stream.close()
 
 
 @app.route("/compute/api/results/<md5sum>/tables/<path:relative_path>", methods=["GET"])
@@ -2395,29 +2423,30 @@ def get_result_table(md5sum: str, relative_path: str):
     resolved = _result_artifact(task, relative_path)
     if resolved is None:
         return jsonify({"error": "Table artifact not found"}), 404
-    path, artifact = resolved
+    path, stream, artifact = resolved
     if not _task_artifact_access_allowed(task, artifact):
+        stream.close()
         return jsonify({"error": "Table artifact not found"}), 404
     declared_table = artifact.get("preview") == "table"
     if not declared_table:
-        try:
-            with open(current_app.config["storage_resolver"].get_manifest_path(task), encoding="utf-8") as handle:
-                logical_files = json.load(handle).get("result", {}).get("files", {})
-            declared_table = any(
-                item.get("path") == artifact.get("path") and item.get("logical_type") == "table"
-                for files in logical_files.values()
-                for item in files
-            )
-        except (OSError, AttributeError, json.JSONDecodeError):
-            declared_table = False
+        manifest = current_app.config["storage_resolver"].load_manifest(task) or {}
+        logical_files = manifest.get("result", {}).get("files", {})
+        declared_table = any(
+            item.get("path") == artifact.get("path") and item.get("logical_type") == "table"
+            for files in logical_files.values()
+            for item in files
+        )
     if not declared_table:
+        stream.close()
         return jsonify({"error": "Artifact is not a table"}), 400
     try:
         offset = int(request.args.get("offset", 0))
         limit = int(request.args.get("limit", 100))
     except ValueError:
+        stream.close()
         return jsonify({"error": "Invalid table page"}), 400
     if offset < 0 or offset > 10000 or limit < 1 or limit > 500:
+        stream.close()
         return jsonify({"error": "Table page is outside allowed bounds"}), 400
     delimiter = "\t" if relative_path.lower().endswith(".tsv") else ","
 
@@ -2432,7 +2461,9 @@ def get_result_table(md5sum: str, relative_path: str):
         return cost
 
     try:
-        with open(path, newline="", encoding="utf-8") as handle:
+        # The verified descriptor stays open for the whole parse, so the page is
+        # read from the same inode whose identity the manifest approved.
+        with stream, io.TextIOWrapper(stream, encoding='utf-8', newline='') as handle:
             reader = csv.reader(handle, delimiter=delimiter)
             columns = next(reader, [])
             # A matrix page carries one extra leading column of row labels beside its
@@ -2456,6 +2487,7 @@ def get_result_table(md5sum: str, relative_path: str):
                 page_bytes += cost
                 rows.append(row)
     except (OSError, UnicodeError, csv.Error, ValueError):
+        stream.close()
         logging.exception("Table preview failed for task %s artifact %s", md5sum, relative_path)
         return jsonify({"error": "Table could not be previewed"}), 400
     return jsonify({"columns": columns, "rows": rows, "offset": offset, "limit": limit, "has_more": has_more})
