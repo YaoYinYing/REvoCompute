@@ -796,10 +796,12 @@ class SlurmJob(Job):
                     '  state="$(squeue -h -j "${SLURM_JOB_ID}" -o "%T" 2>/dev/null | head -n 1)"',
                     '  case "${state}" in',
                     '    (RUNNING) allocation_live=1; break ;;',
-                    # No answer yet (or the query is not available on this
-                    # node): keep waiting for the state rather than reporting a
-                    # job that has not been allocated anything as live.
+                    # No answer yet: keep waiting for the state rather than
+                    # reporting a job that has not been allocated anything as
+                    # live.  A query that errors is retried for the same reason.
                     '    ("") ;;',
+                    # A state was read and it is not RUNNING: this job has been
+                    # allocated nothing and never will be, so stop waiting.
                     "    (*) break ;;",
                     "  esac",
                     f"  sleep {ALLOCATION_LIVE_POLL_SECONDS}",
