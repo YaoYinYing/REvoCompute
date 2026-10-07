@@ -25,7 +25,7 @@ import pytest
 from revocompute.result_storyboard import ResultContractError, declared_file_roles, load_expected_file_tree
 from revocompute.task_types import ArtifactSelector, ResultView
 
-from conftest import _load_pssm_module, _upsert_task_for_user
+from conftest import _load_pssm_module, _test_client_auth, _upsert_task_for_user
 
 
 def _finished_task(module, tmp_path, task_type: str = "gremlin") -> str:
@@ -626,3 +626,116 @@ def test_a_manifest_path_escaping_the_result_root_fails_closed(monkeypatch, tmp_
 
     with pytest.raises(FileNotFoundError):
         module.task_runtime._build_results_archive(module.task_store.get_task(task_id))
+
+
+def test_the_archive_writes_the_manifest_bytes_it_verified(monkeypatch, tmp_path) -> None:
+    """The archived manifest is the exact byte stream that selected the entries.
+
+    A replacement of ``manifest.json`` after the read cannot pair manifest A's
+    artifacts with manifest B's bytes: the archive writes the bytes read from the
+    verified descriptor, never a later open of the pathname.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id, result_dir, manifest = _single_artifact_task(module, tmp_path, b"original bytes\n")
+    published = (result_dir / "manifest.json").read_bytes()
+
+    entries = _archive_manifest(module, task_id)
+
+    assert entries["manifest.json"] == published
+    assert json.loads(entries["manifest.json"])["artifacts"] == manifest["artifacts"]
+
+
+# ---------------------------------------------------------------------------
+# After publication identity has been verified, a consumer must consume the
+# verified descriptor, not reopen its pathname.  These drive the public Result
+# download endpoint with a file replaced after finalization.
+# ---------------------------------------------------------------------------
+
+
+def _published_task(module, tmp_path, content: bytes) -> tuple[str, Path, dict[str, str]]:
+    # The caller identity exists before the task, as it does in production: the
+    # test helper only pre-verifies a user it just created, so a task created
+    # first would leave the account unverified and the request unauthenticated.
+    headers = _test_client_auth(module)
+    task_id, result_dir, _manifest = _single_artifact_task(module, tmp_path, content)
+    return task_id, result_dir, headers
+
+
+def test_a_replaced_artifact_cannot_be_served_by_the_result_download(monkeypatch, tmp_path) -> None:
+    """The direct download refuses a file whose bytes no longer match the manifest."""
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id, result_dir, headers = _published_task(module, tmp_path, b"original bytes\n")
+    result_dir.joinpath("result.txt").write_bytes(b"substituted bytes\n")
+
+    response = module.app.test_client().get(
+        f"/compute/api/results/{task_id}/artifacts/result.txt", headers=headers
+    )
+
+    assert response.status_code == 404
+    assert b"substituted" not in response.data
+
+
+def test_an_unchanged_artifact_downloads_its_verified_bytes(monkeypatch, tmp_path) -> None:
+    """The ordinary download still returns exactly the published bytes."""
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    content = b"score\n1.0\n"
+    task_id, _result_dir, headers = _published_task(module, tmp_path, content)
+
+    response = module.app.test_client().get(
+        f"/compute/api/results/{task_id}/artifacts/result.txt", headers=headers
+    )
+
+    assert response.status_code == 200
+    assert response.data == content
+    assert response.headers["Content-Length"] == str(len(content))
+
+
+def test_a_single_range_reads_from_the_verified_descriptor(monkeypatch, tmp_path) -> None:
+    """A bounded Range is served from the verified descriptor, not a reopen.
+
+    The full-stack smoke asserts this shape, so descriptor-bound delivery must
+    keep single-range and unsatisfiable-range semantics.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    content = b"score\n1.0\n"
+    task_id, _result_dir, headers = _published_task(module, tmp_path, content)
+    client = module.app.test_client()
+    url = f"/compute/api/results/{task_id}/artifacts/result.txt"
+
+    first = client.get(url, headers={**headers, "Range": "bytes=0-0"})
+    tail = client.get(url, headers={**headers, "Range": "bytes=-3"})
+    unsatisfiable = client.get(url, headers={**headers, "Range": f"bytes={len(content) + 10}-"})
+
+    assert first.status_code == 206
+    assert first.data == content[:1]
+    assert first.headers["Content-Range"] == f"bytes 0-0/{len(content)}"
+    assert first.headers["Content-Length"] == "1"
+    assert tail.status_code == 206
+    assert tail.data == content[-3:]
+    assert unsatisfiable.status_code == 416
+    assert unsatisfiable.headers["Content-Range"] == f"bytes */{len(content)}"
+
+
+def test_the_result_download_never_claims_verified_identity_while_offloading(monkeypatch, tmp_path) -> None:
+    """nginx offload is not used where it would reopen the mutable pathname.
+
+    ``RESULT_DOWNLOAD_MODE=nginx`` is accepted for deployment compatibility, but a
+    published artifact is delivered from the verified descriptor: an
+    ``X-Accel-Redirect`` would hand the bytes to a later pathname open, which
+    could serve a file that never satisfied the manifest identity.
+    """
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "RESULT_DOWNLOAD_MODE": "nginx"},
+    )
+    content = b"score\n1.0\n"
+    task_id, _result_dir, headers = _published_task(module, tmp_path, content)
+
+    response = module.app.test_client().get(
+        f"/compute/api/results/{task_id}/artifacts/result.txt", headers=headers
+    )
+
+    assert response.status_code == 200
+    assert "X-Accel-Redirect" not in response.headers
+    assert response.data == content

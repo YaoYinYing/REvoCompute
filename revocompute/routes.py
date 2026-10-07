@@ -45,6 +45,7 @@ from flask import (
 )
 from pydantic import ValidationError
 from werkzeug.exceptions import RequestEntityTooLarge
+from werkzeug.http import parse_range_header
 from werkzeug.wsgi import FileWrapper
 from revocompute.access_control import (
     authorize,
@@ -2307,17 +2308,55 @@ def _result_artifact(task: dict[str, Any], relative_path: str) -> tuple[str, Any
 def _verified_payload(stream: Any) -> Response:
     """Stream a verified descriptor directly, never reopening its pathname.
 
-    ``FileWrapper`` reads exactly the verified length from the open descriptor and
-    closes it, so no later pathname open can substitute different bytes.
+    Everything — full body, HEAD, and a single bounded ``Range`` — reads from the
+    one verified descriptor, so no later pathname open can substitute different
+    bytes.  Range support lives here rather than in ``send_from_directory``
+    because that helper would reopen the pathname that was just verified.
     """
     size = os.fstat(stream.fileno()).st_size
+    raw_range = request.headers.get("Range", "")
     if request.method == "HEAD":
         stream.close()
         response = Response(status=200)
-    else:
-        response = Response(FileWrapper(stream, size), direct_passthrough=True)
+        response.headers["Content-Length"] = str(size)
+        return response
+    if raw_range:
+        parsed = parse_range_header(raw_range, size)
+        if parsed is not None and len(parsed.ranges) == 1:
+            resolved_range = parsed.range_for_length(size)
+            if resolved_range is None:
+                stream.close()
+                response = Response(status=416)
+                response.headers["Content-Range"] = f"bytes */{size}"
+                return response
+            start, end = resolved_range
+            stream.seek(start)
+            response = Response(_BoundedStream(stream, end - start), status=206, direct_passthrough=True)
+            response.headers["Content-Range"] = f"bytes {start}-{end - 1}/{size}"
+            response.headers["Content-Length"] = str(end - start)
+            return response
+    response = Response(FileWrapper(stream, size), direct_passthrough=True)
     response.headers["Content-Length"] = str(size)
     return response
+
+
+class _BoundedStream:
+    """Yield at most *length* bytes from a verified descriptor, then close it."""
+
+    def __init__(self, stream: Any, length: int):
+        self._stream = stream
+        self._remaining = length
+
+    def __iter__(self):
+        while self._remaining > 0:
+            chunk = self._stream.read(min(65536, self._remaining))
+            if not chunk:
+                break
+            self._remaining -= len(chunk)
+            yield chunk
+
+    def close(self):
+        self._stream.close()
 
 
 @app.route("/compute/api/results/<md5sum>/artifacts/<path:relative_path>", methods=["GET"])

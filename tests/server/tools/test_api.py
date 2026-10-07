@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import io
+import os
 import hashlib
 import json
 import time
@@ -196,6 +197,105 @@ def test_task_artifact_to_tool_is_materialized_for_owner_only(monkeypatch, tmp_p
     )
     assert rejected.status_code == 403
     assert len(queued) == 1
+
+
+def _artifact_source_task(module, content: bytes) -> tuple[str, Path]:
+    owner = module.app.config["user_db"].get_user_by_username("owner")
+    source_id = uuid.uuid4().hex
+    source = {"md5sum": source_id, "storage_key": owner["storage_key"]}
+    root = Path(module.app.config["storage_resolver"].get_task_root(source))
+    root.mkdir(parents=True)
+    artifact = root / "sequence.fasta"
+    artifact.write_bytes(content)
+    digest = hashlib.sha256(content).hexdigest()
+    (root / "manifest.json").write_text(
+        json.dumps({"artifacts": [{"path": "sequence.fasta", "sha256": digest, "size": len(content)}]}),
+        encoding="utf-8",
+    )
+    module.task_store.upsert_task(
+        source_id,
+        filename="sequence.fasta",
+        file_path=str(artifact),
+        uploaded_at=time.time(),
+        finished_at=time.time(),
+        status="finished",
+        is_binary=0,
+        username="owner",
+        submitted_by_user_id=owner["id"],
+        storage_key=owner["storage_key"],
+        task_type="gremlin",
+    )
+    return source_id, artifact
+
+
+def test_a_task_artifact_replaced_during_materialization_cannot_enter_the_workspace(monkeypatch, tmp_path):
+    """The Tool workspace receives the verified bytes, not a later pathname open.
+
+    The replacement is injected immediately after the manifest identity is
+    verified, which is exactly the window a pathname reopen would lose to.
+    """
+    module = _app(monkeypatch, tmp_path)
+    monkeypatch.setattr(module.celery, "send_task", lambda *_args, **_kwargs: SimpleNamespace(id="queued"))
+    headers = _test_client_auth(module, "owner")
+    original = b">source\nACDEFG\n"
+    source_id, artifact = _artifact_source_task(module, original)
+
+    resolver = module.app.config["storage_resolver"]
+    resolve = resolver.resolve_artifact
+
+    def replace_after_verify(task, relative_path):
+        resolved = resolve(task, relative_path)
+        # Replace the inode, not the bytes: an atomic swap to a new file is what
+        # a post-publication substitution looks like.
+        swapped = artifact.with_suffix(".swapped")
+        swapped.write_bytes(b">swapped\nZZZZZZ\n")
+        os.replace(swapped, artifact)
+        return resolved
+
+    monkeypatch.setattr(resolver, "resolve_artifact", replace_after_verify)
+
+    response = module.app.test_client().post(
+        "/compute/api/tools/fasta_inspect/call",
+        headers=headers,
+        data={
+            "parameters": "{}",
+            "artifact_references": f"@{source_id}/sequence.fasta",
+            "artifact_roles": "sequence",
+        },
+    )
+
+    assert response.status_code == 202, response.get_json()
+    record = module.tool_calls.get(response.get_json()["tool_call_id"])
+    copied = module.tool_workspace.call_root(record["tool_call_id"]) / "input" / "sequence" / "sequence.fasta"
+    assert copied.read_bytes() == original
+    assert json.loads(record["input_manifest_json"])["inputs"]["sequence"][0]["sha256"] == hashlib.sha256(
+        original
+    ).hexdigest()
+
+
+def test_a_task_artifact_replaced_before_resolution_is_refused(monkeypatch, tmp_path):
+    """Different bytes under a declared name never reach the Tool workspace."""
+    module = _app(monkeypatch, tmp_path)
+    queued = []
+    monkeypatch.setattr(module.celery, "send_task", lambda *args, **kwargs: queued.append(args) or SimpleNamespace(id="q"))
+    headers = _test_client_auth(module, "owner")
+    source_id, artifact = _artifact_source_task(module, b">source\nACDEFG\n")
+    swapped = artifact.with_suffix(".swapped")
+    swapped.write_bytes(b">swapped\nZZZZZZ\n")
+    os.replace(swapped, artifact)
+
+    response = module.app.test_client().post(
+        "/compute/api/tools/fasta_inspect/call",
+        headers=headers,
+        data={
+            "parameters": "{}",
+            "artifact_references": f"@{source_id}/sequence.fasta",
+            "artifact_roles": "sequence",
+        },
+    )
+
+    assert response.status_code == 400, response.get_json()
+    assert queued == []
 
 
 def test_storage_pressure_evicts_terminal_calls_but_never_active_calls(monkeypatch, tmp_path):
