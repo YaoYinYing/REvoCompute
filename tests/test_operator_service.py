@@ -215,6 +215,65 @@ def test_cancellation_only_touches_the_operators_own_job(monkeypatch, host):
     assert cancelled["status"] == OperatorJobStatus.CANCELLED.value
 
 
+def test_cancelling_a_running_job_between_bounded_stages_reaches_cancelled(monkeypatch, host):
+    """A cancel of a RUNNING job is observed between bounded stages, not mid-stage.
+
+    The executor runs a bounded subprocess per stage and cannot be interrupted
+    inside one, so the honest contract is that a cancel is *observed* at a stage
+    boundary.  Here the operator cancels while the job's single stage is running:
+    that stage runs to completion (nothing can stop it), and the executor then
+    observes the cancel at the boundary *before* its terminal write — so the job
+    reaches CANCELLED, not SUCCEEDED, and its exclusive lease is released.
+    """
+    service, _state, calls = _service(monkeypatch, host, scheduler=lambda work: None)
+    outcome = _submit(service)  # reserved at QUEUED; the caller drives the rest
+    job_id = outcome.job["job_id"]
+    plan = service.plan("runner.live_test", "demo")
+    before = _readiness("demo", RunnerReadinessStatus.VALIDATION_STALE, "RUNTIME_BUNDLE_CHANGED")
+
+    real_execute = service_module.execute
+
+    def execute_and_cancel(host, *, action_id, runner_family, parameters=None):
+        # The operator cancels while the bounded stage is in flight.
+        service.cancel(job_id, actor_user_id=1)
+        return real_execute(host, action_id=action_id, runner_family=runner_family, parameters=parameters)
+
+    monkeypatch.setattr(service_module, "execute", execute_and_cancel)
+    calls.clear()
+    service.run_reserved_job(job_id, plan, {"runner_family": "demo"}, before)
+
+    job = service.job(job_id)
+    assert job["status"] == OperatorJobStatus.CANCELLED.value
+    assert job["failure_category"] == "cancelled"
+    assert calls == ["runner.live_test"]  # the in-flight stage completed; it is never claimed interruptible
+    assert service.store.active_exclusive("runner/demo") is None  # lease released exactly once
+
+
+def test_a_completion_racing_a_cancel_still_reaches_a_terminal_state(monkeypatch, host):
+    """A last-stage success racing a cancel must not strand the row in CANCELLING.
+
+    The job is ready to finish and the cancel arrives in the same instant.
+    Whichever side wins the compare-and-swap, the job reaches a terminal state
+    and its exclusive lease is released — it is never left CANCELLING.
+    """
+    service, _state, _calls = _service(monkeypatch, host, scheduler=lambda work: None)
+    outcome = _submit(service)
+    job_id = outcome.job["job_id"]
+    plan = service.plan("runner.live_test", "demo")
+    before = _readiness("demo", RunnerReadinessStatus.VALIDATION_STALE, "RUNTIME_BUNDLE_CHANGED")
+
+    # Drive the job to RUNNING, then let the cancel win the race and _finish lose it.
+    service.store.transition(job_id, expected=(OperatorJobStatus.QUEUED,), new_status=OperatorJobStatus.RUNNING)
+    assert service.store.request_cancel(job_id) is True  # RUNNING -> CANCELLING wins first
+
+    service._finish(job_id, OperatorJobStatus.SUCCEEDED, ["live_test"], plan, before, None, None)
+
+    job = service.job(job_id)
+    assert job["status"] == OperatorJobStatus.CANCELLED.value
+    assert job["failure_category"] == "cancelled"
+    assert service.store.active_exclusive("runner/demo") is None
+
+
 def test_reconciliation_terminalizes_orphans_and_never_retries(monkeypatch, host):
     service, _state, calls = _service(monkeypatch, host, scheduler=lambda work: None)
     outcome = _submit(service)  # holds at QUEUED; the caller drives it to RUNNING

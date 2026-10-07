@@ -295,6 +295,13 @@ class OperatorService:
 
         Safe to run off-request; on a server or executor restart the record stays
         RUNNING and is terminalized by :meth:`reconcile` rather than re-executed.
+
+        Cancellation is observed, never injected.  Each stage is a bounded
+        ``subprocess.run``, so nothing here can interrupt a stage already in
+        flight — a cancelled stage completes under its own wall-clock timeout.
+        The contract is therefore: **cancellation is observed between bounded
+        stages and immediately before the terminal write**.  A job observed
+        CANCELLING stops and becomes CANCELLED, never SUCCEEDED or FAILED.
         """
         if not self.store.transition(
             job_id, expected=(OperatorJobStatus.QUEUED,), new_status=OperatorJobStatus.RUNNING
@@ -302,6 +309,8 @@ class OperatorService:
             return
         effects: list[str] = []
         for stage in plan.effective_actions:
+            if self._cancelled(job_id):
+                return
             action_id = _EFFECT_TO_ACTION[stage]
             try:
                 result = execute(self.host, action_id=action_id, runner_family=plan.runner_family, parameters=parameters)
@@ -318,6 +327,17 @@ class OperatorService:
                 return
         self._finish(job_id, OperatorJobStatus.SUCCEEDED, effects, plan, before, None, None)
 
+    def _cancelled(self, job_id: str) -> bool:
+        """Observe a pending cancel and carry it to terminal.  True when the job is done.
+
+        A row still CANCELLING at a stage boundary is terminalized here, so the
+        cancel always reaches CANCELLED and the exclusive lease is released at
+        that single transition.
+        """
+        if self.store.status_of(job_id) is not OperatorJobStatus.CANCELLING:
+            return False
+        return self.store.cancel_if_terminal(job_id)
+
     def _finish(
         self,
         job_id: str,
@@ -333,9 +353,16 @@ class OperatorService:
         The record keeps ``requested_intent`` beside ``effective_actions`` and a
         before snapshot, so history can answer "why is this not READY now" and
         "what did the operator actually run" without re-deriving them.
+
+        The terminal write is checked.  When it loses its compare-and-swap the
+        job is never left stranded: a row another writer already terminalized is
+        done, and a row a concurrent cancel moved to CANCELLING is carried to
+        CANCELLED.  Either way the loser's write is accounted for, not dropped.
         """
+        if self._cancelled(job_id):
+            return
         after = self.readiness(plan.runner_family)
-        self.store.transition(
+        recorded = self.store.transition(
             job_id,
             expected=(OperatorJobStatus.RUNNING,),
             new_status=status,
@@ -344,6 +371,8 @@ class OperatorService:
             effect=_effect_record(plan, effects, before, after),
             log_text=log_text,
         )
+        if not recorded:
+            self.store.cancel_if_terminal(job_id)
 
     def _require_executable(self, plan: OperatorPlan) -> None:
         unsupported = [name for name in plan.effective_actions if name not in _EFFECT_TO_ACTION]

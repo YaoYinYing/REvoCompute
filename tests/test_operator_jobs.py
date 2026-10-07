@@ -22,18 +22,30 @@ def store(tmp_path: Path) -> OperatorJobStore:
     return OperatorJobStore(str(tmp_path / "operator.sqlite"))
 
 
-def _create(store, *, family="demo", key=None, intent="build", actor=1, scope=None):
+def _create(
+    store,
+    *,
+    family="demo",
+    key=None,
+    intent="build",
+    actor=1,
+    scope=None,
+    action="runner.build",
+    parameters=None,
+    plan_digest="sha256:plan",
+    evidence_digest="sha256:evidence",
+):
     return store.create(
-        action="runner.build",
+        action=action,
         runner_family=family,
         actor_user_id=actor,
         actor_username="admin%d" % actor,
         tier="mutate",
         lease_scope=scope or ("runner/" + family),
         requested_intent=intent,
-        plan_digest="sha256:plan",
-        evidence_digest="sha256:evidence",
-        parameters={"runner_family": family},
+        plan_digest=plan_digest,
+        evidence_digest=evidence_digest,
+        parameters=parameters if parameters is not None else {"runner_family": family},
         idempotency_key=key,
     )
 
@@ -58,6 +70,35 @@ def test_same_key_different_body_is_rejected(store):
     _create(store, key="k", intent="build")
     with pytest.raises(OperatorJobError, match="Idempotency key reused"):
         _create(store, key="k", intent="validate")
+
+
+def test_same_key_different_runner_family_is_rejected(store):
+    """The key names a request for one Runner, not a blank cheque for any of them."""
+    _create(store, key="k", family="one")
+    with pytest.raises(OperatorJobError, match="Idempotency key reused"):
+        _create(store, key="k", family="two")
+
+
+def test_same_key_different_parameters_is_rejected(store):
+    """A different collection/task is a different request, not a retry."""
+    _create(store, key="k", parameters={"runner_family": "demo", "collection": "one"})
+    with pytest.raises(OperatorJobError, match="Idempotency key reused"):
+        _create(store, key="k", parameters={"runner_family": "demo", "collection": "two"})
+
+
+def test_same_key_different_action_is_rejected(store):
+    _create(store, key="k", action="runner.build", intent="runner.build")
+    with pytest.raises(OperatorJobError, match="Idempotency key reused"):
+        _create(store, key="k", action="runner.prepare", intent="runner.prepare")
+
+
+def test_same_key_with_a_changed_plan_or_evidence_identity_is_rejected(store):
+    """A replayed key must not authorize a plan computed against other evidence."""
+    _create(store, key="k")
+    with pytest.raises(OperatorJobError, match="Idempotency key reused"):
+        _create(store, key="k", plan_digest="sha256:other-plan")
+    with pytest.raises(OperatorJobError, match="Idempotency key reused"):
+        _create(store, key="k", evidence_digest="sha256:other-evidence")
 
 
 def test_a_second_conflicting_mutation_on_one_family_is_rejected(store):
@@ -112,6 +153,43 @@ def test_cancelling_a_running_job_moves_it_to_cancelling(store):
     assert store.request_cancel(job) is True
     assert store.get(job)["status"] == OperatorJobStatus.CANCELLING.value
     assert store.transition(job, expected=(OperatorJobStatus.CANCELLING,), new_status=OperatorJobStatus.CANCELLED)
+
+
+def test_a_terminal_write_refused_by_a_cancelling_row_is_converted_not_dropped(store):
+    """A completion racing a cancel must not strand the row in CANCELLING.
+
+    The executor's RUNNING -> SUCCEEDED compare-and-swap is refused because a
+    concurrent cancel already moved the row to CANCELLING.  The loser observes
+    the real status and carries the cancel to its terminal state, releasing the
+    exclusive lease exactly once.
+    """
+    record, _ = _create(store, key="k")
+    job = record["job_id"]
+    store.transition(job, expected=(OperatorJobStatus.QUEUED,), new_status=OperatorJobStatus.RUNNING)
+    assert store.request_cancel(job) is True
+
+    # The completion write loses the race and is refused, not silently ignored.
+    assert (
+        store.transition(job, expected=(OperatorJobStatus.RUNNING,), new_status=OperatorJobStatus.SUCCEEDED)
+        is False
+    )
+    assert store.status_of(job) == OperatorJobStatus.CANCELLING  # never stranded
+
+    assert store.cancel_if_terminal(job) is True
+    assert store.get(job)["status"] == OperatorJobStatus.CANCELLED.value
+    assert store.active_exclusive("runner/demo") is None  # lease released at the terminal transition
+
+
+def test_cancel_if_terminal_is_a_no_op_once_the_winner_has_landed(store):
+    """The race loser must not write a second terminal state over the winner's."""
+    record, _ = _create(store, key="k")
+    job = record["job_id"]
+    store.transition(job, expected=(OperatorJobStatus.QUEUED,), new_status=OperatorJobStatus.RUNNING)
+    store.transition(job, expected=(OperatorJobStatus.RUNNING,), new_status=OperatorJobStatus.SUCCEEDED)
+
+    # The row is already terminal, so the losing writer changes nothing.
+    assert store.cancel_if_terminal(job) is True
+    assert store.get(job)["status"] == OperatorJobStatus.SUCCEEDED.value
 
 
 def test_a_terminal_job_releases_its_lease(store):

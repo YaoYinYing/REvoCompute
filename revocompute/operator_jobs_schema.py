@@ -28,6 +28,7 @@ def operator_jobs_table(metadata: sa.MetaData) -> sa.Table:
         sa.Column("status", sa.String(16), nullable=False),
         sa.Column("stage", sa.String(32), nullable=True),
         sa.Column("requested_intent", sa.Text, nullable=False),
+        sa.Column("request_identity", sa.String(80), nullable=False),
         sa.Column("plan_digest", sa.String(80), nullable=False),
         sa.Column("evidence_digest", sa.String(80), nullable=False),
         sa.Column("parameter_json", sa.Text, nullable=False),

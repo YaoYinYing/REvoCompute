@@ -26,6 +26,7 @@ from typing import Any, Callable, Mapping
 import sqlalchemy as sa
 
 from revocompute.operator_jobs_schema import operator_jobs_table
+from revocompute.serialization import canonical_digest
 
 
 class OperatorJobStatus(str, Enum):
@@ -82,6 +83,39 @@ class OperatorConflictError(OperatorJobError):
 
 def new_job_id() -> str:
     return f"opjob_{secrets.token_urlsafe(24)}"
+
+
+def request_identity(
+    *,
+    action: str,
+    runner_family: str,
+    actor_user_id: int,
+    requested_intent: str,
+    plan_digest: str,
+    evidence_digest: str,
+    parameters: Mapping[str, Any],
+) -> str:
+    """The canonical identity of one operator request, bound to its idempotency key.
+
+    An idempotency key may only replay the request it was first used for, so the
+    identity covers every stored field that can change what the operation *does*:
+    the action, the target Runner family, the requested intent, the canonical
+    parameters, the plan and evidence digests, and the actor.  Mutable
+    execution-result fields (status, stage, result/effect, log, timestamps) are
+    deliberately excluded — a re-read of a job that has since run is the same
+    request, not a different one.
+    """
+    return canonical_digest(
+        {
+            "action": action,
+            "runner_family": runner_family,
+            "actor_user_id": actor_user_id,
+            "requested_intent": requested_intent,
+            "plan_digest": plan_digest,
+            "evidence_digest": evidence_digest,
+            "parameters": dict(parameters),
+        }
+    )
 
 
 class OperatorJobStore:
@@ -183,6 +217,15 @@ class OperatorJobStore:
         if queue_limit < 1:
             raise OperatorJobError("Operator queue limit must be positive")
         body = json.dumps({"action": action, "runner_family": runner_family, "parameters": dict(parameters)}, sort_keys=True)
+        identity = request_identity(
+            action=action,
+            runner_family=runner_family,
+            actor_user_id=actor_user_id,
+            requested_intent=requested_intent,
+            plan_digest=plan_digest,
+            evidence_digest=evidence_digest,
+            parameters=parameters,
+        )
         now = self._clock()
         with self.engine.connect() as conn:
             conn.exec_driver_sql("BEGIN IMMEDIATE")
@@ -199,7 +242,11 @@ class OperatorJobStore:
                         .first()
                     )
                     if existing is not None:
-                        if existing["requested_intent"] != requested_intent:
+                        # Same key replays the same request, or fails closed: the
+                        # identity covers everything that changes the effect, so a
+                        # different action, family, parameters, or plan/evidence
+                        # identity is a different request, not a retry.
+                        if existing["request_identity"] != identity:
                             raise OperatorJobError("Idempotency key reused with a different request")
                         conn.commit()
                         return dict(existing), False
@@ -251,6 +298,7 @@ class OperatorJobStore:
                         lease_scope=lease_scope,
                         status=OperatorJobStatus.QUEUED.value,
                         requested_intent=requested_intent,
+                        request_identity=identity,
                         plan_digest=plan_digest,
                         evidence_digest=evidence_digest,
                         parameter_json=body,
@@ -349,6 +397,36 @@ class OperatorJobStore:
             )
         return False
 
+    def status_of(self, job_id: str) -> OperatorJobStatus | None:
+        """The job's current status, read fresh, or ``None`` when it is gone.
+
+        Cancellation is observed by polling this between an executor's bounded
+        stages; it is never a callback into code the executor is already running.
+        """
+        record = self.get(job_id)
+        return OperatorJobStatus(record["status"]) if record is not None else None
+
+    def cancel_if_terminal(self, job_id: str, *, failure_category: str | None = None) -> bool:
+        """Terminalize a job that reached CANCELLING after a terminal write lost its race.
+
+        When a completion and a cancel race, one compare-and-swap wins.  The
+        loser must not drop its write: whatever a stage produced, a row left in
+        CANCELLING is unreachable, so it is carried to CANCELLED here — the
+        terminal state the cancel asked for.  Returns ``True`` when the job is
+        terminal (this call reached CANCELLED, or the losing peer's own write
+        landed first), ``False`` when the job was not CANCELLING and the caller
+        still owns the terminal write.
+        """
+        if not self.transition(
+            job_id,
+            expected=(OperatorJobStatus.CANCELLING,),
+            new_status=OperatorJobStatus.CANCELLED,
+            failure_category=failure_category or "cancelled",
+        ):
+            current = self.status_of(job_id)
+            return current is not None and current in TERMINAL_STATUSES
+        return True
+
     def reconcile_orphans(self) -> list[str]:
         """Terminalize jobs left RUNNING/CANCELLING by a server or executor restart.
 
@@ -395,4 +473,5 @@ __all__ = [
     "OperatorJobStore",
     "TERMINAL_STATUSES",
     "new_job_id",
+    "request_identity",
 ]
