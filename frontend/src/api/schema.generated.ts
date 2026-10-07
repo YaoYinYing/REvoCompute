@@ -5022,7 +5022,7 @@ export interface operations {
             };
             400: components["responses"]["BadRequest"];
             404: components["responses"]["NotFound"];
-            /** @description Archive has not been requested */
+            /** @description The optional archive has not been requested, or the published result is not readable. A quarantined result (`result_publication` of `unanchored`, `anchor_mismatch`, `manifest_missing`, `manifest_unreadable`, or `anchor_invalid`) is never served as an archive, not even a previously cached one; the body carries the state and the reason. */
             409: {
                 headers: {
                     [name: string]: unknown;

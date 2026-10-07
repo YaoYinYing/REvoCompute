@@ -569,10 +569,12 @@ def build_task_summary(
             "publication": "available" if result_available else "not_finalized",
             "page_url": f"/compute/results/{task_id}",
             "manifest_url": f"/compute/api/results/{task_id}",
-            "archive_ready": archive_ready,
-            "archive_request_allowed": status in {"finished", "failed"} and not archive_ready,
+            # Mirror the server: a result that is not available offers no archive
+            # affordance at all, because every one of them would be refused.
+            "archive_ready": archive_ready and result_available,
+            "archive_request_allowed": status in {"finished", "failed"} and result_available and not archive_ready,
             "archive_request_url": f"/compute/api/results/{task_id}/archive",
-            "download_url": f"/compute/api/download/{task_id}" if archive_ready else None,
+            "download_url": f"/compute/api/download/{task_id}" if archive_ready and result_available else None,
         },
         "actions": {
             "cancel": {"allowed": cancellable, "url": f"/compute/api/cancel/{task_id}"},
