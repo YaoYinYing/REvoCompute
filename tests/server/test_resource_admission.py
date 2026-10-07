@@ -661,6 +661,70 @@ def test_a_later_workflow_stage_is_admitted_against_what_is_left(tmp_path):
         )
 
 
+def test_a_hold_is_not_authority_once_the_balance_is_gone(tmp_path):
+    """A reservation buys a start only while the position it was made against stands.
+
+    The Task waited with a hold on the whole allowance, and the subject's
+    balance has since gone negative *past* that hold (here by an administrative
+    correction; the same shape arrives from an allocation that settled into an
+    overdraft).  The hold is no longer authority for anything, so the start
+    fails closed — exactly as the same start without a hold does — rather than
+    charging an allocation the balance cannot cover.
+    """
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"), monthly_gpu_seconds=100)
+    at = _timestamp(2026, 9, 26)
+    task_id = "a2" + "0" * 30
+    assert _reserve(database, 101, task_id=task_id, at=at, ttl_seconds=1)
+
+    database.adjust_compute_account(
+        user_id=101,
+        gpu_seconds=-250,
+        actor_user_id=101,
+        reason="The subject's balance was reduced below the outstanding hold",
+        idempotency_key="drain-101",
+        created_at=at + 5,
+    )
+    entitlement = database.compute_entitlement(101, at=at + 5)
+    assert entitlement.remaining + 100 < 0
+
+    with pytest.raises(GPUCreditUnavailableError, match="exhausted"):
+        database.record_allocation_start(
+            user_id=101,
+            task_id=task_id,
+            stage_id="model",
+            slurm_job_id="9910",
+            gpu_count=1,
+            cpu_cores=1,
+            started_at=at + 10,
+        )
+
+    assert database.list_task_allocations(task_id) == []
+    # The refusal did not consume the hold either: it is still the Task's claim,
+    # and a later position that stands again can still start on it.
+    assert database.list_task_reservations(task_id)[0]["state"] == ReservationState.HELD.value
+
+
+def test_a_hold_covers_an_overdraft_within_its_own_unit(tmp_path):
+    """The account's deliberate overdraft still applies to the Task that holds it.
+
+    The hold is this Task's own unit and is excluded from the remaining balance,
+    so a position that is negative only because of the hold itself is exactly
+    the case the overdraft rule permits.
+    """
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"), monthly_gpu_seconds=100)
+    at = _timestamp(2026, 9, 27)
+    task_id = "a3" + "0" * 30
+    assert _reserve(database, 102, task_id=task_id, at=at)["allowed"] is True
+    assert database.compute_entitlement(102, at=at).remaining == 0
+
+    allocation = database.record_allocation_start(
+        user_id=102, task_id=task_id, stage_id="model", slurm_job_id="9911", gpu_count=1, cpu_cores=1,
+        started_at=at + 1,
+    )
+
+    assert allocation["admitted_by_reservation"] is True
+
+
 def test_a_dispatch_failure_returns_the_hold_immediately(tmp_path):
     """A failed dispatch must not strand entitlement until the TTL.
 

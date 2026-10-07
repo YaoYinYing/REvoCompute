@@ -235,7 +235,14 @@ class LedgerReason(str, Enum):
 
 
 class ReservationReason(str, Enum):
-    """Bounded reason code for the release (or living hold) of a reservation."""
+    """Bounded reason code for one admission reservation's transition.
+
+    The lifecycle *state* already says whether a reservation is live or
+    finished; this names *why* it moved, so a release stays auditable.  A
+    lapsed pre-dispatch hold is the state ``EXPIRED`` and carries no separate
+    reason code: nothing emits an ``expired`` reason, and a vocabulary entry no
+    writer can produce is a claim the system cannot make.
+    """
 
     ADMISSION_RESERVED = "admission_reserved"
     DISPATCHED = "dispatched"
@@ -243,7 +250,6 @@ class ReservationReason(str, Enum):
     DISPATCH_FAILED = "dispatch_failed"
     TASK_DELETED = "task_deleted"
     RELEASED = "released"
-    EXPIRED = "expired"
 
 
 class DataLifecycleState(str, Enum):

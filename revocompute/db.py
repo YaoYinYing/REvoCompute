@@ -3019,8 +3019,20 @@ class TaskDatabase:
         ).scalar_one()
         _, unsettled = self._unsettled_in_connection(conn, user_id, rloan.UNIT_GPU_SECOND, "", at)
         remaining = int(totals["remaining"]) - int(other_holds) - int(unsettled)
+        # A live reservation owned by this Task is its authority — but only
+        # while the position it was admitted against still stands.  ``own_hold``
+        # is excluded from ``remaining``, so it is added back for the test: the
+        # Task is fine as long as its own unit (plus whatever is left, if that
+        # is positive) covers the negative side, which is the overdraft case the
+        # account deliberately allows.  When other work of the same subject has
+        # since spent the balance the Task was admitted on, the hold no longer
+        # buys anything and the start falls through to the refusal rather than
+        # charging a balance that cannot cover it — the same answer an identical
+        # start without a hold gets.
         if int(own_hold) > 0:
-            return remaining, True
+            position = remaining + int(own_hold)
+            if position >= 0:
+                return remaining, True
         if remaining <= 0:
             raise GPUCreditUnavailableError("GPU credit balance is exhausted")
         return remaining, False
