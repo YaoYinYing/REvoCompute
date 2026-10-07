@@ -20,6 +20,7 @@ import os
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import threading
 import time
@@ -43,6 +44,13 @@ from revocompute.infrastructure import (
 )
 from revocompute.job import Job, JobState
 from revocompute.job.runners.slurm_runner import SlurmJob
+from revocompute.ingress_security import (
+    ARTIFACT_CAPACITY_GUARD,
+    ARTIFACT_PUBLICATION_REJECTED,
+    ValidationReceipt,
+    snapshot_mismatch_reason,
+)
+from revocompute.input_validators.isolated_validation import VALIDATOR_RESOURCE_LIMIT_ERROR
 from revocompute.manage_db import ManageDatabase  # noqa: E402
 from revocompute.operational_events import emit_event
 from revocompute.resource_observations import work_items_projection
@@ -55,7 +63,13 @@ from revocompute.result_storyboard import (
     resolve_expected_files,
     storyboard_declaration,
 )
-from revocompute.storage import StorageResolver
+from revocompute.storage import (
+    PUBLICATION_AVAILABLE,
+    PUBLICATION_QUARANTINE_STATES,
+    ArtifactIdentityError,
+    ResultPublicationError,
+    StorageResolver,
+)
 from revocompute.citations import citations_bibtex
 from revocompute.task_types import default_task_type, get as _get_task_type
 from revocompute.task_types import discover_plugins as _discover_plugins
@@ -192,8 +206,70 @@ def _task_result_dir(task: dict[str, Any]) -> str:
 
 
 def _storage() -> StorageResolver:
-    """Build from current config so tests and controlled reloads stay isolated."""
-    return StorageResolver(CONFIG.results_folder, CONFIG.workspace_folder)
+    """Build from current config so tests and controlled reloads stay isolated.
+
+    The Task store is bound here because it owns the finalized-manifest
+    publication anchor: a reader that could not reach it would be unable to
+    verify that a manifest is the one Core published, and would refuse every
+    publication.
+    """
+    return StorageResolver(CONFIG.results_folder, CONFIG.workspace_folder, task_store)
+
+
+# Stream a verified artifact into the ZIP in bounded chunks: a scientific result
+# can be gigabytes wide, so it is never held in memory to be archived.
+_ARCHIVE_CHUNK_BYTES = 1024 * 1024
+# The ZIP format stores MS-DOS timestamps, whose epoch is 1980; an older mtime
+# (a restored archive, a clock-skewed runner host) must not fail the archive.
+_ZIP_EPOCH = 315_532_800
+
+
+def _write_manifest_entry(archive: zipfile.ZipFile, manifest_bytes: bytes) -> None:
+    """Write the already-verified manifest bytes into the ZIP as ``manifest.json``.
+
+    The bytes are the ones read from the verified descriptor that selected the
+    artifact entries, so the archived manifest and the archive contents can
+    never describe two different publications.
+    """
+    info = zipfile.ZipInfo("manifest.json", date_time=time.localtime()[0:6])
+    info.compress_type = zipfile.ZIP_DEFLATED
+    info.file_size = len(manifest_bytes)
+    with archive.open(info, "w") as destination:
+        destination.write(manifest_bytes)
+
+
+def _write_verified_artifact(
+    archive: zipfile.ZipFile, storage: StorageResolver, task: dict, manifest: dict, artifact: dict
+) -> None:
+    """Add one manifest-declared artifact from its verified open descriptor.
+
+    The bytes reaching the ZIP are streamed from the same descriptor the
+    published-artifact identity contract was checked on, so a file swapped after
+    manifest finalization -- a new inode, a symlink, a hard-link substitute --
+    cannot land in the download: ``open_verified_artifact`` refuses it before a
+    byte is copied.
+    """
+    relative_path = artifact.get("path", "")
+    resolved = storage.resolve_declared_artifact(task, relative_path, manifest)
+    if resolved is None:
+        # A path the manifest never declared -- an undeclared file, an escaping
+        # relative path, a malformed entry -- is not a publication, so it is
+        # refused here exactly like a swapped one.
+        raise FileNotFoundError(f"Published result artifact is unavailable: {relative_path}")
+    path, declared = resolved
+    try:
+        handle, _digest = storage.open_verified_artifact(path, declared)
+    except (ArtifactIdentityError, OSError, ValueError) as exc:
+        raise FileNotFoundError(f"Published result artifact is unavailable: {relative_path}") from exc
+    with handle:
+        status = os.fstat(handle.fileno())
+        info = zipfile.ZipInfo(relative_path, date_time=time.localtime(max(status.st_mtime, _ZIP_EPOCH))[:6])
+        info.compress_type = zipfile.ZIP_DEFLATED
+        info.file_size = status.st_size
+        # ``file_size`` is the verified size, so ``ZipFile`` can decide the ZIP64
+        # format up front instead of striding the artifact through memory.
+        with archive.open(info, "w") as destination:
+            shutil.copyfileobj(handle, destination, _ARCHIVE_CHUNK_BYTES)
 
 
 def _virtual_upload_path(filename: str) -> str:
@@ -383,7 +459,9 @@ def _gpu_allocation_callbacks(
                 required_entitlements=required_entitlements,
             )
         except (GPUAuthorizationUnavailableError, GPUCreditUnavailableError) as exc:
-            reason_code = "credit_exhausted"
+            # One spelling for one admission fact: the preflight detail code
+            # and this operational event both name the exhausted credit.
+            reason_code = "gpu_credit_exhausted"
             if isinstance(exc, GPUAuthorizationUnavailableError):
                 reason_code = (
                     "runner_readiness_unavailable"
@@ -733,6 +811,118 @@ def _public_run_record(task: dict[str, Any], task_type: Any, finished_at: float)
 # diagnostic.
 _COMPLETION_SENTINEL = "task_finished"
 
+# Publication capacity guards.  Runner output is an untrusted filesystem
+# namespace, so the manifest the Server registers is bounded in both entry count
+# and aggregate bytes rather than assumed to be a scientific result set.  The
+# limits are server-owned configuration (``ComputeConfig.max_published_*``), not
+# module constants, so a deployment that ships a genuinely larger family raises
+# them instead of having its manifest silently truncated.
+def _published_artifact_limit() -> int:
+    return CONFIG.max_published_artifacts
+
+
+def _published_byte_limit() -> int:
+    return CONFIG.max_published_bytes
+
+
+#: How many refused result entries are named individually in the output check
+#: before the rest are summarized as a count.  The manifest is the durable
+#: record, so it must describe that a tree was refused without becoming one
+#: entry per hostile file.
+_MAX_RECORDED_REFUSALS = 20
+
+
+def _publishable_artifact(path: str, relative_path: str) -> tuple[dict[str, Any] | None, str | None]:
+    """Return ``(artifact_record, reason)`` for one candidate under the result root.
+
+    Publication never follows a link and never registers a non-regular file.
+    The record's size and digest are taken from one descriptor opened with
+    ``O_NOFOLLOW`` and verified ``fstat``-regular, so the bytes hashed are the
+    bytes the manifest names: a swap between the type check and the read cannot
+    substitute a different inode.
+    """
+    try:
+        info = os.stat(path, follow_symlinks=False)
+    except OSError as exc:
+        return None, f"unreadable ({exc.__class__.__name__})"
+    if stat.S_ISLNK(info.st_mode):
+        return None, "symbolic link"
+    if not stat.S_ISREG(info.st_mode):
+        return None, "special file"
+    if info.st_nlink != 1:
+        return None, "hard link"
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        return None, f"unreadable ({exc.__class__.__name__})"
+    try:
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1:
+            return None, "not a private regular file"
+        digest = hashlib.sha256()
+        with os.fdopen(descriptor, "rb") as handle:
+            descriptor = -1
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError as exc:
+        return None, f"unreadable ({exc.__class__.__name__})"
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    preview = _preview_kind(relative_path)
+    return (
+        {
+            "path": relative_path,
+            "size": opened.st_size,
+            "sha256": digest.hexdigest(),
+            "media_type": mimetypes.guess_type(relative_path)[0] or "application/octet-stream",
+            "preview": preview,
+            "capability": artifact_capability(preview),
+            "role": _default_artifact_role(relative_path),
+        },
+        None,
+    )
+
+
+def _revalidate_blob(fe: dict[str, Any], physical_path: str) -> str | None:
+    """Re-run the canonical Core boundary on one input's bytes.
+
+    This is the actual admission decision for the bytes about to execute.  It is
+    run for every input — a row that predates receipts and a row that carries one
+    alike — so a forged or stale receipt can never stand in for real validation.
+    Returns a bounded reason code when the bytes do not validate.
+    """
+    from revocompute.input_validators import validate_input_file, validate_logical_input
+
+    logical_type = str(fe.get("logical_type") or "file")
+    format_name = str(fe.get("format") or "")
+    relative_path = str(fe.get("relative_path") or fe.get("value") or "")
+    error = validate_input_file(physical_path, relative_path, logical_type=logical_type)
+    if error is None:
+        error = validate_logical_input(physical_path, format_name, logical_type)
+    if error is not None:
+        logging.error("Input failed Core revalidation before dispatch: %s", error)
+        return VALIDATOR_RESOURCE_LIMIT_ERROR if error == VALIDATOR_RESOURCE_LIMIT_ERROR else "input_snapshot_mismatch"
+    return None
+
+
+def _verify_snapshot(fe: dict[str, Any], snapshot_path: str, receipt: Any) -> str | None:
+    """Prove the snapshot is a Core-admitted byte stream, or return a reason code.
+
+    Two independent checks, and revalidation is mandatory rather than skipped:
+    the receipt (when present) proves the snapshot is the exact immutable byte
+    stream admission recorded, and the canonical boundary is re-run on those
+    bytes so a forged or stale receipt cannot substitute a decision for real
+    validation.  This is what lets ``_derive_task_id`` trust a duplicate
+    submission as reproducible: the id is only reusable when the bytes and the
+    boundary that admitted them are the same.
+    """
+    receipt_reason = snapshot_mismatch_reason(receipt, snapshot_path) if isinstance(receipt, dict) else None
+    if receipt_reason is not None:
+        return receipt_reason
+    return _revalidate_blob(fe, snapshot_path)
+
 
 def _default_artifact_role(relative_path: str) -> str:
     basename = os.path.basename(relative_path)
@@ -957,6 +1147,36 @@ def _resolve_result_views(
     return views, checks, list(dict.fromkeys(problems))
 
 
+def _anchor_result_manifest(task: dict[str, Any], payload: bytes, *, published_at: float) -> None:
+    """Record the finalized manifest's identity in server-owned state.
+
+    This is the one piece of publication identity that does not live under the
+    result root.  ``StorageResolver`` reads it back on every manifest read, so a
+    replacement manifest -- a valid single-link regular JSON file that declares
+    its own artifacts, sizes, and digests -- cannot redefine the published
+    namespace: the anchor describes what Core published, and the replacement
+    does not match it.
+
+    Anchoring is part of publication, not a best-effort side effect of it: a
+    manifest without this record is one Core's own reader refuses, so a
+    persistence failure is raised as :class:`ResultPublicationError` and the
+    caller publishes nothing.  Swallowing it would leave a finished task and a
+    ``manifest.published`` event asserting a publication that no consumer can
+    read.
+    """
+    try:
+        task_store.record_result_publication(
+            str(task["md5sum"]),
+            manifest_sha256=hashlib.sha256(payload).hexdigest(),
+            manifest_size=len(payload),
+            published_at=published_at,
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        raise ResultPublicationError(
+            f"result manifest anchor could not be recorded for task {task.get('md5sum')}: {exc}"
+        ) from exc
+
+
 def _finalize_results_manifest(
     task: dict[str, Any],
     *,
@@ -976,29 +1196,69 @@ def _finalize_results_manifest(
         with open(os.path.join(result_dir, "citations.bib"), "w", encoding="utf-8") as handle:
             handle.write(citations_bibtex(task_type.citations))
     artifacts: list[dict[str, Any]] = []
+    publication_problems: list[str] = []
+    publication_capacity_guard = False
+    total_published_bytes = 0
+    published_paths: set[str] = set()
+    skipped_unpublishable = 0
     for root, dirs, files in os.walk(result_dir, followlinks=False):
+        if publication_capacity_guard:
+            # The tree is over capacity: stop walking rather than re-tripping
+            # the guard once per remaining directory, which would grow the
+            # manifest's ``problems`` list one entry at a time for an untrusted
+            # tree.  The capacity problem is recorded once, below.
+            break
         dirs[:] = sorted(directory for directory in dirs if not os.path.islink(os.path.join(root, directory)))
         for filename in sorted(files):
             path = os.path.join(root, filename)
             relative_path = os.path.relpath(path, result_dir).replace(os.sep, "/")
-            if relative_path in {"manifest.json", ".manifest.json.tmp"} or os.path.islink(path):
+            if relative_path in {"manifest.json", ".manifest.json.tmp"}:
                 continue
             if filename == _COMPLETION_SENTINEL:
                 # The runner's execution sentinel is not a published artifact.
                 continue
-            stat = os.stat(path, follow_symlinks=False)
-            preview = _preview_kind(relative_path)
-            artifacts.append(
-                {
-                    "path": relative_path,
-                    "size": stat.st_size,
-                    "sha256": _sha256_file(path),
-                    "media_type": mimetypes.guess_type(relative_path)[0] or "application/octet-stream",
-                    "preview": preview,
-                    "capability": artifact_capability(preview),
-                    "role": _default_artifact_role(relative_path),
-                }
-            )
+            if relative_path in published_paths:
+                # Two walked paths cannot collide on one filesystem, but a
+                # case-insensitive or otherwise aliasing mount could still hand
+                # the manifest one logical path twice; the manifest is the
+                # published namespace and must stay a set.
+                publication_problems.append(f"Duplicate published artifact path: {relative_path}")
+                continue
+            record, reason = _publishable_artifact(path, relative_path)
+            if record is None:
+                # A symlink, hard link, special file, or unreadable entry is not
+                # a publishable artifact.  It is excluded — never followed, never
+                # downgraded to "publish whatever is there".  The first few are
+                # named so the output check says which file was refused; the
+                # remainder are counted, so an untrusted tree cannot grow the
+                # manifest one detail entry per file.
+                skipped_unpublishable += 1
+                if len(publication_problems) < _MAX_RECORDED_REFUSALS:
+                    publication_problems.append(
+                        f"Rejected non-publishable result entry {relative_path}: {reason}"
+                    )
+                continue
+            if len(artifacts) >= _published_artifact_limit():
+                publication_capacity_guard = True
+                break
+            total_published_bytes += record["size"]
+            if total_published_bytes > _published_byte_limit():
+                publication_capacity_guard = True
+                break
+            published_paths.add(relative_path)
+            artifacts.append(record)
+    if publication_capacity_guard:
+        # One bounded entry per guard, whether the ceiling is the artifact count
+        # or the aggregate bytes; the walk above has already stopped.
+        limit = (
+            _published_artifact_limit()
+            if len(artifacts) >= _published_artifact_limit()
+            else _published_byte_limit()
+        )
+        publication_problems.append(f"Result tree exceeds the {limit} publication capacity limit")
+    if skipped_unpublishable > _MAX_RECORDED_REFUSALS:
+        remainder = skipped_unpublishable - _MAX_RECORDED_REFUSALS
+        publication_problems.append(f"... and {remainder} further non-publishable result entries were refused")
     # The runner owns its files' presentation roles in expected_files.yaml.
     # Read that declaration first so view resolution can rank it, but resolve
     # the views before building the logical-file projection: view resolution
@@ -1010,6 +1270,10 @@ def _finalize_results_manifest(
     storyboard = None
     checks: list[dict[str, Any]] = []
     problems: list[str] = []
+    # Publication rejections are reported in the same bounded ``problems`` list
+    # the output check already carries, so a refused symlink, hard link, special
+    # file, or over-capacity tree fails the output check instead of disappearing.
+    problems.extend(publication_problems)
     if task_type is not None:
         try:
             tree = expected_file_tree(task_type, CONFIG.server_dir)
@@ -1068,46 +1332,94 @@ def _finalize_results_manifest(
     # A PARTIAL_SUCCESS task is finalized exactly like any other: the task ran
     # to completion and published everything it has.  The standardized outcome
     # is a presentation/consumer vocabulary, not a new tasks.status.
+    #
+    # A rejected or over-capacity publication entry is already recorded in
+    # ``problems``, so the output check reflects it: the manifest never claims a
+    # passed result set that silently dropped files it could not safely publish,
+    # and a tree with only refused entries still publishes a valid manifest (with
+    # no artifacts) rather than degrading to "publish the unsafe tree".
     temporary = _safe_join(result_dir, ".manifest.json.tmp")
     destination = _safe_join(result_dir, "manifest.json")
+    # One serialization, written once: the bytes anchored below are the exact
+    # bytes published, not a second serialization that could differ from them.
+    payload = json.dumps(manifest, ensure_ascii=True, indent=2, sort_keys=True) + "\n"
+    encoded = payload.encode("utf-8")
     with open(temporary, "w", encoding="utf-8") as handle:
-        json.dump(manifest, handle, ensure_ascii=True, indent=2, sort_keys=True)
-        handle.write("\n")
+        handle.write(payload)
         handle.flush()
         os.fsync(handle.fileno())
+    # The manifest is self-describing — it declares its artifacts, their sizes,
+    # and their digests — and it is written by the runner's Unix identity inside
+    # the runner-owned result tree, so nothing *in* that tree can say whether the
+    # file just published is the one Core finalized.  Anchoring the finalized
+    # bytes in server-owned state is what makes that question answerable: every
+    # later read of the manifest is checked against this record, so a
+    # post-finalization replacement (which could otherwise declare its own sizes
+    # and digests and thereby authorize its own publication) fails closed.
+    #
+    # The anchor is established BEFORE the bytes become visible at the canonical
+    # path, and both happen before any publication is claimed.  The order matters
+    # at the split point, and both directions are bounded and honest: an anchor
+    # failure removes the candidate bytes, leaves no canonical manifest, no
+    # event, and a task that is not finished; a crash between the two steps
+    # leaves the anchor ahead of the bytes, which a reader reports as
+    # ``manifest_missing`` (nothing published at the canonical path yet) or
+    # ``anchor_mismatch`` (a re-publication whose bytes had not landed) -- never
+    # as an available result, and never as an available result that is wrong.  A
+    # later publication of the same task supersedes the abandoned anchor.
+    try:
+        _anchor_result_manifest(task, encoded, published_at=finished_at)
+    except BaseException:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        raise
     os.replace(temporary, destination)
     emit_event(
         "manifest.published",
         request_id=_task_request_id(task),
         task_id=str(task["md5sum"]),
         task_type=str(task.get("task_type") or default_task_type()),
+        # The single owning vocabulary carries the publication outcome: a
+        # rejected entry makes the published manifest's output check fail and
+        # names that reason here, instead of a parallel event for the same fact.
+        reason_code=(
+            (ARTIFACT_CAPACITY_GUARD if publication_capacity_guard else ARTIFACT_PUBLICATION_REJECTED)
+            if publication_problems
+            else None
+        ),
     )
     return manifest
 
 
 def _build_results_archive(task: dict) -> str:
-    """Build an optional ZIP from the artifacts published in the manifest."""
+    """Build an optional ZIP from the artifacts published in the manifest.
+
+    The ZIP is a publication path, so it consumes the same published-artifact
+    identity contract as the ordinary artifact download: every entry comes from
+    a verified open descriptor, never from a pathname that is re-opened after
+    the check.  The manifest itself is read once from a verified descriptor and
+    *those* bytes are the ones written into the ZIP, so the archived manifest
+    can never describe a different manifest than the one that selected the
+    entries.  A file replaced after the manifest was finalized therefore fails
+    the whole archive closed instead of being smuggled into the download.
+    """
     zip_filename = _task_zip_path(task)
-    result_dir = _task_result_dir(task)
-    manifest_path = _safe_join(result_dir, "manifest.json")
+    storage = _storage()
+    manifest_bytes = storage.read_manifest_bytes(task)
+    if manifest_bytes is None:
+        raise FileNotFoundError("Result manifest is not finalized")
     try:
-        with open(manifest_path, encoding="utf-8") as handle:
-            manifest = json.load(handle)
-    except (OSError, json.JSONDecodeError) as exc:
+        manifest = json.loads(manifest_bytes)
+    except json.JSONDecodeError as exc:
         raise FileNotFoundError("Result manifest is not finalized") from exc
     temporary_zip = f"{os.path.splitext(zip_filename)[0]}.tmp-{os.getpid()}-{time.time_ns()}.zip"
     try:
         with zipfile.ZipFile(temporary_zip, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-            archive.write(manifest_path, "manifest.json")
+            _write_manifest_entry(archive, manifest_bytes)
             for artifact in manifest.get("artifacts", []):
-                relative_path = artifact.get("path", "")
-                parts = relative_path.split("/")
-                if not relative_path or any(part in {"", ".", ".."} for part in parts):
-                    raise ValueError("Result manifest contains an invalid artifact path")
-                path = _safe_join(result_dir, *parts)
-                if os.path.islink(path) or not os.path.isfile(path):
-                    raise FileNotFoundError(f"Published result artifact is unavailable: {relative_path}")
-                archive.write(path, relative_path)
+                _write_verified_artifact(archive, storage, task, manifest, artifact)
         os.replace(temporary_zip, zip_filename)
     finally:
         if os.path.exists(temporary_zip):
@@ -1294,15 +1606,21 @@ def _capture_debug_submission(task: dict[str, Any], entities: list[dict], params
                 continue
             destination = _safe_join(inputs_dir, role, *parts)
             os.makedirs(os.path.dirname(destination), exist_ok=True)
-            # Hardlink first: workspace and results live on the same server
-            # filesystem, so the debug copy costs no extra disk and the
-            # workspace deletion later only drops its own link.  Copy when
-            # linking is impossible (e.g. the results dir is a different
-            # mount).
+            # Copy rather than hard link: the debug capture lands inside the
+            # result tree, and the publication boundary refuses any result entry
+            # whose link count is not one.  A hard link here would make every
+            # captured input unpublishable and a symlink would be skipped.
             try:
-                os.link(snapshot_path, destination)
-            except OSError:
                 shutil.copyfile(snapshot_path, destination)
+                os.chmod(destination, 0o440)
+            except OSError as exc:
+                logging.warning(
+                    "Skipping debug capture copy for %r in task %s: %s",
+                    relative_path,
+                    task.get("md5sum"),
+                    exc,
+                )
+                continue
             files.append(
                 {
                     "role": str(fe.get("role") or ""),
@@ -1421,6 +1739,45 @@ def _execute_compute_task(
             )
             logging.error("Input snapshot verification failed for task %s", md5sum)
             return
+        # The snapshot is the immutable byte stream the Runner consumes, so the
+        # admission receipt names it.  A trusted receipt is necessary but not
+        # sufficient: the snapshot is re-run through the same canonical Core
+        # boundary execution would have applied, so a forged or stale receipt can
+        # never substitute a decision for real validation, and a swap between
+        # admission and execution is a failure rather than a silent substitution.
+        receipt = fe.get("validation_receipt")
+        reason = _verify_snapshot(fe, snapshot_path, receipt)
+        if reason is not None:
+            _record_failure(
+                md5sum,
+                task,
+                time.time(),
+                "",
+                f"Immutable input snapshot is missing or changed: {fe.get('relative_path', 'unknown')}",
+            )
+            emit_event(
+                "worker.task.failed",
+                level="ERROR",
+                request_id=request_id,
+                task_id=md5sum,
+                task_type=str(task_type),
+                runner_family=tt.runtime.name,
+                reason_code=reason,
+            )
+            logging.error("Input snapshot receipt verification failed for task %s", md5sum)
+            return
+        if not isinstance(receipt, dict):
+            # Record the freshly proven decision on the execution description,
+            # so downstream provenance names the boundary that admitted these
+            # bytes even for a row that predates receipts.
+            fe["validation_receipt"] = ValidationReceipt(
+                sha256=str(fe["hash"]),
+                size=int(fe.get("size") or os.path.getsize(snapshot_path)),
+                format=str(fe.get("format") or ""),
+                logical_type=str(fe.get("logical_type") or "file"),
+                relative_path=str(fe.get("relative_path") or ""),
+                role=str(fe.get("role") or ""),
+            ).as_record()
 
     stages = list(tt.stage_markers.items())
     start_time = task.get("started_at") or time.time()
@@ -1527,7 +1884,16 @@ def _execute_compute_task(
             return
         _capture_debug_submission(task, entities, params)
         finish_time = time.time()
-        _finalize_results_manifest(refreshed_task, execution_state="completed", finished_at=finish_time)
+        try:
+            _finalize_results_manifest(refreshed_task, execution_state="completed", finished_at=finish_time)
+        except ResultPublicationError as exc:
+            # The run finished, but its result could not be published as one
+            # coherent transition.  The task is settled as failed rather than
+            # finished: a finished row whose canonical result Core's own reader
+            # refuses is exactly the state this boundary exists to prevent.
+            _record_failure(md5sum, task, start_time, stage_state["current"], str(exc))
+            logging.error("Publication failed for task %s: %s", md5sum, exc)
+            return
         refreshed_task = task_store.get_task(md5sum) or refreshed_task
         if _is_terminal_status(refreshed_task.get("status")):
             return
@@ -1838,7 +2204,15 @@ def _finalize_after_poll(md5sum, task, tt, state):
             return
         _capture_debug_submission(task, _entities_from_input_form(task))
         finish_time = time.time()
-        _finalize_results_manifest(refreshed, execution_state="completed", finished_at=finish_time)
+        try:
+            _finalize_results_manifest(refreshed, execution_state="completed", finished_at=finish_time)
+        except ResultPublicationError as exc:
+            # Same rule as the live path: a recovered run whose publication
+            # could not be established is recorded as failed, never as a
+            # finished task with an unreadable result.
+            _record_failure(md5sum, task, task.get("started_at") or finish_time, "", str(exc))
+            logging.error("Publication failed for recovered task %s: %s", md5sum, exc)
+            return
         refreshed = task_store.get_task(md5sum) or refreshed
         if _is_terminal_status(refreshed.get("status")):
             return
@@ -1851,6 +2225,47 @@ def _finalize_after_poll(md5sum, task, tt, state):
             run_stage=list(tt.stage_markers.items())[-1][0] if tt.stage_markers else "",
         )
         _cleanup_task_workspace(task)
+
+
+def _reconcile_result_publications() -> dict[str, int]:
+    """Classify every terminal task's publication and report the quarantined ones.
+
+    This is the rollout rule for results that predate the publication anchor, and
+    the restart-side reconciliation for a publication that was interrupted: both
+    surface as the same bounded state, resolved by the same reader every consumer
+    uses.  It reports and never writes.
+
+    It deliberately does not backfill an anchor.  A pre-anchor result was
+    finalized by an authority that recorded no identity for the manifest, and the
+    only bytes available today are the ones the runner's identity wrote in the
+    result tree — the exact namespace the anchor exists to stop trusting.  So the
+    manifest stays quarantined with its reason, and the trusted re-publication
+    path is the ordinary one: a fresh run of the task, which publishes through
+    the same single transition as everything else.  An operator reads the report
+    with ``revocompute publications`` and decides which tasks to re-run.
+    """
+    storage = _storage()
+    summary: dict[str, int] = {}
+    for task in task_store.list_tasks():
+        status = str(task.get("status") or "").strip().lower()
+        if status not in {"finished", "failed"}:
+            continue
+        state = storage.publication_state(task)
+        summary[state] = summary.get(state, 0) + 1
+        if state in PUBLICATION_QUARANTINE_STATES:
+            emit_event(
+                "manifest.publication_quarantined",
+                level="WARNING",
+                task_id=str(task.get("md5sum")),
+                task_type=str(task.get("task_type") or default_task_type()),
+                # The publication state is the machine-readable reason: it says
+                # whether the result predates the anchor (unanchored) or its bytes
+                # changed after publication (anchor_mismatch), which are different
+                # operator problems.
+                reason_code=state,
+            )
+            logging.warning("Result for task %s is quarantined: %s", task.get("md5sum"), state)
+    return summary
 
 
 # One pulse per worker process.  Started from ``worker_ready``, which Celery
@@ -1936,6 +2351,14 @@ try:
             reconciliation = _reconcile_gpu_allocations()
             if reconciliation["settled"] or reconciliation["review"]:
                 logging.info("GPU allocation reconciliation: %s", reconciliation)
+            publications = _reconcile_result_publications()
+            unreadable = sum(
+                count for state, count in publications.items() if state != PUBLICATION_AVAILABLE
+            )
+            if unreadable:
+                logging.warning("Result publication states: %s", publications)
+            else:
+                logging.info("Result publication reconciliation: %s", publications)
         except Exception:  # boot-time recovery must never die silently
             logging.exception("Recovery pass failed")
         try:

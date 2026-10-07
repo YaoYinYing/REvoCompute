@@ -10,6 +10,14 @@ from pathlib import Path
 
 MAX_TEXT_BYTES = 16 * 1024 * 1024
 
+#: The isolated worker's bounded signal that it exhausted a resource limit
+#: rather than failing to parse.  Transport-level, so it is a protocol constant
+#: of the isolation boundary rather than of any one format parser.
+#: The in-band error the worker returns when it exhausted a resource limit.
+#: It is deliberately not human-facing prose: it is a marker the parent maps
+#: to the bounded machine-readable code ``validator_resource_limit``.
+ISOLATED_RESOURCE_SENTINEL = "RESOURCE_LIMIT"
+
 # Uploads are capped at 16 MiB by app.MAX_CONTENT_LENGTH, so a file on disk is
 # never larger than that.  Every cap below is deliberately far above what can
 # physically fit in 16 MiB of the corresponding format, meaning the caps only

@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import csv
+import io
 import json
 import math
 import os
@@ -27,6 +28,7 @@ MAX_CSV_FILE_BYTES = 64 * 1024 * 1024
 MAX_CSV_ROWS = 1_048_576
 MAX_CSV_COLUMNS = 512
 MAX_CSV_CELL_BYTES = 1024
+MAX_NPY_FILE_BYTES = 64 * 1024 * 1024
 MAX_NPZ_FILE_BYTES = 512 * 1024 * 1024
 MAX_NPZ_ARRAY_BYTES = 64 * 1024 * 1024
 _NPZ_KEY = re.compile(r"[A-Za-z0-9_.-]{1,128}")
@@ -49,23 +51,29 @@ def _array_size(shape: tuple[int, ...], dtype: np.dtype[Any]) -> tuple[int, int]
     return elements, elements * dtype.itemsize
 
 
-def _read_npz_member(path: str, key: str) -> np.ndarray[Any, Any]:
-    if os.path.getsize(path) > MAX_NPZ_FILE_BYTES:
+def _read_npz_member(stream: Any, key: str) -> np.ndarray[Any, Any]:
+    """Read one bounded member of an NPZ archive from the caller's descriptor.
+
+    ``zipfile.ZipFile`` reads and seeks through the supplied binary file object,
+    so the member bytes come from the descriptor whose publication identity was
+    verified and never from a reopened pathname.
+    """
+    if os.fstat(stream.fileno()).st_size > MAX_NPZ_FILE_BYTES:
         raise ArrayAccessError("NPZ artifact exceeds the access limit")
     member_name = f"{key}.npy"
-    with zipfile.ZipFile(path) as archive:
+    with zipfile.ZipFile(stream) as archive:
         members = [item for item in archive.infolist() if item.filename == member_name]
         if len(members) != 1:
             raise ArrayAccessError("NPZ key was not found")
         member = members[0]
         if member.file_size > MAX_NPZ_ARRAY_BYTES + 65_536:
             raise ArrayAccessError("NPZ array exceeds the access limit")
-        with archive.open(member) as handle:
-            version = np.lib.format.read_magic(handle)
+        with archive.open(member) as member_stream:
+            version = np.lib.format.read_magic(member_stream)
             if version == (1, 0):
-                shape, _, dtype = np.lib.format.read_array_header_1_0(handle)
+                shape, _, dtype = np.lib.format.read_array_header_1_0(member_stream)
             elif version in {(2, 0), (3, 0)}:
-                shape, _, dtype = np.lib.format.read_array_header_2_0(handle)
+                shape, _, dtype = np.lib.format.read_array_header_2_0(member_stream)
             else:
                 raise ArrayAccessError("Unsupported NPY format version")
         _, byte_count = _array_size(shape, dtype)
@@ -73,8 +81,11 @@ def _read_npz_member(path: str, key: str) -> np.ndarray[Any, Any]:
             raise ArrayAccessError("NPZ array exceeds the access limit")
         # ponytail: compressed members are materialized up to 64 MiB; stream to
         # a temporary mmap only if real published arrays exceed this ceiling.
-        with archive.open(member) as handle:
-            return np.lib.format.read_array(handle, allow_pickle=False)
+        member_stream = archive.open(member)
+        try:
+            return np.lib.format.read_array(member_stream, allow_pickle=False)
+        finally:
+            member_stream.close()
 
 
 def _json_values(array: np.ndarray[Any, Any]) -> list[bool | int | float | None]:
@@ -101,12 +112,11 @@ def _json_path_value(payload: Any, key: str | None) -> Any:
     return value
 
 
-def _read_json_value(path: str, key: str | None, kind: str) -> np.ndarray[Any, Any] | list[str]:
-    if os.path.getsize(path) > MAX_JSON_FILE_BYTES:
+def _read_json_value(stream: Any, key: str | None, kind: str) -> np.ndarray[Any, Any] | list[str]:
+    if os.fstat(stream.fileno()).st_size > MAX_JSON_FILE_BYTES:
         raise ArrayAccessError("JSON artifact exceeds the access limit")
     try:
-        with open(path, encoding="utf-8") as handle:
-            payload = json.load(handle, parse_constant=lambda _value: None)
+        payload = json.loads(stream.read(MAX_JSON_FILE_BYTES), parse_constant=lambda _value: None)
     except (MemoryError, OSError, UnicodeError, json.JSONDecodeError) as error:
         raise ArrayAccessError("Array artifact is invalid or unsupported") from error
     value = _json_path_value(payload, key)
@@ -153,14 +163,14 @@ def _validate_strings(values: list[str]) -> list[str]:
     return values
 
 
-def _read_csv_column(path: str, key: str | None, *, delimiter: str, kind: str) -> np.ndarray[Any, Any] | list[str]:
+def _read_csv_column(stream: Any, key: str | None, *, delimiter: str, kind: str) -> np.ndarray[Any, Any] | list[str]:
     if key is None or _JSON_KEY.fullmatch(key) is None:
         raise ArrayAccessError("A safe CSV column is required")
-    if os.path.getsize(path) > MAX_CSV_FILE_BYTES:
+    if os.fstat(stream.fileno()).st_size > MAX_CSV_FILE_BYTES:
         raise ArrayAccessError("CSV artifact exceeds the access limit")
     numeric_values: list[float] = []
     string_values: list[str] = []
-    with open(path, encoding="utf-8", newline="") as handle:
+    with io.TextIOWrapper(stream, encoding="utf-8", newline="") as handle:
         reader = csv.reader(handle, delimiter=delimiter)
         try:
             header = next(reader)
@@ -196,37 +206,70 @@ def _read_csv_column(path: str, key: str | None, *, delimiter: str, kind: str) -
     return _validate_strings(string_values) if kind == "categorical" else np.asarray(numeric_values, dtype=np.float64)
 
 
+def _read_npy_array(stream: Any) -> np.ndarray[Any, Any]:
+    """Read a bounded NPY array from the caller's verified descriptor.
+
+    The header is parsed first and its declared byte count checked against the
+    limit *before* the data is read, so a hostile header cannot force an
+    unbounded read; the descriptor is then seeked to the data offset and read
+    through ``np.lib.format.read_array`` (never ``np.load`` on a pathname, which
+    would both reopen the path and mmap it).
+    """
+    if os.fstat(stream.fileno()).st_size > MAX_NPY_FILE_BYTES:
+        raise ArrayAccessError("NPY artifact exceeds the access limit")
+    version = np.lib.format.read_magic(stream)
+    if version == (1, 0):
+        shape, _, dtype = np.lib.format.read_array_header_1_0(stream)
+    elif version in {(2, 0), (3, 0)}:
+        shape, _, dtype = np.lib.format.read_array_header_2_0(stream)
+    else:
+        raise ArrayAccessError("Unsupported NPY format version")
+    _, byte_count = _array_size(shape, dtype)
+    if byte_count > MAX_PROJECTION_BYTES:
+        raise ArrayAccessError("Projection exceeds the byte limit")
+    stream.seek(0)
+    return np.lib.format.read_array(stream, allow_pickle=False)
+
+
 def read_array_projection(
-    path: str | Path,
+    stream: Any,
     *,
+    name: str,
     key: str | None,
     kind: str,
     max_elements: int,
 ) -> dict[str, Any]:
-    """Parse once and return one complete, bounded storage-neutral projection."""
+    """Parse once and return one complete, bounded storage-neutral projection.
+
+    ``stream`` is the open, verified descriptor of the published artifact and
+    ``name`` only selects the parser by suffix.  Every reader consumes the
+    descriptor, so a file replaced after publication identity was verified can
+    never be projected: after publication identity has been verified, a consumer
+    must consume the verified object, not reopen its pathname.
+    """
     if kind not in {"numeric", "categorical"}:
         raise ArrayAccessError("Projection kind must be numeric or categorical")
     if max_elements < 1 or max_elements > MAX_PROJECTION_ELEMENTS:
         raise ArrayAccessError("Projection element limit is outside allowed bounds")
-    artifact_path = str(path)
-    suffix = Path(artifact_path).suffix.lower()
+    stream.seek(0)
+    suffix = Path(name).suffix.lower()
     try:
         if suffix == ".json":
-            value = _read_json_value(artifact_path, key, kind)
+            value = _read_json_value(stream, key, kind)
         elif suffix in {".csv", ".tsv"}:
-            value = _read_csv_column(artifact_path, key, delimiter="\t" if suffix == ".tsv" else ",", kind=kind)
+            value = _read_csv_column(stream, key, delimiter="\t" if suffix == ".tsv" else ",", kind=kind)
         elif suffix == ".npy":
             if kind != "numeric":
                 raise ArrayAccessError("NPY and NPZ projections are numeric-only")
             if key is not None:
                 raise ArrayAccessError("NPY artifacts do not accept a key")
-            value = np.load(artifact_path, mmap_mode="r", allow_pickle=False)
+            value = _read_npy_array(stream)
         elif suffix == ".npz":
             if kind != "numeric":
                 raise ArrayAccessError("NPY and NPZ projections are numeric-only")
             if key is None or _NPZ_KEY.fullmatch(key) is None:
                 raise ArrayAccessError("A safe NPZ key is required")
-            value = _read_npz_member(artifact_path, key)
+            value = _read_npz_member(stream, key)
         else:
             raise ArrayAccessError("Artifact is not a JSON, CSV, NPY, or NPZ array")
     except ArrayAccessError:

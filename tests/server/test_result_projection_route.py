@@ -18,6 +18,7 @@ from pathlib import Path
 
 from conftest import (
     _admin_client_auth,
+    _anchor_result_publication,
     _load_pssm_module,
     _relocate_task_artifacts,
     _task_owner,
@@ -108,6 +109,7 @@ def _finished_task_with_result(module, tmp_path) -> tuple[str, Path]:
         submitted_by_user_id=int(owner["submitted_by_user_id"]),
         storage_key=owner["storage_key"],
     )
+    _anchor_result_publication(module, md5sum)
     return md5sum, root
 
 

@@ -49,6 +49,9 @@ def test_task_status_distinguishes_active_failed_and_hidden_results(monkeypatch,
         "md5sum": running_id,
         "display_name": "query.fasta",
         "result_available": False,
+        # A running task has published nothing: its state is the ordinary
+        # not-yet case, not a quarantine of an existing result.
+        "result_publication": "not_finalized",
         "results_url": f"/compute/api/results/{running_id}",
         "status": "running",
         "status_url": f"/compute/api/running/{running_id}",
@@ -138,6 +141,18 @@ def test_cookie_session_and_openapi_describe_result_reconstruction(monkeypatch, 
 
     status_schema = spec["components"]["schemas"]["TaskStatus"]
     assert {"task_type", "result_available"} <= set(status_schema["required"])
+    # The publication vocabulary is server-owned and published, so a client can
+    # tell a quarantined (pre-anchor) result from a task that published nothing.
+    assert status_schema["properties"]["result_publication"]["enum"] == [
+        "available",
+        "not_finalized",
+        "unanchored",
+        "manifest_missing",
+        "manifest_unreadable",
+        "anchor_mismatch",
+        "anchor_invalid",
+        None,
+    ]
     artifact_schema = spec["components"]["schemas"]["Artifact"]
     assert artifact_schema["properties"]["capability"]["enum"] == [
         "molecular_structure",

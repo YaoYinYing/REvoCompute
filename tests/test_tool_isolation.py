@@ -169,7 +169,10 @@ def test_isolated_parser_timeout_kills_the_whole_child_group(monkeypatch, tmp_pa
         ),
     )
 
-    assert "time limit" in isolated_validation.validate_in_subprocess(str(source), "yaml")
+    assert (
+        isolated_validation.validate_in_subprocess(str(source), "yaml")
+        == isolated_validation.VALIDATOR_RESOURCE_LIMIT_ERROR
+    )
     assert [sig for _pid, sig in kills] == [signal.SIGTERM, signal.SIGKILL]
 
 

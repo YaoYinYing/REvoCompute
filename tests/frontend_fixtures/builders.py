@@ -564,6 +564,9 @@ def build_task_summary(
         "error": error,
         "result": {
             "available": result_available,
+            # A fixture that publishes nothing is in the ordinary not-yet state;
+            # the vocabulary itself is server-owned and validated by the schema.
+            "publication": "available" if result_available else "not_finalized",
             "page_url": f"/compute/results/{task_id}",
             "manifest_url": f"/compute/api/results/{task_id}",
             "archive_ready": archive_ready,

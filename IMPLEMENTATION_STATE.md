@@ -624,3 +624,283 @@ consumes.
 - The Host Operator Executor stays at its two real host operations; the Web
   surface refuses activation and rollback rather than approximating them.
 - §20.9 end-to-end failure drill is deprioritized by the Campaign Commander.
+
+
+# Untrusted Scientific Input and Artifact Boundary Hardening (PR #58)
+
+`TODO.md` is the design contract for this PR. This section is its execution
+state; the committed tests and the named commands are the machine-verifiable
+record.
+
+## Starting point
+
+- Branch base: `e64077589ff6c3583bb4b27b528daa2b1551abce` (current `main`).
+- Feature branch: `security/untrusted-scientific-boundaries`; worktree
+  `security-untrusted-scientific-boundaries`.
+- Scope: Core scientific-ingress validation and Runner artifact-publication
+  hardening only. No #55 readiness/control, no #56 frontend, no #57 MCP, no
+  accounting/quota, no Slurm placement.
+
+## Ingress audit (complete)
+
+Every surface that accepts untrusted scientific bytes reaches the same canonical
+Core path — `validate_input_file` + `validate_logical_input` under the quarantine
+window — before promotion, snapshot creation, or dispatch:
+
+| Surface | Entry | Canonical? | Bypass? |
+| --- | --- | --- | --- |
+| Browser multipart `/compute/api/post` | `_handle_submission` | yes | no |
+| Preflight `/compute/api/preflight/<tt>` | `_rate_limited_preflight` | yes | no (returns before promote/claim/dispatch) |
+| API-key auth | `auth.load_current_user` | yes (same routes) | no |
+| Tool call `/compute/api/tools/<name>/call` | `submit_tool_call` | yes | no |
+| Cross-Task artifact ref (in a Tool call) | `_tool_task_artifact` | yes (content re-validated) | no (cross-user 403) |
+| Workspace normalize POST | `normalize_workspace` | n/a (no file bytes) | CSRF gate added |
+| live-test CLI | `live_test_executor` | yes | n/a (not HTTP) |
+| MCP | absent on this branch | — | reconcile as a projection after #57 |
+
+## What changed
+
+- `revocompute/ingress_security.py` (new): the bounded admission vocabulary
+  (reason code -> phase), the content-derived `validator_revision()`, the
+  `ValidationReceipt`, `canonical_relative_path`, receipt verification, and the
+  collision-collapse helper. It owns reason codes and their phase only; the
+  operational event names it routes to are the existing
+  `operational_events.EVENT_NAMES` entries — no second event family.
+- `revocompute/routes.py`: collision -> `input_namespace_collision`; receipt
+  recorded per admitted item and carried into `task.json`; type+size bound into
+  the task identity; `preflight_task` uses the shared phase/event vocabulary; the
+  routes-local path shim removed; workspace-normalize CSRF gate added.
+- `revocompute/task_runtime.py`: publication boundary (`_publishable_artifact`
+  with `O_NOFOLLOW`+`fstat`, symlink/special/hard-link refusal, entry-count and
+  byte-total guards, duplicate-path refusal, output-check problems and a bounded
+  `manifest.published` reason code); worker verifies the snapshot against the
+  receipt before dispatch and revalidates legacy rows; debug capture copies
+  instead of hard-linking.
+- `revocompute/input_validators/*`: bounded resource-limit classification for the
+  isolated worker.
+
+## Delivery commands and results
+
+- `TMPDIR=<root-fs> pytest tests -m "not browser" -n 4 --dist=load -q -p no:cacheprovider`
+  -> 1829 passed, 24 skipped, 1 failed.
+  The single failure is `tests/runners/opendde/test_opendde_protocol.py` asserting
+  an absolute `/tmp/` scratch prefix; it fails only when the pytest basetemp is
+  relocated off the tmpfs (the shared `/tmp` tmpfs on this host has ~1M inodes and
+  concurrent runs exhaust it). It passes with the default basetemp, so it is a
+  fixture-path assumption of the relocation, not a product regression.
+- `pytest tests/server tests/test_ingress_boundary.py tests/test_input_validation.py -q`
+  -> 468 passed, 1 skipped.
+- `cd frontend && npm ci && npm run typecheck && npm test && npm run build`
+  -> typecheck clean (incl. `check:api-types`), 19 files / 88 tests passed, build
+  passes `verify:lock`/`verify:provenance`/`check:api-types`/`verify:build`.
+  The frontend bundle is unchanged; no `openapi.json` regeneration was needed
+  because the receipt rides inside existing free-form objects.
+
+## Known deferred
+
+- MCP reconciliation after #57 lands (projection only; #57 does not exist on this
+  branch).
+- The `boltz_predict` `considerations` manifest defect noted in the previous
+  section is unrelated and still open.
+
+## Pre-final review cell fixes (head d83f303)
+
+The three-way cell (Security + Correctness/Contract + Evidence/Integration)
+confirmed the publication boundary could not be escaped and returned two
+BLOCKERs plus MATERIALs; all are fixed:
+
+- BLOCKER 1 — the worker read `validation_receipt` while ingress wrote
+  `validation`, so the execution-time check was dead code. The key is unified at
+  every writer and revalidation is now mandatory (a receipt proves identity, it
+  does not replace validation). Three new tests cover the live branch, a stale
+  revision with matching bytes, and a forged receipt over invalid bytes.
+- BLOCKER 2 — a file/directory prefix pair in one role (`x.pdb` +
+  `x.pdb/y.pdb`) now fails closed as `input_namespace_collision` before the
+  preparation claim instead of 500ing with orphan state.
+- MATERIAL — `validator_resource_limit` is reachable (timeout, resource kill,
+  in-band sentinel), the isolated worker converts RLIMIT_AS fatal signals, the
+  capacity guard stops the walk and bounds the recorded refusals, the capacity
+  ceilings are server-owned config, and the credit reason code is one spelling
+  with an enumerated reverse-direction vocabulary test.
+
+Gates on this head: full non-browser suite 1834 passed / 24 skipped / 1 failed
+(the accepted opendde `/tmp`-prefix basetemp artifact); the frontend typecheck /
+test / build gates are unchanged and green.
+
+## Archive publication identity (rebased head)
+
+The downloadable results ZIP was a second publication path: `_build_results_archive`
+re-opened each manifest path and checked only `islink()`/`isfile()` before
+`ZipFile.write()`, so a file replaced after manifest finalization (a new inode, a
+symlink, a hard-link substitute) could land in the archive although the ordinary
+download path rejects it. Archive construction now consumes the same
+published-artifact identity contract:
+
+- `StorageResolver.open_verified_artifact` is the one contract: open with
+  `O_NOFOLLOW`, `fstat` the *opened* descriptor (regular file, `st_nlink == 1`),
+  stream-hash that descriptor, compare size and SHA-256 to the manifest entry,
+  then rewind. `resolve_declared_artifact` does path normalization and declaration
+  lookup only and is shared by both paths, and `resolve_artifact` wraps the same
+  primitive, so download and archive cannot diverge.
+- `_write_verified_artifact` streams from that verified descriptor straight into
+  `ZipFile.open(ZipInfo, "w")` in 1 MiB chunks: no check-then-reopen (the old
+  `archive.write(path, …)` re-opened by pathname) and no whole-artifact read into
+  memory.
+- Regression evidence in `tests/server/test_result_publication_boundary.py`: an
+  unchanged artifact archives normally with its ZIP entry matching the manifest
+  size/sha256, while different regular bytes, a symlink substitution, a hard-link
+  substitution, and a manifest path escaping the result root each fail the archive
+  closed.
+
+## Consumer descriptor binding (rebased head)
+
+The invariant is now enforced at every published-result consumer: *after
+publication identity has been verified, a consumer must consume the verified
+object/descriptor, not reopen its pathname.*
+
+- `StorageResolver.resolve_artifact` returns the verified open descriptor
+  (`verified_stream`) alongside the manifest entry. The direct Result download,
+  the ndarray projection, and the table preview read from that descriptor; the
+  download no longer delegates an `X-Accel-Redirect`, which would have nginx
+  reopen the mutable pathname. Single-`bytes` Range reads are served from the
+  same descriptor (206 + `Content-Range`, 416 when unsatisfiable), HEAD still
+  returns 200, and the tradeoff is recorded in the route: keeping the offload
+  would need an immutable publication store, which is out of scope here.
+- `read_array_projection` takes the verified binary stream plus the artifact
+  name for suffix dispatch: JSON reads a bounded descriptor chunk, CSV/TSV wrap
+  the descriptor in a `TextIOWrapper`, NPY bound-checks the header on the
+  descriptor before seeking to the data offset and calling `read_array` (no
+  pathname mmap, no unbounded read before the size check), and NPZ opens
+  `zipfile.ZipFile` over the descriptor.
+- `_tool_task_artifact` materializes through `materialize_stream` from the
+  verified handle, and `_build_results_archive` writes the exact manifest bytes
+  it verified.
+- `StorageResolver.load_manifest`/`read_manifest_bytes` are the single manifest
+  authority (`O_NOFOLLOW`, `fstat`, `S_ISREG`, `st_nlink == 1`, bounded size);
+  the primary results route, `/compute/api/results/<task>/files/<file_id>`, and
+  the result-availability readiness probe all consume it instead of a
+  plain pathname probe, so the readiness flag cannot disagree with the reader.
+  `ArtifactIdentityError` derives from `OSError`, so every existing fail-closed
+  branch covers it with no second contract.
+- `open_verified_artifact` requires the manifest entry to declare a usable size
+  and SHA-256 and returns the digest computed while hashing the opened
+  descriptor, so `resolve_artifact` never reopens the pathname to derive
+  provenance and an entry without identity evidence fails closed.
+- `_verified_payload` streams both the full body and a single range through one
+  bounded reader whose reads are capped by `_STREAM_CHUNK_BYTES` (64 KiB), so a
+  large artifact is never read with an artifact-sized request; `Range` parsing
+  applies `range_for_length(size)`, which resolves a suffix range and reports an
+  unsatisfiable one as 416.
+- Regression evidence: replaced bytes refuse the direct download and the
+  projection (a replacement injected between resolution and parse still projects
+  the original descriptor), a single and suffix range are served from the
+  verified descriptor with 416 beyond EOF, a Task artifact replaced between
+  resolution and Tool materialization cannot enter the Tool workspace, the
+  archive writes the manifest bytes it verified, a large artifact streams in
+  bounded chunks, missing or malformed digest evidence fails closed, and the
+  primary results route and the `/files/` route fail closed on a symlinked,
+  hard-linked, unreadable, or oversized manifest.
+
+## Finalized-manifest publication anchor (rebased head)
+
+The manifest is self-describing: it declares its artifacts, their sizes, and
+their digests. Because the runner's Unix identity writes both the manifest and
+the files it names, nothing *inside* the result tree can say whether the
+manifest being read is the one Core finalized — a post-finalization replacement
+with another ordinary single-link regular JSON manifest would redefine the
+published namespace and self-authorize its own publication.
+
+- `_finalize_results_manifest` publishes one serialized payload and, in the same
+  step, records its SHA-256 and size in `result_publications` (the Task store,
+  server-owned state outside the runner-writable result namespace), with an
+  advancing `revision`. A re-finalization is a new revision of the same task's
+  publication. Chmod/read-only bits are not treated as a trust boundary; there
+  is no new immutable publication store and no DB-of-blobs.
+- `StorageResolver.read_manifest_bytes` verifies the on-disk manifest against
+  that anchor (streamed SHA-256 plus size of the one verified descriptor) and
+  fails closed on mismatch, so the check is inherited by every consumer of the
+  reader: the results route, download, ndarray/table/logical projection, Tool
+  materialization, results archive, `get_results`, and the result-availability
+  readiness probe. The resolver is constructed with the Task store
+  by the web app, the worker runtime, and the live-test executor, so all three
+  processes resolve the same authority.
+- Regression evidence: `tests/server/test_result_publication_boundary.py` drives
+  the readable-but-unanchored case end to end — an unchanged finalized manifest
+  still serves every surface; a valid single-link regular JSON replacement is
+  refused by the canonical reader, the readiness probe, the results route, and
+  the archive; a replacement that declares a previously-undeclared file with
+  that file's *correct* size and SHA-256 still cannot publish it; the download,
+  ndarray, logical-file, archive, and probe verdicts all agree; and the existing
+  symlink, hard-link, oversized, and escaping-path refusals stay closed.
+
+## Publication establishment is one transition (merge-level review)
+
+Publication anchor establishment was not part of publication success: finalization
+renamed `manifest.json`, `_anchor_result_manifest` swallowed every persistence
+error, the `manifest.published` event was emitted, and the caller marked the task
+`finished`. A finished task plus a `manifest.published` event could therefore
+describe an UNREADABLE result, because `StorageResolver.read_manifest_bytes()`
+refuses an unanchored manifest. Separately, `result_publications` starts empty
+while every read requires an anchor, so the installed pre-anchor result corpus
+would have become uniformly unreadable with no reason and no policy.
+
+- One transition, durable authority first. `_anchor_result_manifest` raises
+  `ResultPublicationError`; `_finalize_results_manifest` writes the candidate
+  bytes, establishes the anchor, and only then renames them to the canonical path
+  and emits `manifest.published`. Both completion call sites
+  (`_execute_compute_task` and `_finalize_after_poll`) turn a publication failure
+  into a task recorded `failed`, so no `manifest.published` event and no
+  published-state claim can exist without a matching anchor. A failed anchor
+  removes the candidate file. The split point is bounded in both directions:
+  anchor-then-crash leaves an anchor ahead of the bytes, which the next
+  publication of the same task supersedes; anchor-failure leaves no canonical
+  manifest, no event, and a `failed` task.
+- The rollout rule for the installed corpus. `StorageResolver.publication_state()`
+  classifies one verified read as `available`, `unanchored` (a manifest with no
+  anchor row — the pre-anchor corpus), `manifest_missing`, `manifest_unreadable`,
+  `anchor_mismatch` (bytes replaced after publication), `anchor_invalid`, or
+  `not_finalized` (nothing was ever published). An unanchored or mismatched result
+  is QUARANTINED with its reason, never 404'd silently, and never backfilled by
+  trusting the runner-writable manifest — the namespace this change exists to stop
+  trusting. The trusted re-publication path is an ordinary re-run of the task,
+  which publishes through the same single transition.
+- Reconciliation is a report, never a write. `_reconcile_result_publications()`
+  runs at `worker_ready` beside orphan recovery and emits
+  `manifest.publication_quarantined` per quarantined terminal task;
+  `revocompute publications [--quarantined] [--json]` gives an operator the same
+  classification. Neither records an anchor.
+- Surfaces agree by construction: the status endpoint reports
+  `result_publication`, the Task list reports `result.publication`, and the
+  results/archive refusals answer with the state and a bounded reason. The
+  `not_finalized` case keeps the pre-existing JSON error contract (a running or
+  never-finalized task is still a not-found, not a quarantine).
+- Regression evidence in `tests/server/test_result_publication_transition.py`:
+  the anchor-failure split point leaves no manifest, no event, and
+  `not_finalized`; the anchor is asserted established BEFORE the manifest becomes
+  visible; every `manifest.published` is asserted emitted with an anchor already
+  durable; a real recovered-path caller settles `failed`, never `finished`, and a
+  retry then publishes normally; a pre-anchor result is quarantined with a reason
+  through the status payload, the results 404 body, and the Task list;
+  reconciliation classifies it, emits the quarantine event, and writes nothing;
+  re-publication settles it to `available`; a replaced manifest reports
+  `anchor_mismatch` rather than `unanchored`; a never-finalized task is not
+  reported as quarantined; and the ordinary archive request is unchanged.
+
+## Named follow-ups (tracked, not silent)
+
+- `validator_revision()` reports `sha256:unavailable` when a boundary source
+  cannot be read, and verification does NOT fail on that value: the revision
+  comparison is skipped because both sides read `unavailable`. After the
+  BLOCKER-1 fix this is a false-accept of an unknown boundary identity, not a
+  validation bypass — the bytes are still re-validated through the canonical
+  boundary on every dispatch. It is deferred rather than fixed here because the
+  stay-on-`main` durability contract requires a restored task to keep executing,
+  so failing on `unavailable` must be paired with guaranteeing the sources are
+  always present in a production install, which is a separate change. Owner:
+  follow-up PR; tracked so it is not dropped.
+- The admission reason-code vocabulary and the artifact reason codes are named
+  here as a shared surface for #59 reconciliation (`gpu_credit_exhausted` is the
+  unified spelling; #59's accounting codes must join this vocabulary rather than
+  mint a parallel one).
+- MCP reconciliation after #57 lands (projection only; the canonical path and
+  the receipt are the trust boundary, MCP projects them).

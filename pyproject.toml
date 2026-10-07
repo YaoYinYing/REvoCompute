@@ -29,6 +29,7 @@ dependencies = [
 [project.scripts]
 revocompute = "revocompute.__main__:main"
 revocompute-doctor = "revocompute.doctor:main"
+revocompute-publications = "revocompute.publications:main"
 revocompute-tool-status = "revocompute.tool_status:main"
 
 [project.optional-dependencies]

@@ -113,15 +113,32 @@ def _input_root(rt, task):
 
 
 class _FakeTaskStore:
+    """A task store double for the finalization path.
+
+    It records publication anchors alongside status updates, because
+    finalization persists the finalized manifest's identity in the Task store
+    and a reader that cannot resolve that anchor refuses the publication.
+    """
+
     def __init__(self, task):
         self.task = task
         self.updates = []
+        self.publications = []
 
     def get_task(self, md5sum):
         return self.task
 
     def update_task(self, md5sum, **fields):
         self.updates.append(fields)
+
+    def record_result_publication(self, md5sum, *, manifest_sha256, manifest_size, published_at):
+        self.publications.append(
+            {"task_id": md5sum, "manifest_sha256": manifest_sha256, "manifest_size": manifest_size}
+        )
+        return len(self.publications)
+
+    def get_result_publication(self, md5sum):
+        return self.publications[-1] if self.publications else None
 
 
 class _FakeTaskType:
