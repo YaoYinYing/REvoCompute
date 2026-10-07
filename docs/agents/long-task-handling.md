@@ -461,6 +461,96 @@ owner. The Commander does not merge or squash-merge unless the launch
 instruction explicitly grants that authority; the normal endpoint is
 `READY_FOR_FINAL_REVIEW`.
 
+### Maintainer attention is a scarce campaign resource
+
+A Campaign must optimize not only implementation throughput and correctness but
+also **maintainer attention cost**. A recent pair of high-throughput PR campaigns
+consumed roughly twelve hours of sustained maintainer supervision in aggregate —
+not because implementation stalled, but because too much routine convergence
+work remained with the maintainer: repeatedly choosing PR order, asking for
+status, noticing stale ancestry, requesting rebases, separating CI flakes from
+regressions, re-checking whether review findings were still live, and deciding
+when agents should continue or stop. More agents must not imply proportionally
+more interruptions; if throughput roughly doubles, required maintainer attention
+should stay roughly bounded. If it does not, the protocol is under-absorbing
+coordination work.
+
+The intended division of responsibility:
+
+```text
+Maintainer  -> goals and first-principles constraints, scientific/product/security
+               judgment, major architectural trade-offs, scope changes, acceptance
+               of user-visible design, final merge authority where retained, and
+               genuinely ambiguous or irreversible decisions
+
+Commander   -> routine convergence: refresh live state, maintain the dependency
+               DAG, choose safe order, dispatch PR-scoped agents, keep the control
+               root clean, detect stale ancestry, rebase/reconcile after upstream
+               merges, resolve ordinary integration conflicts, rerun CI and
+               dedicated gates, distinguish flakes from regressions with evidence,
+               track findings (live / fixed / superseded), request focused review
+               cells, regenerate derived artifacts from canonical sources, identify
+               shared-file hotspots, park downstream work until real dependencies
+               are ready, stop scope growth, and drive PRs to
+               READY_FOR_FINAL_REVIEW
+```
+
+The maintainer should never have to ask whether a PR has rebased onto the new
+`main`, whether a CI rerun finished, whether an old review thread is still
+relevant, which PR is next, whether a generated client was regenerated, whether a
+downstream PR may start, or whether a branch actually consumed a merged upstream
+change. Those are Commander responsibilities.
+
+**Escalation threshold.** Do not escalate routine engineering choices merely
+because several valid options exist. Escalate only when at least one holds:
+
+1. the decision changes an established architectural owner or creates a new
+   source of truth;
+2. it materially expands or cuts campaign scope;
+3. scientific correctness or interpretation is ambiguous;
+4. security posture would materially change;
+5. a user-visible product/design decision needs subjective acceptance;
+6. a migration or destructive operation has meaningful irreversible risk;
+7. two valid approaches have materially different long-term maintenance cost;
+8. proceeding would contradict a previously stated maintainer constraint;
+9. evidence is insufficient to distinguish a regression from an
+   infrastructure/test failure;
+10. an imminent merge requires maintainer approval, or a proposed change would
+    alter previously retained merge authority.
+
+Otherwise choose the best bounded option, record the reasoning concisely, and
+continue.
+
+**Evidence before interruption.** Before asking the maintainer to decide
+anything technical, gather enough evidence to make the decision easier. Do not
+ask "CI failed; what should we do?" — first determine the exact failing
+test/job, whether the changed files can plausibly affect it, whether it
+reproduces, whether it fails on current `main`, whether nondeterminism,
+environment, or ordering explains it, and whether a bounded fix belongs in the
+current PR. Only escalate if a real trade-off remains.
+
+**Report by decision boundary, not by implementation event.** Batch routine
+state changes. Prefer "#58 and #59 are independently converging; #58 rebased
+cleanly and is in exact-head security review; #59 found one admission invariant
+violation and is fixing it. No maintainer decision required." over a stream of
+"rebased / CI started / CI completed / a test failed / should I rerun / should I
+continue." Routine failures are investigated before escalation.
+
+**Convergence loop.** For a long-running Campaign the Commander repeatedly
+performs `observe → classify → dispatch → verify → reconcile → reduce in-flight
+state` without waiting for a maintainer prompt after every step. After every
+upstream merge: refresh `main`; identify affected downstream branches;
+re-evaluate ancestry and semantic dependencies; reconcile the smallest necessary
+set; rerun exact-head evidence; update the dependency DAG; and continue
+automatically where no maintainer decision is required. The goal is to keep
+shrinking the campaign state the maintainer must mentally track.
+
+**Stop conditions.** Autonomy does not mean manufacturing work. When all
+remaining PRs are ready for maintainer final review, deliberately parked behind
+explicit dependencies, or blocked on a genuine maintainer decision, stop
+dispatching implementation work and present one concise campaign checkpoint. Do
+not create speculative follow-up PRs merely because agent capacity is available.
+
 ### PR owners
 
 Every active implementation PR has exactly one owning agent. The owner:
