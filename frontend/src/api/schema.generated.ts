@@ -4991,7 +4991,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
-            /** @description Task results are not ready */
+            /** @description Task results are not ready, or the published result is not readable. A quarantined result (`result_publication` of `unanchored`, `anchor_mismatch`, `manifest_missing`, `manifest_unreadable`, or `anchor_invalid`) cannot be packed into a new archive; the body carries the state and the reason. */
             409: {
                 headers: {
                     [name: string]: unknown;
