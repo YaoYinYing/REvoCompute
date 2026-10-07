@@ -600,6 +600,128 @@ def _register_gpu_test_type(module):
     conftest._inject_task_type(module, replace(base, name="gpu_test", gpus=True), runner)
 
 
+def test_a_gpu_submission_holds_the_final_unit_it_was_admitted_on(monkeypatch, tmp_path):
+    """Admission takes the hold and the dispatch carries it; the start consumes it.
+
+    The reservation a GPU submission is admitted on is recorded against its own
+    Task and left live until the allocation starts — which is exactly what lets a
+    Task holding the final unit reach that transition at all.
+    """
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    _register_gpu_test_type(module)
+    route = module.app.view_functions["upload_file"]
+    while hasattr(route, "__wrapped__"):
+        route = route.__wrapped__
+    # Readiness is the runner's availability evidence (#55's boundary), not an
+    # accounting claim: this scenario is about the Task's reservation, so the
+    # runner is simply available.
+    monkeypatch.setitem(
+        route.__globals__,
+        "resolve_submission_readiness",
+        lambda *_args: SimpleNamespace(ready=True),
+    )
+    headers = _test_client_auth(module)
+    user = module.app.config["user_db"].get_user_by_username("tester")
+    module.app.config["user_db"].update_user(user["id"], allow_gpu_use=True)
+    module.task_store.project_gpu_authorization(
+        user["id"], account_enabled=True, allow_gpu_use=True, entitlements={}
+    )
+    module.task_store.set_compute_allowance(
+        user_id=user["id"],
+        monthly_gpu_seconds=3_600,
+        actor_user_id=user["id"],
+        idempotency_key="one-hold",
+    )
+    queued: list[bool] = []
+
+    def _enqueue(*args, **kwargs):
+        queued.append(True)
+        return SimpleNamespace(id="celery-gpu-admission")
+
+    monkeypatch.setattr(module.run_compute_task, "apply_async", _enqueue)
+
+    response = module.app.test_client().post(
+        "/compute/api/post",
+        headers=headers,
+        data={
+            "task_type": "gpu_test",
+            "files": (io.BytesIO(b">sequence\nACDEFGHIK\n"), "sequence.fasta"),
+            "input_roles": "sequence",
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 302, response.get_data(as_text=True)
+    assert queued == [True]
+    held = module.task_store.list_live_reservations()
+    assert len(held) == 1
+    assert held[0]["quantity"] == 3_600
+    assert held[0]["state"] == "held"
+
+
+def test_a_dispatch_that_never_reached_the_queue_releases_the_hold(monkeypatch, tmp_path):
+    """A submission whose queue enqueue failed keeps no entitlement.
+
+    The Task is failed, so the claim its reservation took must be returned
+    immediately and idempotently rather than held until the TTL expires.
+    """
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    _register_gpu_test_type(module)
+    route = module.app.view_functions["upload_file"]
+    while hasattr(route, "__wrapped__"):
+        route = route.__wrapped__
+    # Readiness is the runner's availability evidence (#55's boundary), not an
+    # accounting claim: this scenario is about the Task's reservation, so the
+    # runner is simply available.
+    monkeypatch.setitem(
+        route.__globals__,
+        "resolve_submission_readiness",
+        lambda *_args: SimpleNamespace(ready=True),
+    )
+    headers = _test_client_auth(module)
+    user = module.app.config["user_db"].get_user_by_username("tester")
+    module.app.config["user_db"].update_user(user["id"], allow_gpu_use=True)
+    module.task_store.project_gpu_authorization(
+        user["id"], account_enabled=True, allow_gpu_use=True, entitlements={}
+    )
+    module.task_store.set_compute_allowance(
+        user_id=user["id"],
+        monthly_gpu_seconds=3_600,
+        actor_user_id=user["id"],
+        idempotency_key="one-hold",
+    )
+
+    def _unavailable(*args, **kwargs):
+        raise RuntimeError("broker is down")
+
+    monkeypatch.setattr(module.run_compute_task, "apply_async", _unavailable)
+
+    response = module.app.test_client().post(
+        "/compute/api/post",
+        headers=headers,
+        data={
+            "task_type": "gpu_test",
+            "files": (io.BytesIO(b">sequence\nACDEFGHIK\n"), "sequence.fasta"),
+            "input_roles": "sequence",
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 503
+    assert module.task_store.list_live_reservations() == []
+    released = [row for row in module.task_store.list_reservations(user_id=user["id"])]
+    assert [row["reason_code"] for row in released] == ["dispatch_failed"]
+    assert module.task_store.compute_entitlement(user["id"]).remaining == 3_600
+
+
 @pytest.mark.parametrize("endpoint", ["/compute/api/preflight/gpu_test", "/compute/api/post"])
 def test_exhausted_gpu_credit_fails_after_security_without_durable_side_effects(monkeypatch, tmp_path, endpoint):
     module = _load_pssm_module(
@@ -611,7 +733,7 @@ def test_exhausted_gpu_credit_fails_after_security_without_durable_side_effects(
     headers = _test_client_auth(module)
     user = module.app.config["user_db"].get_user_by_username("tester")
     module.app.config["user_db"].update_user(user["id"], allow_gpu_use=True)
-    module.task_store.adjust_gpu_credit(
+    module.task_store.adjust_compute_account(
         user_id=user["id"],
         gpu_seconds=-60_000,
         actor_user_id=user["id"],
@@ -676,7 +798,7 @@ def test_cpu_preflight_is_accepted_with_exhausted_gpu_credit(monkeypatch, tmp_pa
     )
     headers = _test_client_auth(module)
     user = module.app.config["user_db"].get_user_by_username("tester")
-    module.task_store.adjust_gpu_credit(
+    module.task_store.adjust_compute_account(
         user_id=user["id"],
         gpu_seconds=-60_000,
         actor_user_id=user["id"],

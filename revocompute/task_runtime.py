@@ -43,7 +43,11 @@ from revocompute.infrastructure import (
     publish_worker_probe_snapshot,
 )
 from revocompute.job import Job, JobState
-from revocompute.job.runners.slurm_runner import SlurmJob
+from revocompute.job.runners.slurm_runner import (
+    SlurmJob,
+    surviving_allocation_receipts,
+    surviving_scheduler_logs,
+)
 from revocompute.ingress_security import (
     ARTIFACT_CAPACITY_GUARD,
     ARTIFACT_PUBLICATION_REJECTED,
@@ -53,6 +57,8 @@ from revocompute.ingress_security import (
 from revocompute.input_validators.isolated_validation import VALIDATOR_RESOURCE_LIMIT_ERROR
 from revocompute.manage_db import ManageDatabase  # noqa: E402
 from revocompute.operational_events import emit_event
+from revocompute import resource_ledger as rloan
+from revocompute.resource_ledger import AdmissionReason, EvidenceSource, LedgerReason, ReservationReason
 from revocompute.resource_observations import work_items_projection
 from revocompute.resource_policy import ResolvedResources, ResourceValidationError
 from revocompute.result_projection import artifact_capability
@@ -400,6 +406,7 @@ def _create_job(
     stage_callback=None,
     username: str = "",
     resource_policy: ResolvedResources | None = None,
+    allocation_dispatched_callback=None,
     allocation_started_callback=None,
     allocation_finished_callback=None,
 ) -> Job:
@@ -420,18 +427,19 @@ def _create_job(
         # The deployment's Runtime Bundle store, so the adapter resolves the
         # task's pinned digest exactly where the submission path recorded it.
         runtime_bundle_root=CONFIG.runtime_bundle_root,
+        allocation_dispatched_callback=allocation_dispatched_callback,
         allocation_started_callback=allocation_started_callback,
         allocation_finished_callback=allocation_finished_callback,
     )
 
 
 def _gpu_count(resource_policy: ResolvedResources) -> int:
-    if not resource_policy.requires_gpu or not resource_policy.gres:
+    if not resource_policy.requires_gpu:
         return 0
-    return int(resource_policy.gres.rsplit(":", 1)[1])
+    return rloan.units_for_gres(resource_policy.gres)
 
 
-def _gpu_allocation_callbacks(
+def _compute_allocation_callbacks(
     *,
     task_id: str,
     user_id: int,
@@ -439,37 +447,137 @@ def _gpu_allocation_callbacks(
     resource_policy: ResolvedResources,
     required_entitlements: tuple[str, ...] = (),
     runner_family: str = "",
-) -> tuple[Any, Any]:
-    gpu_count = _gpu_count(resource_policy)
-    if not gpu_count:
-        return None, None
+) -> tuple[Any, Any, Any]:
+    """The three resource-accounting edges of one Slurm allocation.
 
-    def started(slurm_job_id: str, started_at: float) -> None:
-        try:
-            if runner_family and not resolve_submission_readiness(CONFIG.server_dir, runner_family).ready:
-                raise GPUAuthorizationUnavailableError("Runner readiness is unavailable")
-            summary = task_store.require_gpu_credit(user_id, at=started_at)
-            task_store.record_gpu_allocation_start(
+    ``dispatched`` fires once the scheduler accepted the request: the Task's
+    admission reservation stops being a pre-dispatch hold and becomes a
+    scheduler-owned commitment, so a long queue wait can never free entitlement
+    the request is about to consume.
+
+    ``started`` fires when the allocation is observably running: it records the
+    allocation the balance is actually charged for (which releases the
+    reservation — the allocation, not the reservation, is the charge) and lets
+    the wrapper proceed.
+
+    ``finished`` settles.  Settlement always happens for an allocation that
+    started, whatever the outcome: a failed or cancelled allocation consumed its
+    CPUs and GPUs for the time they were held, so its measured elapsed time is a
+    real charge and only *unknown* evidence stays unsettled.
+    """
+    gpu_count = _gpu_count(resource_policy)
+    cpu_cores = max(1, int(resource_policy.cpus or 0))
+
+    def dispatched(
+        slurm_job_id: str,
+        dispatched_at: float,
+        wrapper_executed: bool = False,
+        receipt: dict | None = None,
+    ) -> bool:
+        """Record the dispatch; ``True`` once a receipt claim was adopted.
+
+        The return value is the caller's license to relinquish the wrapper's
+        receipt file: only a claim this callback durably took over may be
+        deleted, so anything it declined (an unknown subject, a receipt naming a
+        different job) stays on disk for reconciliation.
+        """
+        if user_id <= 0:
+            return False
+        if wrapper_executed:
+            # The wrapper's own stdout id line — not the srun stderr banner —
+            # obtains its scheduler identity *inside* the allocation, so seeing
+            # it is already evidence the wrapper occupied a compute node.  The
+            # observation and the scheduler-owned reservation are written as ONE
+            # store transition: a process death can land before the write, but
+            # never between a queued reservation and the allocation its job id
+            # proves, so a genuinely executed request can never be reclaimed as
+            # "reservation only".  ``record_allocation_start`` later promotes the
+            # same rows and grants or denies the command.
+            #
+            # ``receipt`` is the wrapper's own durable record from the compute
+            # node, so the allocation is dated and shaped by the machine that
+            # held it.  A receipt is a claim about a scheduler job: it is only
+            # accepted here for the identity this dispatch already names, and a
+            # receipt for anything else is ignored rather than allowed to mint an
+            # allocation under a job id the caller does not own.
+            started_at = dispatched_at
+            gpus = gpu_count
+            cpus = cpu_cores
+            adopted = False
+            if receipt is not None and str(receipt.get("slurm_job_id")) == str(slurm_job_id):
+                started_at = float(receipt["observed_at"])
+                gpus = int(receipt.get("gpus") or 0)
+                cpus = max(1, int(receipt.get("cpus") or 0))
+                # The wrapper's own file receipt is the one durable record that
+                # survives this worker's death.  Persisting it as a server-owned
+                # receipt row *before* the observation means the file's claim has
+                # a durable successor the instant the wrapper's line is read, so
+                # the runner may delete the file afterwards without ever leaving
+                # fewer durable representations than before.  The row is consumed
+                # by ``observe_allocation_start`` in the very next call, and by
+                # reconciliation if this worker dies first.
+                task_store.record_allocation_receipt(
+                    task_id=task_id,
+                    stage_id=stage_id,
+                    slurm_job_id=str(slurm_job_id),
+                    observed_at=float(receipt["observed_at"]),
+                    cpus=int(receipt.get("cpus") or 0),
+                    gpus=int(receipt.get("gpus") or 0),
+                    gres=resource_policy.gres or "",
+                )
+                adopted = True
+            task_store.observe_allocation_start(
                 user_id=user_id,
                 task_id=task_id,
                 stage_id=stage_id,
-                slurm_job_id=slurm_job_id,
-                gpu_count=gpu_count,
+                slurm_job_id=str(slurm_job_id),
+                gpu_count=gpus,
+                cpu_cores=cpus,
                 started_at=started_at,
-                required_entitlements=required_entitlements,
+                gres=resource_policy.gres or "",
             )
-        except (GPUAuthorizationUnavailableError, GPUCreditUnavailableError) as exc:
-            # One spelling for one admission fact: the preflight detail code
-            # and this operational event both name the exhausted credit.
-            reason_code = "gpu_credit_exhausted"
-            if isinstance(exc, GPUAuthorizationUnavailableError):
-                reason_code = (
-                    "runner_readiness_unavailable"
-                    if str(exc) == "Runner readiness is unavailable"
-                    else "authorization_unavailable"
-                )
+            # Only a claim this dispatch actually adopted may be relinquished, so
+            # a receipt naming some other job stays on disk for reconciliation.
+            return adopted
+        # Identity without execution evidence, so only the request exists: the
+        # reservation is handed to the scheduler here so a maintenance pass
+        # reading it can never conclude "no request exists" during the window
+        # before the Task row is updated.
+        task_store.record_reservation_dispatch(task_id=task_id, slurm_job_id=str(slurm_job_id))
+        # No allocation was adopted, so no receipt file may be relinquished:
+        # this path does not even look at one.
+        return False
+
+    def started(slurm_job_id: str, started_at: float) -> None:
+        # Runner readiness is checked here because only the caller knows the
+        # runner family, but the outcome is handed to the store as the grant
+        # decision: the allocation fact is written first and unconditionally, so
+        # a not-ready runner denies the *command* without erasing the allocation
+        # the scheduler already handed this Task.
+        denied_reason = None
+        if runner_family and not resolve_submission_readiness(CONFIG.server_dir, runner_family).ready:
+            denied_reason = "Runner readiness is unavailable"
+        # The allocation is recorded here — fact first, then the grant decision
+        # in the same transaction.  There is deliberately no separate entitlement
+        # read: a bare read cannot see that the hold which admitted this Task is
+        # the Task's own authority, and would refuse it for holding the final
+        # entitlement.
+        entitlement = task_store.record_allocation_start(
+            user_id=user_id,
+            task_id=task_id,
+            stage_id=stage_id,
+            slurm_job_id=slurm_job_id,
+            gpu_count=gpu_count,
+            cpu_cores=cpu_cores,
+            started_at=started_at,
+            required_entitlements=required_entitlements,
+            denied_reason=denied_reason,
+            gres=resource_policy.gres or "",
+        )
+        if not entitlement.get("granted", True):
+            reason_code = str(entitlement.get("reason_code") or AdmissionReason.COMPUTE_EXHAUSTED.value)
             emit_event(
-                "gpu.credit.denied",
+                "resource.admission.denied",
                 level="WARNING",
                 reason_code=reason_code,
                 task_id=task_id,
@@ -479,18 +587,18 @@ def _gpu_allocation_callbacks(
                 gpu_count=gpu_count,
                 gpu_seconds=0,
             )
-            raise
+            raise GPUCreditUnavailableError(reason_code)
         emit_event(
-            "gpu.credit.checked",
+            "resource.admission.checked",
             task_id=task_id,
             stage_id=stage_id,
             slurm_job_id=slurm_job_id,
             user_id=user_id,
             gpu_count=gpu_count,
-            gpu_seconds=max(0, int(summary["remaining_gpu_seconds"])),
+            gpu_seconds=max(0, int(entitlement.get("remaining_gpu_seconds") or 0)),
         )
         emit_event(
-            "gpu.usage.started",
+            "resource.allocation.started",
             task_id=task_id,
             stage_id=stage_id,
             slurm_job_id=slurm_job_id,
@@ -504,22 +612,22 @@ def _gpu_allocation_callbacks(
         # a completed Runner as a failed Task.  Keep the allocation recoverable
         # for reconciliation and surface it as evidence instead.
         try:
-            allocation = task_store.settle_gpu_allocation(
+            allocation = task_store.settle_allocation(
                 slurm_job_id, finished_at=finished_at
             )
         except Exception:
             logging.exception("GPU allocation settlement failed for Slurm job %s", slurm_job_id)
             try:
-                task_store.mark_gpu_allocation_for_review(slurm_job_id)
+                task_store.mark_allocation_for_review(slurm_job_id)
             except Exception:
                 logging.exception(
                     "Could not mark GPU allocation %s for review after settlement failure",
                     slurm_job_id,
                 )
             emit_event(
-                "gpu.usage.settlement_failed",
+                "resource.allocation.settlement_failed",
                 level="ERROR",
-                reason_code="settlement_failed",
+                reason_code=LedgerReason.ACTUAL_ALLOCATION.value,
                 task_id=task_id,
                 stage_id=stage_id,
                 slurm_job_id=slurm_job_id,
@@ -528,16 +636,53 @@ def _gpu_allocation_callbacks(
             )
             return
         emit_event(
-            "gpu.usage.settled",
+            "resource.allocation.settled",
             task_id=task_id,
             stage_id=stage_id,
             slurm_job_id=slurm_job_id,
             user_id=user_id,
             gpu_count=gpu_count,
-            gpu_seconds=int(allocation["gpu_seconds"]),
+            gpu_seconds=int(allocation["quantity"] or 0),
         )
 
-    return started, finished
+    return dispatched, started, finished
+
+
+def _recover_surviving_host_allocations() -> None:
+    """Adopt host-only allocation evidence a dead worker left behind, now.
+
+    A scheduler per-job file or a wrapper receipt is the only trace of an
+    allocation whose worker died before it wrote anything, and the passes that
+    adopt them are a worker restart and the ``resource-maintenance`` cadence.  A
+    deployment that never restarts, and leaves ``RESOURCE_MAINTENANCE_SECONDS``
+    unset, has neither until the next restart — and the files sit in a directory
+    nothing garbage-collects before a recovery pass sees them.
+
+    A dispatch is a natural extra occasion: the worker is already up and about to
+    start the next allocation, and adopting a predecessor's evidence first means
+    an old claim can never be mistaken for the new one.
+
+    Deliberately bounded to the *adoption* passes — walk the host-only namespace,
+    corroborate each surviving file, record it, delete it.  That work is
+    proportional to the evidence actually on disk, which is normally none.  The
+    settlement phase is NOT run here: it iterates every unsettled allocation and
+    asks the scheduler about each one, so running it per dispatch would make the
+    latency before a Task may start grow with someone else's backlog — a
+    scheduler outage would then stall every dispatch.  Settlement stays with the
+    restart and maintenance passes, which are not on the dispatch path.
+
+    Best-effort throughout: any failure just leaves the evidence for the next
+    pass, and nothing here may ever keep a dispatch from being attempted.
+    """
+    for name, step in (
+        ("scheduler log", _reconcile_host_scheduler_logs),
+        ("receipt file", _reconcile_host_allocation_receipts),
+        ("receipt row", _reconcile_allocation_receipts),
+    ):
+        try:
+            step()
+        except Exception:  # recovery is best-effort; dispatch must still proceed
+            logging.exception("Dispatch-time %s adoption failed", name)
 
 
 def _run_compute_job(
@@ -551,16 +696,14 @@ def _run_compute_job(
     resource_policy: ResolvedResources | None = None,
 ) -> JobState:
     """Submit and poll through the production Slurm adapter."""
-    started_callback = finished_callback = None
+    dispatched_callback = started_callback = finished_callback = None
     stored_task = task_store.get_task(task_id) or {}
     submitted_by_user_id = int(stored_task.get("submitted_by_user_id") or 0)
-    if (
-        resource_policy is not None
-        and resource_policy.requires_gpu
-        and submitted_by_user_id > 0
-    ):
-        task_store.require_gpu_credit(submitted_by_user_id)
-        started_callback, finished_callback = _gpu_allocation_callbacks(
+    if resource_policy is not None and submitted_by_user_id > 0:
+        # No entitlement read here: the decision belongs to the atomic
+        # allocation-start transition, which knows whether this Task holds a
+        # reservation of its own (the workflow and re-dispatch cases do not).
+        dispatched_callback, started_callback, finished_callback = _compute_allocation_callbacks(
             task_id=task_id,
             user_id=submitted_by_user_id,
             stage_id=tt.name,
@@ -577,6 +720,7 @@ def _run_compute_job(
         stage_callback,
         username=username,
         resource_policy=resource_policy,
+        allocation_dispatched_callback=dispatched_callback,
         allocation_started_callback=started_callback,
         allocation_finished_callback=finished_callback,
     )
@@ -586,7 +730,18 @@ def _run_compute_job(
     if jid:
         if isinstance(job, SlurmJob):
             task_store.update_task(task_id, slurm_job_id=jid)
-    return job.poll()
+    state = job.poll()
+    if isinstance(job, SlurmJob) and not job.wrapper_executed:
+        # The request produced no allocation evidence: it was queued and then
+        # cancelled, rejected, or lost, and no wrapper ever executed.  Its
+        # scheduler-owned reservation would otherwise stay committed forever, so
+        # it is given back here.  A request whose wrapper did execute already has
+        # a durable allocation fact (and a consumed reservation), so this release
+        # is skipped rather than denying resources that were really held.
+        task_store.release_reservation(
+            task_id=task_id, reason_code=ReservationReason.RELEASED.value, at=time.time()
+        )
+    return state
 
 
 def _workflow_state(task: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -632,19 +787,21 @@ def _run_compute_workflow(
         first_marker = next(iter(markers))
         if not task_store.update_task(task_id, status="queued", run_stage=first_marker):
             return JobState.CANCELLED
-        started_callback = finished_callback = None
-        if policy.requires_gpu:
-            user_id = int(task.get("submitted_by_user_id") or 0)
-            if user_id > 0:
-                task_store.require_gpu_credit(user_id)
-                started_callback, finished_callback = _gpu_allocation_callbacks(
-                    task_id=task_id,
-                    user_id=user_id,
-                    stage_id=stage.name,
-                    resource_policy=policy,
-                    required_entitlements=(tt.runtime.access_policy.requires if tt.runtime.access_policy else ()),
-                    runner_family=tt.runtime.name,
-                )
+        dispatched_callback = started_callback = finished_callback = None
+        user_id = int(task.get("submitted_by_user_id") or 0)
+        if user_id > 0:
+            # A workflow stage has no reservation of its own after the first
+            # one consumed the Task's single submission hold, so its allocation
+            # start is admitted on the balance that is actually left — decided
+            # atomically with the allocation itself, not by a read here.
+            dispatched_callback, started_callback, finished_callback = _compute_allocation_callbacks(
+                task_id=task_id,
+                user_id=user_id,
+                stage_id=stage.name,
+                resource_policy=policy,
+                required_entitlements=(tt.runtime.access_policy.requires if tt.runtime.access_policy else ()),
+                runner_family=tt.runtime.name,
+            )
         job = _create_job(
             task_id,
             stage_tt,
@@ -654,6 +811,7 @@ def _run_compute_workflow(
             stage_callback,
             username=task.get("username", ""),
             resource_policy=policy,
+            allocation_dispatched_callback=dispatched_callback,
             allocation_started_callback=started_callback,
             allocation_finished_callback=finished_callback,
         )
@@ -666,6 +824,14 @@ def _run_compute_workflow(
             job.cancel()
             return JobState.CANCELLED
         result = job.poll()
+        if isinstance(job, SlurmJob) and not job.wrapper_executed:
+            # This stage never produced allocation evidence, so no allocation
+            # fact exists for it and the Task's scheduler-owned reservation (if it
+            # is still the one from an earlier stage that was never dispatched)
+            # goes back rather than staying committed with nothing to consume it.
+            task_store.release_reservation(
+                task_id=task_id, reason_code=ReservationReason.RELEASED.value, at=time.time()
+            )
         state[stage.name].update(status=result.value, finished_at=time.time())
         task_store.update_task(
             task_id,
@@ -1191,6 +1357,15 @@ def _finalize_results_manifest(
     """Atomically publish the immutable scientific result record for a task."""
     if execution_state not in {"completed", "failed"}:
         raise ValueError("execution_state must be completed or failed")
+    if not _data_still_owned(str(task["md5sum"])):
+        # The data lifecycle moved on while this worker was finishing: the Task's
+        # durable data was already deleted, or its deletion is in flight.  A
+        # worker that re-created ``manifest.json`` here would re-materialize the
+        # tree a purge had just removed and charge the subject for it, defeating
+        # the deletion the user — or an Admin — authorized.  The execution
+        # lifecycle and the data lifecycle are orthogonal, and this is the one
+        # place they touch, so the durable row is authoritative.
+        raise DataPurgedError(str(task["md5sum"]))
     result_dir = _task_result_dir(task)
     os.makedirs(result_dir, exist_ok=True)
     try:
@@ -1381,6 +1556,7 @@ def _finalize_results_manifest(
             pass
         raise
     os.replace(temporary, destination)
+    _charge_logical_storage(task, manifest, result_dir)
     emit_event(
         "manifest.published",
         request_id=_task_request_id(task),
@@ -1396,6 +1572,68 @@ def _finalize_results_manifest(
         ),
     )
     return manifest
+
+
+def _abandon_published_result(task: dict[str, Any], result_dir: str) -> None:
+    """Remove the result tree a purge authorized while this worker was finishing.
+
+    The publishing worker rebuilt ``result_dir`` (and its execution directory,
+    which lives under the results tree) after a purge had removed them.  Every
+    byte it wrote is disposable — the completed computation, its Slurm stdout,
+    and its observations are independent of these files — and the accepted
+    deletion must not be undone by a worker that simply walked faster.  The walk
+    is unprivileged because the worker owns the tree it just wrote.
+    """
+    for path in (result_dir, os.path.join(result_dir, "execution")):
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def _charge_logical_storage(task: dict[str, Any], manifest: dict[str, Any], result_dir: str) -> None:
+    """Charge the durable bytes one published Task logically owns.
+
+    The ownership boundary is the published result, measured here once from the
+    manifest's own artifacts rather than inferred later from a directory size:
+    a shared read-only asset, a Runner SIF, or a deployment database is never a
+    user's bytes, and a directory walk would charge them.  A failure to record
+    it must not withdraw a completed scientific result, so this is total.
+
+    The lifecycle is re-read here, immediately before the charge, because the
+    walk above is the window where a purge can land: the guard at the top of
+    :func:`_finalize_results_manifest` is true, the durable bytes are removed,
+    and the publication that follows would re-create the tree and re-open a
+    ``PURGED`` row as ``ACTIVE`` charged zero — a resurrected result with no
+    owner.  A purge that wins that race is authoritative: this raises
+    :class:`DataPurgedError`, and the caller ends the Task instead of publishing.
+    """
+    if not _data_still_owned(str(task["md5sum"])):
+        _abandon_published_result(task, result_dir)
+        raise DataPurgedError(str(task["md5sum"]))
+    user_id = int(task.get("submitted_by_user_id") or 0)
+    if user_id <= 0:
+        return
+    owned = sum(int(item.get("size") or 0) for item in manifest.get("artifacts", []))
+    try:
+        task_store.ensure_data_lifecycle(
+            str(task["md5sum"]),
+            user_id=user_id,
+            logical_bytes=owned,
+            at=time.time(),
+        )
+    except Exception:
+        # Recording the charge is an accounting step, not part of the scientific
+        # result: a failure here must not withdraw a completed publication, and
+        # it must not be mistaken for the deletion race above, which is decided
+        # by the durable row rather than by whether this call raised.
+        logging.exception("Could not charge logical storage for task %s", task.get("md5sum"))
+        return
+    emit_event(
+        "resource.storage.charged",
+        request_id=_task_request_id(task),
+        task_id=str(task["md5sum"]),
+        user_id=user_id,
+        storage_bytes=owned,
+        reason_code=LedgerReason.STORAGE_CHARGED.value,
+    )
 
 
 def _build_results_archive(task: dict) -> str:
@@ -1433,6 +1671,14 @@ def _build_results_archive(task: dict) -> str:
 
 
 def _finalize_failed_results(task: dict, error: Any, *, finished_at: float) -> None:
+    task_id = str(task.get("md5sum") or "")
+    if task_id and not _data_still_owned(task_id):
+        # A completed purge is authoritative over this worker's failure report.
+        # Creating the tree first and letting publication refuse it would leave
+        # an unpaid, unpublished ``task_failed.txt`` no charge accounts for, so
+        # ownership is decided before anything is written.
+        logging.info("Task %s data is no longer owned; skipping failure report", task_id)
+        return
     try:
         result_dir = _task_result_dir(task)
     except ValueError:
@@ -1478,6 +1724,38 @@ def format_walltime(seconds: Any) -> str:
 # ---------------------------------------------------------------------------
 # Status helpers
 # ---------------------------------------------------------------------------
+
+
+class DataPurgedError(RuntimeError):
+    """A result cannot be published because the Task's data lifecycle forbids it.
+
+    ``ACTIVE`` and ``ARCHIVED`` are the states in which the Task still owns its
+    durable data.  Every deletion-ward state — requested, purging, purged — and
+    the error state of an interrupted purge mean the data is being removed or is
+    already gone, so publishing a fresh manifest would resurrect a tree the
+    deletion is responsible for.
+    """
+
+
+def _data_still_owned(task_id: str) -> bool:
+    """Whether a Task may publish durable data right now.
+
+    No lifecycle row is the normal case for a Task whose result has not been
+    registered yet: the charge is created by the publication itself.  The check
+    is therefore "no row, or a row in an owning state", read from the store that
+    owns the row rather than inferred from the task's execution status.
+
+    Only ``ACTIVE`` and ``ARCHIVED`` publish.  The deletion-ward states mean a
+    removal is authorized or under way, and ``ERROR`` is an interrupted removal
+    that a later pass retries, so none of them may re-materialize the tree.
+    """
+    record = task_store.get_data_lifecycle(task_id)
+    if record is None:
+        return True
+    return str(record["state"]) in (
+        rloan.DataLifecycleState.ACTIVE.value,
+        rloan.DataLifecycleState.ARCHIVED.value,
+    )
 
 
 def _is_terminal_status(status: Any) -> bool:
@@ -1799,6 +2077,14 @@ def _execute_compute_task(
     if not task.get("started_at"):
         update_fields["started_at"] = start_time
     task_store.update_task(md5sum, **update_fields)
+    if is_slurm:
+        # The worker is up and about to ask the scheduler for an allocation of
+        # its own, so this is a natural extra occasion to adopt whatever a dead
+        # predecessor left in the host-only allocation namespace — the same
+        # evidence a restart or a maintenance pass would pick up, but without
+        # waiting for either.  Best-effort: a cluster that cannot be asked never
+        # keeps this Task from running.
+        _recover_surviving_host_allocations()
     if task.get("request_headers"):
         logging.info("Request headers for task %s: %s", md5sum, _sanitize_for_log(task["request_headers"]))
 
@@ -1898,6 +2184,14 @@ def _execute_compute_task(
             # refuses is exactly the state this boundary exists to prevent.
             _record_failure(md5sum, task, start_time, stage_state["current"], str(exc))
             logging.error("Publication failed for task %s: %s", md5sum, exc)
+            return
+        except DataPurgedError:
+            # The user (or an Admin) deleted this Task's durable data while the
+            # allocation was still finishing.  The deletion wins: the Task ends
+            # without republishing a result tree the purge just removed, and the
+            # lifecycle row keeps its own state instead of charging bytes back.
+            logging.info("Task %s data was purged before finalization; not republishing results", md5sum)
+            _cleanup_task_workspace(task)
             return
         refreshed_task = task_store.get_task(md5sum) or refreshed_task
         if _is_terminal_status(refreshed_task.get("status")):
@@ -2046,6 +2340,61 @@ def _parse_slurm_runtime(value: str) -> int | None:
     return days * 86_400 + hours * 3_600 + minutes * 60 + seconds
 
 
+def _tres_units(tres: str) -> tuple[int | None, int | None]:
+    """Return ``(cpu_cores, gpu_count)`` from one Slurm ``TRES`` string.
+
+    The GPU term must be the accelerator itself.  A typed request — which this
+    deployment supports and uses — is reported as ``gres/gpu:a100=N``, so
+    matching only the literal ``gres/gpu`` would silently lose the count and
+    settle it as a fabricated zero.  Matching by bare prefix is no better in the
+    other direction: ``gres/gpumem`` and ``gres/gpuutil`` also start with
+    ``gres/gpu`` and are integer-valued, so a prefix test reads device *memory*
+    or *utilization* as a device *count*.  The term is therefore anchored —
+    ``gres/gpu`` or ``gres/gpu:<class>``, and nothing else — and every typed term
+    is summed by :func:`rloan.gpu_count_for_tres`.  A unit the scheduler does not
+    report is ``None``: unknown, never zero.
+    """
+    cpu_cores: int | None = None
+    for term in tres.split(","):
+        name, separator, raw = term.partition("=")
+        if not separator or not raw:
+            continue
+        try:
+            value = int(raw)
+        except ValueError:
+            continue
+        if name == "cpu":
+            cpu_cores = value
+    return cpu_cores, rloan.gpu_count_for_tres(tres)
+
+
+def _parse_scontrol_allocation(output: str) -> tuple[str, int | None, int | None, int | None]:
+    """Return ``(state, elapsed_seconds, cpu_cores, gpu_count)`` from one query.
+
+    The same ``scontrol show job`` output already answers the shape question, so
+    the scheduler's own numbers corroborate what a receipt reported rather than
+    trusting the compute node's environment.  ``AllocTRES`` is what was granted
+    and ``TRES`` is the request, used only for a unit the granted term does not
+    report at all — so a job granted fewer GPUs than it asked for cannot
+    over-charge.  A unit the scheduler does not report is ``None``: unknown, not
+    zero.
+    """
+    state, elapsed = _parse_scontrol_job(output)
+    fields: dict[str, str] = {}
+    for token in output.replace("\n", " ").split():
+        key, separator, value = token.partition("=")
+        if separator and key not in fields:
+            fields[key] = value
+    granted_cpu, granted_gpu = _tres_units(fields.get("AllocTRES", ""))
+    requested_cpu, requested_gpu = _tres_units(fields.get("TRES", ""))
+    return (
+        state,
+        elapsed,
+        granted_cpu if granted_cpu is not None else requested_cpu,
+        granted_gpu if granted_gpu is not None else requested_gpu,
+    )
+
+
 def _parse_scontrol_job(output: str) -> tuple[str, int | None]:
     """Return ``(state, elapsed_seconds)`` from ``scontrol show job`` output."""
     fields: dict[str, str] = {}
@@ -2060,7 +2409,291 @@ def _parse_scontrol_job(output: str) -> tuple[str, int | None]:
     return state, elapsed
 
 
-def _reconcile_gpu_allocations() -> dict[str, int]:
+def _reconcile_allocation_receipts() -> dict[str, int]:
+    """Recover allocations from the wrapper's own compute-node receipts.
+
+    A Slurm allocation is created by the scheduler, not by a database write, so
+    the wrapper leaves a durable receipt the instant it is running — before it
+    has told this worker anything.  A worker that died before its own write
+    leaves that receipt as the only evidence, and dropping it would record a real
+    allocation as none at all.
+
+    Each claim is keyed by ``slurm_job_id`` and corroborated against the
+    scheduler before it is admitted, because the receipt is written on a compute
+    node and is only as trustworthy as the job it names:
+
+    * the scheduler owns the job and reports it RUNNING — the allocation is real
+      and the receipt is folded into the canonical allocation fact;
+    * the scheduler owns the job but it is terminal — still folded in, so the
+      elapsed time settles from scheduler evidence as for any other allocation;
+    * the scheduler does not own the job, or cannot be asked — the claim is
+      rejected here.  It is never charged and never quietly dropped either: it is
+      left in place for an operator, because a receipt naming a job the scheduler
+      does not know is evidence of a real anomaly, not of nothing.
+
+    Where the scheduler reports the granted shape (``AllocTRES``), those numbers
+    replace the receipt's self-report before the fact is written, so the charged
+    shape is the one the scheduler granted rather than the one the compute node's
+    environment happened to describe.
+    """
+    receipts = task_store.list_allocation_receipts()
+    result = {"recovered": 0, "rejected": 0, "unavailable": 0}
+    if not receipts:
+        return result
+    scontrol = shutil.which("scontrol")
+    for receipt in receipts:
+        job_id = str(receipt["slurm_job_id"])
+        state = None
+        cpu_cores = gpu_count = None
+        if scontrol:
+            try:
+                completed = subprocess.run(
+                    [scontrol, "show", "job", job_id],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=True,
+                )
+            except (OSError, subprocess.SubprocessError):
+                completed = None
+            if completed is not None:
+                state, _elapsed, cpu_cores, gpu_count = _parse_scontrol_allocation(completed.stdout)
+        if state not in _ACTIVE_SLURM_STATES and state not in _TERMINAL_SLURM_STATES:
+            # The scheduler does not own this job, or could not be asked.  The
+            # claim is not admitted, and it is not discarded: an unverifiable
+            # receipt stays visible instead of silently vanishing.
+            result["unavailable" if scontrol else "rejected"] += 1
+            continue
+        if cpu_cores is not None or gpu_count is not None:
+            # The scheduler's own numbers replace the compute node's self-report
+            # where the scheduler reports them: the fact is charged from what the
+            # allocation was granted, so a node whose environment under- or
+            # over-states its GPUs cannot mis-charge.
+            receipt = {
+                **receipt,
+                "cpus": cpu_cores if cpu_cores is not None else receipt["cpus"],
+                "gpus": gpu_count if gpu_count is not None else receipt["gpus"],
+            }
+        owner = task_store.get_task(str(receipt["task_id"]))
+        user_id = int((owner or {}).get("submitted_by_user_id") or 0)
+        if user_id <= 0:
+            result["rejected"] += 1
+            continue
+        observed = task_store.observe_allocation_receipt(receipt, user_id=user_id)
+        emit_event(
+            "resource.allocation.recovered",
+            task_id=str(observed["task_id"]),
+            stage_id=str(observed["stage_id"]),
+            slurm_job_id=job_id,
+            user_id=user_id,
+            reason_code=EvidenceSource.RUNNER_OBSERVATION.value,
+        )
+        result["recovered"] += 1
+    return result
+
+
+def _reconcile_host_allocation_receipts() -> dict[str, int]:
+    """Adopt the compute-node receipts still on disk after a worker died.
+
+    The durable receipt row is written only once a worker has *read* the file,
+    so a worker that died before it ever parsed the wrapper's job-id line leaves
+    the file as the sole evidence of a real allocation — with no receipt row, no
+    allocation fact, and (for a short while) a held reservation.  Restart is the
+    only thing left that can see it, so it walks the host-only allocation
+    namespace, corroborates every claim against the scheduler exactly as
+    :func:`_reconcile_allocation_receipts` does, records the survivor as a
+    server-owned receipt, and deletes the file *only* after that adoption is
+    durable.  Ownership therefore never moves from one durable representation to
+    none: the file is the source until the row exists, and the row (and, moments
+    later, the canonical allocation fact) is the source after it.
+
+    A file that does not parse, names a job the scheduler does not own, or whose
+    Task is unknown is left exactly where it is.  An unverifiable claim is
+    evidence of an anomaly, not of nothing, and this pass never deletes evidence
+    it did not successfully adopt.
+    """
+    result = {"recovered": 0, "rejected": 0, "unavailable": 0, "surviving": 0}
+    if not CONFIG.results_folder:
+        return result
+    try:
+        files = surviving_allocation_receipts(CONFIG.results_folder)
+    except OSError:
+        return result
+    scontrol = shutil.which("scontrol")
+    for receipt in files:
+        job_id = str(receipt["slurm_job_id"])
+        task_id = str(receipt["task_id"])
+        owner = task_store.get_task(task_id)
+        user_id = int((owner or {}).get("submitted_by_user_id") or 0)
+        if user_id <= 0:
+            result["rejected"] += 1
+            continue
+        state = None
+        cpu_cores = gpu_count = None
+        if scontrol:
+            try:
+                completed = subprocess.run(
+                    [scontrol, "show", "job", job_id],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=True,
+                )
+            except (OSError, subprocess.SubprocessError):
+                completed = None
+            if completed is not None:
+                state, _elapsed, cpu_cores, gpu_count = _parse_scontrol_allocation(completed.stdout)
+        if state not in _ACTIVE_SLURM_STATES and state not in _TERMINAL_SLURM_STATES:
+            result["unavailable" if scontrol else "rejected"] += 1
+            continue
+        if cpu_cores is not None or gpu_count is not None:
+            # The scheduler's own numbers replace the compute node's self-report
+            # where it reports them, so the recorded shape is what the scheduler
+            # granted rather than what the node's environment claimed.
+            receipt = {
+                **receipt,
+                "cpus": cpu_cores if cpu_cores is not None else receipt["cpus"],
+                "gpus": gpu_count if gpu_count is not None else receipt["gpus"],
+            }
+        if task_store.allocation_row_exists(job_id):
+            # The canonical fact already carries this job: an earlier worker (or
+            # an earlier pass) committed it and died before the file was removed.
+            # There is nothing left to adopt — re-recording the claim would mint a
+            # receipt for an allocation that is already durable, and reconciling
+            # it a second time is exactly the double charge this guards — so the
+            # file is retired here and the fact is left alone.
+            try:
+                os.unlink(str(receipt["receipt_path"]))
+            except OSError:
+                result["surviving"] += 1
+            result["recovered"] += 1
+            continue
+        # The scheduler corroborated the claim, so it becomes server-owned state
+        # first; the file is removed only once that row is durable.
+        task_store.record_allocation_receipt(
+            task_id=task_id,
+            stage_id="",
+            slurm_job_id=job_id,
+            observed_at=float(receipt["observed_at"]),
+            cpus=int(receipt["cpus"]),
+            gpus=int(receipt["gpus"]),
+            gres=str(receipt.get("gres") or ""),
+        )
+        try:
+            os.unlink(str(receipt["receipt_path"]))
+        except OSError:
+            result["surviving"] += 1
+        result["recovered"] += 1
+    return result
+
+
+def _reconcile_host_scheduler_logs() -> dict[str, int]:
+    """Adopt the scheduler's own per-job files where no wrapper ever ran.
+
+    The last remaining crash window is the one between "Slurm allocated the job
+    a node" and "the wrapper's first statement ran".  Neither the wrapper's
+    receipt nor any worker write can cover it, but the scheduler's own redirected
+    stderr file can: ``srun`` creates it at allocation, so a job preempted, OOM-
+    killed, or timed out in that instant leaves exactly one durable trace.
+
+    What that file proves is that a real allocation existed — and nothing about
+    its shape.  So the fact is recorded with an UNKNOWN shape and marked for
+    review, never charged a guessed or zero quantity, and the file is deleted
+    only after the fact is durable.  A file the scheduler cannot corroborate is
+    left where it is, exactly like an unverifiable receipt.
+    """
+    result = {"recovered": 0, "rejected": 0, "unavailable": 0, "surviving": 0}
+    if not CONFIG.results_folder:
+        return result
+    try:
+        files = surviving_scheduler_logs(CONFIG.results_folder)
+    except OSError:
+        return result
+    scontrol = shutil.which("scontrol")
+    for entry in files:
+        job_id = str(entry["slurm_job_id"])
+        task_id = str(entry["task_id"])
+        owner = task_store.get_task(task_id)
+        user_id = int((owner or {}).get("submitted_by_user_id") or 0)
+        if user_id <= 0:
+            result["rejected"] += 1
+            continue
+        state = None
+        cpu_cores = gpu_count = None
+        if scontrol:
+            try:
+                completed = subprocess.run(
+                    [scontrol, "show", "job", job_id],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=True,
+                )
+            except (OSError, subprocess.SubprocessError):
+                completed = None
+            if completed is not None:
+                state, _elapsed, cpu_cores, gpu_count = _parse_scontrol_allocation(completed.stdout)
+        if state not in _ACTIVE_SLURM_STATES and state not in _TERMINAL_SLURM_STATES:
+            result["unavailable" if scontrol else "rejected"] += 1
+            continue
+        if task_store.allocation_row_exists(job_id):
+            # A real shape already exists for this job, so there is nothing to
+            # learn from the file; retire it rather than mint a second claim.
+            try:
+                os.unlink(str(entry["scheduler_log_path"]))
+            except OSError:
+                result["surviving"] += 1
+            result["recovered"] += 1
+            continue
+        if gpu_count is not None or cpu_cores is not None:
+            # The scheduler can still report what it granted, so this claim is
+            # not shapeless after all: it is recorded as a normal observation
+            # from the scheduler's own numbers, which reconciles and settles it
+            # like every other allocation.  The GPU's string class is not what
+            # admission gates on — the balance is class-agnostic — so the
+            # scheduler's *count* is the part that matters here.
+            #
+            # Each unit is taken independently: a unit the scheduler reported —
+            # including a typed GRES such as ``gres/gpu:a100=2``, which
+            # :func:`_parse_scontrol_allocation` reads from the anchored
+            # accelerator term — is used exactly as granted, and a unit it did
+            # not report at all falls to the floor.  An absent ``gres/gpu`` term
+            # on a granted allocation means the job held no GPU, which is a fact
+            # rather than a guess; the failure this guards against was a
+            # *reported* count being read as zero.
+            observed = task_store.observe_allocation_start(
+                user_id=user_id,
+                task_id=task_id,
+                stage_id=str((owner or {}).get("run_stage") or ""),
+                slurm_job_id=job_id,
+                gpu_count=max(0, int(gpu_count)) if gpu_count is not None else 0,
+                cpu_cores=max(1, int(cpu_cores)) if cpu_cores is not None else 1,
+                started_at=float(entry["observed_at"]) or time.time(),
+            )
+        else:
+            observed = task_store.observe_unknown_shape_allocation(
+                user_id=user_id,
+                task_id=task_id,
+                slurm_job_id=job_id,
+                started_at=float(entry["observed_at"]),
+            )
+        emit_event(
+            "resource.allocation.recovered",
+            task_id=str(observed["task_id"]),
+            stage_id=str(observed["stage_id"]),
+            slurm_job_id=job_id,
+            user_id=user_id,
+            reason_code=EvidenceSource.SCHEDULER_LOG.value,
+        )
+        try:
+            os.unlink(str(entry["scheduler_log_path"]))
+        except OSError:
+            result["surviving"] += 1
+        result["recovered"] += 1
+    return result
+
+
+def _reconcile_slurm_allocations() -> dict[str, int]:
     """Settle lost finish callbacks from best-effort ``scontrol`` evidence.
 
     The target deployment runs without Slurm accounting storage, so recovery
@@ -2068,13 +2701,30 @@ def _reconcile_gpu_allocations() -> dict[str, int]:
     plus a trustworthy runtime.  No ``sacct``/SlurmDBD dependency, no estimate:
     anything ambiguous is left for manual review.
     """
-    allocations = task_store.list_unsettled_gpu_allocations()
+    # First recover what the compute nodes themselves recorded.  The host-only
+    # files come first: they are the only trace left by a worker that died
+    # before it parsed the wrapper's job-id line at all, so adopting them is what
+    # turns "the allocation happened" into a durable claim at all.  The receipt
+    # table is then folded in, so a worker that did adopt the file but died
+    # before the allocation rows committed still recovers.
+    # Weakest evidence first, strongest last, so a claim is adopted by the most
+    # specific source that can describe it.  The scheduler-log pass ignores any
+    # job that still has the wrapper's receipt beside it, so a receipt is never
+    # adopted twice; running it first keeps it from seeing a receipt that a later
+    # pass has already retired.
+    _reconcile_host_scheduler_logs()
+    _reconcile_host_allocation_receipts()
+    _reconcile_allocation_receipts()
+    allocations = task_store.list_unsettled_allocations()
     result = {"settled": 0, "active": 0, "review": 0}
     scontrol = shutil.which("scontrol")
-    for allocation in allocations:
-        job_id = str(allocation["slurm_job_id"])
+    # One scheduler question per Slurm job, not per accounting unit: a job's GPU
+    # and CPU facts settle from the one authoritative elapsed duration that
+    # question answers.
+    job_ids = list(dict.fromkeys(str(allocation["slurm_job_id"]) for allocation in allocations))
+    for job_id in job_ids:
         if not scontrol:
-            task_store.mark_gpu_allocation_for_review(job_id)
+            task_store.mark_allocation_for_review(job_id)
             result["review"] += 1
             continue
         try:
@@ -2086,7 +2736,7 @@ def _reconcile_gpu_allocations() -> dict[str, int]:
                 check=True,
             )
         except (OSError, subprocess.SubprocessError):
-            task_store.mark_gpu_allocation_for_review(job_id)
+            task_store.mark_allocation_for_review(job_id)
             result["review"] += 1
             continue
         state, elapsed_seconds = _parse_scontrol_job(completed.stdout)
@@ -2094,22 +2744,127 @@ def _reconcile_gpu_allocations() -> dict[str, int]:
             result["active"] += 1
             continue
         if state not in _TERMINAL_SLURM_STATES or elapsed_seconds is None:
-            task_store.mark_gpu_allocation_for_review(job_id)
+            task_store.mark_allocation_for_review(job_id)
             result["review"] += 1
             continue
-        settled = task_store.settle_gpu_allocation_elapsed(job_id, elapsed_seconds=elapsed_seconds)
+        settled = task_store.settle_allocation_elapsed(
+            job_id,
+            elapsed_seconds=elapsed_seconds,
+            evidence_source=EvidenceSource.SLURM_LIVE.value,
+        )
+        if settled.get("resource_count") is None:
+            # The elapsed time is known but the shape never was, so nothing can
+            # be charged: the row stays for an operator instead of becoming a
+            # fabricated or zero quantity.
+            result["review"] += 1
+            continue
         emit_event(
-            "gpu.usage.settled",
+            "resource.allocation.settled",
             task_id=str(settled["task_id"]),
             stage_id=str(settled["stage_id"]),
             slurm_job_id=job_id,
-            user_id=int(settled["user_id"]),
-            gpu_count=int(settled["gpu_count"]),
-            gpu_seconds=int(settled["gpu_seconds"]),
-            reason_code="scontrol_recovery",
+            user_id=int(settled["subject_id"]),
+            gpu_count=int(settled["resource_count"]),
+            gpu_seconds=int(settled["quantity"] or 0),
+            reason_code=LedgerReason.SLURM_LIVE.value,
         )
         result["settled"] += 1
     return result
+
+
+def _reclaim_abandoned_reservations(*, now: float | None = None) -> int:
+    """Free scheduler-owned reservations whose Slurm request no longer exists.
+
+    The complement of :func:`_reconcile_slurm_allocations`: that pass settles
+    allocations that *did* start, this one releases the reservation of a Task
+    whose request never produced an allocation and is provably gone from the
+    scheduler.  Both are evidence-driven.  A reservation whose Job is still
+    active in Slurm belongs to that Job and is left alone — that is the case a
+    bare timeout used to get wrong — and an ambiguous answer (no scheduler, an
+    unreadable state, or no scheduler identity on the row) leaves the reservation
+    committed rather than guessing.  Capacity is therefore returned as soon as
+    the request is knowably gone, and never merely because time passed.
+
+    The scheduler identity is taken from the reservation row, which the
+    held -> queued transition wrote atomically with the state change, not from
+    ``tasks.slurm_job_id`` — that column is persisted separately and later, so
+    reading it here would free a live request's entitlement during the dispatch
+    window.  A missing identity is not evidence that no request exists, so it
+    keeps its commitment.
+
+    ``receipted`` is the set of Task ids whose host-only allocation directory
+    still holds evidence a node was allocated — the wrapper's own receipt, or the
+    scheduler's per-job file that precedes it.  Both are stronger than any answer
+    the scheduler can give later, and both exist *before* any worker write, so the
+    scheduler question must never be the thing that frees a claim they already
+    prove.  Adopting them is :func:`_reconcile_host_allocation_receipts`'s and
+    :func:`_reconcile_host_scheduler_logs`'s job; this pass only refuses to act
+    against them.
+    """
+    timestamp = time.time() if now is None else now
+    reservations = task_store.list_queued_reservations()
+    receipted: set[str] = set()
+    if CONFIG.results_folder:
+        try:
+            receipted = {
+                str(receipt["task_id"])
+                for receipt in surviving_allocation_receipts(CONFIG.results_folder)
+            }
+            receipted.update(
+                str(entry["task_id"])
+                for entry in surviving_scheduler_logs(CONFIG.results_folder)
+            )
+        except OSError:
+            receipted = set()
+    if not reservations:
+        return 0
+    scontrol = shutil.which("scontrol")
+    released = 0
+    for reservation in reservations:
+        task_id = str(reservation["task_id"])
+        task = task_store.get_task(task_id)
+        job_id = str(reservation.get("scheduler_job_id") or "").strip()
+        if task is None:
+            # The Task row is gone, so nothing can ever consume this claim and
+            # no scheduler request it names belongs to a live Task.
+            if task_store.reclaim_queued_reservation(
+                task_id=task_id, reason_code=ReservationReason.TASK_DELETED.value, at=timestamp
+            ):
+                released += 1
+            continue
+        if not job_id or not job_id.isdigit():
+            continue  # no scheduler identity: ambiguous, keep the commitment
+        if task_id in receipted:
+            continue  # a surviving receipt proves the allocation happened
+        if task_store.allocation_row_exists(job_id) or task_store.allocation_receipt_exists(job_id):
+            # The wrapper's own evidence already recorded an allocation for this
+            # request — possibly before the process that was watching it died.
+            # The scheduler step below is what settles it from authoritative
+            # elapsed time; this pass must never free the claim underneath an
+            # allocation that is known to have occupied resources.
+            continue
+        if not scontrol:
+            continue  # ambiguous: keep the commitment rather than guess
+        try:
+            completed = subprocess.run(
+                [scontrol, "show", "job", job_id],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=True,
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+        state, _elapsed = _parse_scontrol_job(completed.stdout)
+        if state in _ACTIVE_SLURM_STATES:
+            continue
+        if state not in _TERMINAL_SLURM_STATES:
+            continue
+        if task_store.reclaim_queued_reservation(
+            task_id=task_id, reason_code=ReservationReason.RELEASED.value, at=timestamp
+        ):
+            released += 1
+    return released
 
 
 def _recover_orphaned_tasks() -> int:
@@ -2217,6 +2972,12 @@ def _finalize_after_poll(md5sum, task, tt, state):
             # finished task with an unreadable result.
             _record_failure(md5sum, task, task.get("started_at") or finish_time, "", str(exc))
             logging.error("Publication failed for recovered task %s: %s", md5sum, exc)
+            return
+        except DataPurgedError:
+            # Same rule on the recovery path: a purge that ran while the job was
+            # being recovered is authoritative over this worker's result tree.
+            logging.info("Task %s data was purged before recovery finalization", md5sum)
+            _cleanup_task_workspace(task)
             return
         refreshed = task_store.get_task(md5sum) or refreshed
         if _is_terminal_status(refreshed.get("status")):
@@ -2353,9 +3114,14 @@ try:
                 logging.info("Handled %d orphaned task(s)", count)
             else:
                 logging.info("Recovery: no orphaned tasks found")
-            reconciliation = _reconcile_gpu_allocations()
-            if reconciliation["settled"] or reconciliation["review"]:
-                logging.info("GPU allocation reconciliation: %s", reconciliation)
+            reconciliation = _reconcile_slurm_allocations()
+            released = _reclaim_abandoned_reservations()
+            if reconciliation["settled"] or reconciliation["review"] or released:
+                logging.info(
+                    "Allocation reconciliation: %s (%d abandoned reservation(s) released)",
+                    reconciliation,
+                    released,
+                )
             publications = _reconcile_result_publications()
             unreadable = sum(
                 count for state, count in publications.items() if state != PUBLICATION_AVAILABLE
@@ -2391,10 +3157,17 @@ def probe_compute_infrastructure():
     return collect_infrastructure_evidence()
 
 
-@celery.task(name="reconcile_gpu_allocations", max_retries=0)
-def reconcile_gpu_allocations():
-    """Reconcile durable unsettled GPU allocations from worker-side Slurm evidence."""
-    return _reconcile_gpu_allocations()
+@celery.task(name="reconcile_slurm_allocations", max_retries=0)
+def reconcile_slurm_allocations():
+    """Reconcile durable unsettled allocations from worker-side Slurm evidence.
+
+    Two evidence-driven passes, no wall-clock guesswork: settle the allocations
+    the scheduler proves ran, then give back the entitlement of a queued request
+    the scheduler proves no longer exists.
+    """
+    outcome = _reconcile_slurm_allocations()
+    outcome["reservations_released"] = _reclaim_abandoned_reservations()
+    return outcome
 
 
 @celery.task(name="run_compute_task", bind=True, max_retries=0)

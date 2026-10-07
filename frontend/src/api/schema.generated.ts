@@ -472,6 +472,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/compute/api/resource-entitlement": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get the current user's canonical resource envelope
+         * @description The canonical per-subject position: compute entitlement and durable-storage ownership in base units. Placement and reporting consume this projection rather than re-deriving a balance. A unit with enforced false is recorded and reported but not gated.
+         */
+        get: operations["getCurrentResourceEntitlement"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/compute/api/auth/admin/users/{user_id}/resource-entitlement": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get one user's canonical resource envelope */
+        get: operations["adminGetUserResourceEntitlement"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/compute/api/gpu-credit": {
         parameters: {
             query?: never;
@@ -2001,6 +2038,39 @@ export interface components {
                 count: number;
             }[];
         };
+        /** @description One (unit, resource class) entitlement and its position. remaining already subtracts settled usage, live admission holds, and the conservative reserve for usage whose authoritative measurement has not arrived, so unsettled_allocations plus usage_complete false means the true balance is not yet known - never that it is zero. */
+        ComputeEntitlement: {
+            /** @enum {string} */
+            unit: "gpu_second" | "cpu_core_second" | "storage_byte";
+            /** @description Slurm GRES class (for example a100); empty for the class-agnostic allowance. */
+            resource_class: string;
+            enforced: boolean;
+            /** @description Null when the unit is not gated. */
+            allowance: number | null;
+            used: number;
+            reserved: number;
+            unsettled_allocations: number;
+            unsettled_quantity: number;
+            remaining: number | null;
+            usage_complete: boolean;
+            evidence_sources: string[];
+        };
+        /** @description Logical user-owned durable bytes, tracked separately from physical filesystem capacity. A successful computation that crosses soft_limit_bytes keeps its result; only later admission is restricted. */
+        StorageEntitlement: {
+            logical_owned_bytes: number;
+            soft_limit_bytes: number | null;
+            remaining_bytes: number | null;
+            over_soft_limit: boolean;
+        };
+        /** @description The canonical per-subject resource position that downstream consumers project. */
+        ResourceEntitlement: {
+            /** @enum {string} */
+            subject_type: "user";
+            subject_id: number;
+            period: string;
+            compute: components["schemas"]["ComputeEntitlement"][];
+            storage: components["schemas"]["StorageEntitlement"];
+        };
         GPUCreditSummary: {
             user_id: number;
             period: string;
@@ -3477,6 +3547,52 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+        };
+    };
+    getCurrentResourceEntitlement: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current user's resource envelope */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceEntitlement"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    adminGetUserResourceEntitlement: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description That user's resource envelope */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceEntitlement"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
         };
     };
     getCurrentGpuCredit: {

@@ -170,6 +170,53 @@ def test_scheduler_resource_observation_uses_bounded_wrapper_fallback(monkeypatc
     assert observation["wrapper"]["max_rss_kib"] == 1024
 
 
+def test_scheduler_resource_observation_accepts_a_wrapper_payload_with_scratch_evidence(
+    monkeypatch, tmp_path
+):
+    """A current wrapper payload carries the guard's fields and must still read.
+
+    The allocation wrapper reports the scratch capacity guard's measurements
+    alongside the scheduler facts.  A reader with a stale allowlist would treat
+    the whole payload as unknown content, report ``accounting_available: False``
+    where the wrapper did report accounting, and fall back to ``sacct`` — which
+    is not always enabled.
+    """
+    monkeypatch.setattr(
+        live_test_executor.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=1, stdout="", stderr="accounting disabled"),
+    )
+    execution = tmp_path / "execution"
+    execution.mkdir()
+    (execution / "slurm-example.resource.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "source": "allocation_wrapper",
+                "job_id": "42",
+                "allocated_cpus_per_task": 4,
+                "allocated_tasks": 1,
+                "exit_code": 0,
+                "elapsed_seconds": 1.2,
+                "user_cpu_seconds": 0.8,
+                "system_cpu_seconds": 0.1,
+                "max_rss_kib": 1024,
+                "scratch_guard.peak_bytes": 3145728,
+                "scratch_guard.samples": 4,
+                "scratch_guard.exceeded": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    observation = live_test_executor._scheduler_resource_observation("42", tmp_path)
+
+    assert observation["accounting_available"] is True
+    assert observation["source"] == "allocation_wrapper"
+    assert observation["wrapper"]["max_rss_kib"] == 1024
+    assert observation["wrapper"]["scratch_guard.exceeded"] == 1
+
+
 def test_wrapper_resource_observation_rejects_oversized_or_unknown_content(tmp_path):
     execution = tmp_path / "execution"
     execution.mkdir()
@@ -207,23 +254,24 @@ def test_gpu_live_case_seeds_isolated_authorization_and_reports_exact_settlement
     assert readiness["ready"] is True
 
     started_at = time.time()
-    database.record_gpu_allocation_start(
+    database.record_allocation_start(
         user_id=1,
         task_id="a" * 32,
         stage_id="model",
         slurm_job_id="42",
         gpu_count=2,
+        cpu_cores=1,
         started_at=started_at,
         required_entitlements=("licensed",),
     )
-    database.settle_gpu_allocation_elapsed("42", elapsed_seconds=7, finished_at=started_at + 7)
+    database.settle_allocation_elapsed("42", elapsed_seconds=7, finished_at=started_at + 7)
 
     evidence = live_test_executor._gpu_accounting_evidence("a" * 32, context)
     assert evidence is not None
     assert evidence["usage_gpu_seconds"] == 14
     assert evidence["before_remaining_gpu_seconds"] - evidence["after_remaining_gpu_seconds"] == 14
     assert evidence["allocations"][0]["status"] == "settled"
-    assert evidence["usage_entries"][0]["gpu_seconds"] == -14
+    assert evidence["usage_entries"][0]["quantity"] == -14
 
 
 @pytest.mark.parametrize("payload", [

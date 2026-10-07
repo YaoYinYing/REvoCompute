@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
 import logging
 import math
@@ -13,6 +14,7 @@ import os
 import re
 import secrets
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Iterable
@@ -31,23 +33,42 @@ from sqlalchemy import (
     delete,
     desc,
     func,
+    literal,
     or_,
     select,
+    text,
     update,
 )
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError, OperationalError
 
+from revocompute import resource_ledger as rloan
 from revocompute import resource_model as rm
+from revocompute.operational_events import emit_event
 from revocompute.schema_epoch import require_current_schema
 
 
 DEFAULT_MONTHLY_GPU_SECONDS = 60_000
 
-#: The digest shape a result-publication anchor must carry.  The same shape
-#: ``StorageResolver`` accepts for a published artifact's declared digest, so an
-#: anchor can never be recorded in a form the publication reader cannot match.
 _MANIFEST_SHA256 = re.compile("[0-9a-f]{64}\\Z")
+
+
+#: Default per-subject durable-storage ceiling, in logical bytes.  Soft: a
+#: result that crosses it is preserved and only later admission is restricted.
+DEFAULT_STORAGE_SOFT_LIMIT_BYTES = 100 * 1024**3
+
+#: Tables whose legacy ``user_id`` column is replaced by the canonical
+#: ``(subject_type, subject_id)`` pair.  The migration is additive and only
+#: renames the column plus backfills the type; no quantity, kind, reason, or
+#: timestamp is rewritten, so historical facts stay exactly as recorded.
+_SUBJECT_TABLES = (
+    "resource_ledger",
+    "resource_allocations",
+    "resource_policies",
+    "data_lifecycle",
+    "resource_policy_audit",
+)
 
 #: What makes one recorded resource observation the same event as another.
 #: ``attempt`` and ``work_item`` are what keep a re-drained stdout log — REST
@@ -257,12 +278,19 @@ class TaskDatabase:
     }
 
     def __init__(
-        self, path: str, *, monthly_gpu_seconds: int = DEFAULT_MONTHLY_GPU_SECONDS
+        self,
+        path: str,
+        *,
+        monthly_gpu_seconds: int = DEFAULT_MONTHLY_GPU_SECONDS,
+        storage_soft_limit_bytes: int = DEFAULT_STORAGE_SOFT_LIMIT_BYTES,
     ):
         if monthly_gpu_seconds < 0:
             raise ValueError("monthly_gpu_seconds must be non-negative")
+        if storage_soft_limit_bytes < 0:
+            raise ValueError("storage_soft_limit_bytes must be non-negative")
         self.path = os.path.abspath(path)
-        self.monthly_gpu_seconds = monthly_gpu_seconds
+        self._monthly_seconds = monthly_gpu_seconds
+        self._storage_soft_limit = storage_soft_limit_bytes
         os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
         self.engine = create_engine(
             f"sqlite:///{self.path}",
@@ -312,60 +340,281 @@ class TaskDatabase:
             Column("token", String(32), nullable=False),
             Column("acquired_at", Float, nullable=False),
         )
-        self.gpu_credit_ledger_table = Table(
-            "gpu_credit_ledger",
+        # One append-only ledger for every subject and unit.  Compute facts are
+        # scoped to a UTC period and carry their resource class; durable storage
+        # facts are ownership rather than consumption, so their period is empty.
+        # There is deliberately no separate CPU or storage ledger: the ``unit``
+        # and ``resource_class`` columns keep them apart without a second source
+        # of truth.  Names retained from the GPU-credit era are aliases on the
+        # table objects, not a second table.
+        self.resource_ledger_table = Table(
+            "resource_ledger",
             self.metadata,
             Column("id", Integer, primary_key=True, autoincrement=True),
-            Column("user_id", Integer, nullable=False),
-            Column("period", String(7), nullable=False),
+            Column("subject_type", String, nullable=False, default=rloan.SUBJECT_USER),
+            Column("subject_id", Integer, nullable=False),
+            Column("period", String(7), nullable=False, default=""),
             Column("kind", String, nullable=False),
-            Column("gpu_seconds", Integer, nullable=False),
+            Column("unit", String, nullable=False),
+            Column("resource_class", String, nullable=False, default=""),
+            Column("quantity", Integer, nullable=False),
             Column("task_id", String(32)),
             Column("stage_id", String),
             Column("slurm_job_id", String),
             Column("actor_user_id", Integer),
             Column("reason", Text),
+            Column("reason_code", String),
+            Column("evidence_source", String, nullable=False, default=rloan.EvidenceSource.UNKNOWN.value),
             Column("idempotency_key", String, nullable=False, unique=True),
             Column("created_at", Float, nullable=False),
         )
         Index(
-            "idx_gpu_credit_ledger_user_period",
-            self.gpu_credit_ledger_table.c.user_id,
-            self.gpu_credit_ledger_table.c.period,
-            self.gpu_credit_ledger_table.c.id,
+            "idx_resource_ledger_subject_unit",
+            self.resource_ledger_table.c.subject_type,
+            self.resource_ledger_table.c.subject_id,
+            self.resource_ledger_table.c.unit,
+            self.resource_ledger_table.c.id,
         )
-        self.gpu_credit_policies_table = Table(
-            "gpu_credit_policies",
-            self.metadata,
-            Column("user_id", Integer, primary_key=True),
-            Column("monthly_gpu_seconds", Integer, nullable=False),
-            Column("updated_by_user_id", Integer, nullable=False),
-            Column("updated_at", Float, nullable=False),
+        Index(
+            "idx_resource_ledger_period",
+            self.resource_ledger_table.c.subject_id,
+            self.resource_ledger_table.c.period,
+            self.resource_ledger_table.c.id,
         )
-        self.gpu_allocations_table = Table(
-            "gpu_allocations",
+        Index("idx_resource_ledger_task", self.resource_ledger_table.c.task_id)
+        # Policy is a current value, never a rewrite of history: a policy change
+        # appends a ledger fact and updates this row.
+        self.resource_policies_table = Table(
+            "resource_policies",
             self.metadata,
             Column("id", Integer, primary_key=True, autoincrement=True),
-            Column("user_id", Integer, nullable=False),
+            Column("subject_type", String, nullable=False, default=rloan.SUBJECT_USER),
+            Column("subject_id", Integer, nullable=False),
+            Column("unit", String, nullable=False),
+            Column("resource_class", String, nullable=False, default=""),
+            Column("allowance", Integer, nullable=False, default=0),
+            Column("updated_by_user_id", Integer),
+            Column("updated_at", Float, nullable=False),
+        )
+        Index(
+            "idx_resource_policies_subject",
+            self.resource_policies_table.c.subject_type,
+            self.resource_policies_table.c.subject_id,
+            self.resource_policies_table.c.unit,
+            self.resource_policies_table.c.resource_class,
+            unique=True,
+        )
+        # Every allocation of a scarce resource, whatever its unit.  A row's
+        # ``resource_count`` is what the scheduler allocated *in that unit's own
+        # terms* — GPUs for ``gpu_second``, CPU cores for ``cpu_core_second`` —
+        # so a historical A100 second is never collapsed into an opaque GPU
+        # second and a CPU core-second is never a utilization figure.
+        #
+        # ``(slurm_job_id, unit)`` is the identity: one Slurm allocation is one
+        # GPU fact *and one CPU fact*, because an allocation consumes both and
+        # they are separate accounting units.  A CPU-only allocation is the GPU
+        # row with a zero ``resource_count``, so "every Slurm allocation"
+        # answers without a second table.
+        #
+        # ``resource_count`` is NULL for exactly one case: an allocation the
+        # scheduler's own per-job output file proves happened but whose resource
+        # shape no one recorded, because the job was killed between "allocated a
+        # node" and its first statement.  NULL is "unknown", never a zero — a
+        # zero would be the false claim that the job held no GPUs, which
+        # settlement would then charge as no usage at all.  Such a row is marked
+        # for review and is never settled to a number.
+        self.resource_allocations_table = Table(
+            "resource_allocations",
+            self.metadata,
+            Column("id", Integer, primary_key=True, autoincrement=True),
+            Column("subject_type", String, nullable=False, default=rloan.SUBJECT_USER),
+            Column("subject_id", Integer, nullable=False),
             Column("task_id", String(32), nullable=False),
             Column("stage_id", String, nullable=False),
-            Column("slurm_job_id", String, nullable=False, unique=True),
-            Column("gpu_count", Integer, nullable=False),
+            Column("slurm_job_id", String, nullable=False),
+            Column("unit", String, nullable=False),
+            Column("resource_class", String, nullable=False, default=""),
+            Column("resource_count", Integer, nullable=True),
             Column("started_at", Float, nullable=False),
             Column("finished_at", Float),
-            Column("gpu_seconds", Integer),
+            Column("quantity", Integer),
             Column("status", String, nullable=False),
+            # The grant decision, kept on the allocation fact itself.  ``NULL``
+            # denial means this allocation was admitted; a value names why the
+            # scientific command was refused.  It records the policy outcome
+            # without ever erasing the scheduler fact — a denied allocation is
+            # still an allocation and is still settled.
+            Column("denial_reason", String),
+            # The bounded vocabulary value for that denial (`compute_exhausted`,
+            # `authorization_unavailable`, ...), separate from the free-form
+            # reason: a caller acts on a comparable code, not on a message.
+            Column("denial_code", String),
+            # When the grant decision was made, or ``NULL`` while the allocation
+            # is a bare observation no admission decision has considered yet.
+            # It separates "recorded, not yet adjudicated" from "admitted", so an
+            # observation written before a crash is adjudicated on the retry
+            # rather than read as an admission nobody made.
+            Column("adjudicated_at", Float),
+            Column("evidence_source", String, nullable=False, default=rloan.EvidenceSource.ALLOCATION_LIFECYCLE.value),
             Column("ledger_entry_id", Integer),
         )
         Index(
-            "idx_gpu_allocations_task_stage",
-            self.gpu_allocations_table.c.task_id,
-            self.gpu_allocations_table.c.stage_id,
+            "idx_resource_allocations_job_unit",
+            self.resource_allocations_table.c.slurm_job_id,
+            self.resource_allocations_table.c.unit,
+            unique=True,
         )
         Index(
-            "idx_gpu_allocations_status",
-            self.gpu_allocations_table.c.status,
-            self.gpu_allocations_table.c.started_at,
+            "idx_resource_allocations_task_stage",
+            self.resource_allocations_table.c.task_id,
+            self.resource_allocations_table.c.stage_id,
+        )
+        Index(
+            "idx_resource_allocations_status",
+            self.resource_allocations_table.c.status,
+            self.resource_allocations_table.c.started_at,
+        )
+        Index(
+            "idx_resource_allocations_subject",
+            self.resource_allocations_table.c.subject_id,
+            self.resource_allocations_table.c.unit,
+        )
+        # Admission reservations.  A reservation is a claim on entitlement a
+        # submission has staked but not yet consumed, in one of two ownership
+        # modes: ``held`` between the admission decision and the dispatch of the
+        # Slurm request (reclaimable after a TTL, since a crash there is
+        # recoverable), and ``queued`` from the moment that request exists
+        # (scheduler-owned, released only by a canonical transition — never by a
+        # wall-clock timeout, because a genuinely queued request may wait longer
+        # than any bound and its entitlement must not be handed to a second
+        # submission).
+        self.resource_reservations_table = Table(
+            "resource_reservations",
+            self.metadata,
+            Column("id", String(32), primary_key=True),
+            Column("subject_type", String, nullable=False, default=rloan.SUBJECT_USER),
+            Column("subject_id", Integer, nullable=False),
+            Column("unit", String, nullable=False),
+            Column("resource_class", String, nullable=False, default=""),
+            Column("quantity", Integer, nullable=False),
+            Column("task_id", String(32), nullable=False),
+            Column("state", String, nullable=False),
+            Column("reason_code", String),
+            Column("created_at", Float, nullable=False),
+            # The pre-dispatch TTL, and only that: ``None`` on a scheduler-owned
+            # reservation, which has no wall-clock expiry at all.
+            Column("expires_at", Float),
+            Column("dispatched_at", Float),
+            # The scheduler's own name for the request, written in the same
+            # transaction that makes the reservation scheduler-owned.  A queued
+            # reservation therefore always carries the identity that proves a
+            # request can still exist, so no maintenance pass can read a missing
+            # identity as "there is nothing to wait for" during the dispatch
+            # window — the two facts are one row, not two writes.
+            Column("scheduler_job_id", String),
+            Column("released_at", Float),
+        )
+        # One live reservation per Task: a resubmission that already staked its
+        # entitlement cannot take a second one, and the database, not a read,
+        # says so.  Both ownership modes are "live" — the difference is who may
+        # release them, not whether they are outstanding.
+        Index(
+            "idx_resource_reservations_live_task",
+            self.resource_reservations_table.c.task_id,
+            unique=True,
+            sqlite_where=text("state IN ('held', 'queued')"),
+        )
+        Index(
+            "idx_resource_reservations_state",
+            self.resource_reservations_table.c.state,
+            self.resource_reservations_table.c.expires_at,
+        )
+        # A wrapper-authored receipt: the earliest compute-node evidence that the
+        # wrapper was running, written the instant the allocation exists.
+        #
+        # It is NOT a second accounting fact — it is a *claim* that a restart
+        # folds into the canonical ``resource_allocations`` rows through the same
+        # idempotent, ``slurm_job_id``-keyed observation the live path uses, and
+        # the row is removed in the same transaction that makes the fact durable.
+        # What it exists for is the case the database cannot cover on its own: a
+        # Slurm allocation is created by the scheduler, not by a DB write, so a
+        # worker that dies before its first write would otherwise lose a real
+        # allocation entirely.  The receipt carries it across that boundary.
+        self.resource_receipts_table = Table(
+            "resource_receipts",
+            self.metadata,
+            Column("id", String(96), primary_key=True),
+            Column("task_id", String(32), nullable=False),
+            Column("stage_id", String, nullable=False, default=""),
+            Column("slurm_job_id", String, nullable=False),
+            # The wrapper's own clock stamp, kept as the run's start floor.
+            Column("observed_at", Float, nullable=False),
+            # The shape the wrapper was started with, taken from the scheduler's
+            # own view (SLURM_CPUS_PER_TASK / SLURM_GPUS_ON_NODE), so recovery
+            # needs no server-side policy lookup to reconstruct the allocation.
+            Column("cpus", Integer, nullable=False, default=0),
+            Column("gpus", Integer, nullable=False, default=0),
+            Column("resource_class", String, nullable=False, default=""),
+            Column("authority", String, nullable=False, default=rloan.SUBJECT_USER),
+        )
+        Index(
+            "idx_resource_receipts_job",
+            self.resource_receipts_table.c.slurm_job_id,
+        )
+        # Retention state of one Task's durable data.  Deliberately separate
+        # from ``tasks.status``: a finished computation stays finished when its
+        # data is later archived or purged.
+        self.data_lifecycle_table = Table(
+            "data_lifecycle",
+            self.metadata,
+            Column("task_id", String(32), primary_key=True),
+            Column("subject_type", String, nullable=False, default=rloan.SUBJECT_USER),
+            Column("subject_id", Integer, nullable=False),
+            Column("state", String, nullable=False, default=rloan.DataLifecycleState.ACTIVE.value),
+            Column("logical_bytes", Integer, nullable=False, default=0),
+            Column("accounted_bytes", Integer, nullable=False, default=0),
+            Column("charge_revision", Integer, nullable=False, default=0),
+            Column("requested_by_user_id", Integer),
+            Column("requested_at", Float),
+            Column("claimed_at", Float),
+            Column("purged_at", Float),
+            Column("error", Text, nullable=False, default=""),
+            Column("updated_at", Float, nullable=False),
+        )
+        Index(
+            "idx_data_lifecycle_state",
+            self.data_lifecycle_table.c.state,
+            self.data_lifecycle_table.c.updated_at,
+        )
+        Index(
+            "idx_data_lifecycle_subject",
+            self.data_lifecycle_table.c.subject_id,
+            self.data_lifecycle_table.c.state,
+        )
+        # Administrative policy/allowance mutations are auditable records with
+        # actor, before/after, reason, and request correlation.  They are never
+        # deletions of the facts they change.
+        self.resource_policy_audit_table = Table(
+            "resource_policy_audit",
+            self.metadata,
+            Column("id", Integer, primary_key=True, autoincrement=True),
+            Column("subject_type", String, nullable=False, default=rloan.SUBJECT_USER),
+            Column("subject_id", Integer, nullable=False),
+            Column("actor_user_id", Integer, nullable=False),
+            Column("operation", String, nullable=False),
+            Column("unit", String, nullable=False, default=""),
+            Column("resource_class", String, nullable=False, default=""),
+            Column("before_json", Text, nullable=False, default="{}"),
+            Column("after_json", Text, nullable=False, default="{}"),
+            Column("reason", Text),
+            Column("request_id", String),
+            Column("idempotency_key", String, nullable=False, unique=True),
+            Column("created_at", Float, nullable=False),
+        )
+        Index(
+            "idx_resource_policy_audit_subject",
+            self.resource_policy_audit_table.c.subject_id,
+            self.resource_policy_audit_table.c.id,
         )
         self.gpu_authorizations_table = Table(
             "gpu_authorizations",
@@ -487,24 +736,279 @@ class TaskDatabase:
                 database_name="task database",
                 forbidden_columns={"tasks": {"scope_type", "scope_id"}},
             )
+        # Every process of a multi-process deployment runs this startup pass at
+        # once, so the whole pass is serialized on the database file itself: the
+        # schema must be created, the legacy tables copied, and those tables
+        # dropped as one exclusive unit.  SQLite transactions cannot give that —
+        # ``BEGIN IMMEDIATE`` serializes writers but a peer's committed
+        # ``DROP TABLE`` is still visible to a statement that has already been
+        # parsed, and a peer's uncommitted DDL is not visible to a reader at all,
+        # so one process can commit "resource_ledger exists" while another is
+        # still creating it and then fail to resolve the name.  The file lock
+        # makes the existence any process observes remain true for the whole
+        # pass, which is the property every step here relies on.
+        with self._startup_lock():
+            with self.engine.begin() as conn:
+                try:
+                    self.metadata.create_all(conn, checkfirst=True)
+                except OperationalError as exc:
+                    # A peer that predates the startup lock — an older release
+                    # still rolling out — can still race ``create_all``.  The
+                    # loser observes an "already exists" error, which is benign.
+                    if "already exists" not in str(exc).lower():
+                        raise
+                    logging.warning("TaskDatabase metadata already present, skipping creation")
+                self._migrate_subject_columns(conn)
+                self._migrate_resource_columns(conn)
+            # The legacy copy normalizes idempotency keys in place, so it must
+            # run before the append-only guards exist, and under the same lock
+            # so nothing can re-create the legacy tables between the copy and
+            # the drop.
+            self._migrate_legacy_gpu_tables()
+            with self.engine.begin() as conn:
+                self._install_append_only_guards(conn)
+
+    @contextmanager
+    def _startup_lock(self):
+        """Serialize the whole startup pass across processes on this database.
+
+        The lock is a file ``fcntl.flock`` beside the database rather than a
+        database lock: it is held for the duration of the pass, it is released
+        by the kernel if the process dies, and it needs no schema of its own.  It
+        guards a startup-only, short, finite section, so waiting is bounded and
+        cannot deadlock against the database's own locks.
+        """
+        lock_path = f"{self.path}.startup.lock"
+        directory = os.path.dirname(lock_path) or "."
+        os.makedirs(directory, exist_ok=True)
+        with open(lock_path, "a+b") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
             try:
-                self.metadata.create_all(conn, checkfirst=True)
-                self._install_gpu_ledger_guards(conn)
-            except OperationalError as exc:
-                # Gunicorn can spawn multiple workers simultaneously which may try to
-                # initialize the SQLite schema at the same time. The loser of that
-                # race observes an "already exists" error; we can safely ignore it.
-                if "already exists" not in str(exc).lower():
-                    raise
-                logging.warning("TaskDatabase metadata already present, skipping creation")
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
     @staticmethod
-    def _install_gpu_ledger_guards(conn) -> None:
-        for operation in ("UPDATE", "DELETE"):
-            trigger = f"prevent_gpu_credit_ledger_{operation.lower()}"
+    def _legacy_key(key: str, user_id: int) -> str:
+        """Translate one pre-canonical ledger key into its canonical spelling.
+
+        The rename is not cosmetic: the canonical writers look up their
+        idempotency keys, so a copied row under the old spelling would make the
+        canonical writer append a *second* monthly grant or a second usage fact
+        for the same event.  Every old key shape is mapped here, and an
+        unrecognised key keeps a stable prefixed form rather than colliding.
+        """
+        if key.startswith("monthly_grant:user:"):
+            return key
+        if key.startswith("monthly_grant:"):
+            _, _, period = key.partition(":")
+            _, _, period = period.partition(":")
+            return f"monthly_grant:user:{user_id}:class:-:{period}"
+        if key.startswith("usage:gpu_second:"):
+            return key
+        if key.startswith("usage:"):
+            return f"usage:gpu_second:{key.split(':', 1)[1]}"
+        if key.startswith("allowance_adjustment:user:"):
+            return key
+        if key.startswith("allowance_adjustment:"):
+            return f"allowance_adjustment:user:{key.split(':', 1)[1]}"
+        if key.startswith("admin_adjustment:user:"):
+            return key
+        if key.startswith("admin_adjustment:"):
+            return f"admin_adjustment:user:{key.split(':', 1)[1]}"
+        if key.startswith("admin_reset:user:"):
+            return key
+        if key.startswith("admin_reset:"):
+            return f"admin_reset:user:{key.split(':', 1)[1]}"
+        return f"legacy:{key}"
+
+    def _migrate_resource_columns(self, conn) -> None:
+        """Widen the reservation/allocations shape without rewriting history.
+
+        Two additive changes from the released revision, each only ever
+        *widening* a constraint so every recorded fact keeps its meaning:
+
+        * ``resource_allocations`` identifies an allocation by
+          ``(slurm_job_id, unit)`` instead of ``slurm_job_id`` alone, because one
+          Slurm allocation now records both its GPU and its CPU core-second
+          facts;
+        * ``resource_reservations`` gains ``dispatched_at`` and nullable
+          ``expires_at``, so a scheduler-owned commitment has no wall-clock
+          expiry at all, and its live-reservation uniqueness covers both
+          ownership modes.
+
+        A third change widens ``resource_allocations.resource_count`` to nullable
+        for a scheduler-log-only observation whose shape was never recorded.
+
+        These are constraint changes SQLite cannot apply in place, so each table
+        is rebuilt — rename, drop the superseded indexes, recreate in the current
+        shape, copy every column unchanged, drop the old table — under the
+        startup lock, in one transaction.  A database already carrying the
+        widened shape is untouched, and no quantity, kind, timestamp, or reason
+        is rewritten.
+        """
+        inspector = sa_inspect(conn)
+        tables = set(inspector.get_table_names())
+        if "resource_allocations" in tables:
+            indexes = {index["name"] for index in inspector.get_indexes("resource_allocations")}
+            columns = {
+                column["name"]: bool(column["nullable"])
+                for column in inspector.get_columns("resource_allocations")
+            }
+            if (
+                "idx_resource_allocations_job_unit" not in indexes
+                or "denial_reason" not in columns
+                or "denial_code" not in columns
+                or "adjudicated_at" not in columns
+                # A row whose shape is unknown records NULL, which the released
+                # NOT NULL column cannot hold.  Widening is the only migration a
+                # recorded fact needs here: every existing count keeps its value.
+                or not columns.get("resource_count", False)
+            ):
+                self._rebuild_table(conn, self.resource_allocations_table)
+        if "resource_reservations" in tables:
+            columns = {column["name"] for column in inspector.get_columns("resource_reservations")}
+            indexes = {index["name"] for index in inspector.get_indexes("resource_reservations")}
+            if (
+                "dispatched_at" not in columns
+                or "scheduler_job_id" not in columns
+                or "idx_resource_reservations_live_task" not in indexes
+            ):
+                self._rebuild_table(conn, self.resource_reservations_table)
+
+    @staticmethod
+    def _rebuild_table(conn, table) -> None:
+        """Recreate *table* in its current shape, copying every stored column.
+
+        A column the old table has is carried verbatim — so a pre-dispatch hold
+        keeps its ``expires_at`` TTL across the upgrade — and a column it does
+        not have is new, so it backfills to ``NULL``: there is no recorded
+        dispatch or release for a row written before those columns existed, and
+        inventing one would be a fact the system never observed.  The old
+        indexes drop with the renamed table, so the recreated ones cannot collide
+        with a superseded definition of the same name.
+        """
+        existing = {column["name"] for column in sa_inspect(conn).get_columns(table.name)}
+        legacy = f"{table.name}_legacy"
+        for index in sa_inspect(conn).get_indexes(table.name):
+            name = index["name"]
+            if name.startswith("sqlite_autoindex"):
+                continue  # an UNIQUE column constraint's index drops with its table
+            conn.exec_driver_sql(f"DROP INDEX IF EXISTS {name}")
+        conn.exec_driver_sql(f"ALTER TABLE {table.name} RENAME TO {legacy}")
+        table.create(conn, checkfirst=True)
+        new_names = [column.name for column in table.columns]
+        targets = ", ".join(new_names)
+        sources = ", ".join(name if name in existing else "NULL" for name in new_names)
+        conn.exec_driver_sql(f"INSERT INTO {table.name} ({targets}) SELECT {sources} FROM {legacy}")
+        conn.exec_driver_sql(f"DROP TABLE {legacy}")
+
+    def _migrate_legacy_gpu_tables(self) -> None:
+        """Copy pre-canonical GPU history into the canonical resource tables.
+
+        Bounded and history-preserving: every recorded GPU-second fact moves to
+        ``resource_ledger`` as a ``gpu_second`` row, every allocation to
+        ``resource_allocations``, and every per-user allowance to
+        ``resource_policies``.  Quantities, kinds, actors, reasons, and
+        timestamps are copied unchanged — only the subject pair, the unit, and
+        the idempotency-key spelling are normalized — so a policy change still
+        never rewrites the past.  The legacy tables are dropped only after the
+        copy, so an interrupted migration is simply retried on the next start.
+
+        Runs inside :meth:`_startup_lock`, which is what makes "the legacy tables
+        are present" a stable observation for the whole copy: a peer's committed
+        ``DROP TABLE`` cannot interleave, and a peer's half-created destination
+        table cannot be observed as finished.  One transaction then makes the
+        copy itself atomic, so a failure leaves the legacy tables in place and
+        the next start retries.
+        """
+        with self.engine.begin() as conn:
+            self._copy_legacy_gpu_tables(conn)
+
+    def _copy_legacy_gpu_tables(self, conn) -> None:
+        inspector = sa_inspect(conn)
+        tables = set(inspector.get_table_names())
+        if "gpu_credit_ledger" in tables:
             conn.exec_driver_sql(
-                f"CREATE TRIGGER IF NOT EXISTS {trigger} BEFORE {operation} ON gpu_credit_ledger "
-                "BEGIN SELECT RAISE(ABORT, 'gpu credit ledger is append-only'); END"
+                "INSERT INTO resource_ledger "
+                "(id, subject_type, subject_id, period, kind, unit, resource_class, quantity, "
+                " task_id, stage_id, slurm_job_id, actor_user_id, reason, reason_code, "
+                " evidence_source, idempotency_key, created_at) "
+                "SELECT id, 'user', user_id, period, kind, 'gpu_second', '', gpu_seconds, "
+                " task_id, stage_id, slurm_job_id, actor_user_id, reason, ?, "
+                " CASE WHEN kind = 'usage' THEN 'allocation_lifecycle' ELSE 'policy' END, "
+                " idempotency_key, created_at FROM gpu_credit_ledger",
+                (rloan.LedgerReason.MIGRATED.value,),
+            )
+            rows = conn.exec_driver_sql(
+                "SELECT id, subject_id, idempotency_key FROM resource_ledger WHERE reason_code = ?",
+                (rloan.LedgerReason.MIGRATED.value,),
+            ).all()
+            for row_id, user_id, key in rows:
+                conn.exec_driver_sql(
+                    "UPDATE resource_ledger SET idempotency_key = ? WHERE id = ?",
+                    (self._legacy_key(str(key), int(user_id)), int(row_id)),
+                )
+            conn.exec_driver_sql("DROP TABLE gpu_credit_ledger")
+        if "gpu_allocations" in tables:
+            conn.exec_driver_sql(
+                "INSERT INTO resource_allocations "
+                "(id, subject_type, subject_id, task_id, stage_id, slurm_job_id, unit, "
+                " resource_class, resource_count, started_at, finished_at, quantity, status, "
+                " evidence_source, ledger_entry_id) "
+                "SELECT id, 'user', user_id, task_id, stage_id, slurm_job_id, 'gpu_second', "
+                " '', gpu_count, started_at, finished_at, gpu_seconds, status, "
+                "'allocation_lifecycle', ledger_entry_id FROM gpu_allocations"
+            )
+            conn.exec_driver_sql("DROP TABLE gpu_allocations")
+        if "gpu_credit_policies" in tables:
+            conn.exec_driver_sql(
+                "INSERT INTO resource_policies "
+                "(subject_type, subject_id, unit, resource_class, allowance, "
+                " updated_by_user_id, updated_at) "
+                "SELECT 'user', user_id, 'gpu_second', '', monthly_gpu_seconds, "
+                " updated_by_user_id, updated_at FROM gpu_credit_policies"
+            )
+            conn.exec_driver_sql("DROP TABLE gpu_credit_policies")
+
+    @staticmethod
+    def _migrate_subject_columns(conn) -> None:
+        """Rename legacy per-table ``user_id`` columns to the canonical subject.
+
+        A pre-existing GPU-credit database holds real usage history.  Rewriting
+        or discarding it would violate "an administrative change never rewrites
+        the past", so the migration is a rename plus a backfill of the subject
+        type: every stored quantity, kind, reason, actor, and timestamp is left
+        exactly as recorded.  A database that already carries the canonical
+        columns is untouched, and one without the legacy name is simply created
+        fresh by ``create_all``.
+        """
+        inspector = sa_inspect(conn)
+        existing_tables = set(inspector.get_table_names())
+        for table in _SUBJECT_TABLES:
+            if table not in existing_tables:
+                continue
+            columns = {column["name"] for column in inspector.get_columns(table)}
+            if "subject_id" not in columns and "user_id" in columns:
+                conn.exec_driver_sql(f"ALTER TABLE {table} RENAME COLUMN user_id TO subject_id")
+                columns = (columns - {"user_id"}) | {"subject_id"}
+            if "subject_type" not in columns:
+                conn.exec_driver_sql(
+                    f"ALTER TABLE {table} ADD COLUMN subject_type VARCHAR NOT NULL DEFAULT '{rloan.SUBJECT_USER}'"
+                )
+            if "subject_id" in columns:
+                conn.exec_driver_sql(
+                    f"UPDATE {table} SET subject_type = '{rloan.SUBJECT_USER}' WHERE subject_type IS NULL OR subject_type = ''"
+                )
+
+    @staticmethod
+    def _install_append_only_guards(conn) -> None:
+        """Resource facts are append-only: no UPDATE and no DELETE, ever."""
+        for operation in ("UPDATE", "DELETE"):
+            trigger = f"prevent_resource_ledger_{operation.lower()}"
+            conn.exec_driver_sql(
+                f"CREATE TRIGGER IF NOT EXISTS {trigger} BEFORE {operation} ON resource_ledger "
+                "BEGIN SELECT RAISE(ABORT, 'resource ledger is append-only'); END"
             )
 
     @staticmethod
@@ -970,32 +1474,256 @@ class TaskDatabase:
             time.time() if at is None else at, timezone.utc
         ).strftime("%Y-%m")
 
-    def _ensure_monthly_gpu_grant(
-        self, conn, user_id: int, period: str, created_at: float
+    def _period_for_unit(self, unit: str, at: float) -> str:
+        """The period a settled fact belongs to: a UTC month, or none at all.
+
+        Consumption units are charged against the month they occurred in;
+        durable ownership spans every period and therefore has no period.
+        """
+        return self._gpu_period(at) if rloan.periods_for_unit(unit) else ""
+
+    def _ensure_monthly_grant(
+        self, conn, user_id: int, period: str, resource_class: str, created_at: float
     ) -> None:
+        """Append the period's base allowance once, from current policy."""
         allowance = conn.execute(
-            select(self.gpu_credit_policies_table.c.monthly_gpu_seconds).where(
-                self.gpu_credit_policies_table.c.user_id == user_id
+            select(self.resource_policies_table.c.allowance).where(
+                self.resource_policies_table.c.subject_type == rloan.SUBJECT_USER,
+                self.resource_policies_table.c.subject_id == user_id,
+                self.resource_policies_table.c.unit == rloan.UNIT_GPU_SECOND,
+                self.resource_policies_table.c.resource_class == resource_class,
             )
         ).scalar_one_or_none()
-        stmt = sqlite_insert(self.gpu_credit_ledger_table).values(
-            user_id=user_id,
+        stmt = sqlite_insert(self.resource_ledger_table).values(
+            subject_type=rloan.SUBJECT_USER,
+            subject_id=user_id,
             period=period,
-            kind="monthly_grant",
-            gpu_seconds=self.monthly_gpu_seconds if allowance is None else int(allowance),
+            kind=rloan.LedgerKind.MONTHLY_GRANT.value,
+            unit=rloan.UNIT_GPU_SECOND,
+            resource_class=resource_class,
+            quantity=self._monthly_seconds if allowance is None else int(allowance),
             task_id=None,
             stage_id=None,
             slurm_job_id=None,
             actor_user_id=None,
             reason="UTC calendar-month allowance",
-            idempotency_key=f"monthly_grant:{user_id}:{period}",
+            reason_code=rloan.LedgerReason.PERIOD_GRANT.value,
+            evidence_source=rloan.EvidenceSource.POLICY.value,
+            idempotency_key=f"monthly_grant:user:{user_id}:class:{resource_class or '-'}:{period}",
             created_at=created_at,
         )
         conn.execute(
             stmt.on_conflict_do_nothing(
-                index_elements=[self.gpu_credit_ledger_table.c.idempotency_key]
+                index_elements=[self.resource_ledger_table.c.idempotency_key]
             )
         )
+
+    # -- Canonical accounting, policy, and admission -------------------------
+    #
+    # Everything below derives its answer from append-only ledger facts plus
+    # the live reservation table.  Nothing is cached and nothing is rewritten:
+    # a policy change appends a new fact, and an administrative correction is
+    # an ``admin_adjustment``/``admin_reset`` entry, never a deletion.
+
+    @property
+    def monthly_gpu_seconds(self) -> int:
+        """Default monthly GPU allowance applied where no policy row exists."""
+        return self._monthly_seconds
+
+    @property
+    def storage_soft_limit_bytes(self) -> int:
+        """Default soft durable-storage ceiling, in logical bytes."""
+        return self._storage_soft_limit
+
+    def _period_totals(self, user_id: int, period: str, resource_class: str) -> dict[str, int]:
+        with self.engine.connect() as conn:
+            return self._ledger_totals_in_connection(conn, user_id, period, resource_class)
+
+    def _period_usage(self, user_id: int, period: str, resource_class: str) -> int:
+        return -self._period_totals(user_id, period, resource_class).get(rloan.LedgerKind.USAGE.value, 0)
+
+    def _period_adjustments(self, user_id: int, period: str, resource_class: str) -> int:
+        return self._administrative_adjustments(self._period_totals(user_id, period, resource_class))
+
+    def compute_entitlement(
+        self,
+        user_id: int,
+        *,
+        unit: str = rloan.UNIT_GPU_SECOND,
+        at: float | None = None,
+    ) -> rloan.ComputeEntitlement:
+        """The canonical per-(subject, unit) admission position, as a typed value.
+
+        The entry is always the class-agnostic scope, because the deployment has
+        exactly one GPU allowance and it spans every accelerator class: a typed
+        ``a100`` second and an untyped one draw on the same balance.  This method
+        is therefore the only place that answers "may this user run?", and every
+        consumer gets the answer admission acts on.
+
+        Per-class detail is real and stays where it belongs — on the ledger rows,
+        reported by :meth:`class_usage` — but it is not an entitlement: a
+        per-class remaining balance would let a consumer read a confident "yes"
+        at one class while admission refuses at the shared balance.
+        """
+        checked_at = time.time() if at is None else at
+        enforce = unit == rloan.UNIT_GPU_SECOND
+        period = self._gpu_period(checked_at) if rloan.periods_for_unit(unit) else ""
+        with self.engine.begin() as conn:
+            if enforce:
+                self._ensure_monthly_grant(conn, user_id, period, "", checked_at)
+            rows = conn.execute(
+                select(self.resource_ledger_table).where(
+                    self.resource_ledger_table.c.subject_type == rloan.SUBJECT_USER,
+                    self.resource_ledger_table.c.subject_id == user_id,
+                    self.resource_ledger_table.c.unit == unit,
+                )
+            ).mappings().all()
+            reserved = conn.execute(
+                select(func.coalesce(func.sum(self.resource_reservations_table.c.quantity), 0)).where(
+                    self.resource_reservations_table.c.subject_id == user_id,
+                    self.resource_reservations_table.c.unit == unit,
+                    self.resource_reservations_table.c.state.in_(rloan.COMMITTED_RESERVATION_STATES),
+                )
+            ).scalar_one()
+            unsettled, unsettled_quantity = self._unsettled_in_connection(
+                conn, user_id, unit, "", checked_at
+            )
+        totals = rloan.summarize_ledger(rows, unit=unit, resource_class="", period=period or None)
+        sources = tuple(sorted({str(row["evidence_source"]) for row in rows if row["evidence_source"]}))
+        return rloan.ComputeEntitlement(
+            unit=unit,
+            resource_class="",
+            allowance=totals["allowance"] if enforce else None,
+            used=totals["used"],
+            reserved=int(reserved),
+            unsettled=int(unsettled),
+            unsettled_quantity=int(unsettled_quantity),
+            evidence_sources=sources,
+        )
+
+    def class_usage(self, user_id: int, *, gres: str, period: str | None = None) -> int:
+        """GPU-seconds one subject actually consumed in one resource class.
+
+        A *report* of recorded facts, never a balance: what a class cost is
+        knowable, while what a class is *allowed* is not a per-class question.
+        """
+        resource_class = rloan.resource_class_for_gres(gres)
+        totals = self._period_totals(user_id, period or self._gpu_period(), resource_class)
+        return -totals.get(rloan.LedgerKind.USAGE.value, 0)
+
+    def _unsettled_in_connection(
+        self, conn, user_id: int, unit: str, resource_class: str, now: float, exclude_slurm_job_id: str | None = None
+    ) -> tuple[int, int]:
+        """Unsettled allocations: how many, and a conservative base-unit reserve.
+
+        An allocation whose authoritative elapsed time is unavailable has
+        definitely consumed something, so it is never treated as zero.  Each one
+        reserves at least as much as a single admission hold would — the same
+        quantum that bounds a pending submission — which keeps the reserve
+        proportional to concurrency instead of stampeding to the full scheduler
+        window, and means a user with running work cannot be admitted as if that
+        work had consumed nothing.
+
+        The reserve scales with the allocation's ``resource_count``, so an
+        allocation of many cores or GPUs reserves proportionally — otherwise a
+        large allocation would cost no more than a single-GPU one until it
+        settled.  ``min_quantity`` is the policy floor for a *countless*
+        allocation (the migrated CPU-only rows), which then behaves exactly as it
+        did before.
+
+        ``exclude_slurm_job_id`` drops one allocation from the reserve.  The
+        allocation-start decision uses it for the allocation it is deciding,
+        which already exists as a fact by then: counting it here would make every
+        start refuse itself, because an ACTIVE allocation reserves usage before it
+        has any elapsed time to settle from.
+        """
+        conditions = [
+            self.resource_allocations_table.c.subject_id == user_id,
+            self.resource_allocations_table.c.unit == unit,
+            self.resource_allocations_table.c.status.in_(
+                (rloan.AllocationStatus.ACTIVE.value, rloan.AllocationStatus.REVIEW.value)
+            ),
+        ]
+        if exclude_slurm_job_id is not None:
+            conditions.append(self.resource_allocations_table.c.slurm_job_id != exclude_slurm_job_id)
+        rows = conn.execute(
+            select(
+                self.resource_allocations_table.c.resource_count,
+                self.resource_allocations_table.c.started_at,
+            ).where(*conditions)
+        ).all()
+        if not rows:
+            return 0, 0
+        quantum = int(rloan.DEFAULT_ADMISSION_QUANTUM.get(unit, 0))
+        total = 0
+        for count, started_at in rows:
+            elapsed = max(0.0, now - float(started_at))
+            # An unknown shape reserves the quantum, never zero: the allocation
+            # really held something, so it must not be admitted against as if it
+            # held nothing.
+            reserved = quantum if count is None else max(quantum, 0, int(count))
+            total += reserved * max(1, int(elapsed))
+        return len(rows), total
+
+    def storage_entitlement(self, user_id: int) -> rloan.StorageEntitlement:
+        """Logical owned bytes for one subject, with its configured soft ceiling."""
+        return rloan.StorageEntitlement(
+            logical_owned_bytes=self.logical_owned_bytes(user_id),
+            soft_limit_bytes=self._storage_soft_limit or None,
+        )
+
+    def resource_envelope(self, user_id: int, *, at: float | None = None) -> rloan.ResourceEnvelope:
+        """The canonical per-subject position that later consumers project.
+
+        ``compute`` carries the scopes admission decides on: the class-agnostic
+        GPU balance (the one allowance, which already spans every accelerator
+        class) and each ungated unit this deployment records.  A per-class entry
+        is deliberately absent — it would be a second, potentially contradicting
+        answer to "may this user run?", and a consumer reading it could be told
+        yes while admission says no.  Class detail stays available as a filtered
+        report via :meth:`class_usage`.
+
+        Storage is reported once, as :attr:`ResourceEnvelope.storage`.  It is
+        durable ownership rather than per-period consumption, so mirroring it as
+        a ``storage_byte`` compute entry would publish two numbers that diverge
+        the moment a result is republished with a different size.
+        """
+        checked_at = time.time() if at is None else at
+        return rloan.ResourceEnvelope(
+            subject_type=rloan.SUBJECT_USER,
+            subject_id=user_id,
+            period=self._gpu_period(checked_at),
+            compute=(
+                self.compute_entitlement(user_id, unit=rloan.UNIT_GPU_SECOND, at=checked_at),
+                self.compute_entitlement(user_id, unit=rloan.UNIT_CPU_CORE_SECOND, at=checked_at),
+            ),
+            storage=self.storage_entitlement(user_id),
+        )
+
+    def cpu_core_second_summary(self, user_id: int, *, at: float | None = None) -> dict[str, Any]:
+        """CPU core-seconds one subject was allocated in one UTC month.
+
+        Allocation-based, not utilization-based: it reports the same settled
+        ``usage`` facts :meth:`compute_entitlement` reads for the
+        ``cpu_core_second`` unit, never the ``/usr/bin/time`` figures the runner
+        wrapper reports.  ``unsettled_allocations`` is the unknown-is-not-zero
+        distinction at the reporting boundary — those allocations definitely
+        consumed something and have not been charged yet.
+        """
+        checked_at = time.time() if at is None else at
+        entitlement = self.compute_entitlement(
+            user_id, unit=rloan.UNIT_CPU_CORE_SECOND, at=checked_at
+        )
+        return {
+            "user_id": user_id,
+            "period": self._gpu_period(checked_at),
+            "used_cpu_core_seconds": entitlement.used,
+            "used_cpu_hours": rloan.cpu_hours_from_core_seconds(entitlement.used),
+            "unsettled_allocations": entitlement.unsettled,
+            "unsettled_cpu_core_seconds": entitlement.unsettled_quantity,
+            "usage_complete": entitlement.usage_complete,
+            "evidence_sources": list(entitlement.evidence_sources),
+        }
 
     def gpu_credit_summary(
         self, user_id: int, *, at: float | None = None
@@ -1003,33 +1731,25 @@ class TaskDatabase:
         """Return a balance derived from append-only entries for one UTC month."""
         checked_at = time.time() if at is None else at
         period = self._gpu_period(checked_at)
+        resource_class = rloan.resource_class_for_gres(None)
         with self.engine.begin() as conn:
-            self._ensure_monthly_gpu_grant(conn, user_id, period, checked_at)
-            rows = conn.execute(
-                select(
-                    self.gpu_credit_ledger_table.c.kind,
-                    func.sum(self.gpu_credit_ledger_table.c.gpu_seconds),
-                )
-                .where(
-                    self.gpu_credit_ledger_table.c.user_id == user_id,
-                    self.gpu_credit_ledger_table.c.period == period,
-                )
-                .group_by(self.gpu_credit_ledger_table.c.kind)
-            ).all()
-        totals = {str(kind): int(total or 0) for kind, total in rows}
+            self._ensure_monthly_grant(conn, user_id, period, "", checked_at)
+        totals = self._period_totals(user_id, period, resource_class)
         return {
             "user_id": user_id,
             "period": period,
             "monthly_grant_gpu_seconds": self._effective_monthly_allowance(totals),
-            "usage_gpu_seconds": -totals.get("usage", 0),
+            "usage_gpu_seconds": -totals.get(rloan.LedgerKind.USAGE.value, 0),
             "adjustment_gpu_seconds": self._administrative_adjustments(totals),
-            "remaining_gpu_seconds": sum(totals.values()),
+            "remaining_gpu_seconds": self.compute_entitlement(user_id, at=checked_at).remaining,
         }
 
     @staticmethod
     def _effective_monthly_allowance(totals: dict[str, int]) -> int:
         """Configured allowance currently effective for one period."""
-        return totals.get("monthly_grant", 0) + totals.get("allowance_adjustment", 0)
+        return totals.get(rloan.LedgerKind.MONTHLY_GRANT.value, 0) + totals.get(
+            rloan.LedgerKind.ALLOWANCE_ADJUSTMENT.value, 0
+        )
 
     @staticmethod
     def _administrative_adjustments(totals: dict[str, int]) -> int:
@@ -1038,13 +1758,9 @@ class TaskDatabase:
         ``admin_reset`` is grouped with adjustments so the displayed breakdown
         (allowance + adjustments - usage) still sums to the derived balance.
         """
-        return (
-            totals.get("admin_adjustment", 0)
-            + totals.get("reversal", 0)
-            + totals.get("admin_reset", 0)
-        )
+        return sum(totals.get(kind, 0) for kind in rloan.ADJUSTMENT_KINDS)
 
-    def set_gpu_monthly_allowance(
+    def set_compute_allowance(
         self,
         *,
         user_id: int,
@@ -1058,7 +1774,7 @@ class TaskDatabase:
             raise ValueError("monthly_gpu_seconds must be between 0 and 10000000")
         timestamp = time.time() if updated_at is None else updated_at
         period = self._gpu_period(timestamp)
-        durable_key = f"allowance_adjustment:{user_id}:{idempotency_key}"
+        durable_key = f"allowance_adjustment:user:{user_id}:{idempotency_key}"
         reason = f"Monthly allowance set to {monthly_gpu_seconds} GPU-seconds"
         # BEGIN IMMEDIATE closes the read-compute-insert race: without it two
         # concurrent updates each read the same stale allowance and append
@@ -1067,8 +1783,8 @@ class TaskDatabase:
             conn.exec_driver_sql("BEGIN IMMEDIATE")
             try:
                 prior = conn.execute(
-                    select(self.gpu_credit_ledger_table).where(
-                        self.gpu_credit_ledger_table.c.idempotency_key == durable_key
+                    select(self.resource_ledger_table).where(
+                        self.resource_ledger_table.c.idempotency_key == durable_key
                     )
                 ).mappings().one_or_none()
                 if prior is not None:
@@ -1076,44 +1792,56 @@ class TaskDatabase:
                         raise ValueError("idempotency_key was already used for a different allowance")
                     conn.commit()
                     return dict(prior)
-                self._ensure_monthly_gpu_grant(conn, user_id, period, timestamp)
+                self._ensure_monthly_grant(conn, user_id, period, "", timestamp)
                 current_allowance = conn.execute(
-                    select(func.sum(self.gpu_credit_ledger_table.c.gpu_seconds)).where(
-                        self.gpu_credit_ledger_table.c.user_id == user_id,
-                        self.gpu_credit_ledger_table.c.period == period,
-                        self.gpu_credit_ledger_table.c.kind.in_(("monthly_grant", "allowance_adjustment")),
+                    select(func.sum(self.resource_ledger_table.c.quantity)).where(
+                        self.resource_ledger_table.c.subject_id == user_id,
+                        self.resource_ledger_table.c.unit == rloan.UNIT_GPU_SECOND,
+                        self.resource_ledger_table.c.period == period,
+                        self.resource_ledger_table.c.kind.in_(rloan.ALLOWANCE_KINDS),
                     )
                 ).scalar_one() or 0
                 delta = monthly_gpu_seconds - int(current_allowance)
-                policy = sqlite_insert(self.gpu_credit_policies_table).values(
+                self._upsert_policy(
+                    conn,
                     user_id=user_id,
-                    monthly_gpu_seconds=monthly_gpu_seconds,
-                    updated_by_user_id=actor_user_id,
-                    updated_at=timestamp,
-                ).on_conflict_do_update(
-                    index_elements=[self.gpu_credit_policies_table.c.user_id],
-                    set_={
-                        "monthly_gpu_seconds": monthly_gpu_seconds,
-                        "updated_by_user_id": actor_user_id,
-                        "updated_at": timestamp,
-                    },
+                    resource_class="",
+                    allowance=monthly_gpu_seconds,
+                    actor_user_id=actor_user_id,
+                    timestamp=timestamp,
                 )
-                conn.execute(policy)
+                self._write_policy_audit(
+                    conn,
+                    user_id=user_id,
+                    actor_user_id=actor_user_id,
+                    operation="set_compute_allowance",
+                    before_json={"allowance": int(current_allowance)},
+                    after_json={"allowance": monthly_gpu_seconds},
+                    reason=reason,
+                    idempotency_key=durable_key,
+                    timestamp=timestamp,
+                    unit=rloan.UNIT_GPU_SECOND,
+                )
                 result = conn.execute(
-                    sqlite_insert(self.gpu_credit_ledger_table).values(
-                        user_id=user_id,
+                    sqlite_insert(self.resource_ledger_table).values(
+                        subject_type=rloan.SUBJECT_USER,
+                        subject_id=user_id,
                         period=period,
-                        kind="allowance_adjustment",
-                        gpu_seconds=delta,
+                        kind=rloan.LedgerKind.ALLOWANCE_ADJUSTMENT.value,
+                        unit=rloan.UNIT_GPU_SECOND,
+                        resource_class="",
+                        quantity=delta,
                         actor_user_id=actor_user_id,
                         reason=reason,
+                        reason_code=rloan.LedgerReason.ALLOWANCE_SET.value,
+                        evidence_source=rloan.EvidenceSource.POLICY.value,
                         idempotency_key=durable_key,
                         created_at=timestamp,
                     )
                 )
                 row = conn.execute(
-                    select(self.gpu_credit_ledger_table).where(
-                        self.gpu_credit_ledger_table.c.id == result.inserted_primary_key[0]
+                    select(self.resource_ledger_table).where(
+                        self.resource_ledger_table.c.id == result.inserted_primary_key[0]
                     )
                 ).mappings().one()
                 conn.commit()
@@ -1122,7 +1850,73 @@ class TaskDatabase:
                 raise
         return dict(row)
 
-    def require_gpu_credit(
+    def _upsert_policy(
+        self,
+        conn,
+        *,
+        user_id: int,
+        resource_class: str,
+        allowance: int,
+        actor_user_id: int,
+        timestamp: float,
+    ) -> None:
+        policy = sqlite_insert(self.resource_policies_table).values(
+            subject_type=rloan.SUBJECT_USER,
+            subject_id=user_id,
+            unit=rloan.UNIT_GPU_SECOND,
+            resource_class=resource_class,
+            allowance=allowance,
+            updated_by_user_id=actor_user_id,
+            updated_at=timestamp,
+        ).on_conflict_do_update(
+            index_elements=[
+                self.resource_policies_table.c.subject_type,
+                self.resource_policies_table.c.subject_id,
+                self.resource_policies_table.c.unit,
+                self.resource_policies_table.c.resource_class,
+            ],
+            set_={
+                "allowance": allowance,
+                "updated_by_user_id": actor_user_id,
+                "updated_at": timestamp,
+            },
+        )
+        conn.execute(policy)
+
+    def _write_policy_audit(
+        self,
+        conn,
+        *,
+        user_id: int,
+        actor_user_id: int,
+        operation: str,
+        before_json: dict[str, Any],
+        after_json: dict[str, Any],
+        reason: str | None,
+        idempotency_key: str,
+        timestamp: float,
+        unit: str = "",
+        resource_class: str = "",
+    ) -> None:
+        conn.execute(
+            sqlite_insert(self.resource_policy_audit_table)
+            .values(
+                subject_type=rloan.SUBJECT_USER,
+                subject_id=user_id,
+                actor_user_id=actor_user_id,
+                operation=operation,
+                unit=unit,
+                resource_class=resource_class,
+                before_json=json.dumps(before_json, sort_keys=True),
+                after_json=json.dumps(after_json, sort_keys=True),
+                reason=reason,
+                idempotency_key=f"policy_audit:{idempotency_key}",
+                created_at=timestamp,
+            )
+            .on_conflict_do_nothing(index_elements=[self.resource_policy_audit_table.c.idempotency_key])
+        )
+
+    def require_compute_entitlement(
         self, user_id: int, *, at: float | None = None
     ) -> dict[str, Any]:
         """Fail when the current UTC-month balance cannot admit a new allocation."""
@@ -1131,7 +1925,7 @@ class TaskDatabase:
             raise GPUCreditUnavailableError("GPU credit balance is exhausted")
         return summary
 
-    def adjust_gpu_credit(
+    def adjust_compute_account(
         self,
         *,
         user_id: int,
@@ -1149,30 +1943,47 @@ class TaskDatabase:
             raise ValueError("reason is required")
         timestamp = time.time() if created_at is None else created_at
         period = self._gpu_period(timestamp)
-        durable_key = f"admin_adjustment:{user_id}:{idempotency_key}"
-        stmt = sqlite_insert(self.gpu_credit_ledger_table).values(
-            user_id=user_id,
+        durable_key = f"admin_adjustment:user:{user_id}:{idempotency_key}"
+        stmt = sqlite_insert(self.resource_ledger_table).values(
+            subject_type=rloan.SUBJECT_USER,
+            subject_id=user_id,
             period=period,
-            kind="admin_adjustment",
-            gpu_seconds=gpu_seconds,
+            kind=rloan.LedgerKind.ADMIN_ADJUSTMENT.value,
+            unit=rloan.UNIT_GPU_SECOND,
+            resource_class="",
+            quantity=gpu_seconds,
             task_id=None,
             stage_id=None,
             slurm_job_id=None,
             actor_user_id=actor_user_id,
             reason=normalized_reason,
+            reason_code=rloan.LedgerReason.ADMIN_ADJUSTMENT.value,
+            evidence_source=rloan.EvidenceSource.POLICY.value,
             idempotency_key=durable_key,
             created_at=timestamp,
-        ).on_conflict_do_nothing(index_elements=[self.gpu_credit_ledger_table.c.idempotency_key])
+        ).on_conflict_do_nothing(index_elements=[self.resource_ledger_table.c.idempotency_key])
         with self.engine.begin() as conn:
-            self._ensure_monthly_gpu_grant(conn, user_id, period, timestamp)
+            self._ensure_monthly_grant(conn, user_id, period, "", timestamp)
             conn.execute(stmt)
+            self._write_policy_audit(
+                conn,
+                user_id=user_id,
+                actor_user_id=actor_user_id,
+                operation="admin_adjustment",
+                before_json={},
+                after_json={"gpu_seconds": gpu_seconds},
+                reason=normalized_reason,
+                idempotency_key=durable_key,
+                timestamp=timestamp,
+                unit=rloan.UNIT_GPU_SECOND,
+            )
             row = conn.execute(
-                select(self.gpu_credit_ledger_table).where(
-                    self.gpu_credit_ledger_table.c.idempotency_key == durable_key
+                select(self.resource_ledger_table).where(
+                    self.resource_ledger_table.c.idempotency_key == durable_key
                 )
             ).mappings().one()
         expected = (user_id, gpu_seconds, actor_user_id, normalized_reason)
-        actual = (row["user_id"], row["gpu_seconds"], row["actor_user_id"], row["reason"])
+        actual = (row["subject_id"], row["quantity"], row["actor_user_id"], row["reason"])
         if actual != expected:
             raise ValueError("idempotency_key was already used for a different adjustment")
         return dict(row)
@@ -1201,21 +2012,32 @@ class TaskDatabase:
             raise ValueError("reason must be at most 1000 characters")
         return normalized
 
-    def _gpu_credit_totals_in_connection(self, conn, user_id: int, period: str) -> dict[str, int]:
-        rows = conn.execute(
+    def _ledger_totals_in_connection(self, conn, user_id: int, period: str, resource_class: str = "") -> dict[str, int]:
+        """Sum one GPU-second period by ledger kind, optionally for one class.
+
+        A *report*: an empty class sums every class (the allowance scope) and a
+        named class selects the facts recorded under it.  Neither decides
+        admission — that is :meth:`compute_entitlement`, always at the
+        allowance scope.
+        """
+        stmt = (
             select(
-                self.gpu_credit_ledger_table.c.kind,
-                func.sum(self.gpu_credit_ledger_table.c.gpu_seconds),
+                self.resource_ledger_table.c.kind,
+                func.sum(self.resource_ledger_table.c.quantity),
             )
             .where(
-                self.gpu_credit_ledger_table.c.user_id == user_id,
-                self.gpu_credit_ledger_table.c.period == period,
+                self.resource_ledger_table.c.subject_id == user_id,
+                self.resource_ledger_table.c.unit == rloan.UNIT_GPU_SECOND,
+                self.resource_ledger_table.c.period == period,
             )
-            .group_by(self.gpu_credit_ledger_table.c.kind)
-        ).all()
+            .group_by(self.resource_ledger_table.c.kind)
+        )
+        if resource_class:
+            stmt = stmt.where(self.resource_ledger_table.c.resource_class == resource_class)
+        rows = conn.execute(stmt).all()
         return {str(kind): int(total or 0) for kind, total in rows}
 
-    def _reset_gpu_credit_in_connection(
+    def _reset_account_in_connection(
         self,
         conn,
         *,
@@ -1228,11 +2050,11 @@ class TaskDatabase:
     ) -> dict[str, Any]:
         """Compute the compensating delta and append it inside one transaction."""
         period = self._gpu_period(timestamp)
-        self._ensure_monthly_gpu_grant(conn, user_id, period, timestamp)
+        self._ensure_monthly_grant(conn, user_id, period, "", timestamp)
         prior = (
             conn.execute(
-                select(self.gpu_credit_ledger_table).where(
-                    self.gpu_credit_ledger_table.c.idempotency_key == durable_key
+                select(self.resource_ledger_table).where(
+                    self.resource_ledger_table.c.idempotency_key == durable_key
                 )
             )
             .mappings()
@@ -1241,9 +2063,9 @@ class TaskDatabase:
         if prior is not None:
             if prior["actor_user_id"] != actor_user_id or prior["reason"] != reason:
                 raise ValueError("idempotency_key was already used for a different reset")
-            totals = self._gpu_credit_totals_in_connection(conn, user_id, period)
+            totals = self._ledger_totals_in_connection(conn, user_id, period)
             remaining = sum(totals.values())
-            delta = int(prior["gpu_seconds"])
+            delta = int(prior["quantity"])
             return {
                 "user_id": user_id,
                 "period": period,
@@ -1256,7 +2078,7 @@ class TaskDatabase:
                 "entry_id": int(prior["id"]),
             }
 
-        totals = self._gpu_credit_totals_in_connection(conn, user_id, period)
+        totals = self._ledger_totals_in_connection(conn, user_id, period)
         allowance = self._effective_monthly_allowance(totals)
         remaining = sum(totals.values())
         delta = allowance - remaining
@@ -1266,19 +2088,36 @@ class TaskDatabase:
         # balance has changed, and it keeps the key reserved against reuse with
         # a different actor/reason.
         result = conn.execute(
-            sqlite_insert(self.gpu_credit_ledger_table).values(
-                user_id=user_id,
+            sqlite_insert(self.resource_ledger_table).values(
+                subject_type=rloan.SUBJECT_USER,
+                subject_id=user_id,
                 period=period,
-                kind="admin_reset",
-                gpu_seconds=delta,
+                kind=rloan.LedgerKind.ADMIN_RESET.value,
+                unit=rloan.UNIT_GPU_SECOND,
+                resource_class="",
+                quantity=delta,
                 task_id=None,
                 stage_id=None,
                 slurm_job_id=None,
                 actor_user_id=actor_user_id,
                 reason=reason,
+                reason_code=rloan.LedgerReason.ADMIN_RESET.value,
+                evidence_source=rloan.EvidenceSource.POLICY.value,
                 idempotency_key=durable_key,
                 created_at=timestamp,
             )
+        )
+        self._write_policy_audit(
+            conn,
+            user_id=user_id,
+            actor_user_id=actor_user_id,
+            operation="admin_reset",
+            before_json={"remaining": remaining},
+            after_json={"remaining": remaining + delta},
+            reason=reason,
+            idempotency_key=durable_key,
+            timestamp=timestamp,
+            unit=rloan.UNIT_GPU_SECOND,
         )
         return {
             "user_id": user_id,
@@ -1292,7 +2131,7 @@ class TaskDatabase:
             "entry_id": int(result.inserted_primary_key[0]),
         }
 
-    def reset_gpu_credit(
+    def reset_compute_account(
         self,
         *,
         user_id: int,
@@ -1306,13 +2145,12 @@ class TaskDatabase:
         timestamp = time.time() if at is None else at
         # Individual resets are scoped by user so the same client key can be
         # reused for different users without colliding.
-        durable_key = f"admin_reset:user:{idempotency_key}:{user_id}"
-        # BEGIN IMMEDIATE closes the read-compute-insert race against a
+        durable_key = f"admin_reset:user:{idempotency_key}:{user_id}"        # BEGIN IMMEDIATE closes the read-compute-insert race against a
         # concurrent GPU settlement on the same SQLite database.
         with self.engine.connect() as conn:
             conn.exec_driver_sql("BEGIN IMMEDIATE")
             try:
-                result = self._reset_gpu_credit_in_connection(
+                result = self._reset_account_in_connection(
                     conn,
                     user_id=user_id,
                     actor_user_id=actor_user_id,
@@ -1327,7 +2165,7 @@ class TaskDatabase:
                 raise
         return result
 
-    def reset_all_gpu_credits(
+    def reset_all_compute_accounts(
         self,
         *,
         user_ids: Iterable[int],
@@ -1352,12 +2190,12 @@ class TaskDatabase:
             conn.exec_driver_sql("BEGIN IMMEDIATE")
             try:
                 for user_id in user_ids:
-                    result = self._reset_gpu_credit_in_connection(
+                    result = self._reset_account_in_connection(
                         conn,
                         user_id=int(user_id),
                         actor_user_id=actor_user_id,
                         reason=normalized_reason,
-                        durable_key=f"admin_reset:{batch_id}:{int(user_id)}",
+                        durable_key=f"admin_reset:user:{batch_id}:{int(user_id)}",
                         batch_id=batch_id,
                         timestamp=timestamp,
                     )
@@ -1592,237 +2430,1896 @@ class TaskDatabase:
         with self.engine.connect() as conn:
             return [dict(row) for row in conn.execute(stmt).mappings().all()]
 
-    def list_gpu_credit_reset_batch(self, batch_id: str) -> list[dict[str, Any]]:
+    def list_reset_batch(self, batch_id: str) -> list[dict[str, Any]]:
         """Return the ledger rows written by one administrative reset batch."""
-        prefix = f"admin_reset:{batch_id}:"
+        prefix = f"admin_reset:user:{batch_id}:"
         stmt = (
-            select(self.gpu_credit_ledger_table)
-            .where(self.gpu_credit_ledger_table.c.idempotency_key.like(f"{prefix}%"))
-            .order_by(self.gpu_credit_ledger_table.c.id)
+            select(self.resource_ledger_table)
+            .where(self.resource_ledger_table.c.idempotency_key.like(f"{prefix}%"))
+            .order_by(self.resource_ledger_table.c.id)
         )
         with self.engine.connect() as conn:
             return [dict(row) for row in conn.execute(stmt).mappings().all()]
 
-    def list_gpu_credit_ledger(
-        self, user_id: int, *, period: str | None = None, limit: int = 50
+    def list_ledger(
+        self,
+        user_id: int,
+        *,
+        unit: str | None = None,
+        period: str | None = None,
+        limit: int = 50,
     ) -> list[dict[str, Any]]:
-        """Return recent immutable entries for one user, newest first."""
+        """Return recent immutable append-only facts for one subject, newest first.
+
+        One reader for every unit: a compute fact and a durable-ownership fact
+        are the same kind of row, so scoping by unit is a filter rather than a
+        separate ledger.  ``period`` applies only to the periodic units; storage
+        ownership spans every period and is returned regardless.
+        """
         if limit < 1 or limit > 200:
             raise ValueError("limit must be between 1 and 200")
-        stmt = select(self.gpu_credit_ledger_table).where(self.gpu_credit_ledger_table.c.user_id == user_id)
+        stmt = select(self.resource_ledger_table).where(
+            self.resource_ledger_table.c.subject_type == rloan.SUBJECT_USER,
+            self.resource_ledger_table.c.subject_id == user_id,
+        )
+        if unit is not None:
+            stmt = stmt.where(self.resource_ledger_table.c.unit == unit)
         if period is not None:
-            stmt = stmt.where(self.gpu_credit_ledger_table.c.period == period)
-        stmt = stmt.order_by(desc(self.gpu_credit_ledger_table.c.id)).limit(limit)
+            stmt = stmt.where(
+                or_(
+                    self.resource_ledger_table.c.period == period,
+                    self.resource_ledger_table.c.unit == rloan.UNIT_STORAGE_BYTE,
+                )
+            )
+        stmt = stmt.order_by(desc(self.resource_ledger_table.c.id)).limit(limit)
         with self.engine.connect() as conn:
             return [dict(row) for row in conn.execute(stmt).mappings().all()]
 
-    def record_gpu_allocation_start(
+    def list_compute_ledger(
+        self, user_id: int, *, period: str | None = None, limit: int = 50
+    ) -> list[dict[str, Any]]:
+        """The GPU-compute projection of one subject's ledger, newest first."""
+        return self.list_ledger(user_id, unit=rloan.UNIT_GPU_SECOND, period=period, limit=limit)
+
+    def list_policy_audit(self, user_id: int, *, limit: int = 50) -> list[dict[str, Any]]:
+        """Return administrative policy mutations for one subject, newest first."""
+        if limit < 1 or limit > 200:
+            raise ValueError("limit must be between 1 and 200")
+        stmt = (
+            select(self.resource_policy_audit_table)
+            .where(
+                self.resource_policy_audit_table.c.subject_type == rloan.SUBJECT_USER,
+                self.resource_policy_audit_table.c.subject_id == user_id,
+            )
+            .order_by(desc(self.resource_policy_audit_table.c.id))
+            .limit(limit)
+        )
+        with self.engine.connect() as conn:
+            return [dict(row) for row in conn.execute(stmt).mappings().all()]
+
+    def record_allocation_start(
         self,
         *,
         user_id: int,
         task_id: str,
         stage_id: str,
         slurm_job_id: str,
-        gpu_count: int,
+        cpu_cores: int,
+        gpu_count: int = 0,
         started_at: float | None = None,
         required_entitlements: tuple[str, ...] | None = None,
+        denied_reason: str | None = None,
+        gres: str = "",
     ) -> dict[str, Any]:
-        """Record the instant a real Slurm GPU allocation becomes observable."""
-        if gpu_count < 1:
-            raise ValueError("gpu_count must be positive")
+        """Record the instant a real Slurm allocation becomes observable.
+
+        One Slurm allocation is recorded as one fact per accounting unit it
+        consumed — a ``gpu_second`` fact when it holds GPUs, and always a
+        ``cpu_core_second`` fact, because every Slurm allocation is an allocation
+        of CPU cores.  They share a start instant and settle from the same
+        authoritative elapsed duration, and their ``resource_count`` is what the
+        scheduler allocated *in that unit's own terms*: GPUs for the GPU fact,
+        CPU cores for the CPU fact.  CUDA percent and ``/usr/bin/time`` figures
+        are utilization telemetry and are deliberately nowhere here.
+
+        Recording the fact and deciding admission are two separate steps, on
+        purpose.  The allocation rows are written first, unconditionally and
+        idempotently (keyed by ``slurm_job_id``), because the scheduler holding
+        the resources is a fact that exists whether or not this subject is
+        allowed to run the scientific command: a policy decision must never
+        rewrite it into "no allocation".  The quota/permission decision then runs
+        in the same ``BEGIN IMMEDIATE`` transaction as a *grant* that either
+
+        * succeeds — the Task's admission authority is honored (a live reserved
+          hold of its own is not counted against it; every other Task's committed
+          reservation and every unsettled allocation still constrains the
+          balance), the reservation is consumed, and the allocation proceeds; or
+        * is denied — the grant is reported as a separate fact
+          (``granted=False`` plus the reason), the allocation rows stay ACTIVE so
+          the resources actually held are still settled, and the caller withholds
+          the scientific command.  A denied Task still owes for what its wrapper
+          held while the gate was resolved and terminated.
+
+        ``gres`` is preserved as the GPU fact's resource class, so a historical
+        A100 second is never collapsed into an anonymous GPU-second; it is
+        admitted against the deployment's single class-agnostic allowance, which
+        spans every class.
+
+        Returns the ``gpu_second`` fact (a zero-count row when the allocation
+        holds no GPU), extended with ``granted``, ``reason_code``,
+        ``remaining_gpu_seconds``, and ``admitted_by_reservation``;
+        :meth:`list_task_allocations` returns every unit's facts.
+        """
+        if gpu_count < 0:
+            raise ValueError("gpu_count must be non-negative")
+        if cpu_cores < 1:
+            raise ValueError("cpu_cores must be positive")
+        resource_class = rloan.resource_class_for_gres(gres)
         timestamp = time.time() if started_at is None else started_at
-        stmt = sqlite_insert(self.gpu_allocations_table).values(
-            user_id=user_id,
-            task_id=task_id,
-            stage_id=stage_id,
-            slurm_job_id=slurm_job_id,
-            gpu_count=gpu_count,
-            started_at=timestamp,
-            finished_at=None,
-            gpu_seconds=None,
-            status="active",
-            ledger_entry_id=None,
+        actual, granted = None, True
+        with self.engine.connect() as conn:
+            conn.exec_driver_sql("BEGIN IMMEDIATE")
+            try:
+                existing = (
+                    conn.execute(
+                        select(self.resource_allocations_table).where(
+                            self.resource_allocations_table.c.slurm_job_id == slurm_job_id,
+                            self.resource_allocations_table.c.unit == rloan.UNIT_GPU_SECOND,
+                        )
+                    )
+                    .mappings()
+                    .one_or_none()
+                )
+                if existing is not None:
+                    if existing.get("resource_count") is None:
+                        # A weaker source proved only that the job held a node;
+                        # this caller now reports the real shape, so it replaces
+                        # the unknown per unit.  Nothing is settled here — the
+                        # elapsed time still comes from reconciliation — and the
+                        # strongest evidence available is recorded on the fact.
+                        for unit, count in (
+                            (rloan.UNIT_GPU_SECOND, gpu_count),
+                            (rloan.UNIT_CPU_CORE_SECOND, cpu_cores),
+                        ):
+                            conn.execute(
+                                update(self.resource_allocations_table)
+                                .where(
+                                    self.resource_allocations_table.c.slurm_job_id == slurm_job_id,
+                                    self.resource_allocations_table.c.unit == unit,
+                                )
+                                .values(
+                                    resource_count=count,
+                                    resource_class=(
+                                        resource_class if unit == rloan.UNIT_GPU_SECOND else ""
+                                    ),
+                                )
+                            )
+                        existing = (
+                            conn.execute(
+                                select(self.resource_allocations_table).where(
+                                    self.resource_allocations_table.c.slurm_job_id == slurm_job_id,
+                                    self.resource_allocations_table.c.unit
+                                    == rloan.UNIT_GPU_SECOND,
+                                )
+                            )
+                            .mappings()
+                            .one()
+                        )
+                    self._assert_allocation_identity(
+                        existing, user_id=user_id, task_id=task_id, stage_id=stage_id,
+                        gpu_count=gpu_count, resource_class=resource_class,
+                    )
+                    if existing.get("adjudicated_at") is not None:
+                        # Already decided — by an earlier identical start or by a
+                        # retry.  The decision is recorded on the fact, so it is
+                        # re-read here rather than made again against a balance
+                        # the first decision already moved.
+                        denial = existing.get("denial_reason")
+                        recorded = dict(existing)
+                        recorded["granted"] = denial is None
+                        recorded["reason_code"] = (
+                            str(existing.get("denial_code") or denial)
+                            if denial
+                            else rloan.AdmissionReason.ADMITTED.value
+                        )
+                        recorded["remaining_gpu_seconds"] = 0
+                        recorded["admitted_by_reservation"] = False
+                        conn.commit()
+                        return recorded
+                    # No decision yet: this row is the runner observation that the
+                    # wrapper was executing, written before the admission
+                    # decision (possibly before a crash).  The fact exists; the
+                    # grant is decided now, below, without inserting a second set.
+                else:
+                    # The allocation FACT comes first, before any policy: the
+                    # scheduler already handed these resources over, so the rows
+                    # exist whether or not this subject may proceed.  Writing them
+                    # here rather than after the decision is what keeps a denied
+                    # Task from being recorded as "no allocation".
+                    self._insert_allocation_facts(
+                        conn,
+                        user_id=user_id,
+                        task_id=task_id,
+                        stage_id=stage_id,
+                        slurm_job_id=slurm_job_id,
+                        gpu_count=gpu_count,
+                        cpu_cores=cpu_cores,
+                        resource_class=resource_class,
+                        timestamp=timestamp,
+                    )
+                granted, reason_code, remaining, adjudicated = self._grant_allocation_in_connection(
+                    conn,
+                    user_id=user_id,
+                    task_id=task_id,
+                    slurm_job_id=slurm_job_id,
+                    gpu_count=gpu_count,
+                    required_entitlements=required_entitlements,
+                    denied_reason=denied_reason,
+                    timestamp=timestamp,
+                )
+                actual = dict(
+                    conn.execute(
+                        select(self.resource_allocations_table).where(
+                            self.resource_allocations_table.c.slurm_job_id == slurm_job_id,
+                            self.resource_allocations_table.c.unit == rloan.UNIT_GPU_SECOND,
+                        )
+                    )
+                    .mappings()
+                    .one()
+                )
+                # Mark the decision on the fact.  This is what distinguishes
+                # "adjudicated and admitted" from "observed, not yet decided", so
+                # a retry of this same call — after a crash, a duplicate callback,
+                # or a workflow re-entry — reads the decision instead of making a
+                # second one against a balance the first already moved.
+                conn.execute(
+                    update(self.resource_allocations_table)
+                    .where(self.resource_allocations_table.c.slurm_job_id == slurm_job_id)
+                    .values(adjudicated_at=timestamp)
+                )
+                # The allocation FACT exists now, so the reservation has done its
+                # job: it covered the submission until the allocation started,
+                # and the allocation — not the reservation — is what the balance
+                # is charged for from here on.  This does not depend on the
+                # grant: a denial does not put the scheduler's resources back,
+                # so the claim this submission made is consumed either way, and
+                # a denied Task is settled for what its wrapper actually held.
+                self._release_reservation_in_connection(
+                    conn,
+                    task_id=task_id,
+                    reason_code=rloan.ReservationReason.ALLOCATION_STARTED.value,
+                    released_at=timestamp,
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        # Whether the decision was re-read from a recorded fact or just made, the
+        # fact's own denial is the answer the caller acts on.
+        denied = actual.get("denial_reason") is not None
+        recorded = dict(actual)
+        recorded["granted"] = granted and not denied
+        recorded["reason_code"] = (
+            str(actual.get("denial_code") or actual.get("denial_reason")) if denied else reason_code
         )
-        stmt = stmt.on_conflict_do_nothing(
-            index_elements=[self.gpu_allocations_table.c.slurm_job_id]
+        recorded["remaining_gpu_seconds"] = remaining if not denied else 0
+        recorded["admitted_by_reservation"] = adjudicated if not denied else False
+        return recorded
+
+    def observe_allocation_start(
+        self,
+        *,
+        user_id: int,
+        task_id: str,
+        stage_id: str,
+        slurm_job_id: str,
+        cpu_cores: int,
+        gpu_count: int = 0,
+        started_at: float | None = None,
+        gres: str = "",
+    ) -> dict[str, Any]:
+        """Record that the wrapper was observed executing in a Slurm allocation.
+
+        The wrapper prints its own ``$SLURM_JOB_ID`` only from inside the
+        allocation, so this observation is the earliest authoritative
+        compute-node execution evidence — stronger than the queued ``srun``
+        stderr banner, which merely names a request.  It is written *before* and
+        independently of any admission decision, so a process death between the
+        observation and the grant can never erase the fact that resources were
+        occupied: the rows are ``slurm_job_id``-keyed and idempotent, and a
+        restart finds them unsettled and settles them from scheduler evidence.
+
+        The exact elapsed duration is not known here, so the rows carry
+        ``quantity = NULL`` and the ``runner_observation`` provenance — an
+        unknown, never a zero.  :meth:`record_allocation_start` later promotes
+        the same rows to their full lifecycle provenance and makes the grant
+        decision; neither call creates a second fact.
+
+        ``slurm_job_id`` is the allocation identity and is required: an
+        observation with nothing to key it to could not be settled or
+        de-duplicated.  It is written together with the per-unit rows.
+        """
+        if gpu_count < 0:
+            raise ValueError("gpu_count must be non-negative")
+        if cpu_cores < 1:
+            raise ValueError("cpu_cores must be positive")
+        resource_class = rloan.resource_class_for_gres(gres)
+        timestamp = time.time() if started_at is None else started_at
+        with self.engine.connect() as conn:
+            conn.exec_driver_sql("BEGIN IMMEDIATE")
+            try:
+                existing = (
+                    conn.execute(
+                        select(self.resource_allocations_table).where(
+                            self.resource_allocations_table.c.slurm_job_id == slurm_job_id,
+                            self.resource_allocations_table.c.unit == rloan.UNIT_GPU_SECOND,
+                        )
+                    )
+                    .mappings()
+                    .one_or_none()
+                )
+                if existing is not None:
+                    if existing.get("resource_count") is None:
+                        # A weaker source (the scheduler's own output file) proved
+                        # only that the job held a node.  The shape this caller
+                        # reports now is the stronger fact, so it replaces the
+                        # unknown per unit — but nothing is settled here: the
+                        # elapsed time still comes from reconciliation, exactly as
+                        # for any other observation.
+                        for unit, count in (
+                            (rloan.UNIT_GPU_SECOND, gpu_count),
+                            (rloan.UNIT_CPU_CORE_SECOND, cpu_cores),
+                        ):
+                            conn.execute(
+                                update(self.resource_allocations_table)
+                                .where(
+                                    self.resource_allocations_table.c.slurm_job_id == slurm_job_id,
+                                    self.resource_allocations_table.c.unit == unit,
+                                )
+                                .values(
+                                    resource_count=count,
+                                    resource_class=resource_class if unit == rloan.UNIT_GPU_SECOND else "",
+                                    evidence_source=rloan.EvidenceSource.RUNNER_OBSERVATION.value,
+                                    status=rloan.AllocationStatus.ACTIVE.value,
+                                )
+                            )
+                        conn.commit()
+                        return dict(existing)
+                    self._assert_allocation_identity(
+                        existing, user_id=user_id, task_id=task_id, stage_id=stage_id,
+                        gpu_count=gpu_count, resource_class=resource_class,
+                    )
+                    # The fact is durable, so the compute-node receipt that
+                    # carried it here has done its job: dropping it in this same
+                    # transaction is what keeps a restart from folding the same
+                    # receipt in twice.
+                    conn.execute(
+                        delete(self.resource_receipts_table).where(
+                            self.resource_receipts_table.c.task_id == task_id
+                        )
+                    )
+                    conn.commit()
+                    return dict(existing)
+                self._insert_allocation_facts(
+                    conn,
+                    user_id=user_id,
+                    task_id=task_id,
+                    stage_id=stage_id,
+                    slurm_job_id=slurm_job_id,
+                    gpu_count=gpu_count,
+                    cpu_cores=cpu_cores,
+                    resource_class=resource_class,
+                    timestamp=timestamp,
+                    evidence_source=rloan.EvidenceSource.RUNNER_OBSERVATION.value,
+                )
+                # The reservation is handed to the scheduler in the same commit
+                # as the observation: the two facts are written together so that
+                # no durable state has a scheduler-owned reservation without the
+                # allocation its own job id proves.  Idempotent — a Task whose
+                # reservation was already queued or consumed keeps its current
+                # state, and the observation is unaffected.
+                conn.execute(
+                    update(self.resource_reservations_table)
+                    .where(
+                        self.resource_reservations_table.c.task_id == task_id,
+                        self.resource_reservations_table.c.state == rloan.ReservationState.HELD.value,
+                    )
+                    .values(
+                        state=rloan.ReservationState.QUEUED.value,
+                        reason_code=rloan.ReservationReason.DISPATCHED.value,
+                        dispatched_at=timestamp,
+                        scheduler_job_id=str(slurm_job_id),
+                        expires_at=None,
+                    )
+                )
+                # A wrapper-authored receipt taken from the compute node is the
+                # one authoritative record that survives the worker's death.
+                # The allocation fact above is now durable, so the receipt has
+                # done its job; removing it here is what makes the reconciliation
+                # idempotent — a restart either finds a receipt (and folds it in)
+                # or finds the fact, never both.
+                conn.execute(
+                    delete(self.resource_receipts_table).where(
+                        self.resource_receipts_table.c.task_id == task_id
+                    )
+                )
+                row = (
+                    conn.execute(
+                        select(self.resource_allocations_table).where(
+                            self.resource_allocations_table.c.slurm_job_id == slurm_job_id,
+                            self.resource_allocations_table.c.unit == rloan.UNIT_GPU_SECOND,
+                        )
+                    )
+                    .mappings()
+                    .one()
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        return dict(row)
+
+    def allocation_row_exists(self, slurm_job_id: str) -> bool:
+        """Whether any allocation fact — settled, active, or review — exists."""
+        stmt = select(self.resource_allocations_table.c.id).where(
+            self.resource_allocations_table.c.slurm_job_id == slurm_job_id
         )
+        with self.engine.connect() as conn:
+            return conn.execute(stmt).first() is not None
+
+    # -- wrapper-authored execution receipts ---------------------------------
+
+    def record_allocation_receipt(
+        self,
+        *,
+        task_id: str,
+        stage_id: str,
+        slurm_job_id: str,
+        observed_at: float,
+        cpus: int,
+        gpus: int,
+        gres: str = "",
+        authority: str = rloan.SUBJECT_USER,
+    ) -> dict[str, Any]:
+        """Persist the compute node's own record that the wrapper was running.
+
+        The wrapper writes this file the moment it is inside the allocation, and
+        for a worker that died before any other write it is the only surviving
+        evidence that the physical allocation ever existed.  It is keyed by
+        ``task_id`` so exactly one receipt per Task exists, and it is cleared once
+        the canonical allocation rows are written.
+
+        ``observed_at`` is the wrapper's own stamp and is kept as a fact about
+        when the run began, not rewritten to the recovery time.
+        """
+        resource_class = rloan.resource_class_for_gres(gres)
+        # The wrapper's stamp is taken on the compute node; a clock that is
+        # ahead of this server's must not date a receipt into the future where a
+        # later reconciliation would read it as an allocation that has not
+        # started.
+        observed_at = min(float(observed_at), time.time())
+        with self.engine.connect() as conn:
+            conn.exec_driver_sql("BEGIN IMMEDIATE")
+            try:
+                row = conn.execute(
+                    select(self.resource_receipts_table).where(
+                        self.resource_receipts_table.c.task_id == task_id
+                    )
+                ).mappings().first()
+                if row is not None:
+                    # A receipt naming a different job is a replaced allocation:
+                    # the latest observation for this Task wins, so a restart
+                    # reconstructs the one allocation that was actually running.
+                    # The same job keeps its first stamp — the earliest evidence
+                    # of when the run began.
+                    if str(row["slurm_job_id"]) != str(slurm_job_id):
+                        conn.execute(
+                            update(self.resource_receipts_table)
+                            .where(self.resource_receipts_table.c.task_id == task_id)
+                            .values(
+                                slurm_job_id=str(slurm_job_id),
+                                stage_id=stage_id,
+                                observed_at=observed_at,
+                                cpus=cpus,
+                                gpus=gpus,
+                                resource_class=resource_class,
+                                authority=authority,
+                            )
+                        )
+                else:
+                    conn.execute(
+                        sqlite_insert(self.resource_receipts_table).values(
+                            id=f"{task_id}:{slurm_job_id}",
+                            task_id=task_id,
+                            stage_id=stage_id,
+                            slurm_job_id=str(slurm_job_id),
+                            observed_at=observed_at,
+                            cpus=int(cpus),
+                            gpus=int(gpus),
+                            resource_class=resource_class,
+                            authority=authority,
+                        )
+                    )
+                row = conn.execute(
+                    select(self.resource_receipts_table).where(
+                        self.resource_receipts_table.c.task_id == task_id
+                    )
+                ).mappings().one()
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        return dict(row)
+
+    def list_allocation_receipts(self) -> list[dict[str, Any]]:
+        """Every receipt whose allocation fact has not been reconciled yet."""
+        stmt = select(self.resource_receipts_table).order_by(
+            self.resource_receipts_table.c.observed_at
+        )
+        with self.engine.connect() as conn:
+            return [dict(row) for row in conn.execute(stmt).mappings().all()]
+
+    def allocation_receipt_exists(self, slurm_job_id: str) -> bool:
+        """Whether a receipt names this job, i.e. the node proved it was held."""
+        stmt = select(self.resource_receipts_table.c.id).where(
+            self.resource_receipts_table.c.slurm_job_id == str(slurm_job_id)
+        )
+        with self.engine.connect() as conn:
+            return conn.execute(stmt).first() is not None
+
+    def discard_allocation_receipt(self, task_id: str) -> None:
+        """Drop a Task's receipt once its allocation fact is durable."""
         with self.engine.begin() as conn:
-            existing = (
-                conn.execute(
-                    select(self.gpu_allocations_table).where(
-                        self.gpu_allocations_table.c.slurm_job_id == slurm_job_id
-                    )
+            conn.execute(
+                delete(self.resource_receipts_table).where(
+                    self.resource_receipts_table.c.task_id == task_id
                 )
-                .mappings()
-                .one_or_none()
             )
-            if existing is not None:
-                expected = (user_id, task_id, stage_id, gpu_count)
-                actual = (
-                    existing["user_id"],
-                    existing["task_id"],
-                    existing["stage_id"],
-                    existing["gpu_count"],
-                )
-                if actual != expected:
-                    raise ValueError(
-                        "Slurm job ID is already associated with a different GPU allocation"
-                    )
-                return dict(existing)
-            if required_entitlements is not None:
-                self._require_gpu_authorization(conn, user_id, required_entitlements, timestamp)
-            period = self._gpu_period(timestamp)
-            self._ensure_monthly_gpu_grant(conn, user_id, period, timestamp)
-            balance = conn.execute(
-                select(func.sum(self.gpu_credit_ledger_table.c.gpu_seconds)).where(
-                    self.gpu_credit_ledger_table.c.user_id == user_id,
-                    self.gpu_credit_ledger_table.c.period == period,
-                )
-            ).scalar()
-            if int(balance or 0) <= 0:
-                raise GPUCreditUnavailableError("GPU credit balance is exhausted")
-            conn.execute(stmt)
-            row = (
-                conn.execute(
-                    select(self.gpu_allocations_table).where(
-                        self.gpu_allocations_table.c.slurm_job_id == slurm_job_id
-                    )
-                )
-                .mappings()
-                .one()
-            )
-        expected = (user_id, task_id, stage_id, gpu_count)
-        actual = (row["user_id"], row["task_id"], row["stage_id"], row["gpu_count"])
+
+    def observe_allocation_receipt(
+        self, receipt: dict[str, Any], *, user_id: int, stage_id: str | None = None, gres: str = ""
+    ) -> dict[str, Any]:
+        """Fold one wrapper receipt into the canonical allocation fact.
+
+        The receipt is consumed idempotently into the same ``slurm_job_id``-keyed
+        observation the live path writes — never into a second row family — and
+        the receipt row is dropped in the same transition that makes the fact
+        durable.  Recovering the same receipt twice, or recovering one the runner
+        already committed, therefore produces exactly one allocation.
+
+        ``stage_id`` falls back to the receipt's own record and ``gres`` to the
+        class it reported; the caller can supply the class from the Task's own
+        resource snapshot when the node could not name one.
+        """
+        observed = self.observe_allocation_start(
+            user_id=user_id,
+            task_id=str(receipt["task_id"]),
+            stage_id=stage_id if stage_id is not None else str(receipt.get("stage_id") or ""),
+            slurm_job_id=str(receipt["slurm_job_id"]),
+            cpu_cores=max(1, int(receipt.get("cpus") or 0)),
+            gpu_count=int(receipt.get("gpus") or 0),
+            started_at=float(receipt["observed_at"]),
+            gres=gres or str(receipt.get("resource_class") or ""),
+        )
+        return observed
+
+    @staticmethod
+    def _assert_allocation_identity(
+        existing, *, user_id: int, task_id: str, stage_id: str, gpu_count: int, resource_class: str
+    ) -> None:
+        """Fail closed if a Slurm job id is reused for a different allocation."""
+        expected = (user_id, task_id, stage_id, gpu_count, resource_class)
+        actual = (
+            existing["subject_id"],
+            existing["task_id"],
+            existing["stage_id"],
+            existing["resource_count"],
+            existing["resource_class"],
+        )
         if actual != expected:
             raise ValueError(
                 "Slurm job ID is already associated with a different GPU allocation"
             )
+
+    def _insert_allocation_facts(
+        self,
+        conn,
+        *,
+        user_id: int,
+        task_id: str,
+        stage_id: str,
+        slurm_job_id: str,
+        gpu_count: int | None,
+        cpu_cores: int | None,
+        resource_class: str,
+        timestamp: float,
+        evidence_source: str = rloan.EvidenceSource.ALLOCATION_LIFECYCLE.value,
+    ) -> None:
+        """Write one ACTIVE fact per accounting unit the allocation held.
+
+        ``evidence_source`` names what the writer actually observed: the
+        allocation lifecycle, or the bare runner observation that the wrapper was
+        executing before any admission decision was made.
+
+        A ``None`` count records an *unknown* shape rather than a zero — the
+        scheduler's own output file proves the job held a node, but nothing says
+        how much of either unit it held.  Such a row is left for review and is
+        never settled to a number; a zero would be the false claim that the job
+        held none of that unit.
+        """
+        for unit, count, klass in (
+            (rloan.UNIT_GPU_SECOND, gpu_count, resource_class),
+            (rloan.UNIT_CPU_CORE_SECOND, cpu_cores, ""),
+        ):
+            conn.execute(
+                sqlite_insert(self.resource_allocations_table).on_conflict_do_nothing(
+                    index_elements=[
+                        self.resource_allocations_table.c.slurm_job_id,
+                        self.resource_allocations_table.c.unit,
+                    ]
+                ).values(
+                    subject_type=rloan.SUBJECT_USER,
+                    subject_id=user_id,
+                    task_id=task_id,
+                    stage_id=stage_id,
+                    slurm_job_id=slurm_job_id,
+                    unit=unit,
+                    resource_class=klass,
+                    resource_count=count,
+                    started_at=timestamp,
+                    finished_at=None,
+                    quantity=None,
+                    status=rloan.AllocationStatus.ACTIVE.value,
+                    evidence_source=evidence_source,
+                    denial_reason=None,
+                    denial_code=None,
+                    adjudicated_at=None,
+                    ledger_entry_id=None,
+                )
+            )
+
+    def observe_unknown_shape_allocation(
+        self,
+        *,
+        user_id: int,
+        task_id: str,
+        slurm_job_id: str,
+        started_at: float,
+        stage_id: str = "",
+    ) -> dict[str, Any]:
+        """Record that an allocation happened, with no shape anyone observed.
+
+        The scheduler's own per-job output file is created the instant a job is
+        allocated a node, so it survives a kill that lands between "allocated a
+        node" and the job's first statement — the one window no in-job mechanism
+        can cover.  What it proves is exactly one thing: a scheduler job held
+        real resources.  It says nothing about how many GPUs or cores, so the
+        facts it produces carry a NULL ``resource_count`` and are marked for
+        review: an unknown, never a zero, and never a number invented from a
+        policy default.
+
+        Idempotent on ``slurm_job_id`` like every other observation, and it never
+        overwrites a fact a stronger source already recorded.
+        """
+        if user_id <= 0:
+            raise ValueError("user_id must be positive")
+        with self.engine.connect() as conn:
+            conn.exec_driver_sql("BEGIN IMMEDIATE")
+            try:
+                existing = (
+                    conn.execute(
+                        select(self.resource_allocations_table).where(
+                            self.resource_allocations_table.c.slurm_job_id == slurm_job_id,
+                            self.resource_allocations_table.c.unit == rloan.UNIT_GPU_SECOND,
+                        )
+                    )
+                    .mappings()
+                    .one_or_none()
+                )
+                if existing is not None:
+                    conn.commit()
+                    return dict(existing)
+                self._insert_allocation_facts(
+                    conn,
+                    user_id=user_id,
+                    task_id=task_id,
+                    stage_id=stage_id,
+                    slurm_job_id=slurm_job_id,
+                    gpu_count=None,
+                    cpu_cores=None,
+                    resource_class="",
+                    timestamp=started_at,
+                    evidence_source=rloan.EvidenceSource.SCHEDULER_LOG.value,
+                )
+                conn.execute(
+                    update(self.resource_allocations_table)
+                    .where(self.resource_allocations_table.c.slurm_job_id == slurm_job_id)
+                    .values(status=rloan.AllocationStatus.REVIEW.value)
+                )
+                # The reservation is handed to the scheduler in the same commit:
+                # the request exists, its job id proves the scheduler owns it, and
+                # the hold must stop being a pre-dispatch hold a timer may free.
+                conn.execute(
+                    update(self.resource_reservations_table)
+                    .where(
+                        self.resource_reservations_table.c.task_id == task_id,
+                        self.resource_reservations_table.c.state == rloan.ReservationState.HELD.value,
+                    )
+                    .values(
+                        state=rloan.ReservationState.QUEUED.value,
+                        reason_code=rloan.ReservationReason.DISPATCHED.value,
+                        dispatched_at=started_at,
+                        scheduler_job_id=str(slurm_job_id),
+                        expires_at=None,
+                    )
+                )
+                row = (
+                    conn.execute(
+                        select(self.resource_allocations_table).where(
+                            self.resource_allocations_table.c.slurm_job_id == slurm_job_id,
+                            self.resource_allocations_table.c.unit == rloan.UNIT_GPU_SECOND,
+                        )
+                    )
+                    .mappings()
+                    .one()
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
         return dict(row)
 
-    def settle_gpu_allocation(
+    def _grant_allocation_in_connection(
+        self,
+        conn,
+        *,
+        user_id: int,
+        task_id: str,
+        slurm_job_id: str,
+        gpu_count: int,
+        required_entitlements: tuple[str, ...] | None,
+        denied_reason: str | None,
+        timestamp: float,
+    ) -> tuple[bool, str, int, bool]:
+        """Decide whether a recorded allocation may run the scientific command.
+
+        Returns ``(granted, reason_code, remaining, admitted_by_reservation)``.
+        A denial is a *fact about the grant*, not a rollback: it is recorded on
+        the allocation rows so the resources the wrapper held are still settled
+        under the reason the Task was stopped, and the caller withholds the
+        command.  Permission (#55 authorization) and quota are both checked here;
+        a CPU-only allocation (``gpu_count == 0``) needs no quota decision.
+
+        ``denied_reason`` is the caller's own pre-decision — a runner that is not
+        ready, checked outside this store — so it denies here under the same rule
+        and records the reason it was refused.
+        """
+        if denied_reason is not None:
+            # The caller's own pre-decision (a runner that is not ready) denies
+            # any allocation, GPU or CPU: the reason is recorded and the fact
+            # stands for what was actually held.
+            self._record_denial_in_connection(
+                conn,
+                slurm_job_id=slurm_job_id,
+                reason=denied_reason,
+                reason_code=rloan.AdmissionReason.RUNNER_READINESS_UNAVAILABLE.value,
+            )
+            return False, rloan.AdmissionReason.RUNNER_READINESS_UNAVAILABLE.value, 0, False
+        if gpu_count < 1:
+            return True, rloan.AdmissionReason.ADMITTED.value, 0, False
+        if required_entitlements is not None:
+            try:
+                self._require_gpu_authorization(conn, user_id, required_entitlements, timestamp)
+            except GPUAuthorizationUnavailableError as exc:
+                self._record_denial_in_connection(
+                    conn,
+                    slurm_job_id=slurm_job_id,
+                    reason=str(exc),
+                    reason_code=rloan.AdmissionReason.AUTHORIZATION_UNAVAILABLE.value,
+                )
+                return False, rloan.AdmissionReason.AUTHORIZATION_UNAVAILABLE.value, 0, False
+        try:
+            remaining, adjudicated = self._authorize_allocation_start_in_connection(
+                conn, user_id=user_id, task_id=task_id, at=timestamp, slurm_job_id=slurm_job_id
+            )
+        except GPUCreditUnavailableError as exc:
+            self._record_denial_in_connection(
+                conn,
+                slurm_job_id=slurm_job_id,
+                reason=str(exc),
+                reason_code=rloan.AdmissionReason.COMPUTE_EXHAUSTED.value,
+            )
+            return False, rloan.AdmissionReason.COMPUTE_EXHAUSTED.value, 0, False
+        return True, rloan.AdmissionReason.ADMITTED.value, remaining, adjudicated
+
+    def _record_denial_in_connection(
+        self, conn, *, slurm_job_id: str, reason: str, reason_code: str | None = None
+    ) -> None:
+        """Write the denial onto the allocation rows, without erasing the fact.
+
+        ``reason_code`` stores the bounded vocabulary value the caller acts on;
+        the free-form ``reason`` is kept as the human-readable detail.  A
+        release/reservation decision needs one canonical, comparable code, never
+        a message string.
+        """
+        values: dict[str, Any] = {"denial_reason": reason[:512]}
+        if reason_code is not None:
+            values["denial_code"] = reason_code
+        conn.execute(
+            update(self.resource_allocations_table)
+            .where(
+                self.resource_allocations_table.c.slurm_job_id == slurm_job_id,
+                self.resource_allocations_table.c.status == rloan.AllocationStatus.ACTIVE.value,
+            )
+            .values(**values)
+        )
+
+    def settle_allocation(
         self, slurm_job_id: str, *, finished_at: float | None = None
     ) -> dict[str, Any]:
-        """Append actual GPU usage once and return the durable allocation record."""
+        """Append actual usage once per unit and return the ``gpu_second`` fact.
+
+        The elapsed duration is measured here from the recorded allocation start,
+        which is exactly the authoritative elapsed duration the scheduler-side
+        settlement passes in, so both entry points charge the same CPU
+        core-seconds and GPU-seconds.
+        """
         timestamp = time.time() if finished_at is None else finished_at
         with self.engine.connect() as conn:
             row = conn.execute(
-                select(self.gpu_allocations_table).where(
-                    self.gpu_allocations_table.c.slurm_job_id == slurm_job_id
+                select(self.resource_allocations_table).where(
+                    self.resource_allocations_table.c.slurm_job_id == slurm_job_id,
+                    self.resource_allocations_table.c.unit == rloan.UNIT_GPU_SECOND,
                 )
             ).mappings().one_or_none()
         if row is None:
-            raise ValueError(f"Unknown Slurm GPU allocation: {slurm_job_id}")
+            raise ValueError(f"Unknown Slurm allocation: {slurm_job_id}")
         elapsed_seconds = max(0, math.ceil(timestamp - float(row["started_at"])))
-        return self.settle_gpu_allocation_elapsed(
+        return self.settle_allocation_elapsed(
             slurm_job_id,
             elapsed_seconds=elapsed_seconds,
             finished_at=timestamp,
         )
 
-    def settle_gpu_allocation_elapsed(
+    def settle_allocation_elapsed(
         self,
         slurm_job_id: str,
         *,
         elapsed_seconds: int,
         finished_at: float | None = None,
+        evidence_source: str = rloan.EvidenceSource.ALLOCATION_LIFECYCLE.value,
     ) -> dict[str, Any]:
-        """Settle once from an authoritative allocation elapsed duration."""
+        """Settle every unit of one allocation from one authoritative elapsed time.
+
+        Usage is recorded per unit from the *allocation*, never from utilization:
+        ``resource_count`` is what the scheduler allocated (GPUs for
+        ``gpu_second``, cores for ``cpu_core_second``) and ``elapsed_seconds`` is
+        the authoritative allocation duration, so a GPU Task and a CPU-only Task
+        are each charged for exactly what they held.
+
+        Idempotent by construction: each unit's fact has its own
+        ``usage:<unit>:<slurm_job_id>`` key, and a unit already settled is left
+        exactly as recorded — a lost response, a retried callback, and a
+        reconciliation pass all observe the same single fact.  Each unit carries
+        its own status, so ``mark_allocation_for_review`` marking one unknown
+        leaves the other settleable and no unit is ever charged a fabricated
+        zero.
+        """
         if elapsed_seconds < 0:
             raise ValueError("elapsed_seconds must be non-negative")
         timestamp = time.time() if finished_at is None else finished_at
         with self.engine.begin() as conn:
-            row = (
+            rows = (
                 conn.execute(
-                    select(self.gpu_allocations_table).where(
-                        self.gpu_allocations_table.c.slurm_job_id == slurm_job_id
+                    select(self.resource_allocations_table)
+                    .where(self.resource_allocations_table.c.slurm_job_id == slurm_job_id)
+                    .order_by(self.resource_allocations_table.c.unit)
+                )
+                .mappings()
+                .all()
+            )
+            if not rows:
+                raise ValueError(f"Unknown Slurm allocation: {slurm_job_id}")
+            gpu_row = None
+            for row in rows:
+                if str(row["unit"]) == rloan.UNIT_GPU_SECOND:
+                    gpu_row = row
+                if row["status"] == rloan.AllocationStatus.SETTLED.value:
+                    continue
+                if row["resource_count"] is None:
+                    # The allocation's shape was never recorded — the scheduler's
+                    # own output file proves it held a node, but nothing says how
+                    # many GPUs or cores it held.  Charging it would invent a
+                    # quantity, and charging it zero would report a real
+                    # allocation as no usage at all, so it is left for an
+                    # operator: the elapsed time is known now, but the fact it
+                    # would multiply is not.
+                    conn.execute(
+                        update(self.resource_allocations_table)
+                        .where(self.resource_allocations_table.c.id == row["id"])
+                        .values(
+                            status=rloan.AllocationStatus.REVIEW.value,
+                            evidence_source=evidence_source,
+                        )
+                    )
+                    continue
+                allocated = int(row["resource_count"])
+                if allocated <= 0:
+                    # The allocation held none of this unit — a CPU-only Task
+                    # holds no GPU.  There is no consumption to record, and a
+                    # zero-quantity usage fact would be a ledger row claiming a
+                    # measurement where the truth is simply "none allocated".
+                    conn.execute(
+                        update(self.resource_allocations_table)
+                        .where(self.resource_allocations_table.c.id == row["id"])
+                        .values(
+                            finished_at=timestamp,
+                            quantity=0,
+                            status=rloan.AllocationStatus.SETTLED.value,
+                            evidence_source=evidence_source,
+                            ledger_entry_id=None,
+                        )
+                    )
+                    continue
+                quantity = allocated * elapsed_seconds
+                idempotency_key = f"usage:{row['unit']}:{slurm_job_id}"
+                result = conn.execute(
+                    sqlite_insert(self.resource_ledger_table)
+                    .values(
+                        subject_type=rloan.SUBJECT_USER,
+                        subject_id=row["subject_id"],
+                        period=self._period_for_unit(row["unit"], float(row["started_at"])),
+                        kind=rloan.LedgerKind.USAGE.value,
+                        unit=row["unit"],
+                        resource_class=row["resource_class"],
+                        quantity=-quantity,
+                        task_id=row["task_id"],
+                        stage_id=row["stage_id"],
+                        slurm_job_id=slurm_job_id,
+                        actor_user_id=None,
+                        reason="Actual Slurm allocation time",
+                        reason_code=rloan.LedgerReason.ACTUAL_ALLOCATION.value,
+                        evidence_source=evidence_source,
+                        idempotency_key=idempotency_key,
+                        created_at=timestamp,
+                    )
+                    .on_conflict_do_nothing(
+                        index_elements=[self.resource_ledger_table.c.idempotency_key]
+                    )
+                )
+                if result.rowcount:
+                    ledger_id = result.inserted_primary_key[0]
+                else:
+                    ledger_id = conn.execute(
+                        select(self.resource_ledger_table.c.id).where(
+                            self.resource_ledger_table.c.idempotency_key == idempotency_key
+                        )
+                    ).scalar_one()
+                conn.execute(
+                    update(self.resource_allocations_table)
+                    .where(self.resource_allocations_table.c.id == row["id"])
+                    .values(
+                        finished_at=timestamp,
+                        quantity=quantity,
+                        status=rloan.AllocationStatus.SETTLED.value,
+                        evidence_source=evidence_source,
+                        ledger_entry_id=ledger_id,
+                    )
+                )
+            settled = (
+                conn.execute(
+                    select(self.resource_allocations_table).where(
+                        self.resource_allocations_table.c.slurm_job_id == slurm_job_id,
+                        self.resource_allocations_table.c.unit == rloan.UNIT_GPU_SECOND,
                     )
                 )
                 .mappings()
                 .one_or_none()
             )
-            if row is None:
-                raise ValueError(f"Unknown Slurm GPU allocation: {slurm_job_id}")
-            if row["status"] == "settled":
-                return dict(row)
-            gpu_seconds = int(row["gpu_count"]) * elapsed_seconds
-            ledger_stmt = (
-                sqlite_insert(self.gpu_credit_ledger_table)
-                .values(
-                    user_id=row["user_id"],
-                    period=self._gpu_period(float(row["started_at"])),
-                    kind="usage",
-                    gpu_seconds=-gpu_seconds,
-                    task_id=row["task_id"],
-                    stage_id=row["stage_id"],
-                    slurm_job_id=slurm_job_id,
-                    actor_user_id=None,
-                    reason="Actual Slurm GPU allocation time",
-                    idempotency_key=f"usage:{slurm_job_id}",
-                    created_at=timestamp,
-                )
-                .on_conflict_do_nothing(
-                    index_elements=[self.gpu_credit_ledger_table.c.idempotency_key]
+        if settled is not None:
+            return dict(settled)
+        # No GPU fact exists for this job (it was recorded by the migrated
+        # CPU-only path), so answer with the unit that does.
+        return dict(rows[0])
+
+    def mark_allocation_for_review(self, slurm_job_id: str) -> bool:
+        """Expose the units of one allocation whose authoritative elapsed time is unavailable.
+
+        Returns whether the allocation had anything left to review, and marks
+        every unsettled unit — an unknown elapsed duration is a fact about the
+        allocation, not about one of its units, so a GPU fact and a CPU fact that
+        shared the allocation must not disagree about it.
+        """
+        stmt = (
+            update(self.resource_allocations_table)
+            .where(
+                self.resource_allocations_table.c.slurm_job_id == slurm_job_id,
+                self.resource_allocations_table.c.status != rloan.AllocationStatus.SETTLED.value,
+            )
+            .values(status=rloan.AllocationStatus.REVIEW.value)
+        )
+        with self.engine.begin() as conn:
+            return conn.execute(stmt).rowcount >= 1
+
+    def list_unsettled_allocations(self) -> list[dict[str, Any]]:
+        """Every unit fact still awaiting its authoritative elapsed duration.
+
+        Ordered by allocation start and then by unit, so a caller reading
+        ``[0]`` gets the ``cpu_core_second`` fact of the allocation, exactly as
+        it got the sole fact before the CPU unit existed.
+        """
+        stmt = (
+            select(self.resource_allocations_table)
+            .where(
+                self.resource_allocations_table.c.status.in_(
+                    (rloan.AllocationStatus.ACTIVE.value, rloan.AllocationStatus.REVIEW.value)
                 )
             )
-            result = conn.execute(ledger_stmt)
-            if result.rowcount:
-                ledger_id = result.inserted_primary_key[0]
-            else:
-                ledger_id = conn.execute(
-                    select(self.gpu_credit_ledger_table.c.id).where(
-                        self.gpu_credit_ledger_table.c.idempotency_key
-                        == f"usage:{slurm_job_id}"
+            .order_by(
+                self.resource_allocations_table.c.started_at,
+                self.resource_allocations_table.c.unit,
+                self.resource_allocations_table.c.id,
+            )
+        )
+        with self.engine.connect() as conn:
+            return [dict(row) for row in conn.execute(stmt).mappings().all()]
+
+    def list_task_allocations(self, task_id: str) -> list[dict[str, Any]]:
+        """Return allocation audit rows for one Task, ordered by allocation start."""
+        stmt = (
+            select(self.resource_allocations_table)
+            .where(self.resource_allocations_table.c.task_id == task_id)
+            .order_by(self.resource_allocations_table.c.started_at, self.resource_allocations_table.c.id)
+        )
+        with self.engine.connect() as conn:
+            return [dict(row) for row in conn.execute(stmt).mappings().all()]
+
+    # -- Admission reservations ---------------------------------------------
+
+    @staticmethod
+    def _reservation_id() -> str:
+        return secrets.token_hex(16)
+
+    def reserve_compute_admission(
+        self,
+        *,
+        user_id: int,
+        task_id: str,
+        gres: str = "",
+        at: float | None = None,
+        ttl_seconds: float = rloan.RESERVATION_TTL_SECONDS,
+        reason_code: str = rloan.ReservationReason.ADMISSION_RESERVED.value,
+    ) -> dict[str, Any]:
+        """Take a race-safe pre-dispatch admission reservation for one Task, or refuse.
+
+        The decision and the reservation are one ``BEGIN IMMEDIATE`` transaction,
+        so a remaining-quota check is never a read-then-act race: two concurrent
+        submissions competing for the final entitlement cannot both take it.
+        The reservation is bounded by policy (see
+        :func:`resource_ledger.admission_hold_quantity`) and capped by the
+        remaining balance, so the *last* unit of entitlement admits exactly one
+        submission and the other gets an explicit refusal instead of being
+        dispatched anyway.
+
+        What comes back is a *pre-dispatch* reservation: it carries the TTL that
+        bounds the submit-to-dispatch window, and it stops being TTL-reclaimable
+        the moment the Slurm request is dispatched
+        (:meth:`record_reservation_dispatch`).  Counting it as committed
+        entitlement is what keeps a second submission from re-taking the final
+        unit while this one is still on its way to the scheduler.
+
+        The allowance is deployment-wide, so the decision is made on the
+        class-agnostic scope: a request for ``a100`` consumes the same balance a
+        request for an untyped GPU would, and the requested class is preserved on
+        the reservation and the resulting allocation rather than opening a
+        per-class budget.  ``gres`` is therefore recorded, not enforced.
+        """
+        timestamp = time.time() if at is None else at
+        resource_class = rloan.resource_class_for_gres(gres)
+        period = self._gpu_period(timestamp)
+        with self.engine.connect() as conn:
+            conn.exec_driver_sql("BEGIN IMMEDIATE")
+            try:
+                self._ensure_monthly_grant(conn, user_id, period, "", timestamp)
+                rows = conn.execute(
+                    select(self.resource_ledger_table).where(
+                        self.resource_ledger_table.c.subject_type == rloan.SUBJECT_USER,
+                        self.resource_ledger_table.c.subject_id == user_id,
+                        self.resource_ledger_table.c.unit == rloan.UNIT_GPU_SECOND,
+                        self.resource_ledger_table.c.period == period,
                     )
-                ).scalar_one()
+                ).mappings().all()
+                totals = rloan.summarize_ledger(
+                    rows, unit=rloan.UNIT_GPU_SECOND, resource_class="", period=period
+                )
+                committed = self._committed_reservation_quantity_in_connection(
+                    conn, user_id, rloan.UNIT_GPU_SECOND
+                )
+                remaining = int(totals["remaining"]) - committed
+                # Unsettled usage is a known lower bound, not a zero.  The hold
+                # is taken against the balance *after* reserving the worst case
+                # of what is already running, so a user whose authoritative
+                # elapsed time is still unknown is never admitted as if they had
+                # consumed nothing.
+                _, unsettled = self._unsettled_in_connection(
+                    conn, user_id, rloan.UNIT_GPU_SECOND, "", timestamp
+                )
+                remaining -= unsettled
+                quantity = rloan.admission_hold_quantity(remaining, rloan.UNIT_GPU_SECOND)
+                if quantity <= 0:
+                    conn.commit()
+                    return {
+                        "allowed": False,
+                        "reason_code": rloan.AdmissionReason.COMPUTE_EXHAUSTED.value,
+                        "reservation_id": None,
+                        "quantity": 0,
+                        "remaining": remaining,
+                        "unsettled": unsettled,
+                        "resource_class": resource_class,
+                        "period": period,
+                    }
+                reservation_id = self._reservation_id()
+                inserted = conn.execute(
+                    sqlite_insert(self.resource_reservations_table)
+                    .values(
+                        id=reservation_id,
+                        subject_type=rloan.SUBJECT_USER,
+                        subject_id=user_id,
+                        unit=rloan.UNIT_GPU_SECOND,
+                        resource_class=resource_class,
+                        quantity=quantity,
+                        task_id=task_id,
+                        state=rloan.ReservationState.HELD.value,
+                        reason_code=reason_code,
+                        created_at=timestamp,
+                        expires_at=timestamp + ttl_seconds,
+                        dispatched_at=None,
+                        scheduler_job_id=None,
+                        released_at=None,
+                    )
+                    .on_conflict_do_nothing(
+                        index_elements=[self.resource_reservations_table.c.task_id],
+                        index_where=text("state IN ('held', 'queued')"),
+                    )
+                )
+                if not inserted.rowcount:
+                    # This Task already holds entitlement.  Answering with a
+                    # bounded refusal keeps the caller on its decision path: a
+                    # resubmission of a Task whose hold is still live is exactly
+                    # the case the caller already knows how to report.
+                    conn.commit()
+                    return {
+                        "allowed": False,
+                        "reason_code": rloan.AdmissionReason.COMPUTE_EXHAUSTED.value,
+                        "reservation_id": None,
+                        "quantity": 0,
+                        "remaining": remaining,
+                        "unsettled": unsettled,
+                        "resource_class": resource_class,
+                        "period": period,
+                    }
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        return {
+            "allowed": True,
+            "reason_code": reason_code,
+            "reservation_id": reservation_id,
+            "quantity": quantity,
+            "remaining": remaining - quantity,
+            "unsettled": unsettled,
+            "resource_class": resource_class,
+            "period": period,
+        }
+
+    def _committed_reservation_quantity_in_connection(self, conn, user_id: int, unit: str) -> int:
+        """Live entitlement staked by this subject, in *unit*.
+
+        Both ownership modes count: a pre-dispatch reservation the submitter is
+        still dispatching and a scheduler-owned queued commitment are the same
+        claim on the balance, and a balance that counted only one of them would
+        hand the final entitlement out twice.
+        """
+        return int(
             conn.execute(
-                update(self.gpu_allocations_table)
-                .where(self.gpu_allocations_table.c.id == row["id"])
+                select(func.coalesce(func.sum(self.resource_reservations_table.c.quantity), 0)).where(
+                    self.resource_reservations_table.c.subject_id == user_id,
+                    self.resource_reservations_table.c.unit == unit,
+                    self.resource_reservations_table.c.state.in_(rloan.COMMITTED_RESERVATION_STATES),
+                )
+            ).scalar_one()
+        )
+
+    def record_reservation_dispatch(
+        self, *, task_id: str, slurm_job_id: str, at: float | None = None
+    ) -> bool:
+        """Hand a Task's reservation to the scheduler: held -> queued.
+
+        Called once the Slurm request actually exists.  After this the
+        reservation has no wall-clock expiry — it is owned by that Task until a
+        canonical transition releases it — because the request may legitimately
+        wait in the scheduler's queue for longer than any TTL, and reclaiming it
+        meanwhile would let a competing submission consume entitlement the
+        queued request is about to use.
+
+        ``slurm_job_id`` is written in the same statement as the state change, so
+        a queued reservation is never observable without the scheduler identity
+        that justifies it.  That is what makes the maintenance reclaim safe: a
+        pass reading this row always sees the request's own name, so it can never
+        mistake a mid-dispatch window for "no request exists".  Idempotent and
+        race-safe: only a live ``held`` row transitions, and a second call for an
+        already-queued or already-released Task is a no-op returning ``False``.
+        """
+        timestamp = time.time() if at is None else at
+        with self.engine.begin() as conn:
+            result = conn.execute(
+                update(self.resource_reservations_table)
+                .where(
+                    self.resource_reservations_table.c.task_id == task_id,
+                    self.resource_reservations_table.c.state == rloan.ReservationState.HELD.value,
+                )
                 .values(
-                    finished_at=timestamp,
-                    gpu_seconds=gpu_seconds,
-                    status="settled",
-                    ledger_entry_id=ledger_id,
+                    state=rloan.ReservationState.QUEUED.value,
+                    reason_code=rloan.ReservationReason.DISPATCHED.value,
+                    dispatched_at=timestamp,
+                    scheduler_job_id=str(slurm_job_id),
+                    expires_at=None,
                 )
             )
-            settled = (
+            return result.rowcount == 1
+
+    def _authorize_allocation_start_in_connection(
+        self, conn, *, user_id: int, task_id: str, at: float, slurm_job_id: str
+    ) -> tuple[int, bool]:
+        """Admit one allocation start against the balance *without* its own hold.
+
+        A live reservation owned by *task_id* is this Task's admission authority:
+        the hold that got the submission past admission is not also a competing
+        claim on the same balance, so a Task holding the final entitlement is
+        never refused by its own reservation.  Every OTHER committed reservation
+        (another Task's hold or queued commitment) and every unsettled allocation
+        still counts, so the atomic decision is as strict as admission was.
+
+        With no live hold for this Task — a reservation that expired while the
+        request waited, or a later workflow stage whose predecessor already
+        consumed one — the current balance is re-evaluated here in the same
+        transaction that writes the allocation, and the allocation is refused
+        rather than charged against a balance that cannot cover it.
+
+        Returns ``(remaining_from_this_decision, own_hold_is_authority)``, which
+        the caller reports: the pair says both what the balance looked like and
+        whether the Task was admitted on its own reservation or on permission
+        that had to be re-established.
+
+        Called inside ``BEGIN IMMEDIATE``, so the answer and the rows it
+        authorizes are one decision: no separate reader can see a different
+        entitlement than the one this transition acted on.
+        """
+        period = self._gpu_period(at)
+        self._ensure_monthly_grant(conn, user_id, period, "", at)
+        rows = conn.execute(
+            select(self.resource_ledger_table).where(
+                self.resource_ledger_table.c.subject_type == rloan.SUBJECT_USER,
+                self.resource_ledger_table.c.subject_id == user_id,
+                self.resource_ledger_table.c.unit == rloan.UNIT_GPU_SECOND,
+                self.resource_ledger_table.c.period == period,
+            )
+        ).mappings().all()
+        totals = rloan.summarize_ledger(rows, unit=rloan.UNIT_GPU_SECOND, resource_class="", period=period)
+        own_hold = conn.execute(
+            select(func.coalesce(func.sum(self.resource_reservations_table.c.quantity), 0)).where(
+                self.resource_reservations_table.c.task_id == task_id,
+                self.resource_reservations_table.c.unit == rloan.UNIT_GPU_SECOND,
+                self.resource_reservations_table.c.state.in_(rloan.COMMITTED_RESERVATION_STATES),
+            )
+        ).scalar_one()
+        other_holds = conn.execute(
+            select(func.coalesce(func.sum(self.resource_reservations_table.c.quantity), 0)).where(
+                self.resource_reservations_table.c.subject_id == user_id,
+                self.resource_reservations_table.c.unit == rloan.UNIT_GPU_SECOND,
+                self.resource_reservations_table.c.state.in_(rloan.COMMITTED_RESERVATION_STATES),
+                self.resource_reservations_table.c.task_id != task_id,
+            )
+        ).scalar_one()
+        _, unsettled = self._unsettled_in_connection(
+            conn, user_id, rloan.UNIT_GPU_SECOND, "", at, exclude_slurm_job_id=slurm_job_id
+        )
+        remaining = int(totals["remaining"]) - int(other_holds) - int(unsettled)
+        # A live reservation owned by this Task is its authority — but only
+        # while the position it was admitted against still stands.  ``own_hold``
+        # is excluded from ``remaining``, so it is added back for the test: the
+        # Task is fine as long as its own unit (plus whatever is left, if that
+        # is positive) covers the negative side, which is the overdraft case the
+        # account deliberately allows.  When other work of the same subject has
+        # since spent the balance the Task was admitted on, the hold no longer
+        # buys anything and the start falls through to the refusal rather than
+        # charging a balance that cannot cover it — the same answer an identical
+        # start without a hold gets.
+        if int(own_hold) > 0:
+            position = remaining + int(own_hold)
+            if position >= 0:
+                return remaining, True
+        if remaining <= 0:
+            raise GPUCreditUnavailableError("GPU credit balance is exhausted")
+        return remaining, False
+
+    def _release_reservation_in_connection(
+        self, conn, *, task_id: str, reason_code: str, released_at: float
+    ) -> bool:
+        """Release one Task's live reservation, whichever ownership mode it holds.
+
+        A release is a canonical transition (allocation started, dispatch failed,
+        Task deleted, or an explicit release) and applies to a pre-dispatch hold
+        and a queued commitment alike; only a TTL expiry is restricted to the
+        pre-dispatch state.
+        """
+        result = conn.execute(
+            update(self.resource_reservations_table)
+            .where(
+                self.resource_reservations_table.c.task_id == task_id,
+                self.resource_reservations_table.c.state.in_(rloan.COMMITTED_RESERVATION_STATES),
+            )
+            .values(state=rloan.ReservationState.RELEASED.value, reason_code=reason_code, released_at=released_at)
+        )
+        return result.rowcount == 1
+
+    def release_reservation(
+        self, *, task_id: str, reason_code: str = rloan.ReservationReason.RELEASED.value, at: float | None = None
+    ) -> bool:
+        """Release this Task's live hold.  Idempotent: a second call is a no-op.
+
+        The hold is a claim on entitlement a submission has not consumed, so
+        releasing it is a real admission fact and is reported as one.  A no-op
+        release emits nothing: there was no live claim to give back.
+        """
+        timestamp = time.time() if at is None else at
+        with self.engine.begin() as conn:
+            released = self._release_reservation_in_connection(
+                conn, task_id=task_id, reason_code=reason_code, released_at=timestamp
+            )
+        if released:
+            emit_event(
+                "resource.admission.released",
+                task_id=task_id,
+                reason_code=reason_code,
+            )
+        return released
+
+    def list_reservations(
+        self, *, user_id: int | None = None, state: str | None = None, limit: int = 200
+    ) -> list[dict[str, Any]]:
+        if limit < 1 or limit > 2000:
+            raise ValueError("limit must be between 1 and 2000")
+        stmt = select(self.resource_reservations_table)
+        if user_id is not None:
+            stmt = stmt.where(self.resource_reservations_table.c.subject_id == user_id)
+        if state is not None:
+            stmt = stmt.where(self.resource_reservations_table.c.state == state)
+        stmt = stmt.order_by(desc(self.resource_reservations_table.c.created_at)).limit(limit)
+        with self.engine.connect() as conn:
+            return [dict(row) for row in conn.execute(stmt).mappings().all()]
+
+    def expire_stale_reservations(
+        self, *, now: float | None = None, unadopted_tasks: Iterable[str] | None = None
+    ) -> int:
+        """Reclaim lapsed *pre-dispatch* reservations.  Safe to run repeatedly.
+
+        Only a ``held`` reservation has a wall-clock expiry: it spans
+        submit -> dispatch, and a submission that died in that window would
+        otherwise keep entitlement nothing can consume.  A ``queued``
+        reservation is scheduler-owned and deliberately has no expiry — the
+        Slurm request it belongs to may still be waiting, so reclaiming it on a
+        timer would hand the same entitlement to a second submission.  Those are
+        reclaimed by :meth:`reclaim_queued_reservation` against scheduler
+        evidence instead.
+
+        A ``held`` reservation whose Task already has a wrapper receipt is a
+        third case: the compute node proved the wrapper was running, so the
+        allocation is real even though the dispatch write never happened.  The
+        timer must not expire it — it is handed to the receipt reconciliation
+        instead, which records the allocation and settles it.
+
+        ``unadopted_tasks`` is that third case's *surviving* form: the Task ids
+        whose host-only ``allocation.receipt`` file is still on disk, reported by
+        the pass that walked the allocation namespace.  It is needed here because
+        the durable receipt row is only written once a worker has *adopted* the
+        file, and the whole point of the file is the window before that.  A hold
+        whose receipt exists but has not yet been adopted is still a real
+        allocation, so it is excluded from expiry exactly as an adopted one is.
+        """
+        timestamp = time.time() if now is None else now
+        receipted = {str(row["task_id"]) for row in self.list_allocation_receipts()}
+        receipted.update(str(task_id) for task_id in (unadopted_tasks or ()) if task_id)
+        with self.engine.begin() as conn:
+            conditions = [
+                self.resource_reservations_table.c.state == rloan.ReservationState.HELD.value,
+                self.resource_reservations_table.c.expires_at.is_not(None),
+                self.resource_reservations_table.c.expires_at <= timestamp,
+            ]
+            if receipted:
+                conditions.append(
+                    self.resource_reservations_table.c.task_id.notin_(receipted)
+                )
+            result = conn.execute(
+                update(self.resource_reservations_table)
+                .where(*conditions)
+                .values(state=rloan.ReservationState.EXPIRED.value, released_at=timestamp)
+            )
+            return result.rowcount
+
+    def list_queued_reservations(self, *, limit: int = 500) -> list[dict[str, Any]]:
+        """Scheduler-owned commitments, oldest first: the ones only evidence may free."""
+        stmt = (
+            select(self.resource_reservations_table)
+            .where(self.resource_reservations_table.c.state == rloan.ReservationState.QUEUED.value)
+            .order_by(self.resource_reservations_table.c.created_at)
+            .limit(limit)
+        )
+        with self.engine.connect() as conn:
+            return [dict(row) for row in conn.execute(stmt).mappings().all()]
+
+    def list_task_reservations(self, task_id: str) -> list[dict[str, Any]]:
+        """Every reservation of one Task, newest first: its admission evidence.
+
+        A Task has at most one live row; the earlier ones are the history of how
+        it was admitted, released, or reclaimed, and they stay readable here
+        rather than being rewritten by the transition that replaced them.
+        """
+        stmt = (
+            select(self.resource_reservations_table)
+            .where(self.resource_reservations_table.c.task_id == task_id)
+            .order_by(desc(self.resource_reservations_table.c.created_at))
+        )
+        with self.engine.connect() as conn:
+            return [dict(row) for row in conn.execute(stmt).mappings().all()]
+
+    def reclaim_queued_reservation(
+        self, *, task_id: str, reason_code: str = rloan.ReservationReason.RELEASED.value, at: float | None = None
+    ) -> bool:
+        """Free a scheduler-owned commitment that evidence proves is abandoned.
+
+        This is the only way a ``queued`` reservation can stop being committed
+        without a canonical allocation/delete/dispatch transition, so the caller
+        is responsible for the evidence: the scheduler has proved the request no
+        longer exists (a terminal or unknown ``scontrol`` state), or the
+        reconciliation believes this Task is an abandoned pre-dispatch crash
+        with no scheduler request at all.  ``reason_code`` records which evidence
+        it was, so the release stays auditable.  Idempotent and race-safe.
+        """
+        timestamp = time.time() if at is None else at
+        with self.engine.begin() as conn:
+            result = conn.execute(
+                update(self.resource_reservations_table)
+                .where(
+                    self.resource_reservations_table.c.task_id == task_id,
+                    self.resource_reservations_table.c.state == rloan.ReservationState.QUEUED.value,
+                )
+                .values(state=rloan.ReservationState.RELEASED.value, reason_code=reason_code, released_at=timestamp)
+            )
+            return result.rowcount == 1
+
+    def list_live_reservations(self, *, limit: int = 2000) -> list[dict[str, Any]]:
+        """Every committed reservation, whichever ownership mode it holds.
+
+        Reconciliation reads this rather than only the queued ones: a hold that
+        lapsed while its submission was still on its way to the scheduler is a
+        separate decision (scheduler evidence says whether the request ever
+        existed), and the two must not be conflated into one timeout.
+        """
+        stmt = (
+            select(self.resource_reservations_table)
+            .where(self.resource_reservations_table.c.state.in_(rloan.COMMITTED_RESERVATION_STATES))
+            .order_by(self.resource_reservations_table.c.created_at)
+            .limit(limit)
+        )
+        with self.engine.connect() as conn:
+            return [dict(row) for row in conn.execute(stmt).mappings().all()]
+
+    # -- Data lifecycle -----------------------------------------------------
+
+    def get_data_lifecycle(self, task_id: str) -> dict[str, Any] | None:
+        stmt = select(self.data_lifecycle_table).where(self.data_lifecycle_table.c.task_id == task_id)
+        with self.engine.connect() as conn:
+            row = conn.execute(stmt).mappings().first()
+        return dict(row) if row else None
+
+    def ensure_data_lifecycle(
+        self,
+        task_id: str,
+        *,
+        user_id: int,
+        logical_bytes: int = 0,
+        at: float | None = None,
+    ) -> dict[str, Any]:
+        """Register one Task's durable data and charge its logical ownership once.
+
+        The size is the *logical* ownership fact, never a directory-size guess
+        at charge time.  A first registration appends one ``storage_usage`` fact
+        and records how much was charged (``accounted_bytes``), which is what a
+        later purge may release — so a partial purge frees nothing it was not
+        charged for, and a completed purge frees it exactly once.
+
+        Republishing after a purge re-opens the Task's data: a ``PURGED`` row is
+        a lifecycle *state*, not a tombstone, and bytes that are back on disk must
+        be charged again or the user gets quota for free.  Each charge carries a
+        monotonic charge revision, so a re-charge is a distinct idempotent fact
+        rather than a duplicate of the first one.
+        """
+        timestamp = time.time() if at is None else at
+        size = max(0, int(logical_bytes))
+        with self.engine.begin() as conn:
+            existing = (
                 conn.execute(
-                    select(self.gpu_allocations_table).where(
-                        self.gpu_allocations_table.c.id == row["id"]
+                    select(self.data_lifecycle_table).where(self.data_lifecycle_table.c.task_id == task_id)
+                )
+                .mappings()
+                .one_or_none()
+            )
+            if existing is None:
+                # Two workers can publish the same Task concurrently.  The
+                # loser must not raise: the insert is conditional on the row
+                # still being absent, and whoever loses simply re-reads the
+                # winner's row (and does not charge a second time).
+                claimed = conn.execute(
+                    sqlite_insert(self.data_lifecycle_table)
+                    .values(
+                        task_id=task_id,
+                        subject_type=rloan.SUBJECT_USER,
+                        subject_id=user_id,
+                        state=rloan.DataLifecycleState.ACTIVE.value,
+                        logical_bytes=size,
+                        accounted_bytes=size,
+                        charge_revision=1,
+                        updated_at=timestamp,
                     )
+                    .on_conflict_do_nothing(index_elements=[self.data_lifecycle_table.c.task_id])
+                )
+                if not claimed.rowcount:
+                    existing = (
+                        conn.execute(
+                            select(self.data_lifecycle_table).where(
+                                self.data_lifecycle_table.c.task_id == task_id
+                            )
+                        )
+                        .mappings()
+                        .one()
+                    )
+                else:
+                    self._append_storage_fact(
+                        conn,
+                        user_id=user_id,
+                        task_id=task_id,
+                        quantity=-size,
+                        reason="Durable result published",
+                        reason_code=rloan.LedgerReason.STORAGE_CHARGED.value,
+                        idempotency_key=f"storage_usage:{task_id}:1",
+                        timestamp=timestamp,
+                    )
+                    existing = (
+                        conn.execute(
+                            select(self.data_lifecycle_table).where(
+                                self.data_lifecycle_table.c.task_id == task_id
+                            )
+                        )
+                        .mappings()
+                        .one()
+                    )
+                return dict(existing)
+            if str(existing["state"]) == rloan.DataLifecycleState.PURGED.value:
+                # The data came back.  Charge the new ownership under the next
+                # charge revision, so the purge's release stays a fact of history
+                # and this is a new fact rather than a rewrite of it.
+                revision = int(existing["charge_revision"]) + 1
+                conn.execute(
+                    update(self.data_lifecycle_table)
+                    .where(
+                        self.data_lifecycle_table.c.task_id == task_id,
+                        self.data_lifecycle_table.c.state == rloan.DataLifecycleState.PURGED.value,
+                    )
+                    .values(
+                        state=rloan.DataLifecycleState.ACTIVE.value,
+                        logical_bytes=size,
+                        accounted_bytes=size,
+                        charge_revision=revision,
+                        purged_at=None,
+                        updated_at=timestamp,
+                    )
+                )
+                if size:
+                    self._append_storage_fact(
+                        conn,
+                        user_id=user_id,
+                        task_id=task_id,
+                        quantity=-size,
+                        reason="Durable result republished",
+                        reason_code=rloan.LedgerReason.STORAGE_CHARGED.value,
+                        idempotency_key=f"storage_usage:{task_id}:{revision}",
+                        timestamp=timestamp,
+                    )
+            elif int(existing["logical_bytes"]) != size:
+                # A recomputation that finds a different size updates the
+                # logical fact.  The ledger fact stays as charged until a purge
+                # releases exactly it, so no reconciliation pass can double-count.
+                conn.execute(
+                    update(self.data_lifecycle_table)
+                    .where(self.data_lifecycle_table.c.task_id == task_id)
+                    .values(logical_bytes=size, updated_at=timestamp)
+                )
+            row = (
+                conn.execute(
+                    select(self.data_lifecycle_table).where(self.data_lifecycle_table.c.task_id == task_id)
                 )
                 .mappings()
                 .one()
             )
-        return dict(settled)
+        return dict(row)
 
-    def mark_gpu_allocation_for_review(self, slurm_job_id: str) -> bool:
-        """Expose an allocation whose authoritative elapsed time is unavailable."""
-        stmt = (
-            update(self.gpu_allocations_table)
-            .where(
-                self.gpu_allocations_table.c.slurm_job_id == slurm_job_id,
-                self.gpu_allocations_table.c.status != "settled",
+    def _append_storage_fact(
+        self,
+        conn,
+        *,
+        user_id: int,
+        task_id: str,
+        quantity: int,
+        reason: str,
+        reason_code: str,
+        idempotency_key: str,
+        timestamp: float,
+    ) -> None:
+        conn.execute(
+            sqlite_insert(self.resource_ledger_table)
+            .values(
+                subject_type=rloan.SUBJECT_USER,
+                subject_id=user_id,
+                period="",
+                kind=rloan.LedgerKind.STORAGE_USAGE.value,
+                unit=rloan.UNIT_STORAGE_BYTE,
+                resource_class="",
+                quantity=quantity,
+                task_id=task_id,
+                stage_id=None,
+                slurm_job_id=None,
+                actor_user_id=None,
+                reason=reason,
+                reason_code=reason_code,
+                evidence_source=rloan.EvidenceSource.ALLOCATION_LIFECYCLE.value,
+                idempotency_key=idempotency_key,
+                created_at=timestamp,
             )
-            .values(status="review")
+            .on_conflict_do_nothing(index_elements=[self.resource_ledger_table.c.idempotency_key])
+        )
+
+    def claim_data_deletion(
+        self,
+        task_id: str,
+        *,
+        user_id: int,
+        actor_user_id: int | None = None,
+        at: float | None = None,
+    ) -> bool:
+        """Move one Task into ``DELETE_REQUESTED``, durably, before any deletion.
+
+        The state write is the claim: a crash after it leaves a resumable
+        deletion rather than an intact tree whose row still reads ``ACTIVE``.
+        Idempotent for a row already awaiting or in purge.
+        """
+        timestamp = time.time() if at is None else at
+        terminal = (
+            rloan.DataLifecycleState.DELETE_REQUESTED.value,
+            rloan.DataLifecycleState.PURGING.value,
+        )
+        with self.engine.begin() as conn:
+            existing = (
+                conn.execute(
+                    select(self.data_lifecycle_table).where(self.data_lifecycle_table.c.task_id == task_id)
+                )
+                .mappings()
+                .one_or_none()
+            )
+            if existing is None:
+                conn.execute(
+                    sqlite_insert(self.data_lifecycle_table).values(
+                        task_id=task_id,
+                        subject_type=rloan.SUBJECT_USER,
+                        subject_id=user_id,
+                        state=rloan.DataLifecycleState.DELETE_REQUESTED.value,
+                        logical_bytes=0,
+                        accounted_bytes=0,
+                        charge_revision=0,
+                        requested_by_user_id=actor_user_id,
+                        requested_at=timestamp,
+                        updated_at=timestamp,
+                    )
+                )
+                return True
+            if existing["state"] in terminal:
+                return False
+            result = conn.execute(
+                update(self.data_lifecycle_table)
+                .where(
+                    self.data_lifecycle_table.c.task_id == task_id,
+                    self.data_lifecycle_table.c.state.notin_(terminal),
+                )
+                .values(
+                    state=rloan.DataLifecycleState.DELETE_REQUESTED.value,
+                    requested_by_user_id=actor_user_id,
+                    requested_at=timestamp,
+                    updated_at=timestamp,
+                )
+            )
+            return result.rowcount == 1
+
+    def begin_data_purge(self, task_id: str, *, at: float | None = None) -> bool:
+        """Claim a ``DELETE_REQUESTED`` Task for destructive work."""
+        timestamp = time.time() if at is None else at
+        stmt = (
+            update(self.data_lifecycle_table)
+            .where(
+                self.data_lifecycle_table.c.task_id == task_id,
+                self.data_lifecycle_table.c.state == rloan.DataLifecycleState.DELETE_REQUESTED.value,
+            )
+            .values(state=rloan.DataLifecycleState.PURGING.value, claimed_at=timestamp, updated_at=timestamp)
         )
         with self.engine.begin() as conn:
             return conn.execute(stmt).rowcount == 1
 
-    def list_unsettled_gpu_allocations(self) -> list[dict[str, Any]]:
+    def complete_data_purge(self, task_id: str, *, at: float | None = None) -> bool:
+        """Mark a ``PURGING`` Task ``PURGED`` and release exactly its charged bytes.
+
+        Quota is freed only here — after the owned bytes are actually gone — and
+        only by the amount the ledger was charged.  A partial purge that never
+        reaches this point frees nothing, so it cannot create phantom free
+        quota; a repeated call is a no-op because the state guard admits it once.
+        """
+        timestamp = time.time() if at is None else at
+        with self.engine.begin() as conn:
+            row = (
+                conn.execute(
+                    select(self.data_lifecycle_table).where(self.data_lifecycle_table.c.task_id == task_id)
+                )
+                .mappings()
+                .one_or_none()
+            )
+            if row is None or row["state"] != rloan.DataLifecycleState.PURGING.value:
+                return False
+            charged = int(row["accounted_bytes"])
+            revision = int(row["charge_revision"]) + 1
+            # Both the release and the PURGED write are conditional on the row
+            # still being PURGING, inside one transaction.  Two concurrent
+            # completions therefore append the fact at most once: the loser
+            # observes no row and returns False instead of freeing the quota a
+            # second time.
+            if charged:
+                # INSERT ... SELECT: the release exists only if the row is still
+                # PURGING at the moment SQLite evaluates it, and the same
+                # condition gates the PURGED write below, inside this one
+                # transaction.  Two concurrent completions therefore append the
+                # fact at most once — the loser inserts no row and returns False
+                # rather than freeing the quota a second time.
+                release_from = select(
+                    literal(rloan.SUBJECT_USER),
+                    literal(int(row["subject_id"])),
+                    literal(""),
+                    literal(rloan.LedgerKind.STORAGE_USAGE.value),
+                    literal(rloan.UNIT_STORAGE_BYTE),
+                    literal(""),
+                    literal(charged),
+                    literal(task_id),
+                    literal(None),
+                    literal(None),
+                    literal(None),
+                    literal("Owned bytes purged"),
+                    literal(rloan.LedgerReason.STORAGE_RELEASED.value),
+                    literal(rloan.EvidenceSource.ALLOCATION_LIFECYCLE.value),
+                    literal(f"storage_usage:{task_id}:{revision}"),
+                    literal(timestamp),
+                ).select_from(self.data_lifecycle_table).where(
+                    self.data_lifecycle_table.c.task_id == task_id,
+                    self.data_lifecycle_table.c.state == rloan.DataLifecycleState.PURGING.value,
+                )
+                released = conn.execute(
+                    sqlite_insert(self.resource_ledger_table)
+                    .from_select(
+                        ["subject_type", "subject_id", "period", "kind", "unit", "resource_class",
+                         "quantity", "task_id", "stage_id", "slurm_job_id", "actor_user_id",
+                         "reason", "reason_code", "evidence_source", "idempotency_key", "created_at"],
+                        release_from,
+                    )
+                    .on_conflict_do_nothing(index_elements=[self.resource_ledger_table.c.idempotency_key])
+                )
+                if not released.rowcount:
+                    return False
+            completed = conn.execute(
+                update(self.data_lifecycle_table)
+                .where(
+                    self.data_lifecycle_table.c.task_id == task_id,
+                    self.data_lifecycle_table.c.state == rloan.DataLifecycleState.PURGING.value,
+                )
+                .values(
+                    state=rloan.DataLifecycleState.PURGED.value,
+                    logical_bytes=0,
+                    accounted_bytes=0,
+                    charge_revision=revision,
+                    purged_at=timestamp,
+                    updated_at=timestamp,
+                    error="",
+                )
+            )
+            return completed.rowcount == 1
+
+    def mark_data_lifecycle_error(self, task_id: str, *, error: str, at: float | None = None) -> bool:
+        """Record a purging Task that could not be completed, without freeing quota."""
+        timestamp = time.time() if at is None else at
         stmt = (
-            select(self.gpu_allocations_table)
-            .where(self.gpu_allocations_table.c.status.in_(("active", "review")))
-            .order_by(self.gpu_allocations_table.c.started_at)
+            update(self.data_lifecycle_table)
+            .where(
+                self.data_lifecycle_table.c.task_id == task_id,
+                self.data_lifecycle_table.c.state == rloan.DataLifecycleState.PURGING.value,
+            )
+            .values(state=rloan.DataLifecycleState.ERROR.value, error=str(error)[:2000], updated_at=timestamp)
         )
+        with self.engine.begin() as conn:
+            return conn.execute(stmt).rowcount == 1
+
+    def requeue_data_lifecycle(self, task_id: str, *, at: float | None = None) -> bool:
+        """Return a failed purge to ``DELETE_REQUESTED`` so a later pass retries it."""
+        timestamp = time.time() if at is None else at
+        stmt = (
+            update(self.data_lifecycle_table)
+            .where(
+                self.data_lifecycle_table.c.task_id == task_id,
+                self.data_lifecycle_table.c.state == rloan.DataLifecycleState.ERROR.value,
+            )
+            .values(state=rloan.DataLifecycleState.DELETE_REQUESTED.value, updated_at=timestamp)
+        )
+        with self.engine.begin() as conn:
+            return conn.execute(stmt).rowcount == 1
+
+    def reclaim_stale_purge(self, task_id: str, *, at: float | None = None) -> bool:
+        """Return an abandoned ``PURGING`` claim to ``DELETE_REQUESTED``.
+
+        The caller owns the staleness decision — it is the only party that knows
+        how long a purge may legitimately run — and this is the transaction that
+        makes the reclaim durable.  Without it an interrupted purge can never be
+        retried: ``begin_data_purge`` requires ``DELETE_REQUESTED``, so a worker
+        that died between its claim and its completion would hold its subject's
+        quota forever.
+        """
+        timestamp = time.time() if at is None else at
+        stmt = (
+            update(self.data_lifecycle_table)
+            .where(
+                self.data_lifecycle_table.c.task_id == task_id,
+                self.data_lifecycle_table.c.state == rloan.DataLifecycleState.PURGING.value,
+            )
+            .values(state=rloan.DataLifecycleState.DELETE_REQUESTED.value, updated_at=timestamp)
+        )
+        with self.engine.begin() as conn:
+            return conn.execute(stmt).rowcount == 1
+
+    def list_data_lifecycle(
+        self, *, user_id: int | None = None, states: tuple[str, ...] = (), limit: int = 500
+    ) -> list[dict[str, Any]]:
+        if limit < 1 or limit > 5000:
+            raise ValueError("limit must be between 1 and 5000")
+        stmt = select(self.data_lifecycle_table)
+        if user_id is not None:
+            stmt = stmt.where(self.data_lifecycle_table.c.subject_id == user_id)
+        if states:
+            stmt = stmt.where(self.data_lifecycle_table.c.state.in_(tuple(states)))
+        stmt = stmt.order_by(self.data_lifecycle_table.c.updated_at).limit(limit)
         with self.engine.connect() as conn:
             return [dict(row) for row in conn.execute(stmt).mappings().all()]
 
-    def list_task_gpu_allocations(self, task_id: str) -> list[dict[str, Any]]:
-        """Return allocation audit rows for one Task, ordered by allocation start."""
-        stmt = (
-            select(self.gpu_allocations_table)
-            .where(self.gpu_allocations_table.c.task_id == task_id)
-            .order_by(self.gpu_allocations_table.c.started_at, self.gpu_allocations_table.c.id)
-        )
+    def logical_owned_bytes(self, user_id: int) -> int:
+        """Logical user-owned durable bytes, from the lifecycle rows themselves."""
         with self.engine.connect() as conn:
-            return [dict(row) for row in conn.execute(stmt).mappings().all()]
+            return int(
+                conn.execute(
+                    select(func.coalesce(func.sum(self.data_lifecycle_table.c.logical_bytes), 0)).where(
+                        self.data_lifecycle_table.c.subject_id == user_id,
+                        self.data_lifecycle_table.c.state.in_(rloan.CHARGED_LIFECYCLE_STATES),
+                    )
+                ).scalar_one()
+            )

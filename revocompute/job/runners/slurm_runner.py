@@ -39,9 +39,189 @@ from revocompute.resource_observations import (
 from revocompute.resource_policy import ResolvedResources, resolve_resources
 
 _SLURM_JOB_ID_RE = re.compile(r"srun:\s+[Jj]ob\s+(\d+)")
+
+#: Output contract of the allocation wrapper: two distinct facts, never one.
+#:
+#: ``REVODESIGN_JOB_ID=<id>`` names the scheduler job.  Inside the allocation
+#: ``$SLURM_JOB_ID`` is set on the compute node, but srun also prints a
+#: ``job <id> queued and waiting for resources`` banner on its *stderr* while
+#: the request is still queued — so job identity is evidence that the scheduler
+#: owns the request, not that anything is running.
+#:
+#: ``REVODESIGN_ALLOCATION_LIVE=<id>`` is printed only after the wrapper has
+#: confirmed, from the scheduler's own state, that this job holds running
+#: resources, so it is the one honest allocation-live signal.  Accounting and
+#: the reservation consume hang off this line, never off the job-identity line:
+#: a queue wait is not allocated time and must not be charged as any.
+ALLOCATION_LIVE_PREFIX = "REVODESIGN_ALLOCATION_LIVE="
+JOB_ID_PREFIX = "REVODESIGN_JOB_ID="
+
+#: How long the wrapper waits for the scheduler to report its job RUNNING before
+#: it gives up.  A request that never reaches RUNNING never held resources, so
+#: the allocation fails instead of running unaccounted.
+ALLOCATION_LIVE_POLLS = 600
+ALLOCATION_LIVE_POLL_SECONDS = "0.5"
+#: How long the wrapper waits for the server to release the scientific command
+#: once the allocation is known to be running.  The release is the admission
+#: decision: an allocation the balance cannot cover is stopped here, before the
+#: task does any work.
+ALLOCATION_RELEASE_POLLS = 600
+ALLOCATION_RELEASE_POLL_SECONDS = "0.1"
+
 _RESOURCE_BEGIN = "REVODESIGN_RESOURCE_BEGIN"
 _RESOURCE_LINE = "REVODESIGN_RESOURCE:"
 _RESOURCE_END = "REVODESIGN_RESOURCE_END"
+
+#: The host-only namespace the allocation wrapper writes its compute-node receipt
+#: into: one ``<task result root>.allocation/`` sibling per Task.  It is named
+#: here, once, because two independent readers depend on the identical layout —
+#: this adapter reads the receipt of the allocation it is running, and restart
+#: reconciliation walks the namespace for receipts whose worker died before it
+#: could adopt them.  A second spelling would silently disagree with the first.
+ALLOCATION_DIR_SUFFIX = ".allocation"
+ALLOCATION_RECEIPT_NAME = "allocation.receipt"
+#: Slurm's own per-job stderr file, redirected into the same host-only directory.
+#: Slurm creates it the instant the job is allocated a node — before the job's
+#: first statement runs — so it is the one artifact that survives a kill landing
+#: between "allocated" and "started", the window no in-job mechanism can cover.
+#: ``%j`` is substituted by Slurm, so the file names the job that owns it, which
+#: is what makes "this file exists, so a node was allocated" readable without
+#: trusting anything the job itself wrote.
+#:
+#: Only ``--error`` is redirected, never ``--output``: redirecting either stream
+#: moves the *task's* output into the file, and redirecting stdout would take the
+#: wrapper's own job-id/live/stage lines off the pipe this runner reads.  The
+#: srun client's own banner still reaches the process's stderr pipe, which is
+#: what supplies job identity before the wrapper runs.
+ALLOCATION_SCHEDULER_LOG_NAME = "allocation-%j.err"
+
+#: Hard ceiling for one Task's ephemeral scratch, in bytes.  Scratch is a
+#: per-execution safety concern, never durable user quota: a runaway temporary
+#: file must hit this wall instead of filling the host.  The allocation wrapper
+#: enforces it on the compute node by measuring the workspace it already owns,
+#: so the limit is host-local and a multi-node task is bounded per node.  The
+#: override exists for hosts whose own scratch is smaller than the default.
+TASK_SCRATCH_LIMIT_ENV = "TASK_SCRATCH_LIMIT_BYTES"
+DEFAULT_TASK_SCRATCH_LIMIT_BYTES = 200 * 1024**3
+#: How often the wrapper's capacity guard re-measures the scratch tree.  The
+#: guard runs beside the task rather than waiting for the filesystem to fill.
+TASK_SCRATCH_GUARD_SECONDS_ENV = "TASK_SCRATCH_GUARD_SECONDS"
+DEFAULT_TASK_SCRATCH_GUARD_SECONDS = 5.0
+#: Separates the allocation-wrapper resource envelope's own fields from the
+#: fields the capacity guard contributes, so a guard that never observed the
+#: scratch tree cannot be mistaken for one that measured zero bytes.
+_SCRATCH_GUARD_PREFIX = "scratch_guard."
+
+#: The capacity guard the allocation wrapper runs beside a task's scratch
+#: directory.  It is a separate small program (its own process, signals, and
+#: exit trap) rather than a shell function, so stopping it cannot disturb the
+#: wrapper's own trap chain — a ``sleep`` inside a function would also delay
+#: that trap.  It measures the task's bound workspace on a fixed interval and
+#: stops once the measured usage passes the ceiling.
+#:
+#: Two consequences are deliberate.  It measures *disk usage*, so a sparse file
+#: does not count (it does not fill the node).  And it measures only the task's
+#: own directory, so no host filesystem state is ever attributed to a user.
+#:
+#: ``samples`` exists because unknown is not zero: a guard that never completed a
+#: measurement reports ``samples=0``, so its peak is unknown rather than zero.
+#:
+#: It reports and terminates; it does not name the failure itself.  The wrapper
+#: observes that it finished — which happens only when it passed the ceiling —
+#: and the wrapper's single nonzero exit already marks the allocation failed.
+_SCRATCH_GUARD_SCRIPT = r"""#!/bin/bash
+# Copyright (c) 2026 The REvoDesign Developers.
+# Distributed under the terms of the GNU General Public License v3.0.
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# Task scratch capacity guard -- generated by the allocation wrapper.
+set -uo pipefail
+
+scratch_dir="${1:?scratch directory is required}"
+limit_bytes="${2:?scratch limit in bytes is required}"
+guard_seconds="${3:?guard interval is required}"
+stop_file="${4:?stop file is required}"
+result_file="${5:?result file is required}"
+
+
+peak_kib=0
+samples=0
+exceeded=0
+
+# Base units on the wire (bytes), so the server never has to know that this
+# host happens to measure in blocks.
+write_result() {
+    {
+        echo "peak_bytes=$(( peak_kib * 1024 ))"
+        echo "samples=${samples}"
+        echo "exceeded=${exceeded}"
+    } >"${result_file}" 2>/dev/null || true
+}
+
+# A run that never completed a measurement writes nothing at all.  Reporting
+# peak_bytes=0 for a scratch tree the guard never saw would be exactly the
+# claim this guard exists to avoid: the caller reads an absent result as
+# unknown, and unknown is not zero.
+finish() {
+    if (( samples > 0 )); then
+        write_result
+    fi
+    exit 0
+}
+
+trap 'finish' TERM INT EXIT
+
+while :; do
+    # Measure before honouring a stop request: a stop must report the last
+    # state it actually observed, and this ordering is what makes a completed
+    # run always carry at least one measurement rather than a misleading zero.
+    #
+    # The wrapper removes the scratch directory after the task exits, which is
+    # the guard's normal end: there is nothing left to measure.
+    test -d "${scratch_dir}" || break
+    # Sum the *allocated blocks of regular files* only.  ``du`` on the tree
+    # would count the directory entries themselves, and an empty directory
+    # occupies one filesystem block on ext4 — a task that wrote nothing would
+    # be reported as having written 4096 bytes, and an empty scratch would not
+    # read as zero.  Allocated blocks rather than apparent size keeps a sparse
+    # file from counting as capacity it never used.
+    # ``stat -c %b`` prints one file's allocated 512-byte blocks per line,
+    # which needs no quoting of its own and cannot be confused with the
+    # directory entries by accident.
+    current_kib="$(find "${scratch_dir}" -type f -exec stat -c %b {} + 2>/dev/null |
+        awk '{ total += $1 } END { print int(total / 2) }')" || current_kib=0
+    case "${current_kib}" in (*[!0-9]*|"") current_kib=0 ;; esac
+    samples=$((samples + 1))
+    if (( current_kib > peak_kib )); then
+        peak_kib="${current_kib}"
+    fi
+    # The wrapper stops the guard through a stop file rather than a signal, so
+    # a stop never truncates the final measurement and never races the guard's
+    # own startup (a signal delivered before the trap is installed would kill
+    # the guard without writing its result at all).
+    if [[ -e "${stop_file}" ]]; then
+        break
+    fi
+    # Measured usage has passed the ceiling: record it and stop.  The
+    # wrapper observes that the guard returned early and fails the
+    # allocation, so the node is protected and the task is the thing that
+    # ends.
+    if (( peak_kib * 1024 > limit_bytes )); then
+        exceeded=1
+        write_result
+        exit 0
+    fi
+    sleep "${guard_seconds}"
+done
+finish
+"""
+
+
+def render_scratch_guard_script() -> str:
+    """The capacity-guard program the allocation wrapper starts beside a task."""
+    return _SCRATCH_GUARD_SCRIPT
+
+
 #: Runner-protocol bookkeeping lines.  They are captured durably (observations
 #: in the database, progress/outcome on the task row), so the human-readable
 #: capture log keeps only the runner's own diagnostics instead of repeating
@@ -52,11 +232,11 @@ _PROTOCOL_PREFIXES = (PROGRESS_PREFIX, OBSERVATION_PREFIX, TASK_OUTCOME_PREFIX)
 class SlurmJob(Job):
     """A compute job submitted via SLURM + Apptainer.
 
-    ``submit()`` launches ``srun`` via ``subprocess.Popen`` and returns the
-    real SLURM job id only when it is captured from the allocation wrapper's
-    first stdout line or an ``srun`` stderr banner. ``poll()`` waits for the
-    process to exit and returns ``COMPLETED`` or ``FAILED`` based on the exit
-    code.
+    ``submit()`` launches ``srun`` and returns the scheduler job id as soon as
+    job *identity* is known — from the wrapper's first stdout line or srun's
+    stderr banner.  Identity is not execution: the request may still be queued,
+    so ``poll()`` (or the wrapper's :data:`ALLOCATION_LIVE_PREFIX` line) is what
+    reports that the allocation actually ran.
     """
 
     def __init__(
@@ -71,6 +251,7 @@ class SlurmJob(Job):
         username: str = "",
         resource_policy: ResolvedResources | None = None,
         scratch_backend: str = "disk",
+        allocation_dispatched_callback: Any = None,
         allocation_started_callback: Any = None,
         allocation_finished_callback: Any = None,
         task_store: Any = None,
@@ -92,11 +273,29 @@ class SlurmJob(Job):
         self._slurm_job_id: str | None = None
         self._allocation_started: float | None = None
         self._allocation_started_at: float | None = None
+        # Wall-clock bounds on when the allocation could have begun, so the
+        # ``poll()`` backstop can never stamp a start later than the real run.
+        # ``_allocation_submitted_at`` is when srun was launched; the tighter
+        # ``_wrapper_started_at`` is when the wrapper's own id line was read.
+        self._allocation_submitted_at: float | None = None
+        self._wrapper_started_at: float | None = None
         self._allocation_tracking_started = False
         self._allocation_finished_notified = False
+        # Two separate facts, two separate gates: the request exists (job
+        # identity known), and the allocation is running (the compute node
+        # observed it holding resources).  Accounting hangs off the second only.
+        self._dispatched_notified = False
+        self._dispatch_recorded_executed = False
+        self._dispatch_error: str | None = None
+        self._allocation_live = False
+        self._wrapper_started = False
+        self._admission_error: Exception | None = None
+        self._accounting_enabled = False
+        self._allocation_dispatched_callback = allocation_dispatched_callback
         self._allocation_started_callback = allocation_started_callback
         self._allocation_finished_callback = allocation_finished_callback
         self._job_id_event = threading.Event()
+        self._allocation_live_lock = threading.Lock()
         self._resolved_resource_policy = resource_policy
         if scratch_backend not in {"disk", "ram"}:
             raise ValueError("scratch_backend must be 'disk' or 'ram'")
@@ -125,6 +324,11 @@ class SlurmJob(Job):
             # intermediates.  ntasks=1, so the task-zero caveat does not apply.
             cmd = ["srun", "-u"] + self._build_srun_args() + ["/bin/bash", script_path]
             logging.info("srun command: %s", " ".join(cmd))
+            if self._allocation_submitted_at is None:
+                # The earliest instant the allocation could have begun.  Used
+                # only as a floor: the tighter wrapper-start stamp is preferred
+                # whenever the wrapper's own id line was read.
+                self._allocation_submitted_at = time.time()
             self._process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         except Exception:
             emit_event(
@@ -166,28 +370,181 @@ class SlurmJob(Job):
             )
             raise RuntimeError(f"SLURM submission did not return a scheduler job ID{suffix}")
         self._job_id = self._slurm_job_id
-        self._allocation_started = time.monotonic()
-        self._allocation_started_at = time.time()
+        # Snapshot before the callbacks run: each may block, and this is the only
+        # stable answer to "does the wrapper gate on resource accounting?".
+        accounting_enabled = (
+            self._allocation_dispatched_callback is not None
+            or self._allocation_started_callback is not None
+        )
+        self._accounting_enabled = accounting_enabled
         try:
-            if self._allocation_started_callback is not None:
-                self._allocation_started_callback(
-                    self._slurm_job_id, self._allocation_started_at
-                )
-                self._allocation_tracking_started = True
-                self._approve_allocation()
-        except Exception:
+            # Job identity is now known, so the scheduler owns the request.
+            # ``_notify_dispatched`` writes the scheduler-owned reservation and,
+            # when the wrapper's own id line was already read, the allocation
+            # observation — one atomic store transition, so the request can never
+            # be durably queued without the allocation its own job id proves.  A
+            # failure tears the wrapper down instead of releasing it: the
+            # scientific command must never run on an allocation whose fact was
+            # not recorded.
+            self._notify_dispatched()
+            # Released to the wrapper here, so it can observe and report whether
+            # the allocation is actually running.  This is not a grant: the
+            # scientific command stays withheld until that report is admitted.
+            if accounting_enabled:
+                self._release_allocation_observation()
+        except Exception as exc:
+            # Keep the reason: the reader thread saw the wrapper's own id line,
+            # so a persisted-fact failure is exactly the case ``poll()`` must
+            # fail closed on if the process survives to reach it.
+            self._dispatch_error = str(exc)
             self.cancel()
             self._remove_wrapper_script()
             raise
+        self._allocation_started = time.monotonic()
         emit_event("slurm.allocation.granted", **self._event_fields())
 
         logging.info(
-            "SLURM job %s (srun pid %s) started for task %s",
+            "SLURM job %s (srun pid %s) submitted for task %s",
             self._job_id,
             self._process.pid,
             self.task_id,
         )
         return self._job_id
+
+    def _notify_dispatched(self) -> None:
+        """Announce that the scheduler owns the request, durably and once.
+
+        Runs inside ``submit()`` while the wrapper is still held at its start
+        gate, so when it returns the scheduler-owned reservation and the
+        persisted job identity exist as one state — the pair a later
+        reconciliation reads to decide whether a request can still be alive.
+
+        Called twice on the identity-without-execution path, and that is the
+        point: the srun stderr banner announces the request before anything is
+        known to be running, and the wrapper's own stdout id line later proves it
+        executed.  The identity announcement is idempotent per identity+evidence,
+        but the execution evidence upgrades it — otherwise a queued banner would
+        be the last word on a request whose wrapper really did occupy a node.
+
+        The wrapper's own id line also means the compute node left a durable
+        receipt, so the observation passed here carries the node's own start
+        stamp and resource shape: the allocation is dated by the machine that
+        held it, not by this process's clock.
+
+        Receipt ownership moves monotonically: the file is read, never deleted up
+        front, and it is removed only after the callback has returned — i.e. only
+        once the canonical allocation fact (or the server-owned receipt that
+        reconciliation folds into it) is durable.  A death anywhere before that
+        leaves the file, so restart reconciliation still finds the claim.
+
+        The callback persists the scheduler-owned reservation and, when the
+        wrapper's own id line is the evidence, the allocation observation in the
+        same store transition.  A failure therefore leaves neither half written:
+        the flag is cleared and the exception propagates, so the caller (the
+        reader thread or ``submit()``) tears the request down rather than letting
+        the wrapper run an allocation that was never observed.
+        """
+        executed = self._wrapper_started
+        if self._dispatched_notified and (self._dispatch_recorded_executed or not executed):
+            return
+        self._dispatched_notified = True
+        self._dispatch_recorded_executed = executed
+        if self._allocation_dispatched_callback is None:
+            return
+        receipt = None
+        started_at = self._wrapper_started_at or time.time()
+        if executed:
+            receipt = self.read_allocation_receipt()
+            if receipt is not None:
+                started_at = receipt["observed_at"]
+        try:
+            adopted = self._allocation_dispatched_callback(
+                self._slurm_job_id, started_at, executed, receipt
+            )
+        except Exception:
+            # Cleared so a later observation retries instead of silently leaving
+            # the request recorded as dispatched with nothing persisted.  The
+            # receipt is untouched, so the retry still has it to adopt.
+            self._dispatched_notified = False
+            raise
+        if receipt is not None and adopted is not False:
+            # The callback committed to a durable successor for this claim — the
+            # server-owned receipt row it wrote or the allocation fact it wrote
+            # from it — so removing the file cannot lose the claim.  A callback
+            # that explicitly declined the claim (``False``) leaves the file for
+            # reconciliation instead.
+            self.discard_allocation_receipt()
+
+    def _notify_allocation_live(self) -> None:
+        """Announce that the allocation is actually running, exactly once.
+
+        The one entry point into allocation accounting: it consumes the Task's
+        admission reservation and starts the clock that GPU- and CPU-core-seconds
+        are measured against.  The wrapper's ``REVODESIGN_ALLOCATION_LIVE`` line
+        reaches it through ``_read_stdout`` while the wrapper is still waiting on
+        the release gate, so the release that follows is the same decision that
+        recorded the allocation.  A run that never printed the line is accounted
+        from ``poll()``, where the wrapper is known to have started on a node.
+
+        The start instant is evidence, never a guess made now.  When the live
+        line carries its own stamp that is used; otherwise the backstop uses the
+        wall-clock floor already observed for this request — the moment the
+        wrapper's id line was read, or failing that the moment srun was launched.
+        Reading the clock here instead would stamp a start *after* a run that has
+        already finished, charging a fully-used allocation as approximately
+        zero.
+
+        Idempotent and lock-guarded: the stdout thread and the polling thread can
+        both arrive, and either report may be the one that survives.
+        """
+        with self._allocation_live_lock:
+            if self._allocation_live:
+                return
+            self._allocation_live = True
+            started_at = self._allocation_started_at
+            if started_at is None:
+                floor = self._wrapper_started_at or self._allocation_submitted_at
+                started_at = time.time() if floor is None else floor
+        if self._allocation_started_callback is not None:
+            try:
+                self._allocation_started_callback(self._slurm_job_id, started_at)
+            except Exception as exc:
+                # The grant was refused.  The allocation FACT was still recorded
+                # — it is the scheduler's, not the policy's — so the wrapper must
+                # not be released to run, and the resources it held until this
+                # decision are settled at the end of the run like any other.
+                self._admission_error = exc
+                self._allocation_tracking_started = True
+                return
+        self._allocation_tracking_started = True
+        if self._accounting_enabled:
+            # The allocation is accounted for, so the scientific command may
+            # run.  The release is this Task's admission grant; the wrapper has
+            # already reported the allocation-live fact the grant answers.
+            self._approve_allocation()
+
+    @property
+    def allocation_started(self) -> bool:
+        """Whether this request produced a recorded allocation.
+
+        ``False`` covers both a request that never left the scheduler's queue and
+        one whose allocation-live moment was refused at admission: either way no
+        allocation fact exists, so the Task's admission reservation must be given
+        back rather than kept.
+        """
+        return self._allocation_live and self._admission_error is None
+
+    @property
+    def wrapper_executed(self) -> bool:
+        """Whether the wrapper was observed executing on a compute node.
+
+        This is the durable-evidence question, not the grant question: the
+        wrapper printing its own ``$SLURM_JOB_ID`` proves an allocation was made
+        even when admission then refused the command.  A caller deciding whether
+        a reservation may be released must ask this, so a refused allocation is
+        never downgraded to "nothing was allocated".
+        """
+        return self._wrapper_started
 
     def poll(self) -> JobState:
         if self._process is None:
@@ -208,6 +565,39 @@ class SlurmJob(Job):
                 self._stdout_thread.join(timeout=10)
             if self._stderr_thread:
                 self._stderr_thread.join(timeout=10)
+
+            # The reader thread saw the wrapper's own id line but the process
+            # died before the observation reached the store: the wrapper must not
+            # run an allocation nothing recorded, so the job fails closed rather
+            # than continue ungranted.  This never fires once the fact is
+            # durable — it covers exactly the crash window a process-local flag
+            # could not.
+            if self._wrapper_started and not self._dispatched_notified:
+                reason = self._dispatch_error or "the allocation observation could not be persisted"
+                logging.error("SLURM job %s failed closed: %s", self._job_id, reason)
+                self._emit_terminal("slurm.allocation.failed", reason_code="allocation_unrecorded")
+                return JobState.FAILED
+
+            # The wrapper itself started on a compute node — it printed its own
+            # job id — but its allocation-live report never arrived, either
+            # because the node's scheduler query is unavailable or because the
+            # run was killed before it could report.  The wrapper running is
+            # itself evidence the request left the queue, so the allocation it
+            # held is accounted here; a request that never left the queue never
+            # printed that line and still charges nothing.  The release is
+            # written first, so a wrapper still waiting is never left to hit its
+            # own bounded wait on an allocation that has already ended.
+            if not self._allocation_live and self._wrapper_started:
+                if self._accounting_enabled:
+                    self._release_allocation_observation()
+                self._notify_allocation_live()
+
+            # An allocation the admission transition refused is not a grant: the
+            # wrapper was never released, srun is expected to have exited
+            # nonzero, and the refusal is the Task's failure rather than an
+            # accounting detail to swallow.
+            if self._admission_error is not None:
+                raise self._admission_error
 
             # The wrapper is removed before any output is captured, so a task
             # that rewrote the running script cannot ship those bytes in the
@@ -318,18 +708,94 @@ class SlurmJob(Job):
         self._allocation_finished_notified = True
 
     def _approve_allocation(self) -> None:
-        with open(self._allocation_approval_path, "x", encoding="utf-8"):
+        """Release an accounted-for allocation to run its scientific command.
+
+        The grant, not the start gate: the allocation has been recorded, so the
+        Task is allowed to consume it.  Idempotent — the wrapper's own live line
+        and the poll-side backstop can both arrive, and the wrapper consumes the
+        file, so an existing one already means the grant stands.
+        """
+        self._write_release(self._allocation_grant_path)
+
+    def _release_allocation_observation(self) -> None:
+        """Release the wrapper to observe whether its allocation is running.
+
+        This is *not* permission to run the task — it is what lets the wrapper
+        report the allocation-live fact the admission decision answers.  It is
+        written as soon as the scheduler owns the request, so the observation
+        happens while the scientific command is still withheld.
+        """
+        self._write_release(self._allocation_release_path)
+
+    @staticmethod
+    def _write_release(path: str) -> None:
+        try:
+            with open(path, "x", encoding="utf-8"):
+                pass
+        except FileExistsError:
             pass
 
     @property
-    def _allocation_approval_path(self) -> str:
+    def _allocation_release_path(self) -> str:
+        """Host-to-wrapper gate: "observe whether this allocation is running"."""
+        return os.path.join(self.output_dir, f".allocation-start-{self.task_id[:8]}")
+
+    @property
+    def _allocation_grant_path(self) -> str:
+        """Host-to-wrapper gate: "run the scientific command for this allocation"."""
         return os.path.join(self.output_dir, f".allocation-approved-{self.task_id[:8]}")
 
-    def _remove_allocation_approval(self) -> None:
+    @property
+    def _allocation_receipt_path(self) -> str:
+        """A sibling of the other host-to-wrapper gate paths."""
+        return self.allocation_receipt_path
+
+    def read_allocation_receipt(self) -> dict[str, Any] | None:
+        """Read the wrapper's compute-node receipt, if it left one.
+
+        Returns ``None`` when there is no receipt, when it is unreadable, or when
+        its schema does not match — a receipt that cannot be trusted as written
+        is treated as absent rather than guessed at.  The values are parsed, not
+        interpreted: corroborating the job id against the scheduler belongs to
+        reconciliation, which has the scheduler.
+
+        Reading is deliberately non-destructive.  The file is the only durable
+        evidence a worker that dies before its own first write ever leaves, so it
+        is read and then *adopted* — either by the live dispatch
+        (:meth:`_notify_dispatched`) or, after a crash, by restart reconciliation
+        — and removed only once that adoption is durable.  A malformed receipt is
+        left exactly where it is, so an anomalous durable observation stays
+        inspectable instead of vanishing.
+        """
+        path = self.allocation_receipt_path
         try:
-            os.unlink(self._allocation_approval_path)
-        except FileNotFoundError:
+            with open(path, encoding="utf-8") as handle:
+                text = handle.read(4096)
+        except OSError:
+            return None
+        return parse_allocation_receipt(text)
+
+    def discard_allocation_receipt(self) -> None:
+        """Remove the compute-node receipt once a durable successor exists.
+
+        Ownership transfer is monotonic: the file may only be deleted after the
+        server-owned receipt or the canonical allocation fact records the same
+        claim, so there is never a transition from one durable representation to
+        none.  Deletion is best-effort and idempotent — a missing file is already
+        the desired state, and a failure merely leaves evidence behind for the
+        next reconciliation, which adopts it again harmlessly.
+        """
+        try:
+            os.unlink(self.allocation_receipt_path)
+        except OSError:
             pass
+
+    def _remove_allocation_approval(self) -> None:
+        for path in (self._allocation_release_path, self._allocation_grant_path):
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                pass
 
     def _build_srun_args(self) -> list[str]:
         resources = self._resolve_resources()
@@ -357,13 +823,26 @@ class SlurmJob(Job):
         # nodes.  Use the task-specific shared output directory so slurmstepd
         # never falls back to /tmp and every job has an isolated valid cwd.
         opts.append(f"--chdir={self.output_dir}")
+        # Slurm creates this file the instant the job is allocated a node, which
+        # is the only durable trace of an allocation killed before the wrapper's
+        # first statement.  It is written into the host-only directory (never
+        # bind-mounted into the container), and only stderr is redirected so the
+        # wrapper's own stdout protocol stays on the pipe this runner reads.
+        opts.append(f"--error={os.path.join(self.allocation_dir, ALLOCATION_SCHEDULER_LOG_NAME)}")
         opts.append(f"--job-name=revocomput_{_sanitize_name(self._username)}_{self.tt.name}_{self.task_id[:8]}")
         return opts
 
     # -- wrapper script ------------------------------------------------------
 
     def _prepare_scratch_dir(self) -> None:
-        """Create private task-backed scratch before the allocation starts."""
+        """Create private task-backed scratch before the allocation starts.
+
+        This directory *is* the task's ephemeral workspace: the allocation
+        wrapper binds it to the container's ``/tmp`` and the capacity guard
+        measures it.  It is deliberately independent of durable storage
+        entitlement — a pathological temporary file is a per-execution safety
+        problem, not something a user's storage quota should pay for.
+        """
         if self.scratch_backend == "ram":
             return
         # Input staging creates the task workspace in production.  Test and
@@ -379,6 +858,39 @@ class SlurmJob(Job):
                 os.unlink(self.scratch_dir)
         os.makedirs(self.scratch_dir, mode=0o700, exist_ok=True)
         os.chmod(self.scratch_dir, 0o700)
+
+    @property
+    def scratch_limit_bytes(self) -> int:
+        """The hard ceiling for this Task's ephemeral scratch, in bytes.
+
+        Read by the allocation wrapper, which enforces it on the compute node:
+        the guard belongs to the process that owns the workspace, not to the
+        server that renders the allocation.
+        """
+        raw = os.environ.get(TASK_SCRATCH_LIMIT_ENV, "").strip()
+        if raw:
+            try:
+                value = int(raw)
+            except ValueError as exc:
+                raise RuntimeError(f"{TASK_SCRATCH_LIMIT_ENV} must be an integer, got {raw!r}") from exc
+            if value <= 0:
+                raise RuntimeError(f"{TASK_SCRATCH_LIMIT_ENV} must be positive")
+            return value
+        return DEFAULT_TASK_SCRATCH_LIMIT_BYTES
+
+    @property
+    def scratch_guard_seconds(self) -> float:
+        """How often the capacity guard re-measures the scratch tree."""
+        raw = os.environ.get(TASK_SCRATCH_GUARD_SECONDS_ENV, "").strip()
+        if raw:
+            try:
+                value = float(raw)
+            except ValueError as exc:
+                raise RuntimeError(f"{TASK_SCRATCH_GUARD_SECONDS_ENV} must be a number, got {raw!r}") from exc
+            if value <= 0:
+                raise RuntimeError(f"{TASK_SCRATCH_GUARD_SECONDS_ENV} must be positive")
+            return value
+        return DEFAULT_TASK_SCRATCH_GUARD_SECONDS
 
     def _cleanup_scratch_dir(self) -> None:
         if self.scratch_backend != "disk":
@@ -408,8 +920,19 @@ class SlurmJob(Job):
         never mounted and always exists, so ``srun`` still reads it on the
         compute node.
         """
-        return f"{os.path.normpath(self.output_dir)}.allocation"
+        return allocation_dir_for(self.output_dir)
 
+    @property
+    def allocation_receipt_path(self) -> str:
+        """Where the wrapper records that it is running, in the host-only dir.
+
+        Deliberately the *same* never-bind-mounted sibling as the wrapper script:
+        ``output_dir`` is mounted read-write into the container, so a receipt
+        there would be forgeable by the task it describes.  A receipt in this
+        directory can only be written by the wrapper running on the compute node
+        as the worker uid, outside the container.
+        """
+        return os.path.join(self.allocation_dir, ALLOCATION_RECEIPT_NAME)
     def _build_wrapper_script(self) -> str:
         """Write the wrapper script into the host-only ``allocation_dir`` so
         the host-side ``srun`` process can read it while the container cannot.
@@ -430,18 +953,103 @@ class SlurmJob(Job):
             "#!/bin/bash",
             "set -euo pipefail",
             "",
+            # The allocation exists the moment the scheduler starts this script,
+            # so the FIRST thing it does is take a durable receipt of that fact —
+            # before any gate wait, any stdout line, and any scientific work.
+            # The write is atomic (temp + fsync + rename), into the host-only
+            # directory that is never bind-mounted into the container, so only
+            # this wrapper (running as the worker uid on the compute node) can
+            # author it and a worker that dies before its own first write still
+            # leaves the evidence reconciliation needs.
+            f"allocation_receipt={_sh_quote(self._allocation_receipt_path)}",
+            'mkdir -p -- "$(dirname -- "${allocation_receipt}")"',
+            'receipt_cpus="${SLURM_CPUS_PER_TASK:-}"',
+            'case "${receipt_cpus}" in (*[!0-9]*|"") receipt_cpus=0 ;; esac',
+            'receipt_gpus="${SLURM_GPUS_ON_NODE:-}"',
+            'case "${receipt_gpus}" in (*[!0-9]*|"") receipt_gpus="${SLURM_JOB_GPUS:-${CUDA_VISIBLE_DEVICES:-}}" ;; esac',
+            'case "${receipt_gpus}" in',
+            '  ("NoDevFiles") receipt_gpus=0 ;;',
+            '  (*[!0-9,]*) receipt_gpus=0 ;;',
+            '  ("") receipt_gpus=0 ;;',
+            '  (*) receipt_gpus="$(awk -F, \'{print NF}\' <<< "${receipt_gpus}")" ;;',
+            "esac",
+            'receipt_tmp="${allocation_receipt}.$$.tmp"',
+            "{",
+            "  printf 'schema_version=1\\n'",
+            "  printf 'slurm_job_id=%s\\n' \"${SLURM_JOB_ID:-}\"",
+            "  printf 'observed_at=%s\\n' \"$(date +%s)\"",
+            "  printf 'cpus=%s\\n' \"${receipt_cpus}\"",
+            "  printf 'gpus=%s\\n' \"${receipt_gpus}\"",
+            "} > \"${receipt_tmp}\"",
+            'sync "${receipt_tmp}"',
+            'mv -f -- "${receipt_tmp}" "${allocation_receipt}"',
+            "",
             # The allocation carries the authoritative job id; publish it on
-            # stdout first so the runner never depends on srun's stderr
-            # banner (which SLURM 19.05 does not always print in time).
-            'echo "REVODESIGN_JOB_ID=${SLURM_JOB_ID}"',
+            # stdout only AFTER the receipt is durable, so the receipt — not the
+            # line — is what recovery keys on, and the line can never be the only
+            # trace of a run.  This names the request; it is not evidence that
+            # anything is running.
+            f'echo "{JOB_ID_PREFIX}${{SLURM_JOB_ID}}"',
         ]
-        if self._allocation_started_callback is not None:
+        if self._allocation_dispatched_callback is not None or self._allocation_started_callback is not None:
             lines.extend(
                 [
-                    f"approval={_sh_quote(self._allocation_approval_path)}",
-                    'for _ in {1..300}; do test -f "$approval" && break; sleep 0.1; done',
-                    'test -f "$approval"',
-                    'rm -f -- "$approval"',
+                    # Two gates, because there are two different questions.  The
+                    # start gate releases the wrapper to observe its own
+                    # allocation; it is not permission to run the task.  The
+                    # grant gate after the live line is the admission decision,
+                    # and only then does the scientific command run.
+                    f"start={_sh_quote(self._allocation_release_path)}",
+                    'for _ in {1..300}; do test -f "$start" && break; sleep 0.1; done',
+                    'test -f "$start"',
+                    'rm -f -- "$start"',
+                    "# -- allocation-live observation --",
+                    # ``squeue`` answers from the scheduler's own state: a
+                    # PENDING or CONFIGURING job has been allocated nothing yet,
+                    # and charging it would charge queue latency as GPU- and
+                    # CPU-seconds.  Only RUNNING is allocation-live, and only
+                    # this line starts the accounting clock.
+                    "allocation_live=0",
+                    f"for _ in {{1..{ALLOCATION_LIVE_POLLS}}}; do",
+                    '  state="$(squeue -h -j "${SLURM_JOB_ID}" -o "%T" 2>/dev/null | head -n 1)"',
+                    '  case "${state}" in',
+                    '    (RUNNING) allocation_live=1; break ;;',
+                    # No answer yet: keep waiting for the state rather than
+                    # reporting a job that has not been allocated anything as
+                    # live.  A query that errors is retried for the same reason.
+                    '    ("") ;;',
+                    # A state was read and it is not RUNNING: this job has been
+                    # allocated nothing and never will be, so stop waiting.
+                    "    (*) break ;;",
+                    "  esac",
+                    f"  sleep {ALLOCATION_LIVE_POLL_SECONDS}",
+                    "done",
+                    'if [[ "${allocation_live}" != 1 ]]; then',
+                    # The state was read and was not RUNNING (a queued job that
+                    # can no longer run, or one already gone).  No allocation is
+                    # ever accounted without this evidence, so one that never
+                    # reached RUNNING is charged nothing.
+                    '  echo "SLURM job ${SLURM_JOB_ID} did not reach RUNNING state" >&2',
+                    "  exit 1",
+                    "fi",
+                    f'echo "{ALLOCATION_LIVE_PREFIX}${{SLURM_JOB_ID}}"',
+                    "# -- admission grant --",
+                    # Allocation-live is a fact about the scheduler, not a grant:
+                    # the server makes the admission decision when it observes it,
+                    # and an allocation the balance cannot cover is stopped here,
+                    # before the task does any work.  The wait has a bound so a
+                    # server that never answers cannot pin a node forever.
+                    f"grant={_sh_quote(self._allocation_grant_path)}",
+                    "released=0",
+                    f"for _ in {{1..{ALLOCATION_RELEASE_POLLS}}}; do",
+                    '  if test -f "$grant"; then released=1; break; fi',
+                    f"  sleep {ALLOCATION_RELEASE_POLL_SECONDS}",
+                    "done",
+                    'if [[ "${released}" != 1 ]]; then',
+                    '  echo "allocation was not released to run" >&2',
+                    "  exit 1",
+                    "fi",
+                    'rm -f -- "$grant"',
                 ]
             )
         if self.scratch_backend == "ram":
@@ -609,13 +1217,49 @@ class SlurmJob(Job):
             [
                 'resource_capture_dir="$(mktemp -d /tmp/revocompute-resource.XXXXXX)"',
                 'chmod 700 "${resource_capture_dir}"',
+                "# -- ephemeral scratch capacity guard --",
+                # The guard runs beside the task, not inside it, and measures the
+                # task's own bound workspace.  It is written here rather than
+                # shipped as a file so it cannot be left behind by an interrupted
+                # run and cannot be rewritten by the task: it lives in the host
+                # capture directory, which is outside every mount the container
+                # can see.
+                f'scratch_guard_path={_sh_quote(self.scratch_path)}',
+                f"scratch_guard_limit_bytes={self.scratch_limit_bytes}",
+                f"scratch_guard_seconds={self.scratch_guard_seconds}",
+                'scratch_guard_script="${resource_capture_dir}/scratch_guard.sh"',
+                'scratch_guard_stop="${resource_capture_dir}/scratch_guard.stop"',
+                'scratch_guard_result="${resource_capture_dir}/scratch_guard.result"',
+                "scratch_guard_pid=''",
+                "cat > \"${scratch_guard_script}\" <<'REVODESIGN_SCRATCH_GUARD'",
+                *render_scratch_guard_script().splitlines(),
+                "REVODESIGN_SCRATCH_GUARD",
+                'chmod 700 "${scratch_guard_script}"',
+                "start_scratch_guard() {",
+                '  "${scratch_guard_script}" "${scratch_guard_path}" '
+                '"${scratch_guard_limit_bytes}" "${scratch_guard_seconds}" '
+                '"${scratch_guard_stop}" "${scratch_guard_result}" &',
+                '  scratch_guard_pid="$!"',
+                "}",
+                "stop_scratch_guard() {",
+                '  [[ -n "${scratch_guard_pid:-}" ]] || return 0',
+                # The stop file is what makes the stop deterministic (the guard
+                # may not have installed its trap yet); the signal is what makes
+                # it immediate, so a normal stop does not wait a whole interval.
+                '  touch "${scratch_guard_stop}" 2>/dev/null || true',
+                '  kill "${scratch_guard_pid}" 2>/dev/null || true',
+                '  wait "${scratch_guard_pid}" 2>/dev/null || true',
+                "  scratch_guard_pid=''",
+                "}",
                 "cleanup_resource_capture() {",
+                "  stop_scratch_guard",
                 '  if [[ -n "${gpu_monitor_pid:-}" ]]; then',
                 '    kill "${gpu_monitor_pid}" 2>/dev/null || true',
                 '    wait "${gpu_monitor_pid}" 2>/dev/null || true',
                 "  fi",
                 '  rm -f -- "${resource_capture_dir}/resource" "${resource_capture_dir}/time" '
-                '"${resource_capture_dir}/gpu"',
+                '"${resource_capture_dir}/gpu" "${scratch_guard_script}" '
+                '"${scratch_guard_stop}" "${scratch_guard_result}"',
                 '  rmdir -- "${resource_capture_dir}" 2>/dev/null || true',
                 "}",
                 "trap cleanup_resource_capture EXIT",
@@ -678,15 +1322,40 @@ class SlurmJob(Job):
                 '&& "${allocated_gpu_ids}" != "NoDevFiles" ]]; then',
                 '  allocated_gpus_on_node="$(awk -F, \'{print NF}\' <<< "${allocated_gpu_ids}")"',
                 "fi",
+                "start_scratch_guard",
                 "if [[ -x /usr/bin/time ]]; then",
-                "  if /usr/bin/time -f 'elapsed_seconds=%e\\nuser_cpu_seconds=%U\\n"
-                f"system_cpu_seconds=%S\\nmax_rss_kib=%M' -o {resource_time_path} {cmd}; then",
-                "    runner_status=0",
-                "  else",
-                "    runner_status=$?",
-                "  fi",
+                "  time_prefix=(/usr/bin/time -f 'elapsed_seconds=%e\\nuser_cpu_seconds=%U\\n"
+                f"system_cpu_seconds=%S\\nmax_rss_kib=%M' -o {resource_time_path})",
                 "else",
-                f"  if {cmd}; then runner_status=0; else runner_status=$?; fi",
+                "  time_prefix=()",
+                "fi",
+                # The task runs in its own process group (job control), so the
+                # capacity guard can stop the entire task tree — apptainer and
+                # every process it started — without signalling the wrapper
+                # itself, which would take this script down before it can report
+                # what it measured.
+                "set -m",
+                f'"${{time_prefix[@]}}" {cmd} &',
+                'runner_pid="$!"',
+                "set +m",
+                "runner_status=0",
+                'while kill -0 "${runner_pid}" 2>/dev/null; do',
+                '  if ! kill -0 "${scratch_guard_pid}" 2>/dev/null; then',
+                "    # The guard finished before the task: measured scratch passed the",
+                "    # ceiling.  Stopping the whole task tree is the point of the",
+                "    # guard; the allocation then ends nonzero, so the failure is the",
+                "    # task's and the node keeps its capacity.",
+                '    kill -TERM -- "-${runner_pid}" 2>/dev/null || true',
+                "    break",
+                "  fi",
+                "  sleep 0.2",
+                "done",
+                'if wait "${runner_pid}"; then runner_status=0; else runner_status=$?; fi',
+                # A task that had already exited zero exactly as the guard
+                # tripped must still fail: it ran past its ceiling.
+                'if [[ -f "${scratch_guard_result}" ]] && grep -qx "exceeded=1" '
+                '"${scratch_guard_result}" && (( runner_status == 0 )); then',
+                "  runner_status=1",
                 "fi",
                 *(
                     [
@@ -700,6 +1369,9 @@ class SlurmJob(Job):
                     if self.tt.gpus
                     else []
                 ),
+                # The guard is stopped before the envelope is written so the
+                # facts it reports are final.
+                "stop_scratch_guard",
                 "{",
                 "  printf 'schema_version=1\\n'",
                 "  printf 'source=allocation_wrapper\\n'",
@@ -710,6 +1382,17 @@ class SlurmJob(Job):
                 "  printf 'allocated_gpu_ids=%s\\n' \"${allocated_gpu_ids}\"",
                 "  printf 'visible_gpu_devices=%s\\n' \"${CUDA_VISIBLE_DEVICES:-}\"",
                 "  printf 'exit_code=%s\\n' \"$runner_status\"",
+                # The capacity guard's own measurement, reported only when it
+                # completed one: a guard that never sampled emits nothing, which
+                # the server reads as unknown rather than as zero bytes.
+                '  if [[ -f "${scratch_guard_result}" ]]; then',
+                '    while IFS=\'=\' read -r scratch_metric scratch_value; do',
+                '      case "${scratch_metric}" in',
+                "        (peak_bytes|samples|exceeded) "
+                f"printf '{_SCRATCH_GUARD_PREFIX}%s=%s\\n' \"${{scratch_metric}}\" \"${{scratch_value}}\" ;;",
+                "      esac",
+                '    done < "${scratch_guard_result}"',
+                "  fi",
                 f"  test ! -f {resource_time_path} || cat {resource_time_path}",
                 *([f"  test ! -f {resource_gpu_path} || cat {resource_gpu_path}"] if self.tt.gpus else []),
                 f"}} > {resource_path}",
@@ -744,16 +1427,48 @@ class SlurmJob(Job):
 
         for line in iter(stream.readline, ""):
             self._stdout_lines.append(line)
-            if line.startswith("REVODESIGN_JOB_ID=") and self._slurm_job_id is None:
+            if line.startswith(JOB_ID_PREFIX):
                 candidate = line.split("=", 1)[1].strip()
                 if candidate.isdigit():
-                    self._slurm_job_id = candidate
-                    self._job_id_event.set()
+                    # The wrapper prints this line itself, so it is evidence the
+                    # request reached a compute node and started — which a queued
+                    # srun stderr banner never is.  Recorded independently of the
+                    # job-id race: the stderr banner may already have supplied
+                    # the identity, and that must not hide the fact that the
+                    # wrapper itself ran.  ``_wrapper_started_at`` is the start
+                    # stamp the ``poll()`` backstop uses on a host with no
+                    # scheduler query.
+                    if self._slurm_job_id is None:
+                        self._slurm_job_id = candidate
+                        self._job_id_event.set()
+                    self._wrapper_started = True
+                    if self._wrapper_started_at is None:
+                        self._wrapper_started_at = time.time()
+                    # Persist the execution fact NOW, from the thread that saw it,
+                    # rather than deferring to ``submit()``: a process death
+                    # between this observation and the scheduler-owned reservation
+                    # transition must not be able to erase the fact that the
+                    # wrapper occupied a node.  ``submit()`` holds the wrapper at
+                    # its start gate — and, for any allocation beyond the first
+                    # workflow stage, at the gate that waits on the scheduler-owned
+                    # reservation — so a failure here must STOP the wrapper rather
+                    # than let it run an allocation whose fact was never written.
+                    # It propagates to ``submit()``, which tears the job down.
+                    self._notify_dispatched()
+            elif line.startswith(ALLOCATION_LIVE_PREFIX):
+                # The wrapper observed its own job in RUNNING state on the
+                # compute node.  This — not job identity — is what starts
+                # allocation accounting, and it is the signal the wrapper waits
+                # on before it releases the scientific command.
+                live = line.split("=", 1)[1].strip()
+                if live.isdigit():
+                    self._allocation_started_at = time.time()
+                    self._notify_allocation_live()
                     if markers and self.stage_callback:
-                        # The allocation is live before the scientific tool
-                        # prints its first marker.  Emit the first declared
-                        # stage as a liveness signal so queued tasks become
-                        # running as soon as the wrapper starts.
+                        # The allocation is now genuinely running, before the
+                        # scientific tool has printed its first marker.  Emit the
+                        # first declared stage as a liveness signal so the Task
+                        # reads as running from the moment it holds resources.
                         emit_stage(next(iter(markers)))
             if markers and self.stage_callback:
                 stage = extract_stage_from_log_line(line, markers)
@@ -882,6 +1597,12 @@ class SlurmJob(Job):
             "max_rss_kib",
             "gpu_memory_peak_mib",
             "gpu_utilization_peak_percent",
+            # Ephemeral scratch capacity, measured by the guard.  Reported by
+            # the wrapper only when the guard completed a measurement, so a
+            # missing pair means "unknown", never "zero bytes used".
+            f"{_SCRATCH_GUARD_PREFIX}peak_bytes",
+            f"{_SCRATCH_GUARD_PREFIX}samples",
+            f"{_SCRATCH_GUARD_PREFIX}exceeded",
         }
         lines = self._resource_capture_text()
         if lines is None:
@@ -921,6 +1642,9 @@ class SlurmJob(Job):
             "max_rss_kib": int,
             "gpu_memory_peak_mib": int,
             "gpu_utilization_peak_percent": int,
+            f"{_SCRATCH_GUARD_PREFIX}peak_bytes": int,
+            f"{_SCRATCH_GUARD_PREFIX}samples": int,
+            f"{_SCRATCH_GUARD_PREFIX}exceeded": int,
         }
         payload: dict[str, Any] = {}
         try:
@@ -1004,6 +1728,11 @@ class SlurmJob(Job):
 
         Called *before* ``_save_output`` so the archive cannot carry a file the
         task container could have rewritten while bash was still reading it.
+
+        The host-only directory is dropped only once it is empty.  A surviving
+        ``allocation.receipt`` therefore keeps the directory alive on purpose: it
+        is the one durable record of an allocation whose worker died before it
+        adopted the claim, and restart reconciliation must be able to find it.
         """
         path = self._wrapper_script_path
         if path and os.path.exists(path):
@@ -1016,6 +1745,189 @@ class SlurmJob(Job):
                 os.rmdir(self.allocation_dir)
             except OSError:
                 pass
+
+
+def parse_allocation_receipt(text: str) -> dict[str, Any] | None:
+    """Parse the exact byte format the wrapper writes into an allocation receipt.
+
+    The one reader of the wrapper's receipt schema, shared by the worker that is
+    running the allocation and by restart reconciliation, which walks the
+    host-only namespace after a crash.  A receipt that is truncated, carries an
+    unknown schema, names a non-numeric job id, or reports a nonsensical shape
+    returns ``None`` — it is treated as absent rather than coerced into a
+    plausible allocation.  The values are parsed, never interpreted:
+    corroborating the job id against the scheduler belongs to the caller that has
+    the scheduler.
+    """
+    fields: dict[str, str] = {}
+    for line in text.splitlines():
+        key, separator, value = line.partition("=")
+        if not separator or key in fields:
+            continue
+        fields[key] = value.strip()
+    job_id = fields.get("slurm_job_id", "")
+    if fields.get("schema_version") != "1" or not job_id.isdigit():
+        return None
+    try:
+        observed_at = float(fields.get("observed_at", ""))
+        cpus = int(fields.get("cpus", "0"))
+        gpus = int(fields.get("gpus", "0"))
+    except ValueError:
+        return None
+    if observed_at <= 0 or cpus < 0 or gpus < 0:
+        return None
+    return {
+        "slurm_job_id": job_id,
+        "observed_at": observed_at,
+        "cpus": cpus,
+        "gpus": gpus,
+    }
+
+
+def allocation_dir_for(output_dir: str) -> str:
+    """The host-only allocation directory for the Task rooted at *output_dir*.
+
+    Derived from the result path rather than stored, because restart
+    reconciliation has only a Task row: the layout and the runner must agree on
+    one spelling, and this is it.
+    """
+    return f"{os.path.normpath(output_dir)}{ALLOCATION_DIR_SUFFIX}"
+
+
+def _allocation_dirs(results_root: str) -> list[tuple[str, str]]:
+    """Every host-only allocation directory under *results_root*, with its Task id.
+
+    The results tree is laid out ``<results_root>/users/<storage key>/tasks/<task
+    id>`` with the allocation directory as the ``<task id>.allocation`` sibling,
+    so this bounded three-level walk finds every Task that ever ran here.  Both
+    reconciliation readers share it: which files live inside the directory is
+    their difference, not where the directory is.
+    """
+    base = os.path.abspath(results_root)
+    users_root = os.path.join(base, "users")
+    found: list[tuple[str, str]] = []
+    if not os.path.isdir(users_root):
+        return found
+    for user_entry in sorted(os.scandir(users_root), key=lambda entry: entry.name):
+        if not user_entry.is_dir(follow_symlinks=False):
+            continue
+        tasks_root = os.path.join(user_entry.path, "tasks")
+        if not os.path.isdir(tasks_root):
+            continue
+        for allocation_entry in sorted(os.scandir(tasks_root), key=lambda entry: entry.name):
+            # The allocation directory is a sibling of the Task's result
+            # directory and is named after it, so the Task id is the name with
+            # the suffix removed.  Anything else under ``tasks`` is a result
+            # directory and is skipped.
+            if not allocation_entry.is_dir(follow_symlinks=False):
+                continue
+            name = allocation_entry.name
+            if not name.endswith(ALLOCATION_DIR_SUFFIX):
+                continue
+            task_id = name[: -len(ALLOCATION_DIR_SUFFIX)]
+            if not task_id:
+                continue
+            found.append((task_id, allocation_entry.path))
+    return found
+
+
+def surviving_allocation_receipts(results_root: str) -> list[dict[str, Any]]:
+    """Every compute-node receipt still on disk under *results_root*.
+
+    Restart reconciliation's view of the host-only allocation namespace.
+
+    A receipt is returned only when it parses: the entry stays on disk so an
+    operator can inspect an anomalous one, and a receipt this pass cannot adopt
+    is never deleted.  The caller corroborates each claim against the scheduler
+    before anything is recorded.
+    """
+    found: list[dict[str, Any]] = []
+    for task_id, directory in _allocation_dirs(results_root):
+        receipt_path = os.path.join(directory, ALLOCATION_RECEIPT_NAME)
+        try:
+            with open(receipt_path, encoding="utf-8") as handle:
+                text = handle.read(4096)
+        except OSError:
+            continue
+        receipt = parse_allocation_receipt(text)
+        if receipt is None:
+            continue
+        receipt["task_id"] = task_id
+        receipt["receipt_path"] = receipt_path
+        found.append(receipt)
+    return found
+
+
+def surviving_scheduler_logs(results_root: str) -> list[dict[str, Any]]:
+    """Every scheduler-authored per-job file still on disk under *results_root*.
+
+    The complement of :func:`surviving_allocation_receipts`, and the only reader
+    of the window that function cannot see.  Slurm creates
+    ``allocation-<job id>.err`` in the job's working directory the instant the
+    job is allocated a node; a job killed between "allocated" and its first
+    statement leaves that file and nothing else.  The wrapper's own receipt is
+    written microseconds later and is strictly better — it carries the shape —
+    so an entry is reported only when no receipt exists beside it, which also
+    keeps the two readers from ever describing one allocation twice.
+
+    What such a file proves is exactly one thing: a scheduler job held a node.
+    It says nothing about how many GPUs or cores, so the caller records the fact
+    with an unknown shape rather than inventing one.  The file name carries the
+    job id, which is the claim's identity and what reconciliation corroborates.
+    """
+    found: list[dict[str, Any]] = []
+    for task_id, directory in _allocation_dirs(results_root):
+        if os.path.exists(os.path.join(directory, ALLOCATION_RECEIPT_NAME)):
+            continue
+        try:
+            entries = os.scandir(directory)
+        except OSError:
+            continue
+        with entries:
+            for entry in sorted(entries, key=lambda item: item.name):
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+                job_id = _scheduler_log_job_id(entry.name)
+                if job_id is None:
+                    continue
+                found.append(
+                    {
+                        "task_id": task_id,
+                        "slurm_job_id": job_id,
+                        # The file's own mtime is the only durable stamp there is
+                        # for this claim.  It is an approximation of the
+                        # allocation start (Slurm touches the file when it starts
+                        # the job's step), which is exactly the kind of floor
+                        # reconciliation already uses, and it is never rewritten
+                        # into a settlement quantity.
+                        "observed_at": _mtime(entry.path),
+                        "scheduler_log_path": entry.path,
+                    }
+                )
+    return found
+
+
+def _mtime(path: str) -> float:
+    """One file's modification time, or ``0.0`` when it cannot be read."""
+    try:
+        return os.stat(path).st_mtime
+    except OSError:
+        return 0.0
+
+
+def _scheduler_log_job_id(filename: str) -> str | None:
+    """The job id a scheduler log file name carries, or ``None``.
+
+    ``ALLOCATION_SCHEDULER_LOG_NAME`` is ``allocation-%j.err``, so the file is
+    ``allocation-<digits>.err``.  Anything else in the directory — the wrapper
+    script, a partially written temp file — is not a scheduler log and is not
+    claimed as one.
+    """
+    prefix, suffix = ALLOCATION_SCHEDULER_LOG_NAME.split("%j", 1)
+    if not filename.startswith(prefix) or not filename.endswith(suffix):
+        return None
+    job_id = filename[len(prefix) : len(filename) - len(suffix) if suffix else None]
+    return job_id if job_id.isdigit() else None
 
 
 def _sanitize_name(s: str) -> str:

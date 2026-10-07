@@ -137,6 +137,13 @@ def _wrapper_resource_observation(job_id: str, output_root: Path | None) -> dict
         "max_rss_kib",
         "gpu_memory_peak_mib",
         "gpu_utilization_peak_percent",
+        # The allocation wrapper's scratch capacity guard reports these whenever
+        # it completed a measurement, so a reader that did not know them would
+        # reject every fresh payload as unknown content and silently fall back to
+        # scheduler accounting that may not be available at all.
+        "scratch_guard.peak_bytes",
+        "scratch_guard.samples",
+        "scratch_guard.exceeded",
     }
     for candidate in candidates:
         try:
@@ -285,10 +292,10 @@ def _gpu_accounting_evidence(task_id: str, context: dict[str, Any] | None) -> di
     user_id = int(context["user_id"])
     before = context["before"]
     after = task_runtime.task_store.gpu_credit_summary(user_id)
-    allocations = task_runtime.task_store.list_task_gpu_allocations(task_id)
+    allocations = task_runtime.task_store.list_task_allocations(task_id)
     usage_entries = [
         entry
-        for entry in task_runtime.task_store.list_gpu_credit_ledger(user_id, period=before["period"], limit=200)
+        for entry in task_runtime.task_store.list_compute_ledger(user_id, period=before["period"], limit=200)
         if entry["kind"] == "usage" and entry["task_id"] == task_id
     ]
     return {

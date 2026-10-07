@@ -168,12 +168,11 @@ def test_gpu_workflow_uses_owning_runtime_for_allocation_authorization(monkeypat
         def poll(self):
             return JobState.COMPLETED
 
-    monkeypatch.setattr(task_runtime.task_store, "require_gpu_credit", lambda user_id: None)
     monkeypatch.setattr(task_runtime.task_store, "update_task", lambda *args, **kwargs: True)
     monkeypatch.setattr(
         task_runtime,
-        "_gpu_allocation_callbacks",
-        lambda **kwargs: callback_requests.append(kwargs) or (None, None),
+        "_compute_allocation_callbacks",
+        lambda **kwargs: callback_requests.append(kwargs) or (None, None, None),
     )
     monkeypatch.setattr(task_runtime, "_create_job", lambda *args, **kwargs: _Job())
 

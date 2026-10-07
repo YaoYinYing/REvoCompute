@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 import time
 import uuid
@@ -24,6 +25,7 @@ import yaml
 import conftest
 from conftest import _anchor_result_publication, _extract_md5, _load_pssm_module, _relocate_task_artifacts, _task_owner
 from jsonschema import Draft202012Validator
+from revocompute.resource_ledger import DataLifecycleState
 from revocompute.task_types import TaskInputRole
 from werkzeug.utils import secure_filename
 
@@ -107,6 +109,8 @@ def test_public_openapi_exposes_the_client_contract(monkeypatch, tmp_path):
         "/compute/api/auth/admin/logs/archives": {"get"},
         "/compute/api/auth/admin/logs/archives/{archive_name}": {"get"},
         "/compute/api/gpu-credit": {"get"},
+        "/compute/api/resource-entitlement": {"get"},
+        "/compute/api/auth/admin/users/{user_id}/resource-entitlement": {"get"},
         "/compute/api/user-metrics": {"get"},
         "/compute/api/auth/admin/gpu-credit/reconciliation": {"get", "post"},
         "/compute/api/auth/admin/gpu-credit/reset": {"post"},
@@ -702,6 +706,40 @@ def test_run_compute_task_records_executor_error(monkeypatch, tmp_path):
     assert not (Path(module.app.config["RESULTS_FOLDER"]) / f"{md5sum}_results.zip").exists()
 
 
+def test_failed_finalize_after_a_completed_purge_leaves_no_result_residue(monkeypatch, tmp_path):
+    """A purge that completed while the worker was failing stays authoritative.
+
+    Writing the failure report first and letting publication refuse it would
+    leave an unpaid, unpublished ``task_failed.txt`` on disk — residue no charge
+    accounts for, which the next retention pass then has to discover.  The
+    lifecycle row, not the execution status, decides whether the tree exists.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    md5sum = _insert_pending_task(module, tmp_path / "result")
+    task = module.task_store.get_task(md5sum)
+    result_dir = Path(module.app.config["storage_resolver"].get_task_root(task))
+
+    # The purge ran to completion while this worker still held the Task.
+    module.task_store.ensure_data_lifecycle(
+        md5sum, user_id=int(task["submitted_by_user_id"]), logical_bytes=4096, at=time.time()
+    )
+    assert module.task_store.claim_data_deletion(
+        md5sum, user_id=int(task["submitted_by_user_id"]), actor_user_id=None, at=time.time()
+    )
+    assert module.task_store.begin_data_purge(md5sum, at=time.time())
+    assert module.task_store.complete_data_purge(md5sum, at=time.time())
+    shutil.rmtree(result_dir, ignore_errors=True)
+    assert not result_dir.exists()
+
+    module.task_runtime._finalize_failed_results(task, "scheduler connection denied", finished_at=time.time())
+
+    assert not result_dir.exists()
+    assert not (result_dir / "task_failed.txt").exists()
+    assert not (result_dir / "manifest.json").exists()
+    # Nothing was charged for residue that does not exist.
+    assert module.task_store.logical_owned_bytes(int(task["submitted_by_user_id"])) == 0
+
+
 def test_run_compute_task_finalizes_uncompressed_result_manifest(monkeypatch, tmp_path):
     module = _load_pssm_module(
         monkeypatch,
@@ -777,6 +815,9 @@ def test_run_compute_task_finalizes_uncompressed_result_manifest(monkeypatch, tm
         "runner.stage.finished",
         "runner.stage.started",
         "runner.stage.finished",
+        # Publishing a result charges the durable bytes it owns, in the same
+        # step that makes it immutable.
+        "resource.storage.charged",
         "manifest.published",
         "task.finished",
         "worker.task.finished",
@@ -1963,6 +2004,257 @@ def test_polling_terminal_flag_covers_settled_outcomes(monkeypatch, tmp_path):
         payload = client.get(f"/compute/api/running/{md5sum}", headers=auth_header).get_json()
         assert payload["terminal"] is want_terminal, status
 
+
+
+def _submit_gremlin(module, client, headers, *, task_type: str = "gremlin", data: bytes = b">test\nACDE\n"):
+    """POST one minimal Swiss-Prot-style submission and return the response."""
+    return client.post(
+        "/compute/api/post",
+        data={
+            "task_type": task_type,
+            "file": (io.BytesIO(data), "upload.fasta"),
+            "input_roles": "sequence",
+        },
+        headers=headers,
+    )
+
+
+def test_durable_storage_soft_limit_refuses_a_submission_of_any_kind(monkeypatch, tmp_path):
+    """The soft ceiling restricts later admission of *any* Task, not only GPUs.
+
+    Durable ownership is a submission-wide concern: it is the same envelope for
+    every Task.  A CPU-only submission creates the overrun as readily as a GPU
+    one, so gating the refusal on a GPU request would let the submissions that
+    cause the overrun keep arriving.
+    """
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "gremlin"},
+    )
+    client = module.app.test_client()
+    headers = _test_client_auth(module)
+    user = module.app.config["user_db"].get_user_by_username("tester")
+    # Register durable ownership past the ceiling.
+    module.task_store.ensure_data_lifecycle(
+        "d" * 32, user_id=int(user["id"]), logical_bytes=module.task_store.storage_soft_limit_bytes + 1
+    )
+
+    class _DummyAsyncResult:
+        id = "celery-test-id"
+
+    monkeypatch.setattr(module.run_compute_task, "apply_async", lambda *a, **kw: _DummyAsyncResult())
+
+    response = _submit_gremlin(module, client, headers)
+
+    assert response.status_code == 403
+    payload = response.get_json()
+    assert payload["details"][0]["code"] == "storage_soft_limit_exceeded"
+    # The refusal is not an accounting event: the completed result that crossed
+    # the ceiling keeps its bytes, and no new Task row was created.
+    assert module.task_store.logical_owned_bytes(int(user["id"])) == (
+        module.task_store.storage_soft_limit_bytes + 1
+    )
+
+
+def test_a_result_that_crossed_the_soft_limit_keeps_its_bytes_and_blocks_the_next_submission(
+    monkeypatch, tmp_path
+):
+    """A successful computation keeps its scientific result even past the limit.
+
+    Quota is checked at admission, never at completion: the bytes are charged,
+    the Task is finished, and only the *next* submission is refused.
+    """
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "gremlin"},
+    )
+    module.task_store._storage_soft_limit = 8
+    client = module.app.test_client()
+    headers = _test_client_auth(module)
+    user = module.app.config["user_db"].get_user_by_username("tester")
+
+    class _DummyAsyncResult:
+        id = "celery-test-id"
+
+    monkeypatch.setattr(module.run_compute_task, "apply_async", lambda *a, **kw: _DummyAsyncResult())
+    accepted = _submit_gremlin(module, client, headers, data=b">crossing\nACDEFGHIKLMNPQRSTVWY\n")
+    assert accepted.status_code == 302
+
+    # A published result larger than the ceiling is charged and kept: the
+    # submission that produced it is not retroactively refused.
+    published = _submit_task_id(accepted)
+    module.task_store.ensure_data_lifecycle(
+        published, user_id=int(user["id"]), logical_bytes=64, at=time.time()
+    )
+    assert module.task_store.logical_owned_bytes(int(user["id"])) == 64
+    record = module.task_store.get_data_lifecycle(published)
+    assert record["state"] == DataLifecycleState.ACTIVE.value
+
+    # The next submission of any kind is refused at the same ceiling.
+    refused = _submit_gremlin(module, client, headers)
+    assert refused.status_code == 403
+    assert refused.get_json()["details"][0]["code"] == "storage_soft_limit_exceeded"
+
+
+def _submit_task_id(response) -> str:
+    return _extract_md5(response.headers["Location"])
+
+
+def test_a_purged_task_is_not_republished_by_a_finishing_worker(monkeypatch, tmp_path):
+    """A deletion that lands while a result is finishing wins.
+
+    Lifecycle state and execution state are independent — ``Task.status`` never
+    encodes storage — so the guard cannot read the task row; it reads the durable
+    lifecycle row.  A worker that republished here would recreate the tree the
+    purge just removed and charge the subject for bytes the deletion was
+    authorized to free.
+    """
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "gremlin"},
+    )
+    owner = _task_owner(module, "purge-vs-finalize")
+    task_id = "e" * 32
+    module.task_store.upsert_task(
+        task_id,
+        filename="input.fasta",
+        file_path="/immutable/input.fasta",
+        uploaded_at=900.0,
+        status="running",
+        is_binary=0,
+        username="purge-vs-finalize",
+        task_type="gremlin",
+        **owner,
+    )
+    task = module.task_store.get_task(task_id)
+    module.task_store.ensure_data_lifecycle(
+        task_id, user_id=int(owner["submitted_by_user_id"]), logical_bytes=64, at=time.time()
+    )
+    module.task_store.claim_data_deletion(
+        task_id, user_id=int(owner["submitted_by_user_id"]), actor_user_id=1, at=time.time()
+    )
+
+    with pytest.raises(module.task_runtime.DataPurgedError):
+        module.task_runtime._finalize_results_manifest(
+            task, execution_state="completed", finished_at=time.time()
+        )
+    # Nothing was resurrected and nothing was charged.
+    assert module.task_store.logical_owned_bytes(int(owner["submitted_by_user_id"])) == 64
+    assert module.task_store.get_data_lifecycle(task_id)["state"] == "DELETE_REQUESTED"
+
+
+def test_a_purge_that_lands_during_finalize_is_not_republished_or_recharged(monkeypatch, tmp_path):
+    """The window between the finalize guard and the charge is real, and deletion wins.
+
+    ``_finalize_results_manifest`` reads the durable lifecycle once at the top
+    and then walks the result tree.  A purge that completes during that walk has
+    removed exactly the bytes this worker is about to re-publish, so publishing
+    anyway would re-create the tree in a directory the deletion emptied and
+    re-open a ``PURGED`` row as ``ACTIVE`` charged zero — a result on disk that
+    nothing owns, and a fabricated zero charge for it.
+    """
+    import os as real_os
+    from types import SimpleNamespace
+
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "gremlin"},
+    )
+    owner = _task_owner(module, "purge-during-finalize")
+    user_id = int(owner["submitted_by_user_id"])
+    task_id = "9" * 32
+    module.task_store.upsert_task(
+        task_id,
+        filename="input.fasta",
+        file_path="/immutable/input.fasta",
+        uploaded_at=900.0,
+        status="running",
+        is_binary=0,
+        username="purge-during-finalize",
+        task_type="gremlin",
+        **owner,
+    )
+    task = module.task_store.get_task(task_id)
+    module.task_store.ensure_data_lifecycle(task_id, user_id=user_id, logical_bytes=64, at=time.time())
+    result_dir = module.task_runtime._task_result_dir(task)
+    charges_before = [
+        entry for entry in module.task_store.list_ledger(user_id)
+        if entry["reason_code"] == "storage_charged"
+    ]
+
+    # The publication's last filesystem step is ``os.replace``; the purge lands
+    # immediately after it and before the charge, which is precisely the window
+    # under test.
+    def _purge_then_replace(src, dst):
+        real_os.replace(src, dst)
+        # Drive the real lifecycle transaction: request, claim, complete.
+        now = time.time()
+        module.task_store.claim_data_deletion(
+            task_id, user_id=user_id, actor_user_id=1, at=now
+        )
+        module.task_store.begin_data_purge(task_id, at=now)
+        module.task_store.complete_data_purge(task_id, at=now)
+
+    shim = SimpleNamespace(**{name: getattr(real_os, name) for name in dir(real_os) if not name.startswith("_")})
+    shim.replace = _purge_then_replace
+    monkeypatch.setattr(module.task_runtime, "os", shim)
+
+    with pytest.raises(module.task_runtime.DataPurgedError):
+        module.task_runtime._finalize_results_manifest(
+            task, execution_state="completed", finished_at=time.time()
+        )
+
+    record = module.task_store.get_data_lifecycle(task_id)
+    # The purge stands: the row is not re-opened to ACTIVE, and nothing is
+    # charged for it.
+    assert record["state"] == "PURGED"
+    assert module.task_store.logical_owned_bytes(user_id) == 0
+    # No new charge was appended for the publication the purge undid; the only
+    # charge on the ledger is the one the original registration made, and the
+    # purge released exactly it.
+    charges_after = [
+        entry for entry in module.task_store.list_ledger(user_id)
+        if entry["reason_code"] == "storage_charged"
+    ]
+    assert charges_after == charges_before
+    # And the resurrected tree the worker had just written is gone, not left
+    # behind in a directory the deletion emptied.
+    assert not os.path.exists(result_dir)
+    assert not os.path.exists(os.path.join(result_dir, "execution"))
+
+
+def test_a_finished_task_with_no_deletion_request_still_publishes_normally(monkeypatch, tmp_path):
+    """The guard admits the ordinary case: no lifecycle row, or an owning state."""
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "gremlin"},
+    )
+    owner = _task_owner(module, "finalize-normal")
+    task_id = "f" * 32
+    module.task_store.upsert_task(
+        task_id,
+        filename="input.fasta",
+        file_path="/immutable/input.fasta",
+        uploaded_at=900.0,
+        status="running",
+        is_binary=0,
+        username="finalize-normal",
+        task_type="gremlin",
+        **owner,
+    )
+    task = module.task_store.get_task(task_id)
+
+    manifest = module.task_runtime._finalize_results_manifest(
+        task, execution_state="completed", finished_at=time.time()
+    )
+
+    assert manifest["task_id"] == task_id
+    assert module.task_store.get_data_lifecycle(task_id) is not None
 
 def test_private_dashboard_blocks_non_owner_access(monkeypatch, tmp_path):
     module = _load_pssm_module(

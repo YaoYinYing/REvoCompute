@@ -50,12 +50,26 @@ EVENT_NAMES = frozenset(
         "manifest.publication_quarantined",
         "archive.requested",
         "archive.completed",
-        "gpu.credit.checked",
-        "gpu.credit.denied",
-        "gpu.usage.started",
-        "gpu.usage.settled",
-        "gpu.usage.settlement_failed",
-        "gpu.credit.adjusted",
+        # Canonical resource-governance vocabulary.  One scheme for accounting,
+        # admission, retention, and reconciliation, so a cross-PR event or
+        # reason code (placement, reporting, MCP) stays comparable.  The
+        # GPU-named events it replaces are gone, not aliased: a second spelling
+        # for the same decision is a second source of truth.
+        "resource.admission.checked",
+        "resource.admission.denied",
+        "resource.admission.reserved",
+        "resource.admission.released",
+        "resource.allocation.started",
+        "resource.allocation.recovered",
+        "resource.allocation.settled",
+        "resource.allocation.settlement_failed",
+        "resource.policy.adjusted",
+        "resource.storage.charged",
+        "resource.storage.released",
+        "resource.lifecycle.requested",
+        "resource.lifecycle.purged",
+        "resource.lifecycle.error",
+        "resource.reconciliation.completed",
     }
 )
 
@@ -76,7 +90,7 @@ _TEXT_FIELDS = frozenset(
         "batch_id",
     }
 )
-_INTEGER_FIELDS = frozenset({"duration_ms", "http_status", "user_id", "gpu_count", "gpu_seconds"})
+_INTEGER_FIELDS = frozenset({"duration_ms", "http_status", "user_id", "gpu_count", "gpu_seconds", "storage_bytes"})
 _CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
 _LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
 _LOGGER = logging.getLogger("revocompute.operational")

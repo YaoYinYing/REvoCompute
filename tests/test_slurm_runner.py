@@ -18,7 +18,7 @@ from unittest.mock import patch
 
 import pytest
 from revocompute.job import JobState
-from revocompute.job.runners.slurm_runner import SlurmJob, _sanitize_name, _sh_quote
+from revocompute.job.runners.slurm_runner import JOB_ID_PREFIX, SlurmJob, _sanitize_name, _sh_quote
 from revocompute.resource_policy import ResolvedResources
 
 
@@ -774,6 +774,10 @@ def test_submit_invokes_srun_with_resource_args_and_wrapper(tmp_path):
         "--constraint=a100&nvme",
         "--exclusive",
         f"--chdir={output_dir}",
+        # Slurm's own per-job file, created at allocation: the only durable trace
+        # of a job killed before the wrapper's first statement.  Only stderr is
+        # redirected, so the wrapper's stdout protocol stays on its pipe.
+        f"--error={Path(job.allocation_dir) / 'allocation-%j.err'}",
         "--job-name=revocomput_alice_example_com_gremlin_abcdef12",
         "/bin/bash",
         str(wrapper),
@@ -786,7 +790,7 @@ def test_submit_invokes_srun_with_resource_args_and_wrapper(tmp_path):
     assert output_dir.is_dir()
 
 
-def test_gpu_allocation_waits_for_accounting_approval_and_reports_finish(tmp_path):
+def test_gpu_allocation_release_gates_the_command_behind_the_allocation_report(tmp_path):
     output_dir = tmp_path / "out"
     starts = []
     finishes = []
@@ -803,19 +807,428 @@ def test_gpu_allocation_waits_for_accounting_approval_and_reports_finish(tmp_pat
     script = job._render_wrapper()
     fake_proc = _FakeSrunProcess(stdout="REVODESIGN_JOB_ID=4217\n", returncode=1)
 
-    assert 'test -f "$approval"' in script
+    # Two gates: one to let the wrapper observe its allocation, one to let the
+    # scientific command run.  The rendered script must contain both, and the
+    # observation must consult the scheduler rather than the job identity.
+    assert ".allocation-start-abcdef12" in script
+    assert ".allocation-approved-abcdef12" in script
+    assert "squeue" in script
     with patch("subprocess.Popen", return_value=fake_proc):
         assert job.submit() == "4217"
-        assert starts[0][0] == "4217"
-        assert (output_dir / ".allocation-approved-abcdef12").is_file()
+        # Submitting names the request and releases the observation gate only.
+        # It does not start the allocation, and it does not grant the command.
+        assert starts == []
+        assert (output_dir / ".allocation-start-abcdef12").is_file()
+        assert not (output_dir / ".allocation-approved-abcdef12").exists()
         assert job.poll() == JobState.FAILED
 
+    # The wrapper ran on a compute node and wrote its resource envelope, so the
+    # allocation is settled and the run released exactly once.
+    assert starts[0][0] == "4217"
     assert finishes[0][0] == "4217"
     assert len(finishes) == 1
     assert not (output_dir / ".allocation-approved-abcdef12").exists()
 
 
-def test_gpu_allocation_cancel_reports_finish_once_at_cancellation(tmp_path):
+def test_wrapper_observation_survives_a_crash_before_the_grant(tmp_path):
+    """The wrapper's own stdout id line is persisted the moment it is read.
+
+    This is the crash window the restart path has to survive: the wrapper is
+    executing on a compute node, then it dies (or its process does) before any
+    admission decision.  The dispatch callback is the durable-writer seam, so it
+    must already have been called with ``wrapper_executed=True`` by the time the
+    identity is known — not deferred to ``submit()``.
+    """
+    output_dir = tmp_path / "out"
+    dispatches = []
+    job = SlurmJob(
+        "abcdef1234567890",
+        _make_task_type(gpus=True),
+        _make_runner(),
+        _make_entities(),
+        str(output_dir),
+        resource_policy=_policy(gres="gpu:1", requires_gpu=True),
+        allocation_dispatched_callback=lambda job_id, at, executed=False, receipt=None: dispatches.append(
+            (job_id, executed)
+        ),
+        allocation_started_callback=lambda _job_id, _at: None,
+    )
+    stdout = StringIO("REVODESIGN_JOB_ID=4217\n")
+    job._process = SimpleNamespace(stdout=stdout, stderr=StringIO(""))
+    job._allocation_submitted_at = 1_000.0
+
+    job._read_stdout()
+
+    assert job.wrapper_executed is True
+    assert dispatches == [("4217", True)]
+
+
+def test_the_wrapper_receipt_precedes_its_stdout_line_and_parses(tmp_path):
+    """The compute node's receipt is durable before anything else is emitted.
+
+    Strict ordering is the point: recovery keys on the receipt, so it must exist
+    before the stdout line that tells the worker anything, and it must be written
+    into the host-only directory the container cannot reach.
+    """
+    output_dir = tmp_path / "out"
+    job = SlurmJob(
+        "abcdef1234567890",
+        _make_task_type(gpus=True),
+        _make_runner(),
+        _make_entities(),
+        str(output_dir),
+        resource_policy=_policy(gres="gpu:1", requires_gpu=True),
+    )
+    script = job._render_wrapper()
+    receipt_write = script.index("allocation.receipt")
+    stdout_line = script.index(f'echo "{JOB_ID_PREFIX}')
+    assert receipt_write < stdout_line
+    # Atomic publication and a durable flush, so a kill cannot leave a partial
+    # receipt that reads as a valid one.
+    assert "sync " in script
+    assert "mv -f -- " in script
+    assert subprocess.run(["bash", "-n"], input=script, text=True, check=False).returncode == 0
+
+    # The receipt lives beside the wrapper script, never inside the directory
+    # that is bind-mounted read-write into the task's container.
+    assert job.allocation_receipt_path.startswith(job.allocation_dir)
+    assert not job.allocation_receipt_path.startswith(str(output_dir) + os.sep)
+
+    # And it round-trips through the reader without being consumed: the file is
+    # the only durable evidence a worker that dies before its own first write
+    # leaves, so it survives until something durable has adopted the claim.
+    os.makedirs(job.allocation_dir, exist_ok=True)
+    Path(job.allocation_receipt_path).write_text(
+        "schema_version=1\nslurm_job_id=4217\nobserved_at=1000\ncpus=2\ngpus=1\n", encoding="utf-8"
+    )
+    assert job.read_allocation_receipt() == {
+        "slurm_job_id": "4217",
+        "observed_at": 1000.0,
+        "cpus": 2,
+        "gpus": 1,
+    }
+    assert Path(job.allocation_receipt_path).exists()
+    assert job.read_allocation_receipt() == {
+        "slurm_job_id": "4217",
+        "observed_at": 1000.0,
+        "cpus": 2,
+        "gpus": 1,
+    }
+    # Removal is a separate, explicit step that only callers with a durable
+    # successor may take.  It is idempotent.
+    job.discard_allocation_receipt()
+    assert not Path(job.allocation_receipt_path).exists()
+    job.discard_allocation_receipt()
+    assert job.read_allocation_receipt() is None
+
+
+def test_an_untrusted_receipt_is_treated_as_absent(tmp_path):
+    """A receipt that is not exactly what the wrapper writes is not read.
+
+    The reader is the boundary between a file on disk and a durable fact, so a
+    truncated, mismatched, or unknown-schema receipt returns nothing rather than
+    being coerced into a plausible allocation.  It is also never deleted: an
+    anomalous durable observation stays inspectable instead of silently
+    disappearing.
+    """
+    output_dir = tmp_path / "out"
+    job = SlurmJob(
+        "abcdef1234567890",
+        _make_task_type(gpus=True),
+        _make_runner(),
+        _make_entities(),
+        str(output_dir),
+        resource_policy=_policy(gres="gpu:1", requires_gpu=True),
+    )
+    os.makedirs(job.allocation_dir, exist_ok=True)
+    for payload in (
+        "slurm_job_id=4217\nobserved_at=1000\n",  # no schema
+        "schema_version=2\nslurm_job_id=4217\nobserved_at=1000\n",  # unknown schema
+        "schema_version=1\nslurm_job_id=not-a-job\nobserved_at=1000\n",  # not an id
+        "schema_version=1\nslurm_job_id=4217\nobserved_at=soon\n",  # unparsable stamp
+        "schema_version=1\nslurm_job_id=4217\n",  # no stamp at all
+    ):
+        Path(job.allocation_receipt_path).write_text(payload, encoding="utf-8")
+        assert job.read_allocation_receipt() is None
+        assert Path(job.allocation_receipt_path).read_text(encoding="utf-8") == payload
+
+
+def test_a_failed_observation_persist_is_never_swallowed(tmp_path):
+    """A store failure on the wrapper's own id line must stop the run.
+
+    The one durable transition that records "the wrapper executed" is the
+    dispatch callback.  If it raises — a busy/locked database, a full disk — the
+    reader must not swallow it: the wrapper is still ahead of its gate, so
+    failing closed here is what keeps an allocation from running with no record.
+    """
+    output_dir = tmp_path / "out"
+    attempts = []
+
+    def failing(job_id, at, executed=False, receipt=None):
+        attempts.append((job_id, executed))
+        raise RuntimeError("database is locked")
+
+    job = SlurmJob(
+        "abcdef1234567890",
+        _make_task_type(gpus=True),
+        _make_runner(),
+        _make_entities(),
+        str(output_dir),
+        resource_policy=_policy(gres="gpu:1", requires_gpu=True),
+        allocation_dispatched_callback=failing,
+        allocation_started_callback=lambda _job_id, _at: None,
+    )
+    job._process = SimpleNamespace(stdout=StringIO("REVODESIGN_JOB_ID=4217\n"), stderr=StringIO(""))
+    job._allocation_submitted_at = 1_000.0
+
+    with pytest.raises(RuntimeError, match="database is locked"):
+        job._read_stdout()
+
+    assert attempts == [("4217", True)]
+    # The flag was cleared, so a later observation retries rather than treating
+    # the request as dispatched with nothing written.
+    assert job._dispatched_notified is False
+    # The process-local fact alone never stands in for a durable one.
+    assert job.wrapper_executed is True
+    assert job.allocation_started is False
+
+
+def _receipt_job(tmp_path, callback, *, task_id="abcdef1234567890"):
+    output_dir = tmp_path / "out"
+    job = SlurmJob(
+        task_id,
+        _make_task_type(gpus=True),
+        _make_runner(),
+        _make_entities(),
+        str(output_dir),
+        resource_policy=_policy(gres="gpu:1", requires_gpu=True),
+        allocation_dispatched_callback=callback,
+        allocation_started_callback=lambda _job_id, _at: None,
+    )
+    os.makedirs(job.allocation_dir, exist_ok=True)
+    Path(job.allocation_receipt_path).write_text(
+        "schema_version=1\nslurm_job_id=4217\nobserved_at=1000\ncpus=2\ngpus=1\n", encoding="utf-8"
+    )
+    job._process = SimpleNamespace(stdout=StringIO("REVODESIGN_JOB_ID=4217\n"), stderr=StringIO(""))
+    job._allocation_submitted_at = 1_000.0
+    return job
+
+
+def test_a_death_before_the_durable_write_keeps_the_receipt(tmp_path):
+    """Injection 1: killed after the file was read and before the DB commit.
+
+    The whole point of the file is this instant.  If the callback never commits,
+    the file has no durable successor and therefore must still be there — that is
+    the difference between "reconciliation can still recover the allocation" and
+    "a real allocation silently became zero".
+    """
+    attempts = []
+
+    def failing(job_id, at, executed=False, receipt=None):
+        attempts.append((job_id, executed, receipt))
+        raise RuntimeError("database is locked")
+
+    job = _receipt_job(tmp_path, failing)
+
+    with pytest.raises(RuntimeError, match="database is locked"):
+        job._read_stdout()
+
+    assert attempts == [("4217", True, {"slurm_job_id": "4217", "observed_at": 1000.0, "cpus": 2, "gpus": 1})]
+    assert job._dispatched_notified is False
+    # The source receipt survives, so restart reconciliation can still adopt it.
+    assert Path(job.allocation_receipt_path).read_text(encoding="utf-8").startswith("schema_version=1")
+    assert job.read_allocation_receipt() is not None
+
+
+def test_a_death_after_the_durable_write_removes_the_receipt(tmp_path):
+    """Injection 2 and 3: the callback committed; the file is finally disposable.
+
+    The runner removes the file only after the callback returns, so a kill
+    anywhere inside the callback leaves it, and a successful callback leaves the
+    claim in server-owned state with the file cleaned up.  There is never a
+    moment with neither.
+    """
+    adopted = []
+
+    def committing(job_id, at, executed=False, receipt=None):
+        adopted.append((job_id, executed, receipt))
+
+    job = _receipt_job(tmp_path, committing)
+    job._read_stdout()
+
+    assert adopted == [("4217", True, {"slurm_job_id": "4217", "observed_at": 1000.0, "cpus": 2, "gpus": 1})]
+    assert job._dispatched_notified is True
+    # The durable successor exists, so the source file is gone; a second read
+    # finds nothing rather than reintroducing the claim.
+    assert not Path(job.allocation_receipt_path).exists()
+    assert job.read_allocation_receipt() is None
+
+
+def test_poll_fails_closed_when_the_observation_was_never_persisted(tmp_path):
+    """A wrapper that ran without a recorded fact fails rather than continues.
+
+    When the process survives to ``poll()`` after a persist failure, the job must
+    not settle as though the allocation had been observed.  There is no grant and
+    no allocation fact, so running the scientific command would be an
+    unaccounted allocation.
+    """
+    output_dir = tmp_path / "out"
+    dispatches = []
+    starts = []
+    job = SlurmJob(
+        "abcdef1234567890",
+        _make_task_type(gpus=True),
+        _make_runner(),
+        _make_entities(),
+        str(output_dir),
+        resource_policy=_policy(gres="gpu:1", requires_gpu=True),
+        allocation_dispatched_callback=lambda job_id, at, executed=False, receipt=None: dispatches.append(
+            (job_id, executed)
+        ),
+        allocation_started_callback=lambda job_id, at: starts.append((job_id, at)),
+    )
+    job._process = _FakeSrunProcess(
+        stdout="REVODESIGN_JOB_ID=4217\n", returncode=0
+    )
+    job._allocation_submitted_at = 1_000.0
+    # The store rejected the observation and the reader path gave up.
+    job._wrapper_started = True
+    job._dispatch_error = "database is locked"
+
+    assert job.poll() == JobState.FAILED
+    # The allocation was never started, so the wrapper was never granted.
+    assert starts == []
+    assert not (output_dir / ".allocation-approved-abcdef12").exists()
+
+
+def test_wrapper_observation_is_recorded_when_stderr_won_the_identity_race(tmp_path):
+    """The stderr banner may supply the identity first; the wrapper still ran.
+
+    A queued banner is not execution evidence, so the stdout id line must set the
+    execution flag (and persist it) even when ``_slurm_job_id`` was already set
+    from stderr — otherwise a host with no ``squeue`` would account nothing for an
+    allocation that really ran.
+    """
+    output_dir = tmp_path / "out"
+    dispatches = []
+    job = SlurmJob(
+        "abcdef1234567890",
+        _make_task_type(gpus=True),
+        _make_runner(),
+        _make_entities(),
+        str(output_dir),
+        resource_policy=_policy(gres="gpu:1", requires_gpu=True),
+        allocation_dispatched_callback=lambda job_id, at, executed=False, receipt=None: dispatches.append(
+            (job_id, executed)
+        ),
+        allocation_started_callback=lambda _job_id, _at: None,
+    )
+    job._slurm_job_id, job._job_id_event = "4217", __import__("threading").Event()
+    job._allocation_submitted_at = 1_000.0
+    job._process = SimpleNamespace(stdout=StringIO("REVODESIGN_JOB_ID=4217\n"), stderr=StringIO(""))
+
+    job._read_stdout()
+
+    assert job.wrapper_executed is True
+    assert dispatches == [("4217", True)]
+
+
+def test_allocation_live_starts_accounting_and_releases_the_wrapper_once(tmp_path):
+    output_dir = tmp_path / "out"
+    starts = []
+    finishes = []
+    job = SlurmJob(
+        "abcdef1234567890",
+        _make_task_type(gpus=True),
+        _make_runner(),
+        _make_entities(),
+        str(output_dir),
+        resource_policy=_policy(gres="gpu:1", requires_gpu=True),
+        allocation_started_callback=lambda job_id, at: starts.append((job_id, at)),
+        allocation_finished_callback=lambda job_id, at: finishes.append((job_id, at)),
+    )
+    fake_proc = _FakeSrunProcess(
+        stdout="REVODESIGN_JOB_ID=4217\nREVODESIGN_ALLOCATION_LIVE=4217\n",
+        returncode=1,
+    )
+
+    with patch("subprocess.Popen", return_value=fake_proc):
+        assert job.submit() == "4217"
+        # The live line is the admission moment: the allocation is recorded and
+        # the scientific command released as one decision, and it is recorded
+        # once even though both the line and poll()'s exit could report it.
+        assert job.poll() == JobState.FAILED
+
+    assert [job_id for job_id, _at in starts] == ["4217"]
+    assert [job_id for job_id, _at in finishes] == ["4217"]
+    # The grant was written while the wrapper could still consume it, and the
+    # wrapper's own run removed it before poll() cleaned up.
+    assert not (output_dir / ".allocation-approved-abcdef12").exists()
+
+
+def test_repeated_allocation_live_lines_start_accounting_exactly_once(tmp_path):
+    starts = []
+    job = SlurmJob(
+        "task-1",
+        _make_task_type(gpus=True),
+        _make_runner(),
+        _make_entities(),
+        str(tmp_path / "out"),
+        resource_policy=_policy(gres="gpu:1", requires_gpu=True),
+        allocation_started_callback=lambda job_id, at: starts.append((job_id, at)),
+    )
+    stdout = StringIO(
+        "REVODESIGN_JOB_ID=4154\n"
+        "REVODESIGN_ALLOCATION_LIVE=4154\n"
+        "REVODESIGN_ALLOCATION_LIVE=4154\n"
+    )
+    job._process = SimpleNamespace(stdout=stdout)
+
+    job._read_stdout()
+
+    assert [job_id for job_id, _at in starts] == ["4154"]
+
+
+def test_a_queued_stderr_banner_never_claims_an_allocation(tmp_path):
+    """A queued srun banner names the request; it is not an allocation.
+
+    The stderr line ``srun: job N queued and waiting for resources`` is
+    sufficient evidence of job identity, and that is all it may be treated as:
+    no allocation is accounted and the wrapper is not released to run until the
+    allocation is observed RUNNING.
+    """
+    output_dir = tmp_path / "out"
+    starts = []
+    dispatches = []
+    job = SlurmJob(
+        "task-1",
+        _make_task_type(gpus=True),
+        _make_runner(),
+        _make_entities(),
+        str(output_dir),
+        resource_policy=_policy(gres="gpu:1", requires_gpu=True),
+        allocation_dispatched_callback=lambda job_id, at, executed=False, receipt=None: dispatches.append(
+            (job_id, at, executed)
+        ),
+        allocation_started_callback=lambda job_id, at: starts.append((job_id, at)),
+    )
+    fake_proc = _FakeSrunProcess(
+        stderr="srun: job 4217 queued and waiting for resources\n", returncode=-15
+    )
+
+    with patch("subprocess.Popen", return_value=fake_proc):
+        assert job.submit() == "4217"
+        assert job.poll() == JobState.FAILED
+
+    # Identity was announced as a dispatch and never as an allocation, and the
+    # queued banner is not evidence the wrapper itself executed.
+    assert [job_id for job_id, _at, _executed in dispatches] == ["4217"]
+    assert [executed for _job_id, _at, executed in dispatches] == [False]
+    assert starts == []
+    assert job.allocation_started is False
+
+
+def test_gpu_allocation_cancel_before_allocation_settles_nothing(tmp_path):
     output_dir = tmp_path / "out"
     finishes = []
     job = SlurmJob(
@@ -836,10 +1249,43 @@ def test_gpu_allocation_cancel_reports_finish_once_at_cancellation(tmp_path):
         job.cancel()
 
     assert fake_proc.terminated is True
+    # The cancellation itself settles nothing: the wrapper was never granted, so
+    # no allocation accounting happened in this process.  The fact that the
+    # wrapper ran stays durable for reconciliation to settle from evidence.
+    assert finishes == []
+    assert job.allocation_started is False
+
+
+def test_gpu_allocation_cancel_after_allocation_reports_finish_once(tmp_path):
+    output_dir = tmp_path / "out"
+    finishes = []
+    job = SlurmJob(
+        "abcdef1234567890",
+        _make_task_type(gpus=True),
+        _make_runner(),
+        _make_entities(),
+        str(output_dir),
+        resource_policy=_policy(gres="gpu:1", requires_gpu=True),
+        allocation_started_callback=lambda _job_id, _at: None,
+        allocation_finished_callback=lambda job_id, at: finishes.append((job_id, at)),
+    )
+    fake_proc = _FakeSrunProcess(
+        stdout="REVODESIGN_JOB_ID=4217\nREVODESIGN_ALLOCATION_LIVE=4217\n", returncode=None
+    )
+
+    with patch("subprocess.Popen", return_value=fake_proc):
+        # Drive the live line through the reader so the allocation is observed
+        # before the cancellation.
+        with patch.object(job, "_stdout_thread", None), patch.object(job, "_stderr_thread", None):
+            assert job.submit() == "4217"
+        job.cancel()
+        job.cancel()
+
+    assert fake_proc.terminated is True
     assert [job_id for job_id, _at in finishes] == ["4217"]
 
 
-def test_gpu_allocation_denial_terminates_srun_before_approval(tmp_path):
+def test_gpu_allocation_denial_terminates_srun_and_fails_the_job(tmp_path):
     output_dir = tmp_path / "out"
     finishes = []
 
@@ -856,14 +1302,21 @@ def test_gpu_allocation_denial_terminates_srun_before_approval(tmp_path):
         allocation_started_callback=deny,
         allocation_finished_callback=lambda job_id, at: finishes.append((job_id, at)),
     )
-    fake_proc = _FakeSrunProcess(stdout="REVODESIGN_JOB_ID=4217\n", returncode=None)
+    fake_proc = _FakeSrunProcess(
+        stdout="REVODESIGN_JOB_ID=4217\nREVODESIGN_ALLOCATION_LIVE=4217\n", returncode=1
+    )
 
     with patch("subprocess.Popen", return_value=fake_proc):
+        assert job.submit() == "4217"
         with pytest.raises(RuntimeError, match="credit exhausted"):
-            job.submit()
+            job.poll()
 
-    assert fake_proc.terminated is True
-    assert finishes == []
+    # A refused allocation is still an allocation: the fact the store was asked
+    # to record exists (that is what the callback attempted before denying), so
+    # it settles for the gate/termination interval.  The refusal is the grant,
+    # not the fact.
+    assert [job_id for job_id, _at in finishes] == ["4217"]
+    assert job.allocation_started is False
     assert not (output_dir / ".allocation-approved-abcdef12").exists()
 
 
@@ -902,7 +1355,7 @@ def test_submit_propagates_srun_launch_failure_and_removes_wrapper(tmp_path):
     assert not list(Path(job.allocation_dir).glob("_slurm_wrapper_*.sh"))
 
 
-def test_job_id_capture_emits_first_stage_as_liveness_signal(tmp_path):
+def test_allocation_live_emits_first_stage_as_liveness_signal(tmp_path):
     stages_seen = []
     job = SlurmJob(
         "task-1",
@@ -912,15 +1365,41 @@ def test_job_id_capture_emits_first_stage_as_liveness_signal(tmp_path):
         str(tmp_path / "out"),
         stage_callback=stages_seen.append,
     )
-    stdout = StringIO("REVODESIGN_JOB_ID=4154\n" "REVODESIGN_STAGE:gremlin\n")
+    stdout = StringIO(
+        "REVODESIGN_JOB_ID=4154\n"
+        "REVODESIGN_ALLOCATION_LIVE=4154\n"
+        "REVODESIGN_STAGE:gremlin\n"
+    )
     job._process = SimpleNamespace(stdout=stdout)
 
     job._read_stdout()
 
     assert job._slurm_job_id == "4154"
     assert job._job_id_event.is_set()
+    # The first declared stage is the allocation's own liveness signal, emitted
+    # when it starts running — never on the bare job identity.
     assert stages_seen == ["hhblits", "gremlin"]
     assert stdout.closed
+
+
+def test_job_identity_alone_emits_no_stage(tmp_path):
+    stages_seen = []
+    job = SlurmJob(
+        "task-1",
+        _make_task_type(),
+        _make_runner(),
+        _make_entities(),
+        str(tmp_path / "out"),
+        stage_callback=stages_seen.append,
+    )
+    stdout = StringIO("REVODESIGN_JOB_ID=4154\n")
+    job._process = SimpleNamespace(stdout=stdout)
+
+    job._read_stdout()
+
+    assert job._slurm_job_id == "4154"
+    assert job._allocation_live is False
+    assert stages_seen == []
 
 
 def test_submit_poll_lifecycle_maps_exit_zero_with_result_to_completed(tmp_path):

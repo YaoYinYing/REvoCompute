@@ -17,6 +17,7 @@ from revocompute.maintenance.tasks import admin_digest
 from revocompute.maintenance.tasks.admin_digest import admin_digest_task
 from revocompute.maintenance.tasks.database_backup import database_backup_task
 from revocompute.maintenance.tasks.log_rotation import log_rotation_task
+from revocompute.maintenance.tasks.resource_maintenance import resource_maintenance_task
 from revocompute.maintenance.tasks.result_cleanup import result_cleanup_task
 
 
@@ -57,6 +58,7 @@ def test_unset_maintenance_settings_register_no_jobs(monkeypatch):
     monkeypatch.delenv("ADMIN_NEW_USER_INFORM", raising=False)
     monkeypatch.delenv("ADMIN_NOTIFY_EMAIL", raising=False)
     monkeypatch.delenv("RESULT_RETENTION_DAYS", raising=False)
+    monkeypatch.delenv("RESOURCE_MAINTENANCE_SECONDS", raising=False)
     monkeypatch.delenv("BACKUP_DB_CRON", raising=False)
     monkeypatch.delenv("BACKUP_DB_PATH", raising=False)
     monkeypatch.delenv("MAX_DB_BACKUP", raising=False)
@@ -66,10 +68,38 @@ def test_unset_maintenance_settings_register_no_jobs(monkeypatch):
     assert scheduler.jobs == []
 
 
+def test_resource_maintenance_is_opt_in(monkeypatch):
+    """An operator turns deletion-completion and reconciliation on deliberately."""
+    monkeypatch.delenv("ADMIN_NEW_USER_INFORM", raising=False)
+    monkeypatch.delenv("ADMIN_NOTIFY_EMAIL", raising=False)
+    monkeypatch.delenv("RESULT_RETENTION_DAYS", raising=False)
+    monkeypatch.delenv("RESOURCE_MAINTENANCE_SECONDS", raising=False)
+    monkeypatch.delenv("BACKUP_DB_CRON", raising=False)
+    unset = RecordingScheduler()
+    assert manager.configure_jobs(unset) == []
+
+    monkeypatch.setenv("RESOURCE_MAINTENANCE_SECONDS", "120")
+    enabled = RecordingScheduler()
+    assert manager.configure_jobs(enabled) == [resource_maintenance_task.id]
+
+    func, trigger, options = enabled.jobs[0]
+    assert func is resource_maintenance_task.task_method
+    assert trigger == "interval"
+    assert options["seconds"] == 120
+    assert options["coalesce"] is True
+    assert options["max_instances"] == 1
+    assert resource_maintenance_task.env == {"RESOURCE_MAINTENANCE_SECONDS": 120}
+
+    monkeypatch.setenv("RESOURCE_MAINTENANCE_SECONDS", "-1")
+    with pytest.raises(ValueError, match="RESOURCE_MAINTENANCE_SECONDS must be zero or positive"):
+        resource_maintenance_task.configure()
+
+
 def test_configure_jobs_registers_enabled_digest_and_cleanup(monkeypatch):
     monkeypatch.setenv("ADMIN_NEW_USER_INFORM", "15")
     monkeypatch.setenv("ADMIN_NOTIFY_EMAIL", "admin@example.com")
     monkeypatch.setenv("RESULT_RETENTION_DAYS", "30")
+    monkeypatch.delenv("RESOURCE_MAINTENANCE_SECONDS", raising=False)
     monkeypatch.delenv("BACKUP_DB_CRON", raising=False)
     monkeypatch.delenv("BACKUP_DB_PATH", raising=False)
     monkeypatch.delenv("MAX_DB_BACKUP", raising=False)
@@ -110,6 +140,7 @@ def test_result_cleanup_accepts_fractional_retention_days(monkeypatch):
     monkeypatch.delenv("ADMIN_NEW_USER_INFORM", raising=False)
     monkeypatch.delenv("ADMIN_NOTIFY_EMAIL", raising=False)
     monkeypatch.setenv("RESULT_RETENTION_DAYS", "0.1")
+    monkeypatch.delenv("RESOURCE_MAINTENANCE_SECONDS", raising=False)
     monkeypatch.delenv("BACKUP_DB_CRON", raising=False)
     scheduler = RecordingScheduler()
 
@@ -124,6 +155,7 @@ def test_configure_jobs_registers_database_backup_cron(monkeypatch, tmp_path):
     monkeypatch.delenv("ADMIN_NEW_USER_INFORM", raising=False)
     monkeypatch.delenv("ADMIN_NOTIFY_EMAIL", raising=False)
     monkeypatch.delenv("RESULT_RETENTION_DAYS", raising=False)
+    monkeypatch.delenv("RESOURCE_MAINTENANCE_SECONDS", raising=False)
     monkeypatch.setenv("BACKUP_DB_CRON", "0 0 * * *")
     monkeypatch.setenv("BACKUP_DB_PATH", str(tmp_path / "backups"))
     monkeypatch.setenv("MAX_DB_BACKUP", "30")
@@ -148,6 +180,7 @@ def test_configure_jobs_registers_database_backup_cron(monkeypatch, tmp_path):
 
 
 def test_configure_jobs_registers_log_rotation(monkeypatch, tmp_path):
+    monkeypatch.delenv("RESOURCE_MAINTENANCE_SECONDS", raising=False)
     monkeypatch.setenv("LOG_DIR", str(tmp_path))
     monkeypatch.setenv("ROTATE_LOG_MAX_LINENO", "1000")
     monkeypatch.setenv("ROTATE_LOG_PERIOD", "0 0 * * *")
@@ -382,7 +415,7 @@ def test_worker_ready_starts_the_pulse_without_consuming_a_task_slot(monkeypatch
     monkeypatch.setattr(module.task_runtime, "start_infrastructure_pulse", lambda: started.append(True))
     monkeypatch.setattr(module.task_runtime, "_recover_orphaned_tasks", lambda: 0)
     monkeypatch.setattr(
-        module.task_runtime, "_reconcile_gpu_allocations", lambda: {"settled": 0, "review": 0, "active": 0}
+        module.task_runtime, "_reconcile_slurm_allocations", lambda: {"settled": 0, "review": 0, "active": 0}
     )
     monkeypatch.setattr(module.task_runtime, "probe_compute_infrastructure", SimpleNamespace(run=lambda: None))
 

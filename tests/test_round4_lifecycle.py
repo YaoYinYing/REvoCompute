@@ -45,7 +45,7 @@ def test_concurrent_allowance_update_is_locked_out(tmp_path):
     database.gpu_credit_summary(user_id)
     probe_engine = sa.create_engine(f"sqlite:///{path}", connect_args={"timeout": 0.2})
     outcome: list[str] = []
-    original_grant = database._ensure_monthly_gpu_grant
+    original_grant = database._ensure_monthly_grant
 
     def _probe_grant(conn, *args, **kwargs):
         with probe_engine.connect() as probe:
@@ -58,8 +58,8 @@ def test_concurrent_allowance_update_is_locked_out(tmp_path):
                 probe.rollback()
         return original_grant(conn, *args, **kwargs)
 
-    database._ensure_monthly_gpu_grant = _probe_grant
-    database.set_gpu_monthly_allowance(
+    database._ensure_monthly_grant = _probe_grant
+    database.set_compute_allowance(
         user_id=user_id, monthly_gpu_seconds=9_000, actor_user_id=1, idempotency_key="locked"
     )
 
