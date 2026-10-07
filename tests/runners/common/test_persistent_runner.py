@@ -353,7 +353,7 @@ def test_a_broken_runtime_never_becomes_the_reason_success_reports_failure():
 
 
 def test_recovery_action_classification_is_by_scientific_impact():
-    """TODO.md 8: every recovery action carries its scientific-impact class.
+    """Recovery provenance: every recovery action carries its scientific-impact class.
 
     ``sample_group_size`` changes how many samples each draw takes together, and
     the samples inside a group share that group's stochastic stream, so the same
@@ -377,7 +377,7 @@ def test_recovery_action_classification_is_by_scientific_impact():
 
 
 def test_the_shared_action_vocabulary_matches_the_runner_adjustment_vocabulary():
-    """TODO.md 1/8: the classification vocabulary is bound to the runner's own.
+    """Parameter roles: the classification vocabulary is bound to the runner's own.
 
     ``ADJUSTMENT_ACTIONS`` and the families' ``RESOURCE_ONLY_PARAMETERS`` are two
     spellings of the same execution-only vocabulary; a key added to one and
@@ -411,7 +411,7 @@ def test_the_shared_action_vocabulary_matches_the_runner_adjustment_vocabulary()
 
 
 def test_every_recorded_attempt_carries_requested_and_effective_parameters():
-    """TODO.md 7/10: per item/attempt the provenance shows requested vs effective."""
+    """Recovery provenance: per item/attempt it shows requested vs effective."""
     items = [{"id": "a", "length": 10, "sample_count": 2, "requested_parameters": {"n": 1, "seed": 4}}]
     config = _config(items, ["", "one"])
     plugin = VerbosePlugin()
@@ -439,7 +439,7 @@ def test_every_recorded_attempt_carries_requested_and_effective_parameters():
 
 
 def test_a_plan_naming_a_scientific_parameter_is_refused_and_never_executed():
-    """TODO.md 8: automatic recovery fails closed on a scientific mutation.
+    """Recovery provenance: automatic recovery fails closed on a scientific mutation.
 
     The server rejects such a declaration, but the runner refuses it on its own
     too: the plan is dropped before the ladder is walked, so it can never mutate
@@ -494,7 +494,7 @@ def test_failure_observation_and_recovery_record_agree_on_the_attempt_index():
 
 
 def test_a_measurement_hook_failure_is_not_an_oom_and_spends_no_ladder():
-    """TODO.md 9: a device that cannot be measured is a runtime fault, not an OOM.
+    """A device that cannot be measured is a runtime fault, not an OOM.
 
     The peak measurement precedes execution; a dead context makes that read
     raise. Nothing ran, so no plan can be blamed and none may be spent: the item
@@ -522,7 +522,7 @@ def test_a_measurement_hook_failure_is_not_an_oom_and_spends_no_ladder():
 
 
 def test_every_item_maps_to_exactly_one_result_regardless_of_execution_order():
-    """TODO.md 4: each input maps to one result; order never cross-contaminates."""
+    """Each input maps to one result; order never cross-contaminates."""
     # Lengths force the queue to execute the longest first, not input order.
     items = [
         {"id": "short", "length": 10, "requested_parameters": {"n": 1}},
@@ -582,7 +582,7 @@ def test_duplicate_items_are_rejected_before_any_path_exists():
 
 
 def test_resume_restores_item_identity_without_recomputing_or_duplicating():
-    """TODO.md 5: a restart keeps every completed item and loses none."""
+    """A restart keeps every completed item and loses none."""
     items = [
         {"id": "a", "length": 10, "requested_parameters": {"n": 1}},
         {"id": "b", "length": 20, "requested_parameters": {"n": 1}},
@@ -612,7 +612,7 @@ def test_resume_restores_item_identity_without_recomputing_or_duplicating():
 
 
 def test_a_changed_input_snapshot_recomputes_instead_of_binding_stale_results():
-    """TODO.md 5: resume is only safe against the same immutable input snapshot.
+    """Resume is only safe against the same immutable input snapshot.
 
     Two FASTA files can carry the same record headers with different sequences,
     so identical item names do not prove identical inputs. The manifest records

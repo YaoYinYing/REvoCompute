@@ -11,7 +11,7 @@ runtime:
   - pssm_gremlin/scripts/fasta_lower_char_rm.py
   - pssm_gremlin/scripts/gremlin_labels.py
   - pssm_gremlin/scripts/make_paired_MSA_simple.py
-  # Family adapter code is still baked here; migration is deferred (IMPLEMENTATION_STATE.md).
+  # Family adapter code is still baked here; migration to runtime_overlay is deferred (docs/runner-guide/runtime-bundles.md).
   runtime_overlay:
   - common/runtime/task_context.sh
   - common/runtime/task_context.py

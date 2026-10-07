@@ -12,7 +12,7 @@ runtime:
   - chai1/requirements.lock
   - chai1/model-assets.json
   - chai1/upstream.json
-  # Family adapter code is still baked here; migration is deferred (IMPLEMENTATION_STATE.md).
+  # Family adapter code is still baked here; migration to runtime_overlay is deferred (docs/runner-guide/runtime-bundles.md).
   runtime_overlay:
   - common/runtime/task_context.sh
   - common/runtime/task_context.py

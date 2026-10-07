@@ -7,7 +7,7 @@ runtime:
   build_inputs:
   - placer-rfdiffusion/rfdiffusion-bool-override.patch
   - placer-rfdiffusion/run.sh
-  # Family adapter code is still baked here; migration is deferred (IMPLEMENTATION_STATE.md).
+  # Family adapter code is still baked here; migration to runtime_overlay is deferred (docs/runner-guide/runtime-bundles.md).
   runtime_overlay:
   - common/runtime/task_context.sh
   - common/runtime/task_context.py

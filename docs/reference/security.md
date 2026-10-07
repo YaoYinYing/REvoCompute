@@ -147,6 +147,14 @@ by file extension and fails closed for formats without a Core validator.
 - Runner families cannot register executable validator hooks in this trusted
   boundary. Reusable transport or format safety belongs in reviewed Core code;
   Runner-specific scientific preparation remains in the Runner.
+- Each admitted input carries a validation receipt recording the byte digest and
+  the Core validation boundary's content revision, and a restored task's snapshot
+  is revalidated against it before dispatch. A deployment that cannot read its own
+  boundary sources reports an `unavailable` revision rather than a guess, and that
+  case skips the revision comparison instead of failing; the bytes are still
+  revalidated through the canonical boundary, so this is a false-accept of an
+  unknown boundary identity, not a validation bypass. Guaranteeing the sources are
+  always readable in a production install is a known, tracked follow-up.
 - Multipart requests, individual files, and aggregate uploaded bytes are each
   limited to 16 MiB; a submission may contain at most 128 inputs. Limits are
   enforced before Task creation. Quarantine copies are hashed while streaming

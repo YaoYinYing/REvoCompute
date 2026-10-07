@@ -5,7 +5,7 @@ runtime:
   image_artifact: fampnn_v1.sif
   definition: fampnn.def
   build_inputs: [fampnn/run.sh, fampnn/normalize_score_table.py, fampnn/model-assets.sha256]
-  # Family adapter code is still baked here; migration is deferred (IMPLEMENTATION_STATE.md).
+  # Family adapter code is still baked here; migration to runtime_overlay is deferred (docs/runner-guide/runtime-bundles.md).
   runtime_overlay:
   - common/runtime/task_context.sh
   - common/runtime/task_context.py

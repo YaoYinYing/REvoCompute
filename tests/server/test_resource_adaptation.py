@@ -653,7 +653,7 @@ def test_work_items_manifest_projection_is_ordered_and_bounded(tmp_path):
 
 
 def test_work_items_projection_publishes_the_recovery_provenance(tmp_path):
-    """TODO.md 10: the smallest existing result surface exposes requested vs effective.
+    """The smallest existing result surface exposes requested vs effective.
 
     The per-item recovery record the runner kept is republished beside the
     item's state, with the scientific-impact class of the action aggregated onto
