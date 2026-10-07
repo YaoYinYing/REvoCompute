@@ -2243,11 +2243,13 @@ def get_result_logical_file(md5sum: str, file_id: str):
     task = task_store.get_task(normalized)
     if task is None or not _task_access_allowed(task):
         return jsonify({"error": "Result file not found"}), 404
-    try:
-        with open(current_app.config["storage_resolver"].get_manifest_path(task), encoding="utf-8") as handle:
-            files = json.load(handle).get("result", {}).get("files", {}).get(file_id, [])
-    except (OSError, json.JSONDecodeError):
-        files = []
+    # The manifest authorizes which identities exist, so it is read through the
+    # canonical bounded verified manifest reader — never a plain pathname open,
+    # which would let a replaced or linked manifest name a different identity.
+    manifest = current_app.config["storage_resolver"].load_manifest(task)
+    if manifest is None:
+        return jsonify({"error": "Result file not found"}), 404
+    files = manifest.get("result", {}).get("files", {}).get(file_id, [])
     try:
         index = int(request.args.get("index", "0"))
     except ValueError:
@@ -2416,11 +2418,12 @@ def get_result_ndarray(md5sum: str, relative_path: str):
     resolved = _result_artifact(task, relative_path)
     if resolved is None:
         return jsonify({"error": "Array artifact not found"}), 404
-    path, stream, artifact = resolved
+    _path, stream, artifact = resolved
     if not _task_artifact_access_allowed(task, artifact):
         stream.close()
         return jsonify({"error": "Array artifact not found"}), 404
     if set(request.args) - {"key", "kind", "max_elements"}:
+        stream.close()
         return jsonify({"error": "Invalid array query"}), 400
 
     def bounded_integer(name: str, default: int) -> int | None:
@@ -2440,15 +2443,20 @@ def get_result_ndarray(md5sum: str, relative_path: str):
         or len(keys) > 1
         or len(kinds) > 1
     ):
+        stream.close()
         return jsonify({"error": "Array projection is outside allowed bounds"}), 400
     key = keys[0] if keys else None
     kind = kinds[0] if kinds else "numeric"
     try:
-        # A projection parses by pathname, so the verified descriptor stays open
-        # for the whole read: the container cannot be swapped for a different file
-        # between verification and the projection, and any replacement is a
-        # new inode rather than the file this descriptor still names.
-        return jsonify(read_array_projection(path, key=key, kind=kind, max_elements=max_elements))
+        # The projection parses from the verified descriptor itself, so a file
+        # replaced after publication identity was checked can never be projected:
+        # after publication identity has been verified, a consumer must consume
+        # the verified object, not reopen its pathname.
+        return jsonify(
+            read_array_projection(
+                stream, name=relative_path, key=key, kind=kind, max_elements=max_elements
+            )
+        )
     except ArrayAccessError as error:
         return jsonify({"error": str(error)}), 400
     finally:
@@ -2470,7 +2478,7 @@ def get_result_table(md5sum: str, relative_path: str):
     resolved = _result_artifact(task, relative_path)
     if resolved is None:
         return jsonify({"error": "Table artifact not found"}), 404
-    path, stream, artifact = resolved
+    _path, stream, artifact = resolved
     if not _task_artifact_access_allowed(task, artifact):
         stream.close()
         return jsonify({"error": "Table artifact not found"}), 404

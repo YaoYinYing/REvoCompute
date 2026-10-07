@@ -54,8 +54,13 @@ _HASH_CHUNK_BYTES = 1024 * 1024
 _MAX_MANIFEST_BYTES = 8 * 1024 * 1024
 
 
-class ArtifactIdentityError(Exception):
-    """A candidate does not satisfy the published-artifact identity contract."""
+class ArtifactIdentityError(OSError):
+    """A candidate does not satisfy the published-artifact identity contract.
+
+    It is an ``OSError`` because it is a failure to obtain the published file at
+    all, so every caller that already fails closed on an unreadable file fails
+    closed on a symlinked, linked, or substituted one with no extra branch.
+    """
 
 
 def _open_published_file(path: str) -> Any:
