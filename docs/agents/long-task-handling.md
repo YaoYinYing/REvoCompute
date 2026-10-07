@@ -482,11 +482,11 @@ A quiescent Commander resumes only on a bounded set of wake events:
 WAKE
 owner checkpoint or READY_FOR_FINAL_REVIEW
 a new reviewer blocker
-a new commit to an active PR
+a commit that changes the head of a PR under review or awaiting merge
 CI completion needing classification
 an upstream merge
-a dependency becoming satisfiable
-a shared-resource or deployment-lease request
+a dependency becoming satisfiable, or a PR becoming blocked because one is not
+a shared-resource request, a deployment/live-test lease request, or a lease release
 an owner escalation
 a material Advisor advisory
 a maintainer instruction
@@ -494,7 +494,9 @@ a maintainer instruction
 
 This is the coordination subset of the Dynamic-orchestration re-evaluation
 events: a wake resumes coordination, while DAG re-evaluation itself is governed
-there.
+there. Dispatching an ephemeral reviewer or specialist is itself a coordination
+action, so a quiescent Commander re-enters to dispatch and then yields again —
+quiescence is not an inability to schedule needed review.
 
 None of the following is Commander work: waiting for subagents, polling with no
 new event, rewriting the same campaign summary, requesting status before an owner
@@ -634,12 +636,12 @@ Commander. It has no implementation, deployment, merge, or routine approval
 authority. Platform-wide concurrency limits still apply and the Advisor consumes a
 slot like any other agent.
 
-The Advisor is subject to the same slot economics as the Commander. "The Advisor
-must remain active" means the role stays instantiated and available across the
-whole Campaign, not that it must hold an execution slot while it has no advisory
-question, checkpoint, or evidence to inspect. When it has none, it checkpoints
-any pending advisory and yields its slot like the Commander, and re-engages when
-an event or a human request makes its independent challenge useful.
+The Advisor is subject to the same slot economics as the Commander. The Advisor
+role stays instantiated and available across the whole Campaign, but it holds an
+execution slot only while it has an advisory question, checkpoint, or evidence to
+inspect. When it has none, it checkpoints any pending advisory and yields its slot
+like the Commander, and re-engages when an event or a human request makes its
+independent challenge useful.
 
 The Advisor spans the full Campaign lifecycle but is not a mandatory gate on any
 PR. It performs:
@@ -1223,12 +1225,15 @@ duplicate line-by-line findings, gate approval, or take implementation ownership
 #### Review stopping rule
 
 Stop review when governing invariants are explicit, all known blocking findings
-are closed, the exact head has green required CI/acceptance evidence, a fresh
-merge-grade reviewer cannot construct a new material counterexample, the relevant
-transition/crash/adversarial cases have evidence, and the remaining observations
-are explicitly non-blocking hardening or future work. The goal is not to prove
-absence of all bugs but to have no known reason the exact head is unsafe or
-architecturally incorrect to merge.
+are closed, the exact head has green required, branch-protected CI/acceptance
+evidence, a fresh merge-grade reviewer cannot construct a new material
+counterexample, the relevant transition/crash/adversarial cases have evidence,
+and the remaining observations are explicitly non-blocking hardening or future
+work. A claimed new counterexample counts only as a concrete reproducible
+sequence touching the changed boundary; the Commander records any finding it
+judges non-concrete as explicit non-blocking hardening rather than leaving it an
+open blocker. The goal is not to prove absence of all bugs but to have no known
+reason the exact head is unsafe or architecturally incorrect to merge.
 
 #### Checkpoint-driven review
 
