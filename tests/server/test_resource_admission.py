@@ -1061,3 +1061,110 @@ def test_a_reclaim_leaves_a_queued_request_named_by_its_identity(tmp_path):
     assert database.list_queued_reservations() == []
     assert database.compute_entitlement(106, at=at + 6).remaining == 1_000
 
+
+# ---------------------------------------------------------------------------
+# The observation and the scheduler-owned reservation are one transition
+# ---------------------------------------------------------------------------
+
+
+def test_an_observed_allocation_hands_the_reservation_over_atomically(tmp_path):
+    """The wrapper's own evidence queues the reservation in the same commit.
+
+    The observation is the earliest proof the wrapper executed.  If it were
+    written one transaction after the reservation transition, a death in between
+    would leave a scheduler-owned reservation with no allocation row, and the
+    reclaim pass would free a proven-occupied allocation as "never produced an
+    allocation".  One commit removes that state entirely.
+    """
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"), monthly_gpu_seconds=1_000)
+    at = _timestamp(2026, 9, 22)
+    task_id = "a8" + "0" * 30
+    assert _reserve(database, 107, task_id=task_id, at=at)["allowed"] is True
+
+    database.observe_allocation_start(
+        user_id=107,
+        task_id=task_id,
+        stage_id="model",
+        slurm_job_id="7004",
+        gpu_count=1,
+        cpu_cores=2,
+        started_at=at + 1,
+    )
+
+    # Both halves of the transition are present, or neither is: the reservation
+    # is scheduler-owned and names this job, and the allocation fact exists.
+    reservation = database.list_task_reservations(task_id)[0]
+    assert reservation["state"] == ReservationState.QUEUED.value
+    assert reservation["scheduler_job_id"] == "7004"
+    assert database.allocation_row_exists("7004") is True
+    facts = database.list_task_allocations(task_id)
+    assert {row["unit"] for row in facts} == {"gpu_second", "cpu_core_second"}
+    assert all(row["status"] == AllocationStatus.ACTIVE.value for row in facts)
+    assert all(row["quantity"] is None for row in facts)
+
+    # The recorded allocation is the discriminator: the reclaim pass must never
+    # free the claim underneath it, and it is settleable from scheduler evidence.
+    assert database.reclaim_queued_reservation(task_id=task_id, at=at + 5) is True
+    assert database.observe_allocation_start(
+        user_id=107,
+        task_id=task_id,
+        stage_id="model",
+        slurm_job_id="7004",
+        gpu_count=1,
+        cpu_cores=2,
+        started_at=at + 6,
+    )["started_at"] == at + 1
+    assert len(database.list_task_allocations(task_id)) == 2
+
+
+def test_a_crash_before_the_dispatch_transition_leaves_nothing_to_reclaim(tmp_path):
+    """A death before any write leaves no durable state and no charge.
+
+    The other side of the crash window, and the honest one: the wrapper's
+    evidence never reached the store, so there is no allocation fact, no queued
+    reservation, and nothing that could be settled into a charge.  A request the
+    server never recorded is unknown, never a zero allocation.
+    """
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"), monthly_gpu_seconds=1_000)
+    at = _timestamp(2026, 9, 22)
+    task_id = "a9" + "0" * 30
+    _reserve(database, 108, task_id=task_id, at=at)
+
+    # The process died here: no dispatch write, no observation.
+
+    assert database.allocation_row_exists("7005") is False
+    assert database.list_queued_reservations() == []
+    assert database.list_task_allocations(task_id) == []
+    assert database.gpu_credit_summary(108, at=at + 10)["usage_gpu_seconds"] == 0
+    # The hold is still the Task's own pre-dispatch reservation, releasable, and
+    # never mistaken for a recorded allocation.
+    assert database.list_task_reservations(task_id)[0]["state"] == ReservationState.HELD.value
+
+
+def test_an_observation_without_a_live_hold_is_still_recorded(tmp_path):
+    """A later workflow stage observes a request it holds no reservation for.
+
+    The atomic reservation write is a no-op when the Task has no live hold, but
+    the allocation fact is not: the stage ran, so it is recorded and settled like
+    any other.  Skipping the write must never skip the observation.
+    """
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"), monthly_gpu_seconds=1_000)
+    at = _timestamp(2026, 9, 22)
+    task_id = "b0" + "0" * 30
+
+    observed = database.observe_allocation_start(
+        user_id=109,
+        task_id=task_id,
+        stage_id="relax",
+        slurm_job_id="7006",
+        gpu_count=1,
+        cpu_cores=1,
+        started_at=at,
+    )
+
+    assert observed["slurm_job_id"] == "7006"
+    assert database.list_task_reservations(task_id) == []
+    assert len(database.list_task_allocations(task_id)) == 2
+    database.settle_allocation_elapsed("7006", elapsed_seconds=30, finished_at=at + 30)
+    assert database.gpu_credit_summary(109, at=at + 30)["usage_gpu_seconds"] == 30
+

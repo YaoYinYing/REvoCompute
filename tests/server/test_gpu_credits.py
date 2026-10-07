@@ -16,6 +16,26 @@ from conftest import _load_pssm_module
 from revocompute.access_control import project_effective_entitlements
 from revocompute.db import GPUAuthorizationUnavailableError, GPUCreditUnavailableError, TaskDatabase
 from revocompute.resource_ledger import AdmissionReason, ReservationState
+from revocompute.resource_policy import ResolvedResources
+
+
+def _gpu_policy() -> ResolvedResources:
+    """The allocation shape a GPU submit would resolve to: one GPU, one core."""
+    return ResolvedResources(
+        cpus=1,
+        memory="4G",
+        max_runtime_seconds=24 * 60 * 60,
+        partition=None,
+        gres="gpu:1",
+        nodes=1,
+        ntasks=1,
+        qos=None,
+        account=None,
+        constraint=None,
+        exclusive=False,
+        requires_gpu=True,
+        sources={},
+    )
 
 
 def _timestamp(year: int, month: int, day: int = 1, second: int = 0) -> float:
@@ -718,6 +738,114 @@ def test_reconciliation_never_frees_a_commitment_over_a_recorded_allocation(monk
     assert module.task_runtime._reconcile_slurm_allocations() == {"settled": 1, "active": 0, "review": 0}
     assert module.task_store.gpu_credit_summary(93, at=at + 10)["usage_gpu_seconds"] == 45
     assert module.task_store.list_unsettled_allocations() == []
+
+
+def test_a_crash_after_the_wrapper_line_never_reclaims_the_commitment(monkeypatch, tmp_path):
+    """The pre-commit split: the wrapper's line is the only durable evidence.
+
+    This is the crash window the atomic transition closes, injected end to end.
+    The wrapper printed its own job id and the dispatch callback began, but the
+    process died before any allocation decision; the observation itself never
+    ran.  The scheduler now reports the request terminal, so the reclaim pass is
+    the only thing left that could act — and it must not: a request with no
+    durable evidence on either side is left alone, never charged a fabricated
+    zero and never freed as though an allocation had never existed.
+
+    The failure is injected by making the observation write raise, which is
+    exactly what a busy database or a full disk looks like from the caller.
+    """
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    at = _timestamp(2026, 9, 5)
+    task_id = "6" * 32
+    _own_task(module.task_store, task_id, user_id=94)
+    module.task_store.reserve_compute_admission(user_id=94, task_id=task_id, at=at)
+
+    original_observe = module.task_store.observe_allocation_start
+
+    def failing_observe(**kwargs):
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(module.task_store, "observe_allocation_start", failing_observe)
+
+    callbacks = module.task_runtime._compute_allocation_callbacks(
+        task_id=task_id,
+        user_id=94,
+        stage_id="model",
+        resource_policy=_gpu_policy(),
+    )
+    with pytest.raises(RuntimeError, match="database is locked"):
+        callbacks[0]("8808", at + 1, True)
+
+    # Nothing durable exists: the observation never committed, and the
+    # reservation was not handed over in a separate write before it.
+    assert module.task_store.allocation_row_exists("8808") is False
+    assert module.task_store.list_queued_reservations() == []
+    assert module.task_store.list_task_reservations(task_id)[0]["state"] == "held"
+
+    module.task_store.observe_allocation_start = original_observe
+    monkeypatch.setattr(module.task_runtime.shutil, "which", lambda command: f"/usr/bin/{command}")
+    monkeypatch.setattr(
+        module.task_runtime.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(stdout="JobId=8808 JobState=COMPLETED RunTime=00:00:45\n"),
+    )
+
+    # The reclaim pass must not free a request the server never recorded: the
+    # hold is the Task's own and a scheduler identity is absent from the
+    # reservation, so the answer is "ambiguous, keep the commitment".
+    assert module.task_runtime._reclaim_abandoned_reservations(now=at + 10) == 0
+    assert module.task_runtime._reconcile_slurm_allocations() == {"settled": 0, "active": 0, "review": 0}
+    # Never charged a fabricated zero, and never settled into a false usage row.
+    assert module.task_store.gpu_credit_summary(94, at=at + 10)["usage_gpu_seconds"] == 0
+
+
+def test_the_observation_and_the_reservation_are_one_durable_transition(monkeypatch, tmp_path):
+    """A wrapper-observed request is never left as a row-less commitment.
+
+    The atomic transition is asserted at the store boundary: once the wrapper's
+    own line is observed, there is no durable state in which a scheduler-owned
+    reservation exists without the allocation fact its job id proves.  A death
+    after the commit therefore finds the allocation, and the reclaim pass refuses
+    to hand the claim back.
+    """
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    at = _timestamp(2026, 9, 5)
+    task_id = "5" * 32
+    _own_task(module.task_store, task_id, user_id=95)
+    module.task_store.reserve_compute_admission(user_id=95, task_id=task_id, at=at)
+
+    callbacks = module.task_runtime._compute_allocation_callbacks(
+        task_id=task_id,
+        user_id=95,
+        stage_id="model",
+        resource_policy=_gpu_policy(),
+    )
+    callbacks[0]("8809", at + 1, True)
+
+    reservation = module.task_store.list_task_reservations(task_id)[0]
+    assert reservation["state"] == "queued"
+    assert reservation["scheduler_job_id"] == "8809"
+    assert module.task_store.allocation_row_exists("8809") is True
+
+    monkeypatch.setattr(module.task_runtime.shutil, "which", lambda command: f"/usr/bin/{command}")
+    monkeypatch.setattr(
+        module.task_runtime.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(stdout="JobId=8809 JobState=COMPLETED RunTime=00:00:20\n"),
+    )
+
+    # The claim is settled from scheduler evidence, never reclaimed.
+    assert module.task_runtime._reclaim_abandoned_reservations(now=at + 10) == 0
+    assert module.task_runtime._reconcile_slurm_allocations() == {"settled": 1, "active": 0, "review": 0}
+    assert module.task_store.gpu_credit_summary(95, at=at + 10)["usage_gpu_seconds"] == 20
 
 
 def _bearer(user: dict) -> dict[str, str]:

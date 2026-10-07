@@ -859,6 +859,83 @@ def test_wrapper_observation_survives_a_crash_before_the_grant(tmp_path):
     assert dispatches == [("4217", True)]
 
 
+def test_a_failed_observation_persist_is_never_swallowed(tmp_path):
+    """A store failure on the wrapper's own id line must stop the run.
+
+    The one durable transition that records "the wrapper executed" is the
+    dispatch callback.  If it raises — a busy/locked database, a full disk — the
+    reader must not swallow it: the wrapper is still ahead of its gate, so
+    failing closed here is what keeps an allocation from running with no record.
+    """
+    output_dir = tmp_path / "out"
+    attempts = []
+
+    def failing(job_id, at, executed=False):
+        attempts.append((job_id, executed))
+        raise RuntimeError("database is locked")
+
+    job = SlurmJob(
+        "abcdef1234567890",
+        _make_task_type(gpus=True),
+        _make_runner(),
+        _make_entities(),
+        str(output_dir),
+        resource_policy=_policy(gres="gpu:1", requires_gpu=True),
+        allocation_dispatched_callback=failing,
+        allocation_started_callback=lambda _job_id, _at: None,
+    )
+    job._process = SimpleNamespace(stdout=StringIO("REVODESIGN_JOB_ID=4217\n"), stderr=StringIO(""))
+    job._allocation_submitted_at = 1_000.0
+
+    with pytest.raises(RuntimeError, match="database is locked"):
+        job._read_stdout()
+
+    assert attempts == [("4217", True)]
+    # The flag was cleared, so a later observation retries rather than treating
+    # the request as dispatched with nothing written.
+    assert job._dispatched_notified is False
+    # The process-local fact alone never stands in for a durable one.
+    assert job.wrapper_executed is True
+    assert job.allocation_started is False
+
+
+def test_poll_fails_closed_when_the_observation_was_never_persisted(tmp_path):
+    """A wrapper that ran without a recorded fact fails rather than continues.
+
+    When the process survives to ``poll()`` after a persist failure, the job must
+    not settle as though the allocation had been observed.  There is no grant and
+    no allocation fact, so running the scientific command would be an
+    unaccounted allocation.
+    """
+    output_dir = tmp_path / "out"
+    dispatches = []
+    starts = []
+    job = SlurmJob(
+        "abcdef1234567890",
+        _make_task_type(gpus=True),
+        _make_runner(),
+        _make_entities(),
+        str(output_dir),
+        resource_policy=_policy(gres="gpu:1", requires_gpu=True),
+        allocation_dispatched_callback=lambda job_id, at, executed=False: dispatches.append(
+            (job_id, executed)
+        ),
+        allocation_started_callback=lambda job_id, at: starts.append((job_id, at)),
+    )
+    job._process = _FakeSrunProcess(
+        stdout="REVODESIGN_JOB_ID=4217\n", returncode=0
+    )
+    job._allocation_submitted_at = 1_000.0
+    # The store rejected the observation and the reader path gave up.
+    job._wrapper_started = True
+    job._dispatch_error = "database is locked"
+
+    assert job.poll() == JobState.FAILED
+    # The allocation was never started, so the wrapper was never granted.
+    assert starts == []
+    assert not (output_dir / ".allocation-approved-abcdef12").exists()
+
+
 def test_wrapper_observation_is_recorded_when_stderr_won_the_identity_race(tmp_path):
     """The stderr banner may supply the identity first; the wrapper still ran.
 
