@@ -1257,10 +1257,13 @@ def _resolve_task_owner() -> dict[str, Any]:
 
 
 def _result_manifest_available(task: dict[str, Any]) -> bool:
-    try:
-        return os.path.isfile(current_app.config["storage_resolver"].get_manifest_path(task))
-    except (OSError, ValueError):
-        return False
+    """Report whether the published result manifest is readable.
+
+    Probes through the same canonical bounded verified reader the results route
+    consumes, so a symlinked, linked, or oversized manifest reports unavailable
+    instead of advertising results the reader will then refuse.
+    """
+    return current_app.config["storage_resolver"].load_manifest(task) is not None
 
 
 def _task_display_name(task: dict[str, Any], task_id: str) -> str:
