@@ -36,6 +36,39 @@ Security regression checks for Docker socket exposure, admin self-lockout,
 banned users, and login throttling are covered by the server test suite; see
 [Testing and CI](../developer-guide/testing.md) for what belongs in pytest.
 
+### Admin control plane
+
+The Web Admin surface operates the Runner fleet through a closed, typed
+vocabulary — there is no command, argv, environment, path, or shell field
+anywhere in the API. The trust boundaries:
+
+- **No arbitrary host execution.** The Web application is never given a Docker
+  socket, unrestricted sudo, a generic host shell, or arbitrary filesystem
+  access. A Web-triggered host operation crosses one narrow boundary that maps
+  a *typed* action to a fixed argv built from a table; a Runner family is
+  re-validated as an identifier, so it can never become a second argument, an
+  option, or a path. The child process receives an allowlisted environment, so
+  ambient credentials never reach it, and its returned log is redacted and
+  size-bounded.
+- **Authorization is the repository's existing bar.** Every Admin route
+  requires the admin role, and every mutation additionally requires the Bearer
+  gate: a cookie-authenticated mutation is refused, so a cross-origin top-level
+  navigation cannot trigger one. Unknown actions, extra fields, malformed
+  bodies, and a body that names a different target family than the path are all
+  rejected before reaching the control core.
+- **Plan before execute.** A privileged action is planned against a
+  content-addressed evidence snapshot and executed only when the request
+  carries the matching plan digest. If evidence, the candidate, a receipt, or
+  the active artifact moved in between, the request fails closed
+  (`409 stale_plan`) instead of executing against new state.
+- **Bounded and idempotent.** One exclusive lease per Runner family prevents
+  racing mutations, an operator queue is bounded, and a request carries an
+  idempotency key so a retried click cannot duplicate a mutation. A repeated
+  key with a different intent is rejected.
+- **Restart cannot duplicate an irreversible action.** On startup, a job left
+  `RUNNING` by a server or executor restart is reconciled to a terminal
+  `orphaned_executor_restart` failure; it is never re-executed automatically.
+
 ### Authentication
 
 - Authentication signing keys are persisted by `restart.sh setup`

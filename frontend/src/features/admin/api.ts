@@ -35,6 +35,16 @@ export type AdminConfiguration = components['schemas']['AdminConfiguration'];
 export type LogArchive = components['schemas']['LogArchive'];
 export type LogArchiveGroup = components['schemas']['LogArchiveGroup'];
 
+export type RunnerFleet = components['schemas']['RunnerFleet'];
+export type RunnerFleetEntry = components['schemas']['RunnerFleetEntry'];
+export type RunnerDetail = components['schemas']['RunnerDetail'];
+export type RunnerReadiness = components['schemas']['RunnerReadiness'];
+export type OperatorAction = components['schemas']['OperatorAction'];
+export type OperatorPlan = components['schemas']['OperatorPlan'];
+export type OperatorJob = components['schemas']['OperatorJob'];
+export type OperatorJobAccepted = components['schemas']['OperatorJobAccepted'];
+export type OperatorHistoryList = components['schemas']['OperatorHistoryList'];
+
 export interface BoundedLog {
   text: string;
   truncated: boolean;
@@ -79,6 +89,17 @@ export const adminApi = {
   getTaskCatalog: (): Promise<TaskCatalog> => authorizedJson('/compute/api/types'),
   getInfrastructure: (): Promise<InfrastructureReadiness> => authorizedJson('/compute/api/infrastructure'),
   refreshInfrastructure: (): Promise<InfrastructureReadiness> => json('/compute/api/auth/admin/infrastructure/refresh', 'POST'),
+
+  getRunnerFleet: (): Promise<RunnerFleet> => authorizedJson('/compute/api/auth/admin/runners'),
+  getRunnerDetail: (family: string): Promise<RunnerDetail> => authorizedJson(`/compute/api/auth/admin/runners/${encodeURIComponent(family)}`),
+  getRunnerHistory: (family: string, limit = 50): Promise<OperatorJob[]> =>
+    authorizedJson<OperatorHistoryList>(`/compute/api/auth/admin/runners/${encodeURIComponent(family)}/history?limit=${limit}`).then(data => data.history),
+  planRunnerAction: (family: string, action: string): Promise<OperatorPlan> =>
+    json(`/compute/api/auth/admin/runners/${encodeURIComponent(family)}/plan`, 'POST', { action }),
+  runRunnerAction: (family: string, action: string, planDigest: string, idempotencyKey: string): Promise<OperatorJobAccepted> =>
+    json(`/compute/api/auth/admin/runners/${encodeURIComponent(family)}/actions`, 'POST', { action, plan_digest: planDigest, idempotency_key: idempotencyKey }),
+  getOperatorJob: (jobId: string): Promise<OperatorJob> => authorizedJson(`/compute/api/auth/admin/operator/jobs/${encodeURIComponent(jobId)}`),
+  cancelOperatorJob: (jobId: string): Promise<OperatorJob> => json(`/compute/api/auth/admin/operator/jobs/${encodeURIComponent(jobId)}/cancel`, 'POST'),
 
   getLog: async (name: AdminLogName, signal?: AbortSignal, maxCharacters = 1_000_000): Promise<BoundedLog> => {
     const response = await authorizedFetch(`/compute/api/auth/admin/logs/${encodeURIComponent(name)}?tail_bytes=${maxCharacters}`, { signal });

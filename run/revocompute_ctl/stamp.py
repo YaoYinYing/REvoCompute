@@ -18,7 +18,7 @@ import os
 from pathlib import Path
 
 from revocompute_ctl.compose import container_fs, image_id, run_cmd
-from revocompute_ctl.registry import RuntimeFamily
+from revocompute.runner_registry import RuntimeFamily
 
 STAMP_FILENAME = ".deploy-stamp"
 

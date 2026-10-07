@@ -15,16 +15,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
-from revocompute_ctl import SERVER_ROOT
-from revocompute_ctl.compose import run_cmd
-
-if str(SERVER_ROOT) not in sys.path:
-    sys.path.insert(0, str(SERVER_ROOT))
 
 from revocompute import runtime_bundle
-from revocompute.access_control import load_policy_documents, resolve_policy  # noqa: E402
-from revocompute.plugins import PluginManager  # noqa: E402
-from revocompute.live_tests import atomic_write_json, canonical_digest, receipt_matches, sha256_file  # noqa: E402
+from revocompute.access_control import load_policy_documents, resolve_policy
+from revocompute.artifact_evidence import read_build_evidence_for_provenance, write_artifact_evidence
+from revocompute.compose import run_cmd
+from revocompute.live_tests import atomic_write_json, canonical_digest, receipt_matches, sha256_file
+from revocompute.plugins import PluginManager
+from revocompute.server_root import SERVER_ROOT
 
 _SAFE_FAMILY_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
@@ -352,7 +350,7 @@ def _build_provenance(state, family: RuntimeFamily) -> dict[str, object]:
 
 
 def _record_sif_manifest(state, family: RuntimeFamily, sif_path: str) -> None:
-    from revocompute_ctl.artifact_evidence import write_artifact_evidence
+    from revocompute.artifact_evidence import write_artifact_evidence
 
     sif_sha256 = sha256_file(sif_path)
     write_artifact_evidence(
@@ -388,7 +386,7 @@ def _rekey_legacy_build_provenance(state, families: list[RuntimeFamily]) -> list
     A record is rekeyed only when its own stored definition and build-input hashes
     recompute to the current digest, so a real image-input change can never be hidden.
     """
-    from revocompute_ctl.artifact_evidence import evidence_path, write_artifact_evidence
+    from revocompute.artifact_evidence import evidence_path, write_artifact_evidence
 
     rekeyed: set[str] = set()
     for family in families:
@@ -458,8 +456,8 @@ def migrate_legacy_sif_evidence(state, families: list[RuntimeFamily]) -> list[st
     if not isinstance(manifest, dict):
         return []
 
-    from revocompute_ctl.artifact_evidence import write_artifact_evidence
-    from revocompute_ctl.live_test import load_validation_identity
+    from revocompute.artifact_evidence import write_artifact_evidence
+    from revocompute.runner_live_test import load_validation_identity
 
     migrated: list[str] = []
     for family in families:
@@ -513,7 +511,7 @@ def migrate_legacy_sif_evidence(state, families: list[RuntimeFamily]) -> list[st
 
 
 def _sif_provenance_matches(state, family: RuntimeFamily, path: str) -> bool:
-    from revocompute_ctl.artifact_evidence import read_build_evidence_for_provenance
+    from revocompute.artifact_evidence import read_build_evidence_for_provenance
 
     if not Path(path).is_file():
         return False
@@ -607,8 +605,8 @@ def validate_prepared_images(state, families: list[RuntimeFamily]) -> None:
             if not valid:
                 print(f"Prepared SIF provenance is invalid: {family.name}", file=sys.stderr)
                 raise RegistryError
-            from revocompute_ctl.live_test import active_receipt_valid, candidate_receipt_valid
-            from revocompute_ctl.artifact_evidence import read_build_evidence_for_provenance
+            from revocompute.runner_live_test import active_receipt_valid, candidate_receipt_valid
+            from revocompute.artifact_evidence import read_build_evidence_for_provenance
             provenance = _build_provenance(state, family)
             build_record = read_build_evidence_for_provenance(family, str(provenance["build_provenance_digest"])) or {}
             sif_sha256 = build_record.get("sif_sha256")

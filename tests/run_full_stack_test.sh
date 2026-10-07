@@ -189,11 +189,11 @@ uid, gid = int(sys.argv[2]), int(sys.argv[3])
 server_root = Path.cwd()
 sys.path.insert(0, str(server_root / "run"))
 
-from revocompute_ctl.live_test import load_validation_identity
-from revocompute_ctl.readiness import load_instance_families, resolve_runner_readiness
-from revocompute_ctl.registry import _build_provenance
-from revocompute_ctl.steps import materialize_runner_bundles
-from revocompute_ctl.artifact_evidence import write_artifact_evidence
+from revocompute.runner_live_test import load_validation_identity
+from revocompute.runner_readiness import load_instance_families, resolve_runner_readiness
+from revocompute.runner_registry import _build_provenance
+from revocompute.runner_bundles import materialize_runner_bundles
+from revocompute.artifact_evidence import write_artifact_evidence
 from revocompute.live_tests import LIVE_TEST_RECEIPT_VERSION, atomic_write_json, sha256_file
 from revocompute.manage_db import ManageDatabase
 

@@ -124,6 +124,8 @@ from revocompute.schemas import (
     GPUCreditAdjustmentRequest,
     GPUCreditResetRequest,
     LoginRequest,
+    OperatorJobRequest,
+    OperatorPlanRequest,
     PreflightAdmission,
     PreflightFinding,
     PreflightPhase,
@@ -2971,6 +2973,189 @@ def _allowed_email_domains() -> set[str]:
 
 def _get_user_db() -> UserDatabase:
     return current_app.config["user_db"]  # type: ignore[no-any-return]
+
+
+def _get_operator_service():
+    service = current_app.config.get("operator_service")
+    if service is None:
+        abort(503, description="Operator control plane is unavailable")
+    return service
+
+
+def _runner_family_or_404(runner_family: str):
+    """Reject a path family that cannot name a canonical Runner before any lookup.
+
+    The registry is the single source of family identity, but a value that is not
+    even the *shape* of an identifier (a path, a shell fragment, an oversized
+    string) is a not-found resource rather than something to resolve.
+    """
+    from revocompute.operator_actions import runner_family_is_resolvable
+
+    if not runner_family_is_resolvable(runner_family):
+        return None
+    return runner_family
+
+
+def _operator_error(exc: Exception) -> tuple[Any, int]:
+    """Map a typed control-plane rejection to a stable, non-leaking HTTP response.
+
+    The messages are the operator-facing ones the control core already produces;
+    an internal failure yields a generic 500 rather than a stack detail.
+    """
+    from revocompute.operator_executor import ExecutorUnavailable, UnsupportedOperation
+    from revocompute.operator_jobs import OperatorConflictError
+    from revocompute.operator_plan import StalePlanError
+    from revocompute.operator_service import OperatorNotFound
+    from revocompute.operator_actions import OperatorActionError
+
+    if isinstance(exc, (OperatorNotFound, KeyError)):
+        return jsonify({"error": str(exc) or "Not found"}), 404
+    if isinstance(exc, StalePlanError):
+        # 409, not 400: the client's request was well-formed but the world moved.
+        return jsonify({"error": "State changed; review the new plan", "code": "stale_plan"}), 409
+    if isinstance(exc, OperatorConflictError):
+        return jsonify({"error": str(exc), "code": "operation_in_progress"}), 409
+    if isinstance(exc, ExecutorUnavailable):
+        return jsonify({"error": "Operator executor unavailable", "code": "executor_unavailable"}), 503
+    if isinstance(exc, (UnsupportedOperation, OperatorActionError)):
+        return jsonify({"error": str(exc)}), 400
+    from revocompute.operator_jobs import OperatorJobError
+    from revocompute.operator_service import OperatorServiceError
+
+    if isinstance(exc, (OperatorJobError, OperatorServiceError, ValueError)):
+        return jsonify({"error": str(exc)}), 409
+    return jsonify({"error": "Operator operation failed"}), 500
+
+
+@app.route("/compute/api/auth/admin/runners", methods=["GET"])
+@login_required
+def admin_runner_fleet():
+    """The fleet readiness list: readiness, capacity, access, and in-flight jobs."""
+    if _blocked := require_admin():
+        return _blocked
+    service = _get_operator_service()
+    return jsonify(service.fleet(int(g.current_user["id"]))), 200
+
+
+@app.route("/compute/api/auth/admin/runners/<runner_family>", methods=["GET"])
+@login_required
+def admin_runner_detail(runner_family: str):
+    """One family's evidence lanes and the actions its current state permits."""
+    if _blocked := require_admin():
+        return _blocked
+    if _runner_family_or_404(runner_family) is None:
+        return jsonify({"error": "Unknown or disabled Runner family"}), 404
+    service = _get_operator_service()
+    try:
+        return jsonify(service.detail(runner_family, int(g.current_user["id"]))), 200
+    except Exception as exc:  # noqa: BLE001 - mapped to a typed status
+        return _operator_error(exc)
+
+
+@app.route("/compute/api/auth/admin/runners/<runner_family>/plan", methods=["POST"])
+@login_required
+def admin_runner_plan(runner_family: str):
+    """Produce the content-addressed plan for one typed action; changes nothing."""
+    if _blocked := require_admin():
+        return _blocked
+    if _blocked := require_bearer_auth():
+        return _blocked
+    if _runner_family_or_404(runner_family) is None:
+        return jsonify({"error": "Unknown or disabled Runner family"}), 404
+    request_model = _parse_body(OperatorPlanRequest)
+    if isinstance(request_model, tuple):
+        return request_model
+    service = _get_operator_service()
+    try:
+        plan = service.plan(request_model.action, runner_family)
+    except Exception as exc:  # noqa: BLE001 - mapped to a typed status
+        return _operator_error(exc)
+    return jsonify(plan.as_dict()), 200
+
+
+@app.route("/compute/api/auth/admin/runners/<runner_family>/actions", methods=["POST"])
+@login_required
+@rate_limit(max_requests=30, window_seconds=300)
+def admin_runner_action(runner_family: str):
+    """Execute a planned typed action; the plan digest binds it to its evidence."""
+    if _blocked := require_admin():
+        return _blocked
+    if _blocked := require_bearer_auth():
+        return _blocked
+    if _runner_family_or_404(runner_family) is None:
+        return jsonify({"error": "Unknown or disabled Runner family"}), 404
+    request_model = _parse_body(OperatorJobRequest)
+    if isinstance(request_model, tuple):
+        return request_model
+    user = g.current_user
+    service = _get_operator_service()
+    try:
+        outcome = service.submit(
+            request_model.action,
+            runner_family,
+            plan_digest=request_model.plan_digest,
+            actor_user_id=int(user["id"]),
+            actor_username=str(user.get("username") or user["id"]),
+            idempotency_key=request_model.idempotency_key,
+        )
+    except Exception as exc:  # noqa: BLE001 - mapped to a typed status
+        return _operator_error(exc)
+    status = 200 if not outcome.created else 202
+    return jsonify({"job": outcome.job, "plan": outcome.plan.as_dict(), "accepted": outcome.created}), status
+
+
+@app.route("/compute/api/auth/admin/runners/<runner_family>/history", methods=["GET"])
+@login_required
+def admin_runner_history(runner_family: str):
+    """Bounded append-only operator history for one family, newest first."""
+    if _blocked := require_admin():
+        return _blocked
+    if _runner_family_or_404(runner_family) is None:
+        return jsonify({"error": "Unknown or disabled Runner family"}), 404
+    service = _get_operator_service()
+    limit = min(max(int(request.args.get("limit", 50)), 1), 200)
+    return jsonify({"history": service.history(runner_family, limit=limit)}), 200
+
+
+@app.route("/compute/api/auth/admin/operator/jobs", methods=["GET"])
+@login_required
+def admin_operator_jobs():
+    """Recent Operator Jobs, filterable by family and status."""
+    if _blocked := require_admin():
+        return _blocked
+    service = _get_operator_service()
+    limit = min(max(int(request.args.get("limit", 50)), 1), 200)
+    family = request.args.get("runner_family") or None
+    return jsonify({"jobs": service.jobs(runner_family=family, limit=limit)}), 200
+
+
+@app.route("/compute/api/auth/admin/operator/jobs/<job_id>", methods=["GET"])
+@login_required
+def admin_operator_job(job_id: str):
+    """One Operator Job's status, stage, bounded log, and structured effect."""
+    if _blocked := require_admin():
+        return _blocked
+    service = _get_operator_service()
+    try:
+        return jsonify(service.job(job_id)), 200
+    except Exception as exc:  # noqa: BLE001 - mapped to a typed status
+        return _operator_error(exc)
+
+
+@app.route("/compute/api/auth/admin/operator/jobs/<job_id>/cancel", methods=["POST"])
+@login_required
+@rate_limit(max_requests=30, window_seconds=300)
+def admin_operator_job_cancel(job_id: str):
+    """Request cancellation of a job the calling operator owns."""
+    if _blocked := require_admin():
+        return _blocked
+    if _blocked := require_bearer_auth():
+        return _blocked
+    service = _get_operator_service()
+    try:
+        return jsonify(service.cancel(job_id, actor_user_id=int(g.current_user["id"]))), 200
+    except Exception as exc:  # noqa: BLE001 - mapped to a typed status
+        return _operator_error(exc)
 
 
 def _project_gpu_authorization(user_id: int) -> None:

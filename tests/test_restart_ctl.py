@@ -32,13 +32,14 @@ from revocompute_ctl import __main__ as main_mod  # noqa: E402
 from revocompute_ctl import admin as admin_mod  # noqa: E402
 from revocompute_ctl import maintenance as maintenance_mod  # noqa: E402
 from revocompute_ctl import promotion  # noqa: E402
-from revocompute_ctl import registry as registry_mod  # noqa: E402
+from revocompute import runner_registry as registry_mod  # noqa: E402
+from revocompute import runner_live_test as live_test_mod  # noqa: E402
 from revocompute_ctl import stamp as stamp_mod  # noqa: E402
 from revocompute_ctl import steps as steps_mod  # noqa: E402
 from revocompute_ctl import sweep as sweep_mod  # noqa: E402
 from revocompute_ctl.env import EnvState, parse_env_file  # noqa: E402
-from revocompute_ctl.artifact_evidence import evidence_path, read_artifact_evidence  # noqa: E402
-from revocompute_ctl.registry import (
+from revocompute.artifact_evidence import evidence_path, read_artifact_evidence  # noqa: E402
+from revocompute.runner_registry import (
     RegistryError,
     RuntimeFamily,
     _docker_tag,
@@ -872,7 +873,7 @@ def test_legacy_sif_evidence_migrates_only_for_exact_current_artifact(tmp_path, 
         select=lambda collection: (SimpleNamespace(id="minimal"),) if collection == "smoke" else (),
     )
     monkeypatch.setattr(
-        "revocompute_ctl.live_test.load_validation_identity",
+        "revocompute.runner_live_test.load_validation_identity",
         lambda *_args, **_kwargs: SimpleNamespace(plan=plan, configuration_digest="sha256:config"),
     )
     sif_sha256 = registry_mod.sha256_file(active)
@@ -979,7 +980,7 @@ def test_legacy_build_provenance_rekeys_unchanged_inputs(tmp_path, monkeypatch):
     active.parent.mkdir()
     active.write_bytes(b"active")
     state, _log = _shimmed_state(monkeypatch, tmp_path, _write_shims(tmp_path), {})
-    monkeypatch.setattr("revocompute_ctl.registry._apptainer_version", lambda _state: "apptainer 1.3.0")
+    monkeypatch.setattr("revocompute.runner_registry._apptainer_version", lambda _state: "apptainer 1.3.0")
     provenance = registry_mod._build_provenance(state, family)
     sif_sha256 = registry_mod.sha256_file(active)
     legacy = _legacy_build_record(family, sif_sha256, provenance)
@@ -1120,7 +1121,7 @@ def test_prepared_candidate_requires_exact_live_receipt(tmp_path, monkeypatch):
     Path(family.slurm_image).parent.mkdir()
     state, _log = _shimmed_state(monkeypatch, tmp_path, _write_shims(tmp_path), {}, USE_SLURM="1")
     build_slurm_images(state, [family])
-    monkeypatch.setattr("revocompute_ctl.live_test.candidate_receipt_valid", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr("revocompute.runner_live_test.candidate_receipt_valid", lambda *_args, **_kwargs: False)
 
     with pytest.raises(RegistryError, match="receipt"):
         registry_mod.validate_prepared_images(state, [family])
@@ -1132,7 +1133,7 @@ def test_prepared_active_sif_requires_exact_live_receipt(tmp_path, monkeypatch):
     state, _log = _shimmed_state(monkeypatch, tmp_path, _write_shims(tmp_path), {}, USE_SLURM="1")
     build_slurm_images(state, [family])
     os.replace(f"{family.slurm_image}.next", family.slurm_image)
-    monkeypatch.setattr("revocompute_ctl.live_test.active_receipt_valid", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr("revocompute.runner_live_test.active_receipt_valid", lambda *_args, **_kwargs: False)
 
     with pytest.raises(RegistryError, match="receipt"):
         registry_mod.validate_prepared_images(state, [family])
@@ -1146,14 +1147,14 @@ def test_sif_promotion_is_receipt_gated_and_preserves_active(tmp_path, monkeypat
     candidate = Path(f"{family.slurm_image}.next")
     candidate.write_bytes(b"candidate")
     state = EnvState(str(tmp_path / "server.env"), values={"ENABLED_TASKRUNNERS": "demo"})
-    monkeypatch.setattr("revocompute_ctl.live_test.candidate_receipt_valid", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr("revocompute.runner_live_test.candidate_receipt_valid", lambda *_args, **_kwargs: False)
 
     with pytest.raises(RegistryError, match="receipt"):
         promotion.promote_sifs(state, [family])
     assert active.read_bytes() == b"active"
     assert candidate.read_bytes() == b"candidate"
 
-    monkeypatch.setattr("revocompute_ctl.live_test.candidate_receipt_valid", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr("revocompute.runner_live_test.candidate_receipt_valid", lambda *_args, **_kwargs: True)
     promotion.promote_sifs(state, [family])
     assert active.read_bytes() == b"candidate"
     assert active.stat().st_mode & 0o222 == 0
@@ -1171,7 +1172,7 @@ def test_sif_promotion_validates_all_candidates_before_activation(tmp_path, monk
     state = EnvState(str(tmp_path / "server.env"), values={"ENABLED_TASKRUNNERS": "demo"})
     valid_results = iter((True, False))
     monkeypatch.setattr(
-        "revocompute_ctl.live_test.candidate_receipt_valid", lambda *_args, **_kwargs: next(valid_results)
+        "revocompute.runner_live_test.candidate_receipt_valid", lambda *_args, **_kwargs: next(valid_results)
     )
 
     with pytest.raises(RegistryError, match="demo"):
@@ -1195,7 +1196,7 @@ def test_sif_promotion_rolls_back_when_second_activation_fails(tmp_path, monkeyp
         Path(f"{family.slurm_image}.next").write_bytes(candidate_data)
     state = EnvState(str(tmp_path / "server.env"), values={"ENABLED_TASKRUNNERS": "demo"})
     monkeypatch.setattr(
-        "revocompute_ctl.live_test.candidate_receipt_valid", lambda *_args, **_kwargs: True
+        "revocompute.runner_live_test.candidate_receipt_valid", lambda *_args, **_kwargs: True
     )
     real_replace = os.replace
 
@@ -1229,7 +1230,7 @@ def test_sif_promotion_rechecks_candidate_bytes_immediately_before_activation(tm
         candidate.write_bytes(b"changed")
         return True
 
-    monkeypatch.setattr("revocompute_ctl.live_test.candidate_receipt_valid", validate)
+    monkeypatch.setattr("revocompute.runner_live_test.candidate_receipt_valid", validate)
 
     with pytest.raises(RegistryError, match="changed after validation"):
         promotion.promote_sifs(state, [family])
@@ -1323,7 +1324,7 @@ def test_restart_resolves_named_service_identity_before_attestation_invalidation
         assert resolved_state.runtime["RUNNER_GID"] == "137"
         raise RuntimeError("invalidation reached")
 
-    monkeypatch.setattr(steps_mod, "invalidate_deployment_attestations", invalidate)
+    monkeypatch.setattr(steps_mod, "clear_deployment_attestations", invalidate)
 
     plan = steps_mod.build_restart_plan(state, ("docker", "compose"), steps_mod.RestartFlags(mode="prod"))
     activate = next(step for step in plan.steps if step.name == "activate-revision")
@@ -1357,7 +1358,7 @@ def test_restart_rejects_mismatched_service_identity_before_attestation_invalida
         nonlocal invalidated
         invalidated = True
 
-    monkeypatch.setattr(steps_mod, "invalidate_deployment_attestations", invalidate)
+    monkeypatch.setattr(steps_mod, "clear_deployment_attestations", invalidate)
 
     with pytest.raises(SystemExit):
         steps_mod.build_restart_plan(state, ("docker", "compose"), steps_mod.RestartFlags(mode="prod"))
@@ -1375,7 +1376,7 @@ def test_restart_preserves_and_stops_old_instance_before_materializing_new_snaps
     monkeypatch.setattr(steps_mod, "resolve_runner_identity", lambda *_args: (1000, 1000))
     monkeypatch.setattr(steps_mod, "cmd_down", lambda *_args, **_kwargs: events.extend(["preserve-old", "stop-old"]))
     monkeypatch.setattr(steps_mod, "materialize_runner_families", lambda *_args: events.append("materialize-new"))
-    monkeypatch.setattr(steps_mod, "invalidate_deployment_attestations", lambda *_args: None)
+    monkeypatch.setattr(steps_mod, "clear_deployment_attestations", lambda *_args: None)
     monkeypatch.setattr(steps_mod, "validate_runtime_files", lambda *_args: [])
     monkeypatch.setattr(steps_mod, "validate_slurm_images", lambda *_args: None)
     monkeypatch.setattr(steps_mod, "migrate_legacy_sif_evidence", lambda *_args: None)

@@ -1,4 +1,4 @@
-import { Bell, Check, createIcons, FileText, Languages, LayoutDashboard, LogOut, MoonStar, Plus, Settings, SunMedium, UserRound, UsersRound, Workflow } from 'lucide';
+import { Bell, Check, createIcons, FileText, Languages, LayoutDashboard, LogOut, MoonStar, Plus, ServerCog, Settings, SunMedium, UserRound, UsersRound, Workflow } from 'lucide';
 import type { CurrentUser } from '../api/app-api';
 import { authorizedJson, clearSessionCredential } from './session';
 import { appAsset } from './assets';
@@ -14,7 +14,7 @@ export interface AppShell {
 
 const railKey = 'revocompute-rail';
 type RailState = 'collapsed' | 'expanded';
-const shellIcons = { Bell, Check, FileText, Languages, LayoutDashboard, LogOut, MoonStar, Plus, Settings, SunMedium, UserRound, UsersRound, Workflow };
+const shellIcons = { Bell, Check, FileText, Languages, LayoutDashboard, LogOut, MoonStar, Plus, ServerCog, Settings, SunMedium, UserRound, UsersRound, Workflow };
 
 function storedRail(): RailState { return localStorage.getItem(railKey) === 'expanded' ? 'expanded' : 'collapsed'; }
 function themeLabel(mode: ThemeMode): string { return `${t('shell.action.theme')}: ${t(`theme.${mode}`)}`; }
@@ -67,6 +67,7 @@ export function mountShell(root: HTMLElement): AppShell {
       ['/compute/profile', 'user-round', t('shell.nav.profile')],
     ]],
     ['admin', [
+      ['/compute/runner_fleet', 'server-cog', t('shell.admin.fleet')],
       ['/compute/user_control', 'users-round', t('shell.admin.users')],
       ['/compute/logs', 'file-text', t('shell.admin.logs')],
       ['/compute/configuration', 'settings', t('shell.admin.configuration')],

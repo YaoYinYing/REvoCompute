@@ -505,6 +505,36 @@ The lesson is simply:
 
 Safety, confirmation, permissions, and consequence text still outrank the joke.
 
+### Runner fleet control plane (owned by PR #55)
+
+PR #55 owns the Runner control-plane *semantics*; this refinement owns how the
+Administration region looks and how the shell composes. When the two meet, the
+control-plane behavior is preserved and the visual layer is adapted to it — the
+fleet surface uses the merged design language and does not become a separate
+"ops dashboard" visual system.
+
+The destination is one Administration region in the left navigation — the same
+region as User control, Server logs, and Configuration. There is no second
+Administration hierarchy and no top-bar Administration launcher.
+
+The fleet-level view separates, at minimum: Runner family; enabled/deployed
+state; derived readiness; the machine-readable reason rendered as understandable
+human copy; transient capacity as its own field; access restriction as its own
+field; active artifact/runtime identity; last validation time and evidence;
+evidence freshness; the recommended corrective action; and any in-flight
+operator job.
+
+A Runner detail view exposes evidence lanes such as Doctor, active SIF identity,
+Runtime bundle, execution contract, resource policy, `test.yaml`/smoke coverage,
+live-test receipt, target host/scheduler identity, and the current invalidation
+reason. Where an authoritative source exists, non-operational evidence is shown
+separately. No "PASS" badge is manufactured for evidence that has no owner.
+
+Corrective actions are state-aware, and the page never offers a button the plan
+contract would reject on submit. A mutation reserves a durable Operator Job and
+is polled, so no operator action holds a request open; cancellation is observed
+between bounded stages, never claimed mid-stage.
+
 ---
 
 ## 14. Public/auth/profile surfaces
@@ -878,3 +908,272 @@ A successful final screen should feel:
 > **carefully composed, not systematically decorated; clean without sterility;
 > soft at the surface, substantial underneath; precise without being
 > industrial; serious about the work without wearing a serious face.**
+
+---
+
+## 29. Operational resilience, rollback, and failure-drill requirements
+
+The control plane must remain understandable and recoverable when operations fail, the Server restarts, the executor disappears, or evidence changes mid-flight.
+
+The governing invariant is:
+
+> **No operator action may leave REvoCompute in a state that is less explainable than before the action.**
+
+After any build, validate, promote, repair, cancel, crash, restart, timeout, or executor failure, an administrator must still be able to answer:
+
+- what state the Runner is in now;
+- why it is in that state;
+- which operation was requested;
+- which effective actions actually ran;
+- how far the operation progressed;
+- whether the active artifact changed;
+- which evidence/receipt was created or invalidated;
+- what the next safe corrective action is.
+
+These requirements are part of the merge gate.
+
+### 20.1 Promotion atomicity and rollback
+
+Treat activation/promotion as an atomic control-plane transition.
+
+A promotion must bind:
+
+```text
+previous active identity
+candidate identity
+validation receipt identity
+expected evidence digest
+new active identity
+```
+
+The candidate validated must be the candidate promoted.
+
+Reject the operation if the candidate, receipt, runtime bundle, policy, or relevant evidence identity changes between plan and execution.
+
+A partially completed promotion must never leave admission pointing at an artifact whose provenance cannot be reconstructed.
+
+Where the existing runtime/deployment model can support it safely, expose a typed rollback to the immediately previous **known validated** active artifact.
+
+Rollback must:
+
+- target only a control-core-known artifact identity;
+- never accept an arbitrary filesystem path;
+- preserve provenance of the rollback source and destination;
+- not affect already-running scientific Tasks;
+- apply only to later submissions;
+- require explicit confirmation in Web;
+- record actor, reason, before/after identities, and outcome.
+
+Do not invent a generic artifact browser merely to support rollback.
+
+If safe rollback cannot be implemented within the existing deployment model, keep it CLI-only and document the limitation rather than approximating it unsafely.
+
+### 20.2 Snapshot identity and stale-page protection
+
+Every Runner readiness/detail response used for planning a mutation must expose a stable current snapshot identity, such as:
+
+```text
+evaluated_at
+evidence_digest / revision
+```
+
+The exact representation may follow existing repository conventions.
+
+Plans must bind to that snapshot identity.
+
+Before execution, the server/control core must re-evaluate relevant evidence and reject a stale plan if the snapshot changed.
+
+This protects against:
+
+- an Admin tab left open for a long time;
+- a second administrator changing the same Runner;
+- an agent/CLI operation occurring between plan and confirm;
+- a new receipt being written;
+- a runtime bundle or policy change;
+- deployment reconciliation changing active identity.
+
+The Web UI must surface stale-plan rejection as:
+
+> State changed; review the new plan.
+
+Do not silently re-plan and execute a materially different mutation under the old confirmation.
+
+### 20.3 Operator Job restart/orphan reconciliation
+
+Persisted Operator Jobs must have explicit recovery semantics.
+
+After Server or executor restart, a job previously recorded as `RUNNING` must not:
+
+- remain permanently RUNNING without investigation;
+- be blindly marked FAILED;
+- be automatically executed again;
+- repeat a promotion or receipt-writing side effect.
+
+On recovery, reconcile the durable job record with the actual owned execution/evidence state.
+
+Use a state such as `RECONCILING` / `ORPHANED` only if useful to the existing state model; do not add states merely to mirror this wording.
+
+Recovery must determine, where possible:
+
+- whether the owned process/job still exists;
+- whether the operation completed before the restart;
+- whether a candidate/receipt/promotion was actually produced;
+- whether a lease is still valid;
+- whether cancellation was requested;
+- whether a retry is safe.
+
+Irreversible or idempotency-sensitive operations must never be repeated automatically without proof that the prior attempt had no effect.
+
+### 20.4 Executor unavailable is a supported degraded mode
+
+The Admin control surface must remain useful when the Host Operator Executor is unavailable.
+
+In that state:
+
+- readiness/evidence/history remain viewable when their server-side sources are available;
+- mutation actions are disabled/fail closed;
+- the UI clearly reports `Operator executor unavailable`;
+- no existing READY evidence is fabricated, cleared, or rewritten merely because the executor is offline;
+- no long-running HTTP retry loop blocks the Admin page.
+
+Executor availability is an operational capability, not Runner readiness itself.
+
+Do not make the whole Admin configuration page depend on the executor being online.
+
+### 20.5 Bounded operator queue and anti-flood behavior
+
+Protect the control plane from accidental operation floods, browser retries, automation loops, and multiple administrators.
+
+Add bounded controls appropriate to the existing architecture, including:
+
+- one conflicting mutation lease per Runner scope;
+- a bounded global/operator queue;
+- idempotency for mutation creation;
+- rejection or coalescing of duplicate in-flight intents where safe;
+- conservative request/rate bounds for mutation endpoints;
+- no unbounded job creation from repeated clicks or network retries.
+
+This is operational safety, not user-throttling policy.
+
+Do not create a general rate-limiting framework if a small bounded mechanism is sufficient.
+
+### 20.6 Requested intent versus effective actions
+
+Audit/history must record both what the operator requested and what the control core actually executed.
+
+Example:
+
+```text
+requested_intent = repair_readiness
+effective_actions = [live_test]
+```
+
+Do not collapse this into only:
+
+```text
+repair succeeded
+```
+
+For each mutation record, preserve where applicable:
+
+- requested intent;
+- plan identity;
+- effective action sequence;
+- target;
+- before snapshot;
+- after snapshot;
+- actor;
+- timestamps;
+- outcome;
+- created/invalidated artifact or receipt identities;
+- cancellation/timeout/failure reason.
+
+This is especially important for agent-driven CLI operations and later forensic review.
+
+### 20.7 Equivalent CLI visibility
+
+Where a Web operation has a stable existing CLI equivalent, the Admin plan/detail view may show it as **read-only reference text**.
+
+This is for operator understanding and handoff between human/Web and agent/SSH workflows.
+
+It must never be used as the execution mechanism and must never become an editable shell field.
+
+The Web implementation still calls the typed control core / Operator Job path, not the displayed command.
+
+Do not fabricate an equivalent CLI string when no stable CLI operation exists.
+
+### 20.8 Prefer bounded polling over new realtime infrastructure
+
+Operator Job progress must be usable without introducing a new realtime stack.
+
+Prefer bounded polling using the existing frontend/API architecture.
+
+Do not add WebSocket/SSE infrastructure solely for this PR unless evidence demonstrates that polling cannot satisfy the required UX or load envelope.
+
+### 20.9 End-to-end failure drill
+
+In addition to the successful representative repair flow required above, add one representative failure/recovery acceptance path.
+
+It should prove a sequence equivalent to:
+
+```text
+VALIDATION_STALE
+→ plan repair
+→ start Operator Job
+→ effective validation begins
+→ operation fails
+→ no false READY state is produced
+→ failure and partial progress are recorded
+→ active artifact identity remains explainable
+→ Admin obtains a fresh plan
+→ retry/recovery succeeds
+→ new receipt is recorded
+→ READY
+```
+
+The test may use bounded fakes/reference execution where the control contract is the subject under test.
+
+It must not require a real GPU or large scientific runtime merely to prove control-plane failure semantics.
+
+### 20.10 Additional security/resilience tests
+
+Extend the multi-level security matrix with explicit cases for:
+
+- TOCTOU between plan and execute;
+- candidate/receipt mismatch at promotion;
+- rollback to an unknown/unvalidated artifact;
+- duplicate promotion request;
+- Server restart during an Operator Job;
+- executor restart during an Operator Job;
+- orphaned RUNNING job reconciliation;
+- executor unavailable before job creation;
+- executor loss during execution;
+- stale browser snapshot;
+- two Admins planning/executing against the same Runner;
+- mutation flood / repeated-click behavior;
+- audit log preservation of requested versus effective action;
+- secret redaction after subprocess failure;
+- cancellation followed immediately by a conflicting mutation;
+- active-artifact invariants after failed promote/rollback.
+
+At least one integration/browser path must demonstrate that a failed privileged operation leaves the Admin UI with an accurate, explainable state and a safe next action.
+
+### 20.11 Supplement to Definition of done
+
+Before `READY_FOR_FINAL_REVIEW`, additionally prove:
+
+> Promotion cannot activate an artifact different from the one validated by the accepted plan.
+
+> Stale plans fail closed rather than silently executing against new evidence.
+
+> Server/executor restart cannot duplicate an irreversible operator action.
+
+> Executor unavailability degrades mutation capability without destroying observability.
+
+> Failed/cancelled operations preserve an explainable active-artifact/readiness state and auditable requested/effective history.
+
+> Routine Admin operation floods and conflicting mutations are bounded by leases, idempotency, and queue limits.
+
+> One failure drill demonstrates failure → no false READY → replan/retry → successful evidence restoration.
+
+These additions strengthen the existing control-plane scope; they must not be used as justification to introduce a generic workflow engine, remote shell, new scheduler, or unrelated deployment framework.

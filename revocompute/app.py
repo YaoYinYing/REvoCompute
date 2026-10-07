@@ -237,6 +237,22 @@ app.config["infrastructure_readiness"] = build_default_service(
 
 # Runner-family plugins are discovered by task_runtime's shared startup path.
 
+# The Admin control plane's single service: readiness evaluation, typed
+# planning, the durable Operator Job store, and the bounded host executor.  A
+# job left RUNNING by a restart is terminalized here rather than re-executed.
+_log = logging.getLogger(__name__)
+from revocompute.operator_service import build_operator_service  # noqa: E402
+from revocompute.runner_host import build_server_host  # noqa: E402
+
+_operator_service = build_operator_service(build_server_host(CONFIG), database=_user_db)
+try:
+    _reconciled = _operator_service.reconcile()
+    if _reconciled:
+        _log.warning("Reconciled %d orphaned operator job(s) after restart", len(_reconciled))
+except Exception:  # pragma: no cover - reconciliation must never block startup
+    _log.exception("Operator job reconciliation failed")
+app.config["operator_service"] = _operator_service
+
 # Seed manage_db.task_type_config for every registered task type.
 # Only inserts rows that don't exist yet — admin toggles are preserved.
 _log = logging.getLogger(__name__)

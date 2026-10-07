@@ -20,10 +20,13 @@ from typing import Any, Mapping
 
 import yaml
 
-from revocompute_ctl import SERVER_ROOT
-from revocompute_ctl.compose import detect_compose_cmd, run_cmd
-from revocompute_ctl.build import build_web_images
-from revocompute_ctl.registry import (
+from revocompute.artifact_evidence import (
+    read_artifact_evidence,
+    read_receipt_for_identity,
+    write_artifact_evidence,
+)
+from revocompute.compose import detect_compose_cmd, run_cmd
+from revocompute.runner_registry import (
     RegistryError,
     RuntimeFamily,
     _build_provenance,
@@ -31,11 +34,14 @@ from revocompute_ctl.registry import (
     load_plugin_families,
     runner_enabled,
 )
-from revocompute_ctl.artifact_evidence import (
-    read_artifact_evidence,
-    read_receipt_for_identity,
-    write_artifact_evidence,
-)
+from revocompute.server_root import SERVER_ROOT
+
+
+def _build_web_images(state, compose_cmd, proxy_build_args, uid, gid):
+    """Build the server/worker images through the deployment control package."""
+    from revocompute_ctl.build import build_web_images
+
+    build_web_images(state, compose_cmd, proxy_build_args, uid, gid)
 from revocompute.live_tests import (
     LiveTestConfigurationError,
     LIVE_TEST_RECEIPT_VERSION,
@@ -818,7 +824,7 @@ class RunnerLiveTestWorker:
             uid = self.state.get("RUNNER_UID") or "1000"
             gid = self.state.get("RUNNER_GID") or "1000"
             if not getattr(self.state, "_runner_live_server_image_prepared", False):
-                build_web_images(self.state, detect_compose_cmd(), [], uid, gid)
+                _build_web_images(self.state, detect_compose_cmd(), [], uid, gid)
                 setattr(self.state, "_runner_live_server_image_prepared", True)
         except (OSError, subprocess.SubprocessError, SystemExit) as exc:
             raise RunnerLiveTestError("EXECUTION_FAILURE", f"candidate server image build failed: {exc}") from exc
@@ -956,7 +962,7 @@ def run_live_tests(
     # that merely happens to be current, and not a different family's.
     candidate_bundles: dict[str, str] = {}
     if build:
-        from revocompute_ctl.steps import materialize_runner_bundles
+        from revocompute.runner_bundles import materialize_runner_bundles
 
         candidate_bundles = materialize_runner_bundles(state, selected, activate=False)
     # Prepare the one-off worker image once for the complete invocation.  The
@@ -974,7 +980,7 @@ def run_live_tests(
     # snapshot must be refreshed before the CLI returns.  Otherwise
     # runner-status can report READY while the API keeps rejecting submissions
     # from an older published attestation until the next full restart.
-    from revocompute_ctl.readiness import write_runner_attestation
+    from revocompute_ctl.attestation import write_runner_attestation
 
     if passed:
         # Activation: only now does the validated bundle become eligible for a
@@ -982,7 +988,8 @@ def run_live_tests(
         # Publish the digests that were actually validated rather than
         # recomputing them, so a source edit in between cannot activate a bundle
         # the receipt never covered.
-        from revocompute_ctl.steps import materialize_runner_bundles, prune_runtime_bundles
+        from revocompute.runner_bundles import materialize_runner_bundles
+        from revocompute_ctl.steps import prune_runtime_bundles
 
         keep = materialize_runner_bundles(state, selected, digests=candidate_bundles)
         prune_runtime_bundles(state, keep)
@@ -998,7 +1005,7 @@ def prepare_live_test_server_image(state, proxy_build_args: list[str] | None = N
     try:
         uid = state.get("RUNNER_UID") or "1000"
         gid = state.get("RUNNER_GID") or "1000"
-        build_web_images(state, detect_compose_cmd(), proxy_build_args or [], uid, gid)
+        _build_web_images(state, detect_compose_cmd(), proxy_build_args or [], uid, gid)
         setattr(state, "_runner_live_server_image_prepared", True)
     except (OSError, subprocess.SubprocessError, SystemExit) as exc:
         raise RunnerLiveTestError("EXECUTION_FAILURE", f"candidate server image build failed: {exc}") from exc
@@ -1027,7 +1034,7 @@ def receipt_valid_for_artifact(
         identity = worker._load_identity()
         provenance = _build_provenance(state, family)
         required = {case.id for case in identity.plan.select("smoke")}
-        from revocompute_ctl.readiness import bundle_digest
+        from revocompute.runner_readiness import bundle_digest
 
         expected_identity = {
             "build_provenance_digest": str(provenance["build_provenance_digest"]),

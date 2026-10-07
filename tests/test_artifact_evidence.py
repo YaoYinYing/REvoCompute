@@ -13,8 +13,8 @@ if str(RUN_DIR) not in sys.path:
     sys.path.insert(0, str(RUN_DIR))
 
 from revocompute.live_tests import sha256_file  # noqa: E402
-from revocompute_ctl.artifact_evidence import read_artifact_evidence, write_artifact_evidence  # noqa: E402
-from revocompute_ctl.registry import RuntimeFamily  # noqa: E402
+from revocompute.artifact_evidence import read_artifact_evidence, write_artifact_evidence  # noqa: E402
+from revocompute.runner_registry import RuntimeFamily  # noqa: E402
 
 
 def _family(tmp_path: Path, name: str) -> RuntimeFamily:

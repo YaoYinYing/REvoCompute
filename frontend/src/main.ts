@@ -74,7 +74,7 @@ async function renderRoute(activeRoute: AppRoute, user: CurrentUser | null): Pro
     case 'profile': {
       const { mountProfile } = await import('./features/profile/index.js'); await mountProfile(shell.outlet, shell, user!); break;
     }
-    case 'admin-users': case 'admin-configuration': case 'admin-logs': {
+    case 'admin-fleet': case 'admin-users': case 'admin-configuration': case 'admin-logs': {
       const { mountAdmin } = await import('./features/admin/index.js'); await mountAdmin(shell.outlet, activeRoute.id, shell, user!); break;
     }
     default: {

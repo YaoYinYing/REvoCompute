@@ -560,3 +560,67 @@ is prepended directly to the header), and an unused `attribute()` helper in
 machine-fact format is intended: dates are machine facts and compare by eye, which
 matches the "consistent formatting" contract in
 `docs/developer-guide/frontend-design-language.md` §15.3.
+
+---
+
+# Deterministic Runner Fleet Control Plane (PR #55)
+
+`TODO.md` is the design contract for this PR. This section records execution
+state; the committed tests and the named commands are the machine-verifiable
+record. Observed `main` at dispatch: `e6407758`; the branch was later rebased
+onto `1f1f3c1`, which landed the registry-determinism fix (#62) this branch
+consumes.
+
+## What landed
+
+- **One canonical control core** (`revocompute/runner_readiness.py`,
+  `runner_registry.py`, `runner_host.py`, `runner_admin_view.py`,
+  `runner_promotion.py`). The CLI, production admission, the Admin API, and the
+  tests resolve `runner-status`/readiness from the same evaluator, so a family
+  cannot be READY on one surface and unavailable to a submission on another.
+- **Readiness / capacity / access / infrastructure stay separate** — never one
+  "available" flag.
+- **Typed operator actions** (`operator_actions.py`): a closed registry with
+  bounded parameters, explicit tiers, and lease scopes; no command, argv, env,
+  or path field exists anywhere.
+- **Plan before execute** (`operator_plan.py`): a content-addressed plan; a stale
+  plan fails closed (`409 stale_plan`).
+- **Operator Jobs** (`operator_jobs.py` + `_schema.py`): durable records with a
+  closed lifecycle, one exclusive lease per family, idempotency, and restart
+  reconciliation that never repeats an irreversible action.
+- **Minimal Host Operator Executor** (`operator_executor.py`): fixed argv from a
+  table, allowlisted env, bounded cwd/timeout, redacted bounded logs, fail-closed
+  when unavailable.
+- **Admin API** (`operator_service.py` + routes): fleet, detail, plan, action,
+  history, jobs, cancel; admin role + bearer gate on every mutation; OpenAPI owns
+  the schema and the generated TS is regenerated.
+- **Admin Fleet UI** (`frontend/src/features/admin/fleet/FleetAdmin.ts`) in the
+  merged Soft Precision language; state-aware corrective actions showing what a
+  plan will and will not do; executor-unavailable degraded banner. Operator Job
+  history renders the job's own lifecycle vocabulary (`operator_jobs` statuses),
+  never a readiness-state badge.
+- **Activation/rollback** (`runner_promotion.py`): plan-bound atomic activation
+  preserving the replaced artifact, and rollback to a control-core-known
+  validated artifact. Deliberately **not** wired to the Web: refused there.
+- **Readiness core is consumed, not duplicated**: `runner_registry` and
+  `access_control` only *parse* policy documents; the active registry snapshot
+  is owned by `task_types` (#62). The admin view and the fleet list resolve
+  readiness through the one `runner_readiness` evaluator.
+
+## Delivery commands and results
+
+- `pytest tests -m "not browser" -n 4 --dist=load` → 1901 passed, 23 skipped
+  (basetemp on the root filesystem; the shared `/tmp` tmpfs exhausts inodes).
+- `pytest tests -m "browser and not molstar_csp" -n 4 --dist=load` → 165 passed,
+  1 skipped, 2 xfailed, against the built bundle.
+- `cd frontend && npm run typecheck && npm run test && npm run build` → clean;
+  97 unit tests passed.
+- `mkdocs build --strict` → clean.
+
+## Not done, by decision
+
+- Registry determinism is PR #62's; this branch consumes it when it lands rather
+  than re-implementing it.
+- The Host Operator Executor stays at its two real host operations; the Web
+  surface refuses activation and rollback rather than approximating them.
+- §20.9 end-to-end failure drill is deprioritized by the Campaign Commander.
