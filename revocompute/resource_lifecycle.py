@@ -408,9 +408,21 @@ def detect_drift(
 
 
 def _request_may_exist(task_store: TaskDatabase, record: Mapping[str, Any]) -> bool:
-    """Whether a queued commitment still has a Slurm request that could be live."""
-    task = task_store.get_task(str(record["task_id"]))
-    return bool(task) and bool(str((task or {}).get("slurm_job_id") or "").strip())
+    """Whether a queued commitment still has a Slurm request that could be live.
+
+    The scheduler identity is read off the reservation row itself, where the
+    held -> queued transition wrote it atomically with the state change — never
+    from ``tasks.slurm_job_id``.  That column is written separately and later,
+    so between the two writes a queued reservation has no Task-side identity; a
+    pass reading it would report a live request as missing and free entitlement
+    the scheduler request is about to consume.
+
+    A reservation with no owning Task row has nothing left to execute, so it is
+    reported as well: its identity names a request that no Task is waiting on.
+    """
+    if not str(record.get("scheduler_job_id") or "").strip():
+        return False
+    return task_store.get_task(str(record["task_id"])) is not None
 
 
 def reconcile_resources(

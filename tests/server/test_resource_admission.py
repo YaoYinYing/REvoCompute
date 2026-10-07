@@ -756,3 +756,74 @@ def test_a_dispatch_failure_returns_the_hold_immediately(tmp_path):
     assert reservation["state"] == ReservationState.RELEASED.value
     assert reservation["reason_code"] == ReservationReason.DISPATCH_FAILED.value
 
+
+# ---------------------------------------------------------------------------
+# Scheduler ownership: identity and commitment are one row
+# ---------------------------------------------------------------------------
+
+
+def test_dispatch_hands_the_hold_to_the_scheduler_and_names_its_job(tmp_path):
+    """Dispatch is the whole transition: state, TTL, and identity in one write.
+
+    A queued reservation with no recorded scheduler identity could be read as
+    "there is nothing to wait for" during the window before the Task row is
+    updated, and its entitlement would be handed to a second submission while a
+    real request was still queued.  Writing the identity with the state is what
+    makes that read impossible.
+    """
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"), monthly_gpu_seconds=1_000)
+    at = _timestamp(2026, 9, 22)
+    task_id = "a4" + "0" * 30
+    assert _reserve(database, 104, task_id=task_id, at=at)["allowed"] is True
+
+    assert database.record_reservation_dispatch(task_id=task_id, slurm_job_id="7001", at=at + 2) is True
+    # A repeated observation of the same identity is not a second dispatch.
+    assert database.record_reservation_dispatch(task_id=task_id, slurm_job_id="7001", at=at + 3) is False
+
+    reservation = database.list_task_reservations(task_id)[0]
+    assert reservation["state"] == ReservationState.QUEUED.value
+    # No wall-clock expiry any more: the scheduler owns it until evidence frees it.
+    assert reservation["expires_at"] is None
+    assert reservation["scheduler_job_id"] == "7001"
+    assert reservation["dispatched_at"] == at + 2
+
+
+def test_a_queued_commitment_survives_a_long_queue_wait(tmp_path):
+    """A request waiting past the pre-dispatch TTL keeps its entitlement.
+
+    This is the whole point of the two ownership modes: the hold has a TTL
+    because a submission that died before dispatch would otherwise strand
+    entitlement, and the queued commitment deliberately has none because the
+    request it belongs to may legitimately wait far longer than that TTL.
+    """
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"), monthly_gpu_seconds=1_000)
+    at = _timestamp(2026, 9, 22)
+    task_id = "a5" + "0" * 30
+    assert _reserve(database, 105, task_id=task_id, at=at, ttl_seconds=60)["allowed"] is True
+    database.record_reservation_dispatch(task_id=task_id, slurm_job_id="7002", at=at + 1)
+
+    # Far past the TTL the hold was created with.
+    assert database.expire_stale_reservations(now=at + 100_000) == 0
+
+    reservation = database.list_task_reservations(task_id)[0]
+    assert reservation["state"] == ReservationState.QUEUED.value
+    # And it still constrains a competing submission.
+    competing = _reserve(database, 105, task_id="a6" + "0" * 30, at=at + 100_000)
+    assert competing["quantity"] == 0
+    held = database.list_task_reservations(task_id)[0]
+    assert held["state"] == ReservationState.QUEUED.value
+
+
+def test_a_reclaim_leaves_a_queued_request_named_by_its_identity(tmp_path):
+    """Only the scheduler's evidence frees a queued commitment, exactly once."""
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"), monthly_gpu_seconds=1_000)
+    at = _timestamp(2026, 9, 22)
+    task_id = "a7" + "0" * 30
+    _reserve(database, 106, task_id=task_id, at=at)
+    database.record_reservation_dispatch(task_id=task_id, slurm_job_id="7003", at=at + 1)
+
+    assert database.reclaim_queued_reservation(task_id=task_id, at=at + 5) is True
+    assert database.reclaim_queued_reservation(task_id=task_id, at=at + 6) is False
+    assert database.list_queued_reservations() == []
+    assert database.compute_entitlement(106, at=at + 6).remaining == 1_000
+

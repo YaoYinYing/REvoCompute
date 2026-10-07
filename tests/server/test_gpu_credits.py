@@ -15,10 +15,28 @@ import sqlalchemy as sa
 from conftest import _load_pssm_module
 from revocompute.access_control import project_effective_entitlements
 from revocompute.db import GPUAuthorizationUnavailableError, GPUCreditUnavailableError, TaskDatabase
+from revocompute.resource_ledger import ReservationState
 
 
 def _timestamp(year: int, month: int, day: int = 1, second: int = 0) -> float:
     return datetime(year, month, day, 0, 0, second, tzinfo=timezone.utc).timestamp()
+
+
+def _own_task(database: TaskDatabase, task_id: str, *, user_id: int) -> None:
+    """A real Task row, so the reclaim pass sees an owning Task and only the
+    scheduler identity decides whether the request still exists."""
+    database.upsert_task(
+        task_id,
+        filename="input.fasta",
+        file_path="/immutable/input.fasta",
+        uploaded_at=900.0,
+        status="queued",
+        is_binary=0,
+        username=f"user-{user_id}",
+        submitted_by_user_id=user_id,
+        storage_key=f"user-{user_id}",
+        task_type="gremlin",
+    )
 
 
 def test_monthly_grant_is_lazy_idempotent_and_uses_utc_period(tmp_path):
@@ -562,6 +580,70 @@ def test_reconciliation_uses_scontrol_without_slurm_accounting(monkeypatch, tmp_
     assert module.task_runtime._reconcile_slurm_allocations() == {"settled": 1, "active": 0, "review": 0}
     assert commands == [["/usr/bin/scontrol", "show", "job", "8803"]]
     assert module.task_store.gpu_credit_summary(71, at=_timestamp(2026, 9, 5))["usage_gpu_seconds"] == 86_410
+
+
+def test_reconciliation_never_frees_a_commitment_without_scheduler_evidence(monkeypatch, tmp_path):
+    """A queued commitment is released by evidence, never by an absent identity.
+
+    The reservation row carries the scheduler identity the dispatch wrote, so
+    the reclaim pass can name the request.  A pass that instead read the Task
+    row would see ``slurm_job_id`` as NULL during the dispatch window and free
+    entitlement a live queued request is about to consume.
+    """
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    at = _timestamp(2026, 9, 5)
+    task_id = "9" * 32
+    _own_task(module.task_store, task_id, user_id=91)
+    module.task_store.reserve_compute_admission(user_id=91, task_id=task_id, at=at)
+    module.task_store.record_reservation_dispatch(task_id=task_id, slurm_job_id="8805", at=at + 1)
+    # The Task row's own handle has not been persisted yet: this is exactly the
+    # window a Task-row read would mistake for "no request exists".
+    assert (module.task_store.get_task(task_id) or {}).get("slurm_job_id") is None
+
+    commands: list[list[str]] = []
+
+    def fake_run(command, *args, **kwargs):
+        commands.append(list(command))
+        return SimpleNamespace(stdout="JobId=8805 JobState=PENDING\n")
+
+    monkeypatch.setattr(module.task_runtime.shutil, "which", lambda command: f"/usr/bin/{command}")
+    monkeypatch.setattr(module.task_runtime.subprocess, "run", fake_run)
+
+    assert module.task_runtime._reclaim_abandoned_reservations(now=at + 10) == 0
+
+    # The scheduler was asked about the queued request named on the row, and the
+    # commitment is still there because the request still exists.
+    assert commands == [["/usr/bin/scontrol", "show", "job", "8805"]]
+    assert module.task_store.list_queued_reservations()[0]["state"] == ReservationState.QUEUED.value
+
+
+def test_reconciliation_frees_a_queued_commitment_the_scheduler_proves_is_gone(monkeypatch, tmp_path):
+    """A terminal scheduler answer is the evidence that frees the claim."""
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    at = _timestamp(2026, 9, 5)
+    task_id = "8" * 32
+    _own_task(module.task_store, task_id, user_id=92)
+    module.task_store.reserve_compute_admission(user_id=92, task_id=task_id, at=at)
+    module.task_store.record_reservation_dispatch(task_id=task_id, slurm_job_id="8806", at=at + 1)
+
+    monkeypatch.setattr(module.task_runtime.shutil, "which", lambda command: f"/usr/bin/{command}")
+    monkeypatch.setattr(
+        module.task_runtime.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(stdout="JobId=8806 JobState=CANCELLED\n"),
+    )
+
+    assert module.task_runtime._reclaim_abandoned_reservations(now=at + 10) == 1
+    assert module.task_store.list_queued_reservations() == []
+    assert module.task_store.compute_entitlement(92, at=at + 10).remaining == 60_000
 
 
 def _bearer(user: dict) -> dict[str, str]:

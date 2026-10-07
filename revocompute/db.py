@@ -481,6 +481,13 @@ class TaskDatabase:
             # reservation, which has no wall-clock expiry at all.
             Column("expires_at", Float),
             Column("dispatched_at", Float),
+            # The scheduler's own name for the request, written in the same
+            # transaction that makes the reservation scheduler-owned.  A queued
+            # reservation therefore always carries the identity that proves a
+            # request can still exist, so no maintenance pass can read a missing
+            # identity as "there is nothing to wait for" during the dispatch
+            # window — the two facts are one row, not two writes.
+            Column("scheduler_job_id", String),
             Column("released_at", Float),
         )
         # One live reservation per Task: a resubmission that already staked its
@@ -792,6 +799,7 @@ class TaskDatabase:
             indexes = {index["name"] for index in inspector.get_indexes("resource_reservations")}
             if (
                 "dispatched_at" not in columns
+                or "scheduler_job_id" not in columns
                 or "idx_resource_reservations_live_task" not in indexes
             ):
                 self._rebuild_table(conn, self.resource_reservations_table)
@@ -2875,6 +2883,7 @@ class TaskDatabase:
                         created_at=timestamp,
                         expires_at=timestamp + ttl_seconds,
                         dispatched_at=None,
+                        scheduler_job_id=None,
                         released_at=None,
                     )
                     .on_conflict_do_nothing(
@@ -2932,7 +2941,7 @@ class TaskDatabase:
         )
 
     def record_reservation_dispatch(
-        self, *, task_id: str, at: float | None = None
+        self, *, task_id: str, slurm_job_id: str, at: float | None = None
     ) -> bool:
         """Hand a Task's reservation to the scheduler: held -> queued.
 
@@ -2943,9 +2952,13 @@ class TaskDatabase:
         meanwhile would let a competing submission consume entitlement the
         queued request is about to use.
 
-        Idempotent and race-safe: only a live ``held`` row transitions, and a
-        second call for an already-queued or already-released Task is a no-op
-        returning ``False``.
+        ``slurm_job_id`` is written in the same statement as the state change, so
+        a queued reservation is never observable without the scheduler identity
+        that justifies it.  That is what makes the maintenance reclaim safe: a
+        pass reading this row always sees the request's own name, so it can never
+        mistake a mid-dispatch window for "no request exists".  Idempotent and
+        race-safe: only a live ``held`` row transitions, and a second call for an
+        already-queued or already-released Task is a no-op returning ``False``.
         """
         timestamp = time.time() if at is None else at
         with self.engine.begin() as conn:
@@ -2959,6 +2972,7 @@ class TaskDatabase:
                     state=rloan.ReservationState.QUEUED.value,
                     reason_code=rloan.ReservationReason.DISPATCHED.value,
                     dispatched_at=timestamp,
+                    scheduler_job_id=str(slurm_job_id),
                     expires_at=None,
                 )
             )

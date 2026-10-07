@@ -39,6 +39,35 @@ from revocompute.resource_observations import (
 from revocompute.resource_policy import ResolvedResources, resolve_resources
 
 _SLURM_JOB_ID_RE = re.compile(r"srun:\s+[Jj]ob\s+(\d+)")
+
+#: Output contract of the allocation wrapper: two distinct facts, never one.
+#:
+#: ``REVODESIGN_JOB_ID=<id>`` names the scheduler job.  Inside the allocation
+#: ``$SLURM_JOB_ID`` is set on the compute node, but srun also prints a
+#: ``job <id> queued and waiting for resources`` banner on its *stderr* while
+#: the request is still queued — so job identity is evidence that the scheduler
+#: owns the request, not that anything is running.
+#:
+#: ``REVODESIGN_ALLOCATION_LIVE=<id>`` is printed only after the wrapper has
+#: confirmed, from the scheduler's own state, that this job holds running
+#: resources, so it is the one honest allocation-live signal.  Accounting and
+#: the reservation consume hang off this line, never off the job-identity line:
+#: a queue wait is not allocated time and must not be charged as any.
+ALLOCATION_LIVE_PREFIX = "REVODESIGN_ALLOCATION_LIVE="
+JOB_ID_PREFIX = "REVODESIGN_JOB_ID="
+
+#: How long the wrapper waits for the scheduler to report its job RUNNING before
+#: it gives up.  A request that never reaches RUNNING never held resources, so
+#: the allocation fails instead of running unaccounted.
+ALLOCATION_LIVE_POLLS = 600
+ALLOCATION_LIVE_POLL_SECONDS = "0.5"
+#: How long the wrapper waits for the server to release the scientific command
+#: once the allocation is known to be running.  The release is the admission
+#: decision: an allocation the balance cannot cover is stopped here, before the
+#: task does any work.
+ALLOCATION_RELEASE_POLLS = 600
+ALLOCATION_RELEASE_POLL_SECONDS = "0.1"
+
 _RESOURCE_BEGIN = "REVODESIGN_RESOURCE_BEGIN"
 _RESOURCE_LINE = "REVODESIGN_RESOURCE:"
 _RESOURCE_END = "REVODESIGN_RESOURCE_END"
@@ -180,11 +209,11 @@ _PROTOCOL_PREFIXES = (PROGRESS_PREFIX, OBSERVATION_PREFIX, TASK_OUTCOME_PREFIX)
 class SlurmJob(Job):
     """A compute job submitted via SLURM + Apptainer.
 
-    ``submit()`` launches ``srun`` via ``subprocess.Popen`` and returns the
-    real SLURM job id only when it is captured from the allocation wrapper's
-    first stdout line or an ``srun`` stderr banner. ``poll()`` waits for the
-    process to exit and returns ``COMPLETED`` or ``FAILED`` based on the exit
-    code.
+    ``submit()`` launches ``srun`` and returns the scheduler job id as soon as
+    job *identity* is known — from the wrapper's first stdout line or srun's
+    stderr banner.  Identity is not execution: the request may still be queued,
+    so ``poll()`` (or the wrapper's :data:`ALLOCATION_LIVE_PREFIX` line) is what
+    reports that the allocation actually ran.
     """
 
     def __init__(
@@ -223,10 +252,19 @@ class SlurmJob(Job):
         self._allocation_started_at: float | None = None
         self._allocation_tracking_started = False
         self._allocation_finished_notified = False
+        # Two separate facts, two separate gates: the request exists (job
+        # identity known), and the allocation is running (the compute node
+        # observed it holding resources).  Accounting hangs off the second only.
+        self._dispatched_notified = False
+        self._allocation_live = False
+        self._wrapper_started = False
+        self._admission_error: Exception | None = None
+        self._accounting_enabled = False
         self._allocation_dispatched_callback = allocation_dispatched_callback
         self._allocation_started_callback = allocation_started_callback
         self._allocation_finished_callback = allocation_finished_callback
         self._job_id_event = threading.Event()
+        self._allocation_live_lock = threading.Lock()
         self._resolved_resource_policy = resource_policy
         if scratch_backend not in {"disk", "ram"}:
             raise ValueError("scratch_backend must be 'disk' or 'ram'")
@@ -296,47 +334,105 @@ class SlurmJob(Job):
             )
             raise RuntimeError(f"SLURM submission did not return a scheduler job ID{suffix}")
         self._job_id = self._slurm_job_id
-        self._allocation_started_at = time.time()
-        # Snapshot before the callbacks run: each may itself block the wrapper,
-        # so this is the only stable answer to "does the wrapper wait?".
+        # Snapshot before the callbacks run: each may block, and this is the only
+        # stable answer to "does the wrapper wait for approval?".
         accounting_enabled = (
             self._allocation_dispatched_callback is not None
             or self._allocation_started_callback is not None
         )
+        self._accounting_enabled = accounting_enabled
         try:
-            if self._allocation_dispatched_callback is not None:
-                # The scheduler request now exists, so the Task's admission
-                # reservation is handed to it here rather than after the
-                # allocation starts: a request that waits in the queue longer
-                # than the pre-dispatch TTL must not lose its entitlement to a
-                # competing admission whose own allocation has not started
-                # either.
-                self._allocation_dispatched_callback(self._slurm_job_id, time.time())
-            if self._allocation_started_callback is not None:
-                self._allocation_started_callback(
-                    self._slurm_job_id, self._allocation_started_at
-                )
-                self._allocation_tracking_started = True
+            # Job identity is now known, so the scheduler owns the request.  The
+            # Task's reservation is handed to it here, as the same transition
+            # that persists the scheduler identity: a request that waits in the
+            # queue longer than the pre-dispatch TTL cannot lose its entitlement
+            # to a competing admission, and no maintenance pass can ever see a
+            # scheduler-owned reservation without a durable scheduler identity.
+            # This is deliberately NOT an allocation start — nothing is running
+            # yet, and a queue wait is not allocated time.
+            self._notify_dispatched()
+            # Released to the wrapper here, so it can observe and report whether
+            # the allocation is actually running.  This is not a grant: the
+            # scientific command stays withheld until that report is admitted.
+            if accounting_enabled:
+                self._release_allocation_observation()
         except Exception:
             self.cancel()
             self._remove_wrapper_script()
             raise
-        # Released after the accounting edges are recorded, so the wrapper runs
-        # only once the allocation is durably known: the request stays in the
-        # scheduler's queue until then, which is what keeps the deferred hold
-        # consistent with a queue wait that outlives the TTL.
-        if accounting_enabled:
-            self._approve_allocation()
         self._allocation_started = time.monotonic()
         emit_event("slurm.allocation.granted", **self._event_fields())
 
         logging.info(
-            "SLURM job %s (srun pid %s) started for task %s",
+            "SLURM job %s (srun pid %s) submitted for task %s",
             self._job_id,
             self._process.pid,
             self.task_id,
         )
         return self._job_id
+
+    def _notify_dispatched(self) -> None:
+        """Announce that the scheduler owns the request, durably and once.
+
+        Runs inside ``submit()`` while the wrapper is still waiting on its
+        approval gate, so when it returns the scheduler-owned reservation and the
+        persisted job identity exist as one state — the pair a later
+        reconciliation reads to decide whether a request can still be alive.
+        Idempotent: a repeated identity observation is not a second dispatch.
+        """
+        if self._dispatched_notified:
+            return
+        self._dispatched_notified = True
+        if self._allocation_dispatched_callback is not None:
+            self._allocation_dispatched_callback(self._slurm_job_id, time.time())
+
+    def _notify_allocation_live(self) -> None:
+        """Announce that the allocation is actually running, exactly once.
+
+        The one entry point into allocation accounting: it consumes the Task's
+        admission reservation and starts the clock that GPU- and CPU-core-seconds
+        are measured against.  The wrapper's ``REVODESIGN_ALLOCATION_LIVE`` line
+        reaches it through ``_read_stdout`` while the wrapper is still waiting on
+        the release gate, so the release that follows is the same decision that
+        recorded the allocation.  A run that never printed the line is accounted
+        from ``poll()``, where the wrapper is known to have started on a node.
+
+        Idempotent and lock-guarded: the stdout thread and the polling thread can
+        both arrive, and either report may be the one that survives.
+        """
+        with self._allocation_live_lock:
+            if self._allocation_live:
+                return
+            self._allocation_live = True
+            started_at = time.time() if self._allocation_started_at is None else self._allocation_started_at
+        if self._allocation_started_callback is not None:
+            try:
+                self._allocation_started_callback(self._slurm_job_id, started_at)
+            except Exception as exc:
+                # The admission decision belongs to this callback.  A refusal
+                # leaves no allocation fact and no grant, so the wrapper must not
+                # be released to run: record it and let ``poll()`` fail the job.
+                # Nothing is settled either — settlement pays for an allocation
+                # that existed, and this one was refused.
+                self._admission_error = exc
+                return
+        self._allocation_tracking_started = True
+        if self._accounting_enabled:
+            # The allocation is accounted for, so the scientific command may
+            # run.  The release is this Task's admission grant; the wrapper has
+            # already reported the allocation-live fact the grant answers.
+            self._approve_allocation()
+
+    @property
+    def allocation_started(self) -> bool:
+        """Whether this request produced a recorded allocation.
+
+        ``False`` covers both a request that never left the scheduler's queue and
+        one whose allocation-live moment was refused at admission: either way no
+        allocation fact exists, so the Task's admission reservation must be given
+        back rather than kept.
+        """
+        return self._allocation_live and self._admission_error is None
 
     def poll(self) -> JobState:
         if self._process is None:
@@ -357,6 +453,27 @@ class SlurmJob(Job):
                 self._stdout_thread.join(timeout=10)
             if self._stderr_thread:
                 self._stderr_thread.join(timeout=10)
+
+            # The wrapper itself started on a compute node — it printed its own
+            # job id — but its allocation-live report never arrived, either
+            # because the node's scheduler query is unavailable or because the
+            # run was killed before it could report.  The wrapper running is
+            # itself evidence the request left the queue, so the allocation it
+            # held is accounted here; a request that never left the queue never
+            # printed that line and still charges nothing.  The release is
+            # written first, so a wrapper still waiting is never left to hit its
+            # own bounded wait on an allocation that has already ended.
+            if not self._allocation_live and self._wrapper_started:
+                if self._accounting_enabled:
+                    self._release_allocation_observation()
+                self._notify_allocation_live()
+
+            # An allocation the admission transition refused is not a grant: the
+            # wrapper was never released, srun is expected to have exited
+            # nonzero, and the refusal is the Task's failure rather than an
+            # accounting detail to swallow.
+            if self._admission_error is not None:
+                raise self._admission_error
 
             # The wrapper is removed before any output is captured, so a task
             # that rewrote the running script cannot ship those bytes in the
@@ -467,18 +584,49 @@ class SlurmJob(Job):
         self._allocation_finished_notified = True
 
     def _approve_allocation(self) -> None:
-        with open(self._allocation_approval_path, "x", encoding="utf-8"):
+        """Release an accounted-for allocation to run its scientific command.
+
+        The grant, not the start gate: the allocation has been recorded, so the
+        Task is allowed to consume it.  Idempotent — the wrapper's own live line
+        and the poll-side backstop can both arrive, and the wrapper consumes the
+        file, so an existing one already means the grant stands.
+        """
+        self._write_release(self._allocation_grant_path)
+
+    def _release_allocation_observation(self) -> None:
+        """Release the wrapper to observe whether its allocation is running.
+
+        This is *not* permission to run the task — it is what lets the wrapper
+        report the allocation-live fact the admission decision answers.  It is
+        written as soon as the scheduler owns the request, so the observation
+        happens while the scientific command is still withheld.
+        """
+        self._write_release(self._allocation_release_path)
+
+    @staticmethod
+    def _write_release(path: str) -> None:
+        try:
+            with open(path, "x", encoding="utf-8"):
+                pass
+        except FileExistsError:
             pass
 
     @property
-    def _allocation_approval_path(self) -> str:
+    def _allocation_release_path(self) -> str:
+        """Host-to-wrapper gate: "observe whether this allocation is running"."""
+        return os.path.join(self.output_dir, f".allocation-start-{self.task_id[:8]}")
+
+    @property
+    def _allocation_grant_path(self) -> str:
+        """Host-to-wrapper gate: "run the scientific command for this allocation"."""
         return os.path.join(self.output_dir, f".allocation-approved-{self.task_id[:8]}")
 
     def _remove_allocation_approval(self) -> None:
-        try:
-            os.unlink(self._allocation_approval_path)
-        except FileNotFoundError:
-            pass
+        for path in (self._allocation_release_path, self._allocation_grant_path):
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                pass
 
     def _build_srun_args(self) -> list[str]:
         resources = self._resolve_resources()
@@ -621,16 +769,67 @@ class SlurmJob(Job):
             "",
             # The allocation carries the authoritative job id; publish it on
             # stdout first so the runner never depends on srun's stderr
-            # banner (which SLURM 19.05 does not always print in time).
-            'echo "REVODESIGN_JOB_ID=${SLURM_JOB_ID}"',
+            # banner (which SLURM 19.05 does not always print in time).  This
+            # names the request — it is not evidence that anything is running.
+            f'echo "{JOB_ID_PREFIX}${{SLURM_JOB_ID}}"',
         ]
         if self._allocation_dispatched_callback is not None or self._allocation_started_callback is not None:
             lines.extend(
                 [
-                    f"approval={_sh_quote(self._allocation_approval_path)}",
-                    'for _ in {1..300}; do test -f "$approval" && break; sleep 0.1; done',
-                    'test -f "$approval"',
-                    'rm -f -- "$approval"',
+                    # Two gates, because there are two different questions.  The
+                    # start gate releases the wrapper to observe its own
+                    # allocation; it is not permission to run the task.  The
+                    # grant gate after the live line is the admission decision,
+                    # and only then does the scientific command run.
+                    f"start={_sh_quote(self._allocation_release_path)}",
+                    'for _ in {1..300}; do test -f "$start" && break; sleep 0.1; done',
+                    'test -f "$start"',
+                    'rm -f -- "$start"',
+                    "# -- allocation-live observation --",
+                    # ``squeue`` answers from the scheduler's own state: a
+                    # PENDING or CONFIGURING job has been allocated nothing yet,
+                    # and charging it would charge queue latency as GPU- and
+                    # CPU-seconds.  Only RUNNING is allocation-live, and only
+                    # this line starts the accounting clock.
+                    "allocation_live=0",
+                    f"for _ in {{1..{ALLOCATION_LIVE_POLLS}}}; do",
+                    '  state="$(squeue -h -j "${SLURM_JOB_ID}" -o "%T" 2>/dev/null | head -n 1)"',
+                    '  case "${state}" in',
+                    '    (RUNNING) allocation_live=1; break ;;',
+                    # No answer yet (or the query is not available on this
+                    # node): keep waiting for the state rather than reporting a
+                    # job that has not been allocated anything as live.
+                    '    ("") ;;',
+                    "    (*) break ;;",
+                    "  esac",
+                    f"  sleep {ALLOCATION_LIVE_POLL_SECONDS}",
+                    "done",
+                    'if [[ "${allocation_live}" != 1 ]]; then',
+                    # The state was read and was not RUNNING (a queued job that
+                    # can no longer run, or one already gone).  No allocation is
+                    # ever accounted without this evidence, so one that never
+                    # reached RUNNING is charged nothing.
+                    '  echo "SLURM job ${SLURM_JOB_ID} did not reach RUNNING state" >&2',
+                    "  exit 1",
+                    "fi",
+                    f'echo "{ALLOCATION_LIVE_PREFIX}${{SLURM_JOB_ID}}"',
+                    "# -- admission grant --",
+                    # Allocation-live is a fact about the scheduler, not a grant:
+                    # the server makes the admission decision when it observes it,
+                    # and an allocation the balance cannot cover is stopped here,
+                    # before the task does any work.  The wait has a bound so a
+                    # server that never answers cannot pin a node forever.
+                    f"grant={_sh_quote(self._allocation_grant_path)}",
+                    "released=0",
+                    f"for _ in {{1..{ALLOCATION_RELEASE_POLLS}}}; do",
+                    '  if test -f "$grant"; then released=1; break; fi',
+                    f"  sleep {ALLOCATION_RELEASE_POLL_SECONDS}",
+                    "done",
+                    'if [[ "${released}" != 1 ]]; then',
+                    '  echo "allocation was not released to run" >&2',
+                    "  exit 1",
+                    "fi",
+                    'rm -f -- "$grant"',
                 ]
             )
         if self.scratch_backend == "ram":
@@ -1008,16 +1207,31 @@ class SlurmJob(Job):
 
         for line in iter(stream.readline, ""):
             self._stdout_lines.append(line)
-            if line.startswith("REVODESIGN_JOB_ID=") and self._slurm_job_id is None:
+            if line.startswith(JOB_ID_PREFIX) and self._slurm_job_id is None:
                 candidate = line.split("=", 1)[1].strip()
                 if candidate.isdigit():
                     self._slurm_job_id = candidate
                     self._job_id_event.set()
+                    # A stdout id is printed by the wrapper itself, so it proves
+                    # the request reached a compute node and started — which a
+                    # queued srun stderr banner never does.  Recorded as a
+                    # fallback for hosts with no ``squeue``; allocation-live
+                    # still governs accounting, and ``poll()`` backstops it.
+                    self._wrapper_started = True
+            elif line.startswith(ALLOCATION_LIVE_PREFIX):
+                # The wrapper observed its own job in RUNNING state on the
+                # compute node.  This — not job identity — is what starts
+                # allocation accounting, and it is the signal the wrapper waits
+                # on before it releases the scientific command.
+                live = line.split("=", 1)[1].strip()
+                if live.isdigit():
+                    self._allocation_started_at = time.time()
+                    self._notify_allocation_live()
                     if markers and self.stage_callback:
-                        # The allocation is live before the scientific tool
-                        # prints its first marker.  Emit the first declared
-                        # stage as a liveness signal so queued tasks become
-                        # running as soon as the wrapper starts.
+                        # The allocation is now genuinely running, before the
+                        # scientific tool has printed its first marker.  Emit the
+                        # first declared stage as a liveness signal so the Task
+                        # reads as running from the moment it holds resources.
                         emit_stage(next(iter(markers)))
             if markers and self.stage_callback:
                 stage = extract_stage_from_log_line(line, markers)

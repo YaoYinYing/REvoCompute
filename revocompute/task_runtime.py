@@ -54,7 +54,7 @@ from revocompute.input_validators.isolated_validation import VALIDATOR_RESOURCE_
 from revocompute.manage_db import ManageDatabase  # noqa: E402
 from revocompute.operational_events import emit_event
 from revocompute import resource_ledger as rloan
-from revocompute.resource_ledger import AdmissionReason, EvidenceSource, LedgerReason
+from revocompute.resource_ledger import AdmissionReason, EvidenceSource, LedgerReason, ReservationReason
 from revocompute.resource_observations import work_items_projection
 from revocompute.resource_policy import ResolvedResources, ResourceValidationError
 from revocompute.result_projection import artifact_capability
@@ -467,7 +467,11 @@ def _compute_allocation_callbacks(
     def dispatched(slurm_job_id: str, _dispatched_at: float) -> None:
         if user_id <= 0:
             return
-        task_store.record_reservation_dispatch(task_id=task_id)
+        # The scheduler identity is persisted as part of this same transition,
+        # so a queued reservation always carries the request's own name: a
+        # maintenance pass reading it can never conclude "no request exists"
+        # during the window before the Task row is updated.
+        task_store.record_reservation_dispatch(task_id=task_id, slurm_job_id=str(slurm_job_id))
 
     def started(slurm_job_id: str, started_at: float) -> None:
         try:
@@ -615,7 +619,17 @@ def _run_compute_job(
     if jid:
         if isinstance(job, SlurmJob):
             task_store.update_task(task_id, slurm_job_id=jid)
-    return job.poll()
+    state = job.poll()
+    if isinstance(job, SlurmJob) and not job.allocation_started:
+        # The request never held a running allocation: it was queued and then
+        # cancelled, rejected, or lost.  No allocation was ever recorded for it,
+        # so its scheduler-owned reservation would otherwise stay committed
+        # forever.  Release it now.  A request that did run had its reservation
+        # consumed by the allocation start, so this release is a no-op there.
+        task_store.release_reservation(
+            task_id=task_id, reason_code=ReservationReason.RELEASED.value, at=time.time()
+        )
+    return state
 
 
 def _workflow_state(task: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -698,6 +712,14 @@ def _run_compute_workflow(
             job.cancel()
             return JobState.CANCELLED
         result = job.poll()
+        if isinstance(job, SlurmJob) and not job.allocation_started:
+            # This stage never held a running allocation, so no allocation fact
+            # exists for it and the Task's scheduler-owned reservation (if it is
+            # still the one from the first stage) must go back rather than stay
+            # committed with nothing left to consume it.
+            task_store.release_reservation(
+                task_id=task_id, reason_code=ReservationReason.RELEASED.value, at=time.time()
+            )
         state[stage.name].update(status=result.value, finished_at=time.time())
         task_store.update_task(
             task_id,
@@ -2274,10 +2296,17 @@ def _reclaim_abandoned_reservations(*, now: float | None = None) -> int:
     whose request never produced an allocation and is provably gone from the
     scheduler.  Both are evidence-driven.  A reservation whose Job is still
     active in Slurm belongs to that Job and is left alone — that is the case a
-    bare timeout used to get wrong — and an ambiguous answer (no scheduler, or
-    an unreadable state) leaves the reservation committed rather than guessing.
-    Capacity is therefore returned as soon as the request is knowably gone, and
-    never merely because time passed.
+    bare timeout used to get wrong — and an ambiguous answer (no scheduler, an
+    unreadable state, or no scheduler identity on the row) leaves the reservation
+    committed rather than guessing.  Capacity is therefore returned as soon as
+    the request is knowably gone, and never merely because time passed.
+
+    The scheduler identity is taken from the reservation row, which the
+    held -> queued transition wrote atomically with the state change, not from
+    ``tasks.slurm_job_id`` — that column is persisted separately and later, so
+    reading it here would free a live request's entitlement during the dispatch
+    window.  A missing identity is not evidence that no request exists, so it
+    keeps its commitment.
     """
     timestamp = time.time() if now is None else now
     reservations = task_store.list_queued_reservations()
@@ -2288,17 +2317,17 @@ def _reclaim_abandoned_reservations(*, now: float | None = None) -> int:
     for reservation in reservations:
         task_id = str(reservation["task_id"])
         task = task_store.get_task(task_id)
-        job_id = str((task or {}).get("slurm_job_id") or "").strip()
-        if not job_id or not job_id.isdigit() or task is None:
-            # The request was never dispatched (or the Task row is gone), so
-            # there is nothing in the scheduler to keep the claim alive.  This
-            # reservation is not TTL-eligible any more, so it is freed here
-            # rather than leaked forever.
+        job_id = str(reservation.get("scheduler_job_id") or "").strip()
+        if task is None:
+            # The Task row is gone, so nothing can ever consume this claim and
+            # no scheduler request it names belongs to a live Task.
             if task_store.reclaim_queued_reservation(
-                task_id=task_id, reason_code=ReservationReason.RELEASED.value, at=timestamp
+                task_id=task_id, reason_code=ReservationReason.TASK_DELETED.value, at=timestamp
             ):
                 released += 1
             continue
+        if not job_id or not job_id.isdigit():
+            continue  # no scheduler identity: ambiguous, keep the commitment
         if not scontrol:
             continue  # ambiguous: keep the commitment rather than guess
         try:

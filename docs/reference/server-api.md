@@ -183,8 +183,21 @@ while every *other* Task's committed reservation and every unsettled allocation
 still counts against the balance. A reservation has two ownership modes: a
 pre-dispatch hold with a TTL, and a scheduler-owned commitment, from the moment
 the Slurm request exists, which no wall-clock timeout may reclaim because the
-request may legitimately still be queued. A commitment the scheduler proves is
-gone is released by reconciliation against that evidence.
+request may legitimately still be queued. The commitment records the scheduler's
+own job id in the same write that makes it scheduler-owned, so a reservation is
+never queued without the identity that names its request, and reconciliation
+decides whether to free it from that identity and the scheduler's answer — never
+from a Task-row handle that is persisted separately, and never from elapsed
+time. A commitment the scheduler proves is gone is released by that evidence.
+
+Knowing a scheduler job id is not the same as holding an allocation. The
+wrapper publishes its job id as soon as it starts, and that identity alone
+dispatches — moves the reservation from held to queued. Only evidence that the
+allocation is actually running starts accounting: the wrapper confirms from the
+scheduler's own state that its job is `RUNNING` and reports that before it runs
+the scientific command. A request that waits in the queue, or is cancelled
+before it ever runs, therefore charges nothing and holds nothing after the
+release, however long it waited.
 
 Immediately before approving a real GPU allocation, the worker atomically
 checks the current server-published account, GPU-permission, entitlement, and
