@@ -352,7 +352,7 @@ def test_each_item_carries_the_requested_scientific_parameter_set(tmp_path, plug
 def test_the_recovery_record_shows_the_requested_science_survived_recovery(
     tmp_path, plugin_module, state, monkeypatch
 ):
-    """TODO.md 7/10: the requested count/seed survive; the grouping divergence is explicit."""
+    """The requested count/seed survive; the grouping divergence is explicit."""
     monkeypatch.setenv("SIMPLEFOLD_FAKE_OOM_MULTIPLICITY", "3")
     items = _sequence_items(("a", "ACDE"), sample_count=4)
     # The item carries the requested set, as the entrypoint supplies it.
@@ -388,7 +388,7 @@ def test_the_recovery_record_shows_the_requested_science_survived_recovery(
 
 
 def test_the_parameter_roles_match_the_modules_actual_use(plugin_module):
-    """TODO.md 1: the comparison contract is derived from the code, not assumed.
+    """The comparison contract is derived from the code, not assumed.
 
     SimpleFold's adaptation vocabulary holds no scientific parameter at all: every
     required setting reaches the sampling call unchanged, so there is no

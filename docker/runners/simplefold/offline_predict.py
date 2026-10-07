@@ -93,8 +93,9 @@ SUPPORTED_ADJUSTMENTS = frozenset({"sample_group_size", "cache_clear"})
 RESOURCE_ADJUSTMENT_KEYS = frozenset(
     {"sample_group_size", "batch_size", "token_budget", "chunk_size", "cpu_offload", "kernel_backend", "cache_clear"}
 )
-#: Comparison contract (``TODO.md`` §1): what each parameter governs, from this
-#: module's actual use of it. The required scientific settings — model, step
+#: Comparison contract (see `Resource adaptation boundaries` in
+#: docs/runner-guide/persistent-execution.md): what each parameter governs,
+#: from this module's actual use of it. The required scientific settings — model, step
 #: count, tau, sample count, pLDDT, output format, seed — all reach the sampling
 #: call unchanged, so a comparison of two executions holds them fixed.
 #: Execution-only controls change how the requested samples are drawn; there is

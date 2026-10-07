@@ -145,8 +145,9 @@ REQUIRED_PARAMS = (
 RESOURCE_ADJUSTMENT_KEYS = frozenset(
     {"sample_group_size", "batch_size", "token_budget", "chunk_size", "cpu_offload", "kernel_backend", "cache_clear"}
 )
-#: Comparison contract (``TODO.md`` §1): what each parameter governs, taken from
-#: this module's actual use of it rather than assumed from its name.
+#: Comparison contract (see `Resource adaptation boundaries` in
+#: docs/runner-guide/persistent-execution.md): what each parameter governs,
+#: taken from this module's actual use of it rather than assumed from its name.
 #:
 #: Every required scientific setting — model variant, loop count, sampling steps,
 #: sample count, seed, the LM dropout/mask knobs, MSA depth and masking, and

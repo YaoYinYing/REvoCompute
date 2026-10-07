@@ -10,7 +10,7 @@ instead as a Runtime Bundle: a read-only snapshot of the declared sources,
 identified by the content of exactly those sources.  Build the environment;
 mount the orchestration.
 
-Identity rules (see ``TODO.md`` §6):
+Identity rules (see docs/runner-guide/runtime-bundles.md):
 
 - only the paths a family declares participate in that family's digest;
 - an executable bit is part of identity, timestamps and ownership are not;
