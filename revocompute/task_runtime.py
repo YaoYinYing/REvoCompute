@@ -63,7 +63,12 @@ from revocompute.result_storyboard import (
     resolve_expected_files,
     storyboard_declaration,
 )
-from revocompute.storage import ArtifactIdentityError, StorageResolver
+from revocompute.storage import (
+    PUBLICATION_QUARANTINE_STATES,
+    ArtifactIdentityError,
+    ResultPublicationError,
+    StorageResolver,
+)
 from revocompute.citations import citations_bibtex
 from revocompute.task_types import default_task_type, get as _get_task_type
 from revocompute.task_types import discover_plugins as _discover_plugins
@@ -1151,10 +1156,12 @@ def _anchor_result_manifest(task: dict[str, Any], payload: bytes, *, published_a
     namespace: the anchor describes what Core published, and the replacement
     does not match it.
 
-    Finalization must not fail because the anchor could not be persisted: a
-    failed persistence leaves the manifest readable-but-unanchored, which every
-    consumer already fails closed on, so the outcome is a refused publication
-    rather than a task finalized with no durable record at all.
+    Anchoring is part of publication, not a best-effort side effect of it: a
+    manifest without this record is one Core's own reader refuses, so a
+    persistence failure is raised as :class:`ResultPublicationError` and the
+    caller publishes nothing.  Swallowing it would leave a finished task and a
+    ``manifest.published`` event asserting a publication that no consumer can
+    read.
     """
     try:
         task_store.record_result_publication(
@@ -1164,7 +1171,9 @@ def _anchor_result_manifest(task: dict[str, Any], payload: bytes, *, published_a
             published_at=published_at,
         )
     except Exception as exc:  # pylint: disable=broad-except
-        logging.warning("Could not anchor result manifest for task %s: %s", task.get("md5sum"), exc)
+        raise ResultPublicationError(
+            f"result manifest anchor could not be recorded for task {task.get('md5sum')}: {exc}"
+        ) from exc
 
 
 def _finalize_results_manifest(
@@ -1333,11 +1342,11 @@ def _finalize_results_manifest(
     # One serialization, written once: the bytes anchored below are the exact
     # bytes published, not a second serialization that could differ from them.
     payload = json.dumps(manifest, ensure_ascii=True, indent=2, sort_keys=True) + "\n"
+    encoded = payload.encode("utf-8")
     with open(temporary, "w", encoding="utf-8") as handle:
         handle.write(payload)
         handle.flush()
         os.fsync(handle.fileno())
-    os.replace(temporary, destination)
     # The manifest is self-describing — it declares its artifacts, their sizes,
     # and their digests — and it is written by the runner's Unix identity inside
     # the runner-owned result tree, so nothing *in* that tree can say whether the
@@ -1346,7 +1355,18 @@ def _finalize_results_manifest(
     # later read of the manifest is checked against this record, so a
     # post-finalization replacement (which could otherwise declare its own sizes
     # and digests and thereby authorize its own publication) fails closed.
-    _anchor_result_manifest(task, payload.encode("utf-8"), published_at=finished_at)
+    #
+    # The anchor is established BEFORE the bytes become visible at the canonical
+    # path, and both happen before any publication is claimed.  The order matters
+    # at the split point: a process that dies between the two steps leaves
+    # bytes and anchor either matching (published) or, when the anchor failed,
+    # a task that is not finished, carries no publication event, and has no
+    # manifest at the canonical path — so no consumer ever sees a result that
+    # asserts a publication Core's own reader refuses.  A run that dies after
+    # the anchor and before the rename leaves the anchor ahead of the bytes,
+    # which the next publication of the same task simply supersedes.
+    _anchor_result_manifest(task, encoded, published_at=finished_at)
+    os.replace(temporary, destination)
     emit_event(
         "manifest.published",
         request_id=_task_request_id(task),
@@ -1855,7 +1875,16 @@ def _execute_compute_task(
             return
         _capture_debug_submission(task, entities, params)
         finish_time = time.time()
-        _finalize_results_manifest(refreshed_task, execution_state="completed", finished_at=finish_time)
+        try:
+            _finalize_results_manifest(refreshed_task, execution_state="completed", finished_at=finish_time)
+        except ResultPublicationError as exc:
+            # The run finished, but its result could not be published as one
+            # coherent transition.  The task is settled as failed rather than
+            # finished: a finished row whose canonical result Core's own reader
+            # refuses is exactly the state this boundary exists to prevent.
+            _record_failure(md5sum, task, start_time, stage_state["current"], str(exc))
+            logging.error("Publication failed for task %s: %s", md5sum, exc)
+            return
         refreshed_task = task_store.get_task(md5sum) or refreshed_task
         if _is_terminal_status(refreshed_task.get("status")):
             return
@@ -2166,7 +2195,15 @@ def _finalize_after_poll(md5sum, task, tt, state):
             return
         _capture_debug_submission(task, _entities_from_input_form(task))
         finish_time = time.time()
-        _finalize_results_manifest(refreshed, execution_state="completed", finished_at=finish_time)
+        try:
+            _finalize_results_manifest(refreshed, execution_state="completed", finished_at=finish_time)
+        except ResultPublicationError as exc:
+            # Same rule as the live path: a recovered run whose publication
+            # could not be established is recorded as failed, never as a
+            # finished task with an unreadable result.
+            _record_failure(md5sum, task, task.get("started_at") or finish_time, "", str(exc))
+            logging.error("Publication failed for recovered task %s: %s", md5sum, exc)
+            return
         refreshed = task_store.get_task(md5sum) or refreshed
         if _is_terminal_status(refreshed.get("status")):
             return
@@ -2179,6 +2216,47 @@ def _finalize_after_poll(md5sum, task, tt, state):
             run_stage=list(tt.stage_markers.items())[-1][0] if tt.stage_markers else "",
         )
         _cleanup_task_workspace(task)
+
+
+def _reconcile_result_publications() -> dict[str, int]:
+    """Classify every terminal task's publication and report the quarantined ones.
+
+    This is the rollout rule for results that predate the publication anchor, and
+    the restart-side reconciliation for a publication that was interrupted: both
+    surface as the same bounded state, resolved by the same reader every consumer
+    uses.  It reports and never writes.
+
+    It deliberately does not backfill an anchor.  A pre-anchor result was
+    finalized by an authority that recorded no identity for the manifest, and the
+    only bytes available today are the ones the runner's identity wrote in the
+    result tree — the exact namespace the anchor exists to stop trusting.  So the
+    manifest stays quarantined with its reason, and the trusted re-publication
+    path is the ordinary one: a fresh run of the task, which publishes through
+    the same single transition as everything else.  An operator reads the report
+    with ``revocompute publications`` and decides which tasks to re-run.
+    """
+    storage = _storage()
+    summary: dict[str, int] = {}
+    for task in task_store.list_tasks():
+        status = str(task.get("status") or "").strip().lower()
+        if status not in {"finished", "failed"}:
+            continue
+        state = storage.publication_state(task)
+        summary[state] = summary.get(state, 0) + 1
+        if state in PUBLICATION_QUARANTINE_STATES:
+            emit_event(
+                "manifest.publication_quarantined",
+                level="WARNING",
+                task_id=str(task.get("md5sum")),
+                task_type=str(task.get("task_type") or default_task_type()),
+                # The publication state is the machine-readable reason: it says
+                # whether the result predates the anchor (unanchored) or its bytes
+                # changed after publication (anchor_mismatch), which are different
+                # operator problems.
+                reason_code=state,
+            )
+            logging.warning("Result for task %s is quarantined: %s", task.get("md5sum"), state)
+    return summary
 
 
 # One pulse per worker process.  Started from ``worker_ready``, which Celery
@@ -2264,6 +2342,12 @@ try:
             reconciliation = _reconcile_gpu_allocations()
             if reconciliation["settled"] or reconciliation["review"]:
                 logging.info("GPU allocation reconciliation: %s", reconciliation)
+            publications = _reconcile_result_publications()
+            quarantined = sum(count for state, count in publications.items() if state != "available")
+            if quarantined:
+                logging.warning("Result publication states: %s", publications)
+            else:
+                logging.info("Result publication reconciliation: %s", publications)
         except Exception:  # boot-time recovery must never die silently
             logging.exception("Recovery pass failed")
         try:

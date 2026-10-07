@@ -117,6 +117,71 @@ class PublicationAnchor:
         return self.sha256 == digest and self.size == size
 
 
+#: Publication states.  Every state but ``AVAILABLE`` is a refusal, and each
+#: refusal names *why* the manifest on disk is not a publication Core finalized
+#: — so a consumer answers with a bounded reason instead of a bare not-found,
+#: and an operator can tell a transient establishment failure (which the task's
+#: own retry settles) from a result that predates the anchor (which only a fresh
+#: run of the task can publish).
+PUBLICATION_AVAILABLE = "available"
+#: No anchor row and no manifest bytes: nothing was ever published for the task.
+PUBLICATION_NOT_FINALIZED = "not_finalized"
+#: A manifest exists but no anchor row does.  This is the state of every result
+#: finalized before the publication anchor existed, and of a run that died
+#: between writing its manifest and recording the anchor.
+PUBLICATION_UNANCHORED = "unanchored"
+#: The result tree holds no manifest at all, and no anchor row either.
+PUBLICATION_MANIFEST_MISSING = "manifest_missing"
+#: An anchor row exists but the manifest on disk is missing, unreadable, or is
+#: not a manifest any more.
+PUBLICATION_MANIFEST_UNREADABLE = "manifest_unreadable"
+#: An anchor row exists and the manifest bytes no longer match it: the manifest
+#: was replaced after finalization.
+PUBLICATION_ANCHOR_MISMATCH = "anchor_mismatch"
+#: Reader and writer disagree about the anchor itself (a malformed row).
+PUBLICATION_ANCHOR_INVALID = "anchor_invalid"
+
+#: Bounded, machine-readable publication states.  Renaming one is a protocol
+#: change: the status payload, the results not-found body, the reconciliation
+#: sweep, and the operator CLI all key off the same string.
+PUBLICATION_STATES = frozenset(
+    {
+        PUBLICATION_AVAILABLE,
+        PUBLICATION_NOT_FINALIZED,
+        PUBLICATION_UNANCHORED,
+        PUBLICATION_MANIFEST_MISSING,
+        PUBLICATION_MANIFEST_UNREADABLE,
+        PUBLICATION_ANCHOR_MISMATCH,
+        PUBLICATION_ANCHOR_INVALID,
+    }
+)
+
+#: The states a published-but-unreadable result can be in.  These are the
+#: *states that carry a reason*, as opposed to ``not_finalized`` (nothing was
+#: published) — a consumer that wants to say "this result exists but is
+#: quarantined, and here is why" switches on these.
+PUBLICATION_QUARANTINE_STATES = frozenset(
+    {
+        PUBLICATION_UNANCHORED,
+        PUBLICATION_MANIFEST_MISSING,
+        PUBLICATION_MANIFEST_UNREADABLE,
+        PUBLICATION_ANCHOR_MISMATCH,
+        PUBLICATION_ANCHOR_INVALID,
+    }
+)
+
+
+class ResultPublicationError(RuntimeError):
+    """The publication anchor could not be established in server-owned state.
+
+    Publication is one transition: the anchor is the durable authority a reader
+    verifies against, so a publication that could not record its anchor never
+    happened.  Raising here is what stops a run from reporting a finished task,
+    emitting a publication event, and leaving a result Core's own reader will
+    refuse — the task records a failure instead, and a retry re-publishes.
+    """
+
+
 class StorageResolver:
     """Resolve every task path from its immutable user storage identity."""
 
@@ -184,32 +249,64 @@ class StorageResolver:
         every consumer of this reader -- every web surface, worker path, and
         maintenance job -- inherits the check and agrees on the same authority.
         A manifest that is unreadable, unanchored, or that no longer matches its
-        anchor is ``None``.
+        anchor is ``None``; :meth:`publication_state` reports *which* of those it
+        is, so a caller can answer with a bounded reason.
+        """
+        return self._read_verified_manifest(task)[0]
+
+    def _read_verified_manifest(self, task: dict[str, Any]) -> tuple[bytes | None, str]:
+        """Read the manifest and classify it in one pass.
+
+        One implementation of the publication read: every caller gets either the
+        verified bytes or the state that explains the refusal, so no consumer can
+        disagree with another about whether a result is published, and no
+        consumer has to re-derive the reason by re-opening the file.
         """
         try:
             handle = _open_published_file(self.get_manifest_path(task))
         except (AttributeError, OSError, ValueError):
-            return None
+            # No usable manifest on disk.  Whether *anything* was published is
+            # the anchor's answer: an anchor with no readable manifest is a
+            # publication whose bytes went away, which is a different fact from
+            # a task that never published.
+            return None, (PUBLICATION_MANIFEST_UNREADABLE if self._anchor_row(task) else PUBLICATION_MANIFEST_MISSING)
         with handle:
             if os.fstat(handle.fileno()).st_size > _MAX_MANIFEST_BYTES:
-                return None
+                return None, PUBLICATION_MANIFEST_UNREADABLE
             data = handle.read(_MAX_MANIFEST_BYTES + 1)
         if len(data) > _MAX_MANIFEST_BYTES:
-            return None
-        anchor = self._publication_anchor(task)
-        if anchor is None or not anchor.matches(hashlib.sha256(data).hexdigest(), len(data)):
-            return None
-        return data
+            return None, PUBLICATION_MANIFEST_UNREADABLE
+        anchor, raw = self._publication_anchor(task)
+        if raw is not None and anchor is None:
+            return None, PUBLICATION_ANCHOR_INVALID
+        if anchor is None:
+            # A structurally valid manifest with no server-owned anchor.  This is
+            # the legacy corpus: results finalized before publication identity was
+            # recorded here.  It is quarantined, never re-anchored from the result
+            # tree, because the tree is exactly the namespace this anchor exists
+            # to stop trusting.
+            return None, PUBLICATION_UNANCHORED
+        if not anchor.matches(hashlib.sha256(data).hexdigest(), len(data)):
+            return None, PUBLICATION_ANCHOR_MISMATCH
+        return data, PUBLICATION_AVAILABLE
 
-    def _publication_anchor(self, task: dict[str, Any]) -> PublicationAnchor | None:
-        """Resolve the finalized-manifest identity Core recorded for one task.
+    def publication_state(self, task: dict[str, Any]) -> str:
+        """Return the bounded publication state of one task's result.
+
+        Answered from the same verified read every consumer uses, so the status
+        endpoint, the results route, the archive builder, and the reconciliation
+        sweep cannot disagree about whether a result is published.
+        """
+        return self._read_verified_manifest(task)[1]
+
+    def _anchor_row(self, task: dict[str, Any]) -> dict[str, Any] | None:
+        """Return the raw anchor row for a task, or ``None`` when there is none.
 
         Resolved from the task store this resolver was built with — the one
-        authority the web, worker, and maintenance processes already share — so
-        every consumer of this reader agrees on the same anchor.  A resolver
-        built without that store cannot answer the question at all, and a
-        publication read that cannot answer it fails closed like any other
-        unverifiable manifest.
+        authority the web, worker, and maintenance processes already share.  A
+        resolver built without that store cannot answer the question at all, so
+        it reports no anchor, which is exactly the refusal it is entitled to
+        make.
         """
         task_id = str(task.get("md5sum") or "").lower()
         if self.task_store is None or not _TASK_ID.fullmatch(task_id):
@@ -218,13 +315,23 @@ class StorageResolver:
             record = self.task_store.get_result_publication(task_id)
         except Exception:  # pylint: disable=broad-except
             return None
-        if not record:
-            return None
+        return dict(record) if record else None
+
+    def _publication_anchor(self, task: dict[str, Any]) -> tuple[PublicationAnchor | None, dict[str, Any] | None]:
+        """Resolve the finalized-manifest identity Core recorded for one task.
+
+        Returns ``(anchor, raw_row)``.  ``anchor`` is ``None`` both when there is
+        no row and when the row is not a usable anchor; the caller distinguishes
+        the two by whether ``raw_row`` is present.
+        """
+        record = self._anchor_row(task)
+        if record is None:
+            return None, None
         digest = str(record.get("manifest_sha256") or "")
         size = record.get("manifest_size")
         if not _SHA256.fullmatch(digest) or not isinstance(size, int) or isinstance(size, bool) or size < 0:
-            return None
-        return PublicationAnchor(digest, size, int(record.get("revision") or 1))
+            return None, record
+        return PublicationAnchor(digest, size, int(record.get("revision") or 1)), record
 
     def load_manifest(self, task: dict[str, Any]) -> dict[str, Any] | None:
         """Return the finalized results manifest, or ``None`` when unreadable.

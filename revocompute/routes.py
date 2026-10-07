@@ -119,6 +119,14 @@ from revocompute.resource_policy import (
     resolve_submission_resources,
 )
 from revocompute.result_projection import project_result_manifest
+from revocompute.storage import (
+    PUBLICATION_ANCHOR_INVALID,
+    PUBLICATION_ANCHOR_MISMATCH,
+    PUBLICATION_AVAILABLE,
+    PUBLICATION_MANIFEST_MISSING,
+    PUBLICATION_MANIFEST_UNREADABLE,
+    PUBLICATION_UNANCHORED,
+)
 from revocompute.result_storyboard import ResultContractError, expected_file_tree, runner_root, storyboard_declaration
 from revocompute import runtime_bundle
 from revocompute.schemas import (
@@ -1256,14 +1264,44 @@ def _resolve_task_owner() -> dict[str, Any]:
     return {"submitted_by_user_id": int(user["id"]), "storage_key": storage_key}
 
 
+def _result_publication_state(task: dict[str, Any]) -> str:
+    """Return the bounded publication state of a task's result.
+
+    One reader answers for every surface: the status payload, the results route,
+    the archive, and the readiness probes all report the same state, so a
+    consumer never has to guess why a result it can see is not readable.
+    """
+    return current_app.config["storage_resolver"].publication_state(task)
+
+
+#: Operator- and client-facing reason for each non-available publication state.
+#: The state is the machine-readable fact; this is its human-readable projection,
+#: and it is the difference between "quarantined, and here is why" and a bare
+#: not-found.
+_PUBLICATION_REASON_TEXT = {
+    PUBLICATION_MANIFEST_MISSING: "The task published no result manifest.",
+    PUBLICATION_MANIFEST_UNREADABLE: "The published result manifest is unavailable.",
+    PUBLICATION_UNANCHORED: "This result predates server-owned publication identity and is quarantined; run the task again to publish it.",
+    PUBLICATION_ANCHOR_MISMATCH: "The result manifest no longer matches the publication Core recorded for this task.",
+    PUBLICATION_ANCHOR_INVALID: "The recorded publication identity for this task is invalid.",
+}
+
+
+def _publication_report(task: dict[str, Any]) -> dict[str, Any]:
+    """Return ``{"state", "reason"}`` for a task's result publication."""
+    state = _result_publication_state(task)
+    return {"state": state, "reason": None if state == PUBLICATION_AVAILABLE else _PUBLICATION_REASON_TEXT.get(state)}
+
+
 def _result_manifest_available(task: dict[str, Any]) -> bool:
     """Report whether the published result manifest is readable.
 
     Probes through the same canonical bounded verified reader the results route
-    consumes, so a symlinked, linked, or oversized manifest reports unavailable
-    instead of advertising results the reader will then refuse.
+    consumes, so a symlinked, linked, oversized, anchored-mismatched, or
+    never-anchored manifest reports unavailable instead of advertising results
+    the reader will then refuse.
     """
-    return current_app.config["storage_resolver"].load_manifest(task) is not None
+    return _result_publication_state(task) == PUBLICATION_AVAILABLE
 
 
 def _task_display_name(task: dict[str, Any], task_id: str) -> str:
@@ -1274,6 +1312,11 @@ def _task_display_name(task: dict[str, Any], task_id: str) -> str:
 
 def _task_follow_up_payload(md5sum: str, status: str) -> dict[str, Any]:
     task = task_store.get_task(md5sum)
+    # A task's result publication is reported as its bounded state, not just a
+    # boolean: "finished, results not readable" is answered with *why*, and the
+    # legacy corpus -- results finalized before publication identity was recorded
+    # -- reports ``unanchored`` here rather than silently disappearing.
+    publication = _result_publication_state(task) if task is not None else None
     payload = {
         "task_id": md5sum,
         "md5sum": md5sum,
@@ -1285,7 +1328,8 @@ def _task_follow_up_payload(md5sum: str, status: str) -> dict[str, Any]:
         "terminal": str(status).strip().lower() in task_store.STOP_POLLING_STATUSES,
         "status_url": f"/compute/api/running/{md5sum}",
         "results_url": f"/compute/api/results/{md5sum}",
-        "result_available": _result_manifest_available(task) if task is not None else False,
+        "result_available": publication == PUBLICATION_AVAILABLE,
+        "result_publication": publication,
     }
     # Per-item progress and the standardized task outcome.  Absent until the
     # runner reports them, so a single-input task's payload is unchanged.
@@ -2189,7 +2233,21 @@ def get_results(md5sum):
     # would let a linked or replaced manifest serve a different publication.
     manifest = current_app.config["storage_resolver"].load_manifest(task)
     if manifest is None:
-        return jsonify({"status": "error", "md5sum": md5sum, "message": "result manifest not found"}), 404
+        # A result that exists but is not readable says why: an unanchored
+        # (pre-anchor) result and a replaced one are different operator problems,
+        # and neither is answered with a bare not-found.
+        report = _publication_report(task)
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "md5sum": md5sum,
+                    "message": report["reason"] or "result manifest not found",
+                    "result_publication": report["state"],
+                }
+            ),
+            404,
+        )
 
     archive_ready = os.path.isfile(_task_zip_path(task))
     payload = dict(manifest)
@@ -2746,7 +2804,10 @@ def _task_list_summary(task: dict[str, Any], *, include_owner: bool) -> dict[str
         archive_ready = os.path.isfile(_task_zip_path(task))
     except (OSError, ValueError):
         archive_ready = False
-    result_available = _result_manifest_available(task)
+    # One classification serves both fields, so the dashboard never reads a
+    # boolean from one authority and a state from another.
+    publication = _result_publication_state(task)
+    result_available = publication == PUBLICATION_AVAILABLE
     can_cancel = _task_mutation_allowed(task) and status in {"pending", "queued", "running"}
     can_delete = (
         g.current_user.get("role") != "guest"
@@ -2768,6 +2829,10 @@ def _task_list_summary(task: dict[str, Any], *, include_owner: bool) -> dict[str
         "error": _sanitize_task_error(task, task.get("error")),
         "result": {
             "available": result_available,
+            # "Available" is the only state a client can open; every other state
+            # names itself so a quarantined (legacy) result is distinguishable
+            # from a task that never published at all.
+            "publication": publication,
             "page_url": f"/compute/results/{task_id}",
             "manifest_url": f"/compute/api/results/{task_id}",
             "archive_ready": archive_ready,

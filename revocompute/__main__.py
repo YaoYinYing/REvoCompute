@@ -9,16 +9,23 @@ from __future__ import annotations
 import sys
 
 from revocompute.doctor import main as doctor_main
+from revocompute.publications import main as publications_main
 
 
 def main(argv: list[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     if not arguments or arguments[0] in {"-h", "--help"}:
-        print("Usage: revocompute doctor [--config-root RUNNER_ROOT] [--runner ID] [--task ID] [--probe] [--strict] [--json]")
+        print(
+            "Usage: revocompute <command> [options]\n"
+            "  doctor       [--config-root RUNNER_ROOT] [--runner ID] [--task ID] [--probe] [--strict] [--json]\n"
+            "  publications [--quarantined] [--json]"
+        )
         return 0
     command, *rest = arguments
     if command == "doctor":
         return doctor_main(rest)
+    if command == "publications":
+        return publications_main(rest)
     print(f"Unknown command: {command}", file=sys.stderr)
     return 2
 
