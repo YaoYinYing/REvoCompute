@@ -166,13 +166,35 @@ blocked until the current-period balance becomes positive. An allocation's
 complete usage is charged to the UTC month in which the allocation started; the
 period is never split across a month boundary.
 
+An allocation records one fact per accounting unit it held: a `gpu_second`
+fact for the GPUs, and always a `cpu_core_second` fact, because every Slurm
+allocation is an allocation of CPU cores. Both are `allocated units × the same
+authoritative allocation elapsed time`, both settle idempotently under their own
+key, and both keep the raw base unit. They are allocation facts, never
+utilization: the CPU-seconds and peak-memory numbers the runner wrapper reports
+are telemetry and are deliberately not the accounting fact.
+
+Admission takes a reservation before dispatch, and that reservation is the
+Task's own authority at allocation start: the hold which admitted a submission
+is not also counted against it, so a Task holding the period's final second is
+never refused by its own reservation. The start decision is one transactional
+transition — it consumes that reservation and records the allocation together,
+while every *other* Task's committed reservation and every unsettled allocation
+still counts against the balance. A reservation has two ownership modes: a
+pre-dispatch hold with a TTL, and a scheduler-owned commitment, from the moment
+the Slurm request exists, which no wall-clock timeout may reclaim because the
+request may legitimately still be queued. A commitment the scheduler proves is
+gone is released by reconciliation against that evidence.
+
 Immediately before approving a real GPU allocation, the worker atomically
 checks the current server-published account, GPU-permission, entitlement, and
 credit projection in the compute database, plus the deployment-owned Runner
 build/live-test attestation. Revocation and account-disable operations deny the
 authorization projection before changing authentication state, while grants
 are projected only after the authoritative authentication transaction
-succeeds. The worker never opens the authentication database.
+succeeds. The worker never opens the authentication database. Runner readiness
+is availability evidence for whether the infrastructure can run the allocation;
+it never becomes the source of quota or accounting truth.
 
 Administrators can inspect a user's accounting at
 `GET /compute/api/auth/admin/users/{user_id}/gpu-credit` and append a reasoned,
