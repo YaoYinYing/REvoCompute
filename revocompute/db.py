@@ -431,6 +431,22 @@ class TaskDatabase:
             Column("finished_at", Float),
             Column("quantity", Integer),
             Column("status", String, nullable=False),
+            # The grant decision, kept on the allocation fact itself.  ``NULL``
+            # denial means this allocation was admitted; a value names why the
+            # scientific command was refused.  It records the policy outcome
+            # without ever erasing the scheduler fact — a denied allocation is
+            # still an allocation and is still settled.
+            Column("denial_reason", String),
+            # The bounded vocabulary value for that denial (`compute_exhausted`,
+            # `authorization_unavailable`, ...), separate from the free-form
+            # reason: a caller acts on a comparable code, not on a message.
+            Column("denial_code", String),
+            # When the grant decision was made, or ``NULL`` while the allocation
+            # is a bare observation no admission decision has considered yet.
+            # It separates "recorded, not yet adjudicated" from "admitted", so an
+            # observation written before a crash is adjudicated on the retry
+            # rather than read as an admission nobody made.
+            Column("adjudicated_at", Float),
             Column("evidence_source", String, nullable=False, default=rloan.EvidenceSource.ALLOCATION_LIFECYCLE.value),
             Column("ledger_entry_id", Integer),
         )
@@ -792,7 +808,13 @@ class TaskDatabase:
         tables = set(inspector.get_table_names())
         if "resource_allocations" in tables:
             indexes = {index["name"] for index in inspector.get_indexes("resource_allocations")}
-            if "idx_resource_allocations_job_unit" not in indexes:
+            columns = {column["name"] for column in inspector.get_columns("resource_allocations")}
+            if (
+                "idx_resource_allocations_job_unit" not in indexes
+                or "denial_reason" not in columns
+                or "denial_code" not in columns
+                or "adjudicated_at" not in columns
+            ):
                 self._rebuild_table(conn, self.resource_allocations_table)
         if "resource_reservations" in tables:
             columns = {column["name"] for column in inspector.get_columns("resource_reservations")}
@@ -1540,7 +1562,7 @@ class TaskDatabase:
         return -totals.get(rloan.LedgerKind.USAGE.value, 0)
 
     def _unsettled_in_connection(
-        self, conn, user_id: int, unit: str, resource_class: str, now: float
+        self, conn, user_id: int, unit: str, resource_class: str, now: float, exclude_slurm_job_id: str | None = None
     ) -> tuple[int, int]:
         """Unsettled allocations: how many, and a conservative base-unit reserve.
 
@@ -1558,18 +1580,27 @@ class TaskDatabase:
         settled.  ``min_quantity`` is the policy floor for a *countless*
         allocation (the migrated CPU-only rows), which then behaves exactly as it
         did before.
+
+        ``exclude_slurm_job_id`` drops one allocation from the reserve.  The
+        allocation-start decision uses it for the allocation it is deciding,
+        which already exists as a fact by then: counting it here would make every
+        start refuse itself, because an ACTIVE allocation reserves usage before it
+        has any elapsed time to settle from.
         """
+        conditions = [
+            self.resource_allocations_table.c.subject_id == user_id,
+            self.resource_allocations_table.c.unit == unit,
+            self.resource_allocations_table.c.status.in_(
+                (rloan.AllocationStatus.ACTIVE.value, rloan.AllocationStatus.REVIEW.value)
+            ),
+        ]
+        if exclude_slurm_job_id is not None:
+            conditions.append(self.resource_allocations_table.c.slurm_job_id != exclude_slurm_job_id)
         rows = conn.execute(
             select(
                 self.resource_allocations_table.c.resource_count,
                 self.resource_allocations_table.c.started_at,
-            ).where(
-                self.resource_allocations_table.c.subject_id == user_id,
-                self.resource_allocations_table.c.unit == unit,
-                self.resource_allocations_table.c.status.in_(
-                    (rloan.AllocationStatus.ACTIVE.value, rloan.AllocationStatus.REVIEW.value)
-                ),
-            )
+            ).where(*conditions)
         ).all()
         if not rows:
             return 0, 0
@@ -2423,6 +2454,7 @@ class TaskDatabase:
         gpu_count: int = 0,
         started_at: float | None = None,
         required_entitlements: tuple[str, ...] | None = None,
+        denied_reason: str | None = None,
         gres: str = "",
     ) -> dict[str, Any]:
         """Record the instant a real Slurm allocation becomes observable.
@@ -2436,18 +2468,23 @@ class TaskDatabase:
         CPU cores for the CPU fact.  CUDA percent and ``/usr/bin/time`` figures
         are utilization telemetry and are deliberately nowhere here.
 
-        This is also the one atomic admission decision for the allocation.  A
-        live reservation owned by *this* Task is its admission authority — the
-        hold that admitted the submission must never be counted against it at
-        start, or a Task holding the final entitlement would be refused by its
-        own reservation.  Any other Task's committed reservation and any
-        unsettled allocation still constrain the balance, so a submission that
-        arrives without a live hold (its reservation expired while the request
-        waited, or the earlier stage of a workflow consumed one) is re-evaluated
-        against the current position and either admitted on the remaining balance
-        or refused.  Decision, reservation consume, and allocation insert are one
-        transaction, so no reader of a separate "may this run?" answer can
-        disagree with the rows it produced.
+        Recording the fact and deciding admission are two separate steps, on
+        purpose.  The allocation rows are written first, unconditionally and
+        idempotently (keyed by ``slurm_job_id``), because the scheduler holding
+        the resources is a fact that exists whether or not this subject is
+        allowed to run the scientific command: a policy decision must never
+        rewrite it into "no allocation".  The quota/permission decision then runs
+        in the same ``BEGIN IMMEDIATE`` transaction as a *grant* that either
+
+        * succeeds — the Task's admission authority is honored (a live reserved
+          hold of its own is not counted against it; every other Task's committed
+          reservation and every unsettled allocation still constrains the
+          balance), the reservation is consumed, and the allocation proceeds; or
+        * is denied — the grant is reported as a separate fact
+          (``granted=False`` plus the reason), the allocation rows stay ACTIVE so
+          the resources actually held are still settled, and the caller withholds
+          the scientific command.  A denied Task still owes for what its wrapper
+          held while the gate was resolved and terminated.
 
         ``gres`` is preserved as the GPU fact's resource class, so a historical
         A100 second is never collapsed into an anonymous GPU-second; it is
@@ -2455,8 +2492,160 @@ class TaskDatabase:
         spans every class.
 
         Returns the ``gpu_second`` fact (a zero-count row when the allocation
-        holds no GPU), so existing callers keep the record they asked for;
+        holds no GPU), extended with ``granted``, ``reason_code``,
+        ``remaining_gpu_seconds``, and ``admitted_by_reservation``;
         :meth:`list_task_allocations` returns every unit's facts.
+        """
+        if gpu_count < 0:
+            raise ValueError("gpu_count must be non-negative")
+        if cpu_cores < 1:
+            raise ValueError("cpu_cores must be positive")
+        resource_class = rloan.resource_class_for_gres(gres)
+        timestamp = time.time() if started_at is None else started_at
+        actual, granted = None, True
+        with self.engine.connect() as conn:
+            conn.exec_driver_sql("BEGIN IMMEDIATE")
+            try:
+                existing = (
+                    conn.execute(
+                        select(self.resource_allocations_table).where(
+                            self.resource_allocations_table.c.slurm_job_id == slurm_job_id,
+                            self.resource_allocations_table.c.unit == rloan.UNIT_GPU_SECOND,
+                        )
+                    )
+                    .mappings()
+                    .one_or_none()
+                )
+                if existing is not None:
+                    self._assert_allocation_identity(
+                        existing, user_id=user_id, task_id=task_id, stage_id=stage_id,
+                        gpu_count=gpu_count, resource_class=resource_class,
+                    )
+                    if existing.get("adjudicated_at") is not None:
+                        # Already decided — by an earlier identical start or by a
+                        # retry.  The decision is recorded on the fact, so it is
+                        # re-read here rather than made again against a balance
+                        # the first decision already moved.
+                        denial = existing.get("denial_reason")
+                        recorded = dict(existing)
+                        recorded["granted"] = denial is None
+                        recorded["reason_code"] = (
+                            str(existing.get("denial_code") or denial)
+                            if denial
+                            else rloan.AdmissionReason.ADMITTED.value
+                        )
+                        recorded["remaining_gpu_seconds"] = 0
+                        recorded["admitted_by_reservation"] = False
+                        conn.commit()
+                        return recorded
+                    # No decision yet: this row is the runner observation that the
+                    # wrapper was executing, written before the admission
+                    # decision (possibly before a crash).  The fact exists; the
+                    # grant is decided now, below, without inserting a second set.
+                else:
+                    # The allocation FACT comes first, before any policy: the
+                    # scheduler already handed these resources over, so the rows
+                    # exist whether or not this subject may proceed.  Writing them
+                    # here rather than after the decision is what keeps a denied
+                    # Task from being recorded as "no allocation".
+                    self._insert_allocation_facts(
+                        conn,
+                        user_id=user_id,
+                        task_id=task_id,
+                        stage_id=stage_id,
+                        slurm_job_id=slurm_job_id,
+                        gpu_count=gpu_count,
+                        cpu_cores=cpu_cores,
+                        resource_class=resource_class,
+                        timestamp=timestamp,
+                    )
+                granted, reason_code, remaining, adjudicated = self._grant_allocation_in_connection(
+                    conn,
+                    user_id=user_id,
+                    task_id=task_id,
+                    slurm_job_id=slurm_job_id,
+                    gpu_count=gpu_count,
+                    required_entitlements=required_entitlements,
+                    denied_reason=denied_reason,
+                    timestamp=timestamp,
+                )
+                actual = dict(
+                    conn.execute(
+                        select(self.resource_allocations_table).where(
+                            self.resource_allocations_table.c.slurm_job_id == slurm_job_id,
+                            self.resource_allocations_table.c.unit == rloan.UNIT_GPU_SECOND,
+                        )
+                    )
+                    .mappings()
+                    .one()
+                )
+                # Mark the decision on the fact.  This is what distinguishes
+                # "adjudicated and admitted" from "observed, not yet decided", so
+                # a retry of this same call — after a crash, a duplicate callback,
+                # or a workflow re-entry — reads the decision instead of making a
+                # second one against a balance the first already moved.
+                conn.execute(
+                    update(self.resource_allocations_table)
+                    .where(self.resource_allocations_table.c.slurm_job_id == slurm_job_id)
+                    .values(adjudicated_at=timestamp)
+                )
+                # The allocation FACT exists now, so the reservation has done its
+                # job: it covered the submission until the allocation started,
+                # and the allocation — not the reservation — is what the balance
+                # is charged for from here on.  This does not depend on the
+                # grant: a denial does not put the scheduler's resources back,
+                # so the claim this submission made is consumed either way, and
+                # a denied Task is settled for what its wrapper actually held.
+                self._release_reservation_in_connection(
+                    conn,
+                    task_id=task_id,
+                    reason_code=rloan.ReservationReason.ALLOCATION_STARTED.value,
+                    released_at=timestamp,
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        # Whether the decision was re-read from a recorded fact or just made, the
+        # fact's own denial is the answer the caller acts on.
+        denied = actual.get("denial_reason") is not None
+        recorded = dict(actual)
+        recorded["granted"] = granted and not denied
+        recorded["reason_code"] = (
+            str(actual.get("denial_code") or actual.get("denial_reason")) if denied else reason_code
+        )
+        recorded["remaining_gpu_seconds"] = remaining if not denied else 0
+        recorded["admitted_by_reservation"] = adjudicated if not denied else False
+        return recorded
+
+    def observe_allocation_start(
+        self,
+        *,
+        user_id: int,
+        task_id: str,
+        stage_id: str,
+        slurm_job_id: str,
+        cpu_cores: int,
+        gpu_count: int = 0,
+        started_at: float | None = None,
+        gres: str = "",
+    ) -> dict[str, Any]:
+        """Record that the wrapper was observed executing in a Slurm allocation.
+
+        The wrapper prints its own ``$SLURM_JOB_ID`` only from inside the
+        allocation, so this observation is the earliest authoritative
+        compute-node execution evidence — stronger than the queued ``srun``
+        stderr banner, which merely names a request.  It is written *before* and
+        independently of any admission decision, so a process death between the
+        observation and the grant can never erase the fact that resources were
+        occupied: the rows are ``slurm_job_id``-keyed and idempotent, and a
+        restart finds them unsettled and settles them from scheduler evidence.
+
+        The exact elapsed duration is not known here, so the rows carry
+        ``quantity = NULL`` and the ``runner_observation`` provenance — an
+        unknown, never a zero.  :meth:`record_allocation_start` later promotes
+        the same rows to their full lifecycle provenance and makes the grant
+        decision; neither call creates a second fact.
         """
         if gpu_count < 0:
             raise ValueError("gpu_count must be non-negative")
@@ -2478,74 +2667,23 @@ class TaskDatabase:
                     .one_or_none()
                 )
                 if existing is not None:
-                    expected = (user_id, task_id, stage_id, gpu_count, resource_class)
-                    actual = (
-                        existing["subject_id"],
-                        existing["task_id"],
-                        existing["stage_id"],
-                        existing["resource_count"],
-                        existing["resource_class"],
+                    self._assert_allocation_identity(
+                        existing, user_id=user_id, task_id=task_id, stage_id=stage_id,
+                        gpu_count=gpu_count, resource_class=resource_class,
                     )
-                    if actual != expected:
-                        raise ValueError(
-                            "Slurm job ID is already associated with a different GPU allocation"
-                        )
                     conn.commit()
                     return dict(existing)
-                if gpu_count >= 1:
-                    # Permission first (the #55 side of the boundary: static
-                    # authorization, not quota), then the one quota decision.
-                    if required_entitlements is not None:
-                        self._require_gpu_authorization(conn, user_id, required_entitlements, timestamp)
-                    remaining, adjudicated = self._authorize_allocation_start_in_connection(
-                        conn, user_id=user_id, task_id=task_id, at=timestamp
-                    )
-                else:
-                    remaining, adjudicated = 0, False
-                conn.execute(
-                    sqlite_insert(self.resource_allocations_table).values(
-                        subject_type=rloan.SUBJECT_USER,
-                        subject_id=user_id,
-                        task_id=task_id,
-                        stage_id=stage_id,
-                        slurm_job_id=slurm_job_id,
-                        unit=rloan.UNIT_GPU_SECOND,
-                        resource_class=resource_class,
-                        resource_count=gpu_count,
-                        started_at=timestamp,
-                        finished_at=None,
-                        quantity=None,
-                        status=rloan.AllocationStatus.ACTIVE.value,
-                        evidence_source=rloan.EvidenceSource.ALLOCATION_LIFECYCLE.value,
-                        ledger_entry_id=None,
-                    )
-                )
-                conn.execute(
-                    sqlite_insert(self.resource_allocations_table).values(
-                        subject_type=rloan.SUBJECT_USER,
-                        subject_id=user_id,
-                        task_id=task_id,
-                        stage_id=stage_id,
-                        slurm_job_id=slurm_job_id,
-                        unit=rloan.UNIT_CPU_CORE_SECOND,
-                        resource_class="",
-                        resource_count=cpu_cores,
-                        started_at=timestamp,
-                        finished_at=None,
-                        quantity=None,
-                        status=rloan.AllocationStatus.ACTIVE.value,
-                        evidence_source=rloan.EvidenceSource.ALLOCATION_LIFECYCLE.value,
-                        ledger_entry_id=None,
-                    )
-                )
-                # The reservation is consumed in the same transaction as the
-                # allocation it authorized: the allocation, not the reservation,
-                # is what the balance is charged for from here on.
-                self._release_reservation_in_connection(
+                self._insert_allocation_facts(
                     conn,
+                    user_id=user_id,
                     task_id=task_id,
-                    reason_code=rloan.ReservationReason.ALLOCATION_STARTED.value,
-                    released_at=timestamp,
+                    stage_id=stage_id,
+                    slurm_job_id=slurm_job_id,
+                    gpu_count=gpu_count,
+                    cpu_cores=cpu_cores,
+                    resource_class=resource_class,
+                    timestamp=timestamp,
+                    evidence_source=rloan.EvidenceSource.RUNNER_OBSERVATION.value,
                 )
                 row = (
                     conn.execute(
@@ -2561,24 +2699,169 @@ class TaskDatabase:
             except Exception:
                 conn.rollback()
                 raise
+        return dict(row)
+
+    def allocation_row_exists(self, slurm_job_id: str) -> bool:
+        """Whether any allocation fact — settled, active, or review — exists."""
+        stmt = select(self.resource_allocations_table.c.id).where(
+            self.resource_allocations_table.c.slurm_job_id == slurm_job_id
+        )
+        with self.engine.connect() as conn:
+            return conn.execute(stmt).first() is not None
+
+    @staticmethod
+    def _assert_allocation_identity(
+        existing, *, user_id: int, task_id: str, stage_id: str, gpu_count: int, resource_class: str
+    ) -> None:
+        """Fail closed if a Slurm job id is reused for a different allocation."""
         expected = (user_id, task_id, stage_id, gpu_count, resource_class)
         actual = (
-            row["subject_id"],
-            row["task_id"],
-            row["stage_id"],
-            row["resource_count"],
-            row["resource_class"],
+            existing["subject_id"],
+            existing["task_id"],
+            existing["stage_id"],
+            existing["resource_count"],
+            existing["resource_class"],
         )
         if actual != expected:
             raise ValueError(
                 "Slurm job ID is already associated with a different GPU allocation"
             )
-        # The caller reports what this one decision saw: the balance it left and
-        # whether the Task's own reservation was its authority to start.
-        recorded = dict(row)
-        recorded["remaining_gpu_seconds"] = remaining
-        recorded["admitted_by_reservation"] = adjudicated
-        return recorded
+
+    def _insert_allocation_facts(
+        self,
+        conn,
+        *,
+        user_id: int,
+        task_id: str,
+        stage_id: str,
+        slurm_job_id: str,
+        gpu_count: int,
+        cpu_cores: int,
+        resource_class: str,
+        timestamp: float,
+        evidence_source: str = rloan.EvidenceSource.ALLOCATION_LIFECYCLE.value,
+    ) -> None:
+        """Write one ACTIVE fact per accounting unit the allocation held.
+
+        ``evidence_source`` names what the writer actually observed: the
+        allocation lifecycle, or the bare runner observation that the wrapper was
+        executing before any admission decision was made.
+        """
+        for unit, count, klass in (
+            (rloan.UNIT_GPU_SECOND, gpu_count, resource_class),
+            (rloan.UNIT_CPU_CORE_SECOND, cpu_cores, ""),
+        ):
+            conn.execute(
+                sqlite_insert(self.resource_allocations_table).on_conflict_do_nothing(
+                    index_elements=[
+                        self.resource_allocations_table.c.slurm_job_id,
+                        self.resource_allocations_table.c.unit,
+                    ]
+                ).values(
+                    subject_type=rloan.SUBJECT_USER,
+                    subject_id=user_id,
+                    task_id=task_id,
+                    stage_id=stage_id,
+                    slurm_job_id=slurm_job_id,
+                    unit=unit,
+                    resource_class=klass,
+                    resource_count=count,
+                    started_at=timestamp,
+                    finished_at=None,
+                    quantity=None,
+                    status=rloan.AllocationStatus.ACTIVE.value,
+                    evidence_source=evidence_source,
+                    denial_reason=None,
+                    denial_code=None,
+                    adjudicated_at=None,
+                    ledger_entry_id=None,
+                )
+            )
+
+    def _grant_allocation_in_connection(
+        self,
+        conn,
+        *,
+        user_id: int,
+        task_id: str,
+        slurm_job_id: str,
+        gpu_count: int,
+        required_entitlements: tuple[str, ...] | None,
+        denied_reason: str | None,
+        timestamp: float,
+    ) -> tuple[bool, str, int, bool]:
+        """Decide whether a recorded allocation may run the scientific command.
+
+        Returns ``(granted, reason_code, remaining, admitted_by_reservation)``.
+        A denial is a *fact about the grant*, not a rollback: it is recorded on
+        the allocation rows so the resources the wrapper held are still settled
+        under the reason the Task was stopped, and the caller withholds the
+        command.  Permission (#55 authorization) and quota are both checked here;
+        a CPU-only allocation (``gpu_count == 0``) needs no quota decision.
+
+        ``denied_reason`` is the caller's own pre-decision — a runner that is not
+        ready, checked outside this store — so it denies here under the same rule
+        and records the reason it was refused.
+        """
+        if denied_reason is not None:
+            # The caller's own pre-decision (a runner that is not ready) denies
+            # any allocation, GPU or CPU: the reason is recorded and the fact
+            # stands for what was actually held.
+            self._record_denial_in_connection(
+                conn,
+                slurm_job_id=slurm_job_id,
+                reason=denied_reason,
+                reason_code=rloan.AdmissionReason.RUNNER_READINESS_UNAVAILABLE.value,
+            )
+            return False, rloan.AdmissionReason.RUNNER_READINESS_UNAVAILABLE.value, 0, False
+        if gpu_count < 1:
+            return True, rloan.AdmissionReason.ADMITTED.value, 0, False
+        if required_entitlements is not None:
+            try:
+                self._require_gpu_authorization(conn, user_id, required_entitlements, timestamp)
+            except GPUAuthorizationUnavailableError as exc:
+                self._record_denial_in_connection(
+                    conn,
+                    slurm_job_id=slurm_job_id,
+                    reason=str(exc),
+                    reason_code=rloan.AdmissionReason.AUTHORIZATION_UNAVAILABLE.value,
+                )
+                return False, rloan.AdmissionReason.AUTHORIZATION_UNAVAILABLE.value, 0, False
+        try:
+            remaining, adjudicated = self._authorize_allocation_start_in_connection(
+                conn, user_id=user_id, task_id=task_id, at=timestamp, slurm_job_id=slurm_job_id
+            )
+        except GPUCreditUnavailableError as exc:
+            self._record_denial_in_connection(
+                conn,
+                slurm_job_id=slurm_job_id,
+                reason=str(exc),
+                reason_code=rloan.AdmissionReason.COMPUTE_EXHAUSTED.value,
+            )
+            return False, rloan.AdmissionReason.COMPUTE_EXHAUSTED.value, 0, False
+        return True, rloan.AdmissionReason.ADMITTED.value, remaining, adjudicated
+
+    def _record_denial_in_connection(
+        self, conn, *, slurm_job_id: str, reason: str, reason_code: str | None = None
+    ) -> None:
+        """Write the denial onto the allocation rows, without erasing the fact.
+
+        ``reason_code`` stores the bounded vocabulary value the caller acts on;
+        the free-form ``reason`` is kept as the human-readable detail.  A
+        release/reservation decision needs one canonical, comparable code, never
+        a message string.
+        """
+        values: dict[str, Any] = {"denial_reason": reason[:512]}
+        if reason_code is not None:
+            values["denial_code"] = reason_code
+        conn.execute(
+            update(self.resource_allocations_table)
+            .where(
+                self.resource_allocations_table.c.slurm_job_id == slurm_job_id,
+                self.resource_allocations_table.c.status == rloan.AllocationStatus.ACTIVE.value,
+            )
+            .values(**values)
+        )
 
     def settle_allocation(
         self, slurm_job_id: str, *, finished_at: float | None = None
@@ -2979,7 +3262,7 @@ class TaskDatabase:
             return result.rowcount == 1
 
     def _authorize_allocation_start_in_connection(
-        self, conn, *, user_id: int, task_id: str, at: float
+        self, conn, *, user_id: int, task_id: str, at: float, slurm_job_id: str
     ) -> tuple[int, bool]:
         """Admit one allocation start against the balance *without* its own hold.
 
@@ -3031,7 +3314,9 @@ class TaskDatabase:
                 self.resource_reservations_table.c.task_id != task_id,
             )
         ).scalar_one()
-        _, unsettled = self._unsettled_in_connection(conn, user_id, rloan.UNIT_GPU_SECOND, "", at)
+        _, unsettled = self._unsettled_in_connection(
+            conn, user_id, rloan.UNIT_GPU_SECOND, "", at, exclude_slurm_job_id=slurm_job_id
+        )
         remaining = int(totals["remaining"]) - int(other_holds) - int(unsettled)
         # A live reservation owned by this Task is its authority — but only
         # while the position it was admitted against still stands.  ``own_hold``
