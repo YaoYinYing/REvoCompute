@@ -63,7 +63,7 @@ SCHEMA_VERSION = 1
 MANIFEST_NAME = "work_items.json"
 TMP_DIR_NAME = ".tmp"
 
-#: Work-item states (``TODO.md`` §3).
+#: Work-item states (see docs/runner-guide/persistent-execution.md).
 PENDING = "PENDING"
 RUNNING = "RUNNING"
 SUCCEEDED = "SUCCEEDED"
@@ -93,9 +93,10 @@ STAGES = ("observe", "recover", "avoid")
 #: ``features.concurrent_samples``, which is the quantity memory is keyed on.
 MATERIAL_FEATURE_KEYS = frozenset({"kernel_backend", "cpu_offload", "chunk_size", "token_budget"})
 
-#: Parameter roles (``TODO.md`` §1). Every parameter a Runner exposes carries
-#: exactly one role, which is what lets the batch-equivalence comparator and the
-#: recovery audit agree on what "the same effective scientific parameters" means:
+#: Parameter roles (see docs/runner-guide/persistent-execution.md). Every
+#: parameter a Runner exposes carries exactly one role, which is what lets the
+#: batch-equivalence comparator and the recovery audit agree on what
+#: "the same effective scientific parameters" means:
 #:
 #: ``scientific``    governs what the model computes, so it is part of the
 #:                   effective scientific parameter set a comparison holds fixed;
@@ -110,9 +111,10 @@ RECOVERY = "recovery"
 PROVENANCE = "provenance"
 PARAMETER_ROLES = (SCIENTIFIC, RESOURCE_ONLY, RECOVERY, PROVENANCE)
 
-#: Scientific-impact class of an automatic recovery action (``TODO.md`` §8).
-#: ``resource_only`` is expected not to change the result; ``numerical_backend``
-#: may change floating behavior; ``scientific_output`` changes the scientific
+#: Scientific-impact class of an automatic recovery action (see
+#: docs/runner-guide/persistent-execution.md). ``resource_only`` is expected
+#: not to change the result; ``numerical_backend`` may change floating
+#: behavior; ``scientific_output`` changes the scientific
 #: result itself — a different stochastic stream per sample, or a different
 #: requested computation; ``unsafe`` is an action the lifecycle must never be
 #: able to take automatically — a plan naming a scientific parameter.
@@ -316,7 +318,10 @@ def count(manifest: dict, states) -> int:
 
 
 def derive_outcome(manifest: dict) -> str:
-    """Derive the task outcome from item states (``TODO.md`` §3)."""
+    """Derive the task outcome from item states.
+
+    See docs/runner-guide/persistent-execution.md for the state-to-outcome table.
+    """
     succeeded = count(manifest, SUCCEEDED)
     failed = count(manifest, _FAILED_STATES)
     unfinished = count(manifest, (PENDING, RUNNING))
@@ -871,7 +876,8 @@ class PersistentTask:
     def _record_attempt(self, entry: dict, item: dict, plan: Plan) -> None:
         """Append one attempt's recovery-provenance record to the item.
 
-        This is the audit trail ``TODO.md`` §7 needs, kept beside the item it
+        This is the audit trail `Recovery provenance` in
+        docs/runner-guide/persistent-execution.md needs, kept beside the item it
         describes rather than in a second store. Per attempt it names the plan
         and its scientific-impact class, the resource-only settings applied, and
         the *effective* scientific parameter set — so a reviewer sees whether the

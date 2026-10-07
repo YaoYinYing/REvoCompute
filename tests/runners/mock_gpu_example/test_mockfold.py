@@ -275,7 +275,7 @@ def test_the_numerical_backend_rung_is_classified_as_such(tmp_path: Path) -> Non
 
 
 def test_resume_preserves_item_identity_and_a_changed_snapshot_recomputes(tmp_path: Path) -> None:
-    """TODO.md 5: restart keeps every committed item; changed input recomputes."""
+    """Restart keeps every committed item; changed input recomputes."""
     task = _manifest(tmp_path, {"mock_alpha": "ACDEFG", "mock_beta": "MNPQRS", "mock_gamma": "WY"})
     output = tmp_path / "output"
     assert _run(task, output).returncode == 0

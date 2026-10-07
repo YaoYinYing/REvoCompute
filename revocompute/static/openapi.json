@@ -1052,7 +1052,7 @@
           "200": {"description": "ZIP archive", "content": {"application/zip": {"schema": {"type": "string", "format": "binary"}}}},
           "400": {"$ref": "#/components/responses/BadRequest"},
           "404": {"$ref": "#/components/responses/NotFound"},
-          "409": {"description": "Archive has not been requested"}
+          "409": {"description": "The optional archive has not been requested, or the published result is not readable. A quarantined result (`result_publication` of `unanchored`, `anchor_mismatch`, `manifest_missing`, `manifest_unreadable`, or `anchor_invalid`) is never served as an archive, not even a previously cached one; the body carries the state and the reason."}
         }
       }
     },

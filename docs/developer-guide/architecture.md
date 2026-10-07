@@ -134,8 +134,7 @@ Capability YAML selects only plugin IDs shipped by the server. Unknown plugins,
 unknown options, executable snippets, and remote plugin URLs are rejected at
 registry load. Browser validation is advisory: accepted extensions, safe
 relative paths, upload limits, parameters, resource policy, and runner command
-construction remain authoritative on the server. The repository-root `TODO.md`
-records the current cross-plane architecture work.
+construction remain authoritative on the server.
 
 ## Server stack and package boundaries
 

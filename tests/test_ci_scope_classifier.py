@@ -33,8 +33,8 @@ classify = _load_classifier()
 @pytest.mark.parametrize(
     "paths,expected",
     [
-        # A: guidance + design contract are documentation-only.
-        (["docs/agents/long-task-handling.md", "TODO.md"], True),
+        # A: guidance + a root markdown note are documentation-only.
+        (["docs/agents/long-task-handling.md", "GOAL_GMX_MMPBSA.md"], True),
         # B: a runner README (markdown anywhere) is documentation-only.
         (["docker/runners/fpocket/README.md"], True),
         # C: mixed docs + Python source forces the full matrix.

@@ -936,6 +936,11 @@ def _public_run_record(task: dict[str, Any], task_type: Any, finished_at: float)
 # diagnostic.
 _COMPLETION_SENTINEL = "task_finished"
 
+# The name publication writes its candidate manifest under before the atomic
+# rename.  One constant serves both the writer and the walk that excludes it, so
+# a runner-placed temp of the same name is never published as an artifact.
+_MANIFEST_TEMP_NAME = ".manifest.json.tmp"
+
 # Publication capacity guards.  Runner output is an untrusted filesystem
 # namespace, so the manifest the Server registers is bounded in both entry count
 # and aggregate bytes rather than assumed to be a scientific result set.  The
@@ -1346,7 +1351,7 @@ def _finalize_results_manifest(
         for filename in sorted(files):
             path = os.path.join(root, filename)
             relative_path = os.path.relpath(path, result_dir).replace(os.sep, "/")
-            if relative_path in {"manifest.json", ".manifest.json.tmp"}:
+            if relative_path in {"manifest.json", _MANIFEST_TEMP_NAME}:
                 continue
             if filename == _COMPLETION_SENTINEL:
                 # The runner's execution sentinel is not a published artifact.
@@ -1472,7 +1477,7 @@ def _finalize_results_manifest(
     # passed result set that silently dropped files it could not safely publish,
     # and a tree with only refused entries still publishes a valid manifest (with
     # no artifacts) rather than degrading to "publish the unsafe tree".
-    temporary = _safe_join(result_dir, ".manifest.json.tmp")
+    temporary = _safe_join(result_dir, _MANIFEST_TEMP_NAME)
     destination = _safe_join(result_dir, "manifest.json")
     # One serialization, written once: the bytes anchored below are the exact
     # bytes published, not a second serialization that could differ from them.

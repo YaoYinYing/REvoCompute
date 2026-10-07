@@ -2907,6 +2907,13 @@ def test_download_uses_safe_fasta_prefix_filename(monkeypatch, tmp_path):
         status="finished",
     )
 
+    # A downloadable archive is a published result, so the fixture records the
+    # publication anchor a real finalization records; without it the download is
+    # refused, which the publication-gate tests assert separately.
+    module.task_runtime._finalize_results_manifest(
+        module.task_store.get_task(md5sum), execution_state="completed", finished_at=1_700_000_000
+    )
+
     response = client.get(f"/compute/api/download/{md5sum}", headers=auth_header)
     assert response.status_code == 200
     assert response.headers["Content-Length"] == str(len(b"zip"))
@@ -2946,6 +2953,10 @@ def test_nginx_download_offload_returns_internal_redirect(monkeypatch, tmp_path)
         result_dir=result_dir,
         username="tester",
         status="finished",
+    )
+
+    module.task_runtime._finalize_results_manifest(
+        module.task_store.get_task(md5sum), execution_state="completed", finished_at=1_700_000_000
     )
 
     response = client.get(f"/compute/api/download/{md5sum}", headers=auth_header)
@@ -2989,6 +3000,12 @@ def test_download_does_not_pack_missing_archive_in_request(monkeypatch, tmp_path
         status="finished",
     )
 
+    # The result itself is published: what this case exercises is the absence of
+    # the optional archive, not an unpublished result.
+    module.task_runtime._finalize_results_manifest(
+        module.task_store.get_task(md5sum), execution_state="completed", finished_at=1_700_000_000
+    )
+
     response = client.get(f"/compute/api/download/{md5sum}", headers=auth_header)
 
     assert response.status_code == 409
@@ -3027,6 +3044,11 @@ def test_failed_task_archive_is_downloadable(monkeypatch, tmp_path):
         status="failed",
     )
     module.task_store.update_task(md5sum, error="runner failed")
+    # ``failed`` publishes a result too: the server writes the failure report and
+    # finalizes it, which is what makes the diagnostics and the archive readable.
+    module.task_runtime._finalize_results_manifest(
+        module.task_store.get_task(md5sum), execution_state="failed", finished_at=1_700_000_000
+    )
 
     response = client.get(f"/compute/api/download/{md5sum}", headers=auth_header)
     assert response.status_code == 200

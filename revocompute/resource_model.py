@@ -37,7 +37,8 @@ This module is **server-side only**: runners measure with the framework that
 owns their GPU allocations and enforce the plan order the server sends them
 (``guidance_for``), so no runner image ships NumPy or a second estimator.
 
-Design constraints (see ``TODO.md`` §7–§19 and §28):
+Design constraints (see `Resource adaptation boundaries` in
+docs/runner-guide/persistent-execution.md):
 
 * stdlib + NumPy only. No PyTorch/JAX/TF/Triton/Ray — this is system
   identification, not deep learning.

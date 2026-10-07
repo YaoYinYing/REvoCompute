@@ -62,6 +62,16 @@ fabricated, cleared, or rewritten because the executor is offline. The UI
 reports `Operator executor unavailable` and disables mutations; it does not
 retry in a loop.
 
+### Planned but not yet implemented
+
+A representative end-to-end failure drill — a stale-validation repair that
+starts an Operator Job, fails, produces no false READY state, records the
+failure and partial progress, keeps the active artifact identity explainable,
+then succeeds on a fresh plan — is planned and not yet implemented. It may use
+bounded fakes where the control contract is the subject under test, and it must
+not require a real GPU or a large scientific runtime merely to prove
+control-plane failure semantics.
+
 ### Permission boundary
 
 The CLI may remain more powerful than the Web surface, because it runs in an

@@ -341,6 +341,106 @@ def test_a_quarantined_result_cannot_be_published_into_a_new_archive(monkeypatch
     assert not list(Path(module.app.config["RESULTS_FOLDER"]).glob("*_results.zip"))
 
 
+# ---------------------------------------------------------------------------
+# Serving a cached ZIP is the same publication decision as building one.
+# ---------------------------------------------------------------------------
+
+
+def _cached_archive(module, task_id: str, payload: bytes = b"PK archive bytes") -> Path:
+    """Place a pre-existing results ZIP where the download route looks for it.
+
+    A quarantined task's ZIP is exactly this: bytes written before the result was
+    refused, still sitting in the archive namespace.  Nothing about the ZIP
+    proves it is a publication, which is why the download route may not decide
+    from its presence.
+    """
+    archive = Path(module.app.config["storage_resolver"].get_archive_path(module.task_store.get_task(task_id)))
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    archive.write_bytes(payload)
+    return archive
+
+
+def test_a_quarantined_cached_archive_is_refused_with_a_reason_not_served(monkeypatch, tmp_path) -> None:
+    """An old ZIP behind a quarantined result is not downloadable."""
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    headers = _test_client_auth(module)
+    task_id, _result_dir = _unanchored_task(module, tmp_path)
+    payload = b"PK\x03\x04 pre-anchor bytes\n"
+    _cached_archive(module, task_id, payload)
+    client = module.app.test_client()
+
+    response = client.get(f"/compute/api/download/{task_id}", headers=headers)
+
+    assert response.status_code == 409
+    body = response.get_json()
+    assert body["result_publication"] == "unanchored"
+    # The reason names the state, and the bytes are nowhere in the response.
+    assert "predate" in body["message"]
+    assert payload not in response.data
+
+    # The archive POST refuses the same result with the same state.
+    assert client.post(f"/compute/api/results/{task_id}/archive", headers=headers).status_code == 409
+
+
+def test_a_quarantined_result_advertises_no_download_or_archive_affordance(monkeypatch, tmp_path) -> None:
+    """No surface offers a link the download route would refuse."""
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    headers = _test_client_auth(module)
+    task_id, _result_dir = _unanchored_task(module, tmp_path)
+    _cached_archive(module, task_id)
+    client = module.app.test_client()
+
+    summary = next(
+        item
+        for item in client.get("/compute/api/tasks", headers=headers).get_json()["tasks"]
+        if item["task_id"] == task_id
+    )
+    assert summary["result"]["publication"] == "unanchored"
+    assert summary["result"]["download_url"] is None
+    assert summary["result"]["archive_ready"] is False
+    assert summary["result"]["archive_request_allowed"] is False
+
+    status = client.get(f"/compute/api/running/{task_id}", headers=headers).get_json()
+    assert status["result_available"] is False
+    assert status["result_publication"] == "unanchored"
+
+
+def test_an_available_archive_is_downloaded_unchanged(monkeypatch, tmp_path) -> None:
+    """The ordinary download still returns exactly the cached bytes."""
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    headers = _test_client_auth(module)
+    task_id, result_dir = _task(module, tmp_path)
+    (result_dir / "result.txt").write_text("score\n", encoding="utf-8")
+    module.task_runtime._finalize_results_manifest(
+        module.task_store.get_task(task_id), execution_state="completed", finished_at=1_700_000_000
+    )
+    payload = b"PK\x03\x04 published archive bytes\n"
+    _cached_archive(module, task_id, payload)
+
+    response = module.app.test_client().get(f"/compute/api/download/{task_id}", headers=headers)
+
+    assert response.status_code == 200
+    assert response.data == payload
+    assert response.headers["Content-Length"] == str(len(payload))
+
+
+def test_a_task_that_never_finalized_is_not_served_an_archive(monkeypatch, tmp_path) -> None:
+    """A task with no published manifest refuses a download by its own state."""
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    headers = _test_client_auth(module)
+    task_id, result_dir = _task(module, tmp_path)
+    assert not (result_dir / "manifest.json").exists()
+    # Even a ZIP left behind by an aborted run is not a publication.
+    _cached_archive(module, task_id)
+
+    response = module.app.test_client().get(f"/compute/api/download/{task_id}", headers=headers)
+
+    assert response.status_code == 409
+    body = response.get_json()
+    assert body["result_publication"] == "not_finalized"
+    assert body["message"]
+
+
 def test_the_archive_request_for_an_available_result_is_unchanged(monkeypatch, tmp_path) -> None:
     """The ordinary path keeps its contract."""
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})

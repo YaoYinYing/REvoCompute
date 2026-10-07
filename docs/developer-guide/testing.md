@@ -104,6 +104,10 @@ new fixture requires no test-file changes beyond the one that uses it; add the
 name to the rendering-class coverage in `test_frontend_fixture_harness.py` when
 it introduces a class the library did not have.
 
+An ad-hoc rendered storyboard is review evidence for human judgment of taste and
+composition, not a committed pixel-golden corpus: do not add a screenshot-diff
+test to freeze a visual decision.
+
 ### Replaying a captured real Runner result
 
 Synthetic fixtures answer "given this canonical contract, does the frontend
