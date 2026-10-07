@@ -221,8 +221,15 @@ can only do so from inside the allocation. That earliest evidence is persisted
 the instant it is read, before and independently of the admission decision, so a
 process failure between the observation and the grant leaves a settleable fact
 rather than a request the server would later downgrade to "reservation only".
-The observation carries unknown elapsed time, never zero, and the later start
-completes the same fact under full lifecycle provenance.
+The observation and the scheduler-owned reservation transition are one atomic
+store write, so there is no durable state in which a request is queued with a
+scheduler identity but without the allocation its own job id proves: the crash
+window between "the wrapper executed" and "the server recorded it" is closed,
+not merely narrowed. The observation carries unknown elapsed time, never zero,
+and the later start completes the same fact under full lifecycle provenance. A
+wrapper whose execution evidence cannot be persisted is torn down rather than
+released: the scientific command never runs on an allocation whose fact was not
+recorded.
 
 Immediately before approving a real GPU allocation, the worker atomically
 checks the current server-published account, GPU-permission, entitlement, and
