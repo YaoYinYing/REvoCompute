@@ -46,7 +46,6 @@ from flask import (
 from pydantic import ValidationError
 from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.http import parse_range_header
-from werkzeug.wsgi import FileWrapper
 from revocompute.access_control import (
     authorize,
     policy_state,
@@ -187,6 +186,9 @@ from werkzeug.security import check_password_hash, generate_password_hash
 MAX_TABLE_PAGE_BYTES = 8 * 1024 * 1024
 MAX_TABLE_CELL_BYTES = 16 * 1024
 _TABLE_PAGE_ENVELOPE_BYTES = 512
+# Read a verified descriptor in bounded chunks; no read is ever sized by the
+# artifact, so a large download streams instead of issuing one huge read.
+_STREAM_CHUNK_BYTES = 64 * 1024
 
 # ---------------------------------------------------------------------------
 # Page routes
@@ -2179,14 +2181,11 @@ def get_results(md5sum):
     if task["status"] not in {"finished", "failed"}:
         return redirect(f"/compute/api/running/{md5sum}", code=302)
 
-    try:
-        manifest_path = current_app.config["storage_resolver"].get_manifest_path(task)
-    except ValueError:
-        return jsonify({"status": "error", "md5sum": md5sum, "message": "result manifest not found"}), 404
-    try:
-        with open(manifest_path, encoding="utf-8") as handle:
-            manifest = json.load(handle)
-    except (OSError, ValueError, json.JSONDecodeError):
+    # The manifest is the publication root of trust, so it is read through the
+    # canonical bounded verified authority -- never a plain pathname open, which
+    # would let a linked or replaced manifest serve a different publication.
+    manifest = current_app.config["storage_resolver"].load_manifest(task)
+    if manifest is None:
         return jsonify({"status": "error", "md5sum": md5sum, "message": "result manifest not found"}), 404
 
     archive_ready = os.path.isfile(_task_zip_path(task))
@@ -2323,7 +2322,10 @@ def _verified_payload(stream: Any) -> Response:
         response.headers["Content-Length"] = str(size)
         return response
     if raw_range:
-        parsed = parse_range_header(raw_range, size)
+        # ``parse_range_header`` takes no resource length: the length is applied
+        # by ``range_for_length``, which is what resolves a suffix range and
+        # reports an unsatisfiable one as ``None``.
+        parsed = parse_range_header(raw_range)
         if parsed is not None and len(parsed.ranges) == 1:
             resolved_range = parsed.range_for_length(size)
             if resolved_range is None:
@@ -2337,13 +2339,20 @@ def _verified_payload(stream: Any) -> Response:
             response.headers["Content-Range"] = f"bytes {start}-{end - 1}/{size}"
             response.headers["Content-Length"] = str(end - start)
             return response
-    response = Response(FileWrapper(stream, size), direct_passthrough=True)
+    # The whole body is streamed through the same bounded reader: the read size
+    # is a chunk constant, never the artifact size, so a large artifact is never
+    # read with one artifact-sized request.
+    response = Response(_BoundedStream(stream, size), direct_passthrough=True)
     response.headers["Content-Length"] = str(size)
     return response
 
 
 class _BoundedStream:
-    """Yield at most *length* bytes from a verified descriptor, then close it."""
+    """Yield at most *length* bytes from a verified descriptor, then close it.
+
+    Each read is bounded by the chunk constant rather than the total length, so
+    the bytes of a large artifact move in bounded chunks.
+    """
 
     def __init__(self, stream: Any, length: int):
         self._stream = stream
@@ -2351,7 +2360,7 @@ class _BoundedStream:
 
     def __iter__(self):
         while self._remaining > 0:
-            chunk = self._stream.read(min(65536, self._remaining))
+            chunk = self._stream.read(min(_STREAM_CHUNK_BYTES, self._remaining))
             if not chunk:
                 break
             self._remaining -= len(chunk)

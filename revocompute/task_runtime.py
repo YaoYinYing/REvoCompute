@@ -246,7 +246,7 @@ def _write_verified_artifact(
         raise FileNotFoundError(f"Published result artifact is unavailable: {relative_path}")
     path, declared = resolved
     try:
-        handle = storage.open_verified_artifact(path, declared)
+        handle, _digest = storage.open_verified_artifact(path, declared)
     except (ArtifactIdentityError, OSError, ValueError) as exc:
         raise FileNotFoundError(f"Published result artifact is unavailable: {relative_path}") from exc
     with handle:

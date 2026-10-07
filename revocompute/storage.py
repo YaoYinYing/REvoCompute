@@ -14,6 +14,7 @@ from typing import Any
 
 _STORAGE_KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{2,119}\Z")
 _TASK_ID = re.compile(r"[a-fA-F0-9]{32}\Z")
+_SHA256 = re.compile(r"[a-fA-F0-9]{64}\Z")
 
 
 def path_is_within(base_dir: str, candidate: str) -> bool:
@@ -91,12 +92,6 @@ def _hash_open_file(handle: Any) -> tuple[str, int]:
         digest.update(chunk)
         size += len(chunk)
     return digest.hexdigest(), size
-
-
-def _sha256_file(path: str) -> str:
-    with open(path, "rb") as handle:
-        digest, _size = _hash_open_file(handle)
-    return digest
 
 
 class StorageResolver:
@@ -211,26 +206,34 @@ class StorageResolver:
         return path, artifact
 
     @staticmethod
-    def open_verified_artifact(path: str, artifact: dict[str, Any]) -> Any:
+    def open_verified_artifact(path: str, artifact: dict[str, Any]) -> tuple[Any, str]:
         """Open a published artifact and verify it against its manifest entry.
 
         This is *the* published-artifact identity contract: a private regular
-        file (no symlink, single link) whose observed size and SHA-256 match the
-        manifest — verified on the exact descriptor the caller then reads.
-        Returns the open handle rewound to the start; the caller must close it.
+        file (no symlink, single link) whose declared size and SHA-256 match the
+        bytes of the opened descriptor.  Both are required — an entry without
+        them carries no identity evidence, so it fails closed rather than being
+        trusted on its pathname.  Returns ``(handle, digest)`` with the handle
+        rewound to the start; the caller must close it.
         """
+        declared_size = artifact.get("size")
+        declared_digest = artifact.get("sha256")
+        if not isinstance(declared_size, int) or isinstance(declared_size, bool) or declared_size < 0:
+            raise ArtifactIdentityError("published artifact declares no usable size")
+        if not isinstance(declared_digest, str) or not _SHA256.fullmatch(declared_digest):
+            raise ArtifactIdentityError("published artifact declares no usable digest")
         handle = _open_published_file(path)
         try:
             digest, size = _hash_open_file(handle)
-            if artifact.get("size") is not None and artifact["size"] != size:
+            if declared_size != size:
                 raise ArtifactIdentityError("published artifact does not match its declared size")
-            if artifact.get("sha256") and artifact["sha256"] != digest:
+            if declared_digest != digest:
                 raise ArtifactIdentityError("published artifact does not match its declared digest")
             handle.seek(0)
         except BaseException:
             handle.close()
             raise
-        return handle
+        return handle, digest
 
     def resolve_artifact(self, task: dict[str, Any], relative_path: str) -> dict[str, Any] | None:
         """Resolve a manifest-declared artifact and its verified open descriptor.
@@ -240,14 +243,16 @@ class StorageResolver:
         consumer must read *that* descriptor rather than reopen ``physical_path``:
         after publication identity has been verified, a pathname reopen would let
         a replaced file serve bytes that never satisfied the manifest identity.
-        The caller owns the descriptor and must close it.
+        The provenance digest is the one computed while verifying that descriptor,
+        never a second open of the pathname.  The caller owns the descriptor and
+        must close it.
         """
         resolved = self.resolve_declared_artifact(task, relative_path)
         if resolved is None:
             return None
         path, artifact = resolved
         try:
-            stream = self.open_verified_artifact(path, artifact)
+            stream, digest = self.open_verified_artifact(path, artifact)
         except (ArtifactIdentityError, OSError, ValueError):
             return None
         return {
@@ -255,10 +260,8 @@ class StorageResolver:
             "path": relative_path.replace("\\", "/"),
             "physical_path": path,
             "verified_stream": stream,
-            "sha256": artifact.get("sha256") or _sha256_file(path),
-            "size": os.fstat(stream.fileno()).st_size
-            if artifact.get("size") is None
-            else artifact["size"],
+            "sha256": digest,
+            "size": os.fstat(stream.fileno()).st_size,
             "type": artifact.get("type") or artifact.get("media_type"),
         }
 
