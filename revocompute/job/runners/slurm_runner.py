@@ -263,6 +263,7 @@ class SlurmJob(Job):
         # observed it holding resources).  Accounting hangs off the second only.
         self._dispatched_notified = False
         self._dispatch_recorded_executed = False
+        self._dispatch_error: str | None = None
         self._allocation_live = False
         self._wrapper_started = False
         self._admission_error: Exception | None = None
@@ -354,21 +355,25 @@ class SlurmJob(Job):
         )
         self._accounting_enabled = accounting_enabled
         try:
-            # Job identity is now known, so the scheduler owns the request.  The
-            # Task's reservation is handed to it here, as the same transition
-            # that persists the scheduler identity: a request that waits in the
-            # queue longer than the pre-dispatch TTL cannot lose its entitlement
-            # to a competing admission, and no maintenance pass can ever see a
-            # scheduler-owned reservation without a durable scheduler identity.
-            # This is deliberately NOT an allocation start — nothing is running
-            # yet, and a queue wait is not allocated time.
+            # Job identity is now known, so the scheduler owns the request.
+            # ``_notify_dispatched`` writes the scheduler-owned reservation and,
+            # when the wrapper's own id line was already read, the allocation
+            # observation — one atomic store transition, so the request can never
+            # be durably queued without the allocation its own job id proves.  A
+            # failure tears the wrapper down instead of releasing it: the
+            # scientific command must never run on an allocation whose fact was
+            # not recorded.
             self._notify_dispatched()
             # Released to the wrapper here, so it can observe and report whether
             # the allocation is actually running.  This is not a grant: the
             # scientific command stays withheld until that report is admitted.
             if accounting_enabled:
                 self._release_allocation_observation()
-        except Exception:
+        except Exception as exc:
+            # Keep the reason: the reader thread saw the wrapper's own id line,
+            # so a persisted-fact failure is exactly the case ``poll()`` must
+            # fail closed on if the process survives to reach it.
+            self._dispatch_error = str(exc)
             self.cancel()
             self._remove_wrapper_script()
             raise
@@ -397,6 +402,13 @@ class SlurmJob(Job):
         executed.  The identity announcement is idempotent per identity+evidence,
         but the execution evidence upgrades it — otherwise a queued banner would
         be the last word on a request whose wrapper really did occupy a node.
+
+        The callback persists the scheduler-owned reservation and, when the
+        wrapper's own id line is the evidence, the allocation observation in the
+        same store transition.  A failure therefore leaves neither half written:
+        the flag is cleared and the exception propagates, so the caller (the
+        reader thread or ``submit()``) tears the request down rather than letting
+        the wrapper run an allocation that was never observed.
         """
         executed = self._wrapper_started
         if self._dispatched_notified and (self._dispatch_recorded_executed or not executed):
@@ -410,10 +422,8 @@ class SlurmJob(Job):
                 self._slurm_job_id, self._wrapper_started_at or time.time(), executed
             )
         except Exception:
-            # The callback writes durable facts.  A failure must not be swallowed
-            # — the caller decides whether the wrapper is torn down — but the flag
-            # is cleared so a later observation retries instead of silently
-            # leaving the request recorded as dispatched with nothing persisted.
+            # Cleared so a later observation retries instead of silently leaving
+            # the request recorded as dispatched with nothing persisted.
             self._dispatched_notified = False
             raise
 
@@ -507,6 +517,18 @@ class SlurmJob(Job):
                 self._stdout_thread.join(timeout=10)
             if self._stderr_thread:
                 self._stderr_thread.join(timeout=10)
+
+            # The reader thread saw the wrapper's own id line but the process
+            # died before the observation reached the store: the wrapper must not
+            # run an allocation nothing recorded, so the job fails closed rather
+            # than continue ungranted.  This never fires once the fact is
+            # durable — it covers exactly the crash window a process-local flag
+            # could not.
+            if self._wrapper_started and not self._dispatched_notified:
+                reason = self._dispatch_error or "the allocation observation could not be persisted"
+                logging.error("SLURM job %s failed closed: %s", self._job_id, reason)
+                self._emit_terminal("slurm.allocation.failed", reason_code="allocation_unrecorded")
+                return JobState.FAILED
 
             # The wrapper itself started on a compute node — it printed its own
             # job id — but its allocation-live report never arrived, either
@@ -1284,16 +1306,13 @@ class SlurmJob(Job):
                     # rather than deferring to ``submit()``: a process death
                     # between this observation and the scheduler-owned reservation
                     # transition must not be able to erase the fact that the
-                    # wrapper occupied a node.  Idempotent, so ``submit()``'s own
-                    # announcement is a no-op when this got there first, and a
-                    # failure here is retried by that announcement rather than
-                    # killing the reader thread.
-                    try:
-                        self._notify_dispatched()
-                    except Exception:
-                        logging.exception(
-                            "Allocation observation could not be persisted for task %s", self.task_id
-                        )
+                    # wrapper occupied a node.  ``submit()`` holds the wrapper at
+                    # its start gate — and, for any allocation beyond the first
+                    # workflow stage, at the gate that waits on the scheduler-owned
+                    # reservation — so a failure here must STOP the wrapper rather
+                    # than let it run an allocation whose fact was never written.
+                    # It propagates to ``submit()``, which tears the job down.
+                    self._notify_dispatched()
             elif line.startswith(ALLOCATION_LIVE_PREFIX):
                 # The wrapper observed its own job in RUNNING state on the
                 # compute node.  This — not job identity — is what starts
