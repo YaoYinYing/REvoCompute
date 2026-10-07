@@ -217,19 +217,36 @@ before it ever runs, therefore charges nothing and holds nothing after the
 release, however long it waited.
 
 The wrapper printing its *own* job id is itself execution evidence, because it
-can only do so from inside the allocation. That earliest evidence is persisted
-the instant it is read, before and independently of the admission decision, so a
-process failure between the observation and the grant leaves a settleable fact
-rather than a request the server would later downgrade to "reservation only".
+can only do so from inside the allocation. But the allocation is created by the
+scheduler, not by anything the worker writes, so the fact has to survive outside
+the worker process. The wrapper's first statement — before any gate wait, any
+output, and any scientific work — atomically writes a *receipt* (`slurm_job_id`,
+the compute node's own `observed_at`, and the resources the scheduler granted
+it) into the host-only directory that is never bind-mounted into the container.
+Only then does it emit its job-id line. The scheduler starts the allocation
+before the wrapper runs, so a node killed between those two instants still
+leaves a receipt whenever the wrapper got as far as its first statement; the
+only remaining gap is the window between the scheduler starting the job and the
+wrapper executing, which no in-job mechanism can close and which the receipt
+schema is dated to make visible.
+
+Recovery keys on the receipt, not on the log line. Each receipt is a claim about
+a scheduler job, so it is corroborated against the scheduler before anything is
+recorded: a receipt for a job the scheduler owns is folded into the one
+`slurm_job_id`-keyed allocation fact, idempotently, and settled from the
+scheduler's elapsed time; a receipt for a job the scheduler does not report
+records nothing and is kept for an operator rather than silently discarded. A
+reservation whose request has a receipt is never expired or reclaimed as though
+the allocation had not happened, and a claim the balance cannot cover still
+withholds the command while its allocation is settled for what was held.
+
 The observation and the scheduler-owned reservation transition are one atomic
 store write, so there is no durable state in which a request is queued with a
-scheduler identity but without the allocation its own job id proves: the crash
-window between "the wrapper executed" and "the server recorded it" is closed,
-not merely narrowed. The observation carries unknown elapsed time, never zero,
-and the later start completes the same fact under full lifecycle provenance. A
-wrapper whose execution evidence cannot be persisted is torn down rather than
-released: the scientific command never runs on an allocation whose fact was not
-recorded.
+scheduler identity but without the allocation its own job id proves. The
+observation carries unknown elapsed time, never zero, and the later start
+completes the same fact under full lifecycle provenance. A wrapper whose
+execution evidence cannot be persisted is torn down rather than released: the
+scientific command never runs on an allocation whose fact was not recorded.
 
 Immediately before approving a real GPU allocation, the worker atomically
 checks the current server-published account, GPU-permission, entitlement, and
