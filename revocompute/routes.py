@@ -125,6 +125,7 @@ from revocompute.storage import (
     PUBLICATION_AVAILABLE,
     PUBLICATION_MANIFEST_MISSING,
     PUBLICATION_MANIFEST_UNREADABLE,
+    PUBLICATION_NOT_FINALIZED,
     PUBLICATION_UNANCHORED,
 )
 from revocompute.result_storyboard import ResultContractError, expected_file_tree, runner_root, storyboard_declaration
@@ -1279,11 +1280,12 @@ def _result_publication_state(task: dict[str, Any]) -> str:
 #: and it is the difference between "quarantined, and here is why" and a bare
 #: not-found.
 _PUBLICATION_REASON_TEXT = {
-    PUBLICATION_MANIFEST_MISSING: "The task published no result manifest.",
+    PUBLICATION_MANIFEST_MISSING: "The published result manifest is missing from storage.",
     PUBLICATION_MANIFEST_UNREADABLE: "The published result manifest is unavailable.",
     PUBLICATION_UNANCHORED: "This result predates server-owned publication identity and is quarantined; run the task again to publish it.",
     PUBLICATION_ANCHOR_MISMATCH: "The result manifest no longer matches the publication Core recorded for this task.",
     PUBLICATION_ANCHOR_INVALID: "The recorded publication identity for this task is invalid.",
+    PUBLICATION_NOT_FINALIZED: "The task published no result manifest.",
 }
 
 
@@ -2633,6 +2635,22 @@ def request_results_archive(md5sum: str):
         return _task_not_found(md5sum)
     if task["status"] not in {"finished", "failed"}:
         return jsonify({"error": "Results are not ready"}), 409
+    # Building a ZIP is a publication from the same authority, so a result the
+    # reader refuses cannot be packed: the caller gets the bounded state and the
+    # reason instead of an archive assembled from a quarantine.
+    publication = _result_publication_state(task)
+    if publication != PUBLICATION_AVAILABLE:
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "md5sum": md5sum,
+                    "message": _PUBLICATION_REASON_TEXT.get(publication) or "result manifest not found",
+                    "result_publication": publication,
+                }
+            ),
+            409,
+        )
     if os.path.isfile(_task_zip_path(task)):
         return jsonify({"status": "ready", "download_url": f"/compute/api/download/{md5sum}"}), 200
     async_result = build_results_archive.apply_async(args=[md5sum])

@@ -124,16 +124,19 @@ class PublicationAnchor:
 #: own retry settles) from a result that predates the anchor (which only a fresh
 #: run of the task can publish).
 PUBLICATION_AVAILABLE = "available"
-#: No anchor row and no manifest bytes: nothing was ever published for the task.
+#: The result tree holds no manifest at all, and no anchor row either: nothing
+#: was ever published for the task, which is the absence of a publication rather
+#: than a refusal of one.
 PUBLICATION_NOT_FINALIZED = "not_finalized"
+#: An anchor row exists but the manifest on disk is missing: a publication whose
+#: bytes went away.
+PUBLICATION_MANIFEST_MISSING = "manifest_missing"
 #: A manifest exists but no anchor row does.  This is the state of every result
 #: finalized before the publication anchor existed, and of a run that died
 #: between writing its manifest and recording the anchor.
 PUBLICATION_UNANCHORED = "unanchored"
-#: The result tree holds no manifest at all, and no anchor row either.
-PUBLICATION_MANIFEST_MISSING = "manifest_missing"
-#: An anchor row exists but the manifest on disk is missing, unreadable, or is
-#: not a manifest any more.
+#: An anchor row exists but the manifest on disk is not an ordinary readable
+#: file any more: a symlink, a second link, or an oversized or truncated entry.
 PUBLICATION_MANIFEST_UNREADABLE = "manifest_unreadable"
 #: An anchor row exists and the manifest bytes no longer match it: the manifest
 #: was replaced after finalization.
@@ -263,13 +266,25 @@ class StorageResolver:
         consumer has to re-derive the reason by re-opening the file.
         """
         try:
-            handle = _open_published_file(self.get_manifest_path(task))
-        except (AttributeError, OSError, ValueError):
-            # No usable manifest on disk.  Whether *anything* was published is
-            # the anchor's answer: an anchor with no readable manifest is a
-            # publication whose bytes went away, which is a different fact from
-            # a task that never published.
-            return None, (PUBLICATION_MANIFEST_UNREADABLE if self._anchor_row(task) else PUBLICATION_MANIFEST_MISSING)
+            manifest_path = self.get_manifest_path(task)
+        except (AttributeError, ValueError):
+            return None, PUBLICATION_NOT_FINALIZED
+        try:
+            handle = _open_published_file(manifest_path)
+        except (AttributeError, OSError, ValueError) as exc:
+            # No usable manifest on disk.  Whether *anything* was published is the
+            # anchor's answer, and the two "no anchor" cases are different facts:
+            # an anchor with the bytes gone is a publication lost after the fact,
+            # while a missing file with no anchor is simply a task that never
+            # finalized -- the ordinary not-yet case, not a quarantine.
+            if self._anchor_row(task):
+                return None, PUBLICATION_MANIFEST_MISSING
+            # A manifest that exists but cannot be opened as a private regular
+            # file is not a publication either; it is a refused one, and saying
+            # "not finalized" for it would be false.
+            if isinstance(exc, ArtifactIdentityError) or os.path.lexists(manifest_path):
+                return None, PUBLICATION_MANIFEST_UNREADABLE
+            return None, PUBLICATION_NOT_FINALIZED
         with handle:
             if os.fstat(handle.fileno()).st_size > _MAX_MANIFEST_BYTES:
                 return None, PUBLICATION_MANIFEST_UNREADABLE

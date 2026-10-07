@@ -497,6 +497,7 @@ def test_submission_manifest_carries_params(monkeypatch, tmp_path):
         "status": "pending",
         "terminal": False,
         "result_available": False,
+        "result_publication": "not_finalized",
         "status_url": f"/compute/api/running/{md5sum}",
         "results_url": f"/compute/api/results/{md5sum}",
     }

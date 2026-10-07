@@ -1364,8 +1364,17 @@ def _finalize_results_manifest(
     # manifest at the canonical path — so no consumer ever sees a result that
     # asserts a publication Core's own reader refuses.  A run that dies after
     # the anchor and before the rename leaves the anchor ahead of the bytes,
-    # which the next publication of the same task simply supersedes.
-    _anchor_result_manifest(task, encoded, published_at=finished_at)
+    # which the next publication of the same task simply supersedes.  A failed
+    # anchor removes the candidate bytes rather than leaving a stray file in the
+    # tree the next finalization walks.
+    try:
+        _anchor_result_manifest(task, encoded, published_at=finished_at)
+    except BaseException:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        raise
     os.replace(temporary, destination)
     emit_event(
         "manifest.published",

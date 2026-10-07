@@ -1008,7 +1008,7 @@
           "401": {"$ref": "#/components/responses/Unauthorized"},
           "403": {"$ref": "#/components/responses/Forbidden"},
           "404": {"$ref": "#/components/responses/NotFound"},
-          "409": {"description": "Task results are not ready"}
+          "409": {"description": "Task results are not ready, or the published result is not readable. A quarantined result (`result_publication` of `unanchored`, `anchor_mismatch`, `manifest_missing`, `manifest_unreadable`, or `anchor_invalid`) cannot be packed into a new archive; the body carries the state and the reason."}
         }
       }
     },

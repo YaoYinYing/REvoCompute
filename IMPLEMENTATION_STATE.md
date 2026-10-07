@@ -833,6 +833,59 @@ published namespace and self-authorize its own publication.
   ndarray, logical-file, archive, and probe verdicts all agree; and the existing
   symlink, hard-link, oversized, and escaping-path refusals stay closed.
 
+## Publication establishment is one transition (merge-level review)
+
+Publication anchor establishment was not part of publication success: finalization
+renamed `manifest.json`, `_anchor_result_manifest` swallowed every persistence
+error, the `manifest.published` event was emitted, and the caller marked the task
+`finished`. A finished task plus a `manifest.published` event could therefore
+describe an UNREADABLE result, because `StorageResolver.read_manifest_bytes()`
+refuses an unanchored manifest. Separately, `result_publications` starts empty
+while every read requires an anchor, so the installed pre-anchor result corpus
+would have become uniformly unreadable with no reason and no policy.
+
+- One transition, durable authority first. `_anchor_result_manifest` raises
+  `ResultPublicationError`; `_finalize_results_manifest` writes the candidate
+  bytes, establishes the anchor, and only then renames them to the canonical path
+  and emits `manifest.published`. Both completion call sites
+  (`_execute_compute_task` and `_finalize_after_poll`) turn a publication failure
+  into a task recorded `failed`, so no `manifest.published` event and no
+  published-state claim can exist without a matching anchor. A failed anchor
+  removes the candidate file. The split point is bounded in both directions:
+  anchor-then-crash leaves an anchor ahead of the bytes, which the next
+  publication of the same task supersedes; anchor-failure leaves no canonical
+  manifest, no event, and a `failed` task.
+- The rollout rule for the installed corpus. `StorageResolver.publication_state()`
+  classifies one verified read as `available`, `unanchored` (a manifest with no
+  anchor row — the pre-anchor corpus), `manifest_missing`, `manifest_unreadable`,
+  `anchor_mismatch` (bytes replaced after publication), `anchor_invalid`, or
+  `not_finalized` (nothing was ever published). An unanchored or mismatched result
+  is QUARANTINED with its reason, never 404'd silently, and never backfilled by
+  trusting the runner-writable manifest — the namespace this change exists to stop
+  trusting. The trusted re-publication path is an ordinary re-run of the task,
+  which publishes through the same single transition.
+- Reconciliation is a report, never a write. `_reconcile_result_publications()`
+  runs at `worker_ready` beside orphan recovery and emits
+  `manifest.publication_quarantined` per quarantined terminal task;
+  `revocompute publications [--quarantined] [--json]` gives an operator the same
+  classification. Neither records an anchor.
+- Surfaces agree by construction: the status endpoint reports
+  `result_publication`, the Task list reports `result.publication`, and the
+  results/archive refusals answer with the state and a bounded reason. The
+  `not_finalized` case keeps the pre-existing JSON error contract (a running or
+  never-finalized task is still a not-found, not a quarantine).
+- Regression evidence in `tests/server/test_result_publication_transition.py`:
+  the anchor-failure split point leaves no manifest, no event, and
+  `not_finalized`; the anchor is asserted established BEFORE the manifest becomes
+  visible; every `manifest.published` is asserted emitted with an anchor already
+  durable; a real recovered-path caller settles `failed`, never `finished`, and a
+  retry then publishes normally; a pre-anchor result is quarantined with a reason
+  through the status payload, the results 404 body, and the Task list;
+  reconciliation classifies it, emits the quarantine event, and writes nothing;
+  re-publication settles it to `available`; a replaced manifest reports
+  `anchor_mismatch` rather than `unanchored`; a never-finalized task is not
+  reported as quarantined; and the ordinary archive request is unchanged.
+
 ## Named follow-ups (tracked, not silent)
 
 - `validator_revision()` reports `sha256:unavailable` when a boundary source

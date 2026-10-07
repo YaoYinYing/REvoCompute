@@ -29,6 +29,36 @@ an immutable downstream input snapshot; execution never reads a mutable upstream
 result path. Provenance records the source task, logical artifact path, digest,
 size, media type, and timestamp without carrying authorization state.
 
+## Result publication states
+
+Publication is one transition: the manifest anchor is recorded in server-owned
+state before the manifest becomes visible at its canonical path, and the task is
+not reported finished until both have happened. A publication whose anchor could
+not be recorded is refused — no `manifest.published` event, no finished task, and
+a retry publishes normally. Every read reports a bounded state:
+
+| State | Meaning |
+| --- | --- |
+| `available` | The published manifest is readable and is the one Core published. |
+| `not_finalized` | Nothing has been published for the task yet. |
+| `unanchored` | A manifest exists with no anchor row — a result finalized before publication identity was recorded. |
+| `anchor_mismatch` | The manifest bytes changed after publication. |
+| `manifest_missing` / `manifest_unreadable` | A publication whose bytes are gone, or are no longer an ordinary readable file. |
+| `anchor_invalid` | The recorded publication identity is malformed. |
+
+`unanchored` is the state of results that predate this anchor. They are
+quarantined and reported with their reason — through the task status payload and
+the results endpoint's refusal — rather than silently disappearing, and they are
+**not** re-anchored from the result tree: that tree is exactly the namespace the
+anchor exists to stop trusting. The trusted way to publish such a result is to
+run the task again.
+
+Run `revocompute publications --quarantined` to list them, and
+`revocompute publications --json` for the full classification. The worker also
+classifies every terminal task at startup, logging and emitting
+`manifest.publication_quarantined` for each quarantined result. Reconciliation
+only reports; it never writes an anchor.
+
 ## Persistent-state epoch
 
 The personal-task schema is intentionally a fresh pre-production epoch. It has
