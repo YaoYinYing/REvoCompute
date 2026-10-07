@@ -1358,15 +1358,14 @@ def _finalize_results_manifest(
     #
     # The anchor is established BEFORE the bytes become visible at the canonical
     # path, and both happen before any publication is claimed.  The order matters
-    # at the split point: a process that dies between the two steps leaves
-    # bytes and anchor either matching (published) or, when the anchor failed,
-    # a task that is not finished, carries no publication event, and has no
-    # manifest at the canonical path — so no consumer ever sees a result that
-    # asserts a publication Core's own reader refuses.  A run that dies after
-    # the anchor and before the rename leaves the anchor ahead of the bytes,
-    # which the next publication of the same task simply supersedes.  A failed
-    # anchor removes the candidate bytes rather than leaving a stray file in the
-    # tree the next finalization walks.
+    # at the split point, and both directions are bounded and honest: an anchor
+    # failure removes the candidate bytes, leaves no canonical manifest, no
+    # event, and a task that is not finished; a crash between the two steps
+    # leaves the anchor ahead of the bytes, which a reader reports as
+    # ``manifest_missing`` (nothing published at the canonical path yet) or
+    # ``anchor_mismatch`` (a re-publication whose bytes had not landed) -- never
+    # as an available result, and never as an available result that is wrong.  A
+    # later publication of the same task supersedes the abandoned anchor.
     try:
         _anchor_result_manifest(task, encoded, published_at=finished_at)
     except BaseException:
