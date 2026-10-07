@@ -228,21 +228,32 @@ class StorageResolver:
         return handle
 
     def resolve_artifact(self, task: dict[str, Any], relative_path: str) -> dict[str, Any] | None:
+        """Resolve a manifest-declared artifact and its verified open descriptor.
+
+        The returned ``verified_stream`` is the descriptor whose size and SHA-256
+        were just checked against the manifest entry, left open and rewound.  A
+        consumer must read *that* descriptor rather than reopen ``physical_path``:
+        after publication identity has been verified, a pathname reopen would let
+        a replaced file serve bytes that never satisfied the manifest identity.
+        The caller owns the descriptor and must close it.
+        """
         resolved = self.resolve_declared_artifact(task, relative_path)
         if resolved is None:
             return None
         path, artifact = resolved
         try:
-            with self.open_verified_artifact(path, artifact) as handle:
-                size = os.fstat(handle.fileno()).st_size
+            stream = self.open_verified_artifact(path, artifact)
         except (ArtifactIdentityError, OSError, ValueError):
             return None
         return {
             **artifact,
             "path": relative_path.replace("\\", "/"),
             "physical_path": path,
+            "verified_stream": stream,
             "sha256": artifact.get("sha256") or _sha256_file(path),
-            "size": size if artifact.get("size") is None else artifact["size"],
+            "size": os.fstat(stream.fileno()).st_size
+            if artifact.get("size") is None
+            else artifact["size"],
             "type": artifact.get("type") or artifact.get("media_type"),
         }
 

@@ -517,13 +517,21 @@ def _tool_task_artifact(tool_call_id: str, role: Any, expression: str) -> dict[s
     resolved = current_app.config["storage_resolver"].resolve_artifact(source, logical_path)
     if resolved is None:
         raise ToolWorkspaceError("Task artifact reference is unavailable")
-    item = tool_workspace.materialize_file(
-        tool_call_id,
-        role=role.name,
-        filename=Path(logical_path).name,
-        accepted_formats=role.formats,
-        source=resolved["physical_path"],
-    )
+    stream = resolved.pop("verified_stream")
+    try:
+        # Materialize from the verified descriptor, not from ``physical_path``:
+        # the bytes copied into the Tool workspace are exactly the bytes whose
+        # manifest identity was checked, so a replacement between resolution and
+        # materialization cannot enter the workspace.
+        item = tool_workspace.materialize_stream(
+            tool_call_id,
+            role=role.name,
+            filename=Path(logical_path).name,
+            accepted_formats=role.formats,
+            stream=stream,
+        )
+    finally:
+        stream.close()
     item["source"] = {
         "kind": "task_artifact",
         "task_id": source_id.lower(),
