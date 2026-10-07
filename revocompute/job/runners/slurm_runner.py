@@ -444,7 +444,7 @@ class SlurmJob(Job):
             if receipt is not None:
                 started_at = receipt["observed_at"]
         try:
-            self._allocation_dispatched_callback(
+            adopted = self._allocation_dispatched_callback(
                 self._slurm_job_id, started_at, executed, receipt
             )
         except Exception:
@@ -453,9 +453,12 @@ class SlurmJob(Job):
             # receipt is untouched, so the retry still has it to adopt.
             self._dispatched_notified = False
             raise
-        if receipt is not None:
-            # The callback committed: the claim the file carries is now durable
-            # in server-owned state, so removing the file cannot lose it.
+        if receipt is not None and adopted is not False:
+            # The callback committed to a durable successor for this claim — the
+            # server-owned receipt row it wrote or the allocation fact it wrote
+            # from it — so removing the file cannot lose the claim.  A callback
+            # that explicitly declined the claim (``False``) leaves the file for
+            # reconciliation instead.
             self.discard_allocation_receipt()
 
     def _notify_allocation_live(self) -> None:

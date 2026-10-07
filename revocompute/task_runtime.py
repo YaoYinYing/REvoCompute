@@ -469,9 +469,16 @@ def _compute_allocation_callbacks(
         dispatched_at: float,
         wrapper_executed: bool = False,
         receipt: dict | None = None,
-    ) -> None:
+    ) -> bool:
+        """Record the dispatch; ``True`` once a receipt claim was adopted.
+
+        The return value is the caller's license to relinquish the wrapper's
+        receipt file: only a claim this callback durably took over may be
+        deleted, so anything it declined (an unknown subject, a receipt naming a
+        different job) stays on disk for reconciliation.
+        """
         if user_id <= 0:
-            return
+            return False
         if wrapper_executed:
             # The wrapper's own stdout id line — not the srun stderr banner —
             # obtains its scheduler identity *inside* the allocation, so seeing
@@ -492,28 +499,29 @@ def _compute_allocation_callbacks(
             started_at = dispatched_at
             gpus = gpu_count
             cpus = cpu_cores
+            adopted = False
             if receipt is not None and str(receipt.get("slurm_job_id")) == str(slurm_job_id):
                 started_at = float(receipt["observed_at"])
                 gpus = int(receipt.get("gpus") or 0)
                 cpus = max(1, int(receipt.get("cpus") or 0))
-            # The wrapper's own file receipt is the one durable record that
-            # survives this worker's death.  Persisting it as a server-owned
-            # receipt row *before* the observation means the file's claim has a
-            # durable successor the instant the wrapper's line is read, so the
-            # runner may delete the file afterwards without ever leaving fewer
-            # durable representations than before.  The row is consumed by
-            # ``observe_allocation_start`` in the very next call, and by
-            # reconciliation if this worker dies first.
-            if receipt is not None:
+                # The wrapper's own file receipt is the one durable record that
+                # survives this worker's death.  Persisting it as a server-owned
+                # receipt row *before* the observation means the file's claim has
+                # a durable successor the instant the wrapper's line is read, so
+                # the runner may delete the file afterwards without ever leaving
+                # fewer durable representations than before.  The row is consumed
+                # by ``observe_allocation_start`` in the very next call, and by
+                # reconciliation if this worker dies first.
                 task_store.record_allocation_receipt(
                     task_id=task_id,
                     stage_id=stage_id,
-                    slurm_job_id=str(receipt.get("slurm_job_id") or slurm_job_id),
+                    slurm_job_id=str(slurm_job_id),
                     observed_at=float(receipt["observed_at"]),
                     cpus=int(receipt.get("cpus") or 0),
                     gpus=int(receipt.get("gpus") or 0),
                     gres=resource_policy.gres or "",
                 )
+                adopted = True
             task_store.observe_allocation_start(
                 user_id=user_id,
                 task_id=task_id,
@@ -524,12 +532,17 @@ def _compute_allocation_callbacks(
                 started_at=started_at,
                 gres=resource_policy.gres or "",
             )
-            return
+            # Only a claim this dispatch actually adopted may be relinquished, so
+            # a receipt naming some other job stays on disk for reconciliation.
+            return adopted
         # Identity without execution evidence, so only the request exists: the
         # reservation is handed to the scheduler here so a maintenance pass
         # reading it can never conclude "no request exists" during the window
         # before the Task row is updated.
         task_store.record_reservation_dispatch(task_id=task_id, slurm_job_id=str(slurm_job_id))
+        # No allocation was adopted, so no receipt file may be relinquished:
+        # this path does not even look at one.
+        return False
 
     def started(slurm_job_id: str, started_at: float) -> None:
         # Runner readiness is checked here because only the caller knows the
