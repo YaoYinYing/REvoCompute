@@ -2420,6 +2420,19 @@ def _reconcile_host_allocation_receipts() -> dict[str, int]:
         if state not in _ACTIVE_SLURM_STATES and state not in _TERMINAL_SLURM_STATES:
             result["unavailable" if scontrol else "rejected"] += 1
             continue
+        if task_store.allocation_row_exists(job_id):
+            # The canonical fact already carries this job: an earlier worker (or
+            # an earlier pass) committed it and died before the file was removed.
+            # There is nothing left to adopt — re-recording the claim would mint a
+            # receipt for an allocation that is already durable, and reconciling
+            # it a second time is exactly the double charge this guards — so the
+            # file is retired here and the fact is left alone.
+            try:
+                os.unlink(str(receipt["receipt_path"]))
+            except OSError:
+                result["surviving"] += 1
+            result["recovered"] += 1
+            continue
         # The scheduler corroborated the claim, so it becomes server-owned state
         # first; the file is removed only once that row is durable.
         task_store.record_allocation_receipt(

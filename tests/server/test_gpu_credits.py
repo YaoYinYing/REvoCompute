@@ -905,6 +905,94 @@ def test_a_receipt_file_is_adopted_without_any_row_ever_being_written(monkeypatc
     assert module.task_store.gpu_credit_summary(97, at=at + 100)["usage_gpu_seconds"] == 45
 
 
+def test_a_crash_between_the_receipt_row_and_the_unlink_never_double_charges(
+    monkeypatch, tmp_path
+):
+    """Injection 2: the receipt row committed, the file was never removed.
+
+    The durable row is what licenses the unlink, so this window is the one where
+    two representations of the same claim exist at once.  Restart must fold them
+    into exactly ONE allocation and settle it from the scheduler exactly once, in
+    either order, however many passes run.
+    """
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    at = _timestamp(2026, 9, 5)
+    task_id = "7" * 32
+    _own_task(module.task_store, task_id, user_id=95)
+    module.task_store.reserve_compute_admission(user_id=95, task_id=task_id, at=at)
+    task = module.task_store.get_task(task_id)
+    receipt = _plant_receipt_file(module, task, job_id="8814", observed_at=at + 2)
+    # The worker adopted the file and died before the unlink.
+    module.task_store.record_allocation_receipt(
+        task_id=task_id, stage_id="model", slurm_job_id="8814", observed_at=at + 2,
+        cpus=1, gpus=1, gres="gpu:1",
+    )
+
+    monkeypatch.setattr(module.task_runtime.shutil, "which", lambda command: f"/usr/bin/{command}")
+    monkeypatch.setattr(
+        module.task_runtime.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(stdout="JobId=8814 JobState=COMPLETED RunTime=00:00:45\n"),
+    )
+
+    assert module.task_runtime._reconcile_slurm_allocations() == {"settled": 1, "active": 0, "review": 0}
+    facts = module.task_store.list_task_allocations(task_id)
+    assert len(facts) == 2
+    assert {row["started_at"] for row in facts} == {at + 2}
+    assert module.task_store.gpu_credit_summary(95, at=at + 100)["usage_gpu_seconds"] == 45
+    # Both representations are gone, and no further pass adds a row or a second.
+    assert not receipt.exists()
+    assert module.task_store.list_allocation_receipts() == []
+    assert module.task_runtime._reconcile_slurm_allocations() == {"settled": 0, "active": 0, "review": 0}
+    assert module.task_store.gpu_credit_summary(95, at=at + 100)["usage_gpu_seconds"] == 45
+
+
+def test_a_crash_after_the_allocation_commit_still_cleans_up_exactly_once(monkeypatch, tmp_path):
+    """Injection 3: the canonical fact committed, the file and row were not cleaned.
+
+    Here every representation already exists.  Restart must recognize the
+    allocation as its own (not a second one under the same job id), leave the
+    settlement charge untouched, and still be free to drop the now-redundant
+    file — the fact is the durable source, not the file.
+    """
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    at = _timestamp(2026, 9, 5)
+    task_id = "8" * 32
+    _own_task(module.task_store, task_id, user_id=96)
+    module.task_store.reserve_compute_admission(user_id=96, task_id=task_id, at=at)
+    task = module.task_store.get_task(task_id)
+    receipt = _plant_receipt_file(module, task, job_id="8815", observed_at=at + 2)
+    module.task_store.observe_allocation_start(
+        user_id=96, task_id=task_id, stage_id="model", slurm_job_id="8815",
+        gpu_count=1, cpu_cores=1, started_at=at + 2, gres="gpu:1",
+    )
+
+    monkeypatch.setattr(module.task_runtime.shutil, "which", lambda command: f"/usr/bin/{command}")
+    monkeypatch.setattr(
+        module.task_runtime.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(stdout="JobId=8815 JobState=COMPLETED RunTime=00:00:45\n"),
+    )
+
+    assert module.task_runtime._reconcile_slurm_allocations() == {"settled": 1, "active": 0, "review": 0}
+    facts = module.task_store.list_task_allocations(task_id)
+    assert len(facts) == 2
+    assert {row["started_at"] for row in facts} == {at + 2}
+    assert module.task_store.gpu_credit_summary(96, at=at + 100)["usage_gpu_seconds"] == 45
+    assert not receipt.exists()
+    assert module.task_runtime._reconcile_slurm_allocations() == {"settled": 0, "active": 0, "review": 0}
+    assert len(module.task_store.list_task_allocations(task_id)) == 2
+    assert module.task_store.gpu_credit_summary(96, at=at + 100)["usage_gpu_seconds"] == 45
+
+
 def test_an_unverifiable_receipt_file_is_never_deleted(monkeypatch, tmp_path):
     """A claim the scheduler cannot corroborate stays on disk and uncharged.
 
