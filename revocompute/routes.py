@@ -1295,17 +1295,6 @@ def _publication_report(task: dict[str, Any]) -> dict[str, Any]:
     return {"state": state, "reason": None if state == PUBLICATION_AVAILABLE else _PUBLICATION_REASON_TEXT.get(state)}
 
 
-def _result_manifest_available(task: dict[str, Any]) -> bool:
-    """Report whether the published result manifest is readable.
-
-    Probes through the same canonical bounded verified reader the results route
-    consumes, so a symlinked, linked, oversized, anchored-mismatched, or
-    never-anchored manifest reports unavailable instead of advertising results
-    the reader will then refuse.
-    """
-    return _result_publication_state(task) == PUBLICATION_AVAILABLE
-
-
 def _task_display_name(task: dict[str, Any], task_id: str) -> str:
     raw = ntpath.basename(os.path.basename(str(task.get("filename") or "")))
     display = "".join(character for character in unicodedata.normalize("NFC", raw) if not unicodedata.category(character).startswith("C"))

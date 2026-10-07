@@ -778,7 +778,7 @@ object/descriptor, not reopen its pathname.*
 - `StorageResolver.load_manifest`/`read_manifest_bytes` are the single manifest
   authority (`O_NOFOLLOW`, `fstat`, `S_ISREG`, `st_nlink == 1`, bounded size);
   the primary results route, `/compute/api/results/<task>/files/<file_id>`, and
-  the `_result_manifest_available` readiness probe all consume it instead of a
+  the result-availability readiness probe all consume it instead of a
   plain pathname probe, so the readiness flag cannot disagree with the reader.
   `ArtifactIdentityError` derives from `OSError`, so every existing fail-closed
   branch covers it with no second contract.
@@ -820,8 +820,8 @@ published namespace and self-authorize its own publication.
   that anchor (streamed SHA-256 plus size of the one verified descriptor) and
   fails closed on mismatch, so the check is inherited by every consumer of the
   reader: the results route, download, ndarray/table/logical projection, Tool
-  materialization, results archive, `get_results`, and
-  `_result_manifest_available`. The resolver is constructed with the Task store
+  materialization, results archive, `get_results`, and the result-availability
+  readiness probe. The resolver is constructed with the Task store
   by the web app, the worker runtime, and the live-test executor, so all three
   processes resolve the same authority.
 - Regression evidence: `tests/server/test_result_publication_boundary.py` drives
