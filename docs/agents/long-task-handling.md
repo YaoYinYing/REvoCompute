@@ -1018,7 +1018,38 @@ It then broadcasts the main advancement to the owners whose dependencies or
 integration bases may be affected, naming which PRs reconcile now, which should
 reconcile before final merge, which remain blocked, and which need no action. It
 does not mechanically require every worktree to rebase after every merge; see
-Rebase policy. Finally it retires the merged PR's execution state: confirm no
+Rebase policy.
+
+**Post-merge owner cleanup.** A merge is not the end of a PR's operational
+lifecycle. Before retiring the merged PR's worktree and execution state, the
+Commander notifies the former owner to perform one final bounded cleanup of
+PR-owned execution residue, and the owner reports completion back. The owner
+removes the PR-scoped working state it created — CI/test scratch directories,
+temporary pytest/run directories, generated acceptance or debug output not meant
+for version control, temporary browser/render evidence once any required durable
+evidence is retained, PR-owned deployment/live-test scratch, and other
+worktree-local generated residue. The owner does not remove canonical fixtures,
+committed scientific evidence, acceptance receipts the product or protocol
+requires, shared caches or databases, another PR's workspace, or a host-level
+shared directory whose ownership is not proven. The owner makes that
+distinction because it has the best local implementation context; when it is
+unsure whether a path is disposable or durable, it keeps the path and reports
+the question. The intended lifecycle is:
+
+```text
+design -> implement -> review -> retire TODO / IMPLEMENTATION_STATE
+       -> READY_FOR_FINAL_REVIEW -> merge
+       -> owner cleans PR-owned CI/runtime residue
+       -> Commander verifies retirement -> worktree/branch lifecycle cleanup
+```
+
+The cleanup request is a wake event like any other: the Commander wakes briefly
+to reconcile downstream PRs and issue it to the former owner, then yields again,
+and neither role stays active merely to wait for the completion report (see
+Control-plane quiescence). Once cleanup is confirmed and no unique work remains,
+retirement proceeds as below.
+
+Finally it retires the merged PR's execution state: confirm no
 uncommitted changes, no unique commits absent from the merged PR, and no
 artifact or evidence that exists only in the worktree and is still required, then
 remove the implementation worktree, prune the merged canonical branch when
