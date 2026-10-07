@@ -91,7 +91,22 @@ case "${command_name}" in
     printf 'mock PSSM data\n' >"${output}/pssm_msa/${prefix}_ascii_mtx_file"
     printf 'finished\n' >"${output}/log/task_finished"
     ;;
-  sbatch|squeue|scancel|sacct|sinfo)
+  sbatch|scancel|sacct|sinfo)
+    exit 0
+    ;;
+  squeue)
+    # The wrapper asks the scheduler whether its own job is RUNNING before it
+    # reports the allocation live.  The mock's srun runs the wrapper inline —
+    # the allocation is running whenever the wrapper reaches the query — so a
+    # per-job query is answered RUNNING.  A listing query is answered with
+    # nothing: this mock has no job table, and inventing one would make a
+    # liveness query appear to name live jobs that do not exist.
+    for argument in "$@"; do
+      if [[ "${argument}" == "-j" ]]; then
+        printf 'RUNNING\n'
+        break
+      fi
+    done
     exit 0
     ;;
   *)
