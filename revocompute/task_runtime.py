@@ -473,8 +473,13 @@ def _compute_allocation_callbacks(
         try:
             if runner_family and not resolve_submission_readiness(CONFIG.server_dir, runner_family).ready:
                 raise GPUAuthorizationUnavailableError("Runner readiness is unavailable")
-            summary = task_store.require_compute_entitlement(user_id, at=started_at)
-            task_store.record_allocation_start(
+            # The quota decision is made *by* this call, inside one transaction
+            # that also consumes the Task's own reservation and records the
+            # allocation.  There is deliberately no separate entitlement read
+            # here: a bare read cannot see that the hold which admitted this Task
+            # is the Task's own authority, and would refuse it for holding the
+            # final entitlement.
+            entitlement = task_store.record_allocation_start(
                 user_id=user_id,
                 task_id=task_id,
                 stage_id=stage_id,
@@ -512,7 +517,7 @@ def _compute_allocation_callbacks(
             slurm_job_id=slurm_job_id,
             user_id=user_id,
             gpu_count=gpu_count,
-            gpu_seconds=max(0, int(summary["remaining_gpu_seconds"])),
+            gpu_seconds=max(0, int(entitlement.get("remaining_gpu_seconds") or 0)),
         )
         emit_event(
             "resource.allocation.started",
@@ -580,8 +585,9 @@ def _run_compute_job(
     stored_task = task_store.get_task(task_id) or {}
     submitted_by_user_id = int(stored_task.get("submitted_by_user_id") or 0)
     if resource_policy is not None and submitted_by_user_id > 0:
-        if resource_policy.requires_gpu:
-            task_store.require_compute_entitlement(submitted_by_user_id)
+        # No entitlement read here: the decision belongs to the atomic
+        # allocation-start transition, which knows whether this Task holds a
+        # reservation of its own (the workflow and re-dispatch cases do not).
         dispatched_callback, started_callback, finished_callback = _compute_allocation_callbacks(
             task_id=task_id,
             user_id=submitted_by_user_id,
@@ -658,8 +664,10 @@ def _run_compute_workflow(
         dispatched_callback = started_callback = finished_callback = None
         user_id = int(task.get("submitted_by_user_id") or 0)
         if user_id > 0:
-            if policy.requires_gpu:
-                task_store.require_compute_entitlement(user_id)
+            # A workflow stage has no reservation of its own after the first
+            # one consumed the Task's single submission hold, so its allocation
+            # start is admitted on the balance that is actually left — decided
+            # atomically with the allocation itself, not by a read here.
             dispatched_callback, started_callback, finished_callback = _compute_allocation_callbacks(
                 task_id=task_id,
                 user_id=user_id,

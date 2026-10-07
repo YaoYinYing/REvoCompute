@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from revocompute.db import TaskDatabase
+from revocompute.db import GPUCreditUnavailableError, TaskDatabase
 from revocompute.resource_ledger import (
     AdmissionReason,
     AllocationStatus,
@@ -504,3 +504,191 @@ def test_releasing_a_hold_publishes_the_admission_release_fact(tmp_path, monkeyp
 
     assert [event for event, _ in emitted] == ["resource.admission.released"]
     assert emitted[0][1]["task_id"] == "a" * 32
+
+
+# ---------------------------------------------------------------------------
+# A reservation is the authority that admitted its own Task
+# ---------------------------------------------------------------------------
+
+
+def test_a_task_holding_the_final_entitlement_starts_its_own_allocation(tmp_path):
+    """The hold that admitted a submission must not refuse it at allocation start.
+
+    Holding the final unit drives the remaining balance to zero, so a start that
+    re-read the balance would be refused by the Task's own reservation.  The
+    reservation is this Task's admission authority, consumed by the same
+    transition that records the allocation.
+    """
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"), monthly_gpu_seconds=100)
+    at = _timestamp(2026, 9, 20)
+    task_id = "a1" + "0" * 30
+    decision = _reserve(database, 95, task_id=task_id, at=at)
+    assert decision["allowed"] is True
+    assert decision["quantity"] == 100
+    assert database.compute_entitlement(95, at=at).remaining == 0
+
+    allocation = database.record_allocation_start(
+        user_id=95,
+        task_id=task_id,
+        stage_id="model",
+        slurm_job_id="9901",
+        gpu_count=1,
+        cpu_cores=2,
+        started_at=at + 5,
+    )
+
+    assert allocation["admitted_by_reservation"] is True
+    assert allocation["slurm_job_id"] == "9901"
+    reservation = database.list_task_reservations(task_id)[0]
+    assert reservation["state"] == ReservationState.RELEASED.value
+    assert reservation["reason_code"] == ReservationReason.ALLOCATION_STARTED.value
+    # The allocation, not the hold, occupies the balance from here on: it is
+    # unsettled (its elapsed time is not known yet), so the position is a lower
+    # bound rather than a double charge.
+    entitlement = database.compute_entitlement(95, at=at + 5)
+    assert entitlement.reserved == 0
+    assert entitlement.unsettled == 1
+
+
+def test_two_tasks_racing_for_the_final_entitlement_leave_one_runnable_winner(tmp_path):
+    """Exactly one of two competing submissions can run to allocation.
+
+    The first takes the final entitlement; the second is refused a hold and,
+    having no hold of its own and no balance, is refused at allocation start
+    too — the refusal is the same decision either way, never a free run.
+    """
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"), monthly_gpu_seconds=60)
+    at = _timestamp(2026, 9, 21)
+    winner, loser = "b1" + "0" * 30, "b2" + "0" * 30
+
+    first = _reserve(database, 96, task_id=winner, at=at)
+    second = _reserve(database, 96, task_id=loser, at=at + 1)
+
+    assert first["allowed"] is True
+    assert second["allowed"] is False
+    assert second["reason_code"] == AdmissionReason.COMPUTE_EXHAUSTED.value
+    assert database.list_task_reservations(loser) == []
+
+    assert database.record_allocation_start(
+        user_id=96, task_id=winner, stage_id="model", slurm_job_id="9902", gpu_count=1, cpu_cores=1, started_at=at + 2
+    )["admitted_by_reservation"] is True
+    with pytest.raises(GPUCreditUnavailableError, match="exhausted"):
+        database.record_allocation_start(
+            user_id=96, task_id=loser, stage_id="model", slurm_job_id="9903", gpu_count=1, cpu_cores=1, started_at=at + 3
+        )
+    assert [row["slurm_job_id"] for row in database.list_task_allocations(loser)] == []
+
+
+def test_an_expired_hold_with_a_consumed_balance_fails_closed(tmp_path):
+    """A hold that lapsed is not authority: the balance is re-decided at start.
+
+    The Task waited, its hold expired, and another allocation has since consumed
+    the balance.  Starting anyway would charge work the subject cannot pay for,
+    so the transition refuses before any allocation row exists.
+    """
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"), monthly_gpu_seconds=60)
+    at = _timestamp(2026, 9, 22)
+    task_id = "c1" + "0" * 30
+    _reserve(database, 97, task_id=task_id, at=at, ttl_seconds=1)
+    assert database.expire_stale_reservations(now=at + 10) == 1
+
+    _start(database, 97, job_id="9904", at=at + 20, task_id="c2" + "0" * 30, gpus=1)
+
+    with pytest.raises(GPUCreditUnavailableError, match="exhausted"):
+        database.record_allocation_start(
+            user_id=97, task_id=task_id, stage_id="model", slurm_job_id="9905", gpu_count=1, cpu_cores=1,
+            started_at=at + 30,
+        )
+
+    assert [row["slurm_job_id"] for row in database.list_task_allocations(task_id)] == []
+    assert database.list_task_reservations(task_id)[0]["state"] == ReservationState.EXPIRED.value
+
+
+def test_an_expired_hold_with_remaining_balance_is_re_admitted(tmp_path):
+    """An expired hold whose entitlement is still unspent may run.
+
+    Nothing consumed the balance while the hold lapsed, so the start re-decides
+    the position in the same transaction and admits: the expiry bounds a claim
+    that was never used, it does not bar the Task.
+    """
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"), monthly_gpu_seconds=60)
+    at = _timestamp(2026, 9, 23)
+    task_id = "d1" + "0" * 30
+    _reserve(database, 98, task_id=task_id, at=at, ttl_seconds=1)
+    assert database.expire_stale_reservations(now=at + 10) == 1
+
+    allocation = database.record_allocation_start(
+        user_id=98, task_id=task_id, stage_id="model", slurm_job_id="9906", gpu_count=1, cpu_cores=4,
+        started_at=at + 20,
+    )
+
+    assert allocation["admitted_by_reservation"] is False
+    assert allocation["remaining_gpu_seconds"] == 60
+    assert {row["unit"] for row in database.list_task_allocations(task_id)} == {
+        "cpu_core_second",
+        "gpu_second",
+    }
+
+
+def test_a_later_workflow_stage_is_admitted_against_what_is_left(tmp_path):
+    """A workflow's second GPU stage has no hold of its own; it is admitted on the balance.
+
+    The Task's single submission hold was consumed by the first stage, so the
+    later stage's start re-decides the position — admitted while entitlement
+    remains, refused once it is gone, without a second reservation ever existing.
+    """
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"), monthly_gpu_seconds=240)
+    at = _timestamp(2026, 9, 24)
+    task_id = "e1" + "0" * 30
+    _reserve(database, 99, task_id=task_id, at=at)
+    database.record_allocation_start(
+        user_id=99, task_id=task_id, stage_id="features", slurm_job_id="9907", gpu_count=1, cpu_cores=1,
+        started_at=at + 1,
+    )
+    database.settle_allocation_elapsed("9907", elapsed_seconds=60, finished_at=at + 61)
+
+    later = database.record_allocation_start(
+        user_id=99, task_id=task_id, stage_id="model", slurm_job_id="9908", gpu_count=1, cpu_cores=1,
+        started_at=at + 62,
+    )
+    assert later["admitted_by_reservation"] is False
+    database.settle_allocation_elapsed("9908", elapsed_seconds=180, finished_at=at + 242)
+
+    with pytest.raises(GPUCreditUnavailableError, match="exhausted"):
+        database.record_allocation_start(
+            user_id=99, task_id=task_id, stage_id="relax", slurm_job_id="9909", gpu_count=1, cpu_cores=1,
+            started_at=at + 243,
+        )
+
+
+def test_a_dispatch_failure_returns_the_hold_immediately(tmp_path):
+    """A failed dispatch must not strand entitlement until the TTL.
+
+    The Task never reached the scheduler, so its claim is released at once and
+    idempotently — the reservation row records the reason, and a second call is
+    a no-op rather than a second release.
+    """
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"), monthly_gpu_seconds=100)
+    at = _timestamp(2026, 9, 25)
+    task_id = "f1" + "0" * 30
+    assert _reserve(database, 100, task_id=task_id, at=at)["allowed"] is True
+    assert database.compute_entitlement(100, at=at).remaining == 0
+
+    assert (
+        database.release_reservation(
+            task_id=task_id, reason_code=ReservationReason.DISPATCH_FAILED.value, at=at + 5
+        )
+        is True
+    )
+    assert (
+        database.release_reservation(
+            task_id=task_id, reason_code=ReservationReason.DISPATCH_FAILED.value, at=at + 6
+        )
+        is False
+    )
+
+    assert database.compute_entitlement(100, at=at + 6).remaining == 100
+    reservation = database.list_task_reservations(task_id)[0]
+    assert reservation["state"] == ReservationState.RELEASED.value
+    assert reservation["reason_code"] == ReservationReason.DISPATCH_FAILED.value
+

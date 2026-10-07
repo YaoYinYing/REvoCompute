@@ -415,7 +415,7 @@ def test_worker_ready_starts_the_pulse_without_consuming_a_task_slot(monkeypatch
     monkeypatch.setattr(module.task_runtime, "start_infrastructure_pulse", lambda: started.append(True))
     monkeypatch.setattr(module.task_runtime, "_recover_orphaned_tasks", lambda: 0)
     monkeypatch.setattr(
-        module.task_runtime, "_reconcile_gpu_allocations", lambda: {"settled": 0, "review": 0, "active": 0}
+        module.task_runtime, "_reconcile_slurm_allocations", lambda: {"settled": 0, "review": 0, "active": 0}
     )
     monkeypatch.setattr(module.task_runtime, "probe_compute_infrastructure", SimpleNamespace(run=lambda: None))
 

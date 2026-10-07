@@ -2428,10 +2428,18 @@ class TaskDatabase:
         CPU cores for the CPU fact.  CUDA percent and ``/usr/bin/time`` figures
         are utilization telemetry and are deliberately nowhere here.
 
-        The per-subject admission reservation the submission took is consumed
-        here either way: the resource is now genuinely allocated, and leaving a
-        reservation live would double-count against the next admission.  The
-        allocation, not the reservation, is what the balance is charged for.
+        This is also the one atomic admission decision for the allocation.  A
+        live reservation owned by *this* Task is its admission authority — the
+        hold that admitted the submission must never be counted against it at
+        start, or a Task holding the final entitlement would be refused by its
+        own reservation.  Any other Task's committed reservation and any
+        unsettled allocation still constrain the balance, so a submission that
+        arrives without a live hold (its reservation expired while the request
+        waited, or the earlier stage of a workflow consumed one) is re-evaluated
+        against the current position and either admitted on the remaining balance
+        or refused.  Decision, reservation consume, and allocation insert are one
+        transaction, so no reader of a separate "may this run?" answer can
+        disagree with the rows it produced.
 
         ``gres`` is preserved as the GPU fact's resource class, so a historical
         A100 second is never collapsed into an anonymous GPU-second; it is
@@ -2448,97 +2456,103 @@ class TaskDatabase:
             raise ValueError("cpu_cores must be positive")
         resource_class = rloan.resource_class_for_gres(gres)
         timestamp = time.time() if started_at is None else started_at
-        with self.engine.begin() as conn:
-            existing = (
+        with self.engine.connect() as conn:
+            conn.exec_driver_sql("BEGIN IMMEDIATE")
+            try:
+                existing = (
+                    conn.execute(
+                        select(self.resource_allocations_table).where(
+                            self.resource_allocations_table.c.slurm_job_id == slurm_job_id,
+                            self.resource_allocations_table.c.unit == rloan.UNIT_GPU_SECOND,
+                        )
+                    )
+                    .mappings()
+                    .one_or_none()
+                )
+                if existing is not None:
+                    expected = (user_id, task_id, stage_id, gpu_count, resource_class)
+                    actual = (
+                        existing["subject_id"],
+                        existing["task_id"],
+                        existing["stage_id"],
+                        existing["resource_count"],
+                        existing["resource_class"],
+                    )
+                    if actual != expected:
+                        raise ValueError(
+                            "Slurm job ID is already associated with a different GPU allocation"
+                        )
+                    conn.commit()
+                    return dict(existing)
+                if gpu_count >= 1:
+                    # Permission first (the #55 side of the boundary: static
+                    # authorization, not quota), then the one quota decision.
+                    if required_entitlements is not None:
+                        self._require_gpu_authorization(conn, user_id, required_entitlements, timestamp)
+                    remaining, adjudicated = self._authorize_allocation_start_in_connection(
+                        conn, user_id=user_id, task_id=task_id, at=timestamp
+                    )
+                else:
+                    remaining, adjudicated = 0, False
                 conn.execute(
-                    select(self.resource_allocations_table).where(
-                        self.resource_allocations_table.c.slurm_job_id == slurm_job_id,
-                        self.resource_allocations_table.c.unit == rloan.UNIT_GPU_SECOND,
+                    sqlite_insert(self.resource_allocations_table).values(
+                        subject_type=rloan.SUBJECT_USER,
+                        subject_id=user_id,
+                        task_id=task_id,
+                        stage_id=stage_id,
+                        slurm_job_id=slurm_job_id,
+                        unit=rloan.UNIT_GPU_SECOND,
+                        resource_class=resource_class,
+                        resource_count=gpu_count,
+                        started_at=timestamp,
+                        finished_at=None,
+                        quantity=None,
+                        status=rloan.AllocationStatus.ACTIVE.value,
+                        evidence_source=rloan.EvidenceSource.ALLOCATION_LIFECYCLE.value,
+                        ledger_entry_id=None,
                     )
                 )
-                .mappings()
-                .one_or_none()
-            )
-            if existing is not None:
-                expected = (user_id, task_id, stage_id, gpu_count, resource_class)
-                actual = (
-                    existing["subject_id"],
-                    existing["task_id"],
-                    existing["stage_id"],
-                    existing["resource_count"],
-                    existing["resource_class"],
-                )
-                if actual != expected:
-                    raise ValueError(
-                        "Slurm job ID is already associated with a different GPU allocation"
-                    )
-                return dict(existing)
-            if gpu_count >= 1:
-                if required_entitlements is not None:
-                    self._require_gpu_authorization(conn, user_id, required_entitlements, timestamp)
-                period = self._gpu_period(timestamp)
-                self._ensure_monthly_grant(conn, user_id, period, "", timestamp)
-                balance = conn.execute(
-                    select(func.sum(self.resource_ledger_table.c.quantity)).where(
-                        self.resource_ledger_table.c.subject_id == user_id,
-                        self.resource_ledger_table.c.unit == rloan.UNIT_GPU_SECOND,
-                        self.resource_ledger_table.c.period == period,
-                    )
-                ).scalar()
-                if int(balance or 0) <= 0:
-                    raise GPUCreditUnavailableError("GPU credit balance is exhausted")
-            conn.execute(
-                sqlite_insert(self.resource_allocations_table).values(
-                    subject_type=rloan.SUBJECT_USER,
-                    subject_id=user_id,
-                    task_id=task_id,
-                    stage_id=stage_id,
-                    slurm_job_id=slurm_job_id,
-                    unit=rloan.UNIT_GPU_SECOND,
-                    resource_class=resource_class,
-                    resource_count=gpu_count,
-                    started_at=timestamp,
-                    finished_at=None,
-                    quantity=None,
-                    status=rloan.AllocationStatus.ACTIVE.value,
-                    evidence_source=rloan.EvidenceSource.ALLOCATION_LIFECYCLE.value,
-                    ledger_entry_id=None,
-                )
-            )
-            conn.execute(
-                sqlite_insert(self.resource_allocations_table).values(
-                    subject_type=rloan.SUBJECT_USER,
-                    subject_id=user_id,
-                    task_id=task_id,
-                    stage_id=stage_id,
-                    slurm_job_id=slurm_job_id,
-                    unit=rloan.UNIT_CPU_CORE_SECOND,
-                    resource_class="",
-                    resource_count=cpu_cores,
-                    started_at=timestamp,
-                    finished_at=None,
-                    quantity=None,
-                    status=rloan.AllocationStatus.ACTIVE.value,
-                    evidence_source=rloan.EvidenceSource.ALLOCATION_LIFECYCLE.value,
-                    ledger_entry_id=None,
-                )
-            )
-            self._release_reservation_in_connection(
-                conn,
-                task_id=task_id,
-                reason_code=rloan.ReservationReason.ALLOCATION_STARTED.value,
-                released_at=timestamp,
-            )
-            row = (
                 conn.execute(
-                    select(self.resource_allocations_table).where(
-                        self.resource_allocations_table.c.slurm_job_id == slurm_job_id,
-                        self.resource_allocations_table.c.unit == rloan.UNIT_GPU_SECOND,
+                    sqlite_insert(self.resource_allocations_table).values(
+                        subject_type=rloan.SUBJECT_USER,
+                        subject_id=user_id,
+                        task_id=task_id,
+                        stage_id=stage_id,
+                        slurm_job_id=slurm_job_id,
+                        unit=rloan.UNIT_CPU_CORE_SECOND,
+                        resource_class="",
+                        resource_count=cpu_cores,
+                        started_at=timestamp,
+                        finished_at=None,
+                        quantity=None,
+                        status=rloan.AllocationStatus.ACTIVE.value,
+                        evidence_source=rloan.EvidenceSource.ALLOCATION_LIFECYCLE.value,
+                        ledger_entry_id=None,
                     )
                 )
-                .mappings()
-                .one()
-            )
+                # The reservation is consumed in the same transaction as the
+                # allocation it authorized: the allocation, not the reservation,
+                # is what the balance is charged for from here on.
+                self._release_reservation_in_connection(
+                    conn,
+                    task_id=task_id,
+                    reason_code=rloan.ReservationReason.ALLOCATION_STARTED.value,
+                    released_at=timestamp,
+                )
+                row = (
+                    conn.execute(
+                        select(self.resource_allocations_table).where(
+                            self.resource_allocations_table.c.slurm_job_id == slurm_job_id,
+                            self.resource_allocations_table.c.unit == rloan.UNIT_GPU_SECOND,
+                        )
+                    )
+                    .mappings()
+                    .one()
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
         expected = (user_id, task_id, stage_id, gpu_count, resource_class)
         actual = (
             row["subject_id"],
@@ -2551,7 +2565,12 @@ class TaskDatabase:
             raise ValueError(
                 "Slurm job ID is already associated with a different GPU allocation"
             )
-        return dict(row)
+        # The caller reports what this one decision saw: the balance it left and
+        # whether the Task's own reservation was its authority to start.
+        recorded = dict(row)
+        recorded["remaining_gpu_seconds"] = remaining
+        recorded["admitted_by_reservation"] = adjudicated
+        return recorded
 
     def settle_allocation(
         self, slurm_job_id: str, *, finished_at: float | None = None
@@ -2945,6 +2964,67 @@ class TaskDatabase:
             )
             return result.rowcount == 1
 
+    def _authorize_allocation_start_in_connection(
+        self, conn, *, user_id: int, task_id: str, at: float
+    ) -> tuple[int, bool]:
+        """Admit one allocation start against the balance *without* its own hold.
+
+        A live reservation owned by *task_id* is this Task's admission authority:
+        the hold that got the submission past admission is not also a competing
+        claim on the same balance, so a Task holding the final entitlement is
+        never refused by its own reservation.  Every OTHER committed reservation
+        (another Task's hold or queued commitment) and every unsettled allocation
+        still counts, so the atomic decision is as strict as admission was.
+
+        With no live hold for this Task — a reservation that expired while the
+        request waited, or a later workflow stage whose predecessor already
+        consumed one — the current balance is re-evaluated here in the same
+        transaction that writes the allocation, and the allocation is refused
+        rather than charged against a balance that cannot cover it.
+
+        Returns ``(remaining_from_this_decision, own_hold_is_authority)``, which
+        the caller reports: the pair says both what the balance looked like and
+        whether the Task was admitted on its own reservation or on permission
+        that had to be re-established.
+
+        Called inside ``BEGIN IMMEDIATE``, so the answer and the rows it
+        authorizes are one decision: no separate reader can see a different
+        entitlement than the one this transition acted on.
+        """
+        period = self._gpu_period(at)
+        self._ensure_monthly_grant(conn, user_id, period, "", at)
+        rows = conn.execute(
+            select(self.resource_ledger_table).where(
+                self.resource_ledger_table.c.subject_type == rloan.SUBJECT_USER,
+                self.resource_ledger_table.c.subject_id == user_id,
+                self.resource_ledger_table.c.unit == rloan.UNIT_GPU_SECOND,
+                self.resource_ledger_table.c.period == period,
+            )
+        ).mappings().all()
+        totals = rloan.summarize_ledger(rows, unit=rloan.UNIT_GPU_SECOND, resource_class="", period=period)
+        own_hold = conn.execute(
+            select(func.coalesce(func.sum(self.resource_reservations_table.c.quantity), 0)).where(
+                self.resource_reservations_table.c.task_id == task_id,
+                self.resource_reservations_table.c.unit == rloan.UNIT_GPU_SECOND,
+                self.resource_reservations_table.c.state.in_(rloan.COMMITTED_RESERVATION_STATES),
+            )
+        ).scalar_one()
+        other_holds = conn.execute(
+            select(func.coalesce(func.sum(self.resource_reservations_table.c.quantity), 0)).where(
+                self.resource_reservations_table.c.subject_id == user_id,
+                self.resource_reservations_table.c.unit == rloan.UNIT_GPU_SECOND,
+                self.resource_reservations_table.c.state.in_(rloan.COMMITTED_RESERVATION_STATES),
+                self.resource_reservations_table.c.task_id != task_id,
+            )
+        ).scalar_one()
+        _, unsettled = self._unsettled_in_connection(conn, user_id, rloan.UNIT_GPU_SECOND, "", at)
+        remaining = int(totals["remaining"]) - int(other_holds) - int(unsettled)
+        if int(own_hold) > 0:
+            return remaining, True
+        if remaining <= 0:
+            raise GPUCreditUnavailableError("GPU credit balance is exhausted")
+        return remaining, False
+
     def _release_reservation_in_connection(
         self, conn, *, task_id: str, reason_code: str, released_at: float
     ) -> bool:
@@ -3033,6 +3113,21 @@ class TaskDatabase:
             .where(self.resource_reservations_table.c.state == rloan.ReservationState.QUEUED.value)
             .order_by(self.resource_reservations_table.c.created_at)
             .limit(limit)
+        )
+        with self.engine.connect() as conn:
+            return [dict(row) for row in conn.execute(stmt).mappings().all()]
+
+    def list_task_reservations(self, task_id: str) -> list[dict[str, Any]]:
+        """Every reservation of one Task, newest first: its admission evidence.
+
+        A Task has at most one live row; the earlier ones are the history of how
+        it was admitted, released, or reclaimed, and they stay readable here
+        rather than being rewritten by the transition that replaced them.
+        """
+        stmt = (
+            select(self.resource_reservations_table)
+            .where(self.resource_reservations_table.c.task_id == task_id)
+            .order_by(desc(self.resource_reservations_table.c.created_at))
         )
         with self.engine.connect() as conn:
             return [dict(row) for row in conn.execute(stmt).mappings().all()]

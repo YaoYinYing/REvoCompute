@@ -392,6 +392,108 @@ def test_reconciliation_settles_terminal_slurm_elapsed_time_once(monkeypatch, tm
     assert module.task_store.cpu_core_second_summary(59, at=started_at)["used_cpu_core_seconds"] == 73
 
 
+def test_allocation_start_is_admitted_by_the_tasks_own_reservation(monkeypatch, tmp_path):
+    """The callback the Slurm adapter calls must admit the Task that holds the last unit.
+
+    Admission gave this submission the month's final GPU second, so the start
+    re-deciding the balance on its own would refuse it.  The reservation is the
+    Task's authority, and the decision is made inside the same transaction that
+    records the allocation.
+    """
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    module.task_store.project_gpu_authorization(
+        64, account_enabled=True, allow_gpu_use=True, entitlements={}
+    )
+    database = module.task_store
+    task_id = "7" * 32
+    database.set_compute_allowance(
+        user_id=64,
+        monthly_gpu_seconds=1,
+        actor_user_id=64,
+        idempotency_key="final-unit",
+        updated_at=_timestamp(2026, 9, 6),
+    )
+    reservation = database.reserve_compute_admission(
+        user_id=64, task_id=task_id, at=_timestamp(2026, 9, 6)
+    )
+    assert reservation["allowed"] is True
+    assert database.compute_entitlement(64, at=_timestamp(2026, 9, 6)).remaining == 0
+
+    _dispatched, started, _finished = module.task_runtime._compute_allocation_callbacks(
+        task_id=task_id,
+        user_id=64,
+        stage_id="prediction",
+        resource_policy=SimpleNamespace(requires_gpu=True, gres="gpu:1", cpus=2),
+    )
+    started("8910", _timestamp(2026, 9, 6))
+
+    allocation = database.list_task_allocations(task_id)
+    assert {row["unit"]: row["resource_count"] for row in allocation} == {
+        "gpu_second": 1,
+        "cpu_core_second": 2,
+    }
+    assert database.list_task_reservations(task_id)[0]["state"] == "released"
+
+
+def test_allocation_start_fails_closed_when_the_hold_is_gone_and_the_balance_is_spent(
+    monkeypatch, tmp_path
+):
+    """No authority to start means no Runner: the gate is never released.
+
+    The Task's reservation expired and another allocation took the balance, so
+    the start transition refuses — the exception surfaces before the Slurm
+    wrapper's approval file is written, which is what keeps an unpayable
+    allocation from ever running.
+    """
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    database = module.task_store
+    project = module.task_store.project_gpu_authorization(
+        65, account_enabled=True, allow_gpu_use=True, entitlements={}
+    )
+    assert project is None
+    task_id = "6" * 32
+    database.set_compute_allowance(
+        user_id=65,
+        monthly_gpu_seconds=60,
+        actor_user_id=65,
+        idempotency_key="closed",
+        updated_at=_timestamp(2026, 9, 6),
+    )
+    assert database.reserve_compute_admission(
+        user_id=65, task_id=task_id, at=_timestamp(2026, 9, 6), ttl_seconds=1
+    )["allowed"] is True
+    assert database.expire_stale_reservations(now=_timestamp(2026, 9, 6) + 10) == 1
+    database.record_allocation_start(
+        user_id=65,
+        task_id="5" * 32,
+        stage_id="prediction",
+        slurm_job_id="8911",
+        gpu_count=1,
+        cpu_cores=1,
+        started_at=_timestamp(2026, 9, 6) + 20,
+    )
+    database.settle_allocation_elapsed("8911", elapsed_seconds=60, finished_at=_timestamp(2026, 9, 6) + 80)
+
+    _dispatched, started, _finished = module.task_runtime._compute_allocation_callbacks(
+        task_id=task_id,
+        user_id=65,
+        stage_id="prediction",
+        resource_policy=SimpleNamespace(requires_gpu=True, gres="gpu:1", cpus=1),
+    )
+    with pytest.raises(GPUCreditUnavailableError, match="exhausted"):
+        started("8912", _timestamp(2026, 9, 6) + 90)
+
+    assert module.task_store.list_task_allocations(task_id) == []
+
+
 @pytest.mark.parametrize(
     ("stdout", "expected"),
     [
