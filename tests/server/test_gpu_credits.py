@@ -1246,6 +1246,81 @@ def test_a_typed_gres_grant_is_charged_not_read_as_zero(monkeypatch, tmp_path):
     assert not log.exists()
 
 
+def test_accelerator_memory_and_utilization_terms_are_never_gpu_counts(
+    monkeypatch, tmp_path
+):
+    """A device's memory or utilization is not a device count.
+
+    ``gres/gpumem`` and ``gres/gpuutil`` start with ``gres/gpu``, so a prefix
+    test reads a job's accelerator *memory* (tens of thousands) or *utilization*
+    (a percentage) as its accelerator *count* and over-charges by orders of
+    magnitude -- a 1-GPU job would settle as tens of thousands of GPU-seconds per
+    second.  The GPU term is anchored to the accelerator itself, so these
+    neighbouring terms contribute nothing.
+    """
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    at = _timestamp(2026, 9, 5)
+    task_id = "e" * 31 + "2"
+    _own_task(module.task_store, task_id, user_id=109)
+    module.task_store.reserve_compute_admission(user_id=109, task_id=task_id, at=at)
+    task = module.task_store.get_task(task_id)
+    log = _plant_scheduler_log(module, task, job_id="8824", observed_at=at + 2)
+
+    from revocompute.resource_ledger import gpu_count_for_tres, is_gpu_tres_term
+
+    # The anchored rule, on the parser's own inputs.
+    assert is_gpu_tres_term("gres/gpu") and is_gpu_tres_term("gres/gpu:a100")
+    assert not is_gpu_tres_term("gres/gpumem") and not is_gpu_tres_term("gres/gpuutil")
+    assert gpu_count_for_tres("cpu=4,gres/gpu=1,gres/gpumem=80000,gres/gpuutil=95") == 1
+    assert gpu_count_for_tres("cpu=4,gres/gpumem=40000") is None
+    assert gpu_count_for_tres("cpu=4,gres/gpu:a100=2,gres/gpumem=80000") == 2
+
+    # And end to end: the 1-GPU job below charges one GPU, not 80k.
+    monkeypatch.setattr(module.task_runtime.shutil, "which", lambda command: f"/usr/bin/{command}")
+    monkeypatch.setattr(
+        module.task_runtime.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            stdout="JobId=8824 JobState=COMPLETED RunTime=00:00:45 "
+            "AllocTRES=cpu=4,mem=1G,node=1,billing=4,gres/gpu=1,gres/gpumem=80000,gres/gpuutil=95\n"
+        ),
+    )
+
+    assert module.task_runtime._reconcile_slurm_allocations() == {"settled": 1, "active": 0, "review": 0}
+    facts = module.task_store.list_task_allocations(task_id)
+    assert {row["unit"]: row["resource_count"] for row in facts} == {
+        "gpu_second": 1,
+        "cpu_core_second": 4,
+    }
+    assert module.task_store.gpu_credit_summary(109, at=at + 100)["usage_gpu_seconds"] == 45
+    assert not log.exists()
+
+    # Memory/utilization alone report no accelerator at all: unknown, never a
+    # count invented from a memory figure.
+    task_id2 = "e" * 31 + "3"
+    _own_task(module.task_store, task_id2, user_id=110)
+    module.task_store.reserve_compute_admission(user_id=110, task_id=task_id2, at=at)
+    task2 = module.task_store.get_task(task_id2)
+    log2 = _plant_scheduler_log(module, task2, job_id="8825", observed_at=at + 2)
+    monkeypatch.setattr(
+        module.task_runtime.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            stdout="JobId=8825 JobState=COMPLETED RunTime=00:00:45 "
+            "AllocTRES=cpu=4,mem=1G,node=1,billing=4,gres/gpumem=40000\n"
+        ),
+    )
+    assert module.task_runtime._reconcile_slurm_allocations() == {"settled": 1, "active": 0, "review": 0}
+    assert {
+        row["unit"]: row["resource_count"] for row in module.task_store.list_task_allocations(task_id2)
+    } == {"gpu_second": 0, "cpu_core_second": 4}
+    assert not log2.exists()
+
+
 def test_an_uncorroborated_scheduler_log_is_never_deleted(monkeypatch, tmp_path):
     """A file the scheduler does not own stays exactly where it is.
 
@@ -2273,6 +2348,10 @@ def test_a_dispatch_adopts_surviving_evidence_before_asking_for_more(monkeypatch
     evidence there is what keeps a worker's death from leaving a real allocation
     unaccounted until some unrelated restart, and it reads the same files the
     restart pass does — including a typed GRES term.
+
+    The dispatch passes *adopt*; they do not settle.  Settlement iterates every
+    unsettled allocation and asks the scheduler about each, so it belongs to the
+    restart and maintenance passes rather than the path a Task waits on.
     """
     module = _load_pssm_module(
         monkeypatch,
@@ -2303,8 +2382,59 @@ def test_a_dispatch_adopts_surviving_evidence_before_asking_for_more(monkeypatch
         "gpu_second": 1,
         "cpu_core_second": 2,
     }
-    assert module.task_store.gpu_credit_summary(107, at=at + 100)["usage_gpu_seconds"] == 45
+    # Adopted, so retired — the file's claim now has a durable successor.
     assert not log.exists()
+
+    # Settlement is the full pass's job, and it charges the typed grant.
+    assert module.task_runtime._reconcile_slurm_allocations() == {"settled": 1, "active": 0, "review": 0}
+    assert module.task_store.gpu_credit_summary(107, at=at + 100)["usage_gpu_seconds"] == 45
+
+
+def test_a_dispatch_never_runs_the_unbounded_settle_phase(monkeypatch, tmp_path):
+    """Dispatch adopts evidence; it does not settle the world.
+
+    The settle phase iterates every unsettled allocation and asks the scheduler
+    about each one, so running it per dispatch would make the wait before a Task
+    may start grow with an unrelated backlog.  An unsettled allocation that the
+    scheduler would happily settle must therefore be left untouched here, and
+    picked up by the restart or maintenance pass instead.
+    """
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    at = _timestamp(2026, 9, 5)
+    task_id = "f" * 31 + "3"
+    _own_task(module.task_store, task_id, user_id=111)
+    module.task_store.reserve_compute_admission(user_id=111, task_id=task_id, at=at)
+    # An allocation that is already recorded and simply awaits settlement.
+    module.task_store.observe_allocation_start(
+        user_id=111,
+        task_id=task_id,
+        stage_id="model",
+        slurm_job_id="8826",
+        gpu_count=2,
+        cpu_cores=4,
+        started_at=at + 2,
+    )
+
+    monkeypatch.setattr(module.task_runtime.shutil, "which", lambda command: f"/usr/bin/{command}")
+    monkeypatch.setattr(
+        module.task_runtime.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(stdout="JobId=8826 JobState=COMPLETED RunTime=00:00:45\n"),
+    )
+
+    module.task_runtime._recover_surviving_host_allocations()
+
+    # Untouched: still unsettled, still charged nothing.
+    assert {row["status"] for row in module.task_store.list_task_allocations(task_id)} == {"active"}
+    assert module.task_store.gpu_credit_summary(111, at=at + 100)["usage_gpu_seconds"] == 0
+
+    # The full pass is what settles it, and the dispatch pass never stood in.
+    assert module.task_runtime._reconcile_slurm_allocations() == {"settled": 1, "active": 0, "review": 0}
+    assert module.task_store.gpu_credit_summary(111, at=at + 100)["usage_gpu_seconds"] == 90
 
 
 def test_a_dispatch_survives_a_failing_recovery_pass(monkeypatch, tmp_path):
@@ -2330,8 +2460,8 @@ def test_a_dispatch_survives_a_failing_recovery_pass(monkeypatch, tmp_path):
     def _explode(*args, **kwargs):
         raise OSError("scheduler unavailable")
 
-    # Any of the three passes may fail this way; the guards are what make the
-    # whole occasion non-fatal.
+    # Any of the three adoption passes may fail this way; the guards are what
+    # make the whole occasion non-fatal.
     monkeypatch.setattr(module.task_runtime, "_reconcile_host_scheduler_logs", _explode)
     monkeypatch.setattr(module.task_runtime, "_reconcile_host_allocation_receipts", _explode)
     monkeypatch.setattr(module.task_runtime, "_reconcile_allocation_receipts", _explode)

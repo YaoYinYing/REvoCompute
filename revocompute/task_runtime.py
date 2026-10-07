@@ -660,14 +660,29 @@ def _recover_surviving_host_allocations() -> None:
 
     A dispatch is a natural extra occasion: the worker is already up and about to
     start the next allocation, and adopting a predecessor's evidence first means
-    an old claim can never be mistaken for the new one.  Best-effort and bounded:
-    a scheduler that cannot be asked just leaves the evidence for the next pass,
-    and nothing here may ever keep a dispatch from being attempted.
+    an old claim can never be mistaken for the new one.
+
+    Deliberately bounded to the *adoption* passes — walk the host-only namespace,
+    corroborate each surviving file, record it, delete it.  That work is
+    proportional to the evidence actually on disk, which is normally none.  The
+    settlement phase is NOT run here: it iterates every unsettled allocation and
+    asks the scheduler about each one, so running it per dispatch would make the
+    latency before a Task may start grow with someone else's backlog — a
+    scheduler outage would then stall every dispatch.  Settlement stays with the
+    restart and maintenance passes, which are not on the dispatch path.
+
+    Best-effort throughout: any failure just leaves the evidence for the next
+    pass, and nothing here may ever keep a dispatch from being attempted.
     """
-    try:
-        _reconcile_slurm_allocations()
-    except Exception:  # recovery is best-effort; dispatch must still proceed
-        logging.exception("Dispatch-time allocation recovery failed")
+    for name, step in (
+        ("scheduler log", _reconcile_host_scheduler_logs),
+        ("receipt file", _reconcile_host_allocation_receipts),
+        ("receipt row", _reconcile_allocation_receipts),
+    ):
+        try:
+            step()
+        except Exception:  # recovery is best-effort; dispatch must still proceed
+            logging.exception("Dispatch-time %s adoption failed", name)
 
 
 def _run_compute_job(
@@ -2328,15 +2343,18 @@ def _parse_slurm_runtime(value: str) -> int | None:
 def _tres_units(tres: str) -> tuple[int | None, int | None]:
     """Return ``(cpu_cores, gpu_count)`` from one Slurm ``TRES`` string.
 
-    The GPU term is matched by *prefix*, never by the literal ``gres/gpu``: a
-    typed request — which this deployment supports and uses — is reported as
-    ``gres/gpu:a100=N``, and matching only the untyped spelling silently loses
-    the count, which then settles as a fabricated zero.  Every typed term is
-    summed, exactly as :meth:`RunnerLiveTest._allocated_gpu_count` does.  A term
-    the scheduler does not report is ``None`` — unknown, never zero.
+    The GPU term must be the accelerator itself.  A typed request — which this
+    deployment supports and uses — is reported as ``gres/gpu:a100=N``, so
+    matching only the literal ``gres/gpu`` would silently lose the count and
+    settle it as a fabricated zero.  Matching by bare prefix is no better in the
+    other direction: ``gres/gpumem`` and ``gres/gpuutil`` also start with
+    ``gres/gpu`` and are integer-valued, so a prefix test reads device *memory*
+    or *utilization* as a device *count*.  The term is therefore anchored —
+    ``gres/gpu`` or ``gres/gpu:<class>``, and nothing else — and every typed term
+    is summed by :func:`rloan.gpu_count_for_tres`.  A unit the scheduler does not
+    report is ``None``: unknown, never zero.
     """
     cpu_cores: int | None = None
-    gpu_count: int | None = None
     for term in tres.split(","):
         name, separator, raw = term.partition("=")
         if not separator or not raw:
@@ -2347,9 +2365,7 @@ def _tres_units(tres: str) -> tuple[int | None, int | None]:
             continue
         if name == "cpu":
             cpu_cores = value
-        elif name.startswith("gres/gpu"):
-            gpu_count = (gpu_count or 0) + value
-    return cpu_cores, gpu_count
+    return cpu_cores, rloan.gpu_count_for_tres(tres)
 
 
 def _parse_scontrol_allocation(output: str) -> tuple[str, int | None, int | None, int | None]:
@@ -2639,11 +2655,12 @@ def _reconcile_host_scheduler_logs() -> dict[str, int]:
             #
             # Each unit is taken independently: a unit the scheduler reported —
             # including a typed GRES such as ``gres/gpu:a100=2``, which
-            # :func:`_parse_scontrol_allocation` sums by prefix — is used exactly
-            # as granted, and a unit it did not report at all falls to the floor.
-            # An absent ``gres/gpu`` term on a granted allocation means the job
-            # held no GPU, which is a fact rather than a guess; the failure this
-            # guards against was a *reported* count being read as zero.
+            # :func:`_parse_scontrol_allocation` reads from the anchored
+            # accelerator term — is used exactly as granted, and a unit it did
+            # not report at all falls to the floor.  An absent ``gres/gpu`` term
+            # on a granted allocation means the job held no GPU, which is a fact
+            # rather than a guess; the failure this guards against was a
+            # *reported* count being read as zero.
             observed = task_store.observe_allocation_start(
                 user_id=user_id,
                 task_id=task_id,

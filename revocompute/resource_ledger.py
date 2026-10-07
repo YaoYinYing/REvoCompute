@@ -76,6 +76,53 @@ def cpu_hours_from_core_seconds(core_seconds: int) -> float:
 
 _GRES_CLASS = re.compile(r"^gpu:(?:(?P<class>[A-Za-z][A-Za-z0-9_.-]*):)?(?P<count>[1-9][0-9]*)$")
 
+#: A Slurm TRES *term name* for the accelerator itself, and nothing else.
+#:
+#: ``AllocTRES``/``TRES`` spell the grant as ``gres/gpu=N`` or, for a typed
+#: request, ``gres/gpu:<class>=N``.  The neighbouring terms this cluster's own
+#: accelerator path expects — ``gres/gpumem`` and ``gres/gpuutil`` — are
+#: integer-valued too, so a prefix test on ``gres/gpu`` reads a job's device
+#: *memory* or *utilization* as its device *count* and over-charges by orders of
+#: magnitude.  The term is therefore anchored: the accelerator, optionally one
+#: typed class, and nothing more.  The class vocabulary matches
+#: :data:`_GRES_CLASS`, so the two spellings of one request agree.
+_GRES_TERM = re.compile(r"gres/gpu(?::[A-Za-z][A-Za-z0-9_.-]*)?")
+
+
+def is_gpu_tres_term(term: str) -> bool:
+    """Whether a TRES term name is the accelerator count itself.
+
+    Not a prefix test: ``gres/gpumem`` and ``gres/gpuutil`` start with
+    ``gres/gpu`` and are not device counts.
+    """
+    return _GRES_TERM.fullmatch(str(term).strip()) is not None
+
+
+def gpu_count_for_tres(tres: str | None) -> int | None:
+    """The accelerator count one Slurm TRES string reports, or ``None``.
+
+    Every typed term is summed — a grant of ``gres/gpu:a100=2,gres/gpu:h100=1``
+    is three devices — and a string that names no accelerator term at all
+    returns ``None``: unknown, never zero, because "the scheduler did not report
+    it" and "the scheduler reported none" are different facts.  A term that
+    cannot be parsed as an integer makes the whole string unusable rather than
+    silently partial.
+    """
+    if not tres:
+        return None
+    total = 0
+    seen = False
+    for item in str(tres).split(","):
+        name, separator, raw = item.partition("=")
+        if not separator or not is_gpu_tres_term(name):
+            continue
+        try:
+            total += int(raw)
+        except ValueError:
+            return None
+        seen = True
+    return total if seen else None
+
 
 def resource_class_for_gres(gres: str | None) -> str:
     """The resource class a Slurm GRES names, or ``""`` for the default class.
