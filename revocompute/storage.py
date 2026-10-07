@@ -144,21 +144,6 @@ PUBLICATION_ANCHOR_MISMATCH = "anchor_mismatch"
 #: Reader and writer disagree about the anchor itself (a malformed row).
 PUBLICATION_ANCHOR_INVALID = "anchor_invalid"
 
-#: Bounded, machine-readable publication states.  Renaming one is a protocol
-#: change: the status payload, the results not-found body, the reconciliation
-#: sweep, and the operator CLI all key off the same string.
-PUBLICATION_STATES = frozenset(
-    {
-        PUBLICATION_AVAILABLE,
-        PUBLICATION_NOT_FINALIZED,
-        PUBLICATION_UNANCHORED,
-        PUBLICATION_MANIFEST_MISSING,
-        PUBLICATION_MANIFEST_UNREADABLE,
-        PUBLICATION_ANCHOR_MISMATCH,
-        PUBLICATION_ANCHOR_INVALID,
-    }
-)
-
 #: The states a published-but-unreadable result can be in.  These are the
 #: *states that carry a reason*, as opposed to ``not_finalized`` (nothing was
 #: published) — a consumer that wants to say "this result exists but is
