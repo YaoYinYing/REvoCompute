@@ -464,7 +464,12 @@ def _compute_allocation_callbacks(
     gpu_count = _gpu_count(resource_policy)
     cpu_cores = max(1, int(resource_policy.cpus or 0))
 
-    def dispatched(slurm_job_id: str, dispatched_at: float, wrapper_executed: bool = False) -> None:
+    def dispatched(
+        slurm_job_id: str,
+        dispatched_at: float,
+        wrapper_executed: bool = False,
+        receipt: dict | None = None,
+    ) -> None:
         if user_id <= 0:
             return
         if wrapper_executed:
@@ -477,14 +482,28 @@ def _compute_allocation_callbacks(
             # proves, so a genuinely executed request can never be reclaimed as
             # "reservation only".  ``record_allocation_start`` later promotes the
             # same rows and grants or denies the command.
+            #
+            # ``receipt`` is the wrapper's own durable record from the compute
+            # node, so the allocation is dated and shaped by the machine that
+            # held it.  A receipt is a claim about a scheduler job: it is only
+            # accepted here for the identity this dispatch already names, and a
+            # receipt for anything else is ignored rather than allowed to mint an
+            # allocation under a job id the caller does not own.
+            started_at = dispatched_at
+            gpus = gpu_count
+            cpus = cpu_cores
+            if receipt is not None and str(receipt.get("slurm_job_id")) == str(slurm_job_id):
+                started_at = float(receipt["observed_at"])
+                gpus = int(receipt.get("gpus") or 0)
+                cpus = max(1, int(receipt.get("cpus") or 0))
             task_store.observe_allocation_start(
                 user_id=user_id,
                 task_id=task_id,
                 stage_id=stage_id,
                 slurm_job_id=str(slurm_job_id),
-                gpu_count=gpu_count,
-                cpu_cores=cpu_cores,
-                started_at=dispatched_at,
+                gpu_count=gpus,
+                cpu_cores=cpus,
+                started_at=started_at,
                 gres=resource_policy.gres or "",
             )
             return
@@ -2250,6 +2269,73 @@ def _parse_scontrol_job(output: str) -> tuple[str, int | None]:
     return state, elapsed
 
 
+def _reconcile_allocation_receipts() -> dict[str, int]:
+    """Recover allocations from the wrapper's own compute-node receipts.
+
+    A Slurm allocation is created by the scheduler, not by a database write, so
+    the wrapper leaves a durable receipt the instant it is running — before it
+    has told this worker anything.  A worker that died before its own write
+    leaves that receipt as the only evidence, and dropping it would record a real
+    allocation as none at all.
+
+    Each claim is keyed by ``slurm_job_id`` and corroborated against the
+    scheduler before it is admitted, because the receipt is written on a compute
+    node and is only as trustworthy as the job it names:
+
+    * the scheduler owns the job and reports it RUNNING — the allocation is real
+      and the receipt is folded into the canonical allocation fact;
+    * the scheduler owns the job but it is terminal — still folded in, so the
+      elapsed time settles from scheduler evidence as for any other allocation;
+    * the scheduler does not own the job, or cannot be asked — the claim is
+      rejected here.  It is never charged and never quietly dropped either: it is
+      left in place for an operator, because a receipt naming a job the scheduler
+      does not know is evidence of a real anomaly, not of nothing.
+    """
+    receipts = task_store.list_allocation_receipts()
+    result = {"recovered": 0, "rejected": 0, "unavailable": 0}
+    if not receipts:
+        return result
+    scontrol = shutil.which("scontrol")
+    for receipt in receipts:
+        job_id = str(receipt["slurm_job_id"])
+        state = None
+        if scontrol:
+            try:
+                completed = subprocess.run(
+                    [scontrol, "show", "job", job_id],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=True,
+                )
+            except (OSError, subprocess.SubprocessError):
+                completed = None
+            if completed is not None:
+                state, _elapsed = _parse_scontrol_job(completed.stdout)
+        if state not in _ACTIVE_SLURM_STATES and state not in _TERMINAL_SLURM_STATES:
+            # The scheduler does not own this job, or could not be asked.  The
+            # claim is not admitted, and it is not discarded: an unverifiable
+            # receipt stays visible instead of silently vanishing.
+            result["unavailable" if scontrol else "rejected"] += 1
+            continue
+        owner = task_store.get_task(str(receipt["task_id"]))
+        user_id = int((owner or {}).get("submitted_by_user_id") or 0)
+        if user_id <= 0:
+            result["rejected"] += 1
+            continue
+        observed = task_store.observe_allocation_receipt(receipt, user_id=user_id)
+        emit_event(
+            "resource.allocation.recovered",
+            task_id=str(observed["task_id"]),
+            stage_id=str(observed["stage_id"]),
+            slurm_job_id=job_id,
+            user_id=user_id,
+            reason_code=EvidenceSource.RUNNER_OBSERVATION.value,
+        )
+        result["recovered"] += 1
+    return result
+
+
 def _reconcile_slurm_allocations() -> dict[str, int]:
     """Settle lost finish callbacks from best-effort ``scontrol`` evidence.
 
@@ -2258,6 +2344,10 @@ def _reconcile_slurm_allocations() -> dict[str, int]:
     plus a trustworthy runtime.  No ``sacct``/SlurmDBD dependency, no estimate:
     anything ambiguous is left for manual review.
     """
+    # First recover what the compute nodes themselves recorded: a wrapper whose
+    # worker died before its own write still has a durable receipt, and it is
+    # that receipt, not the worker's log line, that a restart must key on.
+    _reconcile_allocation_receipts()
     allocations = task_store.list_unsettled_allocations()
     result = {"settled": 0, "active": 0, "review": 0}
     scontrol = shutil.which("scontrol")
@@ -2349,7 +2439,7 @@ def _reclaim_abandoned_reservations(*, now: float | None = None) -> int:
             continue
         if not job_id or not job_id.isdigit():
             continue  # no scheduler identity: ambiguous, keep the commitment
-        if task_store.allocation_row_exists(job_id):
+        if task_store.allocation_row_exists(job_id) or task_store.allocation_receipt_exists(job_id):
             # The wrapper's own evidence already recorded an allocation for this
             # request — possibly before the process that was watching it died.
             # The scheduler step below is what settles it from authoritative
