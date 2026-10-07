@@ -739,3 +739,143 @@ def test_the_result_download_never_claims_verified_identity_while_offloading(mon
     assert response.status_code == 200
     assert "X-Accel-Redirect" not in response.headers
     assert response.data == content
+
+
+# ---------------------------------------------------------------------------
+# The publication root of trust and the bounded reader.  The manifest is read
+# through the canonical verified authority, and a verified descriptor is read in
+# bounded chunks rather than with one artifact-sized read.
+# ---------------------------------------------------------------------------
+
+
+def _manifest_task(module, tmp_path, content: bytes = b"score\n1.0\n") -> tuple[str, Path, dict[str, str]]:
+    headers = _test_client_auth(module)
+    task_id, result_dir, _manifest = _single_artifact_task(module, tmp_path, content)
+    return task_id, result_dir, headers
+
+
+@pytest.mark.parametrize("tamper", ["symlink", "hardlink", "corrupt", "oversized"])
+def test_the_primary_results_route_fails_closed_on_a_tampered_manifest(monkeypatch, tmp_path, tamper) -> None:
+    """A manifest the canonical reader refuses is not served by the results route.
+
+    The manifest authorizes the whole publication and is its own root of trust,
+    so a linked, unreadable, or oversized one must produce the route's not-found
+    answer rather than a partial payload.  (A replacement with different *valid*
+    manifest bytes is, by construction, a different publication: the manifest
+    has no declared identity above it to check against.)
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id, result_dir, headers = _manifest_task(module, tmp_path)
+    manifest_path = result_dir / "manifest.json"
+    published = manifest_path.read_bytes()
+    outside = tmp_path / f"{tamper}.json"
+
+    if tamper == "symlink":
+        outside.write_bytes(published)
+        manifest_path.unlink()
+        manifest_path.symlink_to(outside)
+    elif tamper == "hardlink":
+        outside.write_bytes(published)
+        manifest_path.unlink()
+        manifest_path.hardlink_to(outside)
+    elif tamper == "corrupt":
+        manifest_path.write_bytes(b"{not a manifest")
+    else:
+        manifest_path.write_bytes(published + b" " * (9 * 1024 * 1024))
+
+    response = module.app.test_client().get(f"/compute/api/results/{task_id}", headers=headers)
+
+    assert response.status_code == 404
+    assert response.get_json()["status"] == "error"
+
+
+def test_a_manifest_without_a_declared_digest_is_not_served(monkeypatch, tmp_path) -> None:
+    """Identity evidence is required: no declared sha256 means no publication."""
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id, result_dir, headers = _manifest_task(module, tmp_path)
+    (result_dir / "manifest.json").write_text(
+        json.dumps({"artifacts": [{"path": "result.txt"}]}), encoding="utf-8"
+    )
+
+    artifact = module.app.test_client().get(
+        f"/compute/api/results/{task_id}/artifacts/result.txt", headers=headers
+    )
+
+    assert artifact.status_code == 404
+
+
+def test_a_manifest_with_a_malformed_digest_is_not_served(monkeypatch, tmp_path) -> None:
+    """A malformed digest is not identity evidence either."""
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id, result_dir, headers = _manifest_task(module, tmp_path)
+    content = (result_dir / "result.txt").read_bytes()
+    (result_dir / "manifest.json").write_text(
+        json.dumps({"artifacts": [{"path": "result.txt", "sha256": "not-a-digest", "size": len(content)}]}),
+        encoding="utf-8",
+    )
+
+    artifact = module.app.test_client().get(
+        f"/compute/api/results/{task_id}/artifacts/result.txt", headers=headers
+    )
+
+    assert artifact.status_code == 404
+
+
+def test_a_large_artifact_is_streamed_in_bounded_chunks(monkeypatch, tmp_path) -> None:
+    """The full-body path reads in chunk-sized reads, never one artifact-sized read."""
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    payload = b"x" * (200 * 1024)
+    task_id, _result_dir, headers = _manifest_task(module, tmp_path, payload)
+    client = module.app.test_client()
+    observed: list[int] = []
+
+    from revocompute import routes as routes_module
+    from revocompute import storage as storage_module
+
+    real_open_verified = storage_module.StorageResolver.open_verified_artifact
+    class _SpyStream:
+        def __init__(self, stream):
+            self._stream = stream
+
+        def __getattr__(self, name):
+            return getattr(self._stream, name)
+
+        def read(self, size=-1):
+            observed.append(size)
+            return self._stream.read(size)
+
+    def spy_open(self, path, artifact):
+        handle, digest = real_open_verified(path, artifact)
+        return _SpyStream(handle), digest
+
+    monkeypatch.setattr(storage_module.StorageResolver, "open_verified_artifact", spy_open)
+
+    response = client.get(f"/compute/api/results/{task_id}/artifacts/result.txt", headers=headers)
+
+    assert response.status_code == 200
+    assert response.data == payload
+    assert observed and max(observed) <= routes_module._STREAM_CHUNK_BYTES
+    assert len(observed) > 1
+
+
+def test_suffix_and_unsatisfiable_ranges_are_served_from_the_verified_descriptor(monkeypatch, tmp_path) -> None:
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    content = b"score\n1.0\n"
+    task_id, _result_dir, headers = _manifest_task(module, tmp_path, content)
+    client = module.app.test_client()
+    url = f"/compute/api/results/{task_id}/artifacts/result.txt"
+
+    full = client.get(url, headers=headers)
+    suffix = client.get(url, headers={**headers, "Range": "bytes=-4"})
+    beyond = client.get(url, headers={**headers, "Range": "bytes=9999-"})
+    head = client.head(url, headers=headers)
+
+    assert full.status_code == 200
+    assert full.data == content
+    assert suffix.status_code == 206
+    assert suffix.data == content[-4:]
+    assert suffix.headers["Content-Range"] == f"bytes {len(content) - 4}-{len(content) - 1}/{len(content)}"
+    assert beyond.status_code == 416
+    assert beyond.headers["Content-Range"] == f"bytes */{len(content)}"
+    assert head.status_code == 200
+    assert head.headers["Content-Length"] == str(len(content))
