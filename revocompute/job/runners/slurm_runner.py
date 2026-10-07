@@ -72,6 +72,15 @@ _RESOURCE_BEGIN = "REVODESIGN_RESOURCE_BEGIN"
 _RESOURCE_LINE = "REVODESIGN_RESOURCE:"
 _RESOURCE_END = "REVODESIGN_RESOURCE_END"
 
+#: The host-only namespace the allocation wrapper writes its compute-node receipt
+#: into: one ``<task result root>.allocation/`` sibling per Task.  It is named
+#: here, once, because two independent readers depend on the identical layout —
+#: this adapter reads the receipt of the allocation it is running, and restart
+#: reconciliation walks the namespace for receipts whose worker died before it
+#: could adopt them.  A second spelling would silently disagree with the first.
+ALLOCATION_DIR_SUFFIX = ".allocation"
+ALLOCATION_RECEIPT_NAME = "allocation.receipt"
+
 #: Hard ceiling for one Task's ephemeral scratch, in bytes.  Scratch is a
 #: per-execution safety concern, never durable user quota: a runaway temporary
 #: file must hit this wall instead of filling the host.  The allocation wrapper
@@ -408,6 +417,12 @@ class SlurmJob(Job):
         stamp and resource shape: the allocation is dated by the machine that
         held it, not by this process's clock.
 
+        Receipt ownership moves monotonically: the file is read, never deleted up
+        front, and it is removed only after the callback has returned — i.e. only
+        once the canonical allocation fact (or the server-owned receipt that
+        reconciliation folds into it) is durable.  A death anywhere before that
+        leaves the file, so restart reconciliation still finds the claim.
+
         The callback persists the scheduler-owned reservation and, when the
         wrapper's own id line is the evidence, the allocation observation in the
         same store transition.  A failure therefore leaves neither half written:
@@ -434,9 +449,14 @@ class SlurmJob(Job):
             )
         except Exception:
             # Cleared so a later observation retries instead of silently leaving
-            # the request recorded as dispatched with nothing persisted.
+            # the request recorded as dispatched with nothing persisted.  The
+            # receipt is untouched, so the retry still has it to adopt.
             self._dispatched_notified = False
             raise
+        if receipt is not None:
+            # The callback committed: the claim the file carries is now durable
+            # in server-owned state, so removing the file cannot lose it.
+            self.discard_allocation_receipt()
 
     def _notify_allocation_live(self) -> None:
         """Announce that the allocation is actually running, exactly once.
@@ -721,6 +741,14 @@ class SlurmJob(Job):
         is treated as absent rather than guessed at.  The values are parsed, not
         interpreted: corroborating the job id against the scheduler belongs to
         reconciliation, which has the scheduler.
+
+        Reading is deliberately non-destructive.  The file is the only durable
+        evidence a worker that dies before its own first write ever leaves, so it
+        is read and then *adopted* — either by the live dispatch
+        (:meth:`_notify_dispatched`) or, after a crash, by restart reconciliation
+        — and removed only once that adoption is durable.  A malformed receipt is
+        left exactly where it is, so an anomalous durable observation stays
+        inspectable instead of vanishing.
         """
         path = self.allocation_receipt_path
         try:
@@ -728,36 +756,22 @@ class SlurmJob(Job):
                 text = handle.read(4096)
         except OSError:
             return None
-        finally:
-            # The receipt has been read, so it is no longer needed on disk: the
-            # worker that reads it persists it durably in the same step.
-            try:
-                os.unlink(path)
-            except OSError:
-                pass
-        fields: dict[str, str] = {}
-        for line in text.splitlines():
-            key, separator, value = line.partition("=")
-            if not separator or key in fields:
-                continue
-            fields[key] = value.strip()
-        job_id = fields.get("slurm_job_id", "")
-        if fields.get("schema_version") != "1" or not job_id.isdigit():
-            return None
+        return parse_allocation_receipt(text)
+
+    def discard_allocation_receipt(self) -> None:
+        """Remove the compute-node receipt once a durable successor exists.
+
+        Ownership transfer is monotonic: the file may only be deleted after the
+        server-owned receipt or the canonical allocation fact records the same
+        claim, so there is never a transition from one durable representation to
+        none.  Deletion is best-effort and idempotent — a missing file is already
+        the desired state, and a failure merely leaves evidence behind for the
+        next reconciliation, which adopts it again harmlessly.
+        """
         try:
-            observed_at = float(fields.get("observed_at", ""))
-            cpus = int(fields.get("cpus", "0"))
-            gpus = int(fields.get("gpus", "0"))
-        except ValueError:
-            return None
-        if observed_at <= 0 or cpus < 0 or gpus < 0:
-            return None
-        return {
-            "slurm_job_id": job_id,
-            "observed_at": observed_at,
-            "cpus": cpus,
-            "gpus": gpus,
-        }
+            os.unlink(self.allocation_receipt_path)
+        except OSError:
+            pass
 
     def _remove_allocation_approval(self) -> None:
         for path in (self._allocation_release_path, self._allocation_grant_path):
@@ -883,7 +897,7 @@ class SlurmJob(Job):
         never mounted and always exists, so ``srun`` still reads it on the
         compute node.
         """
-        return f"{os.path.normpath(self.output_dir)}.allocation"
+        return allocation_dir_for(self.output_dir)
 
     @property
     def allocation_receipt_path(self) -> str:
@@ -895,7 +909,7 @@ class SlurmJob(Job):
         directory can only be written by the wrapper running on the compute node
         as the worker uid, outside the container.
         """
-        return os.path.join(self.allocation_dir, "allocation.receipt")
+        return os.path.join(self.allocation_dir, ALLOCATION_RECEIPT_NAME)
     def _build_wrapper_script(self) -> str:
         """Write the wrapper script into the host-only ``allocation_dir`` so
         the host-side ``srun`` process can read it while the container cannot.
@@ -1691,6 +1705,11 @@ class SlurmJob(Job):
 
         Called *before* ``_save_output`` so the archive cannot carry a file the
         task container could have rewritten while bash was still reading it.
+
+        The host-only directory is dropped only once it is empty.  A surviving
+        ``allocation.receipt`` therefore keeps the directory alive on purpose: it
+        is the one durable record of an allocation whose worker died before it
+        adopted the claim, and restart reconciliation must be able to find it.
         """
         path = self._wrapper_script_path
         if path and os.path.exists(path):
@@ -1703,6 +1722,105 @@ class SlurmJob(Job):
                 os.rmdir(self.allocation_dir)
             except OSError:
                 pass
+
+
+def parse_allocation_receipt(text: str) -> dict[str, Any] | None:
+    """Parse the exact byte format the wrapper writes into an allocation receipt.
+
+    The one reader of the wrapper's receipt schema, shared by the worker that is
+    running the allocation and by restart reconciliation, which walks the
+    host-only namespace after a crash.  A receipt that is truncated, carries an
+    unknown schema, names a non-numeric job id, or reports a nonsensical shape
+    returns ``None`` — it is treated as absent rather than coerced into a
+    plausible allocation.  The values are parsed, never interpreted:
+    corroborating the job id against the scheduler belongs to the caller that has
+    the scheduler.
+    """
+    fields: dict[str, str] = {}
+    for line in text.splitlines():
+        key, separator, value = line.partition("=")
+        if not separator or key in fields:
+            continue
+        fields[key] = value.strip()
+    job_id = fields.get("slurm_job_id", "")
+    if fields.get("schema_version") != "1" or not job_id.isdigit():
+        return None
+    try:
+        observed_at = float(fields.get("observed_at", ""))
+        cpus = int(fields.get("cpus", "0"))
+        gpus = int(fields.get("gpus", "0"))
+    except ValueError:
+        return None
+    if observed_at <= 0 or cpus < 0 or gpus < 0:
+        return None
+    return {
+        "slurm_job_id": job_id,
+        "observed_at": observed_at,
+        "cpus": cpus,
+        "gpus": gpus,
+    }
+
+
+def allocation_dir_for(output_dir: str) -> str:
+    """The host-only allocation directory for the Task rooted at *output_dir*.
+
+    Derived from the result path rather than stored, because restart
+    reconciliation has only a Task row: the layout and the runner must agree on
+    one spelling, and this is it.
+    """
+    return f"{os.path.normpath(output_dir)}{ALLOCATION_DIR_SUFFIX}"
+
+
+def surviving_allocation_receipts(results_root: str) -> list[dict[str, Any]]:
+    """Every compute-node receipt still on disk under *results_root*.
+
+    Restart reconciliation's view of the host-only allocation namespace.  The
+    results tree is laid out ``<results_root>/users/<storage key>/tasks/<task
+    id>`` with the allocation directory as the ``<task id>.allocation`` sibling,
+    so a bounded three-level walk finds every Task that ever ran here.
+
+    A receipt is returned only when it parses: the entry stays on disk so an
+    operator can inspect an anomalous one, and a receipt this pass cannot adopt
+    is never deleted.  The caller corroborates each claim against the scheduler
+    before anything is recorded.
+    """
+    base = os.path.abspath(results_root)
+    users_root = os.path.join(base, "users")
+    found: list[dict[str, Any]] = []
+    if not os.path.isdir(users_root):
+        return found
+    for user_entry in sorted(os.scandir(users_root), key=lambda entry: entry.name):
+        if not user_entry.is_dir(follow_symlinks=False):
+            continue
+        tasks_root = os.path.join(user_entry.path, "tasks")
+        if not os.path.isdir(tasks_root):
+            continue
+        for allocation_entry in sorted(os.scandir(tasks_root), key=lambda entry: entry.name):
+            # The allocation directory is a sibling of the Task's result
+            # directory and is named after it, so the Task id is the name with
+            # the suffix removed.  Anything else under ``tasks`` is a result
+            # directory and is skipped.
+            if not allocation_entry.is_dir(follow_symlinks=False):
+                continue
+            task_id = allocation_entry.name
+            if not task_id.endswith(ALLOCATION_DIR_SUFFIX):
+                continue
+            task_id = task_id[: -len(ALLOCATION_DIR_SUFFIX)]
+            if not task_id:
+                continue
+            receipt_path = os.path.join(allocation_entry.path, ALLOCATION_RECEIPT_NAME)
+            try:
+                with open(receipt_path, encoding="utf-8") as handle:
+                    text = handle.read(4096)
+            except OSError:
+                continue
+            receipt = parse_allocation_receipt(text)
+            if receipt is None:
+                continue
+            receipt["task_id"] = task_id
+            receipt["receipt_path"] = receipt_path
+            found.append(receipt)
+    return found
 
 
 def _sanitize_name(s: str) -> str:

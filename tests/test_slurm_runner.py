@@ -890,7 +890,9 @@ def test_the_wrapper_receipt_precedes_its_stdout_line_and_parses(tmp_path):
     assert job.allocation_receipt_path.startswith(job.allocation_dir)
     assert not job.allocation_receipt_path.startswith(str(output_dir) + os.sep)
 
-    # And it round-trips through the reader, which removes it once consumed.
+    # And it round-trips through the reader without being consumed: the file is
+    # the only durable evidence a worker that dies before its own first write
+    # leaves, so it survives until something durable has adopted the claim.
     os.makedirs(job.allocation_dir, exist_ok=True)
     Path(job.allocation_receipt_path).write_text(
         "schema_version=1\nslurm_job_id=4217\nobserved_at=1000\ncpus=2\ngpus=1\n", encoding="utf-8"
@@ -901,7 +903,18 @@ def test_the_wrapper_receipt_precedes_its_stdout_line_and_parses(tmp_path):
         "cpus": 2,
         "gpus": 1,
     }
+    assert Path(job.allocation_receipt_path).exists()
+    assert job.read_allocation_receipt() == {
+        "slurm_job_id": "4217",
+        "observed_at": 1000.0,
+        "cpus": 2,
+        "gpus": 1,
+    }
+    # Removal is a separate, explicit step that only callers with a durable
+    # successor may take.  It is idempotent.
+    job.discard_allocation_receipt()
     assert not Path(job.allocation_receipt_path).exists()
+    job.discard_allocation_receipt()
     assert job.read_allocation_receipt() is None
 
 
@@ -910,7 +923,9 @@ def test_an_untrusted_receipt_is_treated_as_absent(tmp_path):
 
     The reader is the boundary between a file on disk and a durable fact, so a
     truncated, mismatched, or unknown-schema receipt returns nothing rather than
-    being coerced into a plausible allocation.
+    being coerced into a plausible allocation.  It is also never deleted: an
+    anomalous durable observation stays inspectable instead of silently
+    disappearing.
     """
     output_dir = tmp_path / "out"
     job = SlurmJob(
@@ -931,6 +946,7 @@ def test_an_untrusted_receipt_is_treated_as_absent(tmp_path):
     ):
         Path(job.allocation_receipt_path).write_text(payload, encoding="utf-8")
         assert job.read_allocation_receipt() is None
+        assert Path(job.allocation_receipt_path).read_text(encoding="utf-8") == payload
 
 
 def test_a_failed_observation_persist_is_never_swallowed(tmp_path):
@@ -971,6 +987,77 @@ def test_a_failed_observation_persist_is_never_swallowed(tmp_path):
     # The process-local fact alone never stands in for a durable one.
     assert job.wrapper_executed is True
     assert job.allocation_started is False
+
+
+def _receipt_job(tmp_path, callback, *, task_id="abcdef1234567890"):
+    output_dir = tmp_path / "out"
+    job = SlurmJob(
+        task_id,
+        _make_task_type(gpus=True),
+        _make_runner(),
+        _make_entities(),
+        str(output_dir),
+        resource_policy=_policy(gres="gpu:1", requires_gpu=True),
+        allocation_dispatched_callback=callback,
+        allocation_started_callback=lambda _job_id, _at: None,
+    )
+    os.makedirs(job.allocation_dir, exist_ok=True)
+    Path(job.allocation_receipt_path).write_text(
+        "schema_version=1\nslurm_job_id=4217\nobserved_at=1000\ncpus=2\ngpus=1\n", encoding="utf-8"
+    )
+    job._process = SimpleNamespace(stdout=StringIO("REVODESIGN_JOB_ID=4217\n"), stderr=StringIO(""))
+    job._allocation_submitted_at = 1_000.0
+    return job
+
+
+def test_a_death_before_the_durable_write_keeps_the_receipt(tmp_path):
+    """Injection 1: killed after the file was read and before the DB commit.
+
+    The whole point of the file is this instant.  If the callback never commits,
+    the file has no durable successor and therefore must still be there — that is
+    the difference between "reconciliation can still recover the allocation" and
+    "a real allocation silently became zero".
+    """
+    attempts = []
+
+    def failing(job_id, at, executed=False, receipt=None):
+        attempts.append((job_id, executed, receipt))
+        raise RuntimeError("database is locked")
+
+    job = _receipt_job(tmp_path, failing)
+
+    with pytest.raises(RuntimeError, match="database is locked"):
+        job._read_stdout()
+
+    assert attempts == [("4217", True, {"slurm_job_id": "4217", "observed_at": 1000.0, "cpus": 2, "gpus": 1})]
+    assert job._dispatched_notified is False
+    # The source receipt survives, so restart reconciliation can still adopt it.
+    assert Path(job.allocation_receipt_path).read_text(encoding="utf-8").startswith("schema_version=1")
+    assert job.read_allocation_receipt() is not None
+
+
+def test_a_death_after_the_durable_write_removes_the_receipt(tmp_path):
+    """Injection 2 and 3: the callback committed; the file is finally disposable.
+
+    The runner removes the file only after the callback returns, so a kill
+    anywhere inside the callback leaves it, and a successful callback leaves the
+    claim in server-owned state with the file cleaned up.  There is never a
+    moment with neither.
+    """
+    adopted = []
+
+    def committing(job_id, at, executed=False, receipt=None):
+        adopted.append((job_id, executed, receipt))
+
+    job = _receipt_job(tmp_path, committing)
+    job._read_stdout()
+
+    assert adopted == [("4217", True, {"slurm_job_id": "4217", "observed_at": 1000.0, "cpus": 2, "gpus": 1})]
+    assert job._dispatched_notified is True
+    # The durable successor exists, so the source file is gone; a second read
+    # finds nothing rather than reintroducing the claim.
+    assert not Path(job.allocation_receipt_path).exists()
+    assert job.read_allocation_receipt() is None
 
 
 def test_poll_fails_closed_when_the_observation_was_never_persisted(tmp_path):

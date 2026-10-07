@@ -107,6 +107,23 @@ def _remove_artifacts(results_folder: str) -> Callable[[dict[str, Any]], None]:
     return remove
 
 
+def _surviving_receipt_tasks(results_folder: str) -> set[str]:
+    """Task ids whose host-only allocation receipt has not been adopted yet.
+
+    Reconciliation reads the results tree, not the database, because the whole
+    window this serves is the one before any database write: a wrapper left the
+    file the instant it was running and its worker died before reading it.  The
+    namespace walk is the runner's own, imported lazily so the maintenance
+    scheduler does not pull the Celery application in with the adapter module.
+    """
+    from revocompute.job.runners.slurm_runner import surviving_allocation_receipts
+
+    try:
+        return {str(receipt["task_id"]) for receipt in surviving_allocation_receipts(results_folder)}
+    except OSError:
+        return set()
+
+
 def run_resource_maintenance(
     *,
     task_store: TaskDatabase | None = None,
@@ -119,6 +136,7 @@ def run_resource_maintenance(
     results = results_folder or config.results_folder
     remove_artifacts = _remove_artifacts(results)
     owned_paths = _owned_bytes_measure(results)
+    unadopted = _surviving_receipt_tasks(results)
     timestamp = time.time() if now is None else now
 
     purged = resource_lifecycle.purge_requested_tasks(
@@ -131,6 +149,7 @@ def run_resource_maintenance(
         store,
         settle_allocations=_settle_slurm_allocations,
         owned_paths=owned_paths,
+        unadopted_tasks=unadopted,
         now=timestamp,
     )
     if purged["purged"] or recovered["recovered"] or report.drift or report.reclaimed_reservations:

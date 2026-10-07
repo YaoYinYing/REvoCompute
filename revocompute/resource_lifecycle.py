@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
 from revocompute import resource_ledger as rloan
@@ -430,6 +430,7 @@ def reconcile_resources(
     *,
     settle_allocations=None,
     owned_paths: Callable[[str], int | None] | None = None,
+    unadopted_tasks: Iterable[str] | None = None,
     now: float | None = None,
 ) -> rloan.ReconciliationReport:
     """Run one bounded reconciliation pass.  Safe to repeat.
@@ -441,7 +442,9 @@ def reconcile_resources(
     ``expire_stale_reservations`` here only reclaims pre-dispatch holds, never a
     scheduler-owned commitment.  ``owned_paths`` is the storage-layout
     measurement the filesystem-vs-accounting drift checks need; without it those
-    checks are skipped rather than guessed.
+    checks are skipped rather than guessed.  ``unadopted_tasks`` is the
+    complement of the durable receipt table: the Tasks whose host-only receipt
+    file is still on disk, which the runner's own namespace walk reports.
     """
     timestamp = time.time() if now is None else now
     settled = review = active = released = 0
@@ -451,7 +454,7 @@ def reconcile_resources(
         review = int(outcome.get("review", 0))
         active = int(outcome.get("active", 0))
         released = int(outcome.get("reservations_released", 0))
-    expired = task_store.expire_stale_reservations(now=timestamp)
+    expired = task_store.expire_stale_reservations(now=timestamp, unadopted_tasks=unadopted_tasks)
     report = rloan.ReconciliationReport(
         settled_allocations=settled,
         review_allocations=review,

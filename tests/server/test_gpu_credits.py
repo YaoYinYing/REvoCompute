@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import threading
 from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -823,6 +824,163 @@ def test_a_crash_after_the_wrapper_line_never_reclaims_the_commitment(monkeypatc
     assert module.task_store.list_allocation_receipts() == []
     assert module.task_runtime._reconcile_slurm_allocations() == {"settled": 0, "active": 0, "review": 0}
     assert module.task_store.gpu_credit_summary(94, at=at + 100)["usage_gpu_seconds"] == 45
+
+
+def _plant_receipt_file(module, task, *, job_id, observed_at, cpus=1, gpus=1) -> Path:
+    """Write the wrapper's receipt where the wrapper writes it, and nowhere else.
+
+    Nothing here touches the database: the file is the *only* durable artifact a
+    worker that died before its first write leaves, so a test that plants a row
+    instead of a file would be testing a path production cannot reach.
+    """
+    result_root = Path(
+        module.StorageResolver(module.CONFIG.results_folder, module.CONFIG.workspace_folder).get_task_root(task)
+    )
+    receipt = result_root.parent / f"{result_root.name}.allocation" / "allocation.receipt"
+    receipt.parent.mkdir(parents=True, exist_ok=True)
+    receipt.write_text(
+        "schema_version=1\n"
+        f"slurm_job_id={job_id}\n"
+        f"observed_at={observed_at}\n"
+        f"cpus={cpus}\n"
+        f"gpus={gpus}\n",
+        encoding="utf-8",
+    )
+    return receipt
+
+
+def test_a_receipt_file_is_adopted_without_any_row_ever_being_written(monkeypatch, tmp_path):
+    """The live crash window: only the on-disk receipt exists; restart recovers it.
+
+    The worker died before it parsed the wrapper's job-id line, so the durable
+    state is *only* the host-only file: no observation, no queued reservation, no
+    receipt row.  Restart must walk the allocation namespace, corroborate the
+    claim against the scheduler, record it durably, and only then delete the file.
+    Exactly one allocation results, and the file is gone afterwards so a second
+    pass cannot charge it twice.
+    """
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    at = _timestamp(2026, 9, 5)
+    task_id = "5" * 32
+    _own_task(module.task_store, task_id, user_id=97)
+    module.task_store.reserve_compute_admission(user_id=97, task_id=task_id, at=at)
+    task = module.task_store.get_task(task_id)
+    receipt = _plant_receipt_file(module, task, job_id="8811", observed_at=at + 2)
+
+    monkeypatch.setattr(module.task_runtime.shutil, "which", lambda command: f"/usr/bin/{command}")
+    monkeypatch.setattr(
+        module.task_runtime.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(stdout="JobId=8811 JobState=COMPLETED RunTime=00:00:45\n"),
+    )
+
+    # The namespace walk finds the file, and the pass threads that set in — so a
+    # pre-dispatch hold is never expired underneath a receipt that proves the
+    # allocation happened, however long its TTL has been over for.
+    from revocompute import resource_lifecycle
+    from revocompute.maintenance.tasks.resource_maintenance import _surviving_receipt_tasks
+
+    assert _surviving_receipt_tasks(module.CONFIG.results_folder) == {task_id}
+    report = resource_lifecycle.reconcile_resources(
+        module.task_store, unadopted_tasks={task_id}, now=at + 100_000
+    )
+    assert report.expired_reservations == 0
+    assert module.task_store.list_task_reservations(task_id)[0]["state"] == "held"
+    assert module.task_runtime._reclaim_abandoned_reservations(now=at + 100_000) == 0
+
+    assert module.task_runtime._reconcile_slurm_allocations() == {"settled": 1, "active": 0, "review": 0}
+    facts = module.task_store.list_task_allocations(task_id)
+    assert len(facts) == 2
+    assert {row["started_at"] for row in facts} == {at + 2}
+    assert module.task_store.gpu_credit_summary(97, at=at + 100)["usage_gpu_seconds"] == 45
+    # Adoption is what licenses deletion: the file is gone only now that the
+    # allocation is durable, and a second pass reconstructs nothing new.
+    assert not receipt.exists()
+    assert module.task_store.list_allocation_receipts() == []
+    assert module.task_runtime._reconcile_slurm_allocations() == {"settled": 0, "active": 0, "review": 0}
+    assert module.task_store.gpu_credit_summary(97, at=at + 100)["usage_gpu_seconds"] == 45
+
+
+def test_an_unverifiable_receipt_file_is_never_deleted(monkeypatch, tmp_path):
+    """A claim the scheduler cannot corroborate stays on disk and uncharged.
+
+    The file is the only evidence of a real anomaly, so a pass that cannot
+    corroborate it must leave it exactly where it is: deleting it would destroy
+    the observation, and charging it would bill for something the scheduler does
+    not report.
+    """
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    at = _timestamp(2026, 9, 5)
+    task_id = "6" * 32
+    _own_task(module.task_store, task_id, user_id=98)
+    task = module.task_store.get_task(task_id)
+    receipt = _plant_receipt_file(module, task, job_id="8812", observed_at=at + 2)
+
+    monkeypatch.setattr(module.task_runtime.shutil, "which", lambda command: f"/usr/bin/{command}")
+    monkeypatch.setattr(
+        module.task_runtime.subprocess,
+        "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            module.task_runtime.subprocess.SubprocessError("no such job")
+        ),
+    )
+
+    assert module.task_runtime._reconcile_slurm_allocations() == {"settled": 0, "active": 0, "review": 0}
+    assert module.task_store.allocation_row_exists("8812") is False
+    assert module.task_store.gpu_credit_summary(98, at=at + 10)["usage_gpu_seconds"] == 0
+    assert module.task_store.list_allocation_receipts() == []
+    assert receipt.exists()
+
+
+def test_the_live_dispatch_path_persists_the_receipt_before_reading_finishes(monkeypatch, tmp_path):
+    """The production read path leaves a durable receipt row, with no test writes.
+
+    This is the gap the review found: the runner read the file, tore it down, and
+    merely enriched ``started_at`` from it — the file's claim never reached
+    server-owned state, so ``resource_receipts`` was empty on the real path and
+    every receipt-aware recovery rule was dead code.  Here the dispatch callback
+    is the *production* one, and the receipt is adopted by it alone.
+    """
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    at = _timestamp(2026, 9, 5)
+    task_id = "3" * 32
+    _own_task(module.task_store, task_id, user_id=99)
+    module.task_store.reserve_compute_admission(user_id=99, task_id=task_id, at=at)
+
+    callbacks = module.task_runtime._compute_allocation_callbacks(
+        task_id=task_id,
+        user_id=99,
+        stage_id="model",
+        resource_policy=_gpu_policy(),
+    )
+    receipt = {"slurm_job_id": "8813", "observed_at": at + 2, "cpus": 1, "gpus": 1}
+    callbacks[0]("8813", at + 1, True, receipt)
+
+    # The canonical allocation fact is the durable successor the callback wrote,
+    # so the receipt row it wrote on the way is consumed by it.
+    assert module.task_store.allocation_row_exists("8813") is True
+    assert module.task_store.list_allocation_receipts() == []
+    facts = module.task_store.list_task_allocations(task_id)
+    assert {row["started_at"] for row in facts} == {at + 2}
+
+    # A later pass reconstructs nothing from the same claim: the receipt row is
+    # gone, so no second allocation row appears.  (The pass may hand the
+    # allocation to review — there is no scheduler in this test — which is the
+    # ordinary unsettled path, never a second charge.)
+    module.task_runtime._reconcile_slurm_allocations()
+    assert len(module.task_store.list_task_allocations(task_id)) == 2
 
 
 def test_a_receipt_naming_a_job_the_scheduler_does_not_own_is_never_charged(monkeypatch, tmp_path):

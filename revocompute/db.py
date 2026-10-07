@@ -3604,7 +3604,9 @@ class TaskDatabase:
         with self.engine.connect() as conn:
             return [dict(row) for row in conn.execute(stmt).mappings().all()]
 
-    def expire_stale_reservations(self, *, now: float | None = None) -> int:
+    def expire_stale_reservations(
+        self, *, now: float | None = None, unadopted_tasks: Iterable[str] | None = None
+    ) -> int:
         """Reclaim lapsed *pre-dispatch* reservations.  Safe to run repeatedly.
 
         Only a ``held`` reservation has a wall-clock expiry: it spans
@@ -3621,11 +3623,18 @@ class TaskDatabase:
         allocation is real even though the dispatch write never happened.  The
         timer must not expire it — it is handed to the receipt reconciliation
         instead, which records the allocation and settles it.
+
+        ``unadopted_tasks`` is that third case's *surviving* form: the Task ids
+        whose host-only ``allocation.receipt`` file is still on disk, reported by
+        the pass that walked the allocation namespace.  It is needed here because
+        the durable receipt row is only written once a worker has *adopted* the
+        file, and the whole point of the file is the window before that.  A hold
+        whose receipt exists but has not yet been adopted is still a real
+        allocation, so it is excluded from expiry exactly as an adopted one is.
         """
         timestamp = time.time() if now is None else now
-        receipted = {
-            str(row["task_id"]) for row in self.list_allocation_receipts()
-        }
+        receipted = {str(row["task_id"]) for row in self.list_allocation_receipts()}
+        receipted.update(str(task_id) for task_id in (unadopted_tasks or ()) if task_id)
         with self.engine.begin() as conn:
             conditions = [
                 self.resource_reservations_table.c.state == rloan.ReservationState.HELD.value,

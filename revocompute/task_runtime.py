@@ -43,7 +43,7 @@ from revocompute.infrastructure import (
     publish_worker_probe_snapshot,
 )
 from revocompute.job import Job, JobState
-from revocompute.job.runners.slurm_runner import SlurmJob
+from revocompute.job.runners.slurm_runner import SlurmJob, surviving_allocation_receipts
 from revocompute.ingress_security import (
     ARTIFACT_CAPACITY_GUARD,
     ARTIFACT_PUBLICATION_REJECTED,
@@ -496,6 +496,24 @@ def _compute_allocation_callbacks(
                 started_at = float(receipt["observed_at"])
                 gpus = int(receipt.get("gpus") or 0)
                 cpus = max(1, int(receipt.get("cpus") or 0))
+            # The wrapper's own file receipt is the one durable record that
+            # survives this worker's death.  Persisting it as a server-owned
+            # receipt row *before* the observation means the file's claim has a
+            # durable successor the instant the wrapper's line is read, so the
+            # runner may delete the file afterwards without ever leaving fewer
+            # durable representations than before.  The row is consumed by
+            # ``observe_allocation_start`` in the very next call, and by
+            # reconciliation if this worker dies first.
+            if receipt is not None:
+                task_store.record_allocation_receipt(
+                    task_id=task_id,
+                    stage_id=stage_id,
+                    slurm_job_id=str(receipt.get("slurm_job_id") or slurm_job_id),
+                    observed_at=float(receipt["observed_at"]),
+                    cpus=int(receipt.get("cpus") or 0),
+                    gpus=int(receipt.get("gpus") or 0),
+                    gres=resource_policy.gres or "",
+                )
             task_store.observe_allocation_start(
                 user_id=user_id,
                 task_id=task_id,
@@ -2336,6 +2354,78 @@ def _reconcile_allocation_receipts() -> dict[str, int]:
     return result
 
 
+def _reconcile_host_allocation_receipts() -> dict[str, int]:
+    """Adopt the compute-node receipts still on disk after a worker died.
+
+    The durable receipt row is written only once a worker has *read* the file,
+    so a worker that died before it ever parsed the wrapper's job-id line leaves
+    the file as the sole evidence of a real allocation — with no receipt row, no
+    allocation fact, and (for a short while) a held reservation.  Restart is the
+    only thing left that can see it, so it walks the host-only allocation
+    namespace, corroborates every claim against the scheduler exactly as
+    :func:`_reconcile_allocation_receipts` does, records the survivor as a
+    server-owned receipt, and deletes the file *only* after that adoption is
+    durable.  Ownership therefore never moves from one durable representation to
+    none: the file is the source until the row exists, and the row (and, moments
+    later, the canonical allocation fact) is the source after it.
+
+    A file that does not parse, names a job the scheduler does not own, or whose
+    Task is unknown is left exactly where it is.  An unverifiable claim is
+    evidence of an anomaly, not of nothing, and this pass never deletes evidence
+    it did not successfully adopt.
+    """
+    result = {"recovered": 0, "rejected": 0, "unavailable": 0, "surviving": 0}
+    if not CONFIG.results_folder:
+        return result
+    try:
+        files = surviving_allocation_receipts(CONFIG.results_folder)
+    except OSError:
+        return result
+    scontrol = shutil.which("scontrol")
+    for receipt in files:
+        job_id = str(receipt["slurm_job_id"])
+        task_id = str(receipt["task_id"])
+        owner = task_store.get_task(task_id)
+        user_id = int((owner or {}).get("submitted_by_user_id") or 0)
+        if user_id <= 0:
+            result["rejected"] += 1
+            continue
+        state = None
+        if scontrol:
+            try:
+                completed = subprocess.run(
+                    [scontrol, "show", "job", job_id],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=True,
+                )
+            except (OSError, subprocess.SubprocessError):
+                completed = None
+            if completed is not None:
+                state, _elapsed = _parse_scontrol_job(completed.stdout)
+        if state not in _ACTIVE_SLURM_STATES and state not in _TERMINAL_SLURM_STATES:
+            result["unavailable" if scontrol else "rejected"] += 1
+            continue
+        # The scheduler corroborated the claim, so it becomes server-owned state
+        # first; the file is removed only once that row is durable.
+        task_store.record_allocation_receipt(
+            task_id=task_id,
+            stage_id="",
+            slurm_job_id=job_id,
+            observed_at=float(receipt["observed_at"]),
+            cpus=int(receipt["cpus"]),
+            gpus=int(receipt["gpus"]),
+            gres=str(receipt.get("gres") or ""),
+        )
+        try:
+            os.unlink(str(receipt["receipt_path"]))
+        except OSError:
+            result["surviving"] += 1
+        result["recovered"] += 1
+    return result
+
+
 def _reconcile_slurm_allocations() -> dict[str, int]:
     """Settle lost finish callbacks from best-effort ``scontrol`` evidence.
 
@@ -2344,9 +2434,13 @@ def _reconcile_slurm_allocations() -> dict[str, int]:
     plus a trustworthy runtime.  No ``sacct``/SlurmDBD dependency, no estimate:
     anything ambiguous is left for manual review.
     """
-    # First recover what the compute nodes themselves recorded: a wrapper whose
-    # worker died before its own write still has a durable receipt, and it is
-    # that receipt, not the worker's log line, that a restart must key on.
+    # First recover what the compute nodes themselves recorded.  The host-only
+    # files come first: they are the only trace left by a worker that died
+    # before it parsed the wrapper's job-id line at all, so adopting them is what
+    # turns "the allocation happened" into a durable claim at all.  The receipt
+    # table is then folded in, so a worker that did adopt the file but died
+    # before the allocation rows committed still recovers.
+    _reconcile_host_allocation_receipts()
     _reconcile_allocation_receipts()
     allocations = task_store.list_unsettled_allocations()
     result = {"settled": 0, "active": 0, "review": 0}
@@ -2418,9 +2512,26 @@ def _reclaim_abandoned_reservations(*, now: float | None = None) -> int:
     reading it here would free a live request's entitlement during the dispatch
     window.  A missing identity is not evidence that no request exists, so it
     keeps its commitment.
+
+    ``receipted`` is the set of Task ids whose host-only ``allocation.receipt``
+    is still on disk.  A receipt file is the strongest evidence there is that a
+    scheduler job really occupied a node, and it exists *before* any worker
+    write, so the scheduler question must never be the thing that frees a claim a
+    receipt already proves.  Adopting those receipts is
+    :func:`_reconcile_host_allocation_receipts`'s job; this pass only refuses to
+    act against them.
     """
     timestamp = time.time() if now is None else now
     reservations = task_store.list_queued_reservations()
+    receipted: set[str] = set()
+    if CONFIG.results_folder:
+        try:
+            receipted = {
+                str(receipt["task_id"])
+                for receipt in surviving_allocation_receipts(CONFIG.results_folder)
+            }
+        except OSError:
+            receipted = set()
     if not reservations:
         return 0
     scontrol = shutil.which("scontrol")
@@ -2439,6 +2550,8 @@ def _reclaim_abandoned_reservations(*, now: float | None = None) -> int:
             continue
         if not job_id or not job_id.isdigit():
             continue  # no scheduler identity: ambiguous, keep the commitment
+        if task_id in receipted:
+            continue  # a surviving receipt proves the allocation happened
         if task_store.allocation_row_exists(job_id) or task_store.allocation_receipt_exists(job_id):
             # The wrapper's own evidence already recorded an allocation for this
             # request — possibly before the process that was watching it died.

@@ -230,7 +230,7 @@ only remaining gap is the window between the scheduler starting the job and the
 wrapper executing, which no in-job mechanism can close and which the receipt
 schema is dated to make visible.
 
-Recovery keys on the receipt, not on the log line. Each receipt is a claim about
+Recovery keys on the receipt, not on the log line, and a receipt is a claim about
 a scheduler job, so it is corroborated against the scheduler before anything is
 recorded: a receipt for a job the scheduler owns is folded into the one
 `slurm_job_id`-keyed allocation fact, idempotently, and settled from the
@@ -239,6 +239,19 @@ records nothing and is kept for an operator rather than silently discarded. A
 reservation whose request has a receipt is never expired or reclaimed as though
 the allocation had not happened, and a claim the balance cannot cover still
 withholds the command while its allocation is settled for what was held.
+
+Ownership of the receipt moves monotonically. The worker reads the file, records
+it as a server-owned receipt row, and writes the allocation fact; only once that
+successor is durable does the runner delete the file, and an unlink failure is
+harmless because the same claim is adopted again on the next pass. A worker that
+dies between the read and the write leaves the file exactly where it is, so
+restart reconciliation walks the host-only allocation namespace (`<results
+root>/users/<storage key>/tasks/<task id>.allocation/allocation.receipt`),
+corroborates each surviving claim against the scheduler, records it, and deletes
+the file only after that adoption succeeds. There is therefore no sequence of
+failures in which a real allocation has neither its file, its receipt row, nor
+its canonical fact, and a malformed or uncorroborated receipt is never deleted —
+an anomalous durable observation stays inspectable.
 
 The observation and the scheduler-owned reservation transition are one atomic
 store write, so there is no durable state in which a request is queued with a
