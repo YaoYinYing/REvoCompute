@@ -777,16 +777,29 @@ object/descriptor, not reopen its pathname.*
   it verified.
 - `StorageResolver.load_manifest`/`read_manifest_bytes` are the single manifest
   authority (`O_NOFOLLOW`, `fstat`, `S_ISREG`, `st_nlink == 1`, bounded size);
-  `/compute/api/results/<task>/files/<file_id>` consumes it instead of a plain
-  pathname open. `ArtifactIdentityError` derives from `OSError`, so every
-  existing fail-closed branch covers it with no second contract.
+  the primary results route, `/compute/api/results/<task>/files/<file_id>`, and
+  the `_result_manifest_available` readiness probe all consume it instead of a
+  plain pathname probe, so the readiness flag cannot disagree with the reader.
+  `ArtifactIdentityError` derives from `OSError`, so every existing fail-closed
+  branch covers it with no second contract.
+- `open_verified_artifact` requires the manifest entry to declare a usable size
+  and SHA-256 and returns the digest computed while hashing the opened
+  descriptor, so `resolve_artifact` never reopens the pathname to derive
+  provenance and an entry without identity evidence fails closed.
+- `_verified_payload` streams both the full body and a single range through one
+  bounded reader whose reads are capped by `_STREAM_CHUNK_BYTES` (64 KiB), so a
+  large artifact is never read with an artifact-sized request; `Range` parsing
+  applies `range_for_length(size)`, which resolves a suffix range and reports an
+  unsatisfiable one as 416.
 - Regression evidence: replaced bytes refuse the direct download and the
   projection (a replacement injected between resolution and parse still projects
-  the original descriptor), a single bounded Range is served from the verified
-  descriptor, a Task artifact replaced between resolution and Tool
-  materialization cannot enter the Tool workspace, the archive writes the
-  manifest bytes it verified, and the `/files/` route fails closed on a
-  symlinked or hard-linked manifest.
+  the original descriptor), a single and suffix range are served from the
+  verified descriptor with 416 beyond EOF, a Task artifact replaced between
+  resolution and Tool materialization cannot enter the Tool workspace, the
+  archive writes the manifest bytes it verified, a large artifact streams in
+  bounded chunks, missing or malformed digest evidence fails closed, and the
+  primary results route and the `/files/` route fail closed on a symlinked,
+  hard-linked, unreadable, or oversized manifest.
 
 ## Named follow-ups (tracked, not silent)
 
