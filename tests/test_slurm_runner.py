@@ -826,6 +826,71 @@ def test_gpu_allocation_release_gates_the_command_behind_the_allocation_report(t
     assert not (output_dir / ".allocation-approved-abcdef12").exists()
 
 
+def test_wrapper_observation_survives_a_crash_before_the_grant(tmp_path):
+    """The wrapper's own stdout id line is persisted the moment it is read.
+
+    This is the crash window the restart path has to survive: the wrapper is
+    executing on a compute node, then it dies (or its process does) before any
+    admission decision.  The dispatch callback is the durable-writer seam, so it
+    must already have been called with ``wrapper_executed=True`` by the time the
+    identity is known — not deferred to ``submit()``.
+    """
+    output_dir = tmp_path / "out"
+    dispatches = []
+    job = SlurmJob(
+        "abcdef1234567890",
+        _make_task_type(gpus=True),
+        _make_runner(),
+        _make_entities(),
+        str(output_dir),
+        resource_policy=_policy(gres="gpu:1", requires_gpu=True),
+        allocation_dispatched_callback=lambda job_id, at, executed=False: dispatches.append(
+            (job_id, executed)
+        ),
+        allocation_started_callback=lambda _job_id, _at: None,
+    )
+    stdout = StringIO("REVODESIGN_JOB_ID=4217\n")
+    job._process = SimpleNamespace(stdout=stdout, stderr=StringIO(""))
+    job._allocation_submitted_at = 1_000.0
+
+    job._read_stdout()
+
+    assert job.wrapper_executed is True
+    assert dispatches == [("4217", True)]
+
+
+def test_wrapper_observation_is_recorded_when_stderr_won_the_identity_race(tmp_path):
+    """The stderr banner may supply the identity first; the wrapper still ran.
+
+    A queued banner is not execution evidence, so the stdout id line must set the
+    execution flag (and persist it) even when ``_slurm_job_id`` was already set
+    from stderr — otherwise a host with no ``squeue`` would account nothing for an
+    allocation that really ran.
+    """
+    output_dir = tmp_path / "out"
+    dispatches = []
+    job = SlurmJob(
+        "abcdef1234567890",
+        _make_task_type(gpus=True),
+        _make_runner(),
+        _make_entities(),
+        str(output_dir),
+        resource_policy=_policy(gres="gpu:1", requires_gpu=True),
+        allocation_dispatched_callback=lambda job_id, at, executed=False: dispatches.append(
+            (job_id, executed)
+        ),
+        allocation_started_callback=lambda _job_id, _at: None,
+    )
+    job._slurm_job_id, job._job_id_event = "4217", __import__("threading").Event()
+    job._allocation_submitted_at = 1_000.0
+    job._process = SimpleNamespace(stdout=StringIO("REVODESIGN_JOB_ID=4217\n"), stderr=StringIO(""))
+
+    job._read_stdout()
+
+    assert job.wrapper_executed is True
+    assert dispatches == [("4217", True)]
+
+
 def test_allocation_live_starts_accounting_and_releases_the_wrapper_once(tmp_path):
     output_dir = tmp_path / "out"
     starts = []
@@ -900,7 +965,9 @@ def test_a_queued_stderr_banner_never_claims_an_allocation(tmp_path):
         _make_entities(),
         str(output_dir),
         resource_policy=_policy(gres="gpu:1", requires_gpu=True),
-        allocation_dispatched_callback=lambda job_id, at: dispatches.append((job_id, at)),
+        allocation_dispatched_callback=lambda job_id, at, executed=False: dispatches.append(
+            (job_id, at, executed)
+        ),
         allocation_started_callback=lambda job_id, at: starts.append((job_id, at)),
     )
     fake_proc = _FakeSrunProcess(
@@ -911,8 +978,10 @@ def test_a_queued_stderr_banner_never_claims_an_allocation(tmp_path):
         assert job.submit() == "4217"
         assert job.poll() == JobState.FAILED
 
-    # Identity was announced as a dispatch and never as an allocation.
-    assert [job_id for job_id, _at in dispatches] == ["4217"]
+    # Identity was announced as a dispatch and never as an allocation, and the
+    # queued banner is not evidence the wrapper itself executed.
+    assert [job_id for job_id, _at, _executed in dispatches] == ["4217"]
+    assert [executed for _job_id, _at, executed in dispatches] == [False]
     assert starts == []
     assert job.allocation_started is False
 
@@ -938,8 +1007,9 @@ def test_gpu_allocation_cancel_before_allocation_settles_nothing(tmp_path):
         job.cancel()
 
     assert fake_proc.terminated is True
-    # A request cancelled in the queue never held resources, so there is no
-    # allocation to settle — only the Task's reservation to give back.
+    # The cancellation itself settles nothing: the wrapper was never granted, so
+    # no allocation accounting happened in this process.  The fact that the
+    # wrapper ran stays durable for reconciliation to settle from evidence.
     assert finishes == []
     assert job.allocation_started is False
 
@@ -999,9 +1069,11 @@ def test_gpu_allocation_denial_terminates_srun_and_fails_the_job(tmp_path):
         with pytest.raises(RuntimeError, match="credit exhausted"):
             job.poll()
 
-    # A refused allocation is not a grant and not a fact: nothing settles, and
-    # the Task's reservation is the caller's to release.
-    assert finishes == []
+    # A refused allocation is still an allocation: the fact the store was asked
+    # to record exists (that is what the callback attempted before denying), so
+    # it settles for the gate/termination interval.  The refusal is the grant,
+    # not the fact.
+    assert [job_id for job_id, _at in finishes] == ["4217"]
     assert job.allocation_started is False
     assert not (output_dir / ".allocation-approved-abcdef12").exists()
 

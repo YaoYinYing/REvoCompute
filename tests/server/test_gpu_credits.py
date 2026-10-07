@@ -15,7 +15,7 @@ import sqlalchemy as sa
 from conftest import _load_pssm_module
 from revocompute.access_control import project_effective_entitlements
 from revocompute.db import GPUAuthorizationUnavailableError, GPUCreditUnavailableError, TaskDatabase
-from revocompute.resource_ledger import ReservationState
+from revocompute.resource_ledger import AdmissionReason, ReservationState
 
 
 def _timestamp(year: int, month: int, day: int = 1, second: int = 0) -> float:
@@ -120,16 +120,20 @@ def test_active_allocation_may_overdraft_but_next_allocation_is_denied(tmp_path)
     )
     with pytest.raises(GPUCreditUnavailableError, match="exhausted"):
         database.require_compute_entitlement(31, at=started_at + 80)
-    with pytest.raises(GPUCreditUnavailableError, match="exhausted"):
-        database.record_allocation_start(
-            user_id=31,
-            task_id="e" * 32,
-            stage_id="inference",
-            slurm_job_id="5002",
-            gpu_count=1,
-            cpu_cores=1,
-            started_at=started_at + 80,
-        )
+    denied = database.record_allocation_start(
+        user_id=31,
+        task_id="e" * 32,
+        stage_id="inference",
+        slurm_job_id="5002",
+        gpu_count=1,
+        cpu_cores=1,
+        started_at=started_at + 80,
+    )
+    # The second allocation is refused the grant, but it is still an allocation:
+    # the fact is recorded so what the wrapper held is settled, not erased.
+    assert denied["granted"] is False
+    assert denied["reason_code"] == AdmissionReason.COMPUTE_EXHAUSTED.value
+    assert {row["slurm_job_id"] for row in database.list_task_allocations("e" * 32)} == {"5002"}
 
 
 def test_cross_month_allocation_is_charged_to_its_start_month(tmp_path):
@@ -322,25 +326,41 @@ def test_gpu_allocation_callback_checks_projected_authorization_before_recording
         required_entitlements=("licensed_runner",),
     )
 
-    with pytest.raises(GPUAuthorizationUnavailableError):
+    with pytest.raises(GPUCreditUnavailableError, match="authorization_unavailable"):
         started("8901", _timestamp(2026, 9, 6))
 
-    assert module.task_store.list_unsettled_allocations() == []
+    # The refusal is a grant decision: the allocation the wrapper held is still
+    # recorded, and it is the fact that stays unsettled for settlement.
+    denied = module.task_store.list_unsettled_allocations()
+    assert {row["slurm_job_id"] for row in denied} == {"8901"}
+    assert all(row["denial_reason"] for row in denied)
+    task_id = "2" * 32
     module.task_store.project_gpu_authorization(
         63,
         account_enabled=True,
         allow_gpu_use=True,
         entitlements={"licensed_runner": None},
     )
-    started("8901", _timestamp(2026, 9, 6))
-    assert module.task_store.list_unsettled_allocations()[0]["slurm_job_id"] == "8901"
-    module.task_store.deny_gpu_authorization(63)
-    started("8901", _timestamp(2026, 9, 6))
-    # One fact per unit, and a repeat call is idempotent rather than appending a
-    # second set.
+    # The decision is recorded on the fact, so a duplicate callback for the same
+    # allocation reads the recorded refusal instead of re-deciding against a
+    # balance a second decision already moved.
+    with pytest.raises(GPUCreditUnavailableError, match="authorization_unavailable"):
+        started("8901", _timestamp(2026, 9, 6))
     unsettled = module.task_store.list_unsettled_allocations()
     assert {row["unit"] for row in unsettled} == {"gpu_second", "cpu_core_second"}
     assert len(unsettled) == 2
+
+    # A different allocation for the same Task is admitted now that the runner
+    # is authorized: the recorded refusal was about that one allocation only.
+    _dispatched, started_again, _finished = module.task_runtime._compute_allocation_callbacks(
+        task_id=task_id,
+        user_id=63,
+        stage_id="prediction",
+        resource_policy=SimpleNamespace(requires_gpu=True, gres="gpu:1", cpus=1),
+        required_entitlements=("licensed_runner",),
+    )
+    started_again("8901b", _timestamp(2026, 9, 6))
+    assert "8901b" in {row["slurm_job_id"] for row in module.task_store.list_unsettled_allocations()}
 
 
 def test_gpu_allocation_callback_rechecks_runner_readiness(monkeypatch, tmp_path):
@@ -368,10 +388,14 @@ def test_gpu_allocation_callback_rechecks_runner_readiness(monkeypatch, tmp_path
         runner_family="licensed",
     )
 
-    with pytest.raises(GPUAuthorizationUnavailableError, match="readiness"):
+    with pytest.raises(GPUCreditUnavailableError, match="runner_readiness_unavailable"):
         started("8902", _timestamp(2026, 9, 7))
 
-    assert module.task_store.list_unsettled_allocations() == []
+    # The runner was not ready, so the command is refused — but the allocation
+    # the wrapper already held is a fact and stays recorded and settleable.
+    recorded = module.task_store.list_unsettled_allocations()
+    assert {row["slurm_job_id"] for row in recorded} == {"8902"}
+    assert all(row["denial_reason"] == "Runner readiness is unavailable" for row in recorded)
 
 
 def test_reconciliation_settles_terminal_slurm_elapsed_time_once(monkeypatch, tmp_path):
@@ -506,10 +530,13 @@ def test_allocation_start_fails_closed_when_the_hold_is_gone_and_the_balance_is_
         stage_id="prediction",
         resource_policy=SimpleNamespace(requires_gpu=True, gres="gpu:1", cpus=1),
     )
-    with pytest.raises(GPUCreditUnavailableError, match="exhausted"):
+    with pytest.raises(GPUCreditUnavailableError, match="compute_exhausted"):
         started("8912", _timestamp(2026, 9, 6) + 90)
 
-    assert module.task_store.list_task_allocations(task_id) == []
+    recorded = module.task_store.list_task_allocations(task_id)
+    assert {row["slurm_job_id"] for row in recorded} == {"8912"}
+    assert {row["unit"] for row in recorded} == {"gpu_second", "cpu_core_second"}
+    assert all(row["denial_reason"] for row in recorded)
 
 
 @pytest.mark.parametrize(
@@ -644,6 +671,53 @@ def test_reconciliation_frees_a_queued_commitment_the_scheduler_proves_is_gone(m
     assert module.task_runtime._reclaim_abandoned_reservations(now=at + 10) == 1
     assert module.task_store.list_queued_reservations() == []
     assert module.task_store.compute_entitlement(92, at=at + 10).remaining == 60_000
+
+
+def test_reconciliation_never_frees_a_commitment_over_a_recorded_allocation(monkeypatch, tmp_path):
+    """A wrapper-executed request keeps its commitment until evidence settles it.
+
+    The crash window: the wrapper printed its own job id and the execution fact
+    was persisted, then the process died before the grant decision.  The
+    scheduler now reports the job terminal, so a naive reclaim pass would free the
+    reservation as if nothing had ever been allocated.  The recorded allocation is
+    the proof it must not: the request is settled from scheduler evidence, and the
+    claim is consumed by that allocation rather than handed back.
+    """
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    at = _timestamp(2026, 9, 5)
+    task_id = "7" * 32
+    _own_task(module.task_store, task_id, user_id=93)
+    module.task_store.reserve_compute_admission(user_id=93, task_id=task_id, at=at)
+    module.task_store.record_reservation_dispatch(task_id=task_id, slurm_job_id="8807", at=at + 1)
+    # The wrapper's own observation, written before any grant decision.
+    module.task_store.observe_allocation_start(
+        user_id=93,
+        task_id=task_id,
+        stage_id="model",
+        slurm_job_id="8807",
+        gpu_count=1,
+        cpu_cores=1,
+        started_at=at + 2,
+    )
+
+    monkeypatch.setattr(module.task_runtime.shutil, "which", lambda command: f"/usr/bin/{command}")
+    monkeypatch.setattr(
+        module.task_runtime.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(stdout="JobId=8807 JobState=COMPLETED RunTime=00:00:45\n"),
+    )
+
+    assert module.task_runtime._reclaim_abandoned_reservations(now=at + 10) == 0
+
+    # Settled from the one authoritative elapsed duration, not released as if
+    # the request had never been allocated.
+    assert module.task_runtime._reconcile_slurm_allocations() == {"settled": 1, "active": 0, "review": 0}
+    assert module.task_store.gpu_credit_summary(93, at=at + 10)["usage_gpu_seconds"] == 45
+    assert module.task_store.list_unsettled_allocations() == []
 
 
 def _bearer(user: dict) -> dict[str, str]:

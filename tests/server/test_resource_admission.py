@@ -551,11 +551,13 @@ def test_a_task_holding_the_final_entitlement_starts_its_own_allocation(tmp_path
 
 
 def test_two_tasks_racing_for_the_final_entitlement_leave_one_runnable_winner(tmp_path):
-    """Exactly one of two competing submissions can run to allocation.
+    """Exactly one of two competing submissions is granted the final entitlement.
 
     The first takes the final entitlement; the second is refused a hold and,
-    having no hold of its own and no balance, is refused at allocation start
-    too — the refusal is the same decision either way, never a free run.
+    having no hold of its own and no balance, is refused the grant at allocation
+    start too — the refusal is the same decision either way, never a free run.
+    The loser's refusal is a grant fact: it may be recorded only if Slurm
+    actually handed it resources, which never happened here.
     """
     database = TaskDatabase(str(tmp_path / "tasks.sqlite3"), monthly_gpu_seconds=60)
     at = _timestamp(2026, 9, 21)
@@ -572,19 +574,21 @@ def test_two_tasks_racing_for_the_final_entitlement_leave_one_runnable_winner(tm
     assert database.record_allocation_start(
         user_id=96, task_id=winner, stage_id="model", slurm_job_id="9902", gpu_count=1, cpu_cores=1, started_at=at + 2
     )["admitted_by_reservation"] is True
-    with pytest.raises(GPUCreditUnavailableError, match="exhausted"):
-        database.record_allocation_start(
-            user_id=96, task_id=loser, stage_id="model", slurm_job_id="9903", gpu_count=1, cpu_cores=1, started_at=at + 3
-        )
-    assert [row["slurm_job_id"] for row in database.list_task_allocations(loser)] == []
+    denied = database.record_allocation_start(
+        user_id=96, task_id=loser, stage_id="model", slurm_job_id="9903", gpu_count=1, cpu_cores=1, started_at=at + 3
+    )
+    assert denied["granted"] is False
+    assert denied["reason_code"] == AdmissionReason.COMPUTE_EXHAUSTED.value
+    assert database.list_task_reservations(loser) == []
 
 
 def test_an_expired_hold_with_a_consumed_balance_fails_closed(tmp_path):
-    """A hold that lapsed is not authority: the balance is re-decided at start.
+    """A hold that lapsed is not authority: the grant is re-decided at start.
 
     The Task waited, its hold expired, and another allocation has since consumed
-    the balance.  Starting anyway would charge work the subject cannot pay for,
-    so the transition refuses before any allocation row exists.
+    the balance.  Running anyway would charge work the subject cannot pay for, so
+    the grant is refused.  Slurm did hand this request resources, so the
+    allocation fact exists — refused, not erased.
     """
     database = TaskDatabase(str(tmp_path / "tasks.sqlite3"), monthly_gpu_seconds=60)
     at = _timestamp(2026, 9, 22)
@@ -593,14 +597,17 @@ def test_an_expired_hold_with_a_consumed_balance_fails_closed(tmp_path):
     assert database.expire_stale_reservations(now=at + 10) == 1
 
     _start(database, 97, job_id="9904", at=at + 20, task_id="c2" + "0" * 30, gpus=1)
+    # The other allocation consumed the whole allowance before this start.
+    database.settle_allocation_elapsed("9904", elapsed_seconds=60, finished_at=at + 21)
 
-    with pytest.raises(GPUCreditUnavailableError, match="exhausted"):
-        database.record_allocation_start(
-            user_id=97, task_id=task_id, stage_id="model", slurm_job_id="9905", gpu_count=1, cpu_cores=1,
-            started_at=at + 30,
-        )
+    denied = database.record_allocation_start(
+        user_id=97, task_id=task_id, stage_id="model", slurm_job_id="9905", gpu_count=1, cpu_cores=1,
+        started_at=at + 30,
+    )
 
-    assert [row["slurm_job_id"] for row in database.list_task_allocations(task_id)] == []
+    assert denied["granted"] is False
+    assert denied["reason_code"] == AdmissionReason.COMPUTE_EXHAUSTED.value
+    assert [row["slurm_job_id"] for row in database.list_task_allocations(task_id)] == ["9905", "9905"]
     assert database.list_task_reservations(task_id)[0]["state"] == ReservationState.EXPIRED.value
 
 
@@ -652,24 +659,27 @@ def test_a_later_workflow_stage_is_admitted_against_what_is_left(tmp_path):
         started_at=at + 62,
     )
     assert later["admitted_by_reservation"] is False
+    assert later["granted"] is True
     database.settle_allocation_elapsed("9908", elapsed_seconds=180, finished_at=at + 242)
 
-    with pytest.raises(GPUCreditUnavailableError, match="exhausted"):
-        database.record_allocation_start(
-            user_id=99, task_id=task_id, stage_id="relax", slurm_job_id="9909", gpu_count=1, cpu_cores=1,
-            started_at=at + 243,
-        )
+    final = database.record_allocation_start(
+        user_id=99, task_id=task_id, stage_id="relax", slurm_job_id="9909", gpu_count=1, cpu_cores=1,
+        started_at=at + 243,
+    )
+    assert final["granted"] is False
+    assert final["reason_code"] == AdmissionReason.COMPUTE_EXHAUSTED.value
 
 
 def test_a_hold_is_not_authority_once_the_balance_is_gone(tmp_path):
-    """A reservation buys a start only while the position it was made against stands.
+    """A reservation buys a grant only while the position it was made against stands.
 
     The Task waited with a hold on the whole allowance, and the subject's
     balance has since gone negative *past* that hold (here by an administrative
     correction; the same shape arrives from an allocation that settled into an
-    overdraft).  The hold is no longer authority for anything, so the start
-    fails closed — exactly as the same start without a hold does — rather than
-    charging an allocation the balance cannot cover.
+    overdraft).  The hold is no longer authority for anything, so the grant is
+    refused rather than charging an allocation the balance cannot cover.  The
+    claim the submission made is still spent: the allocation the scheduler handed
+    over exists, and the fact is what the balance is now charged against.
     """
     database = TaskDatabase(str(tmp_path / "tasks.sqlite3"), monthly_gpu_seconds=100)
     at = _timestamp(2026, 9, 26)
@@ -687,21 +697,245 @@ def test_a_hold_is_not_authority_once_the_balance_is_gone(tmp_path):
     entitlement = database.compute_entitlement(101, at=at + 5)
     assert entitlement.remaining + 100 < 0
 
-    with pytest.raises(GPUCreditUnavailableError, match="exhausted"):
-        database.record_allocation_start(
-            user_id=101,
-            task_id=task_id,
-            stage_id="model",
-            slurm_job_id="9910",
-            gpu_count=1,
-            cpu_cores=1,
-            started_at=at + 10,
-        )
+    denied = database.record_allocation_start(
+        user_id=101,
+        task_id=task_id,
+        stage_id="model",
+        slurm_job_id="9910",
+        gpu_count=1,
+        cpu_cores=1,
+        started_at=at + 10,
+    )
 
-    assert database.list_task_allocations(task_id) == []
-    # The refusal did not consume the hold either: it is still the Task's claim,
-    # and a later position that stands again can still start on it.
-    assert database.list_task_reservations(task_id)[0]["state"] == ReservationState.HELD.value
+    assert denied["granted"] is False
+    assert denied["reason_code"] == AdmissionReason.COMPUTE_EXHAUSTED.value
+    # The allocation the scheduler granted is a fact, refused but present (one
+    # row per unit), and the hold that covered it is spent rather than left live
+    # for a re-claim.
+    assert {row["slurm_job_id"] for row in database.list_task_allocations(task_id)} == {"9910"}
+    assert {row["unit"] for row in database.list_task_allocations(task_id)} == {"gpu_second", "cpu_core_second"}
+    assert database.list_task_reservations(task_id)[0]["state"] == ReservationState.RELEASED.value
+
+
+# ---------------------------------------------------------------------------
+# The allocation FACT exists independently of the admission GRANT
+# ---------------------------------------------------------------------------
+
+
+def test_a_denied_allocation_is_still_recorded_and_settleable(tmp_path):
+    """A quota denial records the allocation that Slurm already handed over.
+
+    The wrapper observed its own job RUNNING, so CPUs and GPUs were allocated to
+    it.  The grant is refused — the balance cannot cover the work — but that is a
+    policy answer about the *scientific command*, not a claim that no allocation
+    happened.  The fact stays, marked with the denial, and settles for the time
+    the resources were actually held.
+    """
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"), monthly_gpu_seconds=60)
+    at = _timestamp(2026, 9, 28)
+    winner, denied = "d1" + "0" * 30, "d2" + "0" * 30
+    _reserve(database, 200, task_id=winner, at=at)
+    _start(database, 200, job_id="9930", at=at + 1, task_id=winner, gpus=1)
+    # The winner consumed the whole allowance, so the next start has no balance.
+    database.settle_allocation_elapsed("9930", elapsed_seconds=60, finished_at=at + 61)
+
+    decision = database.record_allocation_start(
+        user_id=200, task_id=denied, stage_id="model", slurm_job_id="9931", gpu_count=1, cpu_cores=2,
+        started_at=at + 2,
+    )
+
+    assert decision["granted"] is False
+    assert decision["reason_code"] == AdmissionReason.COMPUTE_EXHAUSTED.value
+    # The allocation the scheduler made is a fact: both units exist, ACTIVE, and
+    # carrying the reason the command was refused.
+    facts = database.list_task_allocations(denied)
+    assert {row["unit"] for row in facts} == {"gpu_second", "cpu_core_second"}
+    assert {row["status"] for row in facts} == {"active"}
+    assert all(row["denial_reason"] for row in facts)
+    # The wrapper held those resources for 30 s before the gate terminated it.
+    settled = database.settle_allocation_elapsed("9931", elapsed_seconds=30, finished_at=at + 92)
+    assert settled["quantity"] == 30
+    assert database.list_task_allocations(denied)[0]["status"] == "settled"
+    # The winner's own 60 s allocation plus this denied Task's 30 s.
+    assert database.gpu_credit_summary(200, at=at + 62)["usage_gpu_seconds"] == 90
+
+
+def test_a_denied_start_consumes_the_claim_it_made(tmp_path):
+    """A denial does not return resources to the scheduler, so the hold is spent.
+
+    The submission's reservation covered it up to the moment the allocation
+    started; that moment happened, so the claim is consumed whether or not the
+    command was granted.  Leaving it live would let the same Task re-claim
+    entitlement after its refused allocation was already accounted for.
+    """
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"), monthly_gpu_seconds=100)
+    at = _timestamp(2026, 9, 28)
+    task_id = "e2" + "0" * 30
+    assert _reserve(database, 201, task_id=task_id, at=at)["allowed"] is True
+    database.adjust_compute_account(
+        user_id=201,
+        gpu_seconds=-250,
+        actor_user_id=201,
+        reason="drain",
+        idempotency_key="drain-201",
+        created_at=at + 1,
+    )
+
+    decision = database.record_allocation_start(
+        user_id=201, task_id=task_id, stage_id="model", slurm_job_id="9932", gpu_count=1, cpu_cores=1,
+        started_at=at + 2,
+    )
+
+    assert decision["granted"] is False
+    reservation = database.list_task_reservations(task_id)[0]
+    assert reservation["state"] == ReservationState.RELEASED.value
+    assert reservation["reason_code"] == ReservationReason.ALLOCATION_STARTED.value
+
+
+def test_a_repeated_denied_start_preserves_the_one_known_fact(tmp_path):
+    """A lost response / retried start re-reads the fact instead of rewriting it."""
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"), monthly_gpu_seconds=60)
+    at = _timestamp(2026, 9, 28)
+    winner, denied = "f2" + "0" * 30, "f3" + "0" * 30
+    _reserve(database, 202, task_id=winner, at=at)
+    _start(database, 202, job_id="9933", at=at + 1, task_id=winner, gpus=1)
+
+    first = database.record_allocation_start(
+        user_id=202, task_id=denied, stage_id="model", slurm_job_id="9934", gpu_count=1, cpu_cores=1,
+        started_at=at + 2,
+    )
+    started_at = {row["unit"]: row["started_at"] for row in database.list_task_allocations(denied)}
+    second = database.record_allocation_start(
+        user_id=202, task_id=denied, stage_id="model", slurm_job_id="9934", gpu_count=1, cpu_cores=1,
+        started_at=at + 99,
+    )
+
+    assert first["granted"] is False and second["granted"] is False
+    assert len(database.list_task_allocations(denied)) == 2
+    # The original start edge is the known fact: a retry never rewrites it.
+    assert {row["unit"]: row["started_at"] for row in database.list_task_allocations(denied)} == started_at
+
+
+def test_reconciliation_cannot_overwrite_a_known_settled_fact(tmp_path):
+    """Once settled, the authoritative elapsed duration is not re-derived."""
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"), monthly_gpu_seconds=600)
+    at = _timestamp(2026, 9, 29)
+    task_id = "a8" + "0" * 30
+    _reserve(database, 203, task_id=task_id, at=at)
+    _start(database, 203, job_id="9935", at=at + 1, task_id=task_id, gpus=1)
+    first = database.settle_allocation_elapsed("9935", elapsed_seconds=45, finished_at=at + 46)
+    second = database.settle_allocation_elapsed("9935", elapsed_seconds=999, finished_at=at + 1000)
+
+    assert first == second
+    assert database.gpu_credit_summary(203, at=at + 1000)["usage_gpu_seconds"] == 45
+
+
+# ---------------------------------------------------------------------------
+# The wrapper's execution evidence survives a crash
+# ---------------------------------------------------------------------------
+
+
+def test_a_wrapper_observation_is_a_settleable_fact_with_no_grant_yet(tmp_path):
+    """The earliest compute-node evidence is durable, unsettled, and never zero.
+
+    The wrapper printed its own ``$SLURM_JOB_ID`` — it is executing inside an
+    allocation — but the server died before any admission decision.  The fact
+    must survive as an ACTIVE allocation with unknown elapsed time, so a restart
+    settles it from scheduler evidence instead of losing the occupancy.
+    """
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"), monthly_gpu_seconds=1_000)
+    at = _timestamp(2026, 9, 30)
+    task_id = "0a" + "0" * 30
+
+    observed = database.observe_allocation_start(
+        user_id=210, task_id=task_id, stage_id="model", slurm_job_id="9940",
+        gpu_count=1, cpu_cores=4, started_at=at,
+    )
+
+    assert observed["slurm_job_id"] == "9940"
+    facts = database.list_task_allocations(task_id)
+    assert {row["unit"] for row in facts} == {"gpu_second", "cpu_core_second"}
+    assert {row["status"] for row in facts} == {"active"}
+    assert all(row["quantity"] is None for row in facts)
+    assert all(row["evidence_source"] == "runner_observation" for row in facts)
+    # Unknown elapsed time is not zero: the allocation still constrains admission.
+    assert database.compute_entitlement(210, at=at).unsettled == 1
+
+    # A restart settles it from the one authoritative elapsed duration.
+    settled = database.settle_allocation_elapsed("9940", elapsed_seconds=300, finished_at=at + 300)
+    assert settled["quantity"] == 300
+    assert database.gpu_credit_summary(210, at=at + 300)["usage_gpu_seconds"] == 300
+
+
+def test_the_grant_decision_is_made_once_for_an_observed_allocation(tmp_path):
+    """A start after an observation adjudicates the same fact; it never doubles it.
+
+    The observation and the later start describe one allocation.  The second call
+    decides the grant and records it, and a third call reads that decision
+    instead of making another against a balance the first already moved.
+    """
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"), monthly_gpu_seconds=100)
+    at = _timestamp(2026, 9, 30)
+    task_id = "0b" + "0" * 30
+    assert _reserve(database, 211, task_id=task_id, at=at)["allowed"] is True
+    database.observe_allocation_start(
+        user_id=211, task_id=task_id, stage_id="model", slurm_job_id="9941",
+        gpu_count=1, cpu_cores=1, started_at=at + 1,
+    )
+
+    granted = database.record_allocation_start(
+        user_id=211, task_id=task_id, stage_id="model", slurm_job_id="9941",
+        gpu_count=1, cpu_cores=1, started_at=at + 1,
+    )
+
+    assert granted["granted"] is True
+    assert len(database.list_task_allocations(task_id)) == 2
+    # The start edge is the evidence already recorded, never rewritten.
+    assert {row["started_at"] for row in database.list_task_allocations(task_id)} == {at + 1}
+
+    again = database.record_allocation_start(
+        user_id=211, task_id=task_id, stage_id="model", slurm_job_id="9941",
+        gpu_count=1, cpu_cores=1, started_at=at + 90,
+    )
+    assert again["granted"] is True
+    assert len(database.list_task_allocations(task_id)) == 2
+    assert {row["started_at"] for row in database.list_task_allocations(task_id)} == {at + 1}
+
+
+def test_an_observation_makes_the_allocation_idempotent_across_a_restart(tmp_path):
+    """Exactly one allocation survives a crash on either side of the dispatch.
+
+    The reservation may or may not already be scheduler-owned when the process
+    dies; either way the observation is idempotent, and the later start completes
+    the same fact rather than creating a second one.
+    """
+    path = str(tmp_path / "tasks.sqlite3")
+    at = _timestamp(2026, 9, 30)
+    task_id = "0c" + "0" * 30
+
+    first = TaskDatabase(path, monthly_gpu_seconds=1_000)
+    first.observe_allocation_start(
+        user_id=212, task_id=task_id, stage_id="model", slurm_job_id="9942",
+        gpu_count=1, cpu_cores=1, started_at=at,
+    )
+    first.engine.dispose()
+
+    second = TaskDatabase(path, monthly_gpu_seconds=1_000)
+    # The observation is idempotent after the restart.
+    second.observe_allocation_start(
+        user_id=212, task_id=task_id, stage_id="model", slurm_job_id="9942",
+        gpu_count=1, cpu_cores=1, started_at=at + 5,
+    )
+    second.record_allocation_start(
+        user_id=212, task_id=task_id, stage_id="model", slurm_job_id="9942",
+        gpu_count=1, cpu_cores=1, started_at=at + 5,
+    )
+
+    facts = second.list_task_allocations(task_id)
+    assert len(facts) == 2
+    assert {row["unit"] for row in facts} == {"gpu_second", "cpu_core_second"}
+    second.settle_allocation_elapsed("9942", elapsed_seconds=120, finished_at=at + 120)
+    assert second.gpu_credit_summary(212, at=at + 120)["usage_gpu_seconds"] == 120
 
 
 def test_a_hold_covers_an_overdraft_within_its_own_unit(tmp_path):
