@@ -403,6 +403,11 @@ class SlurmJob(Job):
         but the execution evidence upgrades it — otherwise a queued banner would
         be the last word on a request whose wrapper really did occupy a node.
 
+        The wrapper's own id line also means the compute node left a durable
+        receipt, so the observation passed here carries the node's own start
+        stamp and resource shape: the allocation is dated by the machine that
+        held it, not by this process's clock.
+
         The callback persists the scheduler-owned reservation and, when the
         wrapper's own id line is the evidence, the allocation observation in the
         same store transition.  A failure therefore leaves neither half written:
@@ -417,9 +422,15 @@ class SlurmJob(Job):
         self._dispatch_recorded_executed = executed
         if self._allocation_dispatched_callback is None:
             return
+        receipt = None
+        started_at = self._wrapper_started_at or time.time()
+        if executed:
+            receipt = self.read_allocation_receipt()
+            if receipt is not None:
+                started_at = receipt["observed_at"]
         try:
             self._allocation_dispatched_callback(
-                self._slurm_job_id, self._wrapper_started_at or time.time(), executed
+                self._slurm_job_id, started_at, executed, receipt
             )
         except Exception:
             # Cleared so a later observation retries instead of silently leaving
@@ -697,6 +708,57 @@ class SlurmJob(Job):
         """Host-to-wrapper gate: "run the scientific command for this allocation"."""
         return os.path.join(self.output_dir, f".allocation-approved-{self.task_id[:8]}")
 
+    @property
+    def _allocation_receipt_path(self) -> str:
+        """A sibling of the other host-to-wrapper gate paths."""
+        return self.allocation_receipt_path
+
+    def read_allocation_receipt(self) -> dict[str, Any] | None:
+        """Read the wrapper's compute-node receipt, if it left one.
+
+        Returns ``None`` when there is no receipt, when it is unreadable, or when
+        its schema does not match — a receipt that cannot be trusted as written
+        is treated as absent rather than guessed at.  The values are parsed, not
+        interpreted: corroborating the job id against the scheduler belongs to
+        reconciliation, which has the scheduler.
+        """
+        path = self.allocation_receipt_path
+        try:
+            with open(path, encoding="utf-8") as handle:
+                text = handle.read(4096)
+        except OSError:
+            return None
+        finally:
+            # The receipt has been read, so it is no longer needed on disk: the
+            # worker that reads it persists it durably in the same step.
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+        fields: dict[str, str] = {}
+        for line in text.splitlines():
+            key, separator, value = line.partition("=")
+            if not separator or key in fields:
+                continue
+            fields[key] = value.strip()
+        job_id = fields.get("slurm_job_id", "")
+        if fields.get("schema_version") != "1" or not job_id.isdigit():
+            return None
+        try:
+            observed_at = float(fields.get("observed_at", ""))
+            cpus = int(fields.get("cpus", "0"))
+            gpus = int(fields.get("gpus", "0"))
+        except ValueError:
+            return None
+        if observed_at <= 0 or cpus < 0 or gpus < 0:
+            return None
+        return {
+            "slurm_job_id": job_id,
+            "observed_at": observed_at,
+            "cpus": cpus,
+            "gpus": gpus,
+        }
+
     def _remove_allocation_approval(self) -> None:
         for path in (self._allocation_release_path, self._allocation_grant_path):
             try:
@@ -823,6 +885,17 @@ class SlurmJob(Job):
         """
         return f"{os.path.normpath(self.output_dir)}.allocation"
 
+    @property
+    def allocation_receipt_path(self) -> str:
+        """Where the wrapper records that it is running, in the host-only dir.
+
+        Deliberately the *same* never-bind-mounted sibling as the wrapper script:
+        ``output_dir`` is mounted read-write into the container, so a receipt
+        there would be forgeable by the task it describes.  A receipt in this
+        directory can only be written by the wrapper running on the compute node
+        as the worker uid, outside the container.
+        """
+        return os.path.join(self.allocation_dir, "allocation.receipt")
     def _build_wrapper_script(self) -> str:
         """Write the wrapper script into the host-only ``allocation_dir`` so
         the host-side ``srun`` process can read it while the container cannot.
@@ -843,10 +916,42 @@ class SlurmJob(Job):
             "#!/bin/bash",
             "set -euo pipefail",
             "",
+            # The allocation exists the moment the scheduler starts this script,
+            # so the FIRST thing it does is take a durable receipt of that fact —
+            # before any gate wait, any stdout line, and any scientific work.
+            # The write is atomic (temp + fsync + rename), into the host-only
+            # directory that is never bind-mounted into the container, so only
+            # this wrapper (running as the worker uid on the compute node) can
+            # author it and a worker that dies before its own first write still
+            # leaves the evidence reconciliation needs.
+            f"allocation_receipt={_sh_quote(self._allocation_receipt_path)}",
+            'mkdir -p -- "$(dirname -- "${allocation_receipt}")"',
+            'receipt_cpus="${SLURM_CPUS_PER_TASK:-}"',
+            'case "${receipt_cpus}" in (*[!0-9]*|"") receipt_cpus=0 ;; esac',
+            'receipt_gpus="${SLURM_GPUS_ON_NODE:-}"',
+            'case "${receipt_gpus}" in (*[!0-9]*|"") receipt_gpus="${SLURM_JOB_GPUS:-${CUDA_VISIBLE_DEVICES:-}}" ;; esac',
+            'case "${receipt_gpus}" in',
+            '  ("NoDevFiles") receipt_gpus=0 ;;',
+            '  (*[!0-9,]*) receipt_gpus=0 ;;',
+            '  ("") receipt_gpus=0 ;;',
+            '  (*) receipt_gpus="$(awk -F, \'{print NF}\' <<< "${receipt_gpus}")" ;;',
+            "esac",
+            'receipt_tmp="${allocation_receipt}.$$.tmp"',
+            "{",
+            "  printf 'schema_version=1\\n'",
+            "  printf 'slurm_job_id=%s\\n' \"${SLURM_JOB_ID:-}\"",
+            "  printf 'observed_at=%s\\n' \"$(date +%s)\"",
+            "  printf 'cpus=%s\\n' \"${receipt_cpus}\"",
+            "  printf 'gpus=%s\\n' \"${receipt_gpus}\"",
+            "} > \"${receipt_tmp}\"",
+            'sync "${receipt_tmp}"',
+            'mv -f -- "${receipt_tmp}" "${allocation_receipt}"',
+            "",
             # The allocation carries the authoritative job id; publish it on
-            # stdout first so the runner never depends on srun's stderr
-            # banner (which SLURM 19.05 does not always print in time).  This
-            # names the request — it is not evidence that anything is running.
+            # stdout only AFTER the receipt is durable, so the receipt — not the
+            # line — is what recovery keys on, and the line can never be the only
+            # trace of a run.  This names the request; it is not evidence that
+            # anything is running.
             f'echo "{JOB_ID_PREFIX}${{SLURM_JOB_ID}}"',
         ]
         if self._allocation_dispatched_callback is not None or self._allocation_started_callback is not None:
