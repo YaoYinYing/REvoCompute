@@ -250,12 +250,19 @@ class SlurmJob(Job):
         self._slurm_job_id: str | None = None
         self._allocation_started: float | None = None
         self._allocation_started_at: float | None = None
+        # Wall-clock bounds on when the allocation could have begun, so the
+        # ``poll()`` backstop can never stamp a start later than the real run.
+        # ``_allocation_submitted_at`` is when srun was launched; the tighter
+        # ``_wrapper_started_at`` is when the wrapper's own id line was read.
+        self._allocation_submitted_at: float | None = None
+        self._wrapper_started_at: float | None = None
         self._allocation_tracking_started = False
         self._allocation_finished_notified = False
         # Two separate facts, two separate gates: the request exists (job
         # identity known), and the allocation is running (the compute node
         # observed it holding resources).  Accounting hangs off the second only.
         self._dispatched_notified = False
+        self._dispatch_recorded_executed = False
         self._allocation_live = False
         self._wrapper_started = False
         self._admission_error: Exception | None = None
@@ -293,6 +300,11 @@ class SlurmJob(Job):
             # intermediates.  ntasks=1, so the task-zero caveat does not apply.
             cmd = ["srun", "-u"] + self._build_srun_args() + ["/bin/bash", script_path]
             logging.info("srun command: %s", " ".join(cmd))
+            if self._allocation_submitted_at is None:
+                # The earliest instant the allocation could have begun.  Used
+                # only as a floor: the tighter wrapper-start stamp is preferred
+                # whenever the wrapper's own id line was read.
+                self._allocation_submitted_at = time.time()
             self._process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         except Exception:
             emit_event(
@@ -378,13 +390,32 @@ class SlurmJob(Job):
         gate, so when it returns the scheduler-owned reservation and the
         persisted job identity exist as one state — the pair a later
         reconciliation reads to decide whether a request can still be alive.
-        Idempotent: a repeated identity observation is not a second dispatch.
+
+        Called twice on the identity-without-execution path, and that is the
+        point: the srun stderr banner announces the request before anything is
+        known to be running, and the wrapper's own stdout id line later proves it
+        executed.  The identity announcement is idempotent per identity+evidence,
+        but the execution evidence upgrades it — otherwise a queued banner would
+        be the last word on a request whose wrapper really did occupy a node.
         """
-        if self._dispatched_notified:
+        executed = self._wrapper_started
+        if self._dispatched_notified and (self._dispatch_recorded_executed or not executed):
             return
         self._dispatched_notified = True
-        if self._allocation_dispatched_callback is not None:
-            self._allocation_dispatched_callback(self._slurm_job_id, time.time())
+        self._dispatch_recorded_executed = executed
+        if self._allocation_dispatched_callback is None:
+            return
+        try:
+            self._allocation_dispatched_callback(
+                self._slurm_job_id, self._wrapper_started_at or time.time(), executed
+            )
+        except Exception:
+            # The callback writes durable facts.  A failure must not be swallowed
+            # — the caller decides whether the wrapper is torn down — but the flag
+            # is cleared so a later observation retries instead of silently
+            # leaving the request recorded as dispatched with nothing persisted.
+            self._dispatched_notified = False
+            raise
 
     def _notify_allocation_live(self) -> None:
         """Announce that the allocation is actually running, exactly once.
@@ -397,6 +428,14 @@ class SlurmJob(Job):
         recorded the allocation.  A run that never printed the line is accounted
         from ``poll()``, where the wrapper is known to have started on a node.
 
+        The start instant is evidence, never a guess made now.  When the live
+        line carries its own stamp that is used; otherwise the backstop uses the
+        wall-clock floor already observed for this request — the moment the
+        wrapper's id line was read, or failing that the moment srun was launched.
+        Reading the clock here instead would stamp a start *after* a run that has
+        already finished, charging a fully-used allocation as approximately
+        zero.
+
         Idempotent and lock-guarded: the stdout thread and the polling thread can
         both arrive, and either report may be the one that survives.
         """
@@ -404,17 +443,20 @@ class SlurmJob(Job):
             if self._allocation_live:
                 return
             self._allocation_live = True
-            started_at = time.time() if self._allocation_started_at is None else self._allocation_started_at
+            started_at = self._allocation_started_at
+            if started_at is None:
+                floor = self._wrapper_started_at or self._allocation_submitted_at
+                started_at = time.time() if floor is None else floor
         if self._allocation_started_callback is not None:
             try:
                 self._allocation_started_callback(self._slurm_job_id, started_at)
             except Exception as exc:
-                # The admission decision belongs to this callback.  A refusal
-                # leaves no allocation fact and no grant, so the wrapper must not
-                # be released to run: record it and let ``poll()`` fail the job.
-                # Nothing is settled either — settlement pays for an allocation
-                # that existed, and this one was refused.
+                # The grant was refused.  The allocation FACT was still recorded
+                # — it is the scheduler's, not the policy's — so the wrapper must
+                # not be released to run, and the resources it held until this
+                # decision are settled at the end of the run like any other.
                 self._admission_error = exc
+                self._allocation_tracking_started = True
                 return
         self._allocation_tracking_started = True
         if self._accounting_enabled:
@@ -433,6 +475,18 @@ class SlurmJob(Job):
         back rather than kept.
         """
         return self._allocation_live and self._admission_error is None
+
+    @property
+    def wrapper_executed(self) -> bool:
+        """Whether the wrapper was observed executing on a compute node.
+
+        This is the durable-evidence question, not the grant question: the
+        wrapper printing its own ``$SLURM_JOB_ID`` proves an allocation was made
+        even when admission then refused the command.  A caller deciding whether
+        a reservation may be released must ask this, so a refused allocation is
+        never downgraded to "nothing was allocated".
+        """
+        return self._wrapper_started
 
     def poll(self) -> JobState:
         if self._process is None:
@@ -1209,17 +1263,37 @@ class SlurmJob(Job):
 
         for line in iter(stream.readline, ""):
             self._stdout_lines.append(line)
-            if line.startswith(JOB_ID_PREFIX) and self._slurm_job_id is None:
+            if line.startswith(JOB_ID_PREFIX):
                 candidate = line.split("=", 1)[1].strip()
                 if candidate.isdigit():
-                    self._slurm_job_id = candidate
-                    self._job_id_event.set()
-                    # A stdout id is printed by the wrapper itself, so it proves
-                    # the request reached a compute node and started — which a
-                    # queued srun stderr banner never does.  Recorded as a
-                    # fallback for hosts with no ``squeue``; allocation-live
-                    # still governs accounting, and ``poll()`` backstops it.
+                    # The wrapper prints this line itself, so it is evidence the
+                    # request reached a compute node and started — which a queued
+                    # srun stderr banner never is.  Recorded independently of the
+                    # job-id race: the stderr banner may already have supplied
+                    # the identity, and that must not hide the fact that the
+                    # wrapper itself ran.  ``_wrapper_started_at`` is the start
+                    # stamp the ``poll()`` backstop uses on a host with no
+                    # scheduler query.
+                    if self._slurm_job_id is None:
+                        self._slurm_job_id = candidate
+                        self._job_id_event.set()
                     self._wrapper_started = True
+                    if self._wrapper_started_at is None:
+                        self._wrapper_started_at = time.time()
+                    # Persist the execution fact NOW, from the thread that saw it,
+                    # rather than deferring to ``submit()``: a process death
+                    # between this observation and the scheduler-owned reservation
+                    # transition must not be able to erase the fact that the
+                    # wrapper occupied a node.  Idempotent, so ``submit()``'s own
+                    # announcement is a no-op when this got there first, and a
+                    # failure here is retried by that announcement rather than
+                    # killing the reader thread.
+                    try:
+                        self._notify_dispatched()
+                    except Exception:
+                        logging.exception(
+                            "Allocation observation could not be persisted for task %s", self.task_id
+                        )
             elif line.startswith(ALLOCATION_LIVE_PREFIX):
                 # The wrapper observed its own job in RUNNING state on the
                 # compute node.  This — not job identity — is what starts
