@@ -521,6 +521,38 @@ class TaskDatabase:
             self.resource_reservations_table.c.state,
             self.resource_reservations_table.c.expires_at,
         )
+        # A wrapper-authored receipt: the earliest compute-node evidence that the
+        # wrapper was running, written the instant the allocation exists.
+        #
+        # It is NOT a second accounting fact — it is a *claim* that a restart
+        # folds into the canonical ``resource_allocations`` rows through the same
+        # idempotent, ``slurm_job_id``-keyed observation the live path uses, and
+        # the row is removed in the same transaction that makes the fact durable.
+        # What it exists for is the case the database cannot cover on its own: a
+        # Slurm allocation is created by the scheduler, not by a DB write, so a
+        # worker that dies before its first write would otherwise lose a real
+        # allocation entirely.  The receipt carries it across that boundary.
+        self.resource_receipts_table = Table(
+            "resource_receipts",
+            self.metadata,
+            Column("id", String(96), primary_key=True),
+            Column("task_id", String(32), nullable=False),
+            Column("stage_id", String, nullable=False, default=""),
+            Column("slurm_job_id", String, nullable=False),
+            # The wrapper's own clock stamp, kept as the run's start floor.
+            Column("observed_at", Float, nullable=False),
+            # The shape the wrapper was started with, taken from the scheduler's
+            # own view (SLURM_CPUS_PER_TASK / SLURM_GPUS_ON_NODE), so recovery
+            # needs no server-side policy lookup to reconstruct the allocation.
+            Column("cpus", Integer, nullable=False, default=0),
+            Column("gpus", Integer, nullable=False, default=0),
+            Column("resource_class", String, nullable=False, default=""),
+            Column("authority", String, nullable=False, default=rloan.SUBJECT_USER),
+        )
+        Index(
+            "idx_resource_receipts_job",
+            self.resource_receipts_table.c.slurm_job_id,
+        )
         # Retention state of one Task's durable data.  Deliberately separate
         # from ``tasks.status``: a finished computation stays finished when its
         # data is later archived or purged.
@@ -2675,6 +2707,15 @@ class TaskDatabase:
                         existing, user_id=user_id, task_id=task_id, stage_id=stage_id,
                         gpu_count=gpu_count, resource_class=resource_class,
                     )
+                    # The fact is durable, so the compute-node receipt that
+                    # carried it here has done its job: dropping it in this same
+                    # transaction is what keeps a restart from folding the same
+                    # receipt in twice.
+                    conn.execute(
+                        delete(self.resource_receipts_table).where(
+                            self.resource_receipts_table.c.task_id == task_id
+                        )
+                    )
                     conn.commit()
                     return dict(existing)
                 self._insert_allocation_facts(
@@ -2709,6 +2750,17 @@ class TaskDatabase:
                         expires_at=None,
                     )
                 )
+                # A wrapper-authored receipt taken from the compute node is the
+                # one authoritative record that survives the worker's death.
+                # The allocation fact above is now durable, so the receipt has
+                # done its job; removing it here is what makes the reconciliation
+                # idempotent — a restart either finds a receipt (and folds it in)
+                # or finds the fact, never both.
+                conn.execute(
+                    delete(self.resource_receipts_table).where(
+                        self.resource_receipts_table.c.task_id == task_id
+                    )
+                )
                 row = (
                     conn.execute(
                         select(self.resource_allocations_table).where(
@@ -2732,6 +2784,142 @@ class TaskDatabase:
         )
         with self.engine.connect() as conn:
             return conn.execute(stmt).first() is not None
+
+    # -- wrapper-authored execution receipts ---------------------------------
+
+    def record_allocation_receipt(
+        self,
+        *,
+        task_id: str,
+        stage_id: str,
+        slurm_job_id: str,
+        observed_at: float,
+        cpus: int,
+        gpus: int,
+        gres: str = "",
+        authority: str = rloan.SUBJECT_USER,
+    ) -> dict[str, Any]:
+        """Persist the compute node's own record that the wrapper was running.
+
+        The wrapper writes this file the moment it is inside the allocation, and
+        for a worker that died before any other write it is the only surviving
+        evidence that the physical allocation ever existed.  It is keyed by
+        ``task_id`` so exactly one receipt per Task exists, and it is cleared once
+        the canonical allocation rows are written.
+
+        ``observed_at`` is the wrapper's own stamp and is kept as a fact about
+        when the run began, not rewritten to the recovery time.
+        """
+        resource_class = rloan.resource_class_for_gres(gres)
+        # The wrapper's stamp is taken on the compute node; a clock that is
+        # ahead of this server's must not date a receipt into the future where a
+        # later reconciliation would read it as an allocation that has not
+        # started.
+        observed_at = min(float(observed_at), time.time())
+        with self.engine.connect() as conn:
+            conn.exec_driver_sql("BEGIN IMMEDIATE")
+            try:
+                row = conn.execute(
+                    select(self.resource_receipts_table).where(
+                        self.resource_receipts_table.c.task_id == task_id
+                    )
+                ).mappings().first()
+                if row is not None:
+                    # A receipt naming a different job is a replaced allocation:
+                    # the latest observation for this Task wins, so a restart
+                    # reconstructs the one allocation that was actually running.
+                    # The same job keeps its first stamp — the earliest evidence
+                    # of when the run began.
+                    if str(row["slurm_job_id"]) != str(slurm_job_id):
+                        conn.execute(
+                            update(self.resource_receipts_table)
+                            .where(self.resource_receipts_table.c.task_id == task_id)
+                            .values(
+                                slurm_job_id=str(slurm_job_id),
+                                stage_id=stage_id,
+                                observed_at=observed_at,
+                                cpus=cpus,
+                                gpus=gpus,
+                                resource_class=resource_class,
+                                authority=authority,
+                            )
+                        )
+                else:
+                    conn.execute(
+                        sqlite_insert(self.resource_receipts_table).values(
+                            id=f"{task_id}:{slurm_job_id}",
+                            task_id=task_id,
+                            stage_id=stage_id,
+                            slurm_job_id=str(slurm_job_id),
+                            observed_at=observed_at,
+                            cpus=int(cpus),
+                            gpus=int(gpus),
+                            resource_class=resource_class,
+                            authority=authority,
+                        )
+                    )
+                row = conn.execute(
+                    select(self.resource_receipts_table).where(
+                        self.resource_receipts_table.c.task_id == task_id
+                    )
+                ).mappings().one()
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        return dict(row)
+
+    def list_allocation_receipts(self) -> list[dict[str, Any]]:
+        """Every receipt whose allocation fact has not been reconciled yet."""
+        stmt = select(self.resource_receipts_table).order_by(
+            self.resource_receipts_table.c.observed_at
+        )
+        with self.engine.connect() as conn:
+            return [dict(row) for row in conn.execute(stmt).mappings().all()]
+
+    def allocation_receipt_exists(self, slurm_job_id: str) -> bool:
+        """Whether a receipt names this job, i.e. the node proved it was held."""
+        stmt = select(self.resource_receipts_table.c.id).where(
+            self.resource_receipts_table.c.slurm_job_id == str(slurm_job_id)
+        )
+        with self.engine.connect() as conn:
+            return conn.execute(stmt).first() is not None
+
+    def discard_allocation_receipt(self, task_id: str) -> None:
+        """Drop a Task's receipt once its allocation fact is durable."""
+        with self.engine.begin() as conn:
+            conn.execute(
+                delete(self.resource_receipts_table).where(
+                    self.resource_receipts_table.c.task_id == task_id
+                )
+            )
+
+    def observe_allocation_receipt(
+        self, receipt: dict[str, Any], *, user_id: int, stage_id: str | None = None, gres: str = ""
+    ) -> dict[str, Any]:
+        """Fold one wrapper receipt into the canonical allocation fact.
+
+        The receipt is consumed idempotently into the same ``slurm_job_id``-keyed
+        observation the live path writes — never into a second row family — and
+        the receipt row is dropped in the same transition that makes the fact
+        durable.  Recovering the same receipt twice, or recovering one the runner
+        already committed, therefore produces exactly one allocation.
+
+        ``stage_id`` falls back to the receipt's own record and ``gres`` to the
+        class it reported; the caller can supply the class from the Task's own
+        resource snapshot when the node could not name one.
+        """
+        observed = self.observe_allocation_start(
+            user_id=user_id,
+            task_id=str(receipt["task_id"]),
+            stage_id=stage_id if stage_id is not None else str(receipt.get("stage_id") or ""),
+            slurm_job_id=str(receipt["slurm_job_id"]),
+            cpu_cores=max(1, int(receipt.get("cpus") or 0)),
+            gpu_count=int(receipt.get("gpus") or 0),
+            started_at=float(receipt["observed_at"]),
+            gres=gres or str(receipt.get("resource_class") or ""),
+        )
+        return observed
 
     @staticmethod
     def _assert_allocation_identity(
@@ -3427,16 +3615,30 @@ class TaskDatabase:
         timer would hand the same entitlement to a second submission.  Those are
         reclaimed by :meth:`reclaim_queued_reservation` against scheduler
         evidence instead.
+
+        A ``held`` reservation whose Task already has a wrapper receipt is a
+        third case: the compute node proved the wrapper was running, so the
+        allocation is real even though the dispatch write never happened.  The
+        timer must not expire it — it is handed to the receipt reconciliation
+        instead, which records the allocation and settles it.
         """
         timestamp = time.time() if now is None else now
+        receipted = {
+            str(row["task_id"]) for row in self.list_allocation_receipts()
+        }
         with self.engine.begin() as conn:
+            conditions = [
+                self.resource_reservations_table.c.state == rloan.ReservationState.HELD.value,
+                self.resource_reservations_table.c.expires_at.is_not(None),
+                self.resource_reservations_table.c.expires_at <= timestamp,
+            ]
+            if receipted:
+                conditions.append(
+                    self.resource_reservations_table.c.task_id.notin_(receipted)
+                )
             result = conn.execute(
                 update(self.resource_reservations_table)
-                .where(
-                    self.resource_reservations_table.c.state == rloan.ReservationState.HELD.value,
-                    self.resource_reservations_table.c.expires_at.is_not(None),
-                    self.resource_reservations_table.c.expires_at <= timestamp,
-                )
+                .where(*conditions)
                 .values(state=rloan.ReservationState.EXPIRED.value, released_at=timestamp)
             )
             return result.rowcount

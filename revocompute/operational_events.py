@@ -60,6 +60,7 @@ EVENT_NAMES = frozenset(
         "resource.admission.reserved",
         "resource.admission.released",
         "resource.allocation.started",
+        "resource.allocation.recovered",
         "resource.allocation.settled",
         "resource.allocation.settlement_failed",
         "resource.policy.adjusted",
