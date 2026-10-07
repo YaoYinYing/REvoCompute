@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 import time
 import uuid
@@ -703,6 +704,40 @@ def test_run_compute_task_records_executor_error(monkeypatch, tmp_path):
     assert {item["path"] for item in manifest["artifacts"]} >= {"input.fasta", "task_failed.txt"}
     assert "scheduler connection denied" in (result_dir / "task_failed.txt").read_text(encoding="utf-8")
     assert not (Path(module.app.config["RESULTS_FOLDER"]) / f"{md5sum}_results.zip").exists()
+
+
+def test_failed_finalize_after_a_completed_purge_leaves_no_result_residue(monkeypatch, tmp_path):
+    """A purge that completed while the worker was failing stays authoritative.
+
+    Writing the failure report first and letting publication refuse it would
+    leave an unpaid, unpublished ``task_failed.txt`` on disk — residue no charge
+    accounts for, which the next retention pass then has to discover.  The
+    lifecycle row, not the execution status, decides whether the tree exists.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    md5sum = _insert_pending_task(module, tmp_path / "result")
+    task = module.task_store.get_task(md5sum)
+    result_dir = Path(module.app.config["storage_resolver"].get_task_root(task))
+
+    # The purge ran to completion while this worker still held the Task.
+    module.task_store.ensure_data_lifecycle(
+        md5sum, user_id=int(task["submitted_by_user_id"]), logical_bytes=4096, at=time.time()
+    )
+    assert module.task_store.claim_data_deletion(
+        md5sum, user_id=int(task["submitted_by_user_id"]), actor_user_id=None, at=time.time()
+    )
+    assert module.task_store.begin_data_purge(md5sum, at=time.time())
+    assert module.task_store.complete_data_purge(md5sum, at=time.time())
+    shutil.rmtree(result_dir, ignore_errors=True)
+    assert not result_dir.exists()
+
+    module.task_runtime._finalize_failed_results(task, "scheduler connection denied", finished_at=time.time())
+
+    assert not result_dir.exists()
+    assert not (result_dir / "task_failed.txt").exists()
+    assert not (result_dir / "manifest.json").exists()
+    # Nothing was charged for residue that does not exist.
+    assert module.task_store.logical_owned_bytes(int(task["submitted_by_user_id"])) == 0
 
 
 def test_run_compute_task_finalizes_uncompressed_result_manifest(monkeypatch, tmp_path):
