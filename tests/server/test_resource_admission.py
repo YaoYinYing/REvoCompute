@@ -1102,9 +1102,14 @@ def test_an_observed_allocation_hands_the_reservation_over_atomically(tmp_path):
     assert all(row["status"] == AllocationStatus.ACTIVE.value for row in facts)
     assert all(row["quantity"] is None for row in facts)
 
-    # The recorded allocation is the discriminator: the reclaim pass must never
-    # free the claim underneath it, and it is settleable from scheduler evidence.
-    assert database.reclaim_queued_reservation(task_id=task_id, at=at + 5) is True
+    # The recorded allocation is the discriminator the reclaim pass reads before
+    # it asks the scheduler anything, so a proven-occupied allocation is never
+    # freed underneath (the loop-level guard is exercised end to end in
+    # tests/server/test_gpu_credits.py, where the pass itself runs).
+    assert database.allocation_row_exists("7004") is True
+
+    # A second observation for the same job preserves the one recorded fact and
+    # its original start instant.
     assert database.observe_allocation_start(
         user_id=107,
         task_id=task_id,
@@ -1117,28 +1122,56 @@ def test_an_observed_allocation_hands_the_reservation_over_atomically(tmp_path):
     assert len(database.list_task_allocations(task_id)) == 2
 
 
-def test_a_crash_before_the_dispatch_transition_leaves_nothing_to_reclaim(tmp_path):
-    """A death before any write leaves no durable state and no charge.
+def test_a_crash_before_the_dispatch_transition_still_leaves_one_fact(tmp_path):
+    """A death before any DB write still leaves the receipt to recover from.
 
-    The other side of the crash window, and the honest one: the wrapper's
-    evidence never reached the store, so there is no allocation fact, no queued
-    reservation, and nothing that could be settled into a charge.  A request the
-    server never recorded is unknown, never a zero allocation.
+    This is the split the database cannot cover on its own: the allocation is
+    created by the scheduler, not by a write, so a worker killed after the
+    wrapper started but before its first transaction leaves no allocation row and
+    no queued reservation.  The wrapper's own durable receipt is what carries the
+    fact across that boundary — reconciliation folds exactly one allocation out
+    of it, dated by the compute node, and the hold is never expired underneath it.
     """
     database = TaskDatabase(str(tmp_path / "tasks.sqlite3"), monthly_gpu_seconds=1_000)
     at = _timestamp(2026, 9, 22)
     task_id = "a9" + "0" * 30
-    _reserve(database, 108, task_id=task_id, at=at)
+    assert _reserve(database, 108, task_id=task_id, at=at)["allowed"] is True
 
-    # The process died here: no dispatch write, no observation.
+    # The worker died here: no dispatch write, no observation.  Only the receipt
+    # the wrapper left on the compute node exists.
+    database.record_allocation_receipt(
+        task_id=task_id,
+        stage_id="model",
+        slurm_job_id="7005",
+        observed_at=at + 2,
+        cpus=2,
+        gpus=1,
+        gres="gpu:1",
+    )
 
     assert database.allocation_row_exists("7005") is False
     assert database.list_queued_reservations() == []
     assert database.list_task_allocations(task_id) == []
-    assert database.gpu_credit_summary(108, at=at + 10)["usage_gpu_seconds"] == 0
-    # The hold is still the Task's own pre-dispatch reservation, releasable, and
-    # never mistaken for a recorded allocation.
+    # The hold is not expired: the receipt is evidence the allocation happened,
+    # so the timer hands it to reconciliation rather than freeing it.
+    assert database.expire_stale_reservations(now=at + 100_000) == 0
     assert database.list_task_reservations(task_id)[0]["state"] == ReservationState.HELD.value
+
+    # Reconciliation folds the one receipt into the one allocation fact, dated by
+    # the node's own stamp and shaped by what the node reported.
+    receipt = database.list_allocation_receipts()[0]
+    observed = database.observe_allocation_receipt(receipt, user_id=108, gres="gpu:1")
+
+    assert observed["slurm_job_id"] == "7005"
+    assert {row["unit"] for row in database.list_task_allocations(task_id)} == {
+        "gpu_second",
+        "cpu_core_second",
+    }
+    assert {row["started_at"] for row in database.list_task_allocations(task_id)} == {at + 2}
+    # The receipt is consumed, so a second reconciliation cannot double-charge.
+    assert database.list_allocation_receipts() == []
+    database.settle_allocation_elapsed("7005", elapsed_seconds=90, finished_at=at + 92)
+    assert database.gpu_credit_summary(108, at=at + 92)["usage_gpu_seconds"] == 90
 
 
 def test_an_observation_without_a_live_hold_is_still_recorded(tmp_path):

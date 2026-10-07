@@ -18,7 +18,7 @@ from unittest.mock import patch
 
 import pytest
 from revocompute.job import JobState
-from revocompute.job.runners.slurm_runner import SlurmJob, _sanitize_name, _sh_quote
+from revocompute.job.runners.slurm_runner import JOB_ID_PREFIX, SlurmJob, _sanitize_name, _sh_quote
 from revocompute.resource_policy import ResolvedResources
 
 
@@ -844,7 +844,7 @@ def test_wrapper_observation_survives_a_crash_before_the_grant(tmp_path):
         _make_entities(),
         str(output_dir),
         resource_policy=_policy(gres="gpu:1", requires_gpu=True),
-        allocation_dispatched_callback=lambda job_id, at, executed=False: dispatches.append(
+        allocation_dispatched_callback=lambda job_id, at, executed=False, receipt=None: dispatches.append(
             (job_id, executed)
         ),
         allocation_started_callback=lambda _job_id, _at: None,
@@ -859,6 +859,80 @@ def test_wrapper_observation_survives_a_crash_before_the_grant(tmp_path):
     assert dispatches == [("4217", True)]
 
 
+def test_the_wrapper_receipt_precedes_its_stdout_line_and_parses(tmp_path):
+    """The compute node's receipt is durable before anything else is emitted.
+
+    Strict ordering is the point: recovery keys on the receipt, so it must exist
+    before the stdout line that tells the worker anything, and it must be written
+    into the host-only directory the container cannot reach.
+    """
+    output_dir = tmp_path / "out"
+    job = SlurmJob(
+        "abcdef1234567890",
+        _make_task_type(gpus=True),
+        _make_runner(),
+        _make_entities(),
+        str(output_dir),
+        resource_policy=_policy(gres="gpu:1", requires_gpu=True),
+    )
+    script = job._render_wrapper()
+    receipt_write = script.index("allocation.receipt")
+    stdout_line = script.index(f'echo "{JOB_ID_PREFIX}')
+    assert receipt_write < stdout_line
+    # Atomic publication and a durable flush, so a kill cannot leave a partial
+    # receipt that reads as a valid one.
+    assert "sync " in script
+    assert "mv -f -- " in script
+    assert subprocess.run(["bash", "-n"], input=script, text=True, check=False).returncode == 0
+
+    # The receipt lives beside the wrapper script, never inside the directory
+    # that is bind-mounted read-write into the task's container.
+    assert job.allocation_receipt_path.startswith(job.allocation_dir)
+    assert not job.allocation_receipt_path.startswith(str(output_dir) + os.sep)
+
+    # And it round-trips through the reader, which removes it once consumed.
+    os.makedirs(job.allocation_dir, exist_ok=True)
+    Path(job.allocation_receipt_path).write_text(
+        "schema_version=1\nslurm_job_id=4217\nobserved_at=1000\ncpus=2\ngpus=1\n", encoding="utf-8"
+    )
+    assert job.read_allocation_receipt() == {
+        "slurm_job_id": "4217",
+        "observed_at": 1000.0,
+        "cpus": 2,
+        "gpus": 1,
+    }
+    assert not Path(job.allocation_receipt_path).exists()
+    assert job.read_allocation_receipt() is None
+
+
+def test_an_untrusted_receipt_is_treated_as_absent(tmp_path):
+    """A receipt that is not exactly what the wrapper writes is not read.
+
+    The reader is the boundary between a file on disk and a durable fact, so a
+    truncated, mismatched, or unknown-schema receipt returns nothing rather than
+    being coerced into a plausible allocation.
+    """
+    output_dir = tmp_path / "out"
+    job = SlurmJob(
+        "abcdef1234567890",
+        _make_task_type(gpus=True),
+        _make_runner(),
+        _make_entities(),
+        str(output_dir),
+        resource_policy=_policy(gres="gpu:1", requires_gpu=True),
+    )
+    os.makedirs(job.allocation_dir, exist_ok=True)
+    for payload in (
+        "slurm_job_id=4217\nobserved_at=1000\n",  # no schema
+        "schema_version=2\nslurm_job_id=4217\nobserved_at=1000\n",  # unknown schema
+        "schema_version=1\nslurm_job_id=not-a-job\nobserved_at=1000\n",  # not an id
+        "schema_version=1\nslurm_job_id=4217\nobserved_at=soon\n",  # unparsable stamp
+        "schema_version=1\nslurm_job_id=4217\n",  # no stamp at all
+    ):
+        Path(job.allocation_receipt_path).write_text(payload, encoding="utf-8")
+        assert job.read_allocation_receipt() is None
+
+
 def test_a_failed_observation_persist_is_never_swallowed(tmp_path):
     """A store failure on the wrapper's own id line must stop the run.
 
@@ -870,7 +944,7 @@ def test_a_failed_observation_persist_is_never_swallowed(tmp_path):
     output_dir = tmp_path / "out"
     attempts = []
 
-    def failing(job_id, at, executed=False):
+    def failing(job_id, at, executed=False, receipt=None):
         attempts.append((job_id, executed))
         raise RuntimeError("database is locked")
 
@@ -917,7 +991,7 @@ def test_poll_fails_closed_when_the_observation_was_never_persisted(tmp_path):
         _make_entities(),
         str(output_dir),
         resource_policy=_policy(gres="gpu:1", requires_gpu=True),
-        allocation_dispatched_callback=lambda job_id, at, executed=False: dispatches.append(
+        allocation_dispatched_callback=lambda job_id, at, executed=False, receipt=None: dispatches.append(
             (job_id, executed)
         ),
         allocation_started_callback=lambda job_id, at: starts.append((job_id, at)),
@@ -953,7 +1027,7 @@ def test_wrapper_observation_is_recorded_when_stderr_won_the_identity_race(tmp_p
         _make_entities(),
         str(output_dir),
         resource_policy=_policy(gres="gpu:1", requires_gpu=True),
-        allocation_dispatched_callback=lambda job_id, at, executed=False: dispatches.append(
+        allocation_dispatched_callback=lambda job_id, at, executed=False, receipt=None: dispatches.append(
             (job_id, executed)
         ),
         allocation_started_callback=lambda _job_id, _at: None,
@@ -1042,7 +1116,7 @@ def test_a_queued_stderr_banner_never_claims_an_allocation(tmp_path):
         _make_entities(),
         str(output_dir),
         resource_policy=_policy(gres="gpu:1", requires_gpu=True),
-        allocation_dispatched_callback=lambda job_id, at, executed=False: dispatches.append(
+        allocation_dispatched_callback=lambda job_id, at, executed=False, receipt=None: dispatches.append(
             (job_id, at, executed)
         ),
         allocation_started_callback=lambda job_id, at: starts.append((job_id, at)),

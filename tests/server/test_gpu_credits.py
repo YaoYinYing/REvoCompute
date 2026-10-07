@@ -741,18 +741,19 @@ def test_reconciliation_never_frees_a_commitment_over_a_recorded_allocation(monk
 
 
 def test_a_crash_after_the_wrapper_line_never_reclaims_the_commitment(monkeypatch, tmp_path):
-    """The pre-commit split: the wrapper's line is the only durable evidence.
+    """The pre-first-write split: the receipt, not the write, carries the fact.
 
-    This is the crash window the atomic transition closes, injected end to end.
-    The wrapper printed its own job id and the dispatch callback began, but the
-    process died before any allocation decision; the observation itself never
-    ran.  The scheduler now reports the request terminal, so the reclaim pass is
-    the only thing left that could act — and it must not: a request with no
-    durable evidence on either side is left alone, never charged a fabricated
-    zero and never freed as though an allocation had never existed.
+    This is the crash window injected end to end.  The wrapper is already running
+    on a compute node and has left its durable receipt, but the worker dies
+    before any of its own writes for that allocation — no observation, no queued
+    reservation.  The scheduler then reports the request terminal, so the reclaim
+    pass is the only thing left that could act, and it must not: a reservation
+    that names a job the compute node proved it held is never freed as "no
+    allocation".
 
-    The failure is injected by making the observation write raise, which is
-    exactly what a busy database or a full disk looks like from the caller.
+    Recovery keys on the receipt.  The allocation is reconstructed exactly once,
+    from the node's own start stamp, and settles from the scheduler's elapsed
+    time — never a fabricated zero.
     """
     module = _load_pssm_module(
         monkeypatch,
@@ -778,15 +779,27 @@ def test_a_crash_after_the_wrapper_line_never_reclaims_the_commitment(monkeypatc
         resource_policy=_gpu_policy(),
     )
     with pytest.raises(RuntimeError, match="database is locked"):
-        callbacks[0]("8808", at + 1, True)
+        callbacks[0]("8808", at + 1, True, {"slurm_job_id": "8808", "observed_at": at + 2, "cpus": 1, "gpus": 1})
 
-    # Nothing durable exists: the observation never committed, and the
-    # reservation was not handed over in a separate write before it.
+    # The worker's own writes left nothing: the observation never committed and
+    # the reservation was not handed over in a separate write before it.
     assert module.task_store.allocation_row_exists("8808") is False
     assert module.task_store.list_queued_reservations() == []
     assert module.task_store.list_task_reservations(task_id)[0]["state"] == "held"
 
+    # But the compute node proved the allocation existed, so recovery cannot
+    # treat the request as nothing at all.
     module.task_store.observe_allocation_start = original_observe
+    module.task_store.record_allocation_receipt(
+        task_id=task_id,
+        stage_id="model",
+        slurm_job_id="8808",
+        observed_at=at + 2,
+        cpus=1,
+        gpus=1,
+        gres="gpu:1",
+    )
+
     monkeypatch.setattr(module.task_runtime.shutil, "which", lambda command: f"/usr/bin/{command}")
     monkeypatch.setattr(
         module.task_runtime.subprocess,
@@ -794,13 +807,64 @@ def test_a_crash_after_the_wrapper_line_never_reclaims_the_commitment(monkeypatc
         lambda *args, **kwargs: SimpleNamespace(stdout="JobId=8808 JobState=COMPLETED RunTime=00:00:45\n"),
     )
 
-    # The reclaim pass must not free a request the server never recorded: the
-    # hold is the Task's own and a scheduler identity is absent from the
-    # reservation, so the answer is "ambiguous, keep the commitment".
-    assert module.task_runtime._reclaim_abandoned_reservations(now=at + 10) == 0
+    # The reclaim pass must never free a hold whose job the node proved it held:
+    # the receipt is the discriminator, checked before any scheduler question.
+    assert module.task_runtime._reclaim_abandoned_reservations(now=at + 100_000) == 0
+    assert module.task_store.list_task_reservations(task_id)[0]["state"] == "held"
+
+    # Reconciliation reconstructs exactly one allocation fact from the receipt,
+    # then settles it from the one authoritative elapsed duration.
+    assert module.task_runtime._reconcile_slurm_allocations() == {"settled": 1, "active": 0, "review": 0}
+    facts = module.task_store.list_task_allocations(task_id)
+    assert len(facts) == 2
+    assert {row["started_at"] for row in facts} == {at + 2}
+    assert module.task_store.gpu_credit_summary(94, at=at + 100)["usage_gpu_seconds"] == 45
+    # Consumed, so a second pass cannot charge it twice.
+    assert module.task_store.list_allocation_receipts() == []
     assert module.task_runtime._reconcile_slurm_allocations() == {"settled": 0, "active": 0, "review": 0}
-    # Never charged a fabricated zero, and never settled into a false usage row.
-    assert module.task_store.gpu_credit_summary(94, at=at + 10)["usage_gpu_seconds"] == 0
+    assert module.task_store.gpu_credit_summary(94, at=at + 100)["usage_gpu_seconds"] == 45
+
+
+def test_a_receipt_naming_a_job_the_scheduler_does_not_own_is_never_charged(monkeypatch, tmp_path):
+    """A receipt is a claim: it is corroborated before anything is recorded.
+
+    The wrapper writes the receipt on a compute node, so it is only as
+    trustworthy as the job it names.  A receipt for a job the scheduler does not
+    report leaves no allocation, no charge, and no vanished evidence — it stays
+    for an operator rather than being silently dropped.
+    """
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    at = _timestamp(2026, 9, 5)
+    task_id = "4" * 32
+    _own_task(module.task_store, task_id, user_id=96)
+    module.task_store.record_allocation_receipt(
+        task_id=task_id,
+        stage_id="model",
+        slurm_job_id="8810",
+        observed_at=at + 2,
+        cpus=1,
+        gpus=1,
+        gres="gpu:1",
+    )
+
+    monkeypatch.setattr(module.task_runtime.shutil, "which", lambda command: f"/usr/bin/{command}")
+    monkeypatch.setattr(
+        module.task_runtime.subprocess,
+        "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            module.task_runtime.subprocess.SubprocessError("no such job")
+        ),
+    )
+
+    assert module.task_runtime._reconcile_slurm_allocations() == {"settled": 0, "active": 0, "review": 0}
+    assert module.task_store.allocation_row_exists("8810") is False
+    assert module.task_store.gpu_credit_summary(96, at=at + 10)["usage_gpu_seconds"] == 0
+    # Not charged, but not discarded either: an unverifiable claim stays visible.
+    assert [row["slurm_job_id"] for row in module.task_store.list_allocation_receipts()] == ["8810"]
 
 
 def test_the_observation_and_the_reservation_are_one_durable_transition(monkeypatch, tmp_path):
