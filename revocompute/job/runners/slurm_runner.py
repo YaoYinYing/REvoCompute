@@ -335,7 +335,7 @@ class SlurmJob(Job):
             raise RuntimeError(f"SLURM submission did not return a scheduler job ID{suffix}")
         self._job_id = self._slurm_job_id
         # Snapshot before the callbacks run: each may block, and this is the only
-        # stable answer to "does the wrapper wait for approval?".
+        # stable answer to "does the wrapper gate on resource accounting?".
         accounting_enabled = (
             self._allocation_dispatched_callback is not None
             or self._allocation_started_callback is not None
@@ -374,8 +374,8 @@ class SlurmJob(Job):
     def _notify_dispatched(self) -> None:
         """Announce that the scheduler owns the request, durably and once.
 
-        Runs inside ``submit()`` while the wrapper is still waiting on its
-        approval gate, so when it returns the scheduler-owned reservation and the
+        Runs inside ``submit()`` while the wrapper is still held at its start
+        gate, so when it returns the scheduler-owned reservation and the
         persisted job identity exist as one state — the pair a later
         reconciliation reads to decide whether a request can still be alive.
         Idempotent: a repeated identity observation is not a second dispatch.
