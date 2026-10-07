@@ -287,5 +287,3 @@ def canonical_relative_path(raw_path: str) -> tuple[str | None, str | None]:
     if len(relative_path.encode("utf-8")) > MAX_INPUT_RELATIVE_PATH_BYTES:
         return None, "input_path_invalid"
     return relative_path, None
-
-
