@@ -2646,6 +2646,10 @@ class TaskDatabase:
         unknown, never a zero.  :meth:`record_allocation_start` later promotes
         the same rows to their full lifecycle provenance and makes the grant
         decision; neither call creates a second fact.
+
+        ``slurm_job_id`` is the allocation identity and is required: an
+        observation with nothing to key it to could not be settled or
+        de-duplicated.  It is written together with the per-unit rows.
         """
         if gpu_count < 0:
             raise ValueError("gpu_count must be non-negative")
@@ -2684,6 +2688,26 @@ class TaskDatabase:
                     resource_class=resource_class,
                     timestamp=timestamp,
                     evidence_source=rloan.EvidenceSource.RUNNER_OBSERVATION.value,
+                )
+                # The reservation is handed to the scheduler in the same commit
+                # as the observation: the two facts are written together so that
+                # no durable state has a scheduler-owned reservation without the
+                # allocation its own job id proves.  Idempotent — a Task whose
+                # reservation was already queued or consumed keeps its current
+                # state, and the observation is unaffected.
+                conn.execute(
+                    update(self.resource_reservations_table)
+                    .where(
+                        self.resource_reservations_table.c.task_id == task_id,
+                        self.resource_reservations_table.c.state == rloan.ReservationState.HELD.value,
+                    )
+                    .values(
+                        state=rloan.ReservationState.QUEUED.value,
+                        reason_code=rloan.ReservationReason.DISPATCHED.value,
+                        dispatched_at=timestamp,
+                        scheduler_job_id=str(slurm_job_id),
+                        expires_at=None,
+                    )
                 )
                 row = (
                     conn.execute(
