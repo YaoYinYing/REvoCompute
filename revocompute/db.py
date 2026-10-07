@@ -10,6 +10,7 @@ import json
 import logging
 import math
 import os
+import re
 import secrets
 import time
 from dataclasses import dataclass
@@ -42,6 +43,11 @@ from revocompute.schema_epoch import require_current_schema
 
 
 DEFAULT_MONTHLY_GPU_SECONDS = 60_000
+
+#: The digest shape a result-publication anchor must carry.  The same shape
+#: ``StorageResolver`` accepts for a published artifact's declared digest, so an
+#: anchor can never be recorded in a form the publication reader cannot match.
+_MANIFEST_SHA256 = re.compile("[0-9a-f]{64}\\Z")
 
 #: What makes one recorded resource observation the same event as another.
 #: ``attempt`` and ``work_item`` are what keep a re-drained stdout log — REST
@@ -443,6 +449,32 @@ class TaskDatabase:
             Column("progress_json", Text, nullable=False, default="{}"),
             Column("outcome", String, nullable=False, default=""),
             Column("updated_at", Float, nullable=False),
+        )
+        # The publication identity of a finalized result manifest, in canonical
+        # server-owned state.  The result directory belongs to the runner's
+        # Unix identity, so a digest recorded *inside* it would be written and
+        # rewritten by the same principal that writes the manifest: a
+        # post-finalization replacement could then supply its own size and
+        # SHA-256 declarations and self-authorize a new publication.  This row
+        # is the only record of what Core published that the Runner-writable
+        # tree cannot rewrite, so it is what makes "the manifest on disk is
+        # still the publication Core finalized" an answerable question.
+        #
+        # A separate table rather than columns on ``tasks`` for the same reason
+        # as the tables above: ``require_current_schema`` rejects a database
+        # whose ``tasks`` table lacks a declared column, so a fresh table is
+        # the addition that cannot invalidate an existing deployment's row set.
+        # No foreign key, for the reason recorded on ``task_progress_table``:
+        # an identical resubmission reuses the id, so the row's lifetime is the
+        # task's, and :meth:`delete_task` removes both together.
+        self.result_publications_table = Table(
+            "result_publications",
+            self.metadata,
+            Column("task_id", String(32), primary_key=True),
+            Column("manifest_sha256", String(64), nullable=False),
+            Column("manifest_size", Integer, nullable=False),
+            Column("revision", Integer, nullable=False, default=1),
+            Column("published_at", Float, nullable=False),
         )
         self._initialize()
 
@@ -921,6 +953,11 @@ class TaskDatabase:
         with self.engine.begin() as conn:
             conn.execute(self.tasks_table.delete().where(self.tasks_table.c.md5sum == md5sum))
             conn.execute(self.task_progress_table.delete().where(self.task_progress_table.c.task_id == md5sum))
+            conn.execute(
+                self.result_publications_table.delete().where(
+                    self.result_publications_table.c.task_id == md5sum
+                )
+            )
             conn.execute(
                 self.resource_observations_table.delete().where(
                     self.resource_observations_table.c.task_id == md5sum
@@ -1485,6 +1522,56 @@ class TaskDatabase:
         record = dict(row)
         record["progress"] = json.loads(record.pop("progress_json") or "{}")
         return record
+
+    def record_result_publication(
+        self, task_id: str, *, manifest_sha256: str, manifest_size: int, published_at: float
+    ) -> int:
+        """Anchor one finalized result manifest's identity in server-owned state.
+
+        The anchor is written in the same transaction that would record any
+        earlier revision of the same task's manifest, and it carries an
+        advancing ``revision`` rather than a bare digest: a re-publish (the
+        failed-task report, or a second finalization of a recovered job) is a
+        new revision of *this* task's publication, and a later consumer reads
+        the newest one.  The digest is validated here rather than trusted, so a
+        caller cannot anchor a value the reader could never match.
+        """
+        digest = str(manifest_sha256 or "").strip().lower()
+        if not _MANIFEST_SHA256.fullmatch(digest):
+            raise ValueError("manifest_sha256 must be a hex SHA-256 digest")
+        if not isinstance(manifest_size, int) or isinstance(manifest_size, bool) or manifest_size < 0:
+            raise ValueError("manifest_size must be a non-negative integer")
+        with self.engine.begin() as conn:
+            revision = conn.execute(
+                select(self.result_publications_table.c.revision).where(
+                    self.result_publications_table.c.task_id == task_id
+                )
+            ).scalar_one_or_none()
+            stmt = sqlite_insert(self.result_publications_table).values(
+                task_id=task_id,
+                manifest_sha256=digest,
+                manifest_size=manifest_size,
+                revision=(int(revision) + 1) if revision is not None else 1,
+                published_at=published_at,
+            )
+            stmt = stmt.on_conflict_do_update(
+                index_elements=[self.result_publications_table.c.task_id],
+                set_={
+                    "manifest_sha256": stmt.excluded.manifest_sha256,
+                    "manifest_size": stmt.excluded.manifest_size,
+                    "revision": stmt.excluded.revision,
+                    "published_at": stmt.excluded.published_at,
+                },
+            )
+            conn.execute(stmt)
+        return (int(revision) + 1) if revision is not None else 1
+
+    def get_result_publication(self, task_id: str) -> dict[str, Any] | None:
+        """Return the anchored publication identity for one task, if any."""
+        stmt = select(self.result_publications_table).where(self.result_publications_table.c.task_id == task_id)
+        with self.engine.connect() as conn:
+            row = conn.execute(stmt).mappings().first()
+        return dict(row) if row else None
 
     def list_resource_observations(
         self,

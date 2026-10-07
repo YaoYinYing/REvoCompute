@@ -354,13 +354,14 @@ def execute(request_path: str | os.PathLike[str]) -> dict[str, Any]:
     # task_runtime is imported above so callers can replace the execution hook
     # in contract tests; its configuration is resolved from the worker env.
     from revocompute.input_validators import validate_input_file, validate_logical_input
+    from revocompute.ingress_security import ValidationReceipt
     from revocompute.schemas import TaskSubmissionRequest
     from revocompute.storage import StorageResolver
 
     submission = TaskSubmissionRequest.model_validate({"task_type": task_type, "params": request["parameters"]})
     parameters = submission.coerce_params()
     storage_key = f"live-test-{os.environ.get('ENABLED_TASKRUNNERS', 'runner')}"
-    resolver = StorageResolver(str(scratch / "results"), str(scratch / "workspaces"))
+    resolver = StorageResolver(str(scratch / "results"), str(scratch / "workspaces"), task_runtime.task_store)
     identity = {"md5sum": task_id, "storage_key": storage_key}
     snapshot_root = Path(resolver.get_input_root(identity)) / "inputs"
     output_root = Path(resolver.get_output_root(identity))
@@ -406,6 +407,14 @@ def execute(request_path: str | os.PathLike[str]) -> dict[str, Any]:
         error = validate_logical_input(str(source), format_name, role.type)
         if error:
             raise ValueError(error)
+        receipt = ValidationReceipt(
+            sha256=digest,
+            size=source.stat().st_size,
+            format=format_name,
+            logical_type=role.type,
+            relative_path=source.name,
+            role=role_name,
+        ).as_record()
         file_entity = {
                 "name": role_name,
                 "type": "file",
@@ -417,7 +426,7 @@ def execute(request_path: str | os.PathLike[str]) -> dict[str, Any]:
                 "hash": digest,
                 "format": format_name,
                 "logical_type": role.type,
-                "validation": {"status": "valid"},
+                "validation_receipt": receipt,
                 "snapshot_path": str(destination),
                 "snapshot_root": str(snapshot_root),
                 "workspace_key": storage_key,
@@ -432,7 +441,7 @@ def execute(request_path: str | os.PathLike[str]) -> dict[str, Any]:
                 "format": format_name,
                 "logical_type": role.type,
                 "sha256": digest,
-                "validation": {"status": "valid"},
+                "validation_receipt": receipt,
             }
         )
     for role in task_type_def.inputs:

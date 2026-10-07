@@ -2234,6 +2234,11 @@ export interface components {
         };
         TaskResultCapability: {
             available: boolean;
+            /**
+             * @description Publication state of the task's result. "available" is the only state whose manifest may be requested through manifest_url; every other state names why the result is not readable. "unanchored" is the state of results finalized before server-owned publication identity existed; "anchor_mismatch" means the manifest on disk is no longer the one Core published.
+             * @enum {string}
+             */
+            publication: "available" | "not_finalized" | "unanchored" | "manifest_missing" | "manifest_unreadable" | "anchor_mismatch" | "anchor_invalid";
             page_url: string;
             manifest_url: string;
             archive_ready: boolean;
@@ -2328,6 +2333,11 @@ export interface components {
             results_url: string;
             /** @description True only when the finalized manifest currently exists and may be requested through results_url. */
             result_available: boolean;
+            /**
+             * @description Publication state of the task's result; null when no task row is visible. A terminal task whose results are not readable reports the state that explains it (for example "unanchored" for a result finalized before server-owned publication identity existed) rather than only result_available=false. The same state vocabulary is reported on the results endpoint's 404 body.
+             * @enum {string|null}
+             */
+            result_publication?: "available" | "not_finalized" | "unanchored" | "manifest_missing" | "manifest_unreadable" | "anchor_mismatch" | "anchor_invalid" | null;
             /** @description Current execution state when status retains a legacy compatibility message */
             task_status?: string;
             error?: string;
@@ -4802,7 +4812,7 @@ export interface operations {
                 content?: never;
             };
             400: components["responses"]["BadRequest"];
-            /** @description Result does not exist, is not finalized, or is not visible to the current session */
+            /** @description Result does not exist, is not finalized, is not readable, or is not visible to the current session. A terminal task whose result exists but is not a readable publication returns a bounded `result_publication` state in the body (`unanchored` for a result finalized before server-owned publication identity existed, `anchor_mismatch` for a manifest replaced after publication) with the reason in `message`. */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -4981,7 +4991,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
-            /** @description Task results are not ready */
+            /** @description Task results are not ready, or the published result is not readable. A quarantined result (`result_publication` of `unanchored`, `anchor_mismatch`, `manifest_missing`, `manifest_unreadable`, or `anchor_invalid`) cannot be packed into a new archive; the body carries the state and the reason. */
             409: {
                 headers: {
                     [name: string]: unknown;

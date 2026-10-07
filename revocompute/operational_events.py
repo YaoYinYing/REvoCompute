@@ -47,6 +47,7 @@ EVENT_NAMES = frozenset(
         "artifact.validation.started",
         "artifact.validation.failed",
         "manifest.published",
+        "manifest.publication_quarantined",
         "archive.requested",
         "archive.completed",
         "gpu.credit.checked",

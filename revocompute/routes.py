@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import io
 import json
 import logging
 import mimetypes
@@ -44,6 +45,7 @@ from flask import (
 )
 from pydantic import ValidationError
 from werkzeug.exceptions import RequestEntityTooLarge
+from werkzeug.http import parse_range_header
 from revocompute.access_control import (
     authorize,
     policy_state,
@@ -97,7 +99,14 @@ from revocompute.auth import (
     validate_reset_token,
 )
 from revocompute.input_validators import validate_input_file, validate_logical_input
+from revocompute.input_validators.isolated_validation import VALIDATOR_RESOURCE_LIMIT_ERROR
 from revocompute.input_validators.json_file import json_error_message, parse_bounded_json
+from revocompute.ingress_security import (
+    ValidationReceipt,
+    canonical_relative_path,
+    event_for_code,
+    phase_for_code,
+)
 from revocompute.ndarray import ArrayAccessError, MAX_PROJECTION_ELEMENTS, read_array_projection
 from revocompute.db import GPUCreditUnavailableError, TaskIdReservedError
 from revocompute.operational_events import emit_event
@@ -110,6 +119,15 @@ from revocompute.resource_policy import (
     resolve_submission_resources,
 )
 from revocompute.result_projection import project_result_manifest
+from revocompute.storage import (
+    PUBLICATION_ANCHOR_INVALID,
+    PUBLICATION_ANCHOR_MISMATCH,
+    PUBLICATION_AVAILABLE,
+    PUBLICATION_MANIFEST_MISSING,
+    PUBLICATION_MANIFEST_UNREADABLE,
+    PUBLICATION_NOT_FINALIZED,
+    PUBLICATION_UNANCHORED,
+)
 from revocompute.result_storyboard import ResultContractError, expected_file_tree, runner_root, storyboard_declaration
 from revocompute import runtime_bundle
 from revocompute.schemas import (
@@ -173,11 +191,13 @@ from jsonschema import ValidationError as JSONSchemaValidationError
 from jsonschema import validate as validate_json_schema
 from sqlalchemy.exc import IntegrityError
 from werkzeug.security import check_password_hash, generate_password_hash
-from werkzeug.utils import secure_filename
 
 MAX_TABLE_PAGE_BYTES = 8 * 1024 * 1024
 MAX_TABLE_CELL_BYTES = 16 * 1024
 _TABLE_PAGE_ENVELOPE_BYTES = 512
+# Read a verified descriptor in bounded chunks; no read is ever sized by the
+# artifact, so a large download streams instead of issuing one huge read.
+_STREAM_CHUNK_BYTES = 64 * 1024
 
 # ---------------------------------------------------------------------------
 # Page routes
@@ -509,13 +529,21 @@ def _tool_task_artifact(tool_call_id: str, role: Any, expression: str) -> dict[s
     resolved = current_app.config["storage_resolver"].resolve_artifact(source, logical_path)
     if resolved is None:
         raise ToolWorkspaceError("Task artifact reference is unavailable")
-    item = tool_workspace.materialize_file(
-        tool_call_id,
-        role=role.name,
-        filename=Path(logical_path).name,
-        accepted_formats=role.formats,
-        source=resolved["physical_path"],
-    )
+    stream = resolved.pop("verified_stream")
+    try:
+        # Materialize from the verified descriptor, not from ``physical_path``:
+        # the bytes copied into the Tool workspace are exactly the bytes whose
+        # manifest identity was checked, so a replacement between resolution and
+        # materialization cannot enter the workspace.
+        item = tool_workspace.materialize_stream(
+            tool_call_id,
+            role=role.name,
+            filename=Path(logical_path).name,
+            accepted_formats=role.formats,
+            stream=stream,
+        )
+    finally:
+        stream.close()
     item["source"] = {
         "kind": "task_artifact",
         "task_id": source_id.lower(),
@@ -946,7 +974,16 @@ def task_type_form(name: str):
 @app.route("/compute/api/types/<name>/workspace/normalize", methods=["POST"])
 @login_required
 def normalize_workspace(name: str):
-    """Normalize one stateful capability through its server-owned adapter."""
+    """Normalize one stateful capability through its server-owned adapter.
+
+    This runs the same Runner-owned normalizer the submission path runs, so it
+    carries the same CSRF gate as every other state-changing POST: the caller
+    must present a Bearer token.  The endpoint has no side effects, but keeping
+    "state-changing POST" one rule rather than a per-route judgement call is what
+    keeps the next POST from being the one that is missed.
+    """
+    if blocked := require_bearer_auth():
+        return blocked
     try:
         tt, _ = _get_task_type(name)
     except KeyError:
@@ -975,51 +1012,6 @@ class InputPreflightError(ValueError):
         super().__init__(message)
         self.item = item
         self.code = code
-
-
-# NAME_MAX is 255 on Linux; leave room for the 21-byte `.tmp_<16 hex>_`
-# quarantine prefix plus the role subdirectory.  200 bytes is generous for any
-# real input filename and cannot overflow the prefix.
-_MAX_INPUT_COMPONENT_BYTES = 200
-# PATH_MAX is 4096 on Linux and the snapshot root sits well inside it, so 1024
-# bytes of joined relative path is both far below the limit and far above any
-# real nested upload.
-_MAX_INPUT_RELATIVE_PATH_BYTES = 1024
-
-
-def _safe_input_relative_path(raw_path: str) -> str | None:
-    source = unicodedata.normalize("NFKC", str(raw_path or "")).strip()
-    if not source or any(ord(character) < 32 or ord(character) == 127 for character in source):
-        return None
-    decoded = unquote(source)
-    for candidate in (source, decoded):
-        slash_normalized = candidate.replace("\\", "/")
-        drive, _tail = ntpath.splitdrive(candidate)
-        if drive or ntpath.isabs(candidate) or slash_normalized.startswith("/"):
-            return None
-        parts = slash_normalized.split("/")
-        if not parts or any(part in {"", ".", ".."} or part.startswith(".") for part in parts):
-            return None
-    normalized = source.replace("\\", "/")
-    raw_parts = normalized.split("/")
-    safe_parts = [secure_filename(part) for part in raw_parts]
-    if any(not part for part in safe_parts):
-        return None
-    # A name this long cannot become a file: quarantine prefixes 21 bytes to the
-    # basename (`.tmp_<16 hex>_`), so an unbounded name overflows NAME_MAX and
-    # the OSError used to reach the client as an unhandled 500.  Reject at the
-    # contract boundary with a normal 400 instead.  `secure_filename` only
-    # expands names, so measuring the sanitized form is the conservative check.
-    if any(len(part.encode("utf-8")) > _MAX_INPUT_COMPONENT_BYTES for part in safe_parts):
-        return None
-    # Bounding each component is not enough: the snapshot copy joins every one
-    # of them under the role directory, so a path with ~20 legal components
-    # still overflows PATH_MAX and reaches `_prepare_task_record` as the same
-    # unhandled OSError.  Bound the joined path too.
-    relative_path = "/".join(safe_parts)
-    if len(relative_path.encode("utf-8")) > _MAX_INPUT_RELATIVE_PATH_BYTES:
-        return None
-    return relative_path
 
 
 def _input_contract_error(code: str, message: str, *, role: str | None = None, format_name: str | None = None):
@@ -1075,11 +1067,22 @@ def _validate_input_uploads(task_type: str | None = None):
     seen_paths: set[tuple[str, str]] = set()
     for index, (uploaded, role_name) in enumerate(zip(uploads, submitted_roles, strict=True)):
         raw_path = submitted_paths[index] if index < len(submitted_paths) else uploaded.filename
-        safe_path = _safe_input_relative_path(raw_path)
+        safe_path, reason = canonical_relative_path(raw_path)
         role = _role_by_name(tt, role_name)
-        key = (role_name, safe_path or "")
-        if safe_path is None or key in seen_paths:
-            return None, _input_contract_error("input_path_invalid", "Invalid or duplicate input path")
+        if safe_path is None:
+            return None, _input_contract_error(reason or "input_path_invalid", "Invalid input path")
+        key = (role_name, safe_path)
+        if key in seen_paths:
+            # The canonical path is the namespace identity, so a repeat is either
+            # an outright duplicate claim or a collision the sanitizer created
+            # (two distinct submissions folding onto one path).  Both are
+            # failures: the snapshot is a filesystem, and one submission must
+            # never silently overwrite another's bytes.
+            return None, _input_contract_error(
+                "input_namespace_collision",
+                "Two inputs resolve to the same path within one role.",
+                role=role_name,
+            )
         format_name = os.path.splitext(safe_path)[1].lower().removeprefix(".")
         if role is None or format_name not in role.formats:
             return None, _input_contract_error(
@@ -1090,6 +1093,22 @@ def _validate_input_uploads(task_type: str | None = None):
             )
         seen_paths.add(key)
         validated.append((uploaded, safe_path, role_name, format_name))
+    # A path may not also be a directory prefix of another path in the same role:
+    # ``x.pdb`` cannot be both a file and the directory ``x.pdb/`` the other path
+    # needs.  The collision set above only catches exact repeats, so a prefix
+    # pair would otherwise reach materialization, where ``copyfile`` fails and the
+    # request dies as a 500 with a durable failed row and orphan state.
+    for _uploaded, safe_path, role_name, _format in validated:
+        prefix = safe_path + "/"
+        if any(
+            other_role == role_name and other_path.startswith(prefix)
+            for _other_uploaded, other_path, other_role, _other_format in validated
+        ):
+            return None, _input_contract_error(
+                "input_namespace_collision",
+                f"Input path {safe_path!r} is also used as a directory by another input.",
+                role=role_name,
+            )
     return validated, None
 
 
@@ -1148,7 +1167,25 @@ def _quarantine_uploaded_inputs(
                 error = validate_logical_input(item["blob_path"], item["format"], logical_type)
                 code = "input_logical_type_invalid"
             if error is not None:
+                # A resource-limit outcome carries the bounded code itself, so a
+                # hostile input that exhausted the isolated parser is reported as
+                # a resource limit rather than as an indistinguishable malformed
+                # file whose only distinguishing detail is prose.
+                if error == VALIDATOR_RESOURCE_LIMIT_ERROR:
+                    code = VALIDATOR_RESOURCE_LIMIT_ERROR
                 raise InputPreflightError(item, code, error)
+            # Bind the admission decision to the exact bytes just validated.  The
+            # digest is computed from the quarantine file that validation read,
+            # so the receipt names the byte stream execution will later consume,
+            # not a path that could be re-resolved to something else.
+            item["validation_receipt"] = ValidationReceipt(
+                sha256=item["hash"],
+                size=item["size"],
+                format=item["format"],
+                logical_type=logical_type,
+                relative_path=item["relative_path"],
+                role=item["role"],
+            ).as_record()
     except Exception:
         for path in quarantined:
             if os.path.exists(path):
@@ -1167,7 +1204,11 @@ def _derive_task_id(
     identity_inputs: dict[str, list[dict[str, str]]] = {}
     for item in saved:
         identity_inputs.setdefault(item["role"], []).append(
-            {"path": item["relative_path"], "sha256": item["hash"]}
+            {
+                "path": item["relative_path"],
+                "sha256": item["hash"],
+                "validation_receipt": item.get("validation_receipt"),
+            }
         )
     identity = json.dumps(
         {
@@ -1224,11 +1265,34 @@ def _resolve_task_owner() -> dict[str, Any]:
     return {"submitted_by_user_id": int(user["id"]), "storage_key": storage_key}
 
 
-def _result_manifest_available(task: dict[str, Any]) -> bool:
-    try:
-        return os.path.isfile(current_app.config["storage_resolver"].get_manifest_path(task))
-    except (OSError, ValueError):
-        return False
+def _result_publication_state(task: dict[str, Any]) -> str:
+    """Return the bounded publication state of a task's result.
+
+    One reader answers for every surface: the status payload, the results route,
+    the archive, and the readiness probes all report the same state, so a
+    consumer never has to guess why a result it can see is not readable.
+    """
+    return current_app.config["storage_resolver"].publication_state(task)
+
+
+#: Operator- and client-facing reason for each non-available publication state.
+#: The state is the machine-readable fact; this is its human-readable projection,
+#: and it is the difference between "quarantined, and here is why" and a bare
+#: not-found.
+_PUBLICATION_REASON_TEXT = {
+    PUBLICATION_MANIFEST_MISSING: "The published result manifest is missing from storage.",
+    PUBLICATION_MANIFEST_UNREADABLE: "The published result manifest is unavailable.",
+    PUBLICATION_UNANCHORED: "This result predates server-owned publication identity and is quarantined; run the task again to publish it.",
+    PUBLICATION_ANCHOR_MISMATCH: "The result manifest no longer matches the publication Core recorded for this task.",
+    PUBLICATION_ANCHOR_INVALID: "The recorded publication identity for this task is invalid.",
+    PUBLICATION_NOT_FINALIZED: "The task published no result manifest.",
+}
+
+
+def _publication_report(task: dict[str, Any]) -> dict[str, Any]:
+    """Return ``{"state", "reason"}`` for a task's result publication."""
+    state = _result_publication_state(task)
+    return {"state": state, "reason": None if state == PUBLICATION_AVAILABLE else _PUBLICATION_REASON_TEXT.get(state)}
 
 
 def _task_display_name(task: dict[str, Any], task_id: str) -> str:
@@ -1239,6 +1303,11 @@ def _task_display_name(task: dict[str, Any], task_id: str) -> str:
 
 def _task_follow_up_payload(md5sum: str, status: str) -> dict[str, Any]:
     task = task_store.get_task(md5sum)
+    # A task's result publication is reported as its bounded state, not just a
+    # boolean: "finished, results not readable" is answered with *why*, and the
+    # legacy corpus -- results finalized before publication identity was recorded
+    # -- reports ``unanchored`` here rather than silently disappearing.
+    publication = _result_publication_state(task) if task is not None else None
     payload = {
         "task_id": md5sum,
         "md5sum": md5sum,
@@ -1250,7 +1319,8 @@ def _task_follow_up_payload(md5sum: str, status: str) -> dict[str, Any]:
         "terminal": str(status).strip().lower() in task_store.STOP_POLLING_STATUSES,
         "status_url": f"/compute/api/running/{md5sum}",
         "results_url": f"/compute/api/results/{md5sum}",
-        "result_available": _result_manifest_available(task) if task is not None else False,
+        "result_available": publication == PUBLICATION_AVAILABLE,
+        "result_publication": publication,
     }
     # Per-item progress and the standardized task outcome.  Absent until the
     # runner reports them, so a single-input task's payload is unchanged.
@@ -1480,20 +1550,12 @@ def preflight_task(task_type: str):
             429: "admission_limited",
         }.get(response.status_code, "admission_unavailable")
     )
-    security_codes = {
-        "input_path_invalid",
-        "input_format_invalid",
-        "input_file_count_limit",
-        "input_file_size_limit",
-        "input_total_size_limit",
-        "request_size_limit",
-        "workspace_json_invalid",
-    }
-    phase = "security" if code in security_codes else (
-        "admission" if response.status_code >= 401 else "contract"
-    )
+    # The phase and the emitted event come from the one Core-owned vocabulary,
+    # so a new admission reason code is classified once rather than re-listed at
+    # every ingress that reports it.
+    phase = phase_for_code(code, http_status=response.status_code)
     emit_event(
-        f"preflight.{phase}_rejected" if phase != "admission" else "preflight.admission_denied",
+        event_for_code(code, http_status=response.status_code),
         level="WARNING",
         request_id=g.request_id,
         reason_code=code,
@@ -1792,7 +1854,7 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
                     runner_family=tt.runtime.name,
                     user_id=user_id,
                     gpu_seconds=0,
-                    reason_code="credit_exhausted",
+                    reason_code="gpu_credit_exhausted",
                 )
                 return (
                     jsonify(
@@ -1900,9 +1962,14 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
                 "relative_path": item["relative_path"],
                 "mounted": f"{virtual_root}/inputs/{item['role']}/{item['relative_path']}",
                 "hash": item["hash"],
+                "size": item["size"],
                 "format": item["format"],
                 "logical_type": role.type if role else "file",
-                "validation": {"status": "valid"},
+                # The receipt is the validation decision bound to this item's
+                # exact immutable bytes.  This is the key the worker reads to
+                # prove the snapshot it will execute is this byte stream; a
+                # status projection would be a second, weaker assertion.
+                "validation_receipt": item["validation_receipt"],
                 "snapshot_path": _safe_join(snapshot_root, item["role"], *item["relative_path"].split("/")),
                 "snapshot_root": snapshot_root,
                 "workspace_key": workspace_key,
@@ -1963,7 +2030,8 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
                 "format": entity["format"],
                 "logical_type": entity["logical_type"],
                 "sha256": entity["hash"],
-                "validation": entity["validation"],
+                "size": entity["size"],
+                "validation_receipt": entity["validation_receipt"],
             }
         )
     # Runner protocol v4: additive.  ``params`` and ``inputs`` are byte-for-byte
@@ -2151,15 +2219,26 @@ def get_results(md5sum):
     if task["status"] not in {"finished", "failed"}:
         return redirect(f"/compute/api/running/{md5sum}", code=302)
 
-    try:
-        manifest_path = current_app.config["storage_resolver"].get_manifest_path(task)
-    except ValueError:
-        return jsonify({"status": "error", "md5sum": md5sum, "message": "result manifest not found"}), 404
-    try:
-        with open(manifest_path, encoding="utf-8") as handle:
-            manifest = json.load(handle)
-    except (OSError, ValueError, json.JSONDecodeError):
-        return jsonify({"status": "error", "md5sum": md5sum, "message": "result manifest not found"}), 404
+    # The manifest is the publication root of trust, so it is read through the
+    # canonical bounded verified authority -- never a plain pathname open, which
+    # would let a linked or replaced manifest serve a different publication.
+    manifest = current_app.config["storage_resolver"].load_manifest(task)
+    if manifest is None:
+        # A result that exists but is not readable says why: an unanchored
+        # (pre-anchor) result and a replaced one are different operator problems,
+        # and neither is answered with a bare not-found.
+        report = _publication_report(task)
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "md5sum": md5sum,
+                    "message": report["reason"] or "result manifest not found",
+                    "result_publication": report["state"],
+                }
+            ),
+            404,
+        )
 
     archive_ready = os.path.isfile(_task_zip_path(task))
     payload = dict(manifest)
@@ -2215,11 +2294,13 @@ def get_result_logical_file(md5sum: str, file_id: str):
     task = task_store.get_task(normalized)
     if task is None or not _task_access_allowed(task):
         return jsonify({"error": "Result file not found"}), 404
-    try:
-        with open(current_app.config["storage_resolver"].get_manifest_path(task), encoding="utf-8") as handle:
-            files = json.load(handle).get("result", {}).get("files", {}).get(file_id, [])
-    except (OSError, json.JSONDecodeError):
-        files = []
+    # The manifest authorizes which identities exist, so it is read through the
+    # canonical bounded verified manifest reader — never a plain pathname open,
+    # which would let a replaced or linked manifest name a different identity.
+    manifest = current_app.config["storage_resolver"].load_manifest(task)
+    if manifest is None:
+        return jsonify({"error": "Result file not found"}), 404
+    files = manifest.get("result", {}).get("files", {}).get(file_id, [])
     try:
         index = int(request.args.get("index", "0"))
     except ValueError:
@@ -2261,13 +2342,84 @@ def get_result_storyboard_asset(md5sum: str, asset: str):
     return response
 
 
-def _result_artifact(task: dict[str, Any], relative_path: str) -> tuple[str, dict[str, Any]] | None:
-    """Resolve only regular files published by the task's finalized manifest."""
+def _result_artifact(task: dict[str, Any], relative_path: str) -> tuple[str, Any, dict[str, Any]] | None:
+    """Resolve only regular files published by the task's finalized manifest.
+
+    Returns the path, the verified open descriptor, and the manifest entry.  The
+    descriptor's bytes and identity were just checked against the manifest, so a
+    consumer must consume *it* rather than reopen ``path``: after publication
+    identity has been verified, a pathname reopen would let a replaced file serve
+    bytes that never satisfied the manifest identity.
+    """
     resolved = current_app.config["storage_resolver"].resolve_artifact(task, relative_path)
     if resolved is None:
         return None
-    path = resolved.pop("physical_path")
-    return path, resolved
+    stream = resolved.pop("verified_stream")
+    return resolved.pop("physical_path"), stream, resolved
+
+
+def _verified_payload(stream: Any) -> Response:
+    """Stream a verified descriptor directly, never reopening its pathname.
+
+    Everything — full body, HEAD, and a single bounded ``Range`` — reads from the
+    one verified descriptor, so no later pathname open can substitute different
+    bytes.  Range support lives here rather than in ``send_from_directory``
+    because that helper would reopen the pathname that was just verified.
+    """
+    size = os.fstat(stream.fileno()).st_size
+    raw_range = request.headers.get("Range", "")
+    if request.method == "HEAD":
+        stream.close()
+        response = Response(status=200)
+        response.headers["Content-Length"] = str(size)
+        return response
+    if raw_range:
+        # ``parse_range_header`` takes no resource length: the length is applied
+        # by ``range_for_length``, which is what resolves a suffix range and
+        # reports an unsatisfiable one as ``None``.
+        parsed = parse_range_header(raw_range)
+        if parsed is not None and len(parsed.ranges) == 1:
+            resolved_range = parsed.range_for_length(size)
+            if resolved_range is None:
+                stream.close()
+                response = Response(status=416)
+                response.headers["Content-Range"] = f"bytes */{size}"
+                return response
+            start, end = resolved_range
+            stream.seek(start)
+            response = Response(_BoundedStream(stream, end - start), status=206, direct_passthrough=True)
+            response.headers["Content-Range"] = f"bytes {start}-{end - 1}/{size}"
+            response.headers["Content-Length"] = str(end - start)
+            return response
+    # The whole body is streamed through the same bounded reader: the read size
+    # is a chunk constant, never the artifact size, so a large artifact is never
+    # read with one artifact-sized request.
+    response = Response(_BoundedStream(stream, size), direct_passthrough=True)
+    response.headers["Content-Length"] = str(size)
+    return response
+
+
+class _BoundedStream:
+    """Yield at most *length* bytes from a verified descriptor, then close it.
+
+    Each read is bounded by the chunk constant rather than the total length, so
+    the bytes of a large artifact move in bounded chunks.
+    """
+
+    def __init__(self, stream: Any, length: int):
+        self._stream = stream
+        self._remaining = length
+
+    def __iter__(self):
+        while self._remaining > 0:
+            chunk = self._stream.read(min(_STREAM_CHUNK_BYTES, self._remaining))
+            if not chunk:
+                break
+            self._remaining -= len(chunk)
+            yield chunk
+
+    def close(self):
+        self._stream.close()
 
 
 @app.route("/compute/api/results/<md5sum>/artifacts/<path:relative_path>", methods=["GET"])
@@ -2284,34 +2436,30 @@ def get_result_artifact(md5sum: str, relative_path: str):
     resolved = _result_artifact(task, relative_path)
     if resolved is None:
         return jsonify({"error": "Artifact not found"}), 404
-    path, artifact = resolved
+    path, stream, artifact = resolved
     if not _task_artifact_access_allowed(task, artifact):
+        stream.close()
         return jsonify({"error": "Artifact not found"}), 404
     # Artifacts are untrusted runner output — default to attachment so they
     # are never rendered same-origin.  `?download=1` still forces a download
     # and `?download=0` explicitly opts back into inline rendering.
     as_attachment = request.args.get("download", "1") in {"1", "true", "yes"}
-    if app.config["RESULT_DOWNLOAD_MODE"] == "nginx":
-        internal_path = quote(os.path.relpath(path, app.config["RESULTS_FOLDER"]).replace(os.sep, "/"), safe="/")
-        response = Response(status=200, mimetype=artifact.get("media_type") or "application/octet-stream")
-        response.headers["X-Accel-Redirect"] = f"/_protected_results/{internal_path}"
-        response.headers.set(
-            "Content-Disposition",
-            "attachment" if as_attachment else "inline",
-            filename=os.path.basename(path),
-        )
-        response.headers["Cache-Control"] = "private, no-store"
-        return response
-    response = send_from_directory(
-        os.path.dirname(path),
-        os.path.basename(path),
-        as_attachment=as_attachment,
-        download_name=os.path.basename(path),
-        mimetype=artifact.get("media_type") or None,
+    # Delivery always consumes the verified descriptor.  ``RESULT_DOWNLOAD_MODE``
+    # is accepted for deployment compatibility, but X-Accel-Redirect is NOT used
+    # here: the offload would have nginx reopen this mutable pathname, which
+    # could serve bytes that never satisfied the manifest identity.  Descriptor-
+    # bound delivery therefore replaces the offload on this endpoint; a redesign
+    # that could keep the offload needs an immutable publication store, which is
+    # out of scope for this change.
+    response = _verified_payload(stream)
+    response.mimetype = artifact.get("media_type") or "application/octet-stream"
+    response.headers.set(
+        "Content-Disposition",
+        "attachment" if as_attachment else "inline",
+        filename=os.path.basename(path),
     )
+    response.headers["Cache-Control"] = "private, no-store"
     # Defense in depth: even an explicitly-inline artifact runs no scripts.
-    # (In nginx mode the served body comes from the internal location, which
-    # sets the same header in docker/nginx/default.conf.template.)
     response.headers["Content-Security-Policy"] = "sandbox"
     return response
 
@@ -2331,10 +2479,12 @@ def get_result_ndarray(md5sum: str, relative_path: str):
     resolved = _result_artifact(task, relative_path)
     if resolved is None:
         return jsonify({"error": "Array artifact not found"}), 404
-    path, artifact = resolved
+    _path, stream, artifact = resolved
     if not _task_artifact_access_allowed(task, artifact):
+        stream.close()
         return jsonify({"error": "Array artifact not found"}), 404
     if set(request.args) - {"key", "kind", "max_elements"}:
+        stream.close()
         return jsonify({"error": "Invalid array query"}), 400
 
     def bounded_integer(name: str, default: int) -> int | None:
@@ -2354,13 +2504,24 @@ def get_result_ndarray(md5sum: str, relative_path: str):
         or len(keys) > 1
         or len(kinds) > 1
     ):
+        stream.close()
         return jsonify({"error": "Array projection is outside allowed bounds"}), 400
     key = keys[0] if keys else None
     kind = kinds[0] if kinds else "numeric"
     try:
-        return jsonify(read_array_projection(path, key=key, kind=kind, max_elements=max_elements))
+        # The projection parses from the verified descriptor itself, so a file
+        # replaced after publication identity was checked can never be projected:
+        # after publication identity has been verified, a consumer must consume
+        # the verified object, not reopen its pathname.
+        return jsonify(
+            read_array_projection(
+                stream, name=relative_path, key=key, kind=kind, max_elements=max_elements
+            )
+        )
     except ArrayAccessError as error:
         return jsonify({"error": str(error)}), 400
+    finally:
+        stream.close()
 
 
 @app.route("/compute/api/results/<md5sum>/tables/<path:relative_path>", methods=["GET"])
@@ -2378,29 +2539,30 @@ def get_result_table(md5sum: str, relative_path: str):
     resolved = _result_artifact(task, relative_path)
     if resolved is None:
         return jsonify({"error": "Table artifact not found"}), 404
-    path, artifact = resolved
+    _path, stream, artifact = resolved
     if not _task_artifact_access_allowed(task, artifact):
+        stream.close()
         return jsonify({"error": "Table artifact not found"}), 404
     declared_table = artifact.get("preview") == "table"
     if not declared_table:
-        try:
-            with open(current_app.config["storage_resolver"].get_manifest_path(task), encoding="utf-8") as handle:
-                logical_files = json.load(handle).get("result", {}).get("files", {})
-            declared_table = any(
-                item.get("path") == artifact.get("path") and item.get("logical_type") == "table"
-                for files in logical_files.values()
-                for item in files
-            )
-        except (OSError, AttributeError, json.JSONDecodeError):
-            declared_table = False
+        manifest = current_app.config["storage_resolver"].load_manifest(task) or {}
+        logical_files = manifest.get("result", {}).get("files", {})
+        declared_table = any(
+            item.get("path") == artifact.get("path") and item.get("logical_type") == "table"
+            for files in logical_files.values()
+            for item in files
+        )
     if not declared_table:
+        stream.close()
         return jsonify({"error": "Artifact is not a table"}), 400
     try:
         offset = int(request.args.get("offset", 0))
         limit = int(request.args.get("limit", 100))
     except ValueError:
+        stream.close()
         return jsonify({"error": "Invalid table page"}), 400
     if offset < 0 or offset > 10000 or limit < 1 or limit > 500:
+        stream.close()
         return jsonify({"error": "Table page is outside allowed bounds"}), 400
     delimiter = "\t" if relative_path.lower().endswith(".tsv") else ","
 
@@ -2415,7 +2577,9 @@ def get_result_table(md5sum: str, relative_path: str):
         return cost
 
     try:
-        with open(path, newline="", encoding="utf-8") as handle:
+        # The verified descriptor stays open for the whole parse, so the page is
+        # read from the same inode whose identity the manifest approved.
+        with stream, io.TextIOWrapper(stream, encoding='utf-8', newline='') as handle:
             reader = csv.reader(handle, delimiter=delimiter)
             columns = next(reader, [])
             # A matrix page carries one extra leading column of row labels beside its
@@ -2439,6 +2603,7 @@ def get_result_table(md5sum: str, relative_path: str):
                 page_bytes += cost
                 rows.append(row)
     except (OSError, UnicodeError, csv.Error, ValueError):
+        stream.close()
         logging.exception("Table preview failed for task %s artifact %s", md5sum, relative_path)
         return jsonify({"error": "Table could not be previewed"}), 400
     return jsonify({"columns": columns, "rows": rows, "offset": offset, "limit": limit, "has_more": has_more})
@@ -2459,6 +2624,22 @@ def request_results_archive(md5sum: str):
         return _task_not_found(md5sum)
     if task["status"] not in {"finished", "failed"}:
         return jsonify({"error": "Results are not ready"}), 409
+    # Building a ZIP is a publication from the same authority, so a result the
+    # reader refuses cannot be packed: the caller gets the bounded state and the
+    # reason instead of an archive assembled from a quarantine.
+    publication = _result_publication_state(task)
+    if publication != PUBLICATION_AVAILABLE:
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "md5sum": md5sum,
+                    "message": _PUBLICATION_REASON_TEXT.get(publication) or "result manifest not found",
+                    "result_publication": publication,
+                }
+            ),
+            409,
+        )
     if os.path.isfile(_task_zip_path(task)):
         return jsonify({"status": "ready", "download_url": f"/compute/api/download/{md5sum}"}), 200
     async_result = build_results_archive.apply_async(args=[md5sum])
@@ -2630,7 +2811,10 @@ def _task_list_summary(task: dict[str, Any], *, include_owner: bool) -> dict[str
         archive_ready = os.path.isfile(_task_zip_path(task))
     except (OSError, ValueError):
         archive_ready = False
-    result_available = _result_manifest_available(task)
+    # One classification serves both fields, so the dashboard never reads a
+    # boolean from one authority and a state from another.
+    publication = _result_publication_state(task)
+    result_available = publication == PUBLICATION_AVAILABLE
     can_cancel = _task_mutation_allowed(task) and status in {"pending", "queued", "running"}
     can_delete = (
         g.current_user.get("role") != "guest"
@@ -2652,6 +2836,10 @@ def _task_list_summary(task: dict[str, Any], *, include_owner: bool) -> dict[str
         "error": _sanitize_task_error(task, task.get("error")),
         "result": {
             "available": result_available,
+            # "Available" is the only state a client can open; every other state
+            # names itself so a quarantined (legacy) result is distinguishable
+            # from a task that never published at all.
+            "publication": publication,
             "page_url": f"/compute/results/{task_id}",
             "manifest_url": f"/compute/api/results/{task_id}",
             "archive_ready": archive_ready,

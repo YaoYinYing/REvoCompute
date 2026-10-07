@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import uuid
 
@@ -241,12 +242,12 @@ def test_json_projection_enforces_artifact_and_element_limits(monkeypatch, tmp_p
     path.write_text('{"values":[1,2,3]}', encoding="utf-8")
     monkeypatch.setattr(ndarray, "MAX_JSON_FILE_BYTES", 8)
     with pytest.raises(ndarray.ArrayAccessError, match="artifact exceeds"):
-        ndarray.read_array_projection(path, key="values", kind="numeric", max_elements=3)
+        ndarray.read_array_projection(path.open("rb"), name=str(path), key="values", kind="numeric", max_elements=3)
 
     monkeypatch.setattr(ndarray, "MAX_JSON_FILE_BYTES", 1024)
     monkeypatch.setattr(ndarray, "MAX_JSON_ARRAY_ELEMENTS", 2)
     with pytest.raises(ndarray.ArrayAccessError, match="element limit"):
-        ndarray.read_array_projection(path, key="values", kind="numeric", max_elements=3)
+        ndarray.read_array_projection(path.open("rb"), name=str(path), key="values", kind="numeric", max_elements=3)
 
 
 def test_csv_projection_enforces_source_row_and_column_limits(monkeypatch, tmp_path) -> None:
@@ -256,17 +257,17 @@ def test_csv_projection_enforces_source_row_and_column_limits(monkeypatch, tmp_p
     path.write_text("token_index,plddt\n1,0.8\n2,0.7\n", encoding="utf-8")
     monkeypatch.setattr(ndarray, "MAX_CSV_FILE_BYTES", 8)
     with pytest.raises(ndarray.ArrayAccessError, match="artifact exceeds"):
-        ndarray.read_array_projection(path, key="plddt", kind="numeric", max_elements=2)
+        ndarray.read_array_projection(path.open("rb"), name=str(path), key="plddt", kind="numeric", max_elements=2)
 
     monkeypatch.setattr(ndarray, "MAX_CSV_FILE_BYTES", 1024)
     monkeypatch.setattr(ndarray, "MAX_CSV_ROWS", 1)
     with pytest.raises(ndarray.ArrayAccessError, match="row limit"):
-        ndarray.read_array_projection(path, key="plddt", kind="numeric", max_elements=2)
+        ndarray.read_array_projection(path.open("rb"), name=str(path), key="plddt", kind="numeric", max_elements=2)
 
     monkeypatch.setattr(ndarray, "MAX_CSV_ROWS", 10)
     monkeypatch.setattr(ndarray, "MAX_CSV_COLUMNS", 1)
     with pytest.raises(ndarray.ArrayAccessError, match="column limit"):
-        ndarray.read_array_projection(path, key="plddt", kind="numeric", max_elements=2)
+        ndarray.read_array_projection(path.open("rb"), name=str(path), key="plddt", kind="numeric", max_elements=2)
 
 
 def test_categorical_projection_supports_only_bounded_json_and_csv_vectors(monkeypatch, tmp_path) -> None:
@@ -311,11 +312,104 @@ def test_categorical_projection_rejects_element_cell_and_aggregate_byte_overflow
     path = tmp_path / "chains.json"
     path.write_text(json.dumps({"chains": ["AB", "CD"]}), encoding="utf-8")
     with pytest.raises(ndarray.ArrayAccessError, match="requested element limit"):
-        ndarray.read_array_projection(path, key="chains", kind="categorical", max_elements=1)
+        ndarray.read_array_projection(path.open("rb"), name=str(path), key="chains", kind="categorical", max_elements=1)
     monkeypatch.setattr(ndarray, "MAX_STRING_CELL_BYTES", 1)
     with pytest.raises(ndarray.ArrayAccessError, match="cell exceeds"):
-        ndarray.read_array_projection(path, key="chains", kind="categorical", max_elements=2)
+        ndarray.read_array_projection(path.open("rb"), name=str(path), key="chains", kind="categorical", max_elements=2)
     monkeypatch.setattr(ndarray, "MAX_STRING_CELL_BYTES", 8)
     monkeypatch.setattr(ndarray, "MAX_STRING_TOTAL_BYTES", 3)
     with pytest.raises(ndarray.ArrayAccessError, match="byte limit"):
-        ndarray.read_array_projection(path, key="chains", kind="categorical", max_elements=2)
+        ndarray.read_array_projection(path.open("rb"), name=str(path), key="chains", kind="categorical", max_elements=2)
+
+
+def test_a_replaced_array_cannot_be_projected_from_the_reopened_pathname(monkeypatch, tmp_path) -> None:
+    """The projection reads the verified descriptor, not a later pathname.
+
+    The file is replaced with different but *valid* array bytes immediately after
+    publication identity is verified, which is the window a pathname reader would
+    lose to; the response must still describe the original artifact.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    client = module.app.test_client()
+    headers = _test_client_auth(module)
+    original = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+    md5sum = _finished_task(module, tmp_path, {"confidence.npy": original})
+    task = module.task_store.get_task(md5sum)
+    artifact_path = Path(module.app.config["storage_resolver"].get_task_root(task)) / "confidence.npy"
+
+    resolver = module.app.config["storage_resolver"]
+    resolve = resolver.resolve_artifact
+
+    def replace_after_verify(task_arg, relative_path):
+        resolved = resolve(task_arg, relative_path)
+        swapped = artifact_path.with_suffix(".swapped.npy")
+        np.save(swapped, np.array([9.0, 9.0, 9.0], dtype=np.float32))
+        os.replace(swapped, artifact_path)
+        return resolved
+
+    monkeypatch.setattr(resolver, "resolve_artifact", replace_after_verify)
+
+    response = client.get(
+        f"/compute/api/results/{md5sum}/ndarrays/confidence.npy?max_elements=3", headers=headers
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["data"] == [1.0, 2.0, 3.0]
+
+
+def test_an_array_replaced_before_resolution_is_refused(monkeypatch, tmp_path) -> None:
+    """Bytes that no longer match the manifest identity are never projected."""
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    client = module.app.test_client()
+    headers = _test_client_auth(module)
+    md5sum = _finished_task(module, tmp_path, {"confidence.npy": np.array([1.0, 2.0, 3.0], dtype=np.float32)})
+    task = module.task_store.get_task(md5sum)
+    artifact_path = Path(module.app.config["storage_resolver"].get_task_root(task)) / "confidence.npy"
+    swapped = artifact_path.with_suffix(".swapped.npy")
+    np.save(swapped, np.array([9.0, 9.0, 9.0], dtype=np.float32))
+    os.replace(swapped, artifact_path)
+
+    response = client.get(
+        f"/compute/api/results/{md5sum}/ndarrays/confidence.npy?max_elements=3", headers=headers
+    )
+
+    assert response.status_code == 404
+
+
+def test_a_linked_or_replaced_manifest_fails_the_logical_file_route_closed(monkeypatch, tmp_path) -> None:
+    """The /files/ route consumes the canonical verified manifest reader.
+
+    A manifest that is a symlink, a hard link, oversized, or replaced by other
+    valid manifest bytes is refused rather than read through a plain pathname
+    open: the manifest's own identity is anchored in server-owned state, so a
+    substitution is detectable even when the substituted file is well formed.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    client = module.app.test_client()
+    headers = _test_client_auth(module)
+    md5sum = _finished_task(module, tmp_path, {"confidence.json": {"plddt": [0.9, 0.8]}})
+    task = module.task_store.get_task(md5sum)
+    manifest_path = Path(module.app.config["storage_resolver"].get_manifest_path(task))
+    url = f"/compute/api/results/{md5sum}/files/confidence?index=0"
+
+    assert client.get(url, headers=headers).status_code in {200, 404}
+    published = manifest_path.read_bytes()
+
+    outside = tmp_path / "other-manifest.json"
+    outside.write_bytes(published)
+    manifest_path.unlink()
+    manifest_path.symlink_to(outside)
+    assert client.get(url, headers=headers).status_code == 404
+
+    manifest_path.unlink()
+    manifest_path.write_bytes(published)
+    hard = tmp_path / "hard-manifest.json"
+    hard.write_bytes(published)
+    manifest_path.unlink()
+    manifest_path.hardlink_to(hard)
+    assert client.get(url, headers=headers).status_code == 404
+
+    # A different, structurally valid manifest is not this task's publication.
+    manifest_path.unlink()
+    manifest_path.write_text(json.dumps({"artifacts": [], "result": {"files": {}}}), encoding="utf-8")
+    assert client.get(url, headers=headers).status_code == 404

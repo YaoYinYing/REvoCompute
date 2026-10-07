@@ -333,7 +333,7 @@ smoke_dir=$(mktemp -d /tmp/revocompute-example-smoke.XXXXXX)
 chmod 0777 "${smoke_dir}"
 cat > "${smoke_dir}/task.json" <<'EOF'
 {"version": 4, "task_id": "example", "task_type": "example", "params": {"samples": 1},
- "inputs": {"complexes": [{"original_name": "input.pdb", "path": "/workspace/inputs/complexes/input.pdb", "relative_path": "input.pdb", "format": "pdb", "logical_type": "protein_structure", "sha256": "fixture digest", "validation": {"status": "valid"}}]}}
+ "inputs": {"complexes": [{"original_name": "input.pdb", "path": "/workspace/inputs/complexes/input.pdb", "relative_path": "input.pdb", "format": "pdb", "logical_type": "protein_structure", "sha256": "fixture digest", "validation_receipt": {"decision": "accepted", "sha256": "fixture digest", "validator_revision": "sha256:<boundary>"}}]}}
 EOF
 apptainer run --cleanenv --containall \
   -e TASK_MANIFEST=/workspace/task.json \

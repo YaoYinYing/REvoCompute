@@ -12,6 +12,7 @@ Run through the server-owned Makefile::
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import os
 import shutil
 import sys
@@ -352,6 +353,25 @@ def _upsert_task_for_user(
         submitted_by_user_id=int(owner["submitted_by_user_id"]),
         run_stage=run_stage,
         storage_key=owner["storage_key"],
+    )
+
+
+def _anchor_result_publication(module, md5sum: str) -> None:
+    """Anchor the task's on-disk manifest, as Core finalization does.
+
+    Publication identity is recorded in server-owned state, and only the
+    finalization path writes it. A fixture that places a manifest on disk
+    without the Task store's own finalization must record the same anchor, or
+    the manifest would be readable-but-unanchored — a state every consumer
+    correctly refuses.
+    """
+    task = module.task_store.get_task(md5sum)
+    data = Path(module.app.config["storage_resolver"].get_manifest_path(task)).read_bytes()
+    module.task_store.record_result_publication(
+        md5sum,
+        manifest_sha256=hashlib.sha256(data).hexdigest(),
+        manifest_size=len(data),
+        published_at=time.time(),
     )
 
 

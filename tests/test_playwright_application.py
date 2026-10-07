@@ -72,7 +72,7 @@ def _task_summary() -> dict:
         "finished_at": "2026-09-29T00:00:03Z", "walltime_seconds": 3, "owner": None,
         "progress": None, "outcome": "SUCCESS", "error": None, "input_preview": None,
         "result": {
-            "available": True, "page_url": f"/compute/results/{TASK_ID}",
+            "available": True, "publication": "available", "page_url": f"/compute/results/{TASK_ID}",
             "manifest_url": f"/compute/api/results/{TASK_ID}", "archive_ready": False,
             "archive_request_allowed": True, "archive_request_url": f"/compute/api/results/{TASK_ID}/archive",
             "download_url": None,

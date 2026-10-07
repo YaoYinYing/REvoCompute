@@ -795,7 +795,7 @@ def test_path_policy_rejects_nul_before_multipart_storage(monkeypatch, tmp_path)
     while hasattr(route, "__wrapped__"):
         route = route.__wrapped__
 
-    assert route.__globals__["_safe_input_relative_path"]("safe\x00evil.fasta") is None
+    assert route.__globals__["canonical_relative_path"]("safe\x00evil.fasta")[0] is None
 
 
 def test_path_normalization_has_safe_properties_for_bounded_generated_inputs(monkeypatch, tmp_path):
@@ -807,7 +807,7 @@ def test_path_normalization_has_safe_properties_for_bounded_generated_inputs(mon
     route = module.app.view_functions["upload_file"]
     while hasattr(route, "__wrapped__"):
         route = route.__wrapped__
-    normalize = route.__globals__["_safe_input_relative_path"]
+    normalize = lambda value: route.__globals__["canonical_relative_path"](value)[0]
     generator = random.Random(20260916)
     alphabet = "abcXYZ019._-%/\\ \x01\x7f"
 
