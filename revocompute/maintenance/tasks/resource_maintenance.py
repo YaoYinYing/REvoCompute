@@ -108,20 +108,27 @@ def _remove_artifacts(results_folder: str) -> Callable[[dict[str, Any]], None]:
 
 
 def _surviving_receipt_tasks(results_folder: str) -> set[str]:
-    """Task ids whose host-only allocation receipt has not been adopted yet.
+    """Task ids whose host-only allocation evidence has not been adopted yet.
 
     Reconciliation reads the results tree, not the database, because the whole
-    window this serves is the one before any database write: a wrapper left the
-    file the instant it was running and its worker died before reading it.  The
-    namespace walk is the runner's own, imported lazily so the maintenance
-    scheduler does not pull the Celery application in with the adapter module.
+    window this serves is the one before any database write: the wrapper left its
+    receipt the instant it was running and its worker died before reading it, and
+    for the earlier window the scheduler's own per-job file is the only trace
+    there is.  Both namespaces are walked by the runner's own readers, imported
+    lazily so the maintenance scheduler does not pull the Celery application in
+    with the adapter module.
     """
-    from revocompute.job.runners.slurm_runner import surviving_allocation_receipts
+    from revocompute.job.runners.slurm_runner import (
+        surviving_allocation_receipts,
+        surviving_scheduler_logs,
+    )
 
     try:
-        return {str(receipt["task_id"]) for receipt in surviving_allocation_receipts(results_folder)}
+        tasks = {str(receipt["task_id"]) for receipt in surviving_allocation_receipts(results_folder)}
+        tasks.update(str(entry["task_id"]) for entry in surviving_scheduler_logs(results_folder))
     except OSError:
         return set()
+    return tasks
 
 
 def run_resource_maintenance(

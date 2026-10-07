@@ -145,6 +145,13 @@ class EvidenceSource(str, Enum):
     SLURM_LIVE = "slurm_live"
     SLURM_ACCOUNTING = "slurm_accounting"
     RUNNER_OBSERVATION = "runner_observation"
+    #: The scheduler's own per-job output file.  Slurm creates it in the job's
+    #: working directory the instant the job is allocated a node — before the
+    #: job's first statement runs — so it is the one artifact that survives a
+    #: job killed between "allocated a node" and "ran anything".  It names the
+    #: job and nothing else, so a fact derived from it has an UNKNOWN shape and
+    #: is never settled to a number.
+    SCHEDULER_LOG = "scheduler_log"
     RECONCILIATION = "reconciliation"
     POLICY = "policy"
     UNKNOWN = "unknown"

@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import os
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -849,6 +850,27 @@ def _plant_receipt_file(module, task, *, job_id, observed_at, cpus=1, gpus=1) ->
     return receipt
 
 
+def _plant_scheduler_log(module, task, *, job_id, observed_at) -> Path:
+    """Write Slurm's own per-job file where Slurm writes it, and nowhere else.
+
+    This file is created by the scheduler at allocation, so it exists before the
+    wrapper's first statement — the one window no worker write can cover.  Its
+    contents are Slurm's, never a claim the test invents.
+    """
+    result_root = Path(
+        module.StorageResolver(module.CONFIG.results_folder, module.CONFIG.workspace_folder).get_task_root(task)
+    )
+    directory = result_root.parent / f"{result_root.name}.allocation"
+    directory.mkdir(parents=True, exist_ok=True)
+    log = directory / f"allocation-{job_id}.err"
+    log.write_text("slurmstepd: task started\n", encoding="utf-8")
+    # Slurm creates the file when it starts the job, so its own mtime is the
+    # allocation's start.  The test sets it to the moment it is simulating,
+    # exactly as the scheduler would have.
+    os.utime(log, (observed_at, observed_at))
+    return log
+
+
 def test_a_receipt_file_is_adopted_without_any_row_ever_being_written(monkeypatch, tmp_path):
     """The live crash window: only the on-disk receipt exists; restart recovers it.
 
@@ -1069,6 +1091,221 @@ def test_the_live_dispatch_path_persists_the_receipt_before_reading_finishes(mon
     # ordinary unsettled path, never a second charge.)
     module.task_runtime._reconcile_slurm_allocations()
     assert len(module.task_store.list_task_allocations(task_id)) == 2
+
+
+def test_the_scheduler_log_is_adopted_when_the_wrapper_never_ran(monkeypatch, tmp_path):
+    """The pre-first-statement window: Slurm's own file is the only trace.
+
+    A job killed between "the scheduler allocated a node" and "the wrapper's
+    first statement ran" leaves no receipt, no observation, and no worker write.
+    Restart must still see the allocation, corroborate it against the scheduler,
+    record exactly one fact, and never let the pre-dispatch hold lapse — the
+    allocation really happened, and charging it nothing is the failure this
+    closing window was about.
+    """
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    at = _timestamp(2026, 9, 5)
+    task_id = "9" * 32
+    _own_task(module.task_store, task_id, user_id=101)
+    module.task_store.reserve_compute_admission(user_id=101, task_id=task_id, at=at)
+    task = module.task_store.get_task(task_id)
+    log = _plant_scheduler_log(module, task, job_id="8816", observed_at=at + 2)
+
+    monkeypatch.setattr(module.task_runtime.shutil, "which", lambda command: f"/usr/bin/{command}")
+    monkeypatch.setattr(
+        module.task_runtime.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            stdout="JobId=8816 JobState=COMPLETED RunTime=00:00:45 "
+            "AllocTRES=cpu=2,mem=1G,node=1,billing=2,gres/gpu=1\n"
+        ),
+    )
+
+    # The hold is not expired or reclaimed underneath a job the scheduler proved
+    # it allocated, however far past its TTL.
+    from revocompute import resource_lifecycle
+    from revocompute.maintenance.tasks.resource_maintenance import _surviving_receipt_tasks
+
+    assert _surviving_receipt_tasks(module.CONFIG.results_folder) == {task_id}
+    report = resource_lifecycle.reconcile_resources(
+        module.task_store, unadopted_tasks={task_id}, now=at + 100_000
+    )
+    assert report.expired_reservations == 0
+    assert module.task_runtime._reclaim_abandoned_reservations(now=at + 100_000) == 0
+
+    # Exactly one allocation, shaped from what the scheduler reported it granted,
+    # settled once from the scheduler's elapsed time.
+    assert module.task_runtime._reconcile_slurm_allocations() == {"settled": 1, "active": 0, "review": 0}
+    facts = module.task_store.list_task_allocations(task_id)
+    assert len(facts) == 2
+    assert {row["unit"]: row["resource_count"] for row in facts} == {
+        "gpu_second": 1,
+        "cpu_core_second": 2,
+    }
+    assert module.task_store.gpu_credit_summary(101, at=at + 100)["usage_gpu_seconds"] == 45
+    # Adopted, so retired; a second pass adds nothing.
+    assert not log.exists()
+    assert module.task_runtime._reconcile_slurm_allocations() == {"settled": 0, "active": 0, "review": 0}
+    assert len(module.task_store.list_task_allocations(task_id)) == 2
+    assert module.task_store.gpu_credit_summary(101, at=at + 100)["usage_gpu_seconds"] == 45
+
+
+def test_a_scheduler_log_with_no_reported_shape_is_review_never_zero(monkeypatch, tmp_path):
+    """A shape nobody reported is UNKNOWN, not zero.
+
+    The file proves a node was allocated and says nothing about how many GPUs it
+    held.  Recording zero would report a real allocation as no usage at all and
+    settlement would multiply that zero into the ledger, so the fact is kept for
+    an operator and is never settled to a number.
+    """
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    at = _timestamp(2026, 9, 5)
+    task_id = "a" * 31 + "1"
+    _own_task(module.task_store, task_id, user_id=102)
+    module.task_store.reserve_compute_admission(user_id=102, task_id=task_id, at=at)
+    task = module.task_store.get_task(task_id)
+    log = _plant_scheduler_log(module, task, job_id="8817", observed_at=at + 2)
+
+    monkeypatch.setattr(module.task_runtime.shutil, "which", lambda command: f"/usr/bin/{command}")
+    monkeypatch.setattr(
+        module.task_runtime.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(stdout="JobId=8817 JobState=COMPLETED RunTime=00:00:45\n"),
+    )
+
+    assert module.task_runtime._reconcile_slurm_allocations() == {"settled": 0, "active": 0, "review": 1}
+    facts = module.task_store.list_task_allocations(task_id)
+    assert len(facts) == 2
+    assert {row["resource_count"] for row in facts} == {None}
+    assert {row["status"] for row in facts} == {"review"}
+    assert module.task_store.gpu_credit_summary(102, at=at + 100)["usage_gpu_seconds"] == 0
+    # The fact is durable, so the file was retired; and a second pass still
+    # charges nothing rather than inventing a quantity now that time has passed.
+    assert not log.exists()
+    assert module.task_runtime._reconcile_slurm_allocations() == {"settled": 0, "active": 0, "review": 1}
+    assert module.task_store.gpu_credit_summary(102, at=at + 100)["usage_gpu_seconds"] == 0
+
+
+def test_an_uncorroborated_scheduler_log_is_never_deleted(monkeypatch, tmp_path):
+    """A file the scheduler does not own stays exactly where it is.
+
+    It is the only evidence that something ran against a job id the scheduler no
+    longer knows, which is an anomaly for an operator — not a reason to record an
+    allocation and not a reason to destroy the record.
+    """
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    at = _timestamp(2026, 9, 5)
+    task_id = "b" * 31 + "1"
+    _own_task(module.task_store, task_id, user_id=103)
+    task = module.task_store.get_task(task_id)
+    log = _plant_scheduler_log(module, task, job_id="8818", observed_at=at + 2)
+
+    monkeypatch.setattr(module.task_runtime.shutil, "which", lambda command: f"/usr/bin/{command}")
+    monkeypatch.setattr(
+        module.task_runtime.subprocess,
+        "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            module.task_runtime.subprocess.SubprocessError("no such job")
+        ),
+    )
+
+    assert module.task_runtime._reconcile_slurm_allocations() == {"settled": 0, "active": 0, "review": 0}
+    assert module.task_store.allocation_row_exists("8818") is False
+    assert module.task_store.gpu_credit_summary(103, at=at + 10)["usage_gpu_seconds"] == 0
+    assert log.exists()
+
+
+def test_the_wrapper_receipt_wins_over_the_scheduler_log(monkeypatch, tmp_path):
+    """Both files present: one allocation, shaped by the wrapper.
+
+    The receipt is written microseconds after the scheduler's file and carries
+    the shape, so the scheduler-log reader must ignore a job the receipt already
+    describes — otherwise one allocation would be adopted twice.
+    """
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    at = _timestamp(2026, 9, 5)
+    task_id = "c" * 31 + "1"
+    _own_task(module.task_store, task_id, user_id=104)
+    module.task_store.reserve_compute_admission(user_id=104, task_id=task_id, at=at)
+    task = module.task_store.get_task(task_id)
+    receipt = _plant_receipt_file(module, task, job_id="8819", observed_at=at + 2)
+    _plant_scheduler_log(module, task, job_id="8819", observed_at=at + 2)
+
+    from revocompute.job.runners.slurm_runner import surviving_scheduler_logs
+
+    # The scheduler-log reader never reports a job the receipt beside it names.
+    assert surviving_scheduler_logs(module.CONFIG.results_folder) == []
+
+    monkeypatch.setattr(module.task_runtime.shutil, "which", lambda command: f"/usr/bin/{command}")
+    monkeypatch.setattr(
+        module.task_runtime.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(stdout="JobId=8819 JobState=COMPLETED RunTime=00:00:45\n"),
+    )
+
+    assert module.task_runtime._reconcile_slurm_allocations() == {"settled": 1, "active": 0, "review": 0}
+    facts = module.task_store.list_task_allocations(task_id)
+    assert len(facts) == 2
+    assert {row["started_at"] for row in facts} == {at + 2}
+    assert module.task_store.gpu_credit_summary(104, at=at + 100)["usage_gpu_seconds"] == 45
+    assert not receipt.exists()
+
+
+def test_a_receipt_with_an_unreported_shape_is_paid_for_by_the_scheduler(monkeypatch, tmp_path):
+    """The scheduler's own numbers replace the compute node's self-report.
+
+    A node whose environment under-states its GPUs must not under-charge: the
+    granted shape is what the scheduler reports, so the fact is written from
+    ``AllocTRES`` rather than trusted from the receipt.
+    """
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    at = _timestamp(2026, 9, 5)
+    task_id = "d" * 31 + "1"
+    _own_task(module.task_store, task_id, user_id=105)
+    module.task_store.reserve_compute_admission(user_id=105, task_id=task_id, at=at)
+    task = module.task_store.get_task(task_id)
+    # The wrapper's environment reported one GPU; the scheduler granted two.
+    _plant_receipt_file(module, task, job_id="8820", observed_at=at + 2, cpus=1, gpus=1)
+
+    monkeypatch.setattr(module.task_runtime.shutil, "which", lambda command: f"/usr/bin/{command}")
+    monkeypatch.setattr(
+        module.task_runtime.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            stdout="JobId=8820 JobState=COMPLETED RunTime=00:00:45 "
+            "AllocTRES=cpu=4,mem=1G,node=1,billing=4,gres/gpu=2\n"
+        ),
+    )
+
+    assert module.task_runtime._reconcile_slurm_allocations() == {"settled": 1, "active": 0, "review": 0}
+    facts = module.task_store.list_task_allocations(task_id)
+    assert {row["unit"]: row["resource_count"] for row in facts} == {
+        "gpu_second": 2,
+        "cpu_core_second": 4,
+    }
+    # Two GPUs for 45 seconds, from the scheduler's grant — not the one the node
+    # believed it had.
+    assert module.task_store.gpu_credit_summary(105, at=at + 100)["usage_gpu_seconds"] == 90
 
 
 def test_a_receipt_naming_a_job_the_scheduler_does_not_own_is_never_charged(monkeypatch, tmp_path):

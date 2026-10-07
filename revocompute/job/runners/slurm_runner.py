@@ -80,6 +80,20 @@ _RESOURCE_END = "REVODESIGN_RESOURCE_END"
 #: could adopt them.  A second spelling would silently disagree with the first.
 ALLOCATION_DIR_SUFFIX = ".allocation"
 ALLOCATION_RECEIPT_NAME = "allocation.receipt"
+#: Slurm's own per-job stderr file, redirected into the same host-only directory.
+#: Slurm creates it the instant the job is allocated a node — before the job's
+#: first statement runs — so it is the one artifact that survives a kill landing
+#: between "allocated" and "started", the window no in-job mechanism can cover.
+#: ``%j`` is substituted by Slurm, so the file names the job that owns it, which
+#: is what makes "this file exists, so a node was allocated" readable without
+#: trusting anything the job itself wrote.
+#:
+#: Only ``--error`` is redirected, never ``--output``: redirecting either stream
+#: moves the *task's* output into the file, and redirecting stdout would take the
+#: wrapper's own job-id/live/stage lines off the pipe this runner reads.  The
+#: srun client's own banner still reaches the process's stderr pipe, which is
+#: what supplies job identity before the wrapper runs.
+ALLOCATION_SCHEDULER_LOG_NAME = "allocation-%j.err"
 
 #: Hard ceiling for one Task's ephemeral scratch, in bytes.  Scratch is a
 #: per-execution safety concern, never durable user quota: a runaway temporary
@@ -809,6 +823,12 @@ class SlurmJob(Job):
         # nodes.  Use the task-specific shared output directory so slurmstepd
         # never falls back to /tmp and every job has an isolated valid cwd.
         opts.append(f"--chdir={self.output_dir}")
+        # Slurm creates this file the instant the job is allocated a node, which
+        # is the only durable trace of an allocation killed before the wrapper's
+        # first statement.  It is written into the host-only directory (never
+        # bind-mounted into the container), and only stderr is redirected so the
+        # wrapper's own stdout protocol stays on the pipe this runner reads.
+        opts.append(f"--error={os.path.join(self.allocation_dir, ALLOCATION_SCHEDULER_LOG_NAME)}")
         opts.append(f"--job-name=revocomput_{_sanitize_name(self._username)}_{self.tt.name}_{self.task_id[:8]}")
         return opts
 
@@ -1774,22 +1794,18 @@ def allocation_dir_for(output_dir: str) -> str:
     return f"{os.path.normpath(output_dir)}{ALLOCATION_DIR_SUFFIX}"
 
 
-def surviving_allocation_receipts(results_root: str) -> list[dict[str, Any]]:
-    """Every compute-node receipt still on disk under *results_root*.
+def _allocation_dirs(results_root: str) -> list[tuple[str, str]]:
+    """Every host-only allocation directory under *results_root*, with its Task id.
 
-    Restart reconciliation's view of the host-only allocation namespace.  The
-    results tree is laid out ``<results_root>/users/<storage key>/tasks/<task
+    The results tree is laid out ``<results_root>/users/<storage key>/tasks/<task
     id>`` with the allocation directory as the ``<task id>.allocation`` sibling,
-    so a bounded three-level walk finds every Task that ever ran here.
-
-    A receipt is returned only when it parses: the entry stays on disk so an
-    operator can inspect an anomalous one, and a receipt this pass cannot adopt
-    is never deleted.  The caller corroborates each claim against the scheduler
-    before anything is recorded.
+    so this bounded three-level walk finds every Task that ever ran here.  Both
+    reconciliation readers share it: which files live inside the directory is
+    their difference, not where the directory is.
     """
     base = os.path.abspath(results_root)
     users_root = os.path.join(base, "users")
-    found: list[dict[str, Any]] = []
+    found: list[tuple[str, str]] = []
     if not os.path.isdir(users_root):
         return found
     for user_entry in sorted(os.scandir(users_root), key=lambda entry: entry.name):
@@ -1805,25 +1821,113 @@ def surviving_allocation_receipts(results_root: str) -> list[dict[str, Any]]:
             # directory and is skipped.
             if not allocation_entry.is_dir(follow_symlinks=False):
                 continue
-            task_id = allocation_entry.name
-            if not task_id.endswith(ALLOCATION_DIR_SUFFIX):
+            name = allocation_entry.name
+            if not name.endswith(ALLOCATION_DIR_SUFFIX):
                 continue
-            task_id = task_id[: -len(ALLOCATION_DIR_SUFFIX)]
+            task_id = name[: -len(ALLOCATION_DIR_SUFFIX)]
             if not task_id:
                 continue
-            receipt_path = os.path.join(allocation_entry.path, ALLOCATION_RECEIPT_NAME)
-            try:
-                with open(receipt_path, encoding="utf-8") as handle:
-                    text = handle.read(4096)
-            except OSError:
-                continue
-            receipt = parse_allocation_receipt(text)
-            if receipt is None:
-                continue
-            receipt["task_id"] = task_id
-            receipt["receipt_path"] = receipt_path
-            found.append(receipt)
+            found.append((task_id, allocation_entry.path))
     return found
+
+
+def surviving_allocation_receipts(results_root: str) -> list[dict[str, Any]]:
+    """Every compute-node receipt still on disk under *results_root*.
+
+    Restart reconciliation's view of the host-only allocation namespace.
+
+    A receipt is returned only when it parses: the entry stays on disk so an
+    operator can inspect an anomalous one, and a receipt this pass cannot adopt
+    is never deleted.  The caller corroborates each claim against the scheduler
+    before anything is recorded.
+    """
+    found: list[dict[str, Any]] = []
+    for task_id, directory in _allocation_dirs(results_root):
+        receipt_path = os.path.join(directory, ALLOCATION_RECEIPT_NAME)
+        try:
+            with open(receipt_path, encoding="utf-8") as handle:
+                text = handle.read(4096)
+        except OSError:
+            continue
+        receipt = parse_allocation_receipt(text)
+        if receipt is None:
+            continue
+        receipt["task_id"] = task_id
+        receipt["receipt_path"] = receipt_path
+        found.append(receipt)
+    return found
+
+
+def surviving_scheduler_logs(results_root: str) -> list[dict[str, Any]]:
+    """Every scheduler-authored per-job file still on disk under *results_root*.
+
+    The complement of :func:`surviving_allocation_receipts`, and the only reader
+    of the window that function cannot see.  Slurm creates
+    ``allocation-<job id>.err`` in the job's working directory the instant the
+    job is allocated a node; a job killed between "allocated" and its first
+    statement leaves that file and nothing else.  The wrapper's own receipt is
+    written microseconds later and is strictly better — it carries the shape —
+    so an entry is reported only when no receipt exists beside it, which also
+    keeps the two readers from ever describing one allocation twice.
+
+    What such a file proves is exactly one thing: a scheduler job held a node.
+    It says nothing about how many GPUs or cores, so the caller records the fact
+    with an unknown shape rather than inventing one.  The file name carries the
+    job id, which is the claim's identity and what reconciliation corroborates.
+    """
+    found: list[dict[str, Any]] = []
+    for task_id, directory in _allocation_dirs(results_root):
+        if os.path.exists(os.path.join(directory, ALLOCATION_RECEIPT_NAME)):
+            continue
+        try:
+            entries = os.scandir(directory)
+        except OSError:
+            continue
+        with entries:
+            for entry in sorted(entries, key=lambda item: item.name):
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+                job_id = _scheduler_log_job_id(entry.name)
+                if job_id is None:
+                    continue
+                found.append(
+                    {
+                        "task_id": task_id,
+                        "slurm_job_id": job_id,
+                        # The file's own mtime is the only durable stamp there is
+                        # for this claim.  It is an approximation of the
+                        # allocation start (Slurm touches the file when it starts
+                        # the job's step), which is exactly the kind of floor
+                        # reconciliation already uses, and it is never rewritten
+                        # into a settlement quantity.
+                        "observed_at": _mtime(entry.path),
+                        "scheduler_log_path": entry.path,
+                    }
+                )
+    return found
+
+
+def _mtime(path: str) -> float:
+    """One file's modification time, or ``0.0`` when it cannot be read."""
+    try:
+        return os.stat(path).st_mtime
+    except OSError:
+        return 0.0
+
+
+def _scheduler_log_job_id(filename: str) -> str | None:
+    """The job id a scheduler log file name carries, or ``None``.
+
+    ``ALLOCATION_SCHEDULER_LOG_NAME`` is ``allocation-%j.err``, so the file is
+    ``allocation-<digits>.err``.  Anything else in the directory — the wrapper
+    script, a partially written temp file — is not a scheduler log and is not
+    claimed as one.
+    """
+    prefix, suffix = ALLOCATION_SCHEDULER_LOG_NAME.split("%j", 1)
+    if not filename.startswith(prefix) or not filename.endswith(suffix):
+        return None
+    job_id = filename[len(prefix) : len(filename) - len(suffix) if suffix else None]
+    return job_id if job_id.isdigit() else None
 
 
 def _sanitize_name(s: str) -> str:

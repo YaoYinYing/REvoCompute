@@ -43,7 +43,11 @@ from revocompute.infrastructure import (
     publish_worker_probe_snapshot,
 )
 from revocompute.job import Job, JobState
-from revocompute.job.runners.slurm_runner import SlurmJob, surviving_allocation_receipts
+from revocompute.job.runners.slurm_runner import (
+    SlurmJob,
+    surviving_allocation_receipts,
+    surviving_scheduler_logs,
+)
 from revocompute.ingress_security import (
     ARTIFACT_CAPACITY_GUARD,
     ARTIFACT_PUBLICATION_REJECTED,
@@ -2291,6 +2295,44 @@ def _parse_slurm_runtime(value: str) -> int | None:
     return days * 86_400 + hours * 3_600 + minutes * 60 + seconds
 
 
+def _parse_scontrol_allocation(output: str) -> tuple[str, int | None, int | None, int | None]:
+    """Return ``(state, elapsed_seconds, cpu_cores, gpu_count)`` from one query.
+
+    The same ``scontrol show job`` output already answers the shape question, so
+    the scheduler's own numbers corroborate what a receipt reported rather than
+    trusting the compute node's environment.  The allocated GPU count comes from
+    ``TRES=`` (its ``gres/gpu=N`` term), never from a request term, so a job that
+    was granted fewer GPUs than it asked for cannot over-charge; a query with no
+    GPU TRES at all returns ``None`` — unknown, not zero.
+    """
+    state, elapsed = _parse_scontrol_job(output)
+    fields: dict[str, str] = {}
+    for token in output.replace("\n", " ").split():
+        key, separator, value = token.partition("=")
+        if separator and key not in fields:
+            fields[key] = value
+    cpu_cores: int | None = None
+    gpu_count: int | None = None
+    for key in ("AllocTRES", "TRES"):
+        # ``AllocTRES`` is what was granted; ``TRES`` is the request, used only
+        # when the scheduler does not report an allocation term at all.
+        for term in fields.get(key, "").split(","):
+            name, _, raw = term.partition("=")
+            if not raw:
+                continue
+            try:
+                value = int(raw)
+            except ValueError:
+                continue
+            if name == "cpu":
+                cpu_cores = value
+            elif name == "gres/gpu":
+                gpu_count = value
+        if cpu_cores is not None or gpu_count is not None:
+            break
+    return state, elapsed, cpu_cores, gpu_count
+
+
 def _parse_scontrol_job(output: str) -> tuple[str, int | None]:
     """Return ``(state, elapsed_seconds)`` from ``scontrol show job`` output."""
     fields: dict[str, str] = {}
@@ -2326,6 +2368,11 @@ def _reconcile_allocation_receipts() -> dict[str, int]:
       rejected here.  It is never charged and never quietly dropped either: it is
       left in place for an operator, because a receipt naming a job the scheduler
       does not know is evidence of a real anomaly, not of nothing.
+
+    Where the scheduler reports the granted shape (``AllocTRES``), those numbers
+    replace the receipt's self-report before the fact is written, so the charged
+    shape is the one the scheduler granted rather than the one the compute node's
+    environment happened to describe.
     """
     receipts = task_store.list_allocation_receipts()
     result = {"recovered": 0, "rejected": 0, "unavailable": 0}
@@ -2335,6 +2382,7 @@ def _reconcile_allocation_receipts() -> dict[str, int]:
     for receipt in receipts:
         job_id = str(receipt["slurm_job_id"])
         state = None
+        cpu_cores = gpu_count = None
         if scontrol:
             try:
                 completed = subprocess.run(
@@ -2347,13 +2395,23 @@ def _reconcile_allocation_receipts() -> dict[str, int]:
             except (OSError, subprocess.SubprocessError):
                 completed = None
             if completed is not None:
-                state, _elapsed = _parse_scontrol_job(completed.stdout)
+                state, _elapsed, cpu_cores, gpu_count = _parse_scontrol_allocation(completed.stdout)
         if state not in _ACTIVE_SLURM_STATES and state not in _TERMINAL_SLURM_STATES:
             # The scheduler does not own this job, or could not be asked.  The
             # claim is not admitted, and it is not discarded: an unverifiable
             # receipt stays visible instead of silently vanishing.
             result["unavailable" if scontrol else "rejected"] += 1
             continue
+        if cpu_cores is not None or gpu_count is not None:
+            # The scheduler's own numbers replace the compute node's self-report
+            # where the scheduler reports them: the fact is charged from what the
+            # allocation was granted, so a node whose environment under- or
+            # over-states its GPUs cannot mis-charge.
+            receipt = {
+                **receipt,
+                "cpus": cpu_cores if cpu_cores is not None else receipt["cpus"],
+                "gpus": gpu_count if gpu_count is not None else receipt["gpus"],
+            }
         owner = task_store.get_task(str(receipt["task_id"]))
         user_id = int((owner or {}).get("submitted_by_user_id") or 0)
         if user_id <= 0:
@@ -2409,6 +2467,7 @@ def _reconcile_host_allocation_receipts() -> dict[str, int]:
             result["rejected"] += 1
             continue
         state = None
+        cpu_cores = gpu_count = None
         if scontrol:
             try:
                 completed = subprocess.run(
@@ -2421,10 +2480,19 @@ def _reconcile_host_allocation_receipts() -> dict[str, int]:
             except (OSError, subprocess.SubprocessError):
                 completed = None
             if completed is not None:
-                state, _elapsed = _parse_scontrol_job(completed.stdout)
+                state, _elapsed, cpu_cores, gpu_count = _parse_scontrol_allocation(completed.stdout)
         if state not in _ACTIVE_SLURM_STATES and state not in _TERMINAL_SLURM_STATES:
             result["unavailable" if scontrol else "rejected"] += 1
             continue
+        if cpu_cores is not None or gpu_count is not None:
+            # The scheduler's own numbers replace the compute node's self-report
+            # where it reports them, so the recorded shape is what the scheduler
+            # granted rather than what the node's environment claimed.
+            receipt = {
+                **receipt,
+                "cpus": cpu_cores if cpu_cores is not None else receipt["cpus"],
+                "gpus": gpu_count if gpu_count is not None else receipt["gpus"],
+            }
         if task_store.allocation_row_exists(job_id):
             # The canonical fact already carries this job: an earlier worker (or
             # an earlier pass) committed it and died before the file was removed.
@@ -2457,6 +2525,103 @@ def _reconcile_host_allocation_receipts() -> dict[str, int]:
     return result
 
 
+def _reconcile_host_scheduler_logs() -> dict[str, int]:
+    """Adopt the scheduler's own per-job files where no wrapper ever ran.
+
+    The last remaining crash window is the one between "Slurm allocated the job
+    a node" and "the wrapper's first statement ran".  Neither the wrapper's
+    receipt nor any worker write can cover it, but the scheduler's own redirected
+    stderr file can: ``srun`` creates it at allocation, so a job preempted, OOM-
+    killed, or timed out in that instant leaves exactly one durable trace.
+
+    What that file proves is that a real allocation existed — and nothing about
+    its shape.  So the fact is recorded with an UNKNOWN shape and marked for
+    review, never charged a guessed or zero quantity, and the file is deleted
+    only after the fact is durable.  A file the scheduler cannot corroborate is
+    left where it is, exactly like an unverifiable receipt.
+    """
+    result = {"recovered": 0, "rejected": 0, "unavailable": 0, "surviving": 0}
+    if not CONFIG.results_folder:
+        return result
+    try:
+        files = surviving_scheduler_logs(CONFIG.results_folder)
+    except OSError:
+        return result
+    scontrol = shutil.which("scontrol")
+    for entry in files:
+        job_id = str(entry["slurm_job_id"])
+        task_id = str(entry["task_id"])
+        owner = task_store.get_task(task_id)
+        user_id = int((owner or {}).get("submitted_by_user_id") or 0)
+        if user_id <= 0:
+            result["rejected"] += 1
+            continue
+        state = None
+        cpu_cores = gpu_count = None
+        if scontrol:
+            try:
+                completed = subprocess.run(
+                    [scontrol, "show", "job", job_id],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=True,
+                )
+            except (OSError, subprocess.SubprocessError):
+                completed = None
+            if completed is not None:
+                state, _elapsed, cpu_cores, gpu_count = _parse_scontrol_allocation(completed.stdout)
+        if state not in _ACTIVE_SLURM_STATES and state not in _TERMINAL_SLURM_STATES:
+            result["unavailable" if scontrol else "rejected"] += 1
+            continue
+        if task_store.allocation_row_exists(job_id):
+            # A real shape already exists for this job, so there is nothing to
+            # learn from the file; retire it rather than mint a second claim.
+            try:
+                os.unlink(str(entry["scheduler_log_path"]))
+            except OSError:
+                result["surviving"] += 1
+            result["recovered"] += 1
+            continue
+        if cpu_cores is not None or gpu_count is not None:
+            # The scheduler can still report what it granted, so this claim is
+            # not shapeless after all: it is recorded as a normal observation
+            # from the scheduler's own numbers, which reconciles and settles it
+            # like every other allocation.  The GPU's string class is not what
+            # admission gates on — the balance is class-agnostic — so the
+            # scheduler's *count* is the part that matters here.
+            observed = task_store.observe_allocation_start(
+                user_id=user_id,
+                task_id=task_id,
+                stage_id=str((owner or {}).get("run_stage") or ""),
+                slurm_job_id=job_id,
+                gpu_count=max(0, int(gpu_count or 0)),
+                cpu_cores=max(1, int(cpu_cores or 1)),
+                started_at=float(entry["observed_at"]) or time.time(),
+            )
+        else:
+            observed = task_store.observe_unknown_shape_allocation(
+                user_id=user_id,
+                task_id=task_id,
+                slurm_job_id=job_id,
+                started_at=float(entry["observed_at"]),
+            )
+        emit_event(
+            "resource.allocation.recovered",
+            task_id=str(observed["task_id"]),
+            stage_id=str(observed["stage_id"]),
+            slurm_job_id=job_id,
+            user_id=user_id,
+            reason_code=EvidenceSource.SCHEDULER_LOG.value,
+        )
+        try:
+            os.unlink(str(entry["scheduler_log_path"]))
+        except OSError:
+            result["surviving"] += 1
+        result["recovered"] += 1
+    return result
+
+
 def _reconcile_slurm_allocations() -> dict[str, int]:
     """Settle lost finish callbacks from best-effort ``scontrol`` evidence.
 
@@ -2471,6 +2636,12 @@ def _reconcile_slurm_allocations() -> dict[str, int]:
     # turns "the allocation happened" into a durable claim at all.  The receipt
     # table is then folded in, so a worker that did adopt the file but died
     # before the allocation rows committed still recovers.
+    # Weakest evidence first, strongest last, so a claim is adopted by the most
+    # specific source that can describe it.  The scheduler-log pass ignores any
+    # job that still has the wrapper's receipt beside it, so a receipt is never
+    # adopted twice; running it first keeps it from seeing a receipt that a later
+    # pass has already retired.
+    _reconcile_host_scheduler_logs()
     _reconcile_host_allocation_receipts()
     _reconcile_allocation_receipts()
     allocations = task_store.list_unsettled_allocations()
@@ -2510,6 +2681,12 @@ def _reconcile_slurm_allocations() -> dict[str, int]:
             elapsed_seconds=elapsed_seconds,
             evidence_source=EvidenceSource.SLURM_LIVE.value,
         )
+        if settled.get("resource_count") is None:
+            # The elapsed time is known but the shape never was, so nothing can
+            # be charged: the row stays for an operator instead of becoming a
+            # fabricated or zero quantity.
+            result["review"] += 1
+            continue
         emit_event(
             "resource.allocation.settled",
             task_id=str(settled["task_id"]),
@@ -2544,13 +2721,14 @@ def _reclaim_abandoned_reservations(*, now: float | None = None) -> int:
     window.  A missing identity is not evidence that no request exists, so it
     keeps its commitment.
 
-    ``receipted`` is the set of Task ids whose host-only ``allocation.receipt``
-    is still on disk.  A receipt file is the strongest evidence there is that a
-    scheduler job really occupied a node, and it exists *before* any worker
-    write, so the scheduler question must never be the thing that frees a claim a
-    receipt already proves.  Adopting those receipts is
-    :func:`_reconcile_host_allocation_receipts`'s job; this pass only refuses to
-    act against them.
+    ``receipted`` is the set of Task ids whose host-only allocation directory
+    still holds evidence a node was allocated — the wrapper's own receipt, or the
+    scheduler's per-job file that precedes it.  Both are stronger than any answer
+    the scheduler can give later, and both exist *before* any worker write, so the
+    scheduler question must never be the thing that frees a claim they already
+    prove.  Adopting them is :func:`_reconcile_host_allocation_receipts`'s and
+    :func:`_reconcile_host_scheduler_logs`'s job; this pass only refuses to act
+    against them.
     """
     timestamp = time.time() if now is None else now
     reservations = task_store.list_queued_reservations()
@@ -2561,6 +2739,10 @@ def _reclaim_abandoned_reservations(*, now: float | None = None) -> int:
                 str(receipt["task_id"])
                 for receipt in surviving_allocation_receipts(CONFIG.results_folder)
             }
+            receipted.update(
+                str(entry["task_id"])
+                for entry in surviving_scheduler_logs(CONFIG.results_folder)
+            )
         except OSError:
             receipted = set()
     if not reservations:

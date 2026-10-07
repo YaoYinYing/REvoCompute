@@ -774,6 +774,10 @@ def test_submit_invokes_srun_with_resource_args_and_wrapper(tmp_path):
         "--constraint=a100&nvme",
         "--exclusive",
         f"--chdir={output_dir}",
+        # Slurm's own per-job file, created at allocation: the only durable trace
+        # of a job killed before the wrapper's first statement.  Only stderr is
+        # redirected, so the wrapper's stdout protocol stays on its pipe.
+        f"--error={Path(job.allocation_dir) / 'allocation-%j.err'}",
         "--job-name=revocomput_alice_example_com_gremlin_abcdef12",
         "/bin/bash",
         str(wrapper),

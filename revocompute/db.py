@@ -415,6 +415,14 @@ class TaskDatabase:
         # they are separate accounting units.  A CPU-only allocation is the GPU
         # row with a zero ``resource_count``, so "every Slurm allocation"
         # answers without a second table.
+        #
+        # ``resource_count`` is NULL for exactly one case: an allocation the
+        # scheduler's own per-job output file proves happened but whose resource
+        # shape no one recorded, because the job was killed between "allocated a
+        # node" and its first statement.  NULL is "unknown", never a zero — a
+        # zero would be the false claim that the job held no GPUs, which
+        # settlement would then charge as no usage at all.  Such a row is marked
+        # for review and is never settled to a number.
         self.resource_allocations_table = Table(
             "resource_allocations",
             self.metadata,
@@ -426,7 +434,7 @@ class TaskDatabase:
             Column("slurm_job_id", String, nullable=False),
             Column("unit", String, nullable=False),
             Column("resource_class", String, nullable=False, default=""),
-            Column("resource_count", Integer, nullable=False),
+            Column("resource_count", Integer, nullable=True),
             Column("started_at", Float, nullable=False),
             Column("finished_at", Float),
             Column("quantity", Integer),
@@ -829,7 +837,10 @@ class TaskDatabase:
           expiry at all, and its live-reservation uniqueness covers both
           ownership modes.
 
-        Both are constraint changes SQLite cannot apply in place, so each table
+        A third change widens ``resource_allocations.resource_count`` to nullable
+        for a scheduler-log-only observation whose shape was never recorded.
+
+        These are constraint changes SQLite cannot apply in place, so each table
         is rebuilt — rename, drop the superseded indexes, recreate in the current
         shape, copy every column unchanged, drop the old table — under the
         startup lock, in one transaction.  A database already carrying the
@@ -840,12 +851,19 @@ class TaskDatabase:
         tables = set(inspector.get_table_names())
         if "resource_allocations" in tables:
             indexes = {index["name"] for index in inspector.get_indexes("resource_allocations")}
-            columns = {column["name"] for column in inspector.get_columns("resource_allocations")}
+            columns = {
+                column["name"]: bool(column["nullable"])
+                for column in inspector.get_columns("resource_allocations")
+            }
             if (
                 "idx_resource_allocations_job_unit" not in indexes
                 or "denial_reason" not in columns
                 or "denial_code" not in columns
                 or "adjudicated_at" not in columns
+                # A row whose shape is unknown records NULL, which the released
+                # NOT NULL column cannot hold.  Widening is the only migration a
+                # recorded fact needs here: every existing count keeps its value.
+                or not columns.get("resource_count", False)
             ):
                 self._rebuild_table(conn, self.resource_allocations_table)
         if "resource_reservations" in tables:
@@ -1640,7 +1658,11 @@ class TaskDatabase:
         total = 0
         for count, started_at in rows:
             elapsed = max(0.0, now - float(started_at))
-            total += max(quantum, 0, int(count)) * max(1, int(elapsed))
+            # An unknown shape reserves the quantum, never zero: the allocation
+            # really held something, so it must not be admitted against as if it
+            # held nothing.
+            reserved = quantum if count is None else max(quantum, 0, int(count))
+            total += reserved * max(1, int(elapsed))
         return len(rows), total
 
     def storage_entitlement(self, user_id: int) -> rloan.StorageEntitlement:
@@ -2549,6 +2571,40 @@ class TaskDatabase:
                     .one_or_none()
                 )
                 if existing is not None:
+                    if existing.get("resource_count") is None:
+                        # A weaker source proved only that the job held a node;
+                        # this caller now reports the real shape, so it replaces
+                        # the unknown per unit.  Nothing is settled here — the
+                        # elapsed time still comes from reconciliation — and the
+                        # strongest evidence available is recorded on the fact.
+                        for unit, count in (
+                            (rloan.UNIT_GPU_SECOND, gpu_count),
+                            (rloan.UNIT_CPU_CORE_SECOND, cpu_cores),
+                        ):
+                            conn.execute(
+                                update(self.resource_allocations_table)
+                                .where(
+                                    self.resource_allocations_table.c.slurm_job_id == slurm_job_id,
+                                    self.resource_allocations_table.c.unit == unit,
+                                )
+                                .values(
+                                    resource_count=count,
+                                    resource_class=(
+                                        resource_class if unit == rloan.UNIT_GPU_SECOND else ""
+                                    ),
+                                )
+                            )
+                        existing = (
+                            conn.execute(
+                                select(self.resource_allocations_table).where(
+                                    self.resource_allocations_table.c.slurm_job_id == slurm_job_id,
+                                    self.resource_allocations_table.c.unit
+                                    == rloan.UNIT_GPU_SECOND,
+                                )
+                            )
+                            .mappings()
+                            .one()
+                        )
                     self._assert_allocation_identity(
                         existing, user_id=user_id, task_id=task_id, stage_id=stage_id,
                         gpu_count=gpu_count, resource_class=resource_class,
@@ -2703,6 +2759,32 @@ class TaskDatabase:
                     .one_or_none()
                 )
                 if existing is not None:
+                    if existing.get("resource_count") is None:
+                        # A weaker source (the scheduler's own output file) proved
+                        # only that the job held a node.  The shape this caller
+                        # reports now is the stronger fact, so it replaces the
+                        # unknown per unit — but nothing is settled here: the
+                        # elapsed time still comes from reconciliation, exactly as
+                        # for any other observation.
+                        for unit, count in (
+                            (rloan.UNIT_GPU_SECOND, gpu_count),
+                            (rloan.UNIT_CPU_CORE_SECOND, cpu_cores),
+                        ):
+                            conn.execute(
+                                update(self.resource_allocations_table)
+                                .where(
+                                    self.resource_allocations_table.c.slurm_job_id == slurm_job_id,
+                                    self.resource_allocations_table.c.unit == unit,
+                                )
+                                .values(
+                                    resource_count=count,
+                                    resource_class=resource_class if unit == rloan.UNIT_GPU_SECOND else "",
+                                    evidence_source=rloan.EvidenceSource.RUNNER_OBSERVATION.value,
+                                    status=rloan.AllocationStatus.ACTIVE.value,
+                                )
+                            )
+                        conn.commit()
+                        return dict(existing)
                     self._assert_allocation_identity(
                         existing, user_id=user_id, task_id=task_id, stage_id=stage_id,
                         gpu_count=gpu_count, resource_class=resource_class,
@@ -2947,8 +3029,8 @@ class TaskDatabase:
         task_id: str,
         stage_id: str,
         slurm_job_id: str,
-        gpu_count: int,
-        cpu_cores: int,
+        gpu_count: int | None,
+        cpu_cores: int | None,
         resource_class: str,
         timestamp: float,
         evidence_source: str = rloan.EvidenceSource.ALLOCATION_LIFECYCLE.value,
@@ -2958,6 +3040,12 @@ class TaskDatabase:
         ``evidence_source`` names what the writer actually observed: the
         allocation lifecycle, or the bare runner observation that the wrapper was
         executing before any admission decision was made.
+
+        A ``None`` count records an *unknown* shape rather than a zero — the
+        scheduler's own output file proves the job held a node, but nothing says
+        how much of either unit it held.  Such a row is left for review and is
+        never settled to a number; a zero would be the false claim that the job
+        held none of that unit.
         """
         for unit, count, klass in (
             (rloan.UNIT_GPU_SECOND, gpu_count, resource_class),
@@ -2989,6 +3077,97 @@ class TaskDatabase:
                     ledger_entry_id=None,
                 )
             )
+
+    def observe_unknown_shape_allocation(
+        self,
+        *,
+        user_id: int,
+        task_id: str,
+        slurm_job_id: str,
+        started_at: float,
+        stage_id: str = "",
+    ) -> dict[str, Any]:
+        """Record that an allocation happened, with no shape anyone observed.
+
+        The scheduler's own per-job output file is created the instant a job is
+        allocated a node, so it survives a kill that lands between "allocated a
+        node" and the job's first statement — the one window no in-job mechanism
+        can cover.  What it proves is exactly one thing: a scheduler job held
+        real resources.  It says nothing about how many GPUs or cores, so the
+        facts it produces carry a NULL ``resource_count`` and are marked for
+        review: an unknown, never a zero, and never a number invented from a
+        policy default.
+
+        Idempotent on ``slurm_job_id`` like every other observation, and it never
+        overwrites a fact a stronger source already recorded.
+        """
+        if user_id <= 0:
+            raise ValueError("user_id must be positive")
+        with self.engine.connect() as conn:
+            conn.exec_driver_sql("BEGIN IMMEDIATE")
+            try:
+                existing = (
+                    conn.execute(
+                        select(self.resource_allocations_table).where(
+                            self.resource_allocations_table.c.slurm_job_id == slurm_job_id,
+                            self.resource_allocations_table.c.unit == rloan.UNIT_GPU_SECOND,
+                        )
+                    )
+                    .mappings()
+                    .one_or_none()
+                )
+                if existing is not None:
+                    conn.commit()
+                    return dict(existing)
+                self._insert_allocation_facts(
+                    conn,
+                    user_id=user_id,
+                    task_id=task_id,
+                    stage_id=stage_id,
+                    slurm_job_id=slurm_job_id,
+                    gpu_count=None,
+                    cpu_cores=None,
+                    resource_class="",
+                    timestamp=started_at,
+                    evidence_source=rloan.EvidenceSource.SCHEDULER_LOG.value,
+                )
+                conn.execute(
+                    update(self.resource_allocations_table)
+                    .where(self.resource_allocations_table.c.slurm_job_id == slurm_job_id)
+                    .values(status=rloan.AllocationStatus.REVIEW.value)
+                )
+                # The reservation is handed to the scheduler in the same commit:
+                # the request exists, its job id proves the scheduler owns it, and
+                # the hold must stop being a pre-dispatch hold a timer may free.
+                conn.execute(
+                    update(self.resource_reservations_table)
+                    .where(
+                        self.resource_reservations_table.c.task_id == task_id,
+                        self.resource_reservations_table.c.state == rloan.ReservationState.HELD.value,
+                    )
+                    .values(
+                        state=rloan.ReservationState.QUEUED.value,
+                        reason_code=rloan.ReservationReason.DISPATCHED.value,
+                        dispatched_at=started_at,
+                        scheduler_job_id=str(slurm_job_id),
+                        expires_at=None,
+                    )
+                )
+                row = (
+                    conn.execute(
+                        select(self.resource_allocations_table).where(
+                            self.resource_allocations_table.c.slurm_job_id == slurm_job_id,
+                            self.resource_allocations_table.c.unit == rloan.UNIT_GPU_SECOND,
+                        )
+                    )
+                    .mappings()
+                    .one()
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        return dict(row)
 
     def _grant_allocation_in_connection(
         self,
@@ -3146,6 +3325,23 @@ class TaskDatabase:
                 if str(row["unit"]) == rloan.UNIT_GPU_SECOND:
                     gpu_row = row
                 if row["status"] == rloan.AllocationStatus.SETTLED.value:
+                    continue
+                if row["resource_count"] is None:
+                    # The allocation's shape was never recorded — the scheduler's
+                    # own output file proves it held a node, but nothing says how
+                    # many GPUs or cores it held.  Charging it would invent a
+                    # quantity, and charging it zero would report a real
+                    # allocation as no usage at all, so it is left for an
+                    # operator: the elapsed time is known now, but the fact it
+                    # would multiply is not.
+                    conn.execute(
+                        update(self.resource_allocations_table)
+                        .where(self.resource_allocations_table.c.id == row["id"])
+                        .values(
+                            status=rloan.AllocationStatus.REVIEW.value,
+                            evidence_source=evidence_source,
+                        )
+                    )
                     continue
                 allocated = int(row["resource_count"])
                 if allocated <= 0:
