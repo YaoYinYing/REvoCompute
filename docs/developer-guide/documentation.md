@@ -59,9 +59,15 @@ Only these root files are maintained alongside the published site:
   references to the root path keep working.
 - `SECURITY.md` and `CODE_OF_CONDUCT.md` — symlinks into `reference/`, kept at
   the root because GitHub reads community-health files from there.
-- `TODO.md`, `TODO_*.md`, `IMPLEMENTATION_STATE.md`, and `GOAL_GMX_MMPBSA.md` —
-  the maintainer backlog and working notes. These are deliberately unpublished
-  and may reference paths that no longer exist.
+- `GOAL_GMX_MMPBSA.md` — a pinned forward-looking intake document. Like the
+  rest of this list it is deliberately unpublished and may reference paths that
+  do not exist yet.
+
+A PR-scoped `TODO.md`, `TODO_*.md`, or `IMPLEMENTATION_STATE.md` is allowed at
+the root while that work is active (the `docs.yml` layout check tolerates those
+names) and is retired before the PR merges: durable guidance moves to its owning
+page and the working file is removed. See
+[Long-task Handling](../agents/long-task-handling.md#retire-pr-working-artifacts-before-final-review).
 
 Any other root-level `*.md` guide is a defect. Move its content into the owning
 section and delete it. When content must keep a stable root path for an existing

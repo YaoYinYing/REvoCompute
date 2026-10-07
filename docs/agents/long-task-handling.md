@@ -1044,28 +1044,50 @@ work.
 
 ### Root TODO.md semantics
 
-The root `TODO.md` is ephemeral PR/worktree-local execution guidance, not durable
-repository-wide policy. Each PR branch may legitimately carry a different
-`TODO.md`; the copy visible on `main` after a merge is historical residue from the
-most recently merged work and must not be read as current repository-wide design
-truth. Reviewers and the Advisor must not reject a PR merely because its
-`TODO.md` differs from the copy on `main`, and there is no need to proliferate
-`TODO_PR<number>.md` files solely to avoid normal PR-local differences. Durable
-project or Campaign policy belongs in stable documentation such as `CLAUDE.md`,
-this protocol, and the developer/operator docs. When a TODO is meant to outlive
-its PR, migrate the durable content into the appropriate policy or documentation
-file before merge.
+A PR's root-level `TODO.md` and `IMPLEMENTATION_STATE.md` (and their
+`TODO_<slug>.md` variants) are ephemeral PR-local execution artifacts, not durable
+repository state. They are allowed while the PR is active, but they describe the
+work in progress, not the product: the merged PR and its Git history already
+preserve the planning and execution record, so `main` should describe the current
+product rather than retain completed PR scratch state.
+
+Because these files are gitignored (`.gitignore`), a worktree copy is not
+normally tracked churn, and removing one is a `git rm` (untrack) — the ignore
+rule stays. A PR branch may legitimately carry its own `TODO.md`, and reviewers
+and the Advisor must not reject a PR merely because its copy differs from
+`main`; there is no need to proliferate `TODO_PR<number>.md` files to avoid
+normal PR-local differences.
+
+#### Retire PR working artifacts before final review
+
+Before a PR reports `READY_FOR_FINAL_REVIEW`, remove its ephemeral working
+artifacts from the final tree:
+
+1. extract every still-durable architectural rule, operational limitation, or
+   reusable guidance into its canonical documentation owner (see
+   [Writing Documentation](../developer-guide/documentation.md)) — not into a
+   fresh scratch file;
+2. move genuinely unfinished work into an explicit follow-up issue or PR rather
+   than leaving it implied in a discarded TODO;
+3. remove the PR's `TODO.md` (and its `IMPLEMENTATION_STATE.md` if it has one);
+4. remove or migrate every reference that still points at either file, including
+   repository tooling and manifests;
+5. confirm the merged tree does not depend on the removed notes.
+
+Durable project or Campaign policy belongs in stable documentation such as
+`CLAUDE.md`, this protocol, and the developer/operator docs.
 
 ### Per-PR execution state
 
 A single long-running task may use the repository's conventional `TODO.md` and
-`IMPLEMENTATION_STATE.md`. Concurrent PRs must not share one mutable planning
-file. Worktree isolation already gives each PR its own copy of a shared filename,
-so distinct worktrees may each carry `TODO.md`; a PR-specific filename such as
-`TODO_<slug>.md` / `IMPLEMENTATION_STATE_<slug>.md` is needed only when two PRs
-would otherwise collide on the same checkout or branch. The invariant is one
-mutable execution truth per PR; the filename is not fixed when a PR already has a
-clear, unambiguous design/state document.
+`IMPLEMENTATION_STATE.md` while it is in flight. Concurrent PRs must not share one
+mutable planning file. Worktree isolation already gives each PR its own copy of a
+shared filename, so distinct worktrees may each carry `TODO.md`; a PR-specific
+filename such as `TODO_<slug>.md` / `IMPLEMENTATION_STATE_<slug>.md` is needed
+only when two PRs would otherwise collide on the same checkout or branch. The
+invariant is one mutable execution truth per PR; the filename is not fixed when a
+PR already has a clear, unambiguous design/state document. Both files are
+retired before `READY_FOR_FINAL_REVIEW` as described above.
 
 ### Rebase policy
 
