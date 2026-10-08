@@ -14,7 +14,7 @@ from __future__ import annotations
 from playwright.sync_api import Page, expect
 import pytest
 
-from frontend_fixtures import ADMIN_AUTH, controlled_scenario, mount_scenario
+from frontend_fixtures import ADMIN_AUTH, ANONYMOUS_AUTH, USER_AUTH, Session, controlled_scenario, mount_scenario
 
 pytestmark = pytest.mark.browser
 
@@ -237,6 +237,91 @@ def test_language_switch_localizes_frontend_copy_and_persists(page: Page) -> Non
 
 
 # ── persistent system notices ─────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("width", [360, 1280])
+@pytest.mark.parametrize("locale", ["en", "zh-CN"])
+@pytest.mark.parametrize("path", ["/runners", "/compute/login"])
+@pytest.mark.parametrize("session", [ANONYMOUS_AUTH, USER_AUTH, ADMIN_AUTH], ids=["anonymous", "user", "admin"])
+def test_account_destinations_match_session_semantics(
+    page: Page, width: int, locale: str, path: str, session: Session,
+) -> None:
+    mount_scenario(page, controlled_scenario(session=session))
+    page.set_viewport_size({"width": width, "height": 900})
+    page.add_init_script(f"localStorage.setItem('revocompute-locale', '{locale}')")
+    page.goto(f"{ORIGIN}{path}")
+    account = page.locator("[data-nav-group='account'] a")
+    identity = page.locator(".app-user")
+    signed_in = session.role != "anonymous"
+    profile, sign_in = ("Profile", "Sign in") if locale == "en" else ("个人资料", "登录")
+    label = profile if signed_in else sign_in
+    if path == "/compute/login":
+        account = page.locator(".public-account")
+        expect(account).to_have_text(label)
+        expect(account).to_have_attribute("title", label)
+        expect(account).to_have_accessible_name(label)
+        expect(account).to_have_attribute("href", "/compute/profile" if signed_in else "/compute/login")
+        return
+    destination = "/compute/profile" if signed_in else "/compute/login?return_to=%2Frunners"
+    expect(account).to_have_text(label)
+    expect(identity.locator("span")).to_have_text(session.full_name if signed_in else label)
+    identity_name = f"{profile}: {session.full_name}" if signed_in else label
+    for link, accessible_name in ((account, label), (identity, identity_name)):
+        expect(link).to_have_attribute("href", destination)
+        expect(link).to_have_attribute("title", label)
+        expect(link).to_have_accessible_name(accessible_name)
+    # The anonymous destination must actually navigate, including on the mobile bar.
+    account.click()
+    expect(page).to_have_url(f"{ORIGIN}{destination}")
+
+
+@pytest.mark.parametrize("width", [320, 360, 390, 834])
+@pytest.mark.parametrize("session", [USER_AUTH, ADMIN_AUTH], ids=["user", "admin"])
+def test_mobile_system_notice_stack_clears_navigation(page: Page, width: int, session: Session) -> None:
+    mount_scenario(page, controlled_scenario(session=session))
+    page.set_viewport_size({"width": width, "height": 780})
+    notices = [
+        {"id": f"maintenance-{index}", "level": "warning", "title": f"Maintenance {index}",
+         "body": "Storage maintenance details. " * 80}
+        for index in range(3)
+    ]
+    page.route(f"{ORIGIN}/compute/api/system/notices", lambda route: route.fulfill(json={"notices": notices}))
+    page.goto(f"{ORIGIN}/compute/dashboard")
+    expect(page.locator(".sys-notice")).to_have_count(3)
+
+    def assert_clearance() -> None:
+        stack = page.locator(".sys-notices").bounding_box()
+        navigation = page.locator(
+            "[data-nav-group='admin']" if session.role == "admin" else ".app-nav"
+        ).bounding_box()
+        assert stack is not None and navigation is not None
+        assert stack["y"] >= 56, stack  # Global actions remain reachable with long/multiple notices.
+        assert stack["y"] + stack["height"] < navigation["y"], (stack, navigation)
+        assert stack["x"] >= 0 and stack["x"] + stack["width"] <= width, stack
+
+    assert_clearance()
+    # Hide, reopen, then collapse the restored notices back to the visible subset.
+    page.locator(".sys-notice").first.get_by_role("button", name="Hide notice").click()
+    expect(page.locator(".sys-notice")).to_have_count(2)
+    assert_clearance()
+    page.get_by_role("button", name="System notices").click()
+    expect(page.locator(".sys-notice")).to_have_count(3)
+    assert_clearance()
+    page.get_by_role("button", name="System notices").click()
+    expect(page.locator(".sys-notice")).to_have_count(2)
+    assert_clearance()
+    page.locator(".sys-notice").first.get_by_role("button", name="Hide notice").click()
+    expect(page.locator(".sys-notice")).to_have_count(1)
+    assert_clearance()
+    page.locator(".sys-notice").first.get_by_role("button", name="Hide notice").click()
+    expect(page.locator(".sys-notice")).to_have_count(0)
+    page.evaluate("window.scrollTo(0, document.documentElement.scrollHeight)")
+    outlet = page.locator(".app-outlet")
+    last_content_bottom = outlet.evaluate("node => node.lastElementChild.getBoundingClientRect().bottom")
+    navigation = page.locator(
+        "[data-nav-group='admin']" if session.role == "admin" else ".app-nav"
+    ).bounding_box()
+    assert navigation is not None and last_content_bottom <= navigation["y"] + 1, (last_content_bottom, navigation)
 
 
 def test_persistent_notice_opens_hides_and_reopens_from_the_global_affordance(page: Page) -> None:

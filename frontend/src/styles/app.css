@@ -123,7 +123,11 @@ a { color: var(--app-accent); }
 
 /* --- Persistent system notices -------------------------------------------- */
 /* Long-lived operational information: bounded, collapsible, dismissible by identity. */
-.sys-notices { position: fixed; right: 1rem; bottom: 1rem; z-index: 60; display: grid; width: min(30rem, calc(100vw - 2rem)); gap: .5rem; }
+.app-feedback { position: fixed; right: 1rem; bottom: 1rem; z-index: 60; display: flex; flex-direction: column; align-items: end; width: min(30rem, calc(100vw - 2rem)); max-height: calc(100dvh - 5rem); gap: .5rem; pointer-events: none; }
+.app-feedback > aside { pointer-events: auto; }
+.sys-notices:empty { display: none; }
+.app-feedback:has(.app-notices:empty) { gap: 0; }
+.sys-notices { display: grid; width: 100%; min-height: 0; overflow-y: auto; gap: .5rem; }
 .sys-notice { border: 1px solid var(--app-line-strong); border-radius: var(--r-surface); background: var(--app-raised); box-shadow: var(--shadow-raised); }
 .sys-notice > header { display: flex; align-items: start; gap: .6rem; padding: .75rem .85rem; }
 .sys-notice-mark { width: .5rem; height: .5rem; margin-top: .42rem; flex: none; border-radius: 50%; background: var(--app-muted); }
@@ -248,7 +252,7 @@ a { color: var(--app-accent); }
 .empty-state { grid-column: 1 / -1; padding: 2.5rem; border: 1px dashed var(--app-line-strong); border-radius: var(--r-surface); color: var(--app-muted); text-align: center; }
 .loading-state { color: var(--app-muted); }.error-state { padding: .8rem; border-left: 2px solid var(--app-danger); background: var(--app-surface); color: var(--app-danger); }
 /* Transient toasts: short action feedback only. */
-.app-notices { position: fixed; right: 1rem; bottom: 1rem; z-index: 50; display: grid; width: min(24rem, calc(100vw - 2rem)); gap: .5rem; }
+.app-notices { display: grid; flex: none; width: min(24rem, 100%); gap: .5rem; }
 .app-notice { padding: .75rem .9rem; border-radius: var(--r-control); background: var(--app-ink); color: var(--app-bg); box-shadow: var(--shadow-raised); font-size: .8rem; }.notice-error { background: var(--app-danger); color: #fff; }.notice-success { background: var(--app-success); color: #fff; }
 .readiness-state { padding: .4rem .7rem; border-left: 2px solid var(--app-warning); background: var(--app-surface); color: var(--app-muted); font-size: .74rem; }.readiness-state[data-status="READY"] { border-color: var(--app-success); }
 .access-banner { width: fit-content; margin: 1rem 0; padding: .35rem .8rem; border-left: 2px solid var(--app-accent); background: var(--app-surface); color: var(--app-muted); font-size: .78rem; }.access-banner.restricted { border-color: var(--app-warning); }
@@ -312,7 +316,7 @@ a { color: var(--app-accent); }
 /* Tablet and below: the rail becomes a mobile-specific bottom navigation;
    the brand and the global actions share one top bar. */
 @media (max-width: 56rem) {
-  .app-shell { grid-template-columns: auto minmax(0, 1fr); grid-template-rows: auto 1fr; grid-template-areas: "brand header" "outlet outlet"; }
+  .app-shell { --app-bottom-clearance: calc(3.5rem + var(--app-admin-height, 0px)); grid-template-columns: auto minmax(0, 1fr); grid-template-rows: auto 1fr; grid-template-areas: "brand header" "outlet outlet"; }
   /* Narrow chrome keeps the logo and icon-only controls so the top bar cannot
      force the document wider than the viewport. */
   .app-brand { justify-content: start; padding: 0 .75rem; }
@@ -343,10 +347,9 @@ a { color: var(--app-accent); }
   .app-header .app-new-task span { display: none; }
   .app-user span { display: none; }
   .app-header #lang-menu-value, .lang-menu .lang-menu-value { display: none; }
-  .app-outlet { padding-bottom: 3.5rem; }
   /* When the Administration surface is present it stands above the bar, so the page
      clears it too — the surface never covers the end of the page. */
-  .app-shell:has(.app-nav-group[data-nav-group="admin"]:not([hidden])) .app-outlet { padding-bottom: 7.5rem; }
+  .app-outlet { padding-bottom: var(--app-bottom-clearance); }
   .page-heading, .runner-detail-heading { grid-template-columns: 1fr; align-items: start; gap: 1rem; }
   .dashboard-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .dashboard-stats div:nth-child(3n) { border-right: 0; }
@@ -356,7 +359,7 @@ a { color: var(--app-accent); }
   .detail-section { gap: 1rem; }
   .runner-detail-cta { align-items: start; flex-direction: column; }
   .task-card dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .sys-notices { bottom: 4.25rem; }
+  .app-shell .app-feedback { bottom: calc(var(--app-bottom-clearance) + .75rem); max-height: calc(100dvh - var(--app-bottom-clearance) - 4.25rem); }
 }
 @media (max-width: 48rem) {
   .dashboard-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }

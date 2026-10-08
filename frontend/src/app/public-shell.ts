@@ -28,6 +28,8 @@ export function mountPublicShell(root: HTMLElement): AppShell {
   const account = document.createElement('a');
   account.className = 'public-account secondary-button';
   account.href = '/compute/login';
+  account.title = t('shell.action.signIn');
+  account.setAttribute('aria-label', account.title);
   account.innerHTML = `<i data-lucide="log-in" aria-hidden="true"></i><span>${t('shell.action.signIn')}</span>`;
   const theme = document.createElement('button');
   theme.type = 'button';
@@ -58,7 +60,9 @@ export function mountPublicShell(root: HTMLElement): AppShell {
   const notices = document.createElement('aside');
   notices.className = 'app-notices';
   notices.setAttribute('aria-live', 'polite');
-  root.append(header, outlet, notices);
+  const feedback = document.createElement('div'); feedback.className = 'app-feedback';
+  feedback.append(notices);
+  root.append(header, outlet, feedback);
   createIcons({ icons: publicIcons, root: header });
   return {
     outlet,
@@ -71,6 +75,8 @@ export function mountPublicShell(root: HTMLElement): AppShell {
     },
     setUser(user: CurrentUser | null) {
       account.href = user ? '/compute/profile' : '/compute/login';
+      account.title = t(user ? 'shell.action.profile' : 'shell.action.signIn');
+      account.setAttribute('aria-label', account.title);
       account.innerHTML = `<i data-lucide="${user ? 'user-round' : 'log-in'}" aria-hidden="true"></i><span>${t(user ? 'shell.action.profile' : 'shell.action.signIn')}</span>`;
       createIcons({ icons: { LogIn, UserRound }, root: account });
     },

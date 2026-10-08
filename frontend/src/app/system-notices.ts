@@ -27,11 +27,11 @@ export interface SystemNotices {
   refresh(): Promise<void>;
 }
 
-export function mountSystemNotices(options: { button: HTMLButtonElement }): SystemNotices {
+export function mountSystemNotices(options: { button: HTMLButtonElement; host: HTMLElement }): SystemNotices {
   const container = document.createElement('aside');
   container.className = 'sys-notices';
   container.setAttribute('aria-label', t('shell.action.notices'));
-  document.body.append(container);
+  options.host.prepend(container);
 
   let notices: SystemNoticesPayload['notices'] = [];
   let loaded = false;

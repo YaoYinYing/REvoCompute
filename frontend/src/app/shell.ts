@@ -80,8 +80,6 @@ export function mountShell(root: HTMLElement): AppShell {
   // The Account region restates the current user's identity, so it follows the same
   // session state as the top-bar profile affordance — one identity, two reach points.
   const accountLink = groups.account.items.firstElementChild as HTMLAnchorElement;
-  accountLink.title = t('shell.action.profile');
-  accountLink.setAttribute('aria-label', t('shell.action.profile'));
   // The group label names the region on the desktop rail. On the mobile bar the
   // Compute and Account destinations sit directly on the bar, so their headings are
   // removed from the tree there; the Administration heading is kept because on mobile
@@ -103,18 +101,16 @@ export function mountShell(root: HTMLElement): AppShell {
 
   function navLink(href: string, icon: string, label: string): HTMLElement {
     const link = document.createElement('a'); link.href = href; link.title = label; link.innerHTML = `<i data-lucide="${icon}" aria-hidden="true"></i><span>${label}</span>`;
-    if (currentDestination(href)) {
-      link.setAttribute('aria-current', 'page');
-      // Repeated activation of the current item toggles the desktop rail. There is
-      // no separate collapse arrow: the control that toggles the rail is the item
-      // you are already on. On the mobile bar there is no rail to toggle, so the
-      // item navigates like any other.
-      link.addEventListener('click', event => {
-        if (!desktopRail.matches) return;
-        event.preventDefault();
-        toggleRail();
-      });
-    }
+    if (currentDestination(href)) link.setAttribute('aria-current', 'page');
+    // Repeated activation of the current item toggles the desktop rail. There is
+    // no separate collapse arrow: the control that toggles the rail is the item
+    // you are already on. On the mobile bar there is no rail to toggle, so the
+    // item navigates like any other.
+    link.addEventListener('click', event => {
+      if (!desktopRail.matches || !currentDestination(link.pathname)) return;
+      event.preventDefault();
+      toggleRail();
+    });
     return link;
   }
 
@@ -129,7 +125,7 @@ export function mountShell(root: HTMLElement): AppShell {
   noticesButton.hidden = true;
   // The top bar is global chrome only. Administration lives in the left
   // navigation, so it must not also be re-launched from a second hidden menu here.
-  const userLink = document.createElement('a'); userLink.href = '/compute/profile'; userLink.className = 'app-user'; userLink.title = t('shell.action.profile'); userLink.setAttribute('aria-label', t('shell.action.profile')); userLink.innerHTML = `<i data-lucide="user-round" aria-hidden="true"></i><span>${t('shell.action.signIn')}</span>`;
+  const userLink = document.createElement('a'); userLink.className = 'app-user'; userLink.innerHTML = '<i data-lucide="user-round" aria-hidden="true"></i><span></span>';
   const logout = document.createElement('button'); logout.type = 'button'; logout.className = 'icon-button'; logout.title = t('shell.action.logout'); logout.setAttribute('aria-label', t('shell.action.logout')); logout.hidden = true; logout.innerHTML = '<i data-lucide="log-out" aria-hidden="true"></i>';
   logout.addEventListener('click', async () => {
     logout.disabled = true;
@@ -151,24 +147,43 @@ export function mountShell(root: HTMLElement): AppShell {
   header.prepend(newTask);
 
   const outlet = document.createElement('div'); outlet.className = 'app-outlet'; outlet.id = 'main-content';
+  const feedback = document.createElement('div'); feedback.className = 'app-feedback';
   const notices = document.createElement('aside'); notices.className = 'app-notices'; notices.setAttribute('aria-live', 'polite');
-  shell.append(brand, header, nav, outlet, notices);
+  feedback.append(notices);
+  shell.append(brand, header, nav, outlet, feedback);
   root.append(shell);
   createIcons({ icons: shellIcons, root: shell });
 
-  const systemNotices = mountSystemNotices({ button: noticesButton });
+  // Measure the secondary surface rather than assuming its height: translated
+  // labels and narrow widths can wrap. CSS applies this clearance only on mobile.
+  new ResizeObserver(() => {
+    shell.style.setProperty('--app-admin-height', `${groups.admin.element.getBoundingClientRect().height}px`);
+  }).observe(groups.admin.element);
+
+  const systemNotices = mountSystemNotices({ button: noticesButton, host: feedback });
+
+  const syncAccount = (user: CurrentUser | null): void => {
+    const label = t(user ? 'shell.action.profile' : 'shell.action.signIn');
+    const identity = user?.full_name || user?.username;
+    const href = user ? '/compute/profile' : `/compute/login?return_to=${encodeURIComponent(location.pathname)}`;
+    accountLink.querySelector('span')!.textContent = label;
+    userLink.querySelector('span')!.textContent = identity || label;
+    for (const link of [accountLink, userLink]) {
+      link.href = href;
+      link.title = label;
+      link.setAttribute('aria-label', link === userLink && identity ? `${label}: ${identity}` : label);
+      if (currentDestination(link.pathname)) link.setAttribute('aria-current', 'page');
+      else link.removeAttribute('aria-current');
+    }
+  };
+  syncAccount(null);
 
   return {
     outlet,
     notify(message, tone = 'info') { const item = document.createElement('div'); item.className = `app-notice notice-${tone}`; item.textContent = message; notices.append(item); setTimeout(() => item.remove(), 4200); },
     setUser(user) {
-      const label = user?.full_name || user?.username || t('shell.action.signIn');
-      userLink.querySelector('span')!.textContent = label;
-      userLink.href = user ? '/compute/profile' : `/compute/login?return_to=${encodeURIComponent(location.pathname)}`;
+      syncAccount(user);
       logout.hidden = !user;
-      // The Account destination follows the same session state as the top-bar
-      // profile affordance: a signed-out visitor is offered the sign-in route.
-      accountLink.href = user ? '/compute/profile' : `/compute/login?return_to=${encodeURIComponent(location.pathname)}`;
       // Authorization, not visual hiding: the Administration group is absent from
       // the navigation for anyone the server has not projected as an administrator,
       // so an ordinary user or an anonymous visitor never sees a forbidden link.

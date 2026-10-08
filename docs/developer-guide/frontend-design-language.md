@@ -427,7 +427,7 @@ regions, in this order:
 ```text
 Compute        Runners, Dashboard
 Account        Profile
-Administration User control, Server logs, Configuration   (administrators only)
+Administration Runner fleet, User control, Server logs, Configuration   (administrators only)
 ```
 
 A region is a quiet label over its destinations, separated from the next region
@@ -443,6 +443,11 @@ is rendered only for a session the server projects as an administrator, so an
 ordinary user or an anonymous visitor never sees a forbidden destination. The
 route guard remains the authoritative boundary; navigation only reflects it.
 
+Account destinations follow session state: anonymous visitors are offered Sign
+in, authenticated users Profile. Visible text, tooltip, accessible name and
+destination must agree at both the rail and top-bar identity affordance. An
+identity's accessible name includes the displayed name as well as its purpose.
+
 The structure is designed so further system surfaces can join a region as they
 are introduced. A destination is added when its route exists — not as a
 placeholder.
@@ -456,10 +461,11 @@ Mobile navigation should be designed for touch and limited width.
 The navigation model may differ while preserving the same information
 architecture and vocabulary.
 
-A bottom bar cannot label a group of items, so region headings are not rendered
-there; the destinations sit directly on the bar and the current one still marks
-itself. A destination added by the Administration region joins the bar the same
-way it joins the rail.
+A bottom bar cannot label a group of items, so Compute and Account destinations
+sit directly on it without region headings; the current one still marks itself.
+Administration occupies a separately named secondary surface above the bar.
+Page-bottom clearance follows that surface's rendered height, including wrapped
+or translated labels.
 
 ---
 
@@ -552,6 +558,11 @@ A persistent notice:
 
 It should feel like the system speaking clearly, not like a warning banner
 trying to stop the user.
+
+Persistent notices and transient feedback share a stack that clears navigation,
+including mobile Administration. Multiple long notices scroll within the
+remaining viewport so global actions stay reachable; hiding a notice releases
+its space.
 
 ---
 
