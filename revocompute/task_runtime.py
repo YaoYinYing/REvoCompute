@@ -1318,11 +1318,15 @@ def _resolve_result_views(
     return views, checks, list(dict.fromkeys(problems))
 
 
-def _anchor_result_manifest(task: dict[str, Any], payload: bytes, *, published_at: float) -> None:
+def _anchor_result_manifest(
+    task: dict[str, Any], payload: bytes, *, published_at: float, charge_bytes: int | None = None
+) -> None:
     """Record the finalized manifest's identity in server-owned state.
 
     This is the one piece of publication identity that does not live under the
-    result root.  ``StorageResolver`` reads it back on every manifest read, so a
+    result root, and it is the only server-owned record of what the publication
+    *owns*, which is why the storage charge is written here rather than as a
+    second, best-effort step afterwards.  ``StorageResolver`` reads it back on every manifest read, so a
     replacement manifest -- a valid single-link regular JSON file that declares
     its own artifacts, sizes, and digests -- cannot redefine the published
     namespace: the anchor describes what Core published, and the replacement
@@ -1341,6 +1345,13 @@ def _anchor_result_manifest(task: dict[str, Any], payload: bytes, *, published_a
             manifest_sha256=hashlib.sha256(payload).hexdigest(),
             manifest_size=len(payload),
             published_at=published_at,
+            # The logical bytes this publication owns, recorded with its identity.
+            # That is the one moment both facts are known together: the size is
+            # measured from the manifest Core just built, and the result tree it
+            # describes belongs to the runner's identity.  A charge that could not
+            # be written afterwards therefore leaves a durable record that one is
+            # owed, instead of a published result nothing can discover.
+            charge_bytes=charge_bytes,
         )
     except Exception as exc:  # pylint: disable=broad-except
         raise ResultPublicationError(
@@ -1547,8 +1558,12 @@ def _finalize_results_manifest(
     # ``anchor_mismatch`` (a re-publication whose bytes had not landed) -- never
     # as an available result, and never as an available result that is wrong.  A
     # later publication of the same task supersedes the abandoned anchor.
+    # The logical bytes this publication owns: measured from the manifest's own
+    # artifacts, never inferred later from a directory size, because a shared
+    # read-only asset or a Runner SIF in the tree is not a user's bytes.
+    owned_bytes = sum(int(item.get("size") or 0) for item in artifacts)
     try:
-        _anchor_result_manifest(task, encoded, published_at=finished_at)
+        _anchor_result_manifest(task, encoded, published_at=finished_at, charge_bytes=owned_bytes)
     except BaseException:
         try:
             os.unlink(temporary)
@@ -1556,7 +1571,7 @@ def _finalize_results_manifest(
             pass
         raise
     os.replace(temporary, destination)
-    _charge_logical_storage(task, manifest, result_dir)
+    _charge_logical_storage(task, manifest, result_dir, owned_bytes=owned_bytes)
     emit_event(
         "manifest.published",
         request_id=_task_request_id(task),
@@ -1588,14 +1603,21 @@ def _abandon_published_result(task: dict[str, Any], result_dir: str) -> None:
         shutil.rmtree(path, ignore_errors=True)
 
 
-def _charge_logical_storage(task: dict[str, Any], manifest: dict[str, Any], result_dir: str) -> None:
+def _charge_logical_storage(
+    task: dict[str, Any], manifest: dict[str, Any], result_dir: str, *, owned_bytes: int | None = None
+) -> None:
     """Charge the durable bytes one published Task logically owns.
 
     The ownership boundary is the published result, measured here once from the
     manifest's own artifacts rather than inferred later from a directory size:
     a shared read-only asset, a Runner SIF, or a deployment database is never a
     user's bytes, and a directory walk would charge them.  A failure to record
-    it must not withdraw a completed scientific result, so this is total.
+    it must not withdraw a completed scientific result, so this is total — but it
+    is no longer *invisible*: the publication anchor already carries the amount
+    owed and the fact that it is unpaid, so a failure here leaves a durable
+    pending charge that reconciliation repairs from the anchor's own metadata
+    (see :func:`_reconcile_pending_storage_charges`) rather than a published
+    result nothing can discover.
 
     The lifecycle is re-read here, immediately before the charge, because the
     walk above is the window where a purge can land: the guard at the top of
@@ -1610,8 +1632,14 @@ def _charge_logical_storage(task: dict[str, Any], manifest: dict[str, Any], resu
         raise DataPurgedError(str(task["md5sum"]))
     user_id = int(task.get("submitted_by_user_id") or 0)
     if user_id <= 0:
+        # An unowned publication owes no subject anything; there is nothing to
+        # charge and nothing to repair later.
         return
-    owned = sum(int(item.get("size") or 0) for item in manifest.get("artifacts", []))
+    owned = (
+        sum(int(item.get("size") or 0) for item in manifest.get("artifacts", []))
+        if owned_bytes is None
+        else max(0, int(owned_bytes))
+    )
     try:
         task_store.ensure_data_lifecycle(
             str(task["md5sum"]),
@@ -1623,9 +1651,12 @@ def _charge_logical_storage(task: dict[str, Any], manifest: dict[str, Any], resu
         # Recording the charge is an accounting step, not part of the scientific
         # result: a failure here must not withdraw a completed publication, and
         # it must not be mistaken for the deletion race above, which is decided
-        # by the durable row rather than by whether this call raised.
+        # by the durable row rather than by whether this call raised.  The anchor
+        # keeps the publication pending, so this exact charge is repaired on the
+        # next reconciliation pass.
         logging.exception("Could not charge logical storage for task %s", task.get("md5sum"))
         return
+    _mark_publication_charge_recorded(str(task["md5sum"]), owned)
     emit_event(
         "resource.storage.charged",
         request_id=_task_request_id(task),
@@ -1634,6 +1665,20 @@ def _charge_logical_storage(task: dict[str, Any], manifest: dict[str, Any], resu
         storage_bytes=owned,
         reason_code=LedgerReason.STORAGE_CHARGED.value,
     )
+
+
+def _mark_publication_charge_recorded(task_id: str, owned: int) -> None:
+    """Close the publication's pending charge once the lifecycle row carries it.
+
+    Bookkeeping that follows the durable charge, so a failure here is not a
+    second chance to lose the fact — it only means the next reconciliation pass
+    establishes that the charge is already recorded (``ensure_data_lifecycle`` is
+    idempotent per task) and closes the marker then.
+    """
+    try:
+        task_store.mark_publication_charged(task_id, charge_bytes=owned, at=time.time())
+    except Exception:
+        logging.exception("Could not close the pending storage charge for task %s", task_id)
 
 
 def _build_results_archive(task: dict) -> str:
@@ -3034,6 +3079,86 @@ def _reconcile_result_publications() -> dict[str, int]:
     return summary
 
 
+def _reconcile_pending_storage_charges() -> dict[str, int]:
+    """Charge the storage of every anchored publication that still owes it.
+
+    A publication and its storage charge are one fact with two effects: the
+    manifest installs the result, and the lifecycle row charges for the bytes it
+    owns.  The charge is a separate write — it must not be able to withdraw a
+    completed scientific result — so it can be the half that did not happen (a
+    locked or full database, a process that died between the two).
+
+    The publication anchor, written with the manifest's identity in the same
+    server-owned transaction, already carries the amount owed and the fact that
+    it is unpaid.  That is what makes this recoverable rather than invisible.
+    This pass repairs exactly that case, and only that case:
+
+    * the task must still exist and still be ``finished`` or ``failed`` — a task
+      that is gone has no owner to charge;
+    * the publication must be ``PUBLICATION_AVAILABLE``: the verified anchored
+      identity, checked against the anchor recorded outside the runner-writable
+      tree.  A quarantined, unanchored, or mismatched result is never charged by
+      a repair pass — its bytes are exactly what the anchor exists to stop
+      trusting;
+    * the task's data must still be owned.  A purge is authoritative over these
+      bytes, so a deletion that landed first releases nothing and charges
+      nothing; the marker was already closed by that purge.
+
+    The amount comes from the anchor, never from walking the result tree: a
+    directory size is untrusted input and the wrong number besides (a shared
+    read-only asset or a Runner SIF is not a user's bytes).  The charge goes
+    through the same ``ensure_data_lifecycle`` the live publication uses, so it
+    is charged once per task and a later purge releases exactly what was charged.
+
+    Idempotent, and safe to run beside a live publisher: the store's transitions
+    admit each task's charge once.
+    """
+    storage = _storage()
+    charged = released = skipped = 0
+    for record in task_store.list_pending_storage_publications():
+        task_id = str(record["task_id"])
+        task = task_store.get_task(task_id)
+        if task is None:
+            skipped += 1
+            continue
+        if str(task.get("status") or "").strip().lower() not in {"finished", "failed"}:
+            skipped += 1
+            continue
+        if storage.publication_state(task) != PUBLICATION_AVAILABLE:
+            # Not a publication Core can vouch for.  Charging it would bill a
+            # subject for bytes an untrusted tree merely claims to hold.
+            skipped += 1
+            continue
+        if not _data_still_owned(task_id):
+            # The deletion won the race: the bytes are gone, nothing is owed.
+            task_store.mark_publication_released(task_id)
+            released += 1
+            continue
+        owned = max(0, int(record.get("charge_bytes") or 0))
+        try:
+            task_store.ensure_data_lifecycle(
+                task_id,
+                user_id=int(task.get("submitted_by_user_id") or 0),
+                logical_bytes=owned,
+                at=time.time(),
+            )
+        except Exception:
+            logging.exception("Could not repair the pending storage charge for task %s", task_id)
+            skipped += 1
+            continue
+        task_store.mark_publication_charged(task_id, charge_bytes=owned, at=time.time())
+        charged += 1
+        emit_event(
+            "resource.storage.charged",
+            task_id=task_id,
+            user_id=int(task.get("submitted_by_user_id") or 0) or None,
+            storage_bytes=owned,
+            reason_code=LedgerReason.STORAGE_CHARGED.value,
+        )
+        logging.info("Repaired the pending storage charge for task %s (%d bytes)", task_id, owned)
+    return {"charged": charged, "released": released, "skipped": skipped}
+
+
 # One pulse per worker process.  Started from ``worker_ready``, which Celery
 # emits on the parent process — never a prefork task slot.
 _infrastructure_pulse_lock = threading.Lock()
@@ -3123,6 +3248,9 @@ try:
                     released,
                 )
             publications = _reconcile_result_publications()
+            repaired = _reconcile_pending_storage_charges()
+            if repaired["charged"] or repaired["released"]:
+                logging.info("Repaired pending storage charges: %s", repaired)
             unreadable = sum(
                 count for state, count in publications.items() if state != PUBLICATION_AVAILABLE
             )
@@ -3164,6 +3292,14 @@ def reconcile_slurm_allocations():
     Two evidence-driven passes, no wall-clock guesswork: settle the allocations
     the scheduler proves ran, then give back the entitlement of a queued request
     the scheduler proves no longer exists.
+
+    This is the *worker's* question to answer: only this service mounts
+    ``scontrol``, the Slurm libraries, and MUNGE, so the maintenance scheduler
+    dispatches it here (see
+    ``maintenance.tasks.resource_maintenance._settle_slurm_allocations``) instead
+    of running the body in a process with no scheduler boundary.  Settlement is
+    idempotent per ``usage:<unit>:<slurm_job>``, so a concurrent pass and a retry
+    can never double-charge.
     """
     outcome = _reconcile_slurm_allocations()
     outcome["reservations_released"] = _reclaim_abandoned_reservations()

@@ -15,6 +15,8 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any
 
+from revocompute import resource_lifecycle
+from revocompute import resource_ledger as rloan
 from revocompute.config import ComputeConfig, env_float
 from revocompute.db import TaskDatabase
 from revocompute.maintenance.model import PeriodicTask
@@ -85,19 +87,38 @@ def cleanup_expired_task_artifacts(
     results_folder: str,
     now: float | None = None,
 ) -> int:
-    """Delete artifacts for terminal tasks older than *retention_days*."""
+    """Retire artifacts for terminal tasks older than *retention_days*.
+
+    Retention *decides* which Task has aged out; it does not delete.  The
+    deletion is the canonical data-lifecycle transaction — a durable request,
+    then one purge owner that removes the bytes and releases exactly the charged
+    logical bytes — because a retention path that deleted files on its own would
+    leave the charged ``ACTIVE`` lifecycle row behind and keep the user's storage
+    quota consumed forever for data that is gone.
+
+    The status marker the UI and API present (``deleting:*`` while a deletion is
+    in flight, ``cleaned:*`` once the bytes are gone) is *derived from the purge
+    outcome* rather than maintained as a parallel cleanup state machine: it is
+    claimed before the purge so a resubmission cannot be retired by mistake, and
+    completed only once the purge reports the data is gone.
+    """
     if retention_days <= 0:
         raise ValueError("retention_days must be positive")
-    cutoff = (time.time() if now is None else now) - retention_days * 86400
+    timestamp = time.time() if now is None else now
+    cutoff = timestamp - retention_days * 86400
+    workspace_folder = os.path.join(os.path.dirname(results_folder), "workspaces")
+    remove_artifacts = _artifact_remover(results_folder, workspace_folder)
     cleaned = 0
     for task in task_store.list_tasks():
         status = str(task.get("status") or "").strip().lower()
-        finished_at = task.get("finished_at")
         if status in _CLAIMED_CLEANUPS:
+            # A deletion that was already claimed and interrupted: resume it
+            # from the durable claim rather than deciding eligibility again.
             claim_status = status
             cleaned_status = _CLAIMED_CLEANUPS[status]
-        else:
-            if status not in _TERMINAL_RESULT_STATUSES or finished_at is None or finished_at > cutoff:
+        elif status in _TERMINAL_RESULT_STATUSES:
+            finished_at = task.get("finished_at")
+            if finished_at is None or finished_at > cutoff:
                 continue
             claim_status, cleaned_status = _CLEANUP_CLAIMS[status]
             if not task_store.claim_task_cleanup(
@@ -107,8 +128,14 @@ def cleanup_expired_task_artifacts(
                 claim_status=claim_status,
             ):
                 continue
-        workspace_folder = os.path.join(os.path.dirname(results_folder), "workspaces")
-        delete_task_artifacts(task, results_folder, workspace_folder)
+        else:
+            continue
+        if not _retire_expired_task(
+            task, task_store=task_store, remove_artifacts=remove_artifacts, at=timestamp
+        ):
+            # The lifecycle row records the failure and keeps the charge, so the
+            # next pass retries it; the claim stays in place meanwhile.
+            continue
         if not task_store.complete_task_cleanup(
             task["md5sum"],
             claim_status=claim_status,
@@ -118,6 +145,58 @@ def cleanup_expired_task_artifacts(
             continue
         cleaned += 1
     return cleaned
+
+
+def _artifact_remover(results_folder: str, workspace_folder: str) -> Callable[[dict[str, Any]], None]:
+    def remove_artifacts(task: dict[str, Any]) -> None:
+        delete_task_artifacts(task, results_folder, workspace_folder)
+
+    return remove_artifacts
+
+
+def _retire_expired_task(
+    task: dict[str, Any],
+    *,
+    task_store: TaskDatabase,
+    remove_artifacts: Callable[[dict[str, Any]], None],
+    at: float,
+) -> bool:
+    """Drive one Task's retirement through the canonical lifecycle, idempotently.
+
+    Returns whether the Task's durable data is gone — already, or as a result of
+    this call.  Every step is the lifecycle's own transition, so a repeated pass
+    (or a purge the maintenance task already completed) adds nothing.
+    """
+    task_id = str(task["md5sum"])
+    # The durable request precedes any filesystem work: after it, a crash is a
+    # resumable purge rather than an intact tree whose row still reads ACTIVE.
+    resource_lifecycle.request_data_deletion(task_store, task, actor_user_id=None, at=at)
+    record = task_store.get_data_lifecycle(task_id)
+    if record is None:  # pragma: no cover - request_data_deletion always records one
+        return False
+    state = str(record["state"])
+    if state == rloan.DataLifecycleState.PURGED.value:
+        return True
+    if state == rloan.DataLifecycleState.ERROR.value:
+        # A purge that failed keeps its charge; re-queue it through the same
+        # guarded transition the first attempt used rather than freeing quota.
+        if not task_store.requeue_data_lifecycle(task_id, at=at):
+            return False
+    elif state == rloan.DataLifecycleState.PURGING.value:
+        claimed_at = float(record.get("claimed_at") or record.get("updated_at") or 0.0)
+        if at - claimed_at < resource_lifecycle.PURGE_STALE_SECONDS:
+            # A live purge owns this Task right now.
+            return False
+        if not task_store.reclaim_stale_purge(task_id, at=at):
+            return False
+    try:
+        return resource_lifecycle.purge_task_data(
+            task_store, task, remove_artifacts=remove_artifacts, at=at
+        )
+    except Exception:
+        # Already recorded as ERROR with its charge intact; a later pass retries.
+        logging.exception("Retention purge failed for task %s", task_id)
+        return False
 
 
 def run_result_cleanup(retention_days: float) -> int:

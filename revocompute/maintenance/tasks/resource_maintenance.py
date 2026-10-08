@@ -16,8 +16,10 @@ what disables this task entirely.
 
 *Reconciliation* releases admission holds whose submission never started and
 reports the inconsistencies it can see but must not repair.  The scheduler-side
-settlement step belongs to the worker (it owns ``scontrol``), so it is not
-duplicated here.
+settlement step needs ``scontrol``, which only the worker has, so this process
+*asks* the worker to run it rather than pretending to own that boundary itself:
+an unreachable worker leaves the allocations unknown (still unsettled, still
+constraining admission) instead of charging them a fabricated zero.
 """
 
 from __future__ import annotations
@@ -30,10 +32,11 @@ from datetime import datetime, timezone
 from typing import Any
 
 from revocompute import resource_lifecycle
-from revocompute.config import ComputeConfig, env_int
+from revocompute.config import ComputeConfig, env_float, env_int
 from revocompute.db import TaskDatabase
 from revocompute.maintenance.model import PeriodicTask
 from revocompute.maintenance.tasks.result_cleanup import delete_task_artifacts
+from revocompute.scheduler_evidence import fetch_scheduler_evidence
 
 #: Opt-in cadence, in seconds.  Zero (the default) leaves the task unregistered:
 #: a deployment that never sets it is exactly as it was before, and an operator
@@ -41,7 +44,6 @@ from revocompute.maintenance.tasks.result_cleanup import delete_task_artifacts
 #: opt-in shape as result retention.  A purge is a bounded filesystem walk and a
 #: reconciliation pass is a handful of indexed reads, so a small value is cheap.
 DEFAULT_RESOURCE_MAINTENANCE_SECONDS = 0
-
 
 #: Bound on the entries one drift measurement visits per Task.  A result tree
 #: is a handful of artifacts; a tree larger than this is not measurable within
@@ -154,7 +156,7 @@ def run_resource_maintenance(
     )
     report = resource_lifecycle.reconcile_resources(
         store,
-        settle_allocations=_settle_slurm_allocations,
+        settle_allocations=lambda: fetch_scheduler_evidence(store),
         owned_paths=owned_paths,
         unadopted_tasks=unadopted,
         now=timestamp,
@@ -179,18 +181,6 @@ def run_resource_maintenance(
         "released_reservations": report.reclaimed_reservations,
         "drift": [item.to_dict() for item in report.drift],
     }
-
-
-def _settle_slurm_allocations() -> dict[str, int]:
-    """The worker-owned scheduler-evidence step, published as a Docker-free boundary.
-
-    ``task_runtime`` is imported lazily: it constructs the production Celery
-    app at import time, which the maintenance scheduler must not do just to run
-    this pass.
-    """
-    from revocompute import task_runtime
-
-    return task_runtime.reconcile_slurm_allocations.run()
 
 
 class ResourceMaintenanceTask(PeriodicTask):
