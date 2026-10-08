@@ -163,6 +163,10 @@ def test_adapter_reaches_the_application_only_through_canonical_modules():
     allowed = {
         'revocompute.app',
         'revocompute.auth',
+        # The canonical client-IP resolution leaf module.  The adapter must ask
+        # the *canonical* trusted-proxy question rather than invent a second IP
+        # policy, so it consumes this module directly.
+        'revocompute.client_ip',
         'revocompute.config',
         'revocompute.db',
         'revocompute.operational_events',

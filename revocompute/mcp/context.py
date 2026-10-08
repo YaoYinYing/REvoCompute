@@ -34,7 +34,24 @@ from revocompute.mcp.handles import canonical_state
 #: an allow-list: the MCP surface must not be able to smuggle a cookie, a proxy
 #: header it does not own, or an arbitrary trust-bearing header into a canonical
 #: call.
-_FORWARDED_HEADERS = ("X-Forwarded-For", "X-Forwarded-Proto", "User-Agent", "X-Request-ID")
+#:
+#: ``X-Real-IP`` is in the list because the canonical client-IP resolver
+#: (``revocompute.client_ip``) *prefers* it: both shipped proxies overwrite it
+#: with the socket peer, while ``X-Forwarded-For`` is appended to and keeps the
+#: client-supplied leading element.  Dropping it here would leave the
+#: synthesized canonical request with only the forgeable header, so an MCP
+#: caller could rotate the submission/preflight rate-limit bucket and the
+#: audited ``source_ip`` -- the exact invariant the HTTP path preserves.
+_FORWARDED_HEADERS = ("X-Real-IP", "X-Forwarded-For", "X-Forwarded-Proto", "User-Agent", "X-Request-ID")
+
+#: The subset of the allow-list that carries a *claimed* client identity.  They
+#: are forwarded only when the observed peer is a trusted proxy, which is the
+#: same decision ``client_ip.trusted_client_ip`` makes for a real request: the
+#: socket peer is the authority, and a forwarding header is believed only from a
+#: configured proxy (``TRUSTED_PROXY_IPS``).  Withholding them otherwise keeps a
+#: direct or unobserved peer from choosing its own rate-limit identity, and
+#: keeps a forged header out of the request metadata Core records.
+_TRUST_BEARING_HEADERS = ("X-Real-IP", "X-Forwarded-For")
 
 
 @dataclass(frozen=True)
@@ -84,6 +101,7 @@ def authenticate(ctx: Any, *, allow_guest: bool = False) -> McpPrincipal:
     every existing block rule are the ones the rest of the server enforces.
     """
     from revocompute.auth import _is_account_blocked, validate_token
+    from revocompute.client_ip import peer_is_trusted_proxy
 
     state = canonical_state()
     db = state.user_db
@@ -132,12 +150,14 @@ def authenticate(ctx: Any, *, allow_guest: bool = False) -> McpPrincipal:
         if value:
             forwarded[header] = value
     client_ip = _client_ip(ctx)
-    if client_ip is None:
-        # The canonical client-IP resolver trusts a client-supplied
-        # X-Forwarded-For only from a trusted-proxy peer.  If this listener
-        # could not observe a socket peer, forwarding a client XFF would let the
-        # caller mint unlimited rate-limit identities, so drop it.
-        forwarded.pop("X-Forwarded-For", None)
+    # A claimed client identity is request-supplied data, so it is carried only
+    # when this listener actually observed a trusted-proxy peer -- the same rule
+    # ``client_ip.trusted_client_ip`` applies to a real request.  Otherwise a
+    # direct caller could rotate a forwarded address to mint a fresh rate-limit
+    # identity, and its chosen value would reach the Task's audited metadata.
+    if not peer_is_trusted_proxy(client_ip):
+        for header in _TRUST_BEARING_HEADERS:
+            forwarded.pop(header, None)
     return McpPrincipal(
         user=user,
         user_id=int(user["id"]),

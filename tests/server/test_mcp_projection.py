@@ -23,6 +23,7 @@ import sys
 import time
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -67,6 +68,231 @@ def test_mcp_carries_the_client_peer_into_the_canonical_request(mcp_app):
     response = call_canonical(principal, "GET", "/_mcp_probe_client_ip")
     assert response.status == 200
     assert observed["remote_addr"] == "203.0.113.9", "the caller peer must reach the canonical request"
+
+
+def _mcp_ctx(headers: dict[str, str], peer: str | None) -> object:
+    """A minimal MCP tool context carrying the ASGI request the projection reads.
+
+    ``headers`` is what the MCP client sent (case-insensitively, as an ASGI
+    request exposes them); ``peer`` is the socket address this listener actually
+    observed, which is the only part of the request a caller cannot choose.
+    """
+    from starlette.datastructures import Headers
+
+    client = MockClient(peer) if peer is not None else None
+    request = SimpleNamespace(headers=Headers(headers), client=client)
+    return SimpleNamespace(request_context=SimpleNamespace(request=request))
+
+
+class MockClient:
+    """The observed socket peer, in the shape an ASGI request exposes it."""
+
+    def __init__(self, host: str):
+        self.host = host
+
+
+#: A compose-bridge address: inside the default ``TRUSTED_PROXY_IPS`` range, so
+#: the canonical resolver believes forwarding headers from it.
+_TRUSTED_GATEWAY_PEER = "172.18.0.5"
+#: A plain internet address: outside every trusted range.
+_UNTRUSTED_PEER = "192.0.2.7"
+
+
+@pytest.fixture
+def identity_probe(mcp_app):
+    """A canonical route that reports the identity resolution it observed.
+
+    The projection's whole job here is to make the *canonical* request see what
+    an ordinary HTTP request would see, so the assertions read the canonical
+    resolution function and the metadata Core records -- not MCP-internal state.
+    """
+    from flask import jsonify, request
+
+    from revocompute.client_ip import client_ip, trusted_client_ip
+
+    observed: dict[str, object] = {}
+
+    @mcp_app.app.route("/_mcp_identity_probe", methods=["GET"])
+    def _identity_probe():  # pragma: no cover - test-only route
+        observed["remote_addr"] = request.remote_addr
+        observed["trusted_client_ip"] = trusted_client_ip()
+        observed["client_ip"] = client_ip()
+        observed["headers"] = sorted(request.headers.keys())
+        return jsonify({"ok": True})
+
+    return observed
+
+
+def _trusted_principal(mcp_app, *, peer, real_ip, forwarded_for, extra=None):
+    """Authenticate one MCP call whose observed peer and headers we control."""
+    from revocompute.auth import generate_token
+    from revocompute.mcp.context import authenticate
+
+    # Reuse the shared helper so the test user exists, then mint a fresh token
+    # for the MCP context shape this test drives.
+    _auth_headers(mcp_app)
+    user = mcp_app.app.config["user_db"].get_user_by_username("mcp-tester")
+    if user is None:
+        raise AssertionError("test user missing")
+    headers = {"authorization": f"Bearer {generate_token(int(user['id']))}"}
+    if real_ip is not None:
+        headers["x-real-ip"] = real_ip
+    if forwarded_for is not None:
+        headers["x-forwarded-for"] = forwarded_for
+    headers.update(extra or {})
+    return authenticate(_mcp_ctx(headers, peer))
+
+
+def _probe_identity(mcp_app, principal, observed):
+    from revocompute.mcp.context import call_canonical
+
+    observed.clear()
+    response = call_canonical(principal, "GET", "/_mcp_identity_probe")
+    assert response.status == 200, response.status
+    return observed
+
+
+def test_mcp_preserves_the_trusted_x_real_ip_the_gateway_overwrote(mcp_app, identity_probe):
+    """Behind the gateway, the canonical request resolves the same client the HTTP path would.
+
+    ``docker/nginx`` overwrites ``X-Real-IP`` with the socket peer and *appends*
+    ``X-Forwarded-For``, so a client-supplied leading XFF element survives.  The
+    canonical resolver therefore prefers ``X-Real-IP``.  If the MCP projection
+    drops that header, the synthesized canonical request has only the forgeable
+    one, and the caller -- not the gateway -- picks the rate-limit identity.
+    """
+    principal = _trusted_principal(
+        mcp_app,
+        peer=_TRUSTED_GATEWAY_PEER,
+        real_ip="198.51.100.10",
+        forwarded_for="203.0.113.1, 10.0.0.9",
+    )
+    observed = _probe_identity(mcp_app, principal, identity_probe)
+
+    assert observed["trusted_client_ip"] == "198.51.100.10", "the trusted overwritten header must win"
+    assert observed["trusted_client_ip"] != "203.0.113.1", "the forged leading XFF must never be the identity"
+    # The peer stays the *actual* MCP socket peer: the canonical trust decision
+    # is still made from what this listener observed, not from the headers.
+    assert observed["remote_addr"] == _TRUSTED_GATEWAY_PEER
+
+
+def test_mcp_rate_limit_identity_survives_a_rotated_forwarded_for(mcp_app, identity_probe):
+    """Rotating the appended XFF while X-Real-IP is stable cannot mint new identities.
+
+    The limiter is the canonical one, reached through the same in-process view an
+    MCP submission uses; the property under test is that the *bucket key* is the
+    gateway-reported client, not a value the caller can vary per request.
+    """
+    from flask import jsonify
+
+    from revocompute.mcp.context import call_canonical
+    from revocompute.ratelimit import rate_limit
+
+    limit = 3
+    mcp_app.app.view_functions["preflight_task"] = rate_limit(max_requests=limit, window_seconds=3600)(
+        lambda *_a, **_k: jsonify({"ok": True})
+    )
+
+    statuses = []
+    for i in range(limit + 2):
+        principal = _trusted_principal(
+            mcp_app,
+            peer=_TRUSTED_GATEWAY_PEER,
+            real_ip="198.51.100.20",
+            forwarded_for=f"203.0.113.{i}, 10.0.0.{i}",
+        )
+        statuses.append(call_canonical(principal, "POST", "/compute/api/preflight/gremlin", data={}).status)
+
+    assert statuses[:limit] == [200] * limit, statuses
+    assert statuses[limit:] == [429, 429], f"a rotated XFF must not refresh the bucket: {statuses}"
+
+
+def test_mcp_untrusted_peer_cannot_override_its_socket_identity(mcp_app, identity_probe):
+    """A direct caller cannot choose its identity, and cannot forge the metadata either.
+
+    Withholding the trust-bearing headers from an untrusted peer is what keeps
+    the canonical resolution equal to the socket address *and* keeps a forged
+    value out of the request metadata Core records for the Task.
+    """
+    forged = {"x-real-ip": "198.51.100.30", "x-forwarded-for": "203.0.113.31, 10.0.0.9"}
+    principal = _trusted_principal(mcp_app, peer=_UNTRUSTED_PEER, real_ip=None, forwarded_for=None, extra=forged)
+    observed = _probe_identity(mcp_app, principal, identity_probe)
+
+    assert observed["trusted_client_ip"] == _UNTRUSTED_PEER, "the socket peer is the only identity here"
+    assert observed["client_ip"] == _UNTRUSTED_PEER
+    assert "X-Real-Ip" not in observed["headers"], "a forged X-Real-IP must not reach the canonical request"
+    assert "X-Forwarded-For" not in observed["headers"], "a forged XFF must not reach the canonical request"
+
+
+def test_mcp_submission_metadata_uses_the_same_identity(mcp_app, identity_probe):
+    """The Task's audited ``source_ip`` follows the one resolution, in both peer cases.
+
+    ``source_ip`` is written from the canonical request metadata, so it is the
+    observable end of the same trust decision -- a caller that could rotate it
+    would be writing its own audit record.
+    """
+    from revocompute.mcp.handles import canonical_state
+    from revocompute.mcp.services import submit_task
+
+    task_type, role = _sequence_task_type(mcp_app)
+
+    def _submit(principal, marker: bytes) -> dict[str, object]:
+        # Distinct bytes per submission: the canonical Task identity is
+        # content-derived, so identical inputs would resolve to the *first*
+        # Task and its metadata rather than creating a second one.
+        inputs = [{"role": role, "filename": "2KL8.fasta", "content_base64": base64.b64encode(FASTA + marker).decode()}]
+        reference = submit_task(
+            principal, task_type=task_type, params={}, inputs=inputs, handle_store=canonical_state().handles, now=1000.0
+        )
+        mapping = canonical_state().handles.resolve(
+            reference["task_handle"], user_id=principal.user_id, kind="task", now=1001.0
+        )
+        return mcp_app.task_store.get_task(mapping.operation_id)
+
+    trusted = _trusted_principal(
+        mcp_app,
+        peer=_TRUSTED_GATEWAY_PEER,
+        real_ip="198.51.100.40",
+        forwarded_for="203.0.113.41, 10.0.0.9",
+    )
+    trusted_task = _submit(trusted, b"TRUSTED\n")
+    assert trusted_task["source_ip"] == "198.51.100.40", "a trusted gateway's reported client is the audited source"
+
+    untrusted = _trusted_principal(
+        mcp_app,
+        peer=_UNTRUSTED_PEER,
+        real_ip=None,
+        forwarded_for=None,
+        extra={"x-real-ip": "203.0.113.42", "x-forwarded-for": "203.0.113.43"},
+    )
+    untrusted_task = _submit(untrusted, b"UNTRUSTED\n")
+    assert untrusted_task["source_ip"] == _UNTRUSTED_PEER, "a direct caller cannot forge its audited source"
+
+
+def test_only_allow_listed_headers_reach_the_canonical_request(mcp_app, identity_probe):
+    """No cookie or unowned proxy header is smuggled into the canonical request.
+
+    The allow-list is the whole boundary: a header outside it does not reach the
+    canonical handler even from a trusted peer, so the projection cannot widen
+    what a canonical request is allowed to see.
+    """
+    principal = _trusted_principal(
+        mcp_app,
+        peer=_TRUSTED_GATEWAY_PEER,
+        real_ip="198.51.100.50",
+        forwarded_for="203.0.113.51",
+        extra={
+            "cookie": "session=forged",
+            "x-forwarded-host": "evil.example",
+            "x-request-id": "mcp-test-request",
+            "user-agent": "mcp-test-agent",
+        },
+    )
+    observed = _probe_identity(mcp_app, principal, identity_probe)
+
+    seen = set(observed["headers"])
+    assert {"X-Real-Ip", "X-Forwarded-For", "X-Request-Id", "User-Agent"} <= seen
+    assert not seen & {"Cookie", "X-Forwarded-Host", "X-Forwarded-Server", "X-Original-Url"}
 
 
 def _activate(module) -> None:
