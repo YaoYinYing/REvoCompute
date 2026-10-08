@@ -155,12 +155,14 @@ export class Dashboard {
     if (this.user.role === 'admin') factValues.push([t('dashboard.card.owner'), task.owner || '-', false]);
     factValues.forEach(([label, value, machine]) => { const row = document.createElement('div'); const dt = document.createElement('dt'); dt.textContent = label; const dd = document.createElement('dd'); dd.textContent = value; if (machine) dd.classList.add('machine'); row.append(dt, dd); facts.append(row); });
     if (task.progress != null && !task.terminal) { const progress = document.createElement('p'); progress.className = 'task-progress'; progress.textContent = typeof task.progress === 'string' ? task.progress : JSON.stringify(task.progress); facts.append(progress); }
-    const preview = this.inputPreview(task); const actions = this.taskActions(task);
-    if (task.error) { const problem = document.createElement('details'); problem.className = 'task-error'; const summary = document.createElement('summary'); summary.textContent = t('dashboard.card.executionError'); const body = document.createElement('p'); body.textContent = task.error; problem.append(summary, body); card.append(header, facts, problem, preview, actions); } else card.append(header, facts, preview, actions);
+    card.append(header, facts);
+    if (task.error) { const problem = document.createElement('details'); problem.className = 'task-error'; const summary = document.createElement('summary'); summary.textContent = t('dashboard.card.executionError'); const body = document.createElement('p'); body.textContent = task.error; problem.append(summary, body); card.append(problem); }
+    const preview = this.inputPreview(task); if (preview) card.append(preview);
+    card.append(this.taskActions(task));
     return card;
   }
-  private inputPreview(task: TaskSummary): HTMLElement {
-    const wrap = document.createElement('div'); if (!task.input_preview) return wrap;
+  private inputPreview(task: TaskSummary): HTMLDetailsElement | null {
+    if (!task.input_preview) return null;
     const details = document.createElement('details'); details.className = 'input-preview'; const summary = document.createElement('summary'); summary.textContent = t('dashboard.card.inputPreview'); const content = document.createElement('div'); content.className = 'input-preview-host'; content.textContent = t('dashboard.card.previewHint'); details.append(summary, content);
     details.addEventListener('toggle', () => {
       if (!details.open) { this.previewViewers.get(task.task_id)?.dispose(); this.previewViewers.delete(task.task_id); details.dataset.loaded = ''; content.textContent = t('dashboard.card.previewHint'); return; }
@@ -172,7 +174,7 @@ export class Dashboard {
         if (!details.open || !details.isConnected) return; content.replaceChildren(); const viewer = await MolecularViewer.mount(content, { theme: document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light' });
         if (!details.open || !details.isConnected) { viewer.dispose(); return; } this.previewViewers.set(task.task_id, viewer); await viewer.loadStructure({ data, format: task.input_preview!.format, label: task.display_name });
       }).catch(error => { if (details.isConnected) content.textContent = `Unable to load structure: ${(error as Error).message}`; });
-    }); wrap.append(details); return wrap;
+    }); return details;
   }
   private taskActions(task: TaskSummary): HTMLElement {
     const actions = document.createElement('footer'); actions.className = 'task-actions'; actions.dataset.taskId = task.task_id;

@@ -7,10 +7,102 @@ from __future__ import annotations
 from playwright.sync_api import Page, expect
 import pytest
 
-from frontend_fixtures import controlled_scenario, mount_scenario, pssm_gremlin_scenario
+from frontend_fixtures import build_task_summary, controlled_scenario, mount_scenario, pssm_gremlin_scenario
+from frontend_fixtures.results import PDB_BODY
 
 pytestmark = pytest.mark.browser
 ORIGIN = "https://revocompute.example"
+
+
+def _mount_dashboard_with_preview(page: Page, width: int, role: str = "user") -> None:
+    page.set_viewport_size({"width": width, "height": 960})
+    scenario = controlled_scenario().with_role(role)
+    preview_url = f"/compute/api/tasks/{scenario.task_id}/input"
+    with_preview = build_task_summary(
+        scenario.task_id, scenario.runner, owner=scenario.session.username,
+        input_preview={"capability": "molecular_structure", "format": "pdb", "url": preview_url},
+    )
+    without_preview = build_task_summary("f" * 32, scenario.runner, owner=scenario.session.username)
+    with_preview["display_name"] = "With input preview"
+    without_preview["display_name"] = "Without input preview"
+    mount_scenario(page, scenario.with_task_summaries([with_preview, without_preview]))
+    page.route(f"{ORIGIN}{preview_url}", lambda route: route.fulfill(content_type="chemical/x-pdb", body=PDB_BODY))
+    page.goto(f"{ORIGIN}/compute/dashboard")
+    expect(page.locator(".task-card")).to_have_count(2)
+
+
+@pytest.mark.parametrize("width", [1024, 1440])
+@pytest.mark.parametrize("role", ["user", "admin"])
+def test_detailed_task_preview_uses_the_register_measure_and_keeps_actions_reachable(
+    page: Page, width: int, role: str,
+) -> None:
+    _mount_dashboard_with_preview(page, width, role)
+    card = page.locator(".task-card").filter(has=page.get_by_role("heading", name="With input preview", exact=True))
+    preview = card.locator(".input-preview")
+    with page.expect_response(f"{ORIGIN}/compute/api/tasks/{controlled_scenario().task_id}/input"):
+        preview.locator("summary").click()
+    expect(preview).to_have_attribute("open", "")
+    row = card.bounding_box()
+    expanded = preview.bounding_box()
+    host = preview.locator(".input-preview-host").bounding_box()
+    actions = card.locator(".task-actions").bounding_box()
+    facts = card.locator("dl").bounding_box()
+    assert row and expanded and host and actions and facts
+    assert abs(expanded["x"] - row["x"]) <= 1
+    assert abs(expanded["width"] - row["width"]) <= 1
+    assert host["width"] >= row["width"] - 2
+    assert actions["y"] >= expanded["y"] + expanded["height"] - 1
+    assert abs(actions["x"] - facts["x"]) <= 1
+    confirmations: list[str] = []
+    page.once("dialog", lambda dialog: (confirmations.append(dialog.message), dialog.dismiss()))
+    card.get_by_role("button", name="Delete", exact=True).click()
+    assert confirmations and "With input preview" in confirmations[0]
+    preview.locator("summary").click()
+    collapsed = card.bounding_box()
+    assert collapsed and collapsed["height"] < row["height"] - 250
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+
+@pytest.mark.parametrize("role", ["user", "admin"])
+def test_detailed_task_without_preview_has_no_empty_grid_slot(page: Page, role: str) -> None:
+    _mount_dashboard_with_preview(page, 1440, role)
+    card = page.locator(".task-card").filter(has=page.get_by_role("heading", name="Without input preview", exact=True))
+    expect(card.locator(".input-preview")).to_have_count(0)
+    assert card.evaluate("""node => !Array.from(node.children).some(child => {
+        const box = child.getBoundingClientRect();
+        return !child.children.length && !child.textContent.trim() && box.width > 0 && box.height > 0;
+    })""")
+    header = card.locator("header").bounding_box()
+    facts = card.locator("dl").bounding_box()
+    actions = card.locator(".task-actions").bounding_box()
+    assert header and facts and actions
+    assert abs(actions["x"] - facts["x"]) <= 1
+    assert abs(actions["y"] - max(header["y"] + header["height"], facts["y"] + facts["height"])) <= 1
+    expect(card.get_by_role("link", name="Results", exact=True)).to_be_visible()
+
+
+@pytest.mark.parametrize("width", [390, 1440])
+def test_preview_tasks_preserve_mobile_compact_and_table_views(page: Page, width: int) -> None:
+    _mount_dashboard_with_preview(page, width)
+    if width == 390:
+        preview = page.locator(".input-preview")
+        preview.locator("summary").click()
+        row = page.locator(".task-card").first.bounding_box()
+        expanded = preview.bounding_box()
+        assert row and expanded and abs(expanded["width"] - row["width"]) <= 1
+        preview.locator("summary").click()
+    page.get_by_role("button", name="Compact", exact=True).click()
+    expect(page.locator(".task-card")).to_have_count(2)
+    expect(page.locator(".input-preview")).to_be_hidden()
+    expect(page.locator(".task-card").first.get_by_role("link", name="Results", exact=True)).to_be_visible()
+    page.get_by_role("button", name="Table", exact=True).click()
+    expect(page.locator(".task-table tbody tr")).to_have_count(2)
+    expect(page.locator(".input-preview")).to_have_count(0)
+    expect(page.locator(".task-table").get_by_role("link", name="Results", exact=True)).to_have_count(2)
+    page.get_by_role("button", name="Detailed", exact=True).click()
+    expect(page.locator(".task-card")).to_have_count(2)
+    expect(page.locator(".input-preview")).to_be_visible()
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
 
 @pytest.mark.parametrize("width", [320, 390, 834, 1440])
