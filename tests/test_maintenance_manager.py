@@ -422,3 +422,109 @@ def test_worker_ready_starts_the_pulse_without_consuming_a_task_slot(monkeypatch
     module.task_runtime._on_worker_ready(None)
 
     assert started == [True]
+
+
+# ---------------------------------------------------------------------------
+# Scheduler evidence is produced where the scheduler boundary exists
+# ---------------------------------------------------------------------------
+
+
+class _FakeAsyncResult:
+    def __init__(self, payload=None, error=None):
+        self._payload = payload
+        self._error = error
+
+    def get(self, timeout=None):
+        if self._error is not None:
+            raise self._error
+        return self._payload
+
+
+class _RecordingApp:
+    """A producer that records the task it was asked to run."""
+
+    def __init__(self, result):
+        self.sent = []
+        self._result = result
+
+    def send_task(self, name):
+        self.sent.append(name)
+        return self._result
+
+
+def test_the_maintenance_pass_dispatches_scheduler_evidence_to_the_worker():
+    """The scheduler question crosses the process boundary, by task name.
+
+    The maintenance scheduler is APScheduler in its own process and has no
+    ``scontrol``; running the Celery task *body* locally answers every question
+    with "the scheduler is unavailable".  The pass therefore dispatches the
+    worker-owned task and reads its bounded answer.
+    """
+    from revocompute import scheduler_evidence
+
+    app = _RecordingApp(_FakeAsyncResult({"settled": 3, "review": 1, "active": 0, "reservations_released": 2}))
+
+    outcome = scheduler_evidence.dispatch_scheduler_evidence(unsettled=0, app=app)
+
+    assert app.sent == [scheduler_evidence.SCHEDULER_EVIDENCE_TASK]
+    assert scheduler_evidence.SCHEDULER_EVIDENCE_TASK == "reconcile_slurm_allocations"
+    assert outcome == {"settled": 3, "review": 1, "active": 0, "reservations_released": 2}
+
+
+def test_an_unavailable_worker_reports_unknown_never_zero():
+    """No broker, no worker, a timeout: the allocations stay unknown.
+
+    A fabricated zero would settle real allocations as free computation, and a
+    released count would hand back entitlement the scheduler may still hold --
+    neither is available without the evidence, so the pass reports the unknown
+    quantity and releases nothing.
+    """
+    from revocompute import scheduler_evidence
+
+    for error in (OSError("no broker"), TimeoutError("timed out"), RuntimeError("worker gone")):
+        app = _RecordingApp(_FakeAsyncResult(error=error))
+        outcome = scheduler_evidence.fetch_scheduler_evidence(
+            SimpleNamespace(list_unsettled_allocations=lambda: [1, 2, 3]), app=app
+        )
+        assert outcome == {"settled": 0, "review": 3, "active": 0, "reservations_released": 0}
+
+
+def test_a_worker_that_returns_nothing_is_not_read_as_a_settlement():
+    """An absent or malformed result is unknown, never an invented outcome."""
+    from revocompute import scheduler_evidence
+
+    for payload in (None, "not a dict", 17):
+        app = _RecordingApp(_FakeAsyncResult(payload))
+        outcome = scheduler_evidence.fetch_scheduler_evidence(
+            SimpleNamespace(list_unsettled_allocations=lambda: [1]), app=app
+        )
+        assert outcome == {"settled": 0, "review": 1, "active": 0, "reservations_released": 0}
+
+
+def test_the_resource_maintenance_pass_asks_the_worker_and_records_review(monkeypatch, tmp_path):
+    """End to end: the pass calls the shared boundary, not the task body."""
+    from revocompute.db import TaskDatabase
+    from revocompute.maintenance.tasks import resource_maintenance as task_module
+
+    seen: list[int] = []
+
+    def _fake_fetch(store, *args, **kwargs):
+        seen.append(len(store.list_unsettled_allocations()))
+        return {"settled": 0, "review": 1, "active": 0, "reservations_released": 0}
+
+    monkeypatch.setattr(task_module, "fetch_scheduler_evidence", _fake_fetch)
+
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"), monthly_gpu_seconds=10_000)
+    database.record_allocation_start(
+        user_id=7, task_id="a" * 32, stage_id="model", slurm_job_id="9900",
+        gpu_count=1, cpu_cores=1, started_at=1_000.0,
+    )
+
+    monkeypatch.setenv("SERVER_DIR", str(tmp_path))
+    monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
+
+    report = task_module.run_resource_maintenance(task_store=database, results_folder=str(tmp_path / "r"))
+
+    assert seen and report["settled_allocations"] == 0
+    # Unknown is not zero: the allocation is still unsettled.
+    assert database.list_unsettled_allocations()

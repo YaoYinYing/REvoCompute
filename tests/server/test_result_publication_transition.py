@@ -56,6 +56,179 @@ def _fail_anchor(module, monkeypatch, *, error=OSError("database is locked")) ->
 
 
 # ---------------------------------------------------------------------------
+# A published-but-uncharged result is discoverable and repairable
+# ---------------------------------------------------------------------------
+
+
+def _fail_charge(module, monkeypatch, *, error=OSError("database is locked")) -> None:
+    def _raise(*_args, **_kwargs):
+        raise error
+
+    monkeypatch.setattr(module.task_store, "ensure_data_lifecycle", _raise)
+
+
+def _publish(module, task_id: str, result_dir: Path, *, bytes_written: int = 4096) -> None:
+    (result_dir / "result.txt").write_text("x" * bytes_written, encoding="utf-8")
+    module.task_runtime._finalize_results_manifest(
+        module.task_store.get_task(task_id), execution_state="completed", finished_at=1_700_000_000
+    )
+
+
+def test_a_charge_that_fails_leaves_a_pending_publication_and_is_repaired(monkeypatch, tmp_path) -> None:
+    """The split the review found: manifest installed, charge missing, no marker.
+
+    The publication anchor carries the amount owed and the fact that it is unpaid,
+    so the result is discoverable by reconciliation instead of being published
+    forever with no lifecycle row and no storage charge.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id, result_dir = _task(module, tmp_path)
+    _fail_charge(module, monkeypatch)
+
+    _publish(module, task_id, result_dir)
+
+    # The result really is published...
+    task = module.task_store.get_task(task_id)
+    assert module.app.config["storage_resolver"].publication_state(task) == "available"
+    # ...and nothing was charged, while the anchor still records what is owed.
+    assert module.task_store.get_data_lifecycle(task_id) is None
+    assert module.task_store.logical_owned_bytes(task.get("submitted_by_user_id")) == 0
+    pending = module.task_store.list_pending_storage_publications()
+    assert [row["task_id"] for row in pending] == [task_id]
+    assert pending[0]["charge_bytes"] > 0
+
+    monkeypatch.undo()
+
+    # Repair charges exactly the amount the anchor recorded, from the anchor's own
+    # metadata -- never from a directory walk.
+    outcome = module.task_runtime._reconcile_pending_storage_charges()
+    assert outcome == {"charged": 1, "released": 0, "skipped": 0}
+    user_id = task.get("submitted_by_user_id")
+    assert module.task_store.logical_owned_bytes(user_id) == pending[0]["charge_bytes"]
+    assert module.task_store.list_pending_storage_publications() == []
+
+
+def test_the_repair_is_idempotent_across_restarts(monkeypatch, tmp_path) -> None:
+    """A second pass over the same publication adds nothing."""
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id, result_dir = _task(module, tmp_path)
+    _fail_charge(module, monkeypatch)
+    _publish(module, task_id, result_dir)
+    monkeypatch.undo()
+
+    first = module.task_runtime._reconcile_pending_storage_charges()
+    charged = module.task_store.logical_owned_bytes(module.task_store.get_task(task_id)["submitted_by_user_id"])
+    second = module.task_runtime._reconcile_pending_storage_charges()
+
+    assert first == {"charged": 1, "released": 0, "skipped": 0}
+    assert second == {"charged": 0, "released": 0, "skipped": 0}
+    assert module.task_store.logical_owned_bytes(
+        module.task_store.get_task(task_id)["submitted_by_user_id"]
+    ) == charged
+
+
+def test_a_purged_result_is_never_charged_by_the_repair(monkeypatch, tmp_path) -> None:
+    """Deletion before repair must not manufacture a charge for bytes that are gone.
+
+    The purge is authoritative over these bytes: it removed them and released the
+    charge it made.  A repair pass must not resurrect a zero-byte or non-zero
+    lifecycle row for data that no longer exists.
+    """
+    from revocompute import resource_lifecycle
+
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id, result_dir = _task(module, tmp_path)
+    _fail_charge(module, monkeypatch)
+    _publish(module, task_id, result_dir)
+    monkeypatch.undo()
+
+    task = module.task_store.get_task(task_id)
+    resource_lifecycle.request_data_deletion(module.task_store, task, actor_user_id=None)
+    resource_lifecycle.purge_task_data(
+        module.task_store, task, remove_artifacts=lambda _task: None
+    )
+
+    assert module.task_store.get_data_lifecycle(task_id)["state"] == "PURGED"
+    assert module.task_store.logical_owned_bytes(task["submitted_by_user_id"]) == 0
+
+    # Repair must not charge, and must close the marker rather than leave it
+    # pending forever.
+    outcome = module.task_runtime._reconcile_pending_storage_charges()
+    assert outcome["charged"] == 0
+    assert module.task_store.logical_owned_bytes(task["submitted_by_user_id"]) == 0
+    assert module.task_store.list_pending_storage_publications() == []
+
+
+def test_a_quarantined_or_unanchored_result_is_never_auto_charged(monkeypatch, tmp_path) -> None:
+    """Only the verified anchored identity is charged.
+
+    A publication whose bytes changed after it was anchored is not the one Core
+    published, so a repair driven from it would bill a subject for bytes an
+    untrusted tree merely claims to hold.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id, result_dir = _task(module, tmp_path)
+    _fail_charge(module, monkeypatch)
+    _publish(module, task_id, result_dir)
+    monkeypatch.undo()
+
+    # Replace the manifest with a valid regular file that no longer matches the
+    # anchor.
+    manifest = result_dir / "manifest.json"
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["total_size"] = payload["total_size"] + 1
+    manifest.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    task = module.task_store.get_task(task_id)
+    assert module.app.config["storage_resolver"].publication_state(task) == "anchor_mismatch"
+
+    outcome = module.task_runtime._reconcile_pending_storage_charges()
+
+    assert outcome["charged"] == 0
+    assert module.task_store.get_data_lifecycle(task_id) is None
+    assert module.task_store.logical_owned_bytes(task["submitted_by_user_id"]) == 0
+
+
+def test_the_repair_charges_the_anchored_amount_not_the_tree_size(monkeypatch, tmp_path) -> None:
+    """The amount is the publication's own declaration, never a directory walk.
+
+    A file planted beside the published artifacts is not a user's bytes, and the
+    repair must not bill for it.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id, result_dir = _task(module, tmp_path)
+    _fail_charge(module, monkeypatch)
+    _publish(module, task_id, result_dir)
+    monkeypatch.undo()
+
+    pending = module.task_store.list_pending_storage_publications()[0]
+    anchored = int(pending["charge_bytes"])
+
+    # Plant a large file that is not part of the anchored manifest.
+    planted = result_dir / "planted.bin"
+    planted.write_bytes(b"z" * (1024 * 1024))
+    assert planted.stat().st_size > anchored
+
+    module.task_runtime._reconcile_pending_storage_charges()
+
+    user_id = module.task_store.get_task(task_id)["submitted_by_user_id"]
+    assert module.task_store.logical_owned_bytes(user_id) == anchored
+
+
+def test_the_repair_skips_a_task_that_no_longer_exists(monkeypatch, tmp_path) -> None:
+    """Nothing to charge when the owning Task row is gone."""
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id, result_dir = _task(module, tmp_path)
+    _fail_charge(module, monkeypatch)
+    _publish(module, task_id, result_dir)
+    monkeypatch.undo()
+
+    module.task_store.delete_task(task_id)
+
+    assert module.task_runtime._reconcile_pending_storage_charges()["charged"] == 0
+
+
+# ---------------------------------------------------------------------------
 # The anchor is part of publication success.
 # ---------------------------------------------------------------------------
 

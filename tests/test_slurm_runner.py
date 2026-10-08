@@ -246,6 +246,134 @@ def test_gpu_wrapper_samples_assigned_device_and_emits_resource_evidence(tmp_pat
     assert payload["gpu_utilization_peak_percent"] == 73
 
 
+def _run_gpu_wrapper(tmp_path, *, env_gpus: dict[str, str]) -> dict:
+    """Run the real wrapper for a GPU Task and return its published envelope.
+
+    The wrapper is executed, not inspected: the claim under test is that the
+    compute node's own report of how many accelerators it holds is a *count*, and
+    that the receipt it writes and the envelope it publishes agree.
+    """
+    workspace = tmp_path / "workspace" / "task-1"
+    inputs = workspace / "inputs"
+    inputs.mkdir(parents=True, exist_ok=True)
+    input_path = inputs / "input.fasta"
+    input_path.write_text(">test\nACDE\n", encoding="utf-8")
+    entities = _make_entities()
+    entities[0] = {
+        **entities[0],
+        "snapshot_path": str(input_path),
+        "snapshot_root": str(inputs),
+        "hash": hashlib.sha256(input_path.read_bytes()).hexdigest(),
+    }
+    output_dir = tmp_path / "out"
+    job = SlurmJob(
+        "task-1",
+        _make_task_type(gpus=True),
+        _make_runner(),
+        entities,
+        str(output_dir),
+        username="alice",
+        resource_policy=_policy(gres="gpu:2", requires_gpu=True),
+    )
+    job._prepare_scratch_dir()
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir(exist_ok=True)
+    fake_apptainer = fake_bin / "apptainer"
+    fake_apptainer.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
+    fake_apptainer.chmod(0o700)
+    fake_nvidia_smi = fake_bin / "nvidia-smi"
+    fake_nvidia_smi.write_text('#!/bin/bash\nprintf "512, 73\\n"\n', encoding="utf-8")
+    fake_nvidia_smi.chmod(0o700)
+    environment = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "SLURM_JOB_ID": "4217",
+        "SLURM_CPUS_PER_TASK": "2",
+        "SLURM_NTASKS": "1",
+        **env_gpus,
+    }
+
+    result = subprocess.run(
+        ["bash"],
+        input=job._render_wrapper(),
+        text=True,
+        capture_output=True,
+        env=environment,
+        check=False,
+        timeout=15,
+    )
+    assert result.returncode == 0, result.stderr
+    job._job_id = "4217"
+    job._stdout_lines = result.stdout.splitlines(keepends=True)
+    job._save_output()
+    payload = json.loads(
+        (output_dir / "execution" / "slurm-alice-gremlin-task-1.resource.json").read_text(encoding="utf-8")
+    )
+    receipt = job.read_allocation_receipt()
+    assert receipt is not None, "the wrapper must leave its compute-node receipt"
+    return {"envelope": payload, "receipt": receipt}
+
+
+def test_a_numeric_slurm_gpu_count_is_a_count_not_a_device_list(tmp_path):
+    """The normal Slurm spelling is a number, and a number is the count.
+
+    ``SLURM_GPUS_ON_NODE=2`` reaching the comma-list reader becomes 1, so a
+    two-GPU receipt would persist a one-GPU allocation while the canonical start
+    callback uses the requested count of two.
+    """
+    for value, expected in (("2", 2), ("1", 1), ("4", 4)):
+        outcome = _run_gpu_wrapper(
+            tmp_path / f"numeric-{value}",
+            env_gpus={"SLURM_GPUS_ON_NODE": value},
+        )
+        assert outcome["receipt"]["gpus"] == expected
+        assert outcome["envelope"]["allocated_gpus_on_node"] == str(expected)
+
+
+def test_a_device_id_list_fallback_is_counted_by_its_members(tmp_path):
+    """``SLURM_JOB_GPUS`` / ``CUDA_VISIBLE_DEVICES`` are device lists."""
+    job_gpus = _run_gpu_wrapper(
+        tmp_path / "job-gpus",
+        env_gpus={"SLURM_JOB_GPUS": "0,1"},
+    )
+    assert job_gpus["receipt"]["gpus"] == 2
+    assert job_gpus["envelope"]["allocated_gpus_on_node"] == "2"
+
+    visible = _run_gpu_wrapper(
+        tmp_path / "visible",
+        env_gpus={"CUDA_VISIBLE_DEVICES": "0,1,2"},
+    )
+    assert visible["receipt"]["gpus"] == 3
+    assert visible["envelope"]["allocated_gpus_on_node"] == "3"
+
+
+def test_a_no_device_or_empty_value_reports_no_gpus(tmp_path):
+    """The scheduler's sentinel means zero, and so does an absent spelling."""
+    sentinel = _run_gpu_wrapper(
+        tmp_path / "sentinel",
+        env_gpus={"SLURM_GPUS_ON_NODE": "NoDevFiles"},
+    )
+    assert sentinel["receipt"]["gpus"] == 0
+
+    empty = _run_gpu_wrapper(tmp_path / "empty", env_gpus={"SLURM_GPUS_ON_NODE": ""})
+    assert empty["receipt"]["gpus"] == 0
+    assert empty["envelope"]["allocated_gpus_on_node"] == ""
+
+
+def test_a_malformed_gpu_value_never_invents_a_count(tmp_path):
+    """A value that is neither a count nor a list is refused, and never exceeds
+    the evidence: the numeric spelling is preferred, so a malformed one falls
+    through rather than being read as a number."""
+    outcome = _run_gpu_wrapper(
+        tmp_path / "malformed",
+        env_gpus={"SLURM_GPUS_ON_NODE": "0,,1", "SLURM_JOB_GPUS": "0"},
+    )
+    # The malformed numeric spelling is refused, so the valid list spelling is
+    # used -- one device, never the two the malformed value might suggest.
+    assert outcome["receipt"]["gpus"] == 1
+    assert outcome["envelope"]["allocated_gpus_on_node"] == "1"
+
+
 def test_resource_markers_start_a_line_after_output_without_a_trailing_newline(tmp_path):
     """Upstream that ends without a newline must not swallow the BEGIN marker.
 

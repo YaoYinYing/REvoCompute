@@ -670,6 +670,104 @@ def test_reconciliation_never_frees_a_commitment_without_scheduler_evidence(monk
     assert module.task_store.list_queued_reservations()[0]["state"] == ReservationState.QUEUED.value
 
 
+def test_an_unanswered_maintenance_pass_releases_no_queued_commitment(monkeypatch, tmp_path):
+    """A queued commitment survives a pass whose scheduler question never landed.
+
+    Releasing a scheduler-owned reservation requires the scheduler's own answer.
+    When maintenance cannot reach the worker, the reservation it cannot ask about
+    stays committed -- entitlement is never handed back on a guess.
+    """
+    from revocompute import resource_lifecycle
+    from revocompute.scheduler_evidence import fetch_scheduler_evidence
+
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    at = _timestamp(2026, 9, 5)
+    task_id = "7" * 32
+    _own_task(module.task_store, task_id, user_id=93)
+    module.task_store.reserve_compute_admission(user_id=93, task_id=task_id, at=at)
+    module.task_store.record_reservation_dispatch(task_id=task_id, slurm_job_id="8811", at=at + 1)
+
+    class _Unreachable:
+        def send_task(self, name):
+            raise OSError("no broker")
+
+    outcome = fetch_scheduler_evidence(module.task_store, app=_Unreachable())
+    assert outcome == {"settled": 0, "review": 0, "active": 0, "reservations_released": 0}
+
+    report = resource_lifecycle.reconcile_resources(
+        module.task_store,
+        settle_allocations=lambda: outcome,
+        now=at + 10,
+    )
+
+    assert report.reclaimed_reservations == 0
+    assert module.task_store.list_queued_reservations()[0]["state"] == ReservationState.QUEUED.value
+    # The commitment still occupies the balance: an unanswered pass released
+    # nothing, so the subject's entitlement is not handed out twice.
+    assert module.task_store.compute_entitlement(93, at=at + 10).reserved == 3600
+
+
+def test_a_concurrent_maintenance_and_worker_pass_settle_exactly_once(monkeypatch, tmp_path):
+    """Settlement is idempotent per (unit, job): two passes charge once.
+
+    The maintenance pass and the worker's own restart pass can overlap.  Each
+    unit's usage fact is keyed ``usage:<unit>:<slurm_job_id>``, so the second
+    writer observes the first and appends nothing.
+    """
+    from revocompute import resource_lifecycle
+
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    at = _timestamp(2026, 9, 5)
+    task_id = "6" * 32
+    _own_task(module.task_store, task_id, user_id=94)
+    module.task_store.record_allocation_start(
+        user_id=94, task_id=task_id, stage_id="model", slurm_job_id="8812",
+        gpu_count=1, cpu_cores=2, started_at=at,
+    )
+
+    monkeypatch.setattr(module.task_runtime.shutil, "which", lambda command: f"/usr/bin/{command}")
+    monkeypatch.setattr(
+        module.task_runtime.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            stdout="JobId=8812 JobState=COMPLETED RunTime=00:00:45 AllocTRES=cpu=2,gres/gpu=1\n"
+        ),
+    )
+
+    # The worker's pass, then a maintenance pass over the same allocation.
+    first = module.task_runtime.reconcile_slurm_allocations.run()
+    second = resource_lifecycle.reconcile_resources(
+        module.task_store,
+        settle_allocations=lambda: module.task_runtime.reconcile_slurm_allocations.run(),
+        now=at + 100,
+    )
+    third = module.task_runtime._reconcile_slurm_allocations()
+
+    assert first["settled"] == 1
+    assert third == {"settled": 0, "active": 0, "review": 0}
+    assert module.task_store.gpu_credit_summary(94, at=at + 100)["usage_gpu_seconds"] == 45
+    # Exactly one usage fact per unit: 45 GPU-seconds and 90 CPU core-seconds,
+    # written by whichever pass won.  A later pass appended nothing.
+    usage = [
+        entry
+        for entry in module.task_store.list_ledger(94)
+        if entry["reason_code"] == "actual_allocation"
+    ]
+    assert sorted((entry["unit"], entry["quantity"]) for entry in usage) == [
+        ("cpu_core_second", -90),
+        ("gpu_second", -45),
+    ]
+    assert second.settled_allocations == 0
+
+
 def test_reconciliation_frees_a_queued_commitment_the_scheduler_proves_is_gone(monkeypatch, tmp_path):
     """A terminal scheduler answer is the evidence that frees the claim."""
     module = _load_pssm_module(
@@ -1091,6 +1189,54 @@ def test_the_live_dispatch_path_persists_the_receipt_before_reading_finishes(mon
     # ordinary unsettled path, never a second charge.)
     module.task_runtime._reconcile_slurm_allocations()
     assert len(module.task_store.list_task_allocations(task_id)) == 2
+
+
+def test_a_two_gpu_receipt_reaches_observation_and_identity_intact(monkeypatch, tmp_path):
+    """End to end: a real 2-GPU wrapper receipt -> observation -> allocation identity.
+
+    The wrapper writes the count the scheduler gave it; the production dispatch
+    callback adopts that receipt into the canonical observation; and the later
+    start callback, which uses the *requested* count, must agree with it.  When
+    the receipt under-reported (a numeric ``SLURM_GPUS_ON_NODE=2`` read as a
+    one-device list) the two disagreed and a real multi-GPU run was refused.
+    """
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    at = _timestamp(2026, 9, 5)
+    task_id = "4" * 32
+    _own_task(module.task_store, task_id, user_id=100)
+    module.task_store.reserve_compute_admission(user_id=100, task_id=task_id, at=at)
+    module.task_store.project_gpu_authorization(
+        100, account_enabled=True, allow_gpu_use=True, entitlements={}
+    )
+
+    policy = _gpu_policy()
+    policy = ResolvedResources(**{**policy.__dict__, "gres": "gpu:2"})
+    dispatched, started, _finished = module.task_runtime._compute_allocation_callbacks(
+        task_id=task_id,
+        user_id=100,
+        stage_id="model",
+        resource_policy=policy,
+    )
+
+    # The receipt the wrapper writes for a real 2-GPU allocation.
+    receipt = {"slurm_job_id": "8814", "observed_at": at + 2, "cpus": 1, "gpus": 2}
+    assert dispatched("8814", at + 1, True, receipt) is True
+
+    observed = {
+        row["unit"]: row["resource_count"]
+        for row in module.task_store.list_task_allocations(task_id)
+    }
+    assert observed == {"gpu_second": 2, "cpu_core_second": 1}
+
+    # The start callback uses the requested count of two; the identity check
+    # between receipt and start therefore passes instead of refusing the run.
+    started("8814", at + 2)
+    assert module.task_store.list_task_allocations(task_id)[0]["slurm_job_id"] == "8814"
+    assert module.task_store.list_unsettled_allocations()
 
 
 def test_the_scheduler_log_is_adopted_when_the_wrapper_never_ran(monkeypatch, tmp_path):

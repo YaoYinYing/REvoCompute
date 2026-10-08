@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import subprocess
+from typing import Any
 
 import pytest
 import yaml
@@ -89,3 +90,88 @@ def test_slurm_stack_mounts_the_runner_tree_and_never_config_dir() -> None:
         ]
         assert runners_dir in sources, f"{name} does not mount the Runner tree"
         assert service["environment"]["RUNNERS_DIR"] == runners_dir
+
+
+def _rendered_services(extra_env: dict[str, str]) -> dict[str, dict[str, Any]]:
+    completed = _render(extra_env)
+    assert completed.returncode == 0, completed.stderr
+    return yaml.safe_load(completed.stdout)["services"]
+
+
+def _environment(services: dict[str, dict[str, Any]], name: str) -> dict[str, str]:
+    return dict(services[name].get("environment") or {})
+
+
+def test_the_resource_governance_settings_reach_their_services() -> None:
+    """The documented knobs are forwarded to the containers that read them.
+
+    ``RESOURCE_MAINTENANCE_SECONDS`` belongs to the maintenance scheduler, and the
+    scratch limit/guard belong to the task-executing worker path: each is read
+    from the process environment of the service that acts on it, so a value an
+    operator sets in the deployment env must arrive there.  The assertions go
+    through the rendered Compose *model*, not through the file's text.
+    """
+    services = _rendered_services(
+        {
+            "RESOURCE_MAINTENANCE_SECONDS": "600",
+            "TASK_SCRATCH_LIMIT_BYTES": "12345",
+            "TASK_SCRATCH_GUARD_SECONDS": "7.5",
+        }
+    )
+
+    assert _environment(services, "maintenance")["RESOURCE_MAINTENANCE_SECONDS"] == "600"
+    # The task-executing worker is where the allocation wrapper -- which reads
+    # both scratch settings from its own process environment -- actually runs.
+    for service in ("worker", "tool-worker"):
+        assert _environment(services, service)["TASK_SCRATCH_LIMIT_BYTES"] == "12345"
+        assert _environment(services, service)["TASK_SCRATCH_GUARD_SECONDS"] == "7.5"
+    # A scheduler that runs no allocation has no use for the maintenance interval.
+    for service in ("worker", "tool-worker", "web"):
+        assert "RESOURCE_MAINTENANCE_SECONDS" not in _environment(services, service)
+
+
+def test_the_scratch_settings_are_not_forwarded_to_unrelated_services() -> None:
+    """Only the task-executing path receives per-execution scratch settings."""
+    services = _rendered_services(
+        {"TASK_SCRATCH_LIMIT_BYTES": "12345", "TASK_SCRATCH_GUARD_SECONDS": "7.5"}
+    )
+
+    for service in ("redis", "gateway"):
+        assert "TASK_SCRATCH_LIMIT_BYTES" not in _environment(services, service)
+        assert "TASK_SCRATCH_GUARD_SECONDS" not in _environment(services, service)
+
+
+def test_unset_resource_governance_settings_keep_the_shipped_defaults() -> None:
+    """An unset operator value forwards as empty, which is the default.
+
+    The runner reads an empty ``TASK_SCRATCH_LIMIT_BYTES`` as its own documented
+    default, and the maintenance task reads an empty
+    ``RESOURCE_MAINTENANCE_SECONDS`` as "unregistered" -- so the rendered stack
+    with nothing set must carry the empty value rather than an invented one.
+    """
+    services = _rendered_services({})
+
+    assert _environment(services, "maintenance")["RESOURCE_MAINTENANCE_SECONDS"] == ""
+    assert _environment(services, "worker")["TASK_SCRATCH_LIMIT_BYTES"] == ""
+    assert _environment(services, "worker")["TASK_SCRATCH_GUARD_SECONDS"] == ""
+
+
+def test_the_slurm_override_does_not_shadow_the_forwarded_settings() -> None:
+    """Layering the Slurm override must not lose a forwarded value.
+
+    The override rewrites the worker's redis URLs and mounts the scheduler
+    boundary; it must leave the environment the base file forwards intact.
+    """
+    without_override = subprocess.run(
+        [*_compose_command(), "-f", str(BASE_COMPOSE), "config"],
+        env={**SAFE_ENV, "TASK_SCRATCH_LIMIT_BYTES": "12345"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert without_override.returncode == 0, without_override.stderr
+    base_worker = yaml.safe_load(without_override.stdout)["services"]["worker"]["environment"]
+
+    layered = _rendered_services({"TASK_SCRATCH_LIMIT_BYTES": "12345"})
+    assert base_worker["TASK_SCRATCH_LIMIT_BYTES"] == "12345"
+    assert _environment(layered, "worker")["TASK_SCRATCH_LIMIT_BYTES"] == "12345"

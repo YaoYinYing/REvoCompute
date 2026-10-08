@@ -527,3 +527,172 @@ def test_reconciliation_publishes_its_completed_event(tmp_path, monkeypatch):
 
     assert [event for event, _ in emitted] == ["resource.reconciliation.completed"]
     assert emitted[0][1]["expired_reservations"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Retention is a lifecycle transaction, not a second cleanup state machine
+# ---------------------------------------------------------------------------
+
+
+def _retention_task(database: TaskDatabase, task_id: str, *, user_id: int, finished_at: float) -> None:
+    database.upsert_task(
+        task_id,
+        filename="input.fasta",
+        file_path="/immutable/input.fasta",
+        uploaded_at=finished_at - 60,
+        finished_at=finished_at,
+        status="finished",
+        is_binary=0,
+        username=f"user-{user_id}",
+        submitted_by_user_id=user_id,
+        storage_key=f"user-{user_id}",
+        task_type="gremlin",
+    )
+
+
+def test_retention_releases_exactly_the_charged_bytes_once(tmp_path):
+    """An expired charged result: bytes removed, charge released, exactly once.
+
+    The old retention path deleted the files and completed the task-status
+    cleanup without ever running the lifecycle transaction, so the charged ACTIVE
+    row survived its own data and consumed the subject's quota forever.
+    """
+    from revocompute.maintenance.tasks.result_cleanup import cleanup_expired_task_artifacts
+
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    now = 2_000_000_000.0
+    task_id = "r1" + "0" * 30
+    _retention_task(database, task_id, user_id=50, finished_at=now - 31 * 86400)
+    _charge(database, task_id, user_id=50, owned=GIB)
+    assert database.logical_owned_bytes(50) == GIB
+
+    cleaned = cleanup_expired_task_artifacts(
+        30,
+        task_store=database,
+        results_folder=str(tmp_path / "results"),
+        now=now,
+    )
+
+    assert cleaned == 1
+    record = database.get_data_lifecycle(task_id)
+    assert record["state"] == DataLifecycleState.PURGED.value
+    assert database.logical_owned_bytes(50) == 0
+    # The presentation marker the UI/API expect is derived from the purge outcome.
+    assert database.get_task(task_id)["status"] == "cleaned:finished"
+    released = [
+        entry for entry in database.list_ledger(50) if entry["reason_code"] == "storage_released"
+    ]
+    assert [entry["quantity"] for entry in released] == [GIB]
+
+
+def test_retention_keeps_the_charge_and_stays_retryable_when_the_purge_fails(tmp_path, monkeypatch):
+    """A failed purge must not leave phantom free quota, and must be retryable.
+
+    The deletion request is durable before any filesystem work, so an interrupted
+    pass leaves a resumable row rather than an intact tree whose bytes are gone.
+    """
+    from revocompute import resource_lifecycle
+    from revocompute.maintenance.tasks import result_cleanup as cleanup
+
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    now = 2_000_000_000.0
+    task_id = "r2" + "0" * 30
+    _retention_task(database, task_id, user_id=51, finished_at=now - 31 * 86400)
+    _charge(database, task_id, user_id=51, owned=GIB)
+
+    def _explode(_task):
+        raise OSError("filesystem went away")
+
+    monkeypatch.setattr(cleanup, "delete_task_artifacts", _explode)
+
+    cleaned = cleanup.cleanup_expired_task_artifacts(
+        30,
+        task_store=database,
+        results_folder=str(tmp_path / "results"),
+        now=now,
+    )
+    assert cleaned == 0
+    # The failure kept the charge and recorded the reason.
+    record = database.get_data_lifecycle(task_id)
+    assert record["state"] == DataLifecycleState.ERROR.value
+    assert database.logical_owned_bytes(51) == GIB
+    assert database.get_task(task_id)["status"] == "deleting:finished"
+
+    # A later pass retries the same durable request and releases it once.
+    monkeypatch.undo()
+    assert cleanup.cleanup_expired_task_artifacts(
+        30,
+        task_store=database,
+        results_folder=str(tmp_path / "results"),
+        now=now + 1,
+    ) == 1
+    assert database.logical_owned_bytes(51) == 0
+    released = [
+        entry for entry in database.list_ledger(51) if entry["reason_code"] == "storage_released"
+    ]
+    assert [entry["quantity"] for entry in released] == [GIB]
+
+
+def test_retention_is_idempotent_and_never_double_releases(tmp_path):
+    """A repeated retention pass adds nothing: the state guard admits it once."""
+    from revocompute.maintenance.tasks.result_cleanup import cleanup_expired_task_artifacts
+
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    now = 2_000_000_000.0
+    task_id = "r3" + "0" * 30
+    _retention_task(database, task_id, user_id=52, finished_at=now - 31 * 86400)
+    _charge(database, task_id, user_id=52, owned=2 * GIB)
+
+    assert cleanup_expired_task_artifacts(
+        30, task_store=database, results_folder=str(tmp_path / "results"), now=now
+    ) == 1
+    assert cleanup_expired_task_artifacts(
+        30, task_store=database, results_folder=str(tmp_path / "results"), now=now + 1
+    ) == 0
+
+    released = [
+        entry for entry in database.list_ledger(52) if entry["reason_code"] == "storage_released"
+    ]
+    assert [entry["quantity"] for entry in released] == [2 * GIB]
+    assert database.logical_owned_bytes(52) == 0
+
+
+def test_retention_skips_results_inside_the_window(tmp_path):
+    """Retention decides eligibility; a recent result is left untouched."""
+    from revocompute.maintenance.tasks.result_cleanup import cleanup_expired_task_artifacts
+
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    now = 2_000_000_000.0
+    task_id = "r4" + "0" * 30
+    _retention_task(database, task_id, user_id=53, finished_at=now - 29 * 86400)
+    _charge(database, task_id, user_id=53, owned=GIB)
+
+    assert cleanup_expired_task_artifacts(
+        30, task_store=database, results_folder=str(tmp_path / "results"), now=now
+    ) == 0
+    assert database.get_task(task_id)["status"] == "finished"
+    assert database.get_data_lifecycle(task_id)["state"] == DataLifecycleState.ACTIVE.value
+    assert database.logical_owned_bytes(53) == GIB
+
+
+def test_retention_resumes_a_claimed_deletion(tmp_path):
+    """A deletion claimed by another path is driven to completion by retention."""
+    from revocompute.maintenance.tasks.result_cleanup import cleanup_expired_task_artifacts
+
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    now = 2_000_000_000.0
+    task_id = "r5" + "0" * 30
+    _retention_task(database, task_id, user_id=54, finished_at=now - 31 * 86400)
+    _charge(database, task_id, user_id=54, owned=GIB)
+    assert database.claim_task_cleanup(
+        task_id,
+        expected_status="finished",
+        expected_finished_at=now - 31 * 86400,
+        claim_status="deleting:finished",
+    )
+
+    assert cleanup_expired_task_artifacts(
+        30, task_store=database, results_folder=str(tmp_path / "results"), now=now
+    ) == 1
+    assert database.get_task(task_id)["status"] == "cleaned:finished"
+    assert database.logical_owned_bytes(54) == 0
