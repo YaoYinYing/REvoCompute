@@ -131,14 +131,42 @@ class _FakeTaskStore:
     def update_task(self, md5sum, **fields):
         self.updates.append(fields)
 
-    def record_result_publication(self, md5sum, *, manifest_sha256, manifest_size, published_at):
+    def record_result_publication(
+        self, md5sum, *, manifest_sha256, manifest_size, published_at, charge_bytes=None
+    ):
         self.publications.append(
-            {"task_id": md5sum, "manifest_sha256": manifest_sha256, "manifest_size": manifest_size}
+            {
+                "task_id": md5sum,
+                "manifest_sha256": manifest_sha256,
+                "manifest_size": manifest_size,
+                # The charge the publication owes travels with its identity, so
+                # the double records it too: a repair pass reading a fake anchor
+                # must see the same fields the real one carries.
+                "charge_bytes": charge_bytes,
+                "charge_state": "charged" if charge_bytes == 0 else "pending",
+            }
         )
         return len(self.publications)
 
     def get_result_publication(self, md5sum):
         return self.publications[-1] if self.publications else None
+
+    def mark_publication_charged(self, task_id, *, charge_bytes, at):
+        if self.publications:
+            self.publications[-1]["charge_state"] = "charged"
+            self.publications[-1]["charge_bytes"] = charge_bytes
+        return True
+
+    def mark_publication_released(self, task_id):
+        if self.publications:
+            self.publications[-1]["charge_state"] = "released"
+        return True
+
+    def list_pending_storage_publications(self, *, limit=500):
+        return [row for row in self.publications if row.get("charge_state") == "pending"]
+
+    def ensure_data_lifecycle(self, task_id, *, user_id, logical_bytes=0, at=None):
+        return {"task_id": task_id, "state": "ACTIVE", "logical_bytes": logical_bytes}
 
     def get_data_lifecycle(self, task_id):
         # No lifecycle row: the Task still owns its data, so finalization is
