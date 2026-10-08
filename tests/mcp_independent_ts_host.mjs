@@ -82,6 +82,7 @@ const receipt = {
   host: 'mcp-typescript-sdk',
   host_version: version,
   host_protocol_library: `@modelcontextprotocol/sdk ${version}`,
+  exact_head: process.env.REVOCOMPUTE_EXACT_HEAD || 'unknown',
   steps: {},
 };
 

@@ -347,6 +347,17 @@ def _is_hex32(value: str) -> bool:
     return len(value) == 32 and all(character in "0123456789abcdefABCDEF" for character in value)
 
 
+def _git_head() -> str:
+    """The revision the hosts are exercised against."""
+    try:
+        completed = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, capture_output=True, text=True, check=True
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return "unknown"
+    return completed.stdout.strip()
+
+
 def _client_main(argv: list[str]) -> int:  # pragma: no cover - subprocess
     import anyio
 
@@ -652,7 +663,11 @@ def _run_host(name: str, url: str, fixtures_path: Path, scratch: Path) -> dict:
         driver = prefix / "independent_ts_host.mjs"
         shutil.copyfile(script.parent / "mcp_independent_ts_host.mjs", driver)
         installed = json.loads((prefix / "node_modules" / "@modelcontextprotocol" / "sdk" / "package.json").read_text())
-        environment = {**os.environ, "REVOCOMPUTE_TS_HOST_VERSION": str(installed["version"])}
+        environment = {
+            **os.environ,
+            "REVOCOMPUTE_TS_HOST_VERSION": str(installed["version"]),
+            "REVOCOMPUTE_EXACT_HEAD": _git_head(),
+        }
         command = [shutil.which("node") or "node", str(driver), str(fixtures_path), url]
         completed = subprocess.run(
             command, capture_output=True, text=True, timeout=600, check=False, env=environment
