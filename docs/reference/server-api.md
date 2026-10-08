@@ -149,7 +149,21 @@ Automatic age-based purge is not enabled by default. An operator can turn on the
 `resource-maintenance` periodic task with `RESOURCE_MAINTENANCE_SECONDS` (see
 the configuration reference); it finishes *authorized* deletions and runs a
 bounded reconciliation pass, and it never decides on its own that data is old
-enough to delete.
+enough to delete. Automatic *retention* is a separate opt-in
+(`RESULT_RETENTION_DAYS`), and it only decides which terminal Task has aged out:
+the deletion is the same lifecycle transaction above, so the bytes and the charge
+cannot diverge. The Task's status marker (`deleting:*` while a purge is in
+flight, `cleaned:*` once the bytes are gone) is derived from that purge rather
+than maintained by a second cleanup path.
+
+Recurring reconciliation asks the *worker* for scheduler evidence, because only
+the worker has `scontrol`: this process dispatches the worker-owned
+`reconcile_slurm_allocations` task over the broker and waits for it, bounded. A
+worker that cannot be reached leaves the unsettled allocations unsettled and
+reports them as unknown — never as zero — and releases no scheduler-owned
+reservation, because releasing one requires the evidence the dispatch could not
+fetch. Settlement is idempotent per `(unit, slurm_job_id)`, so a retry, a restart
+pass, and a maintenance pass that overlap still charge once.
 
 That interval is also what makes *recurring* allocation recovery periodic. A
 worker restart runs the full recovery pass (`worker_ready`), and each dispatch
