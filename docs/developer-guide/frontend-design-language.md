@@ -757,7 +757,9 @@ same card.
 
 Runner detail is a readable method reference. Method identity and the canonical
 use case lead; runtime facts form a smaller ruled colophon, not a competing
-summary card. A section index supports jumping between guidance, inputs,
+summary card. On narrow layouts, native runtime disclosure keeps the compute
+class in its summary and returns space to the scientific guidance; desktop
+exposes those facts directly. A section index supports jumping between guidance, inputs,
 controls, and citations. It sticks beside the reference on wide screens and
 returns to normal flow on narrow screens. Jump targets receive keyboard focus.
 

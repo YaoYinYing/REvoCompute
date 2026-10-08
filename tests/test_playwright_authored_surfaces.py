@@ -86,3 +86,24 @@ def test_method_index_keyboard_jump_reaches_the_complete_parameter_reference(pag
     if width > 834:
         index_box = index.bounding_box()
         assert index_box and index_box["y"] >= 0
+
+
+def test_mobile_method_runtime_disclosure_returns_space_without_losing_facts(page: Page) -> None:
+    page.set_viewport_size({"width": 320, "height": 780})
+    scenario = pssm_gremlin_scenario()
+    mount_scenario(page, scenario)
+    page.goto(f"{ORIGIN}/runners/{scenario.runner.name}")
+    summary = page.get_by_text("Runtime facts · CPU", exact=True)
+    expect(page.locator(".runner-facts")).to_be_hidden()
+    closed = page.get_by_role("region", name="When to use this method").bounding_box()
+    summary.focus()
+    page.keyboard.press("Enter")
+    expect(page.locator(".runner-facts")).to_be_visible()
+    expect(page.locator(".runner-facts")).to_contain_text(scenario.runner.runtime_family)
+    opened = page.get_by_role("region", name="When to use this method").bounding_box()
+    assert closed and opened and opened["y"] > closed["y"] + 100
+    summary.click()
+    expect(page.locator(".runner-facts")).to_be_hidden()
+    page.set_viewport_size({"width": 1440, "height": 780})
+    expect(page.locator(".runner-facts")).to_be_visible()
+    expect(summary).to_be_hidden()

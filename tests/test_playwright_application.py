@@ -530,6 +530,17 @@ def test_runner_to_result_workflow_is_frontend_owned_and_refreshable(page: Page)
     assert any("/compute/api/tasks" in url for url in requests)
 
 
+def test_create_task_keeps_workspace_mount_errors_visible(page: Page) -> None:
+    _install_app(page)
+    detail = _detail()
+    detail["input_workspace"]["steps"][0]["capabilities"][0]["plugin"] = "unavailable_fixture_plugin"
+    page.route(f"{ORIGIN}/compute/api/types/sequence_demo", lambda route: route.fulfill(json=detail))
+    page.goto(f"{ORIGIN}/compute/create_task?task_type=sequence_demo")
+    expect(page.locator("textarea[aria-label='Protein sequence']")).to_be_visible()
+    expect(page.locator(".ct-status.error")).to_contain_text("unsupported component")
+    expect(page.get_by_role("button", name="Run task", exact=True)).to_be_disabled()
+
+
 @pytest.mark.parametrize("path", ["/runners", "/runners/sequence_demo", "/compute/create_task", "/compute/dashboard"])
 def test_application_routes_refresh_without_overflow(page: Page, path: str) -> None:
     _install_app(page)

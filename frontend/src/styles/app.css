@@ -311,6 +311,7 @@ a { color: var(--app-accent); }
 .runner-detail-heading h1 { max-width: 18ch; font-size: clamp(2.8rem, 4.8vw, 4.6rem); line-height: 1.04; letter-spacing: -.035em; overflow-wrap: anywhere; margin: .65rem 0 1rem; }
 .runner-intro { max-width: 58ch; font-size: 1.05rem; }
 .back-link { width: fit-content; margin-bottom: 2rem; color: var(--app-muted); font-size: .78rem; }.back-link:hover { color: var(--app-accent); }.back-link svg { width: .9rem; }
+.method-runtime > summary { display: none; min-height: 2.75rem; align-content: center; color: var(--app-accent); cursor: pointer; font-size: .8rem; font-weight: 600; }
 .runner-facts { margin: 0; border-top: 1px solid var(--app-line-strong); }
 .runner-facts div { display: flex; justify-content: space-between; gap: 1rem; padding: .85rem 0; border-bottom: 1px solid var(--app-line); }
 .runner-facts dt { color: var(--app-muted); font-size: .78rem; }.runner-facts dd { margin: 0; font-size: .83rem; font-weight: 650; text-align: right; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
@@ -426,6 +427,8 @@ a { color: var(--app-accent); }
   .dashboard-page .layout-switch legend { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; }
   .runner-group { grid-template-columns: 1fr; gap: .8rem; }
   .runner-detail-heading { grid-template-columns: 1fr; }
+  .method-runtime { border-top: 1px solid var(--app-line); }
+  .method-runtime > summary { display: list-item; }
   .runner-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 1.25rem; }
   .method-reference { display: block; }
   .method-index { position: static; display: flex; flex-wrap: wrap; gap: .25rem 1.25rem; padding: 1rem 0; border-bottom: 1px solid var(--app-line); }
