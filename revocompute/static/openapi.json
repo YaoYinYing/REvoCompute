@@ -1229,6 +1229,170 @@
           "403": {"$ref": "#/components/responses/Forbidden"}
         }
       }
+    },
+    "/compute/api/auth/admin/placement-policy": {
+      "get": {
+        "tags": [
+          "Administration"
+        ],
+        "summary": "Get the deployment placement policy",
+        "description": "The execution classes that map a stage's workload requirement onto this deployment's partitions, QoS, accounts, and GRES classes, with the content digest and revision a persisted placement plan records.",
+        "operationId": "getPlacementPolicy",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Placement policy in force",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlacementPolicyDetail"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Administration"
+        ],
+        "summary": "Replace the deployment placement policy",
+        "description": "Validated against this deployment's allowed Slurm surface before anything is written, so a policy naming a partition this deployment cannot see is refused with the previous policy still in force. An empty classes list returns the deployment to the canonical per-task resource policy.",
+        "operationId": "updatePlacementPolicy",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlacementPolicyUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Policy updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlacementPolicyDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/compute/api/auth/admin/placement-policy/explain": {
+      "post": {
+        "tags": [
+          "Administration"
+        ],
+        "summary": "Resolve a workload requirement against policy (dry run)",
+        "description": "Consumes the same resolution path real dispatch uses, so the answer is the decision dispatch would make for the same immutable inputs and policy revision. A requirement with no valid placement returns placed=false with a bounded reason code rather than an error status.",
+        "operationId": "explainPlacement",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlacementExplainRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Resolved decision, or a bounded refusal reason code",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlacementDryRunResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/compute/api/auth/admin/tasks/{task_id}/placement": {
+      "get": {
+        "tags": [
+          "Administration"
+        ],
+        "summary": "List the persisted placement plans for one Task",
+        "description": "What each dispatchable stage required, which rule matched, which local Slurm request was resolved, why, and which policy revision produced it, read from the stored plans rather than reconstructed from an srun command line. A submitted plan is reported as it was recorded and is never recomputed against today's policy.",
+        "operationId": "listTaskPlacementPlans",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TaskId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every recorded placement plan for the Task, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskPlacementPlans"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2794,7 +2958,427 @@
         "accepted": {"type": "boolean", "description": "False when an idempotent replay returned the existing job."}
       },
       "additionalProperties": false
-    }
+    },
+      "PlacementStoredClass": {
+        "type": "object",
+        "required": [
+          "name",
+          "accelerator",
+          "partition"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "accelerator": {
+            "type": "string",
+            "enum": [
+              "none",
+              "cuda"
+            ]
+          },
+          "partition": {
+            "type": "string"
+          },
+          "accelerator_class": {
+            "type": "string"
+          },
+          "qos": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "account": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "constraint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "exclusive": {
+            "type": "boolean"
+          },
+          "cpus": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "memory_mb": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "vram_mb": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "fallback_classes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "PlacementClassDocument": {
+        "type": "object",
+        "required": [
+          "name",
+          "partition"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "partition": {
+            "type": "string"
+          },
+          "accelerator": {
+            "type": "string",
+            "enum": [
+              "none",
+              "cuda"
+            ]
+          },
+          "accelerator_class": {
+            "type": "string"
+          },
+          "qos": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "account": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "constraint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "exclusive": {
+            "type": "boolean"
+          },
+          "cpus": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "memory_mb": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "vram_mb": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "fallback_classes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "PlacementPolicyDetail": {
+        "type": "object",
+        "required": [
+          "declared",
+          "revision",
+          "policy_digest",
+          "classes",
+          "slurm"
+        ],
+        "properties": {
+          "declared": {
+            "type": "boolean"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "policy_digest": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "updated_by_user_id": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "classes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlacementStoredClass"
+            }
+          },
+          "slurm": {
+            "type": "object",
+            "required": [
+              "enabled",
+              "allowed_queues"
+            ],
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "allowed_queues": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "PlacementPolicyUpdate": {
+        "type": "object",
+        "required": [
+          "classes"
+        ],
+        "properties": {
+          "classes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlacementClassDocument"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "PlacementExplainRequest": {
+        "type": "object",
+        "properties": {
+          "cpus": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "memory_mb": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "max_runtime_seconds": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "accelerator": {
+            "type": "string",
+            "enum": [
+              "none",
+              "cuda"
+            ]
+          },
+          "gpu_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "min_vram_mb": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "exclusive": {
+            "type": "boolean"
+          },
+          "requires_network": {
+            "type": "boolean"
+          },
+          "overrides": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "PlacementDryRunResult": {
+        "type": "object",
+        "required": [
+          "placed",
+          "reason_code",
+          "requirement"
+        ],
+        "properties": {
+          "placed": {
+            "type": "boolean"
+          },
+          "reason_code": {
+            "type": "string",
+            "description": "Bounded placement vocabulary: placement_resolved_cpu, placement_resolved_accelerator, placement_fallback_applied, placement_unmanaged, no_valid_placement, required_accelerator_unavailable, partition_not_allowed, resource_override_conflict, placement_policy_invalid."
+          },
+          "message": {
+            "type": "string"
+          },
+          "requirement": {
+            "type": "object",
+            "description": "The normalized workload requirement the decision was made from."
+          },
+          "resolved": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "The resolved Slurm request, or null when no placement exists."
+          },
+          "resolved_sources": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "matched_class": {
+            "type": "string",
+            "description": "The execution class that matched, or empty when the deployment declares none."
+          },
+          "notes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "plan_digest": {
+            "type": "string"
+          },
+          "policy_revision": {
+            "type": "integer"
+          },
+          "policy_digest": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "PlacementPlanView": {
+        "type": "object",
+        "required": [
+          "task_id",
+          "stage_id",
+          "plan_revision",
+          "state",
+          "matched_class",
+          "reason_code",
+          "resolved",
+          "policy_revision",
+          "plan_digest",
+          "created_at"
+        ],
+        "properties": {
+          "task_id": {
+            "type": "string"
+          },
+          "stage_id": {
+            "type": "string"
+          },
+          "plan_revision": {
+            "type": "integer"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "planned",
+              "submitted",
+              "superseded"
+            ],
+            "description": "planned = written, not yet dispatched; submitted = the scheduler owns the request and the plan is historical fact; superseded = replaced by an explicit replan before dispatch."
+          },
+          "matched_class": {
+            "type": "string"
+          },
+          "reason_code": {
+            "type": "string"
+          },
+          "resolved": {
+            "type": "object",
+            "description": "The Slurm request this plan recorded, re-readable exactly as stored."
+          },
+          "policy_revision": {
+            "type": "integer"
+          },
+          "policy_digest": {
+            "type": "string"
+          },
+          "plan_digest": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "number"
+          },
+          "submitted_at": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "slurm_job_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "policy_changed_since_plan": {
+            "type": "boolean",
+            "description": "True when today's policy differs from the one this plan recorded. Reported, never applied: the recorded request is unchanged."
+          }
+        },
+        "additionalProperties": false
+      },
+      "TaskPlacementPlans": {
+        "type": "object",
+        "required": [
+          "task_id",
+          "policy_revision",
+          "policy_digest",
+          "plans"
+        ],
+        "properties": {
+          "task_id": {
+            "type": "string"
+          },
+          "policy_revision": {
+            "type": "integer"
+          },
+          "policy_digest": {
+            "type": "string"
+          },
+          "plans": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlacementPlanView"
+            }
+          }
+        },
+        "additionalProperties": false
+      }
     }
   }
 }

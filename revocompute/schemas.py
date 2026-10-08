@@ -623,16 +623,26 @@ class PlacementPlanView(PlacementPolicyView):
 
 
 class PlacementDryRunResult(BaseModel):
-    """The outcome of a dry run, placed or refused, in one stable shape."""
+    """The outcome of a dry run, placed or refused, in one stable shape.
+
+    A refusal carries the same envelope with ``placed=False`` and its bounded
+    reason code, so a caller never has to distinguish "the server refused" from
+    "the request was malformed" by looking at an HTTP status.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     placed: bool
     reason_code: str
     message: str = ""
     requirement: dict[str, Any]
     resolved: dict[str, Any] | None = None
+    resolved_sources: dict[str, str] = Field(default_factory=dict)
     matched_class: str = ""
     notes: list[str] = Field(default_factory=list)
     plan_digest: str = ""
+    policy_revision: int = 0
+    policy_digest: str = ""
 
 
 # ---------------------------------------------------------------------------

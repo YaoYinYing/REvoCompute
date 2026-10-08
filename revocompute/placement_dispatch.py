@@ -30,8 +30,10 @@ from typing import Any, Mapping, Sequence
 
 from revocompute.operational_events import emit_event
 from revocompute.placement_policy import (
+    PLACEMENT_ALREADY_SUBMITTED,
+    PLACEMENT_SUBMISSION_UNRESOLVED,
     PLAN_STATE_SUBMITTED,
-    PlacementError,
+    PlacementDispatchRefused,
     PlacementPlan,
     PlacementPolicy,
     WorkloadRequirement,
@@ -40,20 +42,11 @@ from revocompute.placement_policy import (
 )
 from revocompute.resource_policy import ResolvedResources
 
-#: The bounded reason a stage may not be dispatched from its plan.  Distinct
-#: from the placement vocabulary: these are submission outcomes, not placement
-#: decisions, and an operator acts on them differently.
-DISPATCH_ALREADY_SUBMITTED = "placement_already_submitted"
-DISPATCH_SUBMISSION_UNRESOLVED = "placement_submission_unresolved"
-
-
-class PlacementDispatchRefused(PlacementError):
-    """This stage may not be dispatched again.
-
-    Raised rather than returning a decision, because both cases mean "stop and
-    let an operator look": asking the scheduler again could create a second job
-    for a request that already exists.
-    """
+#: Re-exported under the dispatch seam's own names: these are the bounded
+#: reasons a *submission* is refused, and callers that handle dispatch outcomes
+#: name them from here rather than from the resolution vocabulary.
+DISPATCH_ALREADY_SUBMITTED = PLACEMENT_ALREADY_SUBMITTED
+DISPATCH_SUBMISSION_UNRESOLVED = PLACEMENT_SUBMISSION_UNRESOLVED
 
 
 @dataclass(frozen=True, slots=True)

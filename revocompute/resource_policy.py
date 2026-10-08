@@ -182,7 +182,13 @@ class ResolvedResources:
 
     @classmethod
     def from_snapshot(cls, payload: dict[str, Any]) -> ResolvedResources:
-        """Validate a submission-time policy snapshot before job launch."""
+        """Validate a submission-time policy snapshot before job launch.
+
+        ``sources`` is optional and preserved when present: it records where
+        each resolved field came from, which is what lets placement apply its
+        precedence model to a snapshot that crossed a process boundary.  A
+        snapshot written without it resolves as a plain submission snapshot.
+        """
         required = {"cpus", "memory", "max_runtime_seconds", "nodes", "ntasks", "requires_gpu"}
         missing = sorted(required - set(payload))
         if missing:
@@ -210,8 +216,25 @@ class ResolvedResources:
             constraint=normalize_resource_value("slurm_constraint", payload.get("constraint")),
             exclusive=_boolean(payload.get("exclusive", False), "slurm_exclusive"),
             requires_gpu=requires_gpu,
-            sources={"snapshot": "submission"},
+            sources=_snapshot_sources(payload),
         )
+
+
+def _snapshot_sources(payload: dict[str, Any]) -> dict[str, str]:
+    """Field provenance carried by a snapshot, or the plain submission marker.
+
+    The mapping is bounded to string keys and values: it is explanatory text
+    that reaches an operator-facing plan, never a value any decision reads.
+    """
+    raw = payload.get("sources")
+    if not isinstance(raw, dict):
+        return {"snapshot": "submission"}
+    sources = {
+        str(key): str(value)
+        for key, value in raw.items()
+        if isinstance(key, str) and isinstance(value, str)
+    }
+    return sources or {"snapshot": "submission"}
 
 
 @dataclass(frozen=True, slots=True)

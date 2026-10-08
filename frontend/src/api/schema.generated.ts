@@ -1489,6 +1489,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/compute/api/auth/admin/placement-policy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get the deployment placement policy
+         * @description The execution classes that map a stage's workload requirement onto this deployment's partitions, QoS, accounts, and GRES classes, with the content digest and revision a persisted placement plan records.
+         */
+        get: operations["getPlacementPolicy"];
+        /**
+         * Replace the deployment placement policy
+         * @description Validated against this deployment's allowed Slurm surface before anything is written, so a policy naming a partition this deployment cannot see is refused with the previous policy still in force. An empty classes list returns the deployment to the canonical per-task resource policy.
+         */
+        put: operations["updatePlacementPolicy"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/compute/api/auth/admin/placement-policy/explain": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resolve a workload requirement against policy (dry run)
+         * @description Consumes the same resolution path real dispatch uses, so the answer is the decision dispatch would make for the same immutable inputs and policy revision. A requirement with no valid placement returns placed=false with a bounded reason code rather than an error status.
+         */
+        post: operations["explainPlacement"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/compute/api/auth/admin/tasks/{task_id}/placement": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the persisted placement plans for one Task
+         * @description What each dispatchable stage required, which rule matched, which local Slurm request was resolved, why, and which policy revision produced it, read from the stored plans rather than reconstructed from an srun command line. A submitted plan is reported as it was recorded and is never recomputed against today's policy.
+         */
+        get: operations["listTaskPlacementPlans"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -2799,6 +2863,112 @@ export interface components {
             plan: components["schemas"]["OperatorPlan"];
             /** @description False when an idempotent replay returned the existing job. */
             accepted: boolean;
+        };
+        PlacementStoredClass: {
+            name: string;
+            /** @enum {string} */
+            accelerator: "none" | "cuda";
+            partition: string;
+            accelerator_class?: string;
+            qos?: string | null;
+            account?: string | null;
+            constraint?: string | null;
+            exclusive?: boolean;
+            cpus?: number | null;
+            memory_mb?: number | null;
+            vram_mb?: number | null;
+            fallback_classes?: string[];
+        };
+        PlacementClassDocument: {
+            name: string;
+            partition: string;
+            /** @enum {string} */
+            accelerator?: "none" | "cuda";
+            accelerator_class?: string;
+            qos?: string | null;
+            account?: string | null;
+            constraint?: string | null;
+            exclusive?: boolean;
+            cpus?: number | null;
+            memory_mb?: number | null;
+            vram_mb?: number | null;
+            fallback_classes?: string[];
+        };
+        PlacementPolicyDetail: {
+            declared: boolean;
+            revision: number;
+            policy_digest: string;
+            updated_at?: number | null;
+            updated_by_user_id?: number | null;
+            classes: components["schemas"]["PlacementStoredClass"][];
+            slurm: {
+                enabled: boolean;
+                allowed_queues: string[];
+            };
+        };
+        PlacementPolicyUpdate: {
+            classes: components["schemas"]["PlacementClassDocument"][];
+        };
+        PlacementExplainRequest: {
+            cpus?: number;
+            memory_mb?: number;
+            max_runtime_seconds?: number;
+            /** @enum {string} */
+            accelerator?: "none" | "cuda";
+            gpu_count?: number;
+            min_vram_mb?: number;
+            exclusive?: boolean;
+            requires_network?: boolean;
+            overrides?: {
+                [key: string]: string;
+            };
+        };
+        PlacementDryRunResult: {
+            placed: boolean;
+            /** @description Bounded placement vocabulary: placement_resolved_cpu, placement_resolved_accelerator, placement_fallback_applied, placement_unmanaged, no_valid_placement, required_accelerator_unavailable, partition_not_allowed, resource_override_conflict, placement_policy_invalid. */
+            reason_code: string;
+            message?: string;
+            /** @description The normalized workload requirement the decision was made from. */
+            requirement: Record<string, never>;
+            /** @description The resolved Slurm request, or null when no placement exists. */
+            resolved?: Record<string, never> | null;
+            resolved_sources?: {
+                [key: string]: string;
+            };
+            /** @description The execution class that matched, or empty when the deployment declares none. */
+            matched_class?: string;
+            notes?: string[];
+            plan_digest?: string;
+            policy_revision?: number;
+            policy_digest?: string;
+        };
+        PlacementPlanView: {
+            task_id: string;
+            stage_id: string;
+            plan_revision: number;
+            /**
+             * @description planned = written, not yet dispatched; submitted = the scheduler owns the request and the plan is historical fact; superseded = replaced by an explicit replan before dispatch.
+             * @enum {string}
+             */
+            state: "planned" | "submitted" | "superseded";
+            matched_class: string;
+            reason_code: string;
+            /** @description The Slurm request this plan recorded, re-readable exactly as stored. */
+            resolved: Record<string, never>;
+            policy_revision: number;
+            policy_digest?: string;
+            plan_digest: string;
+            created_at: number;
+            submitted_at?: number | null;
+            slurm_job_id?: string | null;
+            /** @description True when today's policy differs from the one this plan recorded. Reported, never applied: the recorded request is unchanged. */
+            policy_changed_since_plan?: boolean;
+        };
+        TaskPlacementPlans: {
+            task_id: string;
+            policy_revision: number;
+            policy_digest: string;
+            plans: components["schemas"]["PlacementPlanView"][];
         };
     };
     responses: {
@@ -5381,6 +5551,107 @@ export interface operations {
                 };
                 content?: never;
             };
+        };
+    };
+    getPlacementPolicy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Placement policy in force */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlacementPolicyDetail"];
+                };
+            };
+            403: components["responses"]["Forbidden"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    updatePlacementPolicy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlacementPolicyUpdate"];
+            };
+        };
+        responses: {
+            /** @description Policy updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlacementPolicyDetail"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    explainPlacement: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlacementExplainRequest"];
+            };
+        };
+        responses: {
+            /** @description Resolved decision, or a bounded refusal reason code */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlacementDryRunResult"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    listTaskPlacementPlans: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: components["parameters"]["TaskId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every recorded placement plan for the Task, newest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskPlacementPlans"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            503: components["responses"]["Unavailable"];
         };
     };
 }

@@ -2102,8 +2102,19 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
         "snapshot_root": snapshot_root,
         "submitted_at": datetime.now(tz=timezone.utc).isoformat(),
         "entities": entities,
-        "resource_policy": resource_policy.public_dict() if resource_policy is not None else None,
-        "resource_policies": {name: policy.public_dict() for name, policy in resource_policies.items()},
+        # ``sources`` travels with the snapshot because placement runs in the
+        # worker and must be able to tell an explicit Admin value from a
+        # default; dropping it would let a deployment execution class silently
+        # replace an override the Admin set deliberately.
+        "resource_policy": (
+            {**resource_policy.public_dict(), "sources": resource_policy.sources}
+            if resource_policy is not None
+            else None
+        ),
+        "resource_policies": {
+            name: {**policy.public_dict(), "sources": policy.sources}
+            for name, policy in resource_policies.items()
+        },
         "workspace": workspace_payload,
         "request_id": g.request_id,
     }
@@ -5563,24 +5574,31 @@ def _explain_base_snapshot(requirement, overrides):
     if not overrides:
         return resolved
     fields = {}
+    sources = dict(resolved.sources)
     for key, value in overrides.items():
-        field = _PLACEMENT_OVERRIDE_FIELDS.get(key)
-        if field is None:
+        mapping = _PLACEMENT_OVERRIDE_FIELDS.get(key)
+        if mapping is None:
             raise PlacementError(f"Unknown placement override: {key!r}")
-        fields[field] = normalize_resource_value(field, value)
-    return replace(resolved, **fields)
+        resource_field, resolved_field = mapping
+        fields[resolved_field] = normalize_resource_value(resource_field, value)
+        # Marked as an explicit value so placement applies the same precedence
+        # an Admin's per-task setting gets: it wins for the field it names, and
+        # the matched class fills the fields it left.
+        sources[resolved_field] = f"override:{key}"
+    return replace(resolved, sources=sources, **fields)
 
 
 #: The explicit override vocabulary a dry run may evaluate.  Keys are the
-#: operator-facing names; values are the canonical resource field they set, so
-#: an override can never introduce a field placement does not already consume.
+#: operator-facing names; each maps to the canonical resource field the
+#: normalizer validates and the resolved field it sets, so an override can
+#: never introduce a field placement does not already consume.
 _PLACEMENT_OVERRIDE_FIELDS = {
-    "partition": "partition",
-    "qos": "qos",
-    "account": "account",
-    "constraint": "constraint",
-    "gres": "gres",
-    "exclusive": "exclusive",
+    "partition": ("slurm_partition", "partition"),
+    "qos": ("slurm_qos", "qos"),
+    "account": ("slurm_account", "account"),
+    "constraint": ("slurm_constraint", "constraint"),
+    "gres": ("slurm_gres", "gres"),
+    "exclusive": ("slurm_exclusive", "exclusive"),
 }
 
 

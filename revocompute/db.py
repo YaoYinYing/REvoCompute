@@ -2674,7 +2674,16 @@ class TaskDatabase:
                         f"Stage {stage_id!r} of task {task_id!r} already has a submitted placement plan; "
                         "a dispatched request is historical fact and may not be replanned"
                     )
-                revision = int(live["revision"]) + 1 if live is not None else 1
+                # The revision counts every plan this stage has ever had, so a
+                # replan after a supersession continues the sequence instead of
+                # reusing a number that a historical row still holds.
+                latest = conn.execute(
+                    select(func.max(self.placement_plans_table.c.revision)).where(
+                        self.placement_plans_table.c.task_id == task_id,
+                        self.placement_plans_table.c.stage_id == stage_id,
+                    )
+                ).scalar_one()
+                revision = int(latest or 0) + 1
                 if live is not None:
                     conn.execute(
                         update(self.placement_plans_table)

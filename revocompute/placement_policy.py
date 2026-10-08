@@ -80,6 +80,12 @@ PARTITION_NOT_ALLOWED = "partition_not_allowed"
 RESOURCE_OVERRIDE_CONFLICT = "resource_override_conflict"
 #: The declared policy cannot be used as written.
 PLACEMENT_POLICY_INVALID = "placement_policy_invalid"
+#: This stage already has a plan the scheduler owns, so a dispatch is refused
+#: rather than replanned or resubmitted.
+PLACEMENT_ALREADY_SUBMITTED = "placement_already_submitted"
+#: This stage's earlier submission was attempted and its outcome was never
+#: recorded, so a request may already exist and a dispatch must not guess.
+PLACEMENT_SUBMISSION_UNRESOLVED = "placement_submission_unresolved"
 
 REASON_CODES = frozenset(
     {
@@ -93,6 +99,8 @@ REASON_CODES = frozenset(
         PARTITION_NOT_ALLOWED,
         RESOURCE_OVERRIDE_CONFLICT,
         PLACEMENT_POLICY_INVALID,
+        PLACEMENT_ALREADY_SUBMITTED,
+        PLACEMENT_SUBMISSION_UNRESOLVED,
     }
 )
 
@@ -146,6 +154,15 @@ class ResourceOverrideConflict(PlacementError):
     """A configured value contradicts a hard stage requirement."""
 
     reason_code = RESOURCE_OVERRIDE_CONFLICT
+
+
+class PlacementDispatchRefused(PlacementError):
+    """This stage may not be dispatched again.
+
+    Raised by the dispatch seam, not by resolution, because both cases mean
+    "stop and let an operator look": the scheduler may already own a request for
+    this stage, and asking again could create a second job.
+    """
 
 
 def memory_to_mb(value: str) -> int:
@@ -502,7 +519,7 @@ def _from_override(resolved: ResolvedResources, field_name: str) -> bool:
     configuration into a second, potentially disagreeing answer.
     """
     source = str(resolved.sources.get(field_name, "default"))
-    return source.startswith(("task:", "global:"))
+    return source.startswith(("task:", "global:", "override:"))
 
 
 def _class_gres(requirement: WorkloadRequirement, cls_: PlacementClass) -> str:
@@ -1026,7 +1043,9 @@ __all__ = [
     "PLACEMENT_POLICY_INVALID",
     "PLACEMENT_RESOLVED_ACCELERATOR",
     "PLACEMENT_RESOLVED_CPU",
+    "PLACEMENT_ALREADY_SUBMITTED",
     "PLACEMENT_SCHEDULER_DEFAULT",
+    "PLACEMENT_SUBMISSION_UNRESOLVED",
     "PLACEMENT_UNMANAGED",
     "PLAN_STATES",
     "PLAN_STATE_PLANNED",
@@ -1041,6 +1060,7 @@ __all__ = [
     "PlacementDecision",
     "PlacementError",
     "PlacementPlan",
+    "PlacementDispatchRefused",
     "PlacementPolicy",
     "PlacementPolicyInvalid",
     "RequiredAcceleratorUnavailable",
