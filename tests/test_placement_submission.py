@@ -35,6 +35,7 @@ from revocompute.placement_dispatch import (
 from revocompute.placement_policy import (
     PLACEMENT_RESOLVED_ACCELERATOR,
     PLACEMENT_RESOLVED_CPU,
+    PLAN_STATE_PLANNED,
     PLAN_STATE_SUBMITTED,
     PLAN_STATE_SUPERSEDED,
     PlacementPlan,
@@ -224,6 +225,40 @@ def test_a_restart_that_replans_a_superseded_stage_records_a_new_revision(store)
     assert store.get_placement_plan(TASK_ID, STAGE, revision=1)["state"] == PLAN_STATE_SUPERSEDED
 
 
+def test_recovery_releases_a_submitted_plan_once_its_recorded_job_is_stopped(store):
+    dispatch = _plan(store)
+    begin_stage_submission(store, dispatch, at=1.0)
+    confirm_stage_submitted(store, dispatch, slurm_job_id="5150", at=2.0)
+
+    # Nothing has stopped the job yet, so the plan is still the request a
+    # dispatch would consume and a retry is refused rather than replanned.
+    with pytest.raises(PlacementDispatchRefused) as caught:
+        _plan(store)
+    assert caught.value.reason_code == DISPATCH_ALREADY_SUBMITTED
+
+    # Recovery has cancelled the very job this plan named, so the plan is
+    # released: the row keeps its job id — that request really existed and stays
+    # readable — and only its live-ness changes, so the stage can be replanned
+    # instead of being blocked by an allocation this deployment already ended.
+    assert store.release_placement_plan_for_recovery(dispatch.plan_id) is True
+    released = store.get_placement_plan(TASK_ID, STAGE)
+    assert released["state"] == PLAN_STATE_SUPERSEDED
+    assert released["slurm_job_id"] == "5150"
+    assert store.get_live_placement_plan(TASK_ID, STAGE) is None
+
+    replanned = _plan(store)
+    assert replanned.reused is False
+    assert store.get_placement_plan(TASK_ID, STAGE)["revision"] == 2
+
+
+def test_recovery_release_does_not_touch_a_plan_never_dispatched(store):
+    dispatch = _plan(store)
+    # A not-yet-dispatched plan belongs to the dispatch path: it is superseded by
+    # an explicit replan there, never released by recovery.
+    assert store.release_placement_plan_for_recovery(dispatch.plan_id) is False
+    assert store.get_live_placement_plan(TASK_ID, STAGE)["state"] == PLAN_STATE_PLANNED
+
+
 def test_an_explicit_replan_of_a_planned_stage_supersedes_the_previous_record(store):
     first = _plan(store)
     record = first.plan.to_record()
@@ -233,7 +268,7 @@ def test_an_explicit_replan_of_a_planned_stage_supersedes_the_previous_record(st
     record["reason_code"] = PLACEMENT_RESOLVED_ACCELERATOR
     stored = store.record_placement_plan(record=record)
     assert stored["revision"] == 2
-    assert stored["state"] == "planned"
+    assert stored["state"] == PLAN_STATE_PLANNED
     assert store.get_placement_plan(TASK_ID, STAGE, revision=1)["state"] == PLAN_STATE_SUPERSEDED
     assert store.get_live_placement_plan(TASK_ID, STAGE)["plan_digest"] == record["plan_digest"]
 

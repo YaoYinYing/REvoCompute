@@ -232,6 +232,99 @@ def test_composer_does_not_submit_after_cancellation_claim_fails(monkeypatch):
     assert result == JobState.CANCELLED
 
 
+def test_cancelling_a_workflow_stage_releases_its_submitted_plan_for_recovery(monkeypatch):
+    """Recovery of an interrupted stage ends its allocation and its live plan.
+
+    The stage's recorded Slurm job is cancelled *before* the resumed worker runs
+    it again, so the plan that named that job must stop being the request a
+    dispatch would consume.  Otherwise a resumed workflow is blocked forever by
+    a request this same deployment already cancelled.
+    """
+    task_runtime = _live_task_runtime()
+    task_id = "9" * 32
+    stage_name = "alphafold.model"
+
+    runtime = RuntimeFamily("alphafold", ("bash", "run.sh"), "runner.def", "image.sif")
+    stage = WorkflowStage(stage_name, "Model", True, ("-s", "model"), ("model",))
+    task_type = TaskType(
+        "alphafold",
+        "AlphaFold2",
+        runtime,
+        ".fasta",
+        "FASTA",
+        gpus=True,
+        stage_markers={"model": "Model"},
+        workflow=(stage,),
+    )
+
+    from revocompute.placement_dispatch import (
+        begin_stage_submission,
+        confirm_stage_submitted,
+        plan_stage_for_dispatch,
+    )
+    from revocompute.placement_policy import (
+        PLAN_STATE_PLANNED,
+        PLAN_STATE_SUBMITTED,
+        PLAN_STATE_SUPERSEDED,
+        PlacementPolicy,
+        WorkloadRequirement,
+    )
+
+    store = task_runtime.task_store
+    policy = PlacementPolicy()
+    resolved = _policy(True)
+    dispatch = plan_stage_for_dispatch(
+        store,
+        task_id=task_id,
+        stage_id=stage_name,
+        requirement=WorkloadRequirement.from_resolved(resolved),
+        resolved=resolved,
+        policy=policy,
+        allowed_queues=("gpu", "cpu"),
+    )
+    begin_stage_submission(store, dispatch, at=1.0)
+    confirm_stage_submitted(store, dispatch, slurm_job_id="5150", at=2.0)
+    assert store.get_live_placement_plan(task_id, stage_name)["state"] == PLAN_STATE_SUBMITTED
+
+    class _Queued:
+        id = "resumed-task"
+
+    task = {
+        "md5sum": task_id,
+        "status": "running",
+        "task_type": "alphafold",
+        "slurm_job_id": "5150",
+        "container_id": None,
+        "workflow_state": json.dumps({stage_name: {"status": "running"}}),
+    }
+    monkeypatch.setattr(store, "list_tasks", lambda: [task])
+    monkeypatch.setattr(store, "claim_task_recovery", lambda *args, **kwargs: True)
+    monkeypatch.setattr(store, "update_task", lambda *args, **kwargs: True)
+    monkeypatch.setattr(task_runtime, "_get_task_type", lambda name: (task_type, None))
+    monkeypatch.setattr(task_runtime, "_stop_orphaned_workflow_execution", lambda *args: "")
+    monkeypatch.setattr(task_runtime.run_compute_task, "apply_async", lambda *args, **kwargs: _Queued())
+
+    assert task_runtime._recover_orphaned_tasks() == 1
+    released = store.get_placement_plan(task_id, stage_name)
+    assert released["state"] == PLAN_STATE_SUPERSEDED
+    # The released row is history, not a rewrite: the job it named is still on it.
+    assert released["slurm_job_id"] == "5150"
+    assert store.get_live_placement_plan(task_id, stage_name) is None
+    # The resumed stage can plan again rather than being blocked by its own past.
+    replanned = plan_stage_for_dispatch(
+        store,
+        task_id=task_id,
+        stage_id=stage_name,
+        requirement=WorkloadRequirement.from_resolved(resolved),
+        resolved=resolved,
+        policy=policy,
+        allowed_queues=("gpu", "cpu"),
+    )
+    assert replanned.reused is False
+    assert store.get_placement_plan(task_id, stage_name)["revision"] == 2
+    assert store.get_placement_plan(task_id, stage_name)["state"] == PLAN_STATE_PLANNED
+
+
 def test_composer_cancels_submitted_job_when_handle_cannot_be_persisted(monkeypatch):
     task_runtime = _live_task_runtime()
 

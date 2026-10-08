@@ -64,7 +64,12 @@ from revocompute.placement_dispatch import (
     confirm_stage_submitted,
     plan_stage_for_dispatch,
 )
-from revocompute.placement_policy import PlacementPolicy, WorkloadRequirement
+from revocompute.placement_policy import (
+    PLAN_STATE_PLANNED,
+    PLAN_STATE_SUBMITTED,
+    PlacementPolicy,
+    WorkloadRequirement,
+)
 from revocompute.placement_store import load_placement_policy
 from revocompute import resource_ledger as rloan
 from revocompute.resource_ledger import AdmissionReason, EvidenceSource, LedgerReason, ReservationReason
@@ -2986,15 +2991,22 @@ def _recover_orphaned_tasks() -> int:
             for name, step in state.items():
                 if step.get("status") == "running":
                     step["status"] = "interrupted"
-                    # A stage killed mid-run has no known scheduler outcome, so
-                    # its placement plan must be resolved rather than replayed:
-                    # the plan stays recorded as history, but it is no longer
-                    # live, so the resumed worker makes a fresh decision instead
-                    # of reusing a request whose job may still be winding down.
+                    # This stage was killed mid-run, and the recovery above has
+                    # already stopped the allocation it recorded, so its plan is
+                    # no longer the request any dispatch will consume: the plan
+                    # row stays as history, and the stage is released so the
+                    # resumed worker records a fresh decision instead of being
+                    # blocked by an allocation this deployment just ended.  A
+                    # stage the scheduler never dispatched is released the same
+                    # way — it was cancelled before it could be submitted.
                     for record in task_store.list_placement_plans(
-                        task_id=md5sum, stage_id=name, state="planned"
+                        task_id=md5sum, stage_id=name, state=PLAN_STATE_PLANNED
                     ):
                         task_store.supersede_placement_plan(int(record["id"]))
+                    for record in task_store.list_placement_plans(
+                        task_id=md5sum, stage_id=name, state=PLAN_STATE_SUBMITTED
+                    ):
+                        task_store.release_placement_plan_for_recovery(int(record["id"]))
             if not task_store.update_task(
                 md5sum,
                 status="pending",

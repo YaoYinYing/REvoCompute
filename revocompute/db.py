@@ -46,6 +46,7 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 from revocompute import resource_ledger as rloan
 from revocompute import resource_model as rm
 from revocompute.operational_events import emit_event
+from revocompute.placement_policy import PLAN_STATE_PLANNED, PLAN_STATE_SUBMITTED, PLAN_STATE_SUPERSEDED
 from revocompute.schema_epoch import require_current_schema
 
 
@@ -2580,7 +2581,7 @@ class TaskDatabase:
             .where(
                 self.placement_plans_table.c.task_id == task_id,
                 self.placement_plans_table.c.stage_id == stage_id,
-                self.placement_plans_table.c.state.in_(("planned", "submitted")),
+                self.placement_plans_table.c.state.in_((PLAN_STATE_PLANNED, PLAN_STATE_SUBMITTED)),
             )
             .order_by(desc(self.placement_plans_table.c.revision))
         )
@@ -2658,7 +2659,7 @@ class TaskDatabase:
                         .where(
                             self.placement_plans_table.c.task_id == task_id,
                             self.placement_plans_table.c.stage_id == stage_id,
-                            self.placement_plans_table.c.state.in_(("planned", "submitted")),
+                            self.placement_plans_table.c.state.in_((PLAN_STATE_PLANNED, PLAN_STATE_SUBMITTED)),
                         )
                         .order_by(desc(self.placement_plans_table.c.revision))
                     )
@@ -2688,7 +2689,7 @@ class TaskDatabase:
                     conn.execute(
                         update(self.placement_plans_table)
                         .where(self.placement_plans_table.c.id == live["id"])
-                        .values(state="superseded")
+                        .values(state=PLAN_STATE_SUPERSEDED)
                     )
                 inserted = conn.execute(
                     sqlite_insert(self.placement_plans_table)
@@ -2696,7 +2697,7 @@ class TaskDatabase:
                         task_id=task_id,
                         stage_id=stage_id,
                         revision=revision,
-                        state=str(record.get("state") or "planned"),
+                        state=str(record.get("state") or PLAN_STATE_PLANNED),
                         plan_digest=digest,
                         requirement_json=str(record.get("requirement_json") or "{}"),
                         resolved_json=str(record.get("resolved_json") or "{}"),
@@ -2744,9 +2745,36 @@ class TaskDatabase:
             update(self.placement_plans_table)
             .where(
                 self.placement_plans_table.c.id == plan_id,
-                self.placement_plans_table.c.state == "planned",
+                self.placement_plans_table.c.state == PLAN_STATE_PLANNED,
             )
-            .values(state="superseded")
+            .values(state=PLAN_STATE_SUPERSEDED)
+        )
+        with self.engine.begin() as conn:
+            return conn.execute(stmt).rowcount == 1
+
+    def release_placement_plan_for_recovery(self, plan_id: int) -> bool:
+        """Close a plan whose scheduler outcome this deployment has resolved.
+
+        The one path that may take a ``submitted`` plan out of the live state,
+        and it is deliberately narrower than a replan: the caller must have
+        already stopped the very job the plan names (the workflow recovery
+        cancels the recorded Slurm job before it resumes), so the plan is no
+        longer the request any dispatch will consume.  The row itself is never
+        rewritten — it stays as the historical fact that this stage once had
+        that request — only its live-ness changes, which is what lets a resumed
+        workflow record a fresh plan instead of being blocked forever by an
+        allocation this deployment already ended.
+
+        A plan still ``planned`` is not touched here either: nothing was
+        dispatched, so its own transition is the dispatch path's decision.
+        """
+        stmt = (
+            update(self.placement_plans_table)
+            .where(
+                self.placement_plans_table.c.id == plan_id,
+                self.placement_plans_table.c.state == PLAN_STATE_SUBMITTED,
+            )
+            .values(state=PLAN_STATE_SUPERSEDED)
         )
         with self.engine.begin() as conn:
             return conn.execute(stmt).rowcount == 1
@@ -2766,7 +2794,7 @@ class TaskDatabase:
             update(self.placement_plans_table)
             .where(
                 self.placement_plans_table.c.id == plan_id,
-                self.placement_plans_table.c.state == "planned",
+                self.placement_plans_table.c.state == PLAN_STATE_PLANNED,
                 self.placement_plans_table.c.submission_started_at.is_(None),
             )
             .values(submission_started_at=timestamp)
@@ -2787,7 +2815,7 @@ class TaskDatabase:
             update(self.placement_plans_table)
             .where(
                 self.placement_plans_table.c.id == plan_id,
-                self.placement_plans_table.c.state == "planned",
+                self.placement_plans_table.c.state == PLAN_STATE_PLANNED,
             )
             .values(submission_started_at=None)
         )
@@ -2809,9 +2837,9 @@ class TaskDatabase:
             update(self.placement_plans_table)
             .where(
                 self.placement_plans_table.c.id == plan_id,
-                self.placement_plans_table.c.state == "planned",
+                self.placement_plans_table.c.state == PLAN_STATE_PLANNED,
             )
-            .values(state="submitted", submitted_at=timestamp, slurm_job_id=str(slurm_job_id))
+            .values(state=PLAN_STATE_SUBMITTED, submitted_at=timestamp, slurm_job_id=str(slurm_job_id))
         )
         with self.engine.begin() as conn:
             return conn.execute(stmt).rowcount == 1
