@@ -1604,7 +1604,17 @@ def test_run_compute_task_does_not_resurrect_deleted_task(monkeypatch, tmp_path)
     assert not zip_path.exists()
 
 
-def test_delete_task_artifacts_skips_paths_outside_results_folder(monkeypatch, tmp_path):
+def test_a_task_without_a_storage_identity_fails_the_removal_closed(monkeypatch, tmp_path):
+    """An unresolvable storage identity must raise, not be silently skipped.
+
+    The destructive boundary is what ``purge_task_data`` treats as transactional:
+    a remover that returned here would let the lifecycle complete a purge for
+    bytes it never removed.  Raising keeps the lifecycle in ERROR with the charge
+    intact, so a later pass retries rather than reporting a delete that did not
+    happen.
+    """
+    from revocompute.maintenance.tasks.result_cleanup import ArtifactRemovalError
+
     module = _load_pssm_module(
         monkeypatch,
         tmp_path,
@@ -1619,12 +1629,13 @@ def test_delete_task_artifacts_skips_paths_outside_results_folder(monkeypatch, t
     external_result_dir.mkdir(parents=True, exist_ok=True)
     (external_result_dir / "artifact.txt").write_text("payload\n", encoding="utf-8")
 
-    module._delete_task_artifacts(
-        {
-            "md5sum": md5sum,
-            "result_dir": str(external_result_dir),
-        }
-    )
+    with pytest.raises(ArtifactRemovalError):
+        module._delete_task_artifacts(
+            {
+                "md5sum": md5sum,
+                "result_dir": str(external_result_dir),
+            }
+        )
 
     assert external_result_dir.exists()
 

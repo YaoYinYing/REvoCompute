@@ -20,6 +20,7 @@ from pathlib import Path
 import uuid
 
 import pytest
+from revocompute import resource_lifecycle
 from revocompute.storage import ResultPublicationError
 
 from conftest import _load_pssm_module, _test_client_auth, _upsert_task_for_user
@@ -61,10 +62,12 @@ def _fail_anchor(module, monkeypatch, *, error=OSError("database is locked")) ->
 
 
 def _fail_charge(module, monkeypatch, *, error=OSError("database is locked")) -> None:
+    """Make the live charge transition fail, leaving the publication pending."""
+
     def _raise(*_args, **_kwargs):
         raise error
 
-    monkeypatch.setattr(module.task_store, "ensure_data_lifecycle", _raise)
+    monkeypatch.setattr(module.task_store, "charge_data_ownership", _raise)
 
 
 def _publish(module, task_id: str, result_dir: Path, *, bytes_written: int = 4096) -> None:
@@ -157,6 +160,186 @@ def test_a_purged_result_is_never_charged_by_the_repair(monkeypatch, tmp_path) -
     assert outcome["charged"] == 0
     assert module.task_store.logical_owned_bytes(task["submitted_by_user_id"]) == 0
     assert module.task_store.list_pending_storage_publications() == []
+
+
+def test_a_legacy_publication_charges_the_anchored_manifest_bytes_not_zero(monkeypatch, tmp_path) -> None:
+    """A publication that predates the charge column must not charge zero.
+
+    The upgrade path backfills ``charge_bytes = NULL`` and ``charge_state =
+    pending``.  Reading that NULL as zero would permanently mark an anchored
+    publication charged as 0 bytes, so the amount is derived from the verified
+    anchored manifest's own declared artifact sizes instead -- once, and never
+    from a directory walk.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id, result_dir = _task(module, tmp_path)
+    (result_dir / "result.txt").write_text("x" * 4096, encoding="utf-8")
+    module.task_runtime._finalize_results_manifest(
+        module.task_store.get_task(task_id), execution_state="completed", finished_at=1_700_000_000
+    )
+    task = module.task_store.get_task(task_id)
+    user_id = task["submitted_by_user_id"]
+    # A declared artifact with non-zero bytes is what the anchor must resolve.
+    manifest = module.app.config["storage_resolver"].load_manifest(task)
+    declared = sum(int(item["size"]) for item in manifest["artifacts"])
+    assert declared > 0
+    # The release that produced this deployment had no charge columns at all:
+    # the row reads as the upgrade leaves it, with any prior lifecycle row gone.
+    with module.task_store.engine.begin() as connection:
+        connection.exec_driver_sql(
+            "UPDATE result_publications SET charge_bytes = NULL, charge_state = 'pending'"
+        )
+        connection.exec_driver_sql("DELETE FROM data_lifecycle")
+
+    outcome = module.task_runtime._reconcile_pending_storage_charges()
+
+    assert outcome == {"charged": 1, "released": 0, "skipped": 0}
+    assert module.task_store.logical_owned_bytes(user_id) == declared
+    record = module.task_store.get_result_publication(task_id)
+    assert record["charge_state"] == "charged"
+    assert int(record["charge_bytes"]) == declared
+    # A repeated pass over the same (now charged) publication adds nothing.
+    assert module.task_runtime._reconcile_pending_storage_charges() == {
+        "charged": 0,
+        "released": 0,
+        "skipped": 0,
+    }
+    assert module.task_store.logical_owned_bytes(user_id) == declared
+
+
+def test_a_legacy_publication_whose_anchor_does_not_match_stays_unresolved(monkeypatch, tmp_path) -> None:
+    """A pre-column publication that is no longer available is not charged at zero.
+
+    The amount is unknown and the publication is quarantined: the marker must
+    stay pending (reviewable) rather than being closed as a zero charge no later
+    pass would re-examine.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id, result_dir = _task(module, tmp_path)
+    (result_dir / "result.txt").write_text("x" * 4096, encoding="utf-8")
+    module.task_runtime._finalize_results_manifest(
+        module.task_store.get_task(task_id), execution_state="completed", finished_at=1_700_000_000
+    )
+    task = module.task_store.get_task(task_id)
+    user_id = task["submitted_by_user_id"]
+    # Replace the manifest with a valid regular file that no longer matches the
+    # anchor, then present the row as the release upgrade would.
+    manifest_path = result_dir / "manifest.json"
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["total_size"] = payload["total_size"] + 1
+    manifest_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    with module.task_store.engine.begin() as connection:
+        connection.exec_driver_sql(
+            "UPDATE result_publications SET charge_bytes = NULL, charge_state = 'pending'"
+        )
+        connection.exec_driver_sql("DELETE FROM data_lifecycle")
+
+    assert module.app.config["storage_resolver"].publication_state(task) == "anchor_mismatch"
+    outcome = module.task_runtime._reconcile_pending_storage_charges()
+
+    assert outcome == {"charged": 0, "released": 0, "skipped": 1}
+    assert module.task_store.get_data_lifecycle(task_id) is None
+    assert module.task_store.logical_owned_bytes(user_id) == 0
+    # Still pending: the amount is unknown, not zero, and stays reviewable.
+    assert [row["task_id"] for row in module.task_store.list_pending_storage_publications()] == [task_id]
+
+
+def test_an_ownerless_publication_is_closed_ownerlessly_not_charged_to_subject_zero(
+    monkeypatch, tmp_path
+) -> None:
+    """A publication with no owning user must not become a subject-0 charge.
+
+    The live charge deliberately returns for ``user_id <= 0``, so a pending
+    publication for such a Task would otherwise be inherited by the repair pass
+    and billed to subject 0.  Closing the marker ownerless is the transition's
+    own ownerless branch.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id, result_dir = _task(module, tmp_path)
+    (result_dir / "result.txt").write_text("x" * 4096, encoding="utf-8")
+    module.task_runtime._finalize_results_manifest(
+        module.task_store.get_task(task_id), execution_state="completed", finished_at=1_700_000_000
+    )
+    # Present the Task as ownerless, exactly as a publication with user_id <= 0,
+    # and with its live charge never recorded.
+    with module.task_store.engine.begin() as connection:
+        connection.exec_driver_sql("UPDATE tasks SET submitted_by_user_id = 0 WHERE md5sum = ?", (task_id,))
+        connection.exec_driver_sql(
+            "UPDATE result_publications SET charge_bytes = NULL, charge_state = 'pending'"
+        )
+        connection.exec_driver_sql("DELETE FROM data_lifecycle")
+
+    outcome = module.task_runtime._reconcile_pending_storage_charges()
+
+    assert outcome["charged"] == 0
+    record = module.task_store.get_result_publication(task_id)
+    assert record["charge_state"] == "unowned"
+    assert module.task_store.get_data_lifecycle(task_id) is None
+    assert module.task_store.logical_owned_bytes(0) == 0
+
+
+def test_a_purge_that_lands_mid_repair_leaves_the_publication_released(monkeypatch, tmp_path) -> None:
+    """A stale ownership read must not re-open a lifecycle the purge closed.
+
+    The repair reads the anchored bytes and then charges.  A purge that completes
+    between that read and the charge is authoritative: the charge transition
+    answers ``released``, no lifecycle row is re-opened, no new storage fact is
+    appended, and the publication stays released.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id, result_dir = _task(module, tmp_path)
+    _fail_charge(module, monkeypatch)
+    _publish(module, task_id, result_dir)
+    monkeypatch.undo()
+
+    task = module.task_store.get_task(task_id)
+    user_id = task["submitted_by_user_id"]
+    # Establish ownership, then let a purge complete exactly at the repair's
+    # charge transition -- after its ownership read, before its charge.
+    module.task_store.ensure_data_lifecycle(task_id, user_id=user_id, logical_bytes=4096)
+    real_charge = module.task_store.charge_data_ownership
+    purged: list[bool] = []
+
+    def _purge_then_charge(task_id_arg, *, user_id, logical_bytes=0, at=None):
+        if not purged:
+            resource_lifecycle.request_data_deletion(module.task_store, task, actor_user_id=None)
+            resource_lifecycle.purge_task_data(
+                module.task_store, task, remove_artifacts=lambda _task: None
+            )
+            purged.append(True)
+        return real_charge(task_id_arg, user_id=user_id, logical_bytes=logical_bytes, at=at)
+
+    monkeypatch.setattr(module.task_store, "charge_data_ownership", _purge_then_charge)
+    charges_before = [
+        entry
+        for entry in module.task_store.list_ledger(user_id)
+        if entry["reason_code"] == "storage_charged"
+    ]
+
+    outcome = module.task_runtime._reconcile_pending_storage_charges()
+
+    assert outcome["charged"] == 0
+    assert outcome["released"] == 1
+    # No lifecycle re-open: the purge stands.
+    assert module.task_store.get_data_lifecycle(task_id)["state"] == "PURGED"
+    assert module.task_store.logical_owned_bytes(user_id) == 0
+    # No new charge was appended by the repair; the only new fact is the release
+    # the purge itself made.
+    charges_after = [
+        entry
+        for entry in module.task_store.list_ledger(user_id)
+        if entry["reason_code"] == "storage_charged"
+    ]
+    assert charges_after == charges_before
+    # The publication is released and never re-charged by a repeated pass.
+    assert module.task_store.get_result_publication(task_id)["charge_state"] == "released"
+    assert module.task_store.list_pending_storage_publications() == []
+    assert module.task_runtime._reconcile_pending_storage_charges() == {
+        "charged": 0,
+        "released": 0,
+        "skipped": 0,
+    }
+    assert module.task_store.get_data_lifecycle(task_id)["state"] == "PURGED"
 
 
 def test_a_quarantined_or_unanchored_result_is_never_auto_charged(monkeypatch, tmp_path) -> None:

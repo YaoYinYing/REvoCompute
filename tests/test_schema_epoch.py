@@ -126,6 +126,44 @@ def test_released_resource_indexes_are_widened_in_place(tmp_path):
     assert reopened.get_task("a" * 32)["submitted_by_user_id"] == 7
 
 
+def test_a_released_publication_anchor_gains_the_charge_columns_as_pending(tmp_path):
+    """A result_publications table from the released revision widens in place.
+
+    The charge columns are additive and the migration is conservative: a
+    publication that predates them was published, and whether it was charged is
+    exactly what reconciliation must now establish, so it backfills to
+    ``charge_bytes = NULL`` (an *unknown* amount, never a zero one) and
+    ``charge_state = pending``.  The anchor's own identity columns are untouched,
+    so a reader still verifies the same publication.
+    """
+    path = tmp_path / "tasks.sqlite3"
+    database = TaskDatabase(str(path))
+    with database.engine.begin() as connection:
+        connection.exec_driver_sql(
+            "INSERT INTO result_publications "
+            "(task_id, manifest_sha256, manifest_size, revision, published_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("a" * 32, "f" * 64, 123, 1, 1.0),
+        )
+        connection.exec_driver_sql("ALTER TABLE result_publications DROP COLUMN charge_bytes")
+        connection.exec_driver_sql("ALTER TABLE result_publications DROP COLUMN charge_state")
+        connection.exec_driver_sql("ALTER TABLE result_publications DROP COLUMN charged_at")
+    database.engine.dispose()
+
+    reopened = TaskDatabase(str(path))
+
+    with reopened.engine.connect() as connection:
+        columns = {
+            column["name"] for column in sa.inspect(connection).get_columns("result_publications")
+        }
+    assert {"charge_bytes", "charge_state", "charged_at"}.issubset(columns)
+    row = reopened.get_result_publication("a" * 32)
+    assert row["manifest_sha256"] == "f" * 64
+    assert row["manifest_size"] == 123
+    assert row["charge_bytes"] is None
+    assert row["charge_state"] == "pending"
+
+
 def test_project_era_task_schema_fails_without_altering_rows(tmp_path):
     path = tmp_path / "tasks.sqlite3"
     current = TaskDatabase(str(path))

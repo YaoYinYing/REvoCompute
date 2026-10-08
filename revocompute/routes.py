@@ -2882,7 +2882,15 @@ def cancel_task(md5sum):
         except Exception as exc:  # pylint: disable=broad-except
             logging.warning("Failed to revoke Celery task %s: %s", celery_id, exc)
 
-    _delete_task_artifacts(task)
+    # The row is already claimed cancelled, so the Task is cancelled whatever
+    # the removal does.  A removal that cannot finish (a refused unsafe path, a
+    # permission or I/O failure) raises so the interruption is visible and a
+    # later sweep retries it, rather than reporting a delete that did not
+    # happen -- but it must not overwrite the successful cancellation.
+    try:
+        _delete_task_artifacts(task)
+    except Exception:  # pylint: disable=broad-except
+        logging.exception("Could not remove artifacts for cancelled task %s", md5sum)
     return jsonify({"status": "cancelled", "md5sum": md5sum}), 200
 
 

@@ -1619,48 +1619,56 @@ def _charge_logical_storage(
     (see :func:`_reconcile_pending_storage_charges`) rather than a published
     result nothing can discover.
 
-    The lifecycle is re-read here, immediately before the charge, because the
-    walk above is the window where a purge can land: the guard at the top of
-    :func:`_finalize_results_manifest` is true, the durable bytes are removed,
-    and the publication that follows would re-create the tree and re-open a
-    ``PURGED`` row as ``ACTIVE`` charged zero — a resurrected result with no
-    owner.  A purge that wins that race is authoritative: this raises
-    :class:`DataPurgedError`, and the caller ends the Task instead of publishing.
+    The charge and the decision that it is still allowed are one durable
+    transition (``charge_data_ownership``), because a check outside it races the
+    purge: the guard at the top of :func:`_finalize_results_manifest` is true,
+    the walk below runs, the purge lands, and the charge that followed would
+    re-open a ``PURGED`` row as ``ACTIVE`` — a resurrected result with no owner.
+    A purge that wins that race is authoritative: the transition answers
+    ``released``, this abandons the tree it just wrote, and the caller ends the
+    Task instead of publishing.
     """
-    if not _data_still_owned(str(task["md5sum"])):
-        _abandon_published_result(task, result_dir)
-        raise DataPurgedError(str(task["md5sum"]))
+    task_id = str(task["md5sum"])
     user_id = int(task.get("submitted_by_user_id") or 0)
-    if user_id <= 0:
-        # An unowned publication owes no subject anything; there is nothing to
-        # charge and nothing to repair later.
-        return
     owned = (
         sum(int(item.get("size") or 0) for item in manifest.get("artifacts", []))
         if owned_bytes is None
         else max(0, int(owned_bytes))
     )
+    if user_id <= 0:
+        # An unowned publication owes no subject anything, so it must not stay
+        # pending: a repair pass that inherited it would charge those bytes to
+        # subject 0.  Closing it here is the same transition's ownerless branch.
+        try:
+            task_store.mark_publication_unowned(task_id)
+        except Exception:
+            logging.exception("Could not close the ownerless publication for task %s", task_id)
+        return
     try:
-        task_store.ensure_data_lifecycle(
-            str(task["md5sum"]),
-            user_id=user_id,
-            logical_bytes=owned,
-            at=time.time(),
+        outcome = task_store.charge_data_ownership(
+            task_id, user_id=user_id, logical_bytes=owned, at=time.time()
         )
     except Exception:
         # Recording the charge is an accounting step, not part of the scientific
         # result: a failure here must not withdraw a completed publication, and
-        # it must not be mistaken for the deletion race above, which is decided
+        # it must not be mistaken for the deletion race below, which is decided
         # by the durable row rather than by whether this call raised.  The anchor
         # keeps the publication pending, so this exact charge is repaired on the
         # next reconciliation pass.
-        logging.exception("Could not charge logical storage for task %s", task.get("md5sum"))
+        logging.exception("Could not charge logical storage for task %s", task_id)
         return
-    _mark_publication_charge_recorded(str(task["md5sum"]), owned)
+    if outcome == "released":
+        # The deletion owns these bytes now: it removed the tree, released the
+        # charge exactly once, and closed this publication's marker itself.  The
+        # tree this worker just wrote is exactly what that deletion authorized
+        # removing, so it is abandoned and the Task ends instead of publishing.
+        _abandon_published_result(task, result_dir)
+        raise DataPurgedError(task_id)
+    _mark_publication_charge_recorded(task_id, owned)
     emit_event(
         "resource.storage.charged",
         request_id=_task_request_id(task),
-        task_id=str(task["md5sum"]),
+        task_id=task_id,
         user_id=user_id,
         storage_bytes=owned,
         reason_code=LedgerReason.STORAGE_CHARGED.value,
@@ -3079,6 +3087,36 @@ def _reconcile_result_publications() -> dict[str, int]:
     return summary
 
 
+def _anchored_publication_bytes(storage: StorageResolver, task: dict[str, Any]) -> int | None:
+    """The bytes one anchored publication owns, from the manifest Core anchored.
+
+    Read through the same verified descriptor every consumer uses, so the sum is
+    of the artifacts *Core published*: a replacement manifest cannot declare its
+    own sizes, and a file planted in the tree is not counted.  ``None`` means the
+    amount is unknown — the manifest could not be read as a verified anchored
+    publication, or does not describe its artifacts — and an unknown amount must
+    stay unresolved rather than becoming a zero charge.
+    """
+    data = storage.read_manifest_bytes(task)
+    if data is None:
+        return None
+    try:
+        manifest = json.loads(data)
+    except ValueError:
+        return None
+    if not isinstance(manifest, dict) or not isinstance(manifest.get("artifacts"), list):
+        return None
+    total = 0
+    for item in manifest["artifacts"]:
+        if not isinstance(item, dict):
+            return None
+        size = item.get("size")
+        if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+            return None
+        total += size
+    return total
+
+
 def _reconcile_pending_storage_charges() -> dict[str, int]:
     """Charge the storage of every anchored publication that still owes it.
 
@@ -3093,22 +3131,27 @@ def _reconcile_pending_storage_charges() -> dict[str, int]:
     it is unpaid.  That is what makes this recoverable rather than invisible.
     This pass repairs exactly that case, and only that case:
 
-    * the task must still exist and still be ``finished`` or ``failed`` — a task
-      that is gone has no owner to charge;
+    * the task must still exist, still be ``finished`` or ``failed``, and have an
+      owning subject.  A publication with no owner (``user_id <= 0``) owes nobody
+      storage, so it is closed ownerless here instead of being charged to
+      subject 0;
     * the publication must be ``PUBLICATION_AVAILABLE``: the verified anchored
       identity, checked against the anchor recorded outside the runner-writable
       tree.  A quarantined, unanchored, or mismatched result is never charged by
       a repair pass — its bytes are exactly what the anchor exists to stop
-      trusting;
-    * the task's data must still be owned.  A purge is authoritative over these
-      bytes, so a deletion that landed first releases nothing and charges
-      nothing; the marker was already closed by that purge.
+      trusting — and it stays ``pending`` (unresolved) rather than being closed as
+      a zero-byte charge;
+    * the amount is the publication's own recorded ``charge_bytes``.  A row that
+      predates that column carries ``NULL``, which means *unknown*, not zero: the
+      amount is then derived from the verified anchored manifest's declared
+      artifact sizes — the bytes Core published, never a directory walk.  If even
+      that is unavailable the publication stays unresolved.
 
-    The amount comes from the anchor, never from walking the result tree: a
-    directory size is untrusted input and the wrong number besides (a shared
-    read-only asset or a Runner SIF is not a user's bytes).  The charge goes
-    through the same ``ensure_data_lifecycle`` the live publication uses, so it
-    is charged once per task and a later purge releases exactly what was charged.
+    The charge goes through one durable guarded transition
+    (``charge_data_ownership``), so it is charged once per task, a later purge
+    releases exactly what was charged, and a purge that lands between the read
+    above and the charge answers ``released``: the deletion is authoritative,
+    nothing is charged, and the marker the purge already closed stays closed.
 
     Idempotent, and safe to run beside a live publisher: the store's transitions
     admit each task's charge once.
@@ -3124,34 +3167,50 @@ def _reconcile_pending_storage_charges() -> dict[str, int]:
         if str(task.get("status") or "").strip().lower() not in {"finished", "failed"}:
             skipped += 1
             continue
-        if storage.publication_state(task) != PUBLICATION_AVAILABLE:
-            # Not a publication Core can vouch for.  Charging it would bill a
-            # subject for bytes an untrusted tree merely claims to hold.
+        user_id = int(task.get("submitted_by_user_id") or 0)
+        if user_id <= 0:
+            # Ownerless: there is no subject to charge, so the publication is
+            # closed rather than left pending for a later pass to bill subject 0.
+            task_store.mark_publication_unowned(task_id)
             skipped += 1
             continue
-        if not _data_still_owned(task_id):
-            # The deletion won the race: the bytes are gone, nothing is owed.
-            task_store.mark_publication_released(task_id)
-            released += 1
+        if storage.publication_state(task) != PUBLICATION_AVAILABLE:
+            # Not a publication Core can vouch for.  Charging it would bill a
+            # subject for bytes an untrusted tree merely claims to hold, and
+            # closing it as zero would record a charge that never happened.
+            skipped += 1
             continue
-        owned = max(0, int(record.get("charge_bytes") or 0))
+        owned = record.get("charge_bytes")
+        if owned is None:
+            # A publication that predates the charge column: its amount is
+            # unknown, so derive it from the verified anchored manifest instead
+            # of reading NULL as a zero charge that is then never re-examined.
+            owned = _anchored_publication_bytes(storage, task)
+            if owned is None:
+                skipped += 1
+                continue
+        owned = max(0, int(owned))
         try:
-            task_store.ensure_data_lifecycle(
-                task_id,
-                user_id=int(task.get("submitted_by_user_id") or 0),
-                logical_bytes=owned,
-                at=time.time(),
+            outcome = task_store.charge_data_ownership(
+                task_id, user_id=user_id, logical_bytes=owned, at=time.time()
             )
         except Exception:
             logging.exception("Could not repair the pending storage charge for task %s", task_id)
             skipped += 1
+            continue
+        if outcome == "released":
+            # The deletion is authoritative over these bytes.  It released the
+            # charge it made and closed this marker; a repair must not re-open
+            # the lifecycle, append a new storage fact, or count a charge.
+            task_store.mark_publication_released(task_id)
+            released += 1
             continue
         task_store.mark_publication_charged(task_id, charge_bytes=owned, at=time.time())
         charged += 1
         emit_event(
             "resource.storage.charged",
             task_id=task_id,
-            user_id=int(task.get("submitted_by_user_id") or 0) or None,
+            user_id=user_id,
             storage_bytes=owned,
             reason_code=LedgerReason.STORAGE_CHARGED.value,
         )

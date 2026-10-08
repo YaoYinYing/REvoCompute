@@ -2482,6 +2482,95 @@ class TaskDatabase:
             row = conn.execute(stmt).mappings().first()
         return dict(row) if row else None
 
+    def charge_data_ownership(
+        self, task_id: str, *, user_id: int, logical_bytes: int = 0, at: float | None = None
+    ) -> str:
+        """Record a published result's ownership in ONE guarded transition.
+
+        The charge and the decision that it is still allowed are the same
+        transaction, serialized against the purge by ``BEGIN IMMEDIATE``, because
+        a check outside it races: a caller that reads "the data is still owned",
+        has a purge land, and then charges would re-open a ``PURGED`` row and bill
+        a subject for bytes that are gone.
+
+        Returns ``"charged"`` when this call created the row and appended its
+        ``storage_usage`` fact; ``"already_charged"`` when the Task's ownership is
+        already on record (nothing is written, so a repeated pass cannot
+        double-charge; the logical size is refreshed from this caller's own
+        measurement when it differs); and ``"released"`` when the lifecycle is
+        deletion-ward, ``ERROR`` (an interrupted removal a later pass retries), or
+        ``PURGED`` -- nothing is written, because those bytes are gone or on their
+        way out, and a deletion that already happened is not re-opened by a
+        charge.
+        """
+        timestamp = time.time() if at is None else at
+        size = max(0, int(logical_bytes))
+        with self.engine.connect() as conn:
+            conn.exec_driver_sql("BEGIN IMMEDIATE")
+            existing = (
+                conn.execute(
+                    select(self.data_lifecycle_table).where(self.data_lifecycle_table.c.task_id == task_id)
+                )
+                .mappings()
+                .one_or_none()
+            )
+            outcome = self._charge_data_ownership_in_connection(
+                conn, task_id, existing, user_id=user_id, size=size, timestamp=timestamp
+            )
+            conn.commit()
+        return outcome
+
+    def _charge_data_ownership_in_connection(
+        self, conn, task_id: str, existing, *, user_id: int, size: int, timestamp: float
+    ) -> str:
+        """The guarded body of :meth:`charge_data_ownership`, inside its transaction."""
+        if existing is None:
+            claimed = conn.execute(
+                sqlite_insert(self.data_lifecycle_table)
+                .values(
+                    task_id=task_id,
+                    subject_type=rloan.SUBJECT_USER,
+                    subject_id=user_id,
+                    state=rloan.DataLifecycleState.ACTIVE.value,
+                    logical_bytes=size,
+                    accounted_bytes=size,
+                    charge_revision=1,
+                    updated_at=timestamp,
+                )
+                .on_conflict_do_nothing(index_elements=[self.data_lifecycle_table.c.task_id])
+            )
+            if not claimed.rowcount:
+                # Another writer got there first: its charge is the fact.
+                return "already_charged"
+            self._append_storage_fact(
+                conn,
+                user_id=user_id,
+                task_id=task_id,
+                quantity=-size,
+                reason="Durable result published",
+                reason_code=rloan.LedgerReason.STORAGE_CHARGED.value,
+                idempotency_key=f"storage_usage:{task_id}:1",
+                timestamp=timestamp,
+            )
+            return "charged"
+        if str(existing["state"]) not in (
+            rloan.DataLifecycleState.ACTIVE.value,
+            rloan.DataLifecycleState.ARCHIVED.value,
+        ):
+            # Deletion-ward, ERROR, or PURGED: the lifecycle owns these bytes now,
+            # so a charge transition must not re-open them.
+            return "released"
+        if int(existing["logical_bytes"]) != size:
+            # A recomputation that found a different size updates the logical
+            # fact.  The ledger fact stays as charged until a purge releases
+            # exactly it, so no pass can double-count.
+            conn.execute(
+                update(self.data_lifecycle_table)
+                .where(self.data_lifecycle_table.c.task_id == task_id)
+                .values(logical_bytes=size, updated_at=timestamp)
+            )
+        return "already_charged"
+
     def list_pending_storage_publications(self, *, limit: int = 500) -> list[dict[str, Any]]:
         """Anchored publications whose logical-storage charge has not been recorded.
 
@@ -2515,6 +2604,24 @@ class TaskDatabase:
                 self.result_publications_table.c.charge_state == "pending",
             )
             .values(charge_bytes=max(0, int(charge_bytes)), charge_state="charged", charged_at=at)
+        )
+        with self.engine.begin() as conn:
+            return conn.execute(stmt).rowcount == 1
+
+    def mark_publication_unowned(self, task_id: str) -> bool:
+        """Close a pending publication that has no subject to charge.
+
+        A publication whose Task has no owning user (``user_id <= 0``) owes nobody
+        storage.  Closing it here is what keeps a repair pass from eventually
+        charging those bytes to subject 0.
+        """
+        stmt = (
+            update(self.result_publications_table)
+            .where(
+                self.result_publications_table.c.task_id == task_id,
+                self.result_publications_table.c.charge_state == "pending",
+            )
+            .values(charge_state="unowned")
         )
         with self.engine.begin() as conn:
             return conn.execute(stmt).rowcount == 1
@@ -4052,6 +4159,7 @@ class TaskDatabase:
         user_id: int,
         logical_bytes: int = 0,
         at: float | None = None,
+        allow_reopen: bool = False,
     ) -> dict[str, Any]:
         """Register one Task's durable data and charge its logical ownership once.
 
@@ -4066,7 +4174,19 @@ class TaskDatabase:
         be charged again or the user gets quota for free.  Each charge carries a
         monotonic charge revision, so a re-charge is a distinct idempotent fact
         rather than a duplicate of the first one.
+
+        ``allow_reopen`` is the explicit publication transition for a Task whose
+        bytes really came back after a purge: only a caller that has established
+        that may re-open a ``PURGED`` row and charge it again.  Every other
+        caller -- a live publication charge, a repair pass -- uses the guarded
+        :meth:`charge_data_ownership` instead, because an unconditional reopen
+        would let a stale charge re-open a deletion that already happened.
         """
+        if not allow_reopen:
+            self.charge_data_ownership(task_id, user_id=user_id, logical_bytes=logical_bytes, at=at)
+            record = self.get_data_lifecycle(task_id)
+            if record is not None:
+                return record
         timestamp = time.time() if at is None else at
         size = max(0, int(logical_bytes))
         with self.engine.begin() as conn:

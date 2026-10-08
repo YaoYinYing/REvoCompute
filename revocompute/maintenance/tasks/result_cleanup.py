@@ -42,42 +42,89 @@ def _path_is_within(base_dir: str, candidate: str) -> bool:
     return common == base_abs
 
 
+class ArtifactRemovalError(RuntimeError):
+    """An owned artifact path was refused or could not be removed.
+
+    The lifecycle treats this remover as transactional -- a completed purge
+    frees exactly the bytes that were charged -- so a removal that cannot do
+    what it claims must fail closed.  A refused unsafe path or an ``rmtree``
+    that leaves bytes behind (a permission or I/O error) therefore raises
+    instead of being logged and swallowed: the purge records ``ERROR``, keeps
+    the charge, and a later pass retries, rather than releasing quota for data
+    that is still on disk.
+    """
+
+
+def _remove_owned_tree(path: str, *, label: str) -> None:
+    """Remove *path* completely, or raise.  Already-absent is idempotent success."""
+    if not os.path.lexists(path):
+        return
+    try:
+        shutil.rmtree(path)
+    except FileNotFoundError:
+        # A concurrent removal emptied it first: the bytes are gone.
+        return
+    except OSError as exc:
+        raise ArtifactRemovalError(f"could not remove {label} {path}: {exc}") from exc
+    if os.path.lexists(path):
+        # A partial removal that left a locked entry behind would still return
+        # normally; the bytes are what the charge describes, so their survival
+        # is a failure.
+        raise ArtifactRemovalError(f"{label} {path} survived its removal")
+
+
 def delete_task_artifacts(task: dict[str, Any], results_folder: str, workspace_folder: str | None = None) -> None:
-    """Safely remove one task's result tree, archive cache, and input snapshot."""
+    """Safely remove one task's result tree, archive cache, and input snapshot.
+
+    The destructive boundary fails closed.  A path outside the folders this
+    deployment owns is refused, and a refusal or a failed removal raises
+    :class:`ArtifactRemovalError` rather than leaving the purge to record
+    success.  A path its owning folder does not contain is not this caller's to
+    delete, so it is skipped: the lifecycle row records the Task's durable data,
+    and an artifact this layout never owned is not part of it.
+    """
     resolver = StorageResolver(
         workspace_dir=workspace_folder or os.path.join(os.path.dirname(results_folder), "workspaces"),
         results_dir=results_folder,
     )
     try:
         safe_result_dir = resolver.get_task_root(task)
-    except ValueError:
-        logging.warning("Refusing to delete task with invalid storage identity: %s", task.get("md5sum"))
-        return
-    if safe_result_dir:
-        if os.path.isdir(safe_result_dir):
-            if safe_result_dir in {os.path.abspath(os.sep), os.path.abspath(os.path.expanduser("~"))}:
-                logging.warning("Refusing to delete unsafe root-like directory: %s", safe_result_dir)
-            elif not _path_is_within(results_folder, safe_result_dir):
-                logging.warning("Refusing to delete result directory outside RESULTS_FOLDER: %s", safe_result_dir)
-            else:
-                shutil.rmtree(safe_result_dir, ignore_errors=True)
+    except ValueError as exc:
+        raise ArtifactRemovalError(
+            f"invalid storage identity for task {task.get('md5sum')}: {exc}"
+        ) from exc
+    if os.path.lexists(safe_result_dir):
+        if safe_result_dir in {os.path.abspath(os.sep), os.path.abspath(os.path.expanduser("~"))}:
+            raise ArtifactRemovalError(f"refusing to delete unsafe root-like directory {safe_result_dir}")
+        if not _path_is_within(results_folder, safe_result_dir):
+            raise ArtifactRemovalError(
+                f"refusing to delete result directory {safe_result_dir} outside RESULTS_FOLDER"
+            )
+        _remove_owned_tree(safe_result_dir, label="result tree")
 
     task_id = str(task.get("md5sum") or "").strip().lower()
     if not _TASK_ID_PATTERN.fullmatch(task_id):
-        logging.warning("Refusing to delete zip for invalid task id: %s", task.get("md5sum"))
-        return
+        raise ArtifactRemovalError(f"invalid task id for archive path: {task.get('md5sum')}")
     zip_path = resolver.get_archive_path(task)
-    if _path_is_within(results_folder, zip_path) and os.path.exists(zip_path):
-        os.remove(zip_path)
+    if _path_is_within(results_folder, zip_path) and os.path.lexists(zip_path):
+        # A single file removes atomically, so its failure is a real one; a
+        # missing file means the bytes are already gone.
+        try:
+            os.remove(zip_path)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            raise ArtifactRemovalError(f"could not remove results archive {zip_path}: {exc}") from exc
 
     if workspace_folder:
         try:
             workspace_dir = resolver.get_input_root(task)
-        except ValueError:
-            logging.warning("Refusing to delete invalid task input storage: %s", task_id)
-            return
-        if _path_is_within(workspace_folder, workspace_dir) and os.path.isdir(workspace_dir):
-            shutil.rmtree(workspace_dir, ignore_errors=True)
+        except ValueError as exc:
+            raise ArtifactRemovalError(
+                f"invalid task input storage for task {task_id}: {exc}"
+            ) from exc
+        if _path_is_within(workspace_folder, workspace_dir):
+            _remove_owned_tree(workspace_dir, label="input snapshot")
 
 
 def cleanup_expired_task_artifacts(

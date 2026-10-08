@@ -357,7 +357,11 @@ def test_republishing_a_purged_result_charges_the_new_bytes(tmp_path):
     )
     assert database.logical_owned_bytes(32) == 0
 
-    database.ensure_data_lifecycle(task_id, user_id=32, logical_bytes=2 * GIB, at=1_300.0)
+    # Reopening is explicit: only a caller that has established the bytes really
+    # came back may re-open a PURGED row and charge it again.
+    database.ensure_data_lifecycle(
+        task_id, user_id=32, logical_bytes=2 * GIB, at=1_300.0, allow_reopen=True
+    )
     record = database.get_data_lifecycle(task_id)
 
     assert record["state"] == DataLifecycleState.ACTIVE.value
@@ -561,7 +565,7 @@ def test_retention_releases_exactly_the_charged_bytes_once(tmp_path):
 
     database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
     now = 2_000_000_000.0
-    task_id = "r1" + "0" * 30
+    task_id = "d1" + "0" * 30
     _retention_task(database, task_id, user_id=50, finished_at=now - 31 * 86400)
     _charge(database, task_id, user_id=50, owned=GIB)
     assert database.logical_owned_bytes(50) == GIB
@@ -596,7 +600,7 @@ def test_retention_keeps_the_charge_and_stays_retryable_when_the_purge_fails(tmp
 
     database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
     now = 2_000_000_000.0
-    task_id = "r2" + "0" * 30
+    task_id = "d2" + "0" * 30
     _retention_task(database, task_id, user_id=51, finished_at=now - 31 * 86400)
     _charge(database, task_id, user_id=51, owned=GIB)
 
@@ -639,7 +643,7 @@ def test_retention_is_idempotent_and_never_double_releases(tmp_path):
 
     database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
     now = 2_000_000_000.0
-    task_id = "r3" + "0" * 30
+    task_id = "d3" + "0" * 30
     _retention_task(database, task_id, user_id=52, finished_at=now - 31 * 86400)
     _charge(database, task_id, user_id=52, owned=2 * GIB)
 
@@ -663,7 +667,7 @@ def test_retention_skips_results_inside_the_window(tmp_path):
 
     database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
     now = 2_000_000_000.0
-    task_id = "r4" + "0" * 30
+    task_id = "d4" + "0" * 30
     _retention_task(database, task_id, user_id=53, finished_at=now - 29 * 86400)
     _charge(database, task_id, user_id=53, owned=GIB)
 
@@ -681,7 +685,7 @@ def test_retention_resumes_a_claimed_deletion(tmp_path):
 
     database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
     now = 2_000_000_000.0
-    task_id = "r5" + "0" * 30
+    task_id = "d5" + "0" * 30
     _retention_task(database, task_id, user_id=54, finished_at=now - 31 * 86400)
     _charge(database, task_id, user_id=54, owned=GIB)
     assert database.claim_task_cleanup(
@@ -696,3 +700,53 @@ def test_retention_resumes_a_claimed_deletion(tmp_path):
     ) == 1
     assert database.get_task(task_id)["status"] == "cleaned:finished"
     assert database.logical_owned_bytes(54) == 0
+
+
+def test_the_real_remover_fails_closed_and_keeps_the_charge(tmp_path, monkeypatch):
+    """A failed ``rmtree`` on the production path must not free quota.
+
+    ``purge_task_data`` treats its remover as transactional, so the real remover
+    must fail closed: a permission or I/O failure that leaves bytes on disk has
+    to raise, keeping the lifecycle in ``ERROR`` with its charge, rather than
+    reporting success and freeing storage that is still occupied.  A later pass
+    retries the same durable request and releases exactly once.
+    """
+    from revocompute.maintenance.tasks import result_cleanup as cleanup
+
+    cleanup_expired_task_artifacts = cleanup.cleanup_expired_task_artifacts
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    now = 2_000_000_000.0
+    task_id = "d6" + "0" * 30
+    results_folder = tmp_path / "results"
+    _retention_task(database, task_id, user_id=55, finished_at=now - 31 * 86400)
+    _charge(database, task_id, user_id=55, owned=GIB)
+    # A real result tree at the resolver-owned path, so the removal is attempted.
+    task_root = results_folder / "users" / "user-55" / "tasks" / task_id
+    task_root.mkdir(parents=True)
+    (task_root / "artifact.txt").write_text("payload\n", encoding="utf-8")
+
+    def _boom(*_args, **_kwargs):
+        raise OSError("read-only file system")
+
+    monkeypatch.setattr(cleanup.shutil, "rmtree", _boom)
+
+    cleaned = cleanup_expired_task_artifacts(
+        30, task_store=database, results_folder=str(results_folder), now=now
+    )
+
+    assert cleaned == 0
+    assert database.get_data_lifecycle(task_id)["state"] == DataLifecycleState.ERROR.value
+    assert database.logical_owned_bytes(55) == GIB
+    assert (task_root / "artifact.txt").is_file()
+
+    # The same durable request is retried and releases the charge exactly once.
+    monkeypatch.undo()
+    assert cleanup_expired_task_artifacts(
+        30, task_store=database, results_folder=str(results_folder), now=now + 1
+    ) == 1
+    assert not task_root.exists()
+    assert database.logical_owned_bytes(55) == 0
+    released = [
+        entry for entry in database.list_ledger(55) if entry["reason_code"] == "storage_released"
+    ]
+    assert [entry["quantity"] for entry in released] == [GIB]
