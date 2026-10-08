@@ -246,7 +246,12 @@ def test_language_switch_localizes_frontend_copy_and_persists(page: Page) -> Non
 def test_account_destinations_match_session_semantics(
     page: Page, width: int, locale: str, path: str, session: Session,
 ) -> None:
+    from test_playwright_application import _gpu_credit, _metrics
+
     mount_scenario(page, controlled_scenario(session=session))
+    # Authenticated activation reaches Profile, which eagerly loads these resources.
+    page.route(f"{ORIGIN}/compute/api/gpu-credit", lambda route: route.fulfill(json=_gpu_credit()))
+    page.route(f"{ORIGIN}/compute/api/user-metrics?*", lambda route: route.fulfill(json=_metrics()))
     page.set_viewport_size({"width": width, "height": 900})
     page.add_init_script(f"localStorage.setItem('revocompute-locale', '{locale}')")
     page.goto(f"{ORIGIN}{path}")
