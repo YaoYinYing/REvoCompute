@@ -230,6 +230,15 @@ parameters: partition, cpus-per-task, memory, time limit, GRES, etc.  These
 are stored in `manage.sqlite` in the server directory and become `--option=value`
 flags on the `srun` command line.
 
+Then declare this deployment's execution classes at
+`/compute/api/auth/admin/placement-policy` (see
+[Runner Configuration and Resource Policy](runner-configuration.md#deterministic-stage-placement)).
+The classes map a stage's workload requirement onto this site's partition, QoS,
+GRES class, account, and constraint, so no Runner or task definition has to name
+a partition. Placement is decided once per stage before the request is
+submitted and stored in the task database, so the request Slurm receives can be
+read back afterwards.
+
 ### Step 7: Verify
 
 Submit a test task and monitor:

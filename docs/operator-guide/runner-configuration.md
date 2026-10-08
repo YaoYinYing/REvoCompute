@@ -84,6 +84,42 @@ and a watchdog kills work that exceeds the snapshotted runtime. Invalid fields
 fail closed in the admin API and again at submission/launch rather than being
 silently discarded.
 
+## Deterministic stage placement
+
+The canonical resource policy says *what a stage needs* (cores, memory, runtime,
+whether it needs an accelerator). Placement says *which local Slurm request
+satisfies that need* — partition, QoS, GRES, constraint, account, exclusivity.
+The two stay separate so a Runner contract never names a partition and one
+site's queue names never enter a Runner or task definition.
+
+A deployment declares its own execution classes in a placement policy. The
+classes are deployment-local names such as `cpu`, `gpu-standard`, or `gpu-large`;
+each maps a workload requirement onto this site's partition and Slurm fields.
+`GET`/`PUT /compute/api/auth/admin/placement-policy` reads and replaces the
+policy, and `POST .../placement-policy/explain` resolves a hypothetical
+requirement without submitting anything. A policy that names a partition outside
+`SLURM_ALLOWED_QUEUES` is refused before anything is written, and a malformed
+policy fails closed rather than silently placing every stage as if no policy
+existed. A deployment that declares no classes keeps the canonical per-task
+resource policy as its placement, and that outcome is recorded as such.
+
+Placement is planned per stage, before dispatch, and the decision is persisted:
+what the stage required, which class matched, which local request was resolved,
+why, and which policy revision produced it. The Admin reader
+`GET /compute/api/auth/admin/tasks/{task_id}/placement` reads those records for
+a Task. Each record can be explained without consulting today's policy, because
+the resolved request, its field provenance, and the policy revision/digest are
+part of the record. Once a request has been submitted the plan is historical
+fact: editing the policy affects the next dispatch, never an allocation Slurm
+already owns, and a retry cannot replan or resubmit a stage whose submission
+outcome is unresolved.
+
+CPU-only stages resolve against a CPU class with no GRES and never inherit GPU
+placement from a sibling stage, a GPU-capable Runner family, or a global default.
+An accelerator is requested only from an explicit `requires_gpu` contract, and a
+stage's configured override refines or strengthens a placement but can never
+remove a hard requirement.
+
 ## Ordered workflows
 
 A task type may declare an ordered `workflow` whose stages reuse the same
