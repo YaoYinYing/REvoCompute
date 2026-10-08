@@ -163,7 +163,7 @@ a { color: var(--app-accent); }
    rather than reading as a row of equal bands. */
 .page-heading { display: flex; justify-content: space-between; align-items: end; gap: 2rem; padding-bottom: 1.6rem; border-bottom: 1px solid var(--app-line); }
 .page-heading h1, .runner-detail-heading h1, .route-error h1 { margin: .15rem 0 .15rem; font: 600 clamp(2rem, 3.2vw, 2.7rem)/1.1 var(--font-display); letter-spacing: -.022em; }
-.page-heading p, .runner-intro { max-width: 54rem; margin: .55rem 0 0; color: var(--app-muted); font-size: .95rem; line-height: 1.6; }
+.page-heading p:not(.page-kicker), .runner-intro { max-width: 54rem; margin: .55rem 0 0; color: var(--app-muted); font-size: .95rem; line-height: 1.6; }
 .page-kicker { margin: 0; color: var(--app-accent-2); font-size: .72rem; font-weight: 650; }
 .page-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
 
@@ -421,7 +421,7 @@ a { color: var(--app-accent); }
   .dashboard-filter-fields { padding: .5rem 0 1rem; }
   .dashboard-page .view-toolbar { flex-direction: row; flex-wrap: wrap; align-items: end; gap: .75rem; }
   .dashboard-page .view-toolbar .layout-switch button { padding-inline: .6rem; min-height: 2.75rem; }
-  .dashboard-page .page-heading .page-kicker { margin: 0; font-size: .72rem; line-height: 1.4; }
+  .dashboard-page .page-heading .page-kicker { line-height: 1.4; }
   .dashboard-page .dashboard-stats { margin-bottom: .75rem; }
   .dashboard-page .dashboard-stats span { font-size: .7rem; line-height: 1.3; }
   .dashboard-page > .work-toolbar { margin-bottom: .75rem; }

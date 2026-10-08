@@ -751,6 +751,37 @@ def test_dark_theme_and_mobile_navigation_clearance(page: Page) -> None:
     assert result_colors[0] != result_colors[1]
 
 
+@pytest.mark.parametrize(("width", "theme"), [(390, "light"), (1440, "light"), (1440, "dark")])
+def test_page_kickers_keep_their_role_inside_page_headings(page: Page, width: int, theme: str) -> None:
+    page.set_viewport_size({"width": width, "height": 780})
+    page.emulate_media(color_scheme=theme)
+    _install_app(page)
+    paint = """node => {
+        const style = getComputedStyle(node);
+        return Object.fromEntries(['color', 'fontSize', 'fontWeight', 'marginTop', 'marginBottom']
+            .map(property => [property, style[property]]));
+    }"""
+    page.goto(f"{ORIGIN}/runners/sequence_demo")
+    reference = page.locator(".runner-detail-heading .page-kicker")
+    expect(reference).to_be_visible()
+    page.evaluate("() => document.fonts.ready")
+    kicker_paint = reference.evaluate(paint)
+    for path in ("/compute/dashboard", "/compute/profile"):
+        page.goto(f"{ORIGIN}{path}")
+        kicker = page.locator(".page-heading .page-kicker")
+        expect(kicker).to_be_visible()
+        page.evaluate("() => document.fonts.ready")
+        # A context label keeps the same role as its sibling on the method
+        # reference; its nesting must not turn it into introductory prose.
+        assert kicker.evaluate(paint) == kicker_paint
+    introduction = page.locator("[data-profile-summary]")
+    expect(introduction).to_be_visible()
+    body_paint = introduction.evaluate(paint)
+    assert float(body_paint["fontSize"].removesuffix("px")) > float(kicker_paint["fontSize"].removesuffix("px"))
+    assert body_paint["color"] != kicker_paint["color"]
+    assert float(body_paint["marginTop"].removesuffix("px")) > float(kicker_paint["marginTop"].removesuffix("px"))
+
+
 def test_malformed_result_id_stays_in_frontend_not_found_state(page: Page) -> None:
     _install_app(page)
     page.goto(f"{ORIGIN}/compute/results/not-a-task")

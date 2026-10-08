@@ -822,7 +822,7 @@ The visual language does not require every page to look the same.
 
 | Surface | Character |
 | --- | --- |
-| Dashboard | calm overview |
+| Dashboard | task register |
 | Runner catalog | curated registry |
 | Runner detail | method reference |
 | Create Task | controlled preparation |
