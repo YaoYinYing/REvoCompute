@@ -137,13 +137,26 @@ pass can retry it. A partial purge therefore frees nothing, and a completed purg
 releases exactly the bytes it charged, once. Recovery re-enters *from the durable
 state*, so a stale `PURGING` row is reclaimed and retried and a worker that died
 between its claim and its completion cannot hold a subject's quota forever.
-`PURGED` is a lifecycle state rather than a tombstone, so a result published
-again after a purge is charged again.
+`PURGED` is a lifecycle state rather than a tombstone: a result published again
+after a purge is charged again, but that reopen is an explicit publication
+transition rather than an unconditional side effect of registering ownership. A
+charge -- the live publication and every repair pass alike -- is one guarded
+transition that decides and writes together, so a deletion-ward, failed, or
+`PURGED` lifecycle it meets answers *released* and the charge writes nothing.
 
 Deletion and publication cannot resurrect each other. A Task whose data is in a
 deletion-ward lifecycle state is not republished by a worker that is still
 finishing: the durable lifecycle row wins over the worker's result tree, so a
-delete that lands mid-finalization is not re-materialized and re-charged.
+delete that lands mid-finalization is not re-materialized and re-charged. A
+purge that lands after the worker's ownership read but before its charge has the
+same effect, because the decision and the charge are one transaction.
+
+A publication anchored before the charge was recorded alongside it owes an amount
+that is *unknown*, not zero. The repair derives it from the verified anchored
+manifest's own declared artifact sizes (the bytes Core published, never a
+directory walk over the result tree) and charges it once. A publication whose
+anchor is unreadable, replaced, or otherwise no longer verifiable stays
+unresolved and reviewable instead of being closed as a zero-byte charge.
 
 Automatic age-based purge is not enabled by default. An operator can turn on the
 `resource-maintenance` periodic task with `RESOURCE_MAINTENANCE_SECONDS` (see
