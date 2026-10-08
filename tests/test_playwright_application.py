@@ -1198,6 +1198,8 @@ def test_save_feedback_and_system_notices_clear_each_other_and_navigation(page: 
     expect(page.locator(".app-notice")).to_have_text("Resource policy saved.")
     page.get_by_role("button", name="System notices").click()
     expect(page.locator(".sys-notice")).to_have_count(3)
+    for body in page.locator(".sys-notice-body").all():
+        expect(body).to_be_visible()
     stack = page.locator(".sys-notices").bounding_box()
     feedback = page.locator(".app-notices").bounding_box()
     assert stack is not None and feedback is not None

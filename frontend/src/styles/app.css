@@ -130,7 +130,9 @@ a { color: var(--app-accent); }
 .sys-notices { display: grid; width: 100%; min-height: 0; overflow-y: auto; gap: .5rem; }
 .sys-notice { border: 1px solid var(--app-line-strong); border-radius: var(--r-surface); background: var(--app-raised); box-shadow: var(--shadow-raised); }
 .sys-notice > header { display: flex; align-items: start; gap: .6rem; padding: .75rem .85rem; }
-.sys-notice-mark { width: .5rem; height: .5rem; margin-top: .42rem; flex: none; border-radius: 50%; background: var(--app-muted); }
+.sys-notice details { flex: 1; min-width: 0; }
+.sys-notice summary { min-height: 2.75rem; padding: .625rem 0; list-style-position: inside; cursor: pointer; }
+.sys-notice-mark { width: .5rem; height: .5rem; margin-top: 1.125rem; flex: none; border-radius: 50%; background: var(--app-muted); }
 .sys-notice[data-tone="warning"] .sys-notice-mark { background: var(--app-warning); }
 .sys-notice[data-tone="critical"] .sys-notice-mark { background: var(--app-danger); }
 .sys-notice-title { margin: 0; font-size: .84rem; font-weight: 650; }
@@ -138,7 +140,7 @@ a { color: var(--app-accent); }
 .sys-notice button { border: 1px solid transparent; border-radius: var(--r-util); background: transparent; color: var(--app-muted); cursor: pointer; font-size: .74rem; }
 .sys-notice button:hover { color: var(--app-accent); }
 .sys-notice-tools { display: flex; align-items: center; gap: .3rem; margin-left: auto; }
-.sys-notice .icon-button { width: 1.9rem; height: 1.9rem; border-color: transparent; background: transparent; }
+.sys-notice .icon-button { width: 2.75rem; height: 2.75rem; border-color: transparent; background: transparent; }
 
 /* --- Guided tour ----------------------------------------------------------- */
 .tour-launcher { display: inline-flex; min-height: 2.2rem; align-items: center; gap: .4rem; padding: 0 .8rem; border: 1px solid color-mix(in srgb, var(--app-accent) 40%, var(--app-line)); border-radius: var(--r-control); background: var(--app-surface); color: var(--app-accent); cursor: pointer; font-size: .8rem; font-weight: 650; }

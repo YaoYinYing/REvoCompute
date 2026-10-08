@@ -36,6 +36,7 @@ export function mountSystemNotices(options: { button: HTMLButtonElement; host: H
   let notices: SystemNoticesPayload['notices'] = [];
   let loaded = false;
   let expanded = false;
+  const disclosureState = new Map<string, { open: boolean; scrollTop: number }>();
 
   const render = (): void => {
     const hidden = hiddenIds();
@@ -53,7 +54,11 @@ export function mountSystemNotices(options: { button: HTMLButtonElement; host: H
       const node = document.createElement('span'); node.className = 'app-notice-count'; node.textContent = String(count);
       options.button.append(node);
     }
-    visible.forEach(notice => container.append(noticeCard(notice, hidden)));
+    visible.forEach(notice => {
+      const card = noticeCard(notice, hidden);
+      container.append(card);
+      card.querySelector<HTMLElement>('.sys-notice-body')!.scrollTop = disclosureState.get(notice.id)?.scrollTop ?? 0;
+    });
     if (visible.length) createIcons({ icons: { X }, root: container });
   };
 
@@ -61,12 +66,18 @@ export function mountSystemNotices(options: { button: HTMLButtonElement; host: H
     const card = document.createElement('article'); card.className = 'sys-notice'; card.dataset.tone = notice.level; card.dataset.noticeId = notice.id;
     const header = document.createElement('header');
     const mark = document.createElement('span'); mark.className = 'sys-notice-mark'; mark.setAttribute('aria-hidden', 'true');
-    const text = document.createElement('div');
-    const title = document.createElement('p'); title.className = 'sys-notice-title'; title.textContent = notice.title;
+    const text = document.createElement('details');
+    text.open = disclosureState.get(notice.id)?.open ?? notice.level === 'critical';
+    const summary = document.createElement('summary');
+    const title = document.createElement('span'); title.className = 'sys-notice-title'; title.textContent = notice.title;
     const level = document.createElement('span'); level.className = 'sr-only'; level.textContent = levelLabel[notice.level] || notice.level;
-    text.append(title, level);
+    summary.append(title, level);
+    text.append(summary);
     const body = document.createElement('p'); body.className = 'sys-notice-body'; body.textContent = notice.body;
     text.append(body);
+    const remember = (): void => { disclosureState.set(notice.id, { open: text.open, scrollTop: body.scrollTop }); };
+    text.addEventListener('toggle', remember);
+    body.addEventListener('scroll', remember);
     const tools = document.createElement('div'); tools.className = 'sys-notice-tools';
     if (hidden.has(notice.id)) {
       const restore = document.createElement('button'); restore.type = 'button'; restore.textContent = t('notice.restore');
@@ -82,7 +93,15 @@ export function mountSystemNotices(options: { button: HTMLButtonElement; host: H
     return card;
   };
 
-  options.button.addEventListener('click', () => { expanded = !expanded; render(); });
+  options.button.addEventListener('click', () => {
+    expanded = !expanded;
+    // The global affordance opens the messages, then returns to compact summaries;
+    // it must also do something useful when no notices have been hidden.
+    notices.forEach(notice => disclosureState.set(notice.id, {
+      open: expanded, scrollTop: disclosureState.get(notice.id)?.scrollTop ?? 0,
+    }));
+    render();
+  });
 
   return {
     async refresh() {

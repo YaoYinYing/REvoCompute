@@ -562,7 +562,11 @@ trying to stop the user.
 Persistent notices and transient feedback share a stack that clears navigation,
 including mobile Administration. Multiple long notices scroll within the
 remaining viewport so global actions stay reachable; hiding a notice releases
-its space.
+its space. Compact title summaries let operational chrome yield to the work
+object; readers disclose full messages with native keyboard-accessible controls.
+Critical messages start open. The global notice affordance opens full messages
+and returns to summaries; adjacent hide/restore actions preserve a reader’s
+expanded message and reading position.
 
 ---
 
