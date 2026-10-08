@@ -1,5 +1,6 @@
 {
-  "exact_head": "f8a847db145a9911dfec6e60dda23ed84543c51f",
+  "accepted_limitation": "The independent-host acceptance (tests/mcp_independent_host.py) installs each host into an isolated environment at run time, so it needs network access to PyPI (for fastmcp) and npm (for @modelcontextprotocol/sdk) plus uv/npm/node on PATH. It is a live-acceptance script, not a pytest case, and is not wired into CI for that reason: CI's required gates stay deterministic and offline. The committed receipts are the durable evidence, each naming the exact head it was produced at.",
+  "exact_head": "b8a51a1dd24184203bf6dd3d125039c7f7f0b41f",
   "failures": [],
   "host": "fastmcp",
   "host_key": "fastmcp",
