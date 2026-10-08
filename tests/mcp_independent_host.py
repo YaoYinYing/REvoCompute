@@ -355,9 +355,16 @@ def _client_main(argv: list[str]) -> int:  # pragma: no cover - subprocess
     parser.add_argument("--server-fixtures", required=True)
     args = parser.parse_args(argv)
     fixtures = json.loads(Path(args.server_fixtures).read_text(encoding="utf-8"))
-    receipt = anyio.run(
-        lambda: _run_client(args.url, fixtures["token"], fixtures["handle"], fixtures)
-    )
+    receipt = anyio.run(lambda: _run_client(args.url, fixtures["token"], fixtures["handle"], fixtures))
+    # The revision is recorded by the client half, which runs in its own
+    # environment: the receipt then names the head that actually served it.
+    try:
+        completed = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, capture_output=True, text=True, check=True
+        )
+        receipt["exact_head"] = completed.stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        receipt["exact_head"] = "unknown"
     print(json.dumps(receipt, sort_keys=True))
     return 0
 
