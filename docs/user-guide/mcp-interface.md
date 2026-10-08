@@ -224,4 +224,3 @@ A second, genuinely independent MCP host and a rendered MCP Inspector Web UI wer
 be demonstrated against the final head before the MCP surface is considered fully
 interoperability-accepted. See the PR description for the exact matrix of what
 was and was not exercised.
-
