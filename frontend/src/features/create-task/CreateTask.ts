@@ -87,7 +87,7 @@ export class CreateTask {
       const definition = await getTaskDefinition(name, controller.signal); if (generation !== this.generation) return;
       this.definition = definition; this.preflight = null; this.renderWorkbench(); this.setBusy(false); this.revision++; await this.workspace.mount(definition);
       if (generation !== this.generation) return;
-      this.refreshValidation(); window.scrollTo({ top: 0, behavior: 'auto' });
+      this.setStatus(''); this.refreshValidation(); window.scrollTo({ top: 0, behavior: 'auto' });
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') return;
       this.showChooser('Could not load the selected method. Check your connection and try again.');

@@ -371,6 +371,7 @@ def _record_request_order(page: Page) -> list[str]:
 def _open_sequence_create(page: Page) -> None:
     page.goto(f"{ORIGIN}/compute/create_task?task_type=sequence_demo")
     expect(page.get_by_role("heading", name="Sequence demo", exact=True)).to_be_visible()
+    expect(page.locator(".ct-status")).not_to_contain_text("Loading experiment protocol")
     page.locator("textarea[aria-label='Protein sequence']").fill(">sample\nACDEFG")
 
 

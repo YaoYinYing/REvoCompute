@@ -25,6 +25,7 @@ export class Dashboard {
   private poll: number | null = null;
   private controller = new AbortController();
   private list!: HTMLElement; private stats!: HTMLElement; private count!: HTMLElement; private error!: HTMLElement; private batch!: HTMLButtonElement;
+  private filterDisclosure!: HTMLDetailsElement; private filterSummary!: HTMLElement;
   private advancedToggle!: HTMLButtonElement; private advancedPanel!: HTMLElement;
 
   constructor(private root: HTMLElement, private shell: AppShell, private user: CurrentUser) { this.build(); }
@@ -41,7 +42,7 @@ export class Dashboard {
   private build(): void {
     this.root.replaceChildren(); this.root.className = 'app-outlet dashboard-page';
     const head = document.createElement('header'); head.className = 'page-heading';
-    head.innerHTML = `<div><h1>${t('dashboard.title')}</h1></div>`;
+    head.innerHTML = `<div><p class="page-kicker">${t('dashboard.register')}</p><h1>${t('dashboard.title')}</h1></div>`;
     const actions = document.createElement('div'); actions.className = 'page-actions';
     actions.append(guidedTour.launcher());
     const refresh = button(t('dashboard.action.refresh'), 'refresh', 'refresh-cw');
@@ -64,6 +65,15 @@ export class Dashboard {
         <label><span>${t('dashboard.filter.finishedTo')}</span><input type="date" data-filter="finishedTo"></label>
         <label class="advanced-regex"><span>${t('dashboard.filter.regex')}</span><button type="button" data-toggle-regex aria-pressed="false" title="${t('dashboard.filter.regex')}">.*</button></label>
       </div>`;
+    // A phone opens on the work, with secondary filters available in one disclosure.
+    this.filterDisclosure = document.createElement('details'); this.filterDisclosure.className = 'dashboard-filters';
+    this.filterSummary = textNode('summary', t('dashboard.filters.summary'));
+    const filterFields = document.createElement('div'); filterFields.className = 'dashboard-filter-fields';
+    filterFields.append(...Array.from(controls.children).slice(1));
+    this.filterDisclosure.append(this.filterSummary, filterFields); controls.append(this.filterDisclosure);
+    const narrow = window.matchMedia('(max-width: 56rem)');
+    this.filterDisclosure.open = !narrow.matches;
+    narrow.addEventListener('change', () => { this.filterDisclosure.open = !narrow.matches; }, { signal: this.controller.signal });
     this.error = controls.querySelector('[data-query-error]')!;
     this.advancedToggle = controls.querySelector('[data-advanced]')!;
     this.advancedPanel = controls.querySelector('[data-advanced-panel]')!;
@@ -123,6 +133,8 @@ export class Dashboard {
     this.batch.setAttribute('aria-label', batchLabel);
     this.batch.querySelector('span')!.textContent = batchLabel;
     this.updateAdvancedState();
+    const active = Boolean(this.query.status || this.query.taskType || this.query.owner || this.query.submittedFrom || this.query.submittedTo || this.query.finishedFrom || this.query.finishedTo || this.query.regex || this.query.sort !== 'submitted');
+    this.filterSummary.textContent = t(active ? 'dashboard.filters.active' : 'dashboard.filters.summary');
     this.list.dataset.layout = this.query.layout; this.list.replaceChildren();
     if (!result.tasks.length) { const empty = document.createElement('p'); empty.className = 'empty-state'; empty.textContent = result.error ? t('dashboard.list.fixExpression') : t('dashboard.list.empty'); this.list.append(empty); return; }
     if (this.query.layout === 'table') this.renderTable(result.tasks); else result.tasks.forEach(task => this.list.append(this.taskCard(task)));
