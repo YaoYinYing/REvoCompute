@@ -109,8 +109,11 @@ def test_mobile_method_runtime_disclosure_returns_space_without_losing_facts(pag
     expect(summary).to_be_hidden()
 
 
-def test_narrow_admin_register_tolerates_wider_font_metrics(page: Page) -> None:
+@pytest.mark.parametrize("tour_completed", [False, True])
+def test_narrow_admin_register_tolerates_wider_font_metrics(page: Page, tour_completed: bool) -> None:
     page.set_viewport_size({"width": 320, "height": 780})
+    if tour_completed:
+        page.add_init_script("localStorage.setItem('revocompute-tour-done', 'true')")
     mount_scenario(page, controlled_scenario().with_role("admin"))
     page.goto(f"{ORIGIN}/compute/dashboard")
     expect(page.locator(".task-card")).to_be_visible()

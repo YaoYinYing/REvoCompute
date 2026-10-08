@@ -143,7 +143,7 @@ const en: Dictionary = {
   'tour.entry': 'Guided tour',
   'tour.resume': 'Resume tour',
   'tour.start': 'Start the tour',
-  'tour.restart': 'Restart guided tour',
+  'tour.restart': 'Restart tour',
   'tour.stepOf': 'Step {current} of {total}',
   'tour.next': 'Next',
   'tour.back': 'Back',
