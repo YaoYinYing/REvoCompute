@@ -61,13 +61,10 @@ _STATUS_TO_CLASS = {
 }
 
 # Canonical detail codes (the ``code`` field of a canonical error payload) ->
-# protocol class.  These are the vocabulary the submission/preflight/tool
-# boundaries already emit; mapping them here keeps the projection declarative
-# instead of re-deriving admission semantics.
-#
-# The vocabulary is owned elsewhere and consumed here: the ingress reason codes
-# (``revocompute.ingress_security``), the artifact-publication codes, and the
-# admission reasons ``revocompute.resource_ledger.AdmissionReason`` names.
+# protocol class.  The vocabulary is owned elsewhere and consumed here: the
+# ingress reason codes (``revocompute.ingress_security``), the
+# artifact-publication codes, and the admission reasons
+# ``revocompute.resource_ledger.AdmissionReason`` names.
 # ``tests/server/test_mcp_projection.py`` derives this table's required entries
 # from those canonical vocabularies, so a reason code a canonical boundary can
 # emit and this adapter cannot classify fails CI rather than silently
