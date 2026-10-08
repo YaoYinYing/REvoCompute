@@ -1192,6 +1192,10 @@ def test_admin_runner_fleet_plans_revalidates_and_runs_typed_actions(page: Page)
 @pytest.mark.parametrize("width", [320, 834, 1280])
 def test_save_feedback_and_system_notices_clear_each_other_and_navigation(page: Page, width: int) -> None:
     _install_app(page)
+    # Hold the transient lifetime: this case measures simultaneous geometry,
+    # independent of the speed of a traced browser on a shared host.
+    page.clock.install(time="2026-10-08T00:00:00Z")
+    page.clock.pause_at("2026-10-08T01:00:00Z")
     page.set_viewport_size({"width": width, "height": 780})
     page.route(f"{ORIGIN}/compute/api/auth/me", lambda route: route.fulfill(json=_current_user("admin")))
     notices = [
@@ -1214,7 +1218,7 @@ def test_save_feedback_and_system_notices_clear_each_other_and_navigation(page: 
         expect(body).to_be_visible()
     stack = page.locator(".sys-notices").bounding_box()
     feedback = page.locator(".app-notices").bounding_box()
-    assert stack is not None and feedback is not None
+    assert stack is not None and feedback is not None and feedback["height"] > 0
     assert stack["y"] >= 56, stack
     assert stack["y"] + stack["height"] < feedback["y"], (stack, feedback)
     if width <= 896:

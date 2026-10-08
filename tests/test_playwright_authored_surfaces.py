@@ -107,3 +107,22 @@ def test_mobile_method_runtime_disclosure_returns_space_without_losing_facts(pag
     page.set_viewport_size({"width": 1440, "height": 780})
     expect(page.locator(".runner-facts")).to_be_visible()
     expect(summary).to_be_hidden()
+
+
+def test_narrow_admin_register_tolerates_wider_font_metrics(page: Page) -> None:
+    page.set_viewport_size({"width": 320, "height": 780})
+    mount_scenario(page, controlled_scenario().with_role("admin"))
+    page.goto(f"{ORIGIN}/compute/dashboard")
+    expect(page.locator(".task-card")).to_be_visible()
+    page.add_style_tag(content=":root { --font-sans: monospace; }")
+    actions = page.locator(".dashboard-page .page-actions")
+    box = actions.bounding_box()
+    navigation = page.locator(".app-nav-group[data-nav-group='admin']").bounding_box()
+    heading = page.locator(".task-card h2").bounding_box()
+    assert box and navigation and heading
+    assert heading["y"] + heading["height"] <= navigation["y"]
+    for control in actions.locator(":scope > *").all():
+        target = control.bounding_box()
+        assert target and target["height"] >= 44
+        assert target["x"] >= box["x"] and target["x"] + target["width"] <= box["x"] + box["width"] + 1
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
