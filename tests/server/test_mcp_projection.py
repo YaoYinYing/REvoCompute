@@ -791,8 +791,17 @@ def _publish_manifest(
     artifacts: list[tuple[str, str]],
     *,
     media_type: str = "text/plain",
+    anchor: bool = False,
 ) -> None:
-    """Publish a minimal canonical ResultManifest listing *artifacts*."""
+    """Write a minimal canonical ResultManifest listing *artifacts* to disk.
+
+    By default this only places the manifest; a caller that wants a real
+    publication -- one a canonical reader will serve -- records the canonical
+    publication anchor afterwards, once its Task row exists, via
+    ``_conftest._anchor_result_publication``.  A manifest left unanchored is
+    exactly the quarantined state the publication gate must refuse, so the
+    default keeps an unanchored caller honest instead of silently publishing.
+    """
     resolver = module.app.config["storage_resolver"]
     root = Path(resolver.get_task_root({"md5sum": task_id, **owner}))
     root.mkdir(parents=True, exist_ok=True)
@@ -825,6 +834,8 @@ def _publish_manifest(
         "total_size": sum(entry["size"] for entry in entries),
     }
     (root / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    if anchor:
+        _conftest._anchor_result_publication(module, task_id)
 
 
 def _seed_published_artifact(module, tmp_path, *, username: str = "mcp-tester") -> str:
@@ -855,6 +866,7 @@ def _seed_published_artifact(module, tmp_path, *, username: str = "mcp-tester") 
         submitted_by_user_id=int(owner["submitted_by_user_id"]),
         storage_key=owner["storage_key"],
     )
+    _conftest._anchor_result_publication(module, task_id)
     return task_id
 
 
@@ -937,6 +949,7 @@ def test_inline_artifact_content_is_byte_exact_for_a_json_media_type(mcp_app, tm
         submitted_by_user_id=int(owner["submitted_by_user_id"]),
         storage_key=owner["storage_key"],
     )
+    _conftest._anchor_result_publication(mcp_app, task_id)
     payload = retrieve_artifact(principal, operation_id=task_id, artifact_path="data.json")
     assert payload["inline"] is True
     assert base64.b64decode(payload["content_base64"]) == written
@@ -1000,6 +1013,7 @@ def test_oversized_artifact_returns_metadata_not_content(mcp_app, tmp_path):
         submitted_by_user_id=int(owner["submitted_by_user_id"]),
         storage_key=owner["storage_key"],
     )
+    _conftest._anchor_result_publication(mcp_app, task_id)
     handle = "mcp_op_" + "a" * 43
     result = retrieve_artifact(
         principal, operation_id=task_id, artifact_path="big.txt", handle=handle, max_inline_bytes=64
@@ -1015,6 +1029,138 @@ def test_oversized_artifact_returns_metadata_not_content(mcp_app, tmp_path):
     # No dead resource URI is advertised: nothing here is a followable protocol
     # resource, so the answer must not claim one.
     assert "resource_uri" not in result
+
+
+# ---------------------------------------------------------------------------
+# Publication boundary -- MCP never serves a result Core quarantines (#58/#65)
+# ---------------------------------------------------------------------------
+
+
+def _seed_unpublished_artifact(module, tmp_path, *, username: str = "mcp-tester") -> str:
+    """Create a finished Task whose result tree holds an unanchored manifest.
+
+    This is the quarantined state the canonical publication reader refuses: the
+    manifest exists on disk and is structurally valid, but Core never recorded
+    the anchor that makes it a publication, so no canonical consumer will serve
+    it.  A pre-anchor results ZIP is planted as well, because the point of the
+    gate is that cached bytes on disk are not publication identity.
+    """
+    import zipfile
+
+    task_id = uuid.uuid4().hex
+    owner = _conftest._task_owner(module, username)
+    result_dir = tmp_path / f"unanchored-{task_id}"
+    result_dir.mkdir(parents=True, exist_ok=True)
+    (result_dir / "output.txt").write_text("result\n", encoding="utf-8")
+    _conftest._relocate_task_artifacts(module, task_id, result_dir, owner)
+    _publish_manifest(module, task_id, owner, [("output.txt", "artifact")], anchor=False)
+    module.task_store.upsert_task(
+        task_id,
+        filename="input.fasta",
+        file_path="/tmp/input.fasta",
+        uploaded_at=time.time(),
+        started_at=time.time(),
+        finished_at=time.time(),
+        walltime=1.0,
+        status="finished",
+        is_binary=0,
+        source_ip="127.0.0.1",
+        user_agent="pytest",
+        username=username,
+        task_type="gremlin",
+        submitted_by_user_id=int(owner["submitted_by_user_id"]),
+        storage_key=owner["storage_key"],
+    )
+    resolver = module.app.config["storage_resolver"]
+    archive = Path(resolver.get_archive_path(module.task_store.get_task(task_id)))
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(archive, "w") as bundle:
+        bundle.writestr("output.txt", "pre-anchor bytes\n")
+    return task_id
+
+
+def test_unanchored_result_is_unavailable_with_reason_not_served(mcp_app, tmp_path):
+    """A quarantined result is refused by every MCP result read, with its reason.
+
+    The publication state ``unanchored`` names a result Core's own reader
+    refuses, so the MCP surface must serve neither its manifest projection nor
+    its artifact bytes, and it must say *why* rather than pretend the result is
+    merely not ready yet.  The negative is asserted at the status projection and
+    at both result readers, so the gate cannot be satisfied on one route while
+    another still serves the quarantine.
+    """
+    from revocompute.mcp.errors import McpError
+    from revocompute.mcp.services import get_task_results, get_task_status, retrieve_artifact
+
+    principal = _principal(mcp_app)
+    task_id = _seed_unpublished_artifact(mcp_app, tmp_path)
+
+    # Status advertises no available result, so no client is offered a read.
+    assert get_task_status(principal, operation_id=task_id)["results_available"] is False
+
+    for call, arguments in (
+        (get_task_results, {}),
+        (retrieve_artifact, {"artifact_path": "output.txt"}),
+    ):
+        with pytest.raises(McpError) as excinfo:
+            call(principal, operation_id=task_id, **arguments)
+        error = excinfo.value
+        assert error.error_class == "RESULT_NOT_READY", (call.__name__, error.error_class)
+        assert error.detail == "unanchored", (call.__name__, error.detail)
+        assert error.message, "a refusal must carry the canonical reason text"
+        assert "/" not in error.message, "a refusal must not name a host or storage path"
+
+
+def test_published_result_is_available_once_the_anchor_exists(mcp_app, tmp_path):
+    """The same result becomes readable when Core's publication anchor exists.
+
+    The publication gate is a decision about identity, not a blanket refusal of
+    finished Tasks: ``_seed_published_artifact`` records the canonical anchor, so
+    the status projection advertises the result and both readers serve it.  This
+    is the positive control for the quarantine negative above.
+    """
+    from revocompute.mcp.services import get_task_results, get_task_status, retrieve_artifact
+
+    principal = _principal(mcp_app)
+    task_id = _seed_published_artifact(mcp_app, tmp_path)
+
+    assert get_task_status(principal, operation_id=task_id)["results_available"] is True
+    results = get_task_results(principal, operation_id=task_id)
+    assert [artifact["path"] for artifact in results["artifacts"]] == ["output.txt", "db/log.txt"]
+    payload = retrieve_artifact(principal, operation_id=task_id, artifact_path="output.txt")
+    assert base64.b64decode(payload["content_base64"]) == b"result\n"
+
+
+def test_classifier_covers_every_canonical_admission_vocabulary():
+    """Every reason code a canonical boundary can emit is classifiable here.
+
+    The adapter classifies canonical decisions with a bounded table; that table
+    is owned downstream by ``ingress_security`` (the phase vocabulary) and
+    ``resource_ledger.AdmissionReason`` (the admission reasons).  Deriving the
+    required entries from those modules means a new canonical reason code cannot
+    silently degrade to the wrong protocol class -- it fails here until the
+    adapter names it.
+    """
+    from revocompute.ingress_security import ARTIFACT_CAPACITY_GUARD, ARTIFACT_PUBLICATION_REJECTED, REASON_CODES
+    from revocompute.mcp import errors
+    from revocompute.resource_ledger import AdmissionReason
+
+    required = {code for codes in REASON_CODES.values() for code in codes}
+    # The codes the submission boundary answers with, in addition to the
+    # admission-reason names the ledger owns.
+    required |= {"gpu_credit_exhausted", "infrastructure_unavailable", "storage_soft_limit_exceeded"}
+    required |= {ARTIFACT_PUBLICATION_REJECTED, ARTIFACT_CAPACITY_GUARD}
+    required |= {reason.value for reason in AdmissionReason}
+    # ``admitted`` is the success value, not a refusal, so no error class names it.
+    required.discard(AdmissionReason.ADMITTED.value)
+
+    missing = sorted(code for code in required if errors._class_for_detail_code(code) is None)
+    assert missing == [], f"unclassified canonical reason codes: {missing}"
+    # Each admitted reason names a real class, never a bare access denial.
+    assert errors._class_for_detail_code(AdmissionReason.COMPUTE_EXHAUSTED.value) == "RESOURCE_LIMIT"
+    assert errors._class_for_detail_code(AdmissionReason.STORAGE_SOFT_LIMIT.value) == "RESOURCE_LIMIT"
+    assert errors._class_for_detail_code(AdmissionReason.RUNNER_READINESS_UNAVAILABLE.value) == "NOT_READY"
+    assert errors._class_for_detail_code(AdmissionReason.INFRASTRUCTURE_UNAVAILABLE.value) == "NOT_READY"
 
 
 # ---------------------------------------------------------------------------
@@ -1241,7 +1387,7 @@ def test_exhausted_gpu_credit_is_not_admitted_through_mcp(mcp_app):
     principal = _principal(mcp_app)
     db = mcp_app.app.config["user_db"]
     db.update_user(principal.user_id, allow_gpu_use=True)
-    mcp_app.task_store.adjust_gpu_credit(
+    mcp_app.task_store.adjust_compute_account(
         user_id=principal.user_id,
         gpu_seconds=-60_000,
         actor_user_id=principal.user_id,

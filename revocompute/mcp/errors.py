@@ -65,36 +65,61 @@ _STATUS_TO_CLASS = {
 # boundaries already emit; mapping them here keeps the projection declarative
 # instead of re-deriving admission semantics.
 #
-# The canonical admission/reason-code vocabulary is a *reconcile surface* (see
-# ``IMPLEMENTATION_STATE.md``): the resource-accounting work replaces the
-# GPU-credit vocabulary with a shared admission-reason enum, so this table must
-# be re-checked when that lands rather than frozen.  Code that is not yet named
-# here still classifies through ``_DETAIL_CODE_RULES`` below, so an unmapped
-# reason never silently degrades to a *non-retryable* wrong class.
+# The vocabulary is owned elsewhere and consumed here: the ingress reason codes
+# (``revocompute.ingress_security``), the artifact-publication codes, and the
+# admission reasons ``revocompute.resource_ledger.AdmissionReason`` names.
+# ``tests/server/test_mcp_projection.py`` derives this table's required entries
+# from those canonical vocabularies, so a reason code a canonical boundary can
+# emit and this adapter cannot classify fails CI rather than silently
+# degrading.  The mapping stays declarative: it classifies a decision the
+# boundary already made, it never re-derives one.
 _DETAIL_CODE_TO_CLASS = {
-    "input_role_unknown": INVALID_PARAMETERS,
-    "input_role_cardinality": INVALID_PARAMETERS,
-    "input_role_binding": INVALID_PARAMETERS,
-    "input_role_format": INVALID_PARAMETERS,
+    # ingress_security.Phase.SECURITY -- transport and byte safety.
     "input_path_invalid": INVALID_PARAMETERS,
+    "input_namespace_collision": INVALID_PARAMETERS,
     "input_format_invalid": INVALID_PARAMETERS,
     "input_logical_type_invalid": INVALID_PARAMETERS,
     "input_file_count_limit": CONTENT_TOO_LARGE,
     "input_file_size_limit": CONTENT_TOO_LARGE,
     "input_total_size_limit": CONTENT_TOO_LARGE,
+    "input_snapshot_mismatch": INVALID_PARAMETERS,
     "request_size_limit": CONTENT_TOO_LARGE,
     "workspace_json_invalid": INVALID_PARAMETERS,
-    "infrastructure_unavailable": NOT_READY,
+    "validator_resource_limit": RESOURCE_LIMIT,
+    # ingress_security.Phase.CONTRACT -- the caller's declared vocabulary.
+    "contract_invalid": INVALID_PARAMETERS,
+    "input_role_binding": INVALID_PARAMETERS,
+    "input_role_format": INVALID_PARAMETERS,
+    "input_role_unknown": INVALID_PARAMETERS,
+    "input_role_cardinality": INVALID_PARAMETERS,
+    # ingress_security.Phase.ADMISSION -- the canonical admission reasons.
+    # ``gpu_credit_exhausted`` and ``infrastructure_unavailable`` are the
+    # response codes the submission boundary emits for the canonical
+    # ``compute_exhausted`` and ``infrastructure_unavailable`` admission reasons;
+    # both spellings are named here because both can reach this classifier.
+    "admission_denied": ACCESS_DENIED,
+    "admission_limited": RESOURCE_LIMIT,
+    "admission_unavailable": NOT_READY,
     "gpu_credit_exhausted": RESOURCE_LIMIT,
-    "invalid_parameters": INVALID_PARAMETERS,
-    "invalid_input": INVALID_PARAMETERS,
-    "runtime_unavailable": NOT_READY,
+    "infrastructure_unavailable": NOT_READY,
+    "runner_not_ready": NOT_READY,
+    # resource_ledger.AdmissionReason -- the durable reason vocabulary #59 owns.
+    "compute_exhausted": RESOURCE_LIMIT,
+    "storage_soft_limit": RESOURCE_LIMIT,
+    "authorization_unavailable": ACCESS_DENIED,
+    "runner_readiness_unavailable": NOT_READY,
+    # the artifact-publication reason codes.
+    "artifact_publication_rejected": ACCESS_DENIED,
+    "artifact_capacity_guard": CONTENT_TOO_LARGE,
 }
 
 # Suffix/marker rules applied when a canonical ``details[0].code`` is not in the
 # table above.  A resource/credit condition is retryable-later, not a policy
-# denial, so an admission reason this adapter has not yet named still lands in a
-# class an agent can act on instead of a bare ``ACCESS_DENIED``.
+# denial, so a reason this adapter has not yet named still lands in a class an
+# agent can act on instead of a bare ``ACCESS_DENIED``.  The gate above is what
+# keeps this a backstop rather than a habit:
+# ``tests/server/test_mcp_projection.py`` fails when a canonical vocabulary
+# member has no explicit entry.
 _DETAIL_CODE_RULES = (
     ("exhausted", RESOURCE_LIMIT),
     ("_limit_exceeded", RESOURCE_LIMIT),

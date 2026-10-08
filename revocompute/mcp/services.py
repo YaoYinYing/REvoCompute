@@ -42,6 +42,7 @@ from revocompute.mcp.errors import (
     classify,
 )
 from revocompute.mcp.handles import canonical_state
+from revocompute.storage import PUBLICATION_AVAILABLE, PUBLICATION_NOT_FINALIZED
 
 # ---------------------------------------------------------------------------
 # Discovery
@@ -373,8 +374,6 @@ def get_task_results(principal: Any, *, operation_id: str) -> dict[str, Any]:
     if status not in {"finished", "failed"}:
         raise McpError(RESULT_NOT_READY, f"Results are not ready (task status: {status or 'unknown'})")
     body = _canonical_result_body(principal, task)
-    if body is None:
-        raise McpError(RESULT_NOT_READY, "Result manifest is not published")
     artifacts = body.get("artifacts") if isinstance(body.get("artifacts"), list) else []
     logical = body.get("result", {}).get("files", {}) if isinstance(body.get("result"), dict) else {}
     bounded_artifacts, artifacts_truncated = bound_sequence(artifacts, MAX_RESULT_ENTRIES)
@@ -468,6 +467,7 @@ def retrieve_artifact(
     normalized = artifact_path.strip()
     if _looks_like_host_path(normalized):
         raise McpError(ARTIFACT_NOT_FOUND, "Artifact not found")
+    _require_published_result(principal, task)
     resolved = canonical_state().web.app.config["storage_resolver"].resolve_artifact(task, normalized)
     if resolved is None:
         raise McpError(ARTIFACT_NOT_FOUND, "Artifact not found")
@@ -486,7 +486,14 @@ def retrieve_artifact(
             "note": "Artifact exceeds the inline context limit and is not returned inline. Fetch it out of "
             "band through the canonical results API; no host, container, or object-store path is exposed.",
         }
-    # Authorize through the canonical route; the returned body is not used.
+    # Authorize + gate on publication through the canonical artifact route (so
+    # ownership, role visibility, and *publication* are its rules), but read the
+    # bytes from the resolver's already-verified descriptor rather than the
+    # route's response body.  The route answers an empty body plus
+    # ``X-Accel-Redirect`` in the shipped ``nginx`` download mode and
+    # content-negotiates otherwise, so a response-body read silently returned
+    # empty content; the verified descriptor is the same content in every mode,
+    # and a quarantined result is refused by the route before any bytes are read.
     response = call_canonical(
         principal,
         "GET",
@@ -530,22 +537,59 @@ def _looks_like_host_path(value: str) -> bool:
 
 
 def _canonical_result_body(principal: Any, task: dict[str, Any]) -> dict[str, Any] | None:
+    """The canonical result projection for one owned Task, or a refusal.
+
+    The canonical results route owns publication: it answers with the manifest
+    projection only for a result Core anchored and can still verify, and with
+    the bounded publication *state* plus its reason for anything else.  A
+    non-200 answer is therefore the publication decision, not a transport
+    hiccup, so it is raised as ``RESULT_NOT_READY`` carrying that state -- an
+    agent sees "quarantined, and here is why" rather than a bare not-ready.
+    Only a result that never finalized (the ordinary not-yet case) keeps the
+    plain message.
+    """
     from revocompute.mcp.context import call_canonical
 
     task_id = str(task["md5sum"])
     response = call_canonical(principal, "GET", f"/compute/api/results/{task_id}")
-    if response.status != 200 or not isinstance(response.body, dict):
-        return None
-    return response.body
+    if response.status == 200 and isinstance(response.body, dict):
+        return response.body
+    body = response.body if isinstance(response.body, dict) else {}
+    publication = str(body.get("result_publication") or "")
+    if publication and publication != PUBLICATION_NOT_FINALIZED:
+        raise McpError(
+            RESULT_NOT_READY,
+            str(body.get("message") or "Result manifest is not published"),
+            detail=publication,
+        )
+    if response.status == 404:
+        raise McpError(RESULT_NOT_READY, "Result manifest is not published")
+    raise classify(body, status=response.status)
+
+
+def _require_published_result(principal: Any, task: dict[str, Any]) -> None:
+    """Refuse a result the canonical results route refuses.
+
+    One publication authority: the exact call the Web and HTTP surfaces make.
+    The MCP surface therefore never answers a quarantined, unanchored, replaced,
+    or unverifiable result with bytes, and never paraphrases the canonical
+    reason.
+    """
+    _canonical_result_body(principal, task)
 
 
 def _manifest_available(task: dict[str, Any]) -> bool:
-    state = canonical_state()
-    import os
+    """Report whether the canonical publication reader will serve this result.
 
+    Answered from the canonical resolver's own verified publication read -- the
+    same authority the results route, the archive request, and the download
+    route consult -- so a status poll neither builds a result projection nor
+    advertises a result the canonical surface quarantines.
+    """
+    resolver = canonical_state().web.app.config["storage_resolver"]
     try:
-        return os.path.isfile(state.web.app.config["storage_resolver"].get_manifest_path(task))
-    except (OSError, ValueError):
+        return resolver.publication_state(task) == PUBLICATION_AVAILABLE
+    except (AttributeError, ValueError):
         return False
 
 

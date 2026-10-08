@@ -86,8 +86,16 @@ def _seed_finished_task(
     *,
     artifact_name: str = "output.txt",
     payload: bytes = b"acceptance-artifact\n",
+    anchor: bool = True,
 ) -> tuple[str, str]:
-    """Create a finished Task publishing one artifact, and return (task_id, token)."""
+    """Create a finished Task publishing one artifact, and return (task_id, token).
+
+    ``anchor=True`` records the canonical publication anchor, as Core's own
+    finalization does, so the result is a real publication the canonical surface
+    serves.  ``anchor=False`` leaves a structurally valid manifest with no
+    server-owned anchor: the quarantined state every canonical reader refuses,
+    which is what the publication negative exercises.
+    """
     from revocompute.auth import generate_token
 
     db = module.app.config["user_db"]
@@ -149,6 +157,14 @@ def _seed_finished_task(
         submitted_by_user_id=int(user["id"]),
         storage_key=user["storage_key"],
     )
+    if anchor:
+        data = (root / "manifest.json").read_bytes()
+        module.task_store.record_result_publication(
+            task_id,
+            manifest_sha256=hashlib.sha256(data).hexdigest(),
+            manifest_size=len(data),
+            published_at=time.time(),
+        )
     return task_id, generate_token(user["id"])
 
 
@@ -169,6 +185,7 @@ async def _workflow(
     handle_b: str,
     handle_big: str,
     big_task_id: str,
+    quarantined_handle: str,
     submit_task_type: str,
     submit_role: str,
 ) -> dict:
@@ -397,6 +414,28 @@ async def _workflow(
                 "leaks_task_id": big_task_id in json.dumps(big_payload),
             }
 
+            # Publication boundary: a finished Task whose manifest Core never
+            # anchored is a quarantined result, so neither the result manifest nor
+            # a cached archive's bytes may be served -- and the answer names the
+            # canonical publication state rather than a bare not-ready.
+            quarantined_status = await session.call_tool(
+                "get_task_status", {"task_handle": quarantined_handle}
+            )
+            receipt["steps"]["negative_quarantined_status"] = {
+                "error": quarantined_status.isError,
+                "results_available": (quarantined_status.structuredContent or {}).get("results_available"),
+            }
+            quarantined_artifact = await session.call_tool(
+                "retrieve_artifact", {"task_handle": quarantined_handle, "artifact_path": "output.txt"}
+            )
+            quarantined_payload = quarantined_artifact.structuredContent or {}
+            receipt["steps"]["negative_quarantined_artifact"] = {
+                "error": quarantined_artifact.isError,
+                "error_class": quarantined_payload.get("error_class"),
+                "detail": quarantined_payload.get("detail"),
+                "content_base64": quarantined_payload.get("content_base64"),
+            }
+
     async with _session(token_b) as (read, write, _):
         async with ClientSession(read, write) as session:
             await session.initialize()
@@ -531,10 +570,14 @@ def main(argv: list[str] | None = None) -> int:
             artifact_name="big.txt",
             payload=b"z" * (MAX_INLINE_ARTIFACT_BYTES + 1024),
         )
+        quarantined_task_id, _quarantined_token = _seed_finished_task(
+            module, artifact_name="quarantined.txt", anchor=False
+        )
         db = module.app.config["user_db"]
         user = db.get_user_by_username("mcp-acceptance")
         handle = _mint_handle(module, int(user["id"]), task_id)
         big_handle = _mint_handle(module, int(user["id"]), big_task_id)
+        quarantined_handle = _mint_handle(module, int(user["id"]), quarantined_task_id)
         other_token, other_id = _second_user(module)
         foreign_handle = _mint_handle(module, other_id, task_id)
 
@@ -550,6 +593,7 @@ def main(argv: list[str] | None = None) -> int:
             foreign_handle,
             big_handle,
             big_task_id,
+            quarantined_handle,
             submit_type,
             submit_role,
         )
@@ -634,6 +678,26 @@ def _assert_receipt(receipt: dict) -> list[str]:
         failures.append("negative_oversized_artifact.content_base64: expected None")
     if oversized.get("leaks_task_id") is not False:
         failures.append("negative_oversized_artifact.leaks_task_id: expected False (canonical id must not leak)")
+
+    # Publication boundary: a quarantined result is unavailable-with-reason and
+    # never served, from either the status projection or an artifact read.
+    quarantined_status = receipt.get("steps", {}).get("negative_quarantined_status") or {}
+    if quarantined_status.get("error") is not False:
+        failures.append("negative_quarantined_status.error: expected False")
+    if quarantined_status.get("results_available") is not False:
+        failures.append("negative_quarantined_status.results_available: expected False (quarantine is not available)")
+    quarantined = receipt.get("steps", {}).get("negative_quarantined_artifact") or {}
+    if quarantined.get("error") is not True:
+        failures.append("negative_quarantined_artifact.error: expected True (a quarantined result must be refused)")
+    if quarantined.get("content_base64") is not None:
+        failures.append("negative_quarantined_artifact.content_base64: expected None (no bytes from a quarantine)")
+    if quarantined.get("error_class") != "RESULT_NOT_READY":
+        failures.append(
+            "negative_quarantined_artifact.error_class: expected RESULT_NOT_READY, "
+            f"got {quarantined.get('error_class')!r}"
+        )
+    if not quarantined.get("detail"):
+        failures.append("negative_quarantined_artifact.detail: expected the canonical publication state")
     return failures
 
 

@@ -4,7 +4,8 @@
 
 """The REvoCompute MCP server: a protocol projection of the canonical service.
 
-Design rules this module implements (from ``TODO.md``):
+The interface contract this implements is documented for users in
+``docs/user-guide/mcp-interface.md``:
 
 * **Progressive discovery.** A small, stable set of primitives -- no MCP tool
   per Runner.  ``discover_tasks`` returns a compact catalog;

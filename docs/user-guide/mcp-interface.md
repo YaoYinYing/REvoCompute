@@ -148,7 +148,28 @@ recover without parsing a traceback, Slurm stderr, or an HTTP error string:
 `RESOURCE_LIMIT`, `TASK_NOT_FOUND`, `TASK_NOT_CANCELLABLE`, `RESULT_NOT_READY`,
 `ARTIFACT_NOT_FOUND`, `CONTENT_TOO_LARGE`.
 
-Human-readable messages travel beside the class as secondary detail.
+Human-readable messages travel beside the class as secondary detail. The class
+is derived from the canonical decision — the admission reason the submission
+boundary produced, never a second local rule — so a resource or readiness reason
+the server can emit maps to an actionable class (`RESOURCE_LIMIT`, `NOT_READY`)
+rather than a bare `ACCESS_DENIED`.
+
+## Publication and quarantined results
+
+A finished Task is not automatically a readable result. Serving a result is a
+publication decision the canonical Server owns: only a manifest the server
+anchored at finalization — and can still verify — is a publication. `MCP` never
+decides this itself, and it never serves a result the canonical surface refuses.
+
+- `get_task_status` reports `results_available` from the canonical publication
+  read, so a quarantined result is not advertised as available;
+- `get_task_results` and `retrieve_artifact` refuse a quarantined or unanchored
+  result with `RESULT_NOT_READY` and the canonical reason as detail — never with
+  a manifest, cached archive bytes, or an empty payload that looks like data;
+- a Task that simply has not finished keeps the ordinary not-ready answer.
+
+This is the same gate the results page, the archive request, and the download
+route use, so there is no MCP-specific path to a result.
 
 ## Retries and idempotency
 
@@ -174,10 +195,10 @@ hosts.
 surface enabled and drives the complete workflow — connect, discover, inspect,
 preflight, submit, track, results, artifact — plus the negative cases (unknown
 task type, invalid parameters, unentitled Runner, cross-user handle, cross-user
-artifact, traversal, missing artifact, oversized artifact, cancel, retried
-submission, invalid credentials, anonymous access) over a real streamable-HTTP
-client. It **asserts** those expectations and exits non-zero on any mismatch,
-printing a JSON receipt:
+artifact, traversal, missing artifact, oversized artifact, quarantined result,
+cancel, retried submission, invalid credentials, anonymous access) over a real
+streamable-HTTP client. It **asserts** those expectations and exits non-zero on
+any mismatch, printing a JSON receipt:
 
 ```bash
 uv run --extra mcp python tests/mcp_live_acceptance.py
@@ -201,5 +222,6 @@ not be read as "Claude Code fully accepted".
 A second, genuinely independent MCP host and a rendered MCP Inspector Web UI were
 **unavailable in this environment** and are an openly acknowledged gap: they must
 be demonstrated against the final head before the MCP surface is considered fully
-interoperability-accepted. See the PR description and `TODO.md` §19.
+interoperability-accepted. See the PR description for the exact matrix of what
+was and was not exercised.
 
