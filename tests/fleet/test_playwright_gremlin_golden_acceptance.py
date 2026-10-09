@@ -11,7 +11,7 @@ serve-time enrichment the Server applies (per-artifact
 drives the built Result workspace in Chrome.
 
 The 2KL8 case is the scientific golden case (6 rows x 79 columns at the pinned
-upstream profile). The tiny 8x8 ``cpu_runner_lh_tiny.a3m`` is a separate
+upstream profile). The tiny 8x8 ``gremlin_lh_tiny.a3m`` is a separate
 runtime/smoke case and must not be presented here. This test proves the declared
 ``matrix`` primitive, the storyboard narrative (including the
 ``columns_excluded_by_gap_cutoff`` metric), the ranked-pairs table, the alignment
@@ -35,7 +35,7 @@ from frontend_fixtures import project_manifest_for_serve
 
 pytestmark = pytest.mark.browser
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 # The golden case is a real production run, not a fixture: its manifest,
 # artifacts, and storyboard are staged by whoever took the receipt. Point
 # ``REVOCOMPUTE_GREMLIN_STAGE`` at that directory to run this test; when it is
@@ -72,7 +72,7 @@ def _projected_manifest() -> dict:
     assert manifest["task_id"] == TASK_ID, "Staged manifest is not the scientific-golden run"
     inputs = {item["path"] for item in manifest["run"]["inputs"]}
     assert "2KL8.i90c75_aln.a3m" in inputs, f"Golden browser case is not 2KL8: {inputs}"
-    assert "cpu_runner_lh_tiny.a3m" not in inputs, "The tiny smoke case must not back the golden browser test"
+    assert "gremlin_lh_tiny.a3m" not in inputs, "The tiny smoke case must not back the golden browser test"
     return project_manifest_for_serve(manifest, task_id=TASK_ID)
 
 
@@ -85,7 +85,7 @@ def _csv_rows(relative_path: str) -> list[list[str]]:
 def _status() -> dict:
     return {
         "task_id": TASK_ID,
-        "task_type": "cpu_runner_lh_fit",
+        "task_type": "gremlin_lh_fit",
         "display_name": "2KL8.i90c75_aln.a3m",
         "status": "finished",
         "terminal": True,
@@ -187,7 +187,7 @@ def _collect_errors(page: Page) -> list[str]:
     return errors
 
 
-def test_cpu_runner_lh_golden_result_acceptance(page: Page) -> None:
+def test_gremlin_lh_golden_result_acceptance(page: Page) -> None:
     manifest = _projected_manifest()
     errors = _collect_errors(page)
     page.set_viewport_size({"width": 1280, "height": 900})
@@ -295,7 +295,7 @@ def test_cpu_runner_lh_golden_result_acceptance(page: Page) -> None:
 
     scientific_outputs = {
         "raw_scores.csv", "apc_scores.csv", "pairwise_scores.tsv", "profile.tsv",
-        "statistics.json", "metadata.json", "summary.json", "cpu_runner_mrf.npz",
+        "statistics.json", "metadata.json", "summary.json", "gremlin_mrf.npz",
         "filtered_alignment.a3m", "sequence_weights.tsv", "sequence_scores.tsv",
         "training_history.csv", "coupling_apc.png",
     }
