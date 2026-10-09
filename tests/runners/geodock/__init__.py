@@ -1,1 +1,0 @@
-"""GeoDock Runner tests."""

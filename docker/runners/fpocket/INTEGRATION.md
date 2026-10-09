@@ -39,7 +39,7 @@ calibration of those numbers.
 
 ## Bounded raw parser fixture
 
-`tests/data/fpocket/1SUO_out/` is a *bounded* slice of a real fpocket run on
+`docker/runners/fpocket/tests/fast/fixtures/1SUO_out/` is a *bounded* slice of a real fpocket run on
 PDB `1SUO`, kept so the normalizer's parsing is exercised against real upstream
 output rather than a hand-written imitation:
 
