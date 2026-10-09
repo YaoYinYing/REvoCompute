@@ -1680,7 +1680,7 @@ def _mark_publication_charge_recorded(task_id: str, owned: int) -> None:
 
     Bookkeeping that follows the durable charge, so a failure here is not a
     second chance to lose the fact — it only means the next reconciliation pass
-    establishes that the charge is already recorded (``ensure_data_lifecycle`` is
+    establishes that the charge is already recorded (``charge_data_ownership`` is
     idempotent per task) and closes the marker then.
     """
     try:
