@@ -2501,7 +2501,8 @@ class TaskDatabase:
         deletion-ward, ``ERROR`` (an interrupted removal a later pass retries), or
         ``PURGED`` -- nothing is written, because those bytes are gone or on their
         way out, and a deletion that already happened is not re-opened by a
-        charge.
+        charge. ``"unowned"`` closes an ownerless pending publication without a
+        lifecycle row or ledger charge, under the same deletion guard.
         """
         timestamp = time.time() if at is None else at
         size = max(0, int(logical_bytes))
@@ -2524,6 +2525,21 @@ class TaskDatabase:
         self, conn, task_id: str, existing, *, user_id: int, size: int, timestamp: float
     ) -> str:
         """The guarded body of :meth:`charge_data_ownership`, inside its transaction."""
+        if existing is not None and str(existing["state"]) not in (
+            rloan.DataLifecycleState.ACTIVE.value,
+            rloan.DataLifecycleState.ARCHIVED.value,
+        ):
+            return "released"
+        if user_id <= 0:
+            conn.execute(
+                update(self.result_publications_table)
+                .where(
+                    self.result_publications_table.c.task_id == task_id,
+                    self.result_publications_table.c.charge_state == "pending",
+                )
+                .values(charge_state="unowned")
+            )
+            return "unowned"
         if existing is None:
             claimed = conn.execute(
                 sqlite_insert(self.data_lifecycle_table)
@@ -2553,13 +2569,6 @@ class TaskDatabase:
                 timestamp=timestamp,
             )
             return "charged"
-        if str(existing["state"]) not in (
-            rloan.DataLifecycleState.ACTIVE.value,
-            rloan.DataLifecycleState.ARCHIVED.value,
-        ):
-            # Deletion-ward, ERROR, or PURGED: the lifecycle owns these bytes now,
-            # so a charge transition must not re-open them.
-            return "released"
         if int(existing["logical_bytes"]) != size:
             # A recomputation that found a different size updates the logical
             # fact.  The ledger fact stays as charged until a purge releases
@@ -2604,24 +2613,6 @@ class TaskDatabase:
                 self.result_publications_table.c.charge_state == "pending",
             )
             .values(charge_bytes=max(0, int(charge_bytes)), charge_state="charged", charged_at=at)
-        )
-        with self.engine.begin() as conn:
-            return conn.execute(stmt).rowcount == 1
-
-    def mark_publication_unowned(self, task_id: str) -> bool:
-        """Close a pending publication that has no subject to charge.
-
-        A publication whose Task has no owning user (``user_id <= 0``) owes nobody
-        storage.  Closing it here is what keeps a repair pass from eventually
-        charging those bytes to subject 0.
-        """
-        stmt = (
-            update(self.result_publications_table)
-            .where(
-                self.result_publications_table.c.task_id == task_id,
-                self.result_publications_table.c.charge_state == "pending",
-            )
-            .values(charge_state="unowned")
         )
         with self.engine.begin() as conn:
             return conn.execute(stmt).rowcount == 1
@@ -4182,11 +4173,14 @@ class TaskDatabase:
         :meth:`charge_data_ownership` instead, because an unconditional reopen
         would let a stale charge re-open a deletion that already happened.
         """
+        if user_id <= 0:
+            raise ValueError("Data ownership requires an owning user")
         if not allow_reopen:
             self.charge_data_ownership(task_id, user_id=user_id, logical_bytes=logical_bytes, at=at)
             record = self.get_data_lifecycle(task_id)
-            if record is not None:
-                return record
+            if record is None:
+                raise RuntimeError("The guarded ownership transition yielded no lifecycle row")
+            return record
         timestamp = time.time() if at is None else at
         size = max(0, int(logical_bytes))
         with self.engine.begin() as conn:

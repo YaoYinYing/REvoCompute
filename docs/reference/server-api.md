@@ -150,6 +150,8 @@ finishing: the durable lifecycle row wins over the worker's result tree, so a
 delete that lands mid-finalization is not re-materialized and re-charged. A
 purge that lands after the worker's ownership read but before its charge has the
 same effect, because the decision and the charge are one transaction.
+An ownerless publication closes as `unowned` without charging subject zero; that
+branch uses the same guarded transaction, so it cannot bypass an accepted deletion.
 
 A publication anchored before the charge was recorded alongside it owes an amount
 that is *unknown*, not zero. The repair derives it from the verified anchored

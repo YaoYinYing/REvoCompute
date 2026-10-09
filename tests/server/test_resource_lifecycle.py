@@ -324,6 +324,53 @@ def test_a_crashed_purge_reaches_purged_and_releases_the_charged_bytes_once(tmp_
     assert database.logical_owned_bytes(30) == 0
 
 
+def test_cancellation_acknowledges_the_claim_without_releasing_failed_cleanup(monkeypatch, tmp_path):
+    """Cancellation succeeds independently of cleanup, which must not free quota."""
+    from inspect import unwrap
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from conftest import _insert_pending_task, _load_pssm_module, _test_client_auth
+
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    from revocompute.maintenance.tasks import result_cleanup as cleanup
+
+    headers = _test_client_auth(module)
+    task_id = _insert_pending_task(module, tmp_path / "result")
+    task = module.task_store.get_task(task_id)
+    user_id = task["submitted_by_user_id"]
+    module.task_store.ensure_data_lifecycle(task_id, user_id=user_id, logical_bytes=64)
+    task_root = Path(module.app.config["storage_resolver"].get_task_root(task))
+    stopped: list[dict] = []
+
+    def refuse_removal(*args, **kwargs):
+        raise PermissionError("cleanup temporarily unavailable")
+
+    with monkeypatch.context() as failure:
+        route_globals = unwrap(module.app.view_functions["cancel_task"]).__globals__
+        failure.setitem(
+            route_globals, "cancel_compute_resources", SimpleNamespace(delay=lambda **fields: stopped.append(fields))
+        )
+        failure.setattr(cleanup.shutil, "rmtree", refuse_removal)
+        response = module.app.test_client().post(f"/compute/api/cancel/{task_id}", headers=headers)
+
+    assert response.status_code == 200
+    assert response.json["status"] == "cancelled"
+    assert module.task_store.get_task(task_id)["status"] == "cancelled"
+    assert stopped and task_root.exists()
+    assert module.task_store.logical_owned_bytes(user_id) == 64
+    assert not [
+        entry for entry in module.task_store.list_ledger(user_id) if entry["reason_code"] == "storage_released"
+    ]
+
+    resource_lifecycle.request_data_deletion(module.task_store, task, actor_user_id=user_id)
+    assert resource_lifecycle.purge_task_data(module.task_store, task, remove_artifacts=module._delete_task_artifacts)
+    assert not task_root.exists()
+    assert module.task_store.logical_owned_bytes(user_id) == 0
+    released = [entry for entry in module.task_store.list_ledger(user_id) if entry["reason_code"] == "storage_released"]
+    assert [entry["quantity"] for entry in released] == [64]
+
+
 def test_a_crashed_purge_with_no_owning_task_row_is_completed(tmp_path):
     """The orphan case: the Task row was hard-removed while its purge was claimed."""
     database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
@@ -338,6 +385,16 @@ def test_a_crashed_purge_with_no_owning_task_row_is_completed(tmp_path):
     assert recovered == {"recovered": 1}
     assert database.get_data_lifecycle("b2" + "0" * 30)["state"] == DataLifecycleState.PURGED.value
     assert database.logical_owned_bytes(31) == 0
+
+
+@pytest.mark.parametrize("allow_reopen", [False, True])
+def test_an_ownerless_task_cannot_register_a_subject_zero_charge(tmp_path, allow_reopen):
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "a" * 32
+    with pytest.raises(ValueError):
+        database.ensure_data_lifecycle(task_id, user_id=0, logical_bytes=64, allow_reopen=allow_reopen)
+    assert database.get_data_lifecycle(task_id) is None
+    assert database.list_ledger(0) == []
 
 
 def test_republishing_a_purged_result_charges_the_new_bytes(tmp_path):
@@ -355,6 +412,10 @@ def test_republishing_a_purged_result_charges_the_new_bytes(tmp_path):
     resource_lifecycle.purge_task_data(
         database, _task(task_id, user_id=32), remove_artifacts=_remove, at=1_200.0
     )
+    assert database.logical_owned_bytes(32) == 0
+
+    guarded = database.ensure_data_lifecycle(task_id, user_id=32, logical_bytes=2 * GIB, at=1_250.0)
+    assert guarded["state"] == DataLifecycleState.PURGED.value
     assert database.logical_owned_bytes(32) == 0
 
     # Reopening is explicit: only a caller that has established the bytes really
@@ -702,7 +763,10 @@ def test_retention_resumes_a_claimed_deletion(tmp_path):
     assert database.logical_owned_bytes(54) == 0
 
 
-def test_the_real_remover_fails_closed_and_keeps_the_charge(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "removal_error", [PermissionError("read-only filesystem"), FileNotFoundError("child vanished")]
+)
+def test_the_real_remover_fails_closed_and_keeps_the_charge(tmp_path, monkeypatch, removal_error):
     """A failed ``rmtree`` on the production path must not free quota.
 
     ``purge_task_data`` treats its remover as transactional, so the real remover
@@ -726,7 +790,7 @@ def test_the_real_remover_fails_closed_and_keeps_the_charge(tmp_path, monkeypatc
     (task_root / "artifact.txt").write_text("payload\n", encoding="utf-8")
 
     def _boom(*_args, **_kwargs):
-        raise OSError("read-only file system")
+        raise removal_error
 
     monkeypatch.setattr(cleanup.shutil, "rmtree", _boom)
 

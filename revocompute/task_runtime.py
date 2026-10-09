@@ -1635,15 +1635,6 @@ def _charge_logical_storage(
         if owned_bytes is None
         else max(0, int(owned_bytes))
     )
-    if user_id <= 0:
-        # An unowned publication owes no subject anything, so it must not stay
-        # pending: a repair pass that inherited it would charge those bytes to
-        # subject 0.  Closing it here is the same transition's ownerless branch.
-        try:
-            task_store.mark_publication_unowned(task_id)
-        except Exception:
-            logging.exception("Could not close the ownerless publication for task %s", task_id)
-        return
     try:
         outcome = task_store.charge_data_ownership(
             task_id, user_id=user_id, logical_bytes=owned, at=time.time()
@@ -1664,6 +1655,8 @@ def _charge_logical_storage(
         # removing, so it is abandoned and the Task ends instead of publishing.
         _abandon_published_result(task, result_dir)
         raise DataPurgedError(task_id)
+    if outcome == "unowned":
+        return
     _mark_publication_charge_recorded(task_id, owned)
     emit_event(
         "resource.storage.charged",
@@ -3168,27 +3161,18 @@ def _reconcile_pending_storage_charges() -> dict[str, int]:
             skipped += 1
             continue
         user_id = int(task.get("submitted_by_user_id") or 0)
-        if user_id <= 0:
-            # Ownerless: there is no subject to charge, so the publication is
-            # closed rather than left pending for a later pass to bill subject 0.
-            task_store.mark_publication_unowned(task_id)
-            skipped += 1
-            continue
-        if storage.publication_state(task) != PUBLICATION_AVAILABLE:
-            # Not a publication Core can vouch for.  Charging it would bill a
-            # subject for bytes an untrusted tree merely claims to hold, and
-            # closing it as zero would record a charge that never happened.
-            skipped += 1
-            continue
-        owned = record.get("charge_bytes")
-        if owned is None:
-            # A publication that predates the charge column: its amount is
-            # unknown, so derive it from the verified anchored manifest instead
-            # of reading NULL as a zero charge that is then never re-examined.
-            owned = _anchored_publication_bytes(storage, task)
-            if owned is None:
+        owned = 0
+        if user_id > 0:
+            if storage.publication_state(task) != PUBLICATION_AVAILABLE:
+                # An unverifiable publication stays unresolved, not charged as zero.
                 skipped += 1
                 continue
+            owned = record.get("charge_bytes")
+            if owned is None:
+                owned = _anchored_publication_bytes(storage, task)
+                if owned is None:
+                    skipped += 1
+                    continue
         owned = max(0, int(owned))
         try:
             outcome = task_store.charge_data_ownership(
@@ -3204,6 +3188,9 @@ def _reconcile_pending_storage_charges() -> dict[str, int]:
             # the lifecycle, append a new storage fact, or count a charge.
             task_store.mark_publication_released(task_id)
             released += 1
+            continue
+        if outcome == "unowned":
+            skipped += 1
             continue
         task_store.mark_publication_charged(task_id, charge_bytes=owned, at=time.time())
         charged += 1

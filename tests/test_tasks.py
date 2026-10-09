@@ -2157,7 +2157,8 @@ def test_a_purged_task_is_not_republished_by_a_finishing_worker(monkeypatch, tmp
     assert module.task_store.get_data_lifecycle(task_id)["state"] == "DELETE_REQUESTED"
 
 
-def test_a_purge_that_lands_during_finalize_is_not_republished_or_recharged(monkeypatch, tmp_path):
+@pytest.mark.parametrize("ownerless", [False, True])
+def test_a_purge_that_lands_during_finalize_is_not_republished_or_recharged(monkeypatch, tmp_path, ownerless):
     """The window between the finalize guard and the charge is real, and deletion wins.
 
     ``_finalize_results_manifest`` reads the durable lifecycle once at the top
@@ -2176,6 +2177,8 @@ def test_a_purge_that_lands_during_finalize_is_not_republished_or_recharged(monk
         extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "gremlin"},
     )
     owner = _task_owner(module, "purge-during-finalize")
+    if ownerless:
+        owner["submitted_by_user_id"] = 0
     user_id = int(owner["submitted_by_user_id"])
     task_id = "9" * 32
     module.task_store.upsert_task(
@@ -2190,7 +2193,8 @@ def test_a_purge_that_lands_during_finalize_is_not_republished_or_recharged(monk
         **owner,
     )
     task = module.task_store.get_task(task_id)
-    module.task_store.ensure_data_lifecycle(task_id, user_id=user_id, logical_bytes=64, at=time.time())
+    if not ownerless:
+        module.task_store.ensure_data_lifecycle(task_id, user_id=user_id, logical_bytes=64, at=time.time())
     result_dir = module.task_runtime._task_result_dir(task)
     charges_before = [
         entry for entry in module.task_store.list_ledger(user_id)

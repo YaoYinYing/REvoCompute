@@ -171,12 +171,11 @@ class _FakeTaskStore:
     def charge_data_ownership(self, task_id, *, user_id, logical_bytes=0, at=None):
         # The guarded transition the live publication now uses: the fake models
         # only the task row, so the data is always still owned here.
+        if user_id <= 0:
+            if self.publications:
+                self.publications[-1]["charge_state"] = "unowned"
+            return "unowned"
         return "charged"
-
-    def mark_publication_unowned(self, task_id):
-        if self.publications:
-            self.publications[-1]["charge_state"] = "unowned"
-        return True
 
     def get_data_lifecycle(self, task_id):
         # No lifecycle row: the Task still owns its data, so finalization is

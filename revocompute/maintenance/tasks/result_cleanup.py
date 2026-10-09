@@ -62,8 +62,9 @@ def _remove_owned_tree(path: str, *, label: str) -> None:
     try:
         shutil.rmtree(path)
     except FileNotFoundError:
-        # A concurrent removal emptied it first: the bytes are gone.
-        return
+        # A missing child is not proof that the owned root is gone. The same
+        # postcondition below decides whether concurrent removal completed it.
+        pass
     except OSError as exc:
         raise ArtifactRemovalError(f"could not remove {label} {path}: {exc}") from exc
     if os.path.lexists(path):
