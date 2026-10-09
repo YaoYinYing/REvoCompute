@@ -170,7 +170,7 @@ _ZERO_SHA = "0" * 40
 
 
 def _normalize(path: str) -> str:
-    candidate = path.strip().replace("\\", "/")
+    candidate = path
     while candidate.startswith("./"):
         candidate = candidate[2:]
     return candidate.lstrip("/")
@@ -243,32 +243,54 @@ def classify_paths(paths) -> frozenset[str]:
     return frozenset(lanes)
 
 
-def _parse_name_only(output: str):
-    return [line.strip() for line in output.splitlines() if line.strip()]
+def file_transitions(base: str, head: str, cwd=None, *, merge_base=True) -> bytes:
+    """Canonical raw transitions: exact paths, modes and full before/after blob IDs.
+
+    Disable rename detection deliberately: a rename is a deletion plus addition,
+    so both endpoints remain visible regardless of Git similarity heuristics.
+    NUL delimiters preserve whitespace and newlines in paths.
+    """
+    if not base or not head or base == _ZERO_SHA or head == _ZERO_SHA:
+        raise ValueError("missing or zero revision")
+    revision = [f"{base}...{head}"] if merge_base else [base, head]
+    return subprocess.run(
+        ["git", "diff", "--raw", "--no-abbrev", "--no-renames", "--no-ext-diff",
+         "--no-textconv", "--no-relative", "--ignore-submodules=none", "-z", *revision, "--"],
+        capture_output=True, check=True, cwd=cwd,
+    ).stdout
+
+
+def transition_paths(records: bytes):
+    fields = records.split(b"\0")
+    if fields[-1] != b"" or (len(fields) - 1) % 2:
+        raise ValueError("malformed raw transitions")
+    paths = []
+    for metadata, path in zip(fields[0:-1:2], fields[1:-1:2]):
+        if not metadata.startswith(b":") or len(metadata.split()) != 5 or not path:
+            raise ValueError("malformed raw transition")
+        paths.append(os.fsdecode(path))
+    return sorted(paths)
+
+
+def transition_requires_full(records: bytes) -> bool:
+    """Executable/type/submodule transitions are not provably documentation-only."""
+    transition_paths(records)  # validate the shared representation first
+    for metadata in records.split(b"\0")[0:-1:2]:
+        old, new, *_ = metadata[1:].split()
+        ordinary = {b"000000", b"100644", b"100755"}
+        if old not in ordinary or new not in ordinary:
+            return True
+        if old != b"000000" and new != b"000000" and old != new:
+            return True
+    return False
 
 
 def changed_paths(base: str, head: str):
-    """Return the changed paths for ``base..head``, or None if undeterminable.
-
-    None (missing or zero SHAs, a git error) means the classifier cannot prove
-    the change set, so every lane must run.
-    """
-    if not base or not head:
-        return None
-    if base == _ZERO_SHA or head == _ZERO_SHA:
-        return None
-    # Three-dot diff against the merge base: the change set's own paths, not
-    # unrelated commits that landed on the base branch meanwhile.
+    """Return all transition endpoints, or None to widen validation on failure."""
     try:
-        result = subprocess.run(
-            ["git", "diff", "--name-only", f"{base}...{head}"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-    except (OSError, subprocess.CalledProcessError):
+        return transition_paths(file_transitions(base, head))
+    except (OSError, ValueError, subprocess.CalledProcessError):
         return None
-    return _parse_name_only(result.stdout)
 
 
 def classify(event: str, base: str = "", head: str = "", paths=None) -> frozenset[str]:
@@ -278,7 +300,13 @@ def classify(event: str, base: str = "", head: str = "", paths=None) -> frozense
     if paths is not None:
         return classify_paths(paths)
     if event in ("push", "pull_request"):
-        return classify_paths(changed_paths(base, head))
+        try:
+            records = file_transitions(base, head)
+            if transition_requires_full(records):
+                return ALL_LANES
+            return classify_paths(transition_paths(records))
+        except (OSError, ValueError, subprocess.CalledProcessError):
+            return ALL_LANES
     # Unknown event: fail closed.
     return ALL_LANES
 

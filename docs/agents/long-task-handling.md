@@ -793,8 +793,8 @@ INDEPENDENT          merge order does not matter relative to its siblings,
 STACKED(parent_pr)   code depends on an unmerged ancestor: review it
                      independently, but it cannot enter the merge frontier
                      before that ancestor lands
-COUPLED(group_id)    individually reviewable, but the set lands as one
-                     integration set in a recorded order
+COUPLED(group_id)    independently valid members land by sequential squash
+                     in a recorded order; the group is never atomic
 EXTERNAL             deliberately outside Commander ownership; still
                      participates in shared-host arbitration and main-drift
                      reconciliation
@@ -816,7 +816,7 @@ rebase/reconcile when required and rerun the affected acceptance. The downstream
 PR must not reach `READY_FOR_FINAL_REVIEW` while an unresolved dependency can
 still invalidate its result. This is `STACKED` when implementation itself is
 blocked on the contract, and `COUPLED` when the PRs are independently
-implementable but must land together.
+valid at every landing step, with coordinated sequential landing.
 
 **Shared-resource / ownership dependency.** The PRs are logically independent but
 cannot safely use the same mutable resource or write surface concurrently — a
@@ -828,7 +828,9 @@ and write-ownership rules rather than inventing a whole-PR dependency.
 An `INDEPENDENT` PR states that two siblings may merge in either order; it is the
 default only when that is actually true. `COUPLED` exists because "independently
 reviewable" and "safe to land in any order" are different claims — a coupled set
-is parallel during review and serial at landing.
+is parallel during review and sequential, non-atomic at landing. Record the
+landing order and revalidate every remaining candidate after each merge. If a
+member cannot remain independently valid, use one PR or a STACKED dependency.
 
 These classes are the explicit vocabulary for the categories above, not a second
 taxonomy; a launch prompt may name them or leave the Commander to record them.
@@ -899,13 +901,14 @@ the next decision needs: `pr`, `head_sha`, `base_sha`, `patch_digest`,
 `review_result`, and `reviewed_at`. The validation lanes that ran are the CI
 classifier's answer, so they are not duplicated into the receipt.
 
-`patch_digest` is the sha256 of the PR's own diff taken against its **merge base**
-(`git diff $(git merge-base base head)..head`, the same three-dot form the CI
-classifier uses). The three-dot range excludes unrelated commits from the base
-branch, so a rebase that only changes ancestry leaves the digest unchanged, while
-any real change to the reviewed content moves it. The digest is always recomputed
-against the *new* base: a two-dot range would move on every base advance and turn
-a content-identical rebase into a false escalation.
+`patch_digest` hashes canonical NUL-delimited raw Git file transitions against
+its merge base, with rename detection disabled. The identity includes exact path
+bytes, old/new modes (including symlink and executable type), and full old/new
+blob IDs. Deletion and addition preserve both rename endpoints. Receipts require
+`identity_format=git-raw-transition-v1`; older human-diff receipts never authorize
+carry-forward. Whitespace, binary bytes, symlink targets and mode changes affect
+the identity. Same-file base edits conservatively invalidate identity even if a
+human patch appears unchanged. `merge_tree_oid` records the synthetic merge tree.
 
 When `main` advances after review, classify the difference:
 
@@ -1305,6 +1308,10 @@ an unrelated external agent session — does not make RAM, swap, CPU, disk
 bandwidth, Docker/build cache, browser workers, or the demo deployment
 independent, and an over-subscribed development host can take down the shared
 demo stack for everyone.
+
+This PR documents existing host practice; it does not implement or machine-verify
+a heavy-work lease wrapper, metadata inspection, or contention/death acceptance.
+Those mechanisms are deferred. Preserve the existing adopted host lock.
 
 Where the host already runs an adopted shared heavy-work lock, that lock **is**
 the lease: this protocol points at it rather than defining a second mechanism,
@@ -1749,7 +1756,7 @@ reads it. The bus carries ephemeral peer notification, nothing else:
 ```text
 durable technical truth      -> the GitHub PR and its thread
 campaign coordination truth   -> the Commander
-ephemeral peer notification   -> the local liaison bus (optionally a tmux wakeup)
+ephemeral peer notification   -> the local liaison mailbox
 ```
 
 Membership is explicit. At session start an agent registers its logical name and,
@@ -1778,21 +1785,11 @@ The bus is coordination-only and must stay that way:
   database. If a use needs a reply within a deadline, a queue with delivery
   guarantees, or a durable record, it belongs in a PR thread, not here.
 
-tmux is a **notification path only**. Where tmux is available and a peer's pane is
-known, a notice may be injected to tell that session its mailbox has something new
-— for example `Coordination message available in <bus>/<agent>.jsonl`. Discover
-targets with `tmux list-sessions` and
-`tmux list-panes -a -F '#{session_name}:#{window_index}.#{pane_index}'`. Only
-inject into a pane known to be an interactive agent prompt, and only this
-generated notice — never a message body, never a general remote-command
-mechanism.
-
-A `send-keys` is not delivered until the pane visibly changes: type the notice,
-send Enter in a **separate** call, then capture the pane and confirm it differs. A
-notice still sitting on the current input line is unsent. If the pane's prompt
-state cannot be established safely, write the mailbox only and let the peer read
-it at its next checkpoint. Without tmux, the bus degrades to mailbox-only with no
-error and no lost information.
+Delivery is **mailbox-only**. Registration and pane discovery are descriptive
+metadata, never proof that a pane currently belongs to an owned live agent prompt.
+The helper does not submit terminal input or send Enter. Stale, shell, unknown,
+and partially typed panes therefore receive no keystrokes. Peers read mailboxes
+at meaningful checkpoints; the append remains authoritative if a peer is offline.
 
 The bus and the heavy-work lease tell one story about the same host: control
 ownership may be independent while physical resources are shared, so

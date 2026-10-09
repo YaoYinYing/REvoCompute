@@ -10,13 +10,10 @@ A reviewed PR does not become unreviewed because unrelated commits landed on
 rerunning, and re-reviewing everything:
 
 ``patch_digest``
-    sha256 of the PR's own diff, taken against its **merge base**
-    (``git merge-base base head`` -> ``head``). A three-dot diff excludes
-    unrelated commits that landed on the base branch, so a rebase that only
-    changes ancestry leaves the digest unchanged, while any real change to the
-    reviewed content changes it. The digest must be recomputed against the new
-    base: a two-dot range would change on every base advance and turn a
-    content-identical rebase into a false escalation.
+    sha256 of canonical NUL-delimited raw Git transitions against the merge base.
+    Every record includes the exact path, old/new mode and full old/new blob ID.
+    Rename detection is disabled: both deletion and addition are represented.
+    Older human-patch receipts cannot authorize content-review carry-forward.
 
 ``changed_paths_digest``
     sha256 over the sorted three-dot changed paths.
@@ -172,28 +169,42 @@ def merge_base(base: str, head: str, cwd=None) -> str:
     return _git(["merge-base", _require_sha(base, "base"), _require_sha(head, "head")], cwd).strip()
 
 
+def _transition_policy():
+    spec = importlib.util.spec_from_file_location("classify_ci_scope", TOOLS_DIR / "classify_ci_scope.py")
+    if spec is None or spec.loader is None:
+        raise CandidateError("transition policy unavailable")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _transitions(base: str, head: str, cwd=None, *, merge_base=True):
+    try:
+        return _transition_policy().file_transitions(
+            _require_sha(base, "base"), _require_sha(head, "head"), cwd, merge_base=merge_base,
+        )
+    except (OSError, ValueError, subprocess.CalledProcessError) as error:
+        raise CandidateError(f"cannot establish file transitions: {error}") from error
+
+
 def changed_paths(base: str, head: str, cwd=None):
-    """Return the PR's own changed paths (three-dot diff against the merge base)."""
-    base_sha = _require_sha(base, "base")
-    head_sha = _require_sha(head, "head")
-    output = _git(["diff", "--name-only", f"{base_sha}...{head_sha}"], cwd)
-    return sorted(path.strip() for path in output.splitlines() if path.strip())
+    """All endpoints of the PR's canonical raw file transitions."""
+    return _transition_policy().transition_paths(_transitions(base, head, cwd))
 
 
 def patch_digest(base: str, head: str, cwd=None) -> str:
-    """sha256 of the PR's own diff, taken against its merge base."""
-    base_sha = _require_sha(base, "base")
-    head_sha = _require_sha(head, "head")
-    diff = _git_bytes(
-        ["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", f"{base_sha}...{head_sha}"],
-        cwd,
-    )
-    return hashlib.sha256(diff).hexdigest()
+    """Exact path/mode/type/before-and-after blob transition identity."""
+    records = _transitions(base, head, cwd)
+    _transition_policy().transition_paths(records)
+    fields = records.split(b"\0")
+    pairs = sorted(zip(fields[0:-1:2], fields[1:-1:2]), key=lambda pair: pair[1])
+    canonical = b"".join(metadata + b"\0" + path + b"\0" for metadata, path in pairs)
+    return hashlib.sha256(b"git-raw-transition-v1\0" + canonical).hexdigest()
 
 
 def changed_paths_digest(paths) -> str:
     """sha256 over the sorted changed-path list."""
-    payload = "".join(f"{path}\n" for path in sorted(paths))
+    payload = json.dumps(sorted(paths), ensure_ascii=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -254,10 +265,10 @@ def advance_paths(old_base: str, new_base: str, cwd=None):
     if result.returncode != 0:
         return None
     try:
-        output = _git(["diff", "--name-only", old_sha, new_sha], cwd)
+        output = _transitions(old_sha, new_sha, cwd, merge_base=False)
     except CandidateError:
         return None
-    return sorted(path.strip() for path in output.splitlines() if path.strip())
+    return _transition_policy().transition_paths(output)
 
 
 # --------------------------------------------------------------------------- #
@@ -424,12 +435,15 @@ def compute_candidate(pr: int | None, base: str, head: str, cwd=None, private_re
         "base_sha": base_sha,
         "merge_base_sha": merge_base(base_sha, head_sha, cwd),
         "patch_digest": patch_digest(base_sha, head_sha, cwd),
+        "identity_format": "git-raw-transition-v1",
         "changed_paths": paths,
         "changed_paths_digest": changed_paths_digest(paths),
         "merge_tree_oid": tree_oid,
         "mergeable": not conflicts,
         "conflicted_paths": conflicts,
-        "lanes": _classify_lanes(paths),
+        "lanes": (sorted(_transition_policy().ALL_LANES)
+                  if _transition_policy().transition_requires_full(_transitions(base_sha, head_sha, cwd))
+                  else _classify_lanes(paths)),
         "merges_main": False,
         "private_recheck": bool(private_recheck),
     }
@@ -484,11 +498,18 @@ def evaluate_candidate(receipt: dict, current_base: str, head: str, cwd=None) ->
     decision = classify_drift(
         pr_paths=candidate["changed_paths"],
         advanced_paths=advanced,
-        patch_identity_unchanged=candidate["patch_digest"] == receipt["patch_digest"],
+        patch_identity_unchanged=(receipt.get("identity_format") == "git-raw-transition-v1"
+                                  and candidate["patch_digest"] == receipt["patch_digest"]),
         dependency_surface=receipt.get("dependency_surface") or (),
         previous_review_result=receipt.get("review_result", "approved"),
     )
-    decision["patch_identity_unchanged"] = candidate["patch_digest"] == receipt["patch_digest"]
+    if advanced is not None and _transition_policy().transition_requires_full(
+        _transitions(receipt["base_sha"], current_base, cwd, merge_base=False)
+    ):
+        decision.update(drift_class=CLASS_GLOBAL, carry_forward=False, required_gate=GATE_FULL,
+                        reason="base gained a mode/type transition")
+    decision["patch_identity_unchanged"] = (receipt.get("identity_format") == "git-raw-transition-v1"
+                                            and candidate["patch_digest"] == receipt["patch_digest"])
     decision["reviewed_head_sha"] = receipt["head_sha"]
     decision["current_head_sha"] = candidate["head_sha"]
 

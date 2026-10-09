@@ -305,3 +305,72 @@ def test_cli_fails_closed_with_exit_four_on_unreadable_range(tmp_path):
     receipt = tmp_path / "receipt.json"
     receipt.write_text(json.dumps({"patch_digest": "x" * 64, "base_sha": "not-a-sha", "head_sha": "also-not"}), encoding="utf-8")
     assert candidate.main(["drift", "--base", "nope", "--head", "nope", "--receipt", str(receipt)]) == 4
+
+
+@pytest.mark.parametrize("change", ["rename-out", "rename-in", "delete", "mode", "symlink", "type", "whitespace", "binary"])
+def test_exact_transition_identity_and_classification(repo, change, monkeypatch):
+    # All cases use real trees; rename detection configuration cannot hide origins.
+    _write(repo, "revocompute/auth.py", "trusted = True\n")
+    _write(repo, "docs/note.md", "trusted = True\n")
+    base = _commit(repo, "transition base")
+    original = candidate.patch_digest(base, base, repo)
+    target = repo / "revocompute/auth.py"
+    if change == "rename-out":
+        target.rename(repo / "docs/moved.md")
+    elif change == "rename-in":
+        (repo / "docs/note.md").rename(repo / "revocompute/db.py")
+    elif change == "delete":
+        target.unlink()
+    elif change == "mode":
+        target.chmod(0o755)
+    elif change in ("symlink", "type"):
+        target.unlink()
+        target.symlink_to("../docs/note.md")
+    elif change == "whitespace":
+        target.write_bytes(b"trusted = True  \n")
+    elif change == "binary":
+        target.write_bytes(b"\x00\xffbinary\n")
+    head = _commit(repo, change)
+    digest = candidate.patch_digest(base, head, repo)
+    assert digest != original
+    assert candidate.patch_digest(base, head, repo) == digest
+    paths = candidate.changed_paths(base, head, repo)
+    monkeypatch.chdir(repo)
+    assert candidate._transition_policy().classify("pull_request", base, head) == candidate._transition_policy().ALL_LANES
+    assert candidate._classify_lanes(paths) == list(sorted(candidate._transition_policy().ALL_LANES))
+    if change == "rename-out":
+        assert {"revocompute/auth.py", "docs/moved.md"} <= set(paths)
+    elif change == "rename-in":
+        assert {"docs/note.md", "revocompute/db.py"} <= set(paths)
+    # Changing exact bytes again cannot retain the identity.
+    (repo / "docs/note.md").write_bytes(b"another exact byte\n")
+    changed = _commit(repo, "different bytes")
+    assert candidate.patch_digest(base, changed, repo) != digest
+
+
+def test_base_drift_rename_cannot_hide_global_invalidator(repo):
+    _write(repo, "revocompute/auth.py", "trusted = True\n")
+    base = _commit(repo, "trust boundary")
+    _git(repo, "checkout", "-q", "-b", "pr")
+    _write(repo, "frontend/src/app.js", "changed\n")
+    head = _commit(repo, "frontend change")
+    receipt = candidate.compute_candidate(69, base, head, repo)
+    _git(repo, "checkout", "-q", "main")
+    (repo / "docs").mkdir()
+    (repo / "revocompute/auth.py").rename(repo / "docs/auth.md")
+    advanced = _commit(repo, "boundary moved to docs")
+    outcome = candidate.evaluate_candidate(receipt, advanced, head, repo)
+    assert outcome["decision"]["drift_class"] == candidate.CLASS_GLOBAL
+    assert not outcome["decision"]["carry_forward"]
+    assert "revocompute/auth.py" in outcome["decision"]["drift_paths"]
+
+
+def test_old_human_patch_receipts_cannot_authorize_carry_forward(repo):
+    base = _git(repo, "rev-parse", "HEAD")
+    _write(repo, "frontend/src/app.js", "changed\n")
+    head = _commit(repo, "content")
+    receipt = candidate.compute_candidate(69, base, head, repo)
+    del receipt["identity_format"]
+    outcome = candidate.evaluate_candidate(receipt, base, head, repo)
+    assert not outcome["decision"]["carry_forward"]
+    assert outcome["decision"]["required_gate"] == candidate.GATE_FULL

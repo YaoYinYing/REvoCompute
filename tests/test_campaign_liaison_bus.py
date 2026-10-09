@@ -199,96 +199,17 @@ def test_a_later_registration_supersedes_an_earlier_pane(tmp_path):
 # --------------------------------------------------------------------------- #
 
 
-def _fake_tmux(monkeypatch, *, before: str, after: str):
-    """Replace tmux with a deterministic stand-in for the delivery rule."""
-    calls = []
-
-    def fake_run(command, *args, **kwargs):
-        calls.append(command)
-        if "capture-pane" in command:
-            # First capture is "before"; every later capture is "after".
-            captured = before if calls.count(command) <= 1 else after
-            return subprocess.CompletedProcess(command, 0, stdout=captured, stderr="")
-        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
-
-    monkeypatch.setattr(bus.subprocess, "run", fake_run)
-    monkeypatch.setattr(bus.shutil, "which", lambda name: "/usr/bin/tmux")
-    monkeypatch.setattr(bus.time, "sleep", lambda seconds: None)
-    return calls
-
-
-def test_delivery_requires_the_pane_to_change(monkeypatch):
-    calls = _fake_tmux(monkeypatch, before="prompt $", after="prompt $")
-    assert bus.notify_pane("sess:0.0", "Coordination message available in x.jsonl") == "unconfirmed-unchanged"
-    typed = [c for c in calls if "send-keys" in c]
-    assert typed, "the notice must still be typed"
-    # Enter is a separate call, never combined with the text.
-    assert any(c[:1] == ["tmux"] and c[-1] == "Enter" for c in typed)
-
-
-def test_delivery_reports_success_when_the_pane_changed(monkeypatch):
-    _fake_tmux(monkeypatch, before="prompt $", after="prompt $ bash: notice: command not found\nprompt $")
-    assert bus.notify_pane("sess:0.0", "Coordination message available in x.jsonl") == "confirmed"
-
-
-def test_text_still_on_the_input_line_is_unconfirmed(monkeypatch):
-    notice = "Coordination message available in x.jsonl"
-    _fake_tmux(monkeypatch, before="prompt $", after=f"prompt $ {notice}")
-    assert bus.notify_pane("sess:0.0", notice) == "unconfirmed-on-input-line"
-
-
-def test_notify_degrades_to_mailbox_only_without_tmux(tmp_path, monkeypatch):
-    registration = bus.build_message(sender="a1", recipient="a1", message_type="REGISTERED", body="online")
+@pytest.mark.parametrize("pane_state", ["stale", "shell", "unknown", "partial-input"])
+def test_registered_panes_never_receive_submitted_keystrokes(tmp_path, monkeypatch, pane_state):
+    registration = bus.build_message(sender="a1", recipient="a1", message_type="REGISTERED", body=pane_state)
     registration["tmux_target"] = "sess:0.0"
     bus.append_message(registration, tmp_path)
-    monkeypatch.setattr(bus.shutil, "which", lambda name: None)
-    assert bus.notify_message("a1", tmp_path) == "mailbox-only-tmux-absent"
-    assert bus.list_panes() == {"available": False, "sessions": [], "panes": []}
-
-
-def test_notify_without_a_registration_never_touches_tmux(tmp_path, monkeypatch):
-    def explode(*args, **kwargs):
-        raise AssertionError("tmux must not run for an unregistered agent")
-
-    monkeypatch.setattr(bus.subprocess, "run", explode)
-    assert bus.notify_message("ghost", tmp_path) == "mailbox-only-no-registration"
-
-
-def test_pane_target_validation_rejects_injection(tmp_path):
-    assert bus.notify_pane("sess; rm -rf /", "notice") == "invalid-target"
-    assert bus.notify_pane("$(whoami)", "notice") == "invalid-target"
-
-
-@pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is not installed")
-def test_real_tmux_delivery_verification(tmp_path):
-    """A real pane: the notice is delivered only when the pane visibly changes."""
-    session = f"rc-bus-test-{os.getpid()}"
-    created = subprocess.run(
-        ["tmux", "new-session", "-d", "-s", session, "-x", "100", "-y", "30", "bash", "--norc", "-i"],
-        capture_output=True,
-        text=True,
-    )
-    if created.returncode != 0:
-        pytest.skip(f"cannot start a tmux session here: {created.stderr.strip()}")
-    try:
-        target = f"{session}:0.0"
-        # Wait for the shell to reach an interactive prompt.
-        ready = False
-        for _ in range(40):
-            captured = subprocess.run(["tmux", "capture-pane", "-t", target, "-p"], capture_output=True, text=True)
-            if captured.returncode == 0 and "$" in captured.stdout:
-                ready = True
-                break
-            time.sleep(0.25)
-        if not ready:
-            pytest.skip("tmux pane never reached an interactive prompt")
-        notice = "Coordination message available in .rc-agent-bus/commander.jsonl"
-        outcome = bus.notify_pane(target, notice, settle_seconds=1.0)
-        assert outcome == "confirmed", outcome
-        final = subprocess.run(["tmux", "capture-pane", "-t", target, "-p"], capture_output=True, text=True).stdout
-        assert notice not in final.splitlines()[-1]
-    finally:
-        subprocess.run(["tmux", "kill-session", "-t", session], capture_output=True, text=True)
+    def refuse_input(*args, **kwargs):
+        raise AssertionError("mailbox delivery must not invoke tmux")
+    monkeypatch.setattr(bus.subprocess, "run", refuse_input)
+    assert bus.main(["--bus-dir", str(tmp_path), "send", "--from", "b1", "--to", "a1",
+                     "--type", "PLEASE_INSPECT", "--message", "read mailbox"]) == 0
+    assert bus.read_messages("a1", tmp_path)[-1]["message"] == "read mailbox"
 
 
 # --------------------------------------------------------------------------- #
