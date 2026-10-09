@@ -26,6 +26,13 @@ POLICY_TESTS = frozenset({"tests/test_ci_scope_classifier.py", "tests/test_campa
 VALUE_EXCEPTIONS = {
     "revocompute/input_validators/profiles.py": {"alphafold3"},
     "revocompute/routes.py": {"/compute/create_task?task_type=gremlin"},
+    "tests/server/test_application_frontend_contract.py": {"/compute/create_task?task_type=gremlin"},
+    "tests/server/test_preflight_boundary.py": {"alphafold3"},
+    # Immutable format-parser corpus is shared input data, not plugin assets.
+    "tests/test_input_validation.py": {
+        "tests/data/foundry/rf3_monomer.json", "tests/data/foundry/rfd3_unconditional.json",
+        "tests/data/chai1/entity_ligand.fasta", "alphafold3",
+    },
 }
 FORBIDDEN_IMPORTS = ("docker.runners", "docker.runner_testkit", "tests.runners", "runner_protocol")
 
@@ -78,7 +85,8 @@ def inspect_source(source: str, path: str, identities: set[str]) -> list[str]:
             continue
         # A token boundary catches family paths/URLs/JSON values while avoiding
         # accidental substring matches (e.g. 'prime' inside 'primary').
-        tokens = set(re.findall(r"[A-Za-z0-9_]+", node.value))
+        value = re.sub(r"\bexample\.(?:invalid|test|com|org|net)\b", "documentation_domain", node.value)
+        tokens = set(re.findall(r"[A-Za-z0-9_]+", value))
         for identity in sorted(tokens & identities):
             violations.append(f"{path}:{node.lineno}: concrete Runner identity {identity!r}")
     return violations

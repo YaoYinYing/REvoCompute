@@ -251,7 +251,7 @@ python -m pytest docker/runners/gremlin_lh/tests -q
 python -m revocompute doctor --config-root docker/runners --runner gremlin_lh --strict
 
 # Regenerate the frozen receipt from the pinned notebook (maintainer only; not CI).
-python tests/data/gremlin_lh/generate_upstream_reference.py \
+python docker/runners/gremlin_lh/tests/scientific/references/generate_upstream_reference.py \
     --upstream /path/to/GREMLIN_LH_outline_7.ipynb
 ```
 
@@ -268,7 +268,7 @@ novo designed 2KL8 protein, produced by the mock pipeline documented in
 MSA — and compares sequence weights, Neff, the one-body fields, coupling blocks,
 the tensor norm and maximum magnitude, the full raw and APC matrices, the
 per-sequence pseudo-likelihood and Hamiltonian, and the strongest APC pairs
-against `tests/data/gremlin_lh/upstream_reference.json`. Every tolerance has a
+against `docker/runners/gremlin_lh/tests/scientific/references/upstream_reference.json`. Every tolerance has a
 stated reason in `SCIENTIFIC_TRACEABILITY.md` §6; the current implementation
 passes with 20–100× margin.
 

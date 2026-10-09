@@ -157,8 +157,8 @@ provenance is the receipt's, not a second record.
 Mount one in a browser test with
 `replay_scenario(gremlin_lh_runner(), ReplayBundle.load(path))`; a mismatched
 task id still resolves to 404. The checked-in GREMLIN_LH 2KL8 bundle lives under
-`tests/data/gremlin_lh_replay/`, `tests/test_replay_bundle.py` covers the
-round-trip and drift guarantees, and `tests/test_playwright_replay_gremlin.py`
+`tests/data/gremlin_lh_replay/`, `tests/fleet/test_replay_bundle.py` covers the
+round-trip and drift guarantees, and `tests/fleet/test_playwright_replay_gremlin.py`
 drives the real frontend against it.
 
 A replay bundle proves **frontend compatibility with authentic Runner output**.

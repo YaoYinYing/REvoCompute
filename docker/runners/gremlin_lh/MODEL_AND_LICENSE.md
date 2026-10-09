@@ -23,7 +23,7 @@ The notebook blob is the hash that pins the transcribed source and is
 re-derivable from the file alone (`git hash-object`). The commit was recorded at
 intake as the repository revision the blob came from; unlike the blob it cannot
 be recomputed offline from the file, which is why the receipt
-(`tests/data/gremlin_lh/upstream_reference.json`) records both.
+(`docker/runners/gremlin_lh/tests/scientific/references/upstream_reference.json`) records both.
 
 `fit_model.py` transcribes the reusable JAX inference path into a deterministic,
 headless command. It retains sequence reweighting, inverse-covariance or zero

@@ -11,6 +11,11 @@ docker run --rm --user 0 --entrypoint /usr/local/bin/python "$1" -c '
 import json
 from pathlib import Path
 
+server = Path("/app/server")
+assert not (server / "docker/runner_testkit").exists()
+assert not list((server / "docker/runners").glob("*/tests")), "Runner test namespaces leaked into server image"
+assert (server / "docker/runners/common/runtime/task_context.py").is_file()
+
 root = Path("/app/server/revocompute/static/app").resolve()
 manifest = json.loads((root / ".vite/manifest.json").read_text(encoding="utf-8"))
 assert isinstance(manifest, dict) and isinstance(manifest.get("index.html"), dict)

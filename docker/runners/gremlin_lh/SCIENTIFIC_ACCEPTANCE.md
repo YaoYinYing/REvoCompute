@@ -118,9 +118,9 @@ case rather than the smoke case.
 
 ## 3. Where it matches the pinned notebook
 
-The reference receipt (`tests/data/gremlin_lh/upstream_reference.json`,
+The reference receipt (`docker/runners/gremlin_lh/tests/scientific/references/upstream_reference.json`,
 schema_version 2) is regenerated from a checked-in literal transcription of the
-pinned notebook's own cells (`tests/data/gremlin_lh/upstream_notebook_reference.py`,
+pinned notebook's own cells (`docker/runners/gremlin_lh/tests/scientific/references/upstream_notebook_reference.py`,
 guarded against the pinned notebook's source), so its observables are upstream
 behaviour rather than a shared-helper echo. On the
 2KL8 receipt case (79 columns, 6 rows, 50 full-batch steps, seed 0) the Runner
@@ -196,7 +196,7 @@ benchmark datasets).
 PATH="$PWD/.venv/bin:$PATH" .venv/bin/python -m pytest docker/runners/gremlin_lh/tests -q
 
 # Regenerate the receipt from the pinned notebook (maintainer only; not CI):
-.venv/bin/python tests/data/gremlin_lh/generate_upstream_reference.py \
+.venv/bin/python docker/runners/gremlin_lh/tests/scientific/references/generate_upstream_reference.py \
   --upstream ~/revocompute-handoff-309/references/GREMLIN_LH_outline_7.ipynb
 
 # Real path on the target host (as the deployment account, from a neutral cwd).

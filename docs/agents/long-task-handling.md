@@ -868,7 +868,7 @@ frontier and returns to the owner; it is not a merge decision.
 
 Which validation a change set owes is decided by one classifier,
 `tools/classify_ci_scope.py`, and consumed by the workflows. It answers with a
-set of lanes — `docs`, `server`, `runner_scientific`, `browser`, `compose` — and
+set of lanes — `docs`, `server`, `runner_fast`, `runner_scientific`, `browser`, `compose` — and
 it fails closed: an unrecognized path, an empty or undeterminable change set, or
 a manual dispatch selects every lane. A workflow gates a lane job on its output
 being anything other than an explicit negative, so a classifier failure widens

@@ -8,7 +8,7 @@ REGISTRY_WORKERS ?= 4
 # Generic Server collection is independent of the production fleet. Fleet
 # projection contracts have a separate, explicitly named collection boundary.
 SERVER_TESTS := tests --ignore=tests/fleet
-RUNNER_FAST_TESTS := $(sort $(wildcard docker/runners/*/tests/fast))
+RUNNER_FAST_TESTS := docker/runner_testkit/tests/fast $(sort $(wildcard docker/runners/*/tests/fast))
 RUNNER_PYTEST := $(PYTEST) -p docker.runner_testkit.pytest_plugin --import-mode=importlib
 
 server-test test test-unit:

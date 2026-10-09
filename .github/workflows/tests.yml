@@ -183,7 +183,20 @@ jobs:
       - name: Install the Runner's Pinned Scientific Stack
         run: |
           if [ "${{ matrix.family }}" = evosplit ]; then
-            pip install --extra-index-url https://download.pytorch.org/whl/cu126 -r docker/runners/evosplit/requirements.lock pytest
+            # The lock pins PyPI wheels except torch's CUDA wheel. Use each
+            # distribution's source explicitly; an alternate index may serve
+            # a same-version wheel with bytes outside the locked hash set.
+            python - <<'PYLOCK'
+          import os
+          from pathlib import Path
+          lines = Path("docker/runners/evosplit/requirements.lock").read_text().splitlines(keepends=True)
+          start = next(i for i, line in enumerate(lines) if line.startswith("torch=="))
+          end = next((i for i in range(start + 1, len(lines)) if lines[i] and not lines[i][0].isspace()), len(lines))
+          Path(os.environ["RUNNER_TEMP"], "torch.lock").write_text("".join(lines[start:end]))
+          PYLOCK
+            pip install --no-deps --require-hashes --index-url https://download.pytorch.org/whl/cu126 -r "$RUNNER_TEMP/torch.lock"
+            pip install --no-deps --require-hashes --index-url https://pypi.org/simple -r docker/runners/evosplit/requirements.lock
+            pip install pytest
           else
             pip install -r docker/runners/gremlin_lh/requirements.lock pytest PyYAML pydantic jsonschema
           fi
