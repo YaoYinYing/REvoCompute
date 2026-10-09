@@ -706,7 +706,8 @@ def test_run_compute_task_records_executor_error(monkeypatch, tmp_path):
     assert not (Path(module.app.config["RESULTS_FOLDER"]) / f"{md5sum}_results.zip").exists()
 
 
-def test_failed_finalize_after_a_completed_purge_leaves_no_result_residue(monkeypatch, tmp_path):
+@pytest.mark.parametrize("purge_at", ["before", "after_ownership_read"])
+def test_failed_finalize_after_a_completed_purge_leaves_no_result_residue(monkeypatch, tmp_path, purge_at):
     """A purge that completed while the worker was failing stays authoritative.
 
     Writing the failure report first and letting publication refuse it would
@@ -723,13 +724,29 @@ def test_failed_finalize_after_a_completed_purge_leaves_no_result_residue(monkey
     module.task_store.ensure_data_lifecycle(
         md5sum, user_id=int(task["submitted_by_user_id"]), logical_bytes=4096, at=time.time()
     )
-    assert module.task_store.claim_data_deletion(
-        md5sum, user_id=int(task["submitted_by_user_id"]), actor_user_id=None, at=time.time()
-    )
-    assert module.task_store.begin_data_purge(md5sum, at=time.time())
-    assert module.task_store.complete_data_purge(md5sum, at=time.time())
-    shutil.rmtree(result_dir, ignore_errors=True)
-    assert not result_dir.exists()
+    from revocompute import resource_lifecycle
+
+    def purge():
+        resource_lifecycle.request_data_deletion(module.task_store, task, actor_user_id=None)
+        assert resource_lifecycle.purge_task_data(
+            module.task_store, task, remove_artifacts=module._delete_task_artifacts
+        )
+        assert not result_dir.exists()
+
+    if purge_at == "before":
+        purge()
+    else:
+        real_check = module.task_runtime._data_still_owned
+        checked = []
+
+        def stale_check(task_id):
+            owned = real_check(task_id)
+            if not checked:
+                checked.append(True)
+                purge()
+            return owned
+
+        monkeypatch.setattr(module.task_runtime, "_data_still_owned", stale_check)
 
     module.task_runtime._finalize_failed_results(task, "scheduler connection denied", finished_at=time.time())
 
@@ -738,6 +755,14 @@ def test_failed_finalize_after_a_completed_purge_leaves_no_result_residue(monkey
     assert not (result_dir / "manifest.json").exists()
     # Nothing was charged for residue that does not exist.
     assert module.task_store.logical_owned_bytes(int(task["submitted_by_user_id"])) == 0
+    assert module.task_store.get_data_lifecycle(md5sum)["state"] == "PURGED"
+    assert module.task_store.get_result_publication(md5sum) is None
+    released = [
+        entry
+        for entry in module.task_store.list_ledger(int(task["submitted_by_user_id"]))
+        if entry["reason_code"] == "storage_released"
+    ]
+    assert [entry["quantity"] for entry in released] == [4096]
 
 
 def test_run_compute_task_finalizes_uncompressed_result_manifest(monkeypatch, tmp_path):

@@ -1719,10 +1719,8 @@ def _build_results_archive(task: dict) -> str:
 def _finalize_failed_results(task: dict, error: Any, *, finished_at: float) -> None:
     task_id = str(task.get("md5sum") or "")
     if task_id and not _data_still_owned(task_id):
-        # A completed purge is authoritative over this worker's failure report.
-        # Creating the tree first and letting publication refuse it would leave
-        # an unpaid, unpublished ``task_failed.txt`` no charge accounts for, so
-        # ownership is decided before anything is written.
+        # Refuse unnecessary writes early. A purge may still win after this
+        # read; the publisher's guarded charge is the final ownership decision.
         logging.info("Task %s data is no longer owned; skipping failure report", task_id)
         return
     try:
@@ -1741,6 +1739,9 @@ def _finalize_failed_results(task: dict, error: Any, *, finished_at: float) -> N
             handle.write(message)
             handle.write("\n")
         _finalize_results_manifest(task, execution_state="failed", finished_at=finished_at)
+    except DataPurgedError:
+        _abandon_published_result(task, result_dir)
+        logging.info("Task %s data was deleted while its failure report was being written", task_id)
     except Exception as exc:  # pylint: disable=broad-except
         logging.warning("Failed to finalize failed task %s: %s", task.get("md5sum"), exc)
 
@@ -1784,7 +1785,7 @@ class DataPurgedError(RuntimeError):
 
 
 def _data_still_owned(task_id: str) -> bool:
-    """Whether a Task may publish durable data right now.
+    """Early refusal check; the guarded charge decides final publication ownership.
 
     No lifecycle row is the normal case for a Task whose result has not been
     registered yet: the charge is created by the publication itself.  The check
