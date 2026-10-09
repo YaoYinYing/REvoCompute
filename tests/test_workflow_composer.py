@@ -75,7 +75,7 @@ def test_composer_resumes_after_completed_feature_stage(monkeypatch):
     )
     task_type = TaskType(
         "multistage_runner",
-        "AlphaFold2",
+        "Synthetic staged calculation",
         runtime,
         ".fasta",
         "FASTA",
@@ -136,7 +136,7 @@ def test_gpu_workflow_uses_owning_runtime_for_allocation_authorization(monkeypat
 
     access_policy = AccessPolicy(
         "synthetic_noncommercial",
-        "AlphaFold access",
+        "Synthetic restricted access",
         "Restricted runtime",
         ("synthetic_terms",),
         True,
@@ -151,7 +151,7 @@ def test_gpu_workflow_uses_owning_runtime_for_allocation_authorization(monkeypat
     stage = WorkflowStage("multistage_runner.model", "Model", True, ("-s", "model"), ("model",))
     task_type = TaskType(
         "multistage_runner",
-        "AlphaFold2",
+        "Synthetic staged calculation",
         runtime,
         ".fasta",
         "FASTA",
@@ -207,7 +207,7 @@ def test_composer_does_not_submit_after_cancellation_claim_fails(monkeypatch):
     stage = WorkflowStage("multistage_runner.model", "Model", True, ("-s", "model"), ("model",))
     task_type = TaskType(
         "multistage_runner",
-        "AlphaFold2",
+        "Synthetic staged calculation",
         runtime,
         ".fasta",
         "FASTA",
@@ -239,7 +239,7 @@ def test_composer_cancels_submitted_job_when_handle_cannot_be_persisted(monkeypa
     stage = WorkflowStage("multistage_runner.model", "Model", True, ("-s", "model"), ("model",))
     task_type = TaskType(
         "multistage_runner",
-        "AlphaFold2",
+        "Synthetic staged calculation",
         runtime,
         ".fasta",
         "FASTA",
@@ -365,8 +365,8 @@ def test_workflow_recovery_escalates_srun_termination(monkeypatch):
     assert kills == [(42, signal.SIGTERM), (42, signal.SIGKILL)]
 
 
-def _real_af3_stage(runner_args: tuple[str, ...]):
-    """Return the real AlphaFold 3 stage TaskType the composer builds.
+def _synthetic_stage(runner_args: tuple[str, ...]):
+    """Return the synthetic stage TaskType the composer builds.
 
     The composer derives each allocation from the discovered task, so the
     stage-local marker set here is exactly what the stage parser sees.
@@ -386,7 +386,7 @@ def _real_af3_stage(runner_args: tuple[str, ...]):
 
 
 def _drive_stage_stdout(stage_tt, runner, tmp_path, stdout: str) -> list[str]:
-    """Feed real runner stdout through ``SlurmJob._read_stdout`` + completion.
+    """Feed synthetic Runner stdout through ``SlurmJob._read_stdout`` + completion.
 
     ``_read_stdout`` is the production marker parser: it emits the first
     declared marker as a liveness signal once the allocation id is known, then
@@ -436,7 +436,7 @@ def _transitions(seen: list[str]) -> list[str]:
 
 def test_restricted_runner_features_stage_observes_pipeline_and_validation_markers(tmp_path):
     """The features allocation must accept both markers the Runner emits."""
-    stage_tt, runner = _real_af3_stage(("-s", "features"))
+    stage_tt, runner = _synthetic_stage(("-s", "features"))
     assert set(stage_tt.stage_markers) == {"data_pipeline", "feature_validation"}
 
     seen = _drive_stage_stdout(
@@ -455,7 +455,7 @@ def test_restricted_runner_features_stage_observes_pipeline_and_validation_marke
 
 
 def test_restricted_runner_model_stage_observes_inference_and_validation_markers(tmp_path):
-    stage_tt, runner = _real_af3_stage(("-s", "model"))
+    stage_tt, runner = _synthetic_stage(("-s", "model"))
     assert set(stage_tt.stage_markers) == {"inference", "output_validation"}
 
     seen = _drive_stage_stdout(
@@ -474,7 +474,7 @@ def test_restricted_runner_model_stage_observes_inference_and_validation_markers
 def test_restricted_runner_stage_ignores_duplicate_and_foreign_markers(tmp_path):
     """Duplicate lines must not double-advance, and another stage's marker is
     not observable by the active stage."""
-    features, runner = _real_af3_stage(("-s", "features"))
+    features, runner = _synthetic_stage(("-s", "features"))
     seen = _drive_stage_stdout(
         features,
         runner,
@@ -489,7 +489,7 @@ def test_restricted_runner_stage_ignores_duplicate_and_foreign_markers(tmp_path)
     assert "inference" not in seen
     assert _transitions(seen) == ["data_pipeline", "feature_validation"]
 
-    model, runner = _real_af3_stage(("-s", "model"))
+    model, runner = _synthetic_stage(("-s", "model"))
     seen = _drive_stage_stdout(
         model,
         runner,

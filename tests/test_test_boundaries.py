@@ -30,7 +30,7 @@ def test_new_concrete_family_dependencies_are_rejected(source: str) -> None:
 
 def test_comments_and_generic_protocol_vocabulary_are_allowed() -> None:
     source = '''"""new_family explains the motivating regression."""
-# new_family is an example only
+# new_family is a motivating case only
 role = "alignment"
 name = manifest.id
 root = Path("docker/runners")
@@ -57,3 +57,17 @@ def test_explicit_exception_is_value_and_path_scoped(monkeypatch) -> None:
     assert checker.inspect_source(source, "revocompute/routes.py", {"demo_family"}) == []
     assert checker.inspect_source(source, "tests/server/test_protocol.py", {"demo_family"})
     assert checker.inspect_source('task_type = "demo_family"', "revocompute/routes.py", {"demo_family"})
+
+
+@pytest.mark.parametrize("source", [
+    'origin = "https://revocompute.example"',
+    'origin = "https://example.invalid"',
+    'email = "person@example.test"',
+])
+def test_reserved_documentation_hosts_are_not_runner_identities(source: str) -> None:
+    assert checker.inspect_source(source, "tests/server/test_http.py", {"example"}) == []
+
+
+def test_documentation_host_normalization_does_not_allow_runner_dependencies() -> None:
+    assert checker.inspect_source('family = "example"', "tests/server/test_http.py", {"example"})
+    assert checker.inspect_source('path = "docker/runners/example/plugin.yaml"', "tests/server/test_http.py", {"example"})

@@ -28,7 +28,7 @@ def runner_source(tmp_path):
         "common/tests/scientific/test_runtime.py": "raise RuntimeError('never deploy')",
         "demo/demo.def": "Bootstrap: docker\nFrom: scratch\n",
         "demo/run.sh": "#!/bin/sh\n",
-        "demo/tasks/example/task.yaml": "id: example\n",
+        "demo/tasks/echo/task.yaml": "id: echo\n",
         "demo/references/runtime.json": "reference runtime bytes",
         "demo/fixtures/build.dat": "fixture build bytes",
         "demo/goldens/build.dat": "golden build bytes",
@@ -53,7 +53,7 @@ def runner_source(tmp_path):
     manifest = {
         "id": "demo",
         "version": "1",
-        "tasks": ["tasks/example/task.yaml"],
+        "tasks": ["tasks/echo/task.yaml"],
         "access_policies": ["policies/access.yaml"],
         "contributions": {
             "input_workspace_plugins": [{

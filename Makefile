@@ -18,7 +18,7 @@ runner-fast:
 	$(RUNNER_PYTEST) $(RUNNER_FAST_TESTS) -q -p no:cacheprovider
 
 test-fleet:
-	$(PYTEST) tests/fleet -m "not browser" -q -p no:cacheprovider
+	$(PYTEST) tests/fleet --ignore=tests/fleet/browser -m "not browser" -q -p no:cacheprovider
 
 test-all: test runner-fast test-fleet test-browser
 

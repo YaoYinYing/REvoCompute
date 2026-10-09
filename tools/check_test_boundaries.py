@@ -21,13 +21,25 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 EXCLUDED_TEST_NAMESPACES = ("tests/fleet/", "tests/frontend_fixtures/")
-POLICY_TESTS = frozenset({"tests/test_ci_scope_classifier.py", "tests/test_campaign_merge_candidate.py"})
+BOUNDARY_FILES = {
+    "tests/test_ci_scope_classifier.py": "CI policy deliberately classifies real fleet paths",
+    "tests/test_campaign_merge_candidate.py": "drift policy deliberately compares real fleet paths",
+    "tests/full_stack_smoke.py": "target-stack acceptance deliberately exercises installed Runner",
+    "tests/mcp_independent_host.py": "independent live acceptance deliberately exercises installed Runner",
+    "tests/data/test_data.py": "shared immutable historical scientific corpus helper",
+}
 # These are protocol vocabularies or legacy route targets, not dispatch branches.
 VALUE_EXCEPTIONS = {
-    "revocompute/input_validators/profiles.py": {"alphafold3"},
+    "revocompute/input_validators/profiles.py": {
+        "alphafold3", "AlphaFold 3 JSON object must declare the alphafold3 dialect and a positive integer version",
+    },
     "revocompute/routes.py": {"/compute/create_task?task_type=gremlin"},
     "tests/server/test_application_frontend_contract.py": {"/compute/create_task?task_type=gremlin"},
     "tests/server/test_preflight_boundary.py": {"alphafold3"},
+    # Counterexamples intentionally use the identity that collides with reserved DNS.
+    "tests/test_test_boundaries.py": {
+        "example", 'family = "example"', 'path = "docker/runners/example/plugin.yaml"',
+    },
     # Immutable format-parser corpus is shared input data, not plugin assets.
     "tests/test_input_validation.py": {
         "tests/data/foundry/rf3_monomer.json", "tests/data/foundry/rfd3_unconditional.json",
@@ -85,7 +97,7 @@ def inspect_source(source: str, path: str, identities: set[str]) -> list[str]:
             continue
         # A token boundary catches family paths/URLs/JSON values while avoiding
         # accidental substring matches (e.g. 'prime' inside 'primary').
-        value = re.sub(r"\bexample\.(?:invalid|test|com|org|net)\b", "documentation_domain", node.value)
+        value = re.sub(r"\bexample\.(?:invalid|test|com|org|net)\b|\b[A-Za-z0-9-]+\.example\b", "documentation_domain", node.value)
         tokens = set(re.findall(r"[A-Za-z0-9_]+", value))
         for identity in sorted(tokens & identities):
             violations.append(f"{path}:{node.lineno}: concrete Runner identity {identity!r}")
@@ -98,7 +110,7 @@ def check_repository(root: Path) -> list[str]:
     for namespace in ("revocompute", "tests"):
         for path in sorted((root / namespace).rglob("*.py")):
             relative = path.relative_to(root).as_posix()
-            if relative in POLICY_TESTS or relative.startswith(EXCLUDED_TEST_NAMESPACES):
+            if relative in BOUNDARY_FILES or relative.startswith(EXCLUDED_TEST_NAMESPACES):
                 continue
             violations.extend(inspect_source(path.read_text(encoding="utf-8"), relative, identities))
     if (root / "docker" / "runners" / "_testkit").exists():
