@@ -187,12 +187,6 @@ def prune_runtime_bundles(state, keep: dict[str, str]) -> None:
         print(f"[SLURM] Pruned {len(removed)} superseded runtime bundle(s).")
 
 
-def _runner_test_payload_ignore(_directory: str, names: list[str]) -> set[str]:
-    """Keep test/support/scientific validation material out of deployment payloads."""
-    excluded = {"tests", "__pycache__", "fake_modules", "references", "reference", "reference_generation", "goldens"}
-    return {name for name in names if name in excluded or name.endswith(".pyc")}
-
-
 def materialize_runner_families(state) -> None:
     """Atomically replace the server instance's enabled Runner snapshot."""
     from revocompute_ctl import SERVER_ROOT
@@ -205,7 +199,32 @@ def materialize_runner_families(state) -> None:
     if not os.path.isdir(source_root):
         raise FileNotFoundError(f"Runtime runner directory is missing: {source_root}")
     enabled = {value for value in state.get("ENABLED_TASKRUNNERS").split(",") if value}
-    manifests = PluginManager().discover(source_root)
+    manifests = PluginManager().discover(source_root, enabled=enabled)
+    # Only family-root tests/ is reserved.  Names such as references, fixtures,
+    # goldens, or even nested tests/ may be legitimate runtime/build inputs.
+    # Refuse conflicting declarations before touching the deployed snapshot:
+    # silently pruning a declared directory would change its runtime identity.
+    test_roots = tuple(manifest.path.resolve() / "tests" for manifest in manifests)
+    for manifest in manifests:
+        root = manifest.path.parent
+        declared = [root / path for path in manifest.runtime.get("build_inputs", ())]
+        declared.extend(root / path for path in manifest.runtime_overlay)
+        declared.append(manifest.path / str(manifest.runtime.get("definition") or f"{manifest.id}.def"))
+        declared.extend(manifest.path / path for path in (*manifest.tasks, *manifest.access_policies))
+        for workspace in manifest.workspace_plugins.values():
+            assets = [workspace.module, *workspace.styles]
+            if workspace.configuration_schema:
+                assets.append(workspace.configuration_schema)
+            assets.extend(entrypoint.rsplit(":", 1)[0] for entrypoint in workspace.backend.values())
+            declared.extend(workspace.root / path for path in assets)
+        for path in declared:
+            resolved = path.resolve()
+            for test_root in test_roots:
+                if resolved.is_relative_to(test_root) or (test_root.exists() and test_root.is_relative_to(resolved)):
+                    raise ValueError(
+                        f"Runner plugin {manifest.id!r} declares deployment input {str(path)!r} "
+                        f"inside or containing the test-only namespace {str(test_root)!r}"
+                    )
     os.makedirs(os.path.dirname(target_root), exist_ok=True)
     for transient_root in (staging_root, previous_root):
         if os.path.exists(transient_root):
@@ -217,10 +236,12 @@ def materialize_runner_families(state) -> None:
         raise FileNotFoundError(f"Shared runner build inputs are missing: {common_source}")
     shutil.copytree(common_source, common_target)
     for manifest in manifests:
-        if enabled and manifest.id not in enabled:
-            continue
         destination = os.path.join(staging_root, manifest.path.name)
-        shutil.copytree(manifest.path, destination, ignore=_runner_test_payload_ignore)
+        shutil.copytree(
+            manifest.path,
+            destination,
+            ignore=lambda directory, _names: {"tests"} if Path(directory) == manifest.path else set(),
+        )
     had_previous = os.path.exists(target_root)
     try:
         if had_previous:
