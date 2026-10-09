@@ -200,11 +200,22 @@ def materialize_runner_families(state) -> None:
         raise FileNotFoundError(f"Runtime runner directory is missing: {source_root}")
     enabled = {value for value in state.get("ENABLED_TASKRUNNERS").split(",") if value}
     manifests = PluginManager().discover(source_root, enabled=enabled)
-    # Only family-root tests/ is reserved.  Names such as references, fixtures,
+    # Only family/common-root tests/ is reserved.  Names such as references, fixtures,
     # goldens, or even nested tests/ may be legitimate runtime/build inputs.
     # Refuse conflicting declarations before touching the deployed snapshot:
     # silently pruning a declared directory would change its runtime identity.
-    test_roots = tuple(manifest.path.resolve() / "tests" for manifest in manifests)
+    payload_roots = (Path(source_root) / "common", *(manifest.path for manifest in manifests))
+    test_roots = tuple(root.absolute() / "tests" for root in payload_roots)
+
+    def reject_test_input(path: Path, owner: str) -> None:
+        for candidate in (path.absolute(), path.resolve()):
+            for test_root in test_roots:
+                if candidate.is_relative_to(test_root) or (test_root.exists() and test_root.is_relative_to(candidate)):
+                    raise ValueError(
+                        f"Runner {owner!r} deployment input {str(path)!r} "
+                        f"is inside or contains the test-only namespace {str(test_root)!r}"
+                    )
+
     for manifest in manifests:
         root = manifest.path.parent
         declared = [root / path for path in manifest.runtime.get("build_inputs", ())]
@@ -218,13 +229,17 @@ def materialize_runner_families(state) -> None:
             assets.extend(entrypoint.rsplit(":", 1)[0] for entrypoint in workspace.backend.values())
             declared.extend(workspace.root / path for path in assets)
         for path in declared:
-            resolved = path.resolve()
-            for test_root in test_roots:
-                if resolved.is_relative_to(test_root) or (test_root.exists() and test_root.is_relative_to(resolved)):
-                    raise ValueError(
-                        f"Runner plugin {manifest.id!r} declares deployment input {str(path)!r} "
-                        f"inside or containing the test-only namespace {str(test_root)!r}"
-                    )
+            reject_test_input(path, manifest.id)
+    # copytree follows symlinks.  Refuse aliases into test trees, including an
+    # alias of an ancestor directory, rather than copying tests under a new name.
+    for root in payload_roots:
+        for directory, dirs, files in os.walk(root, followlinks=False):
+            if Path(directory) == root:
+                dirs[:] = [name for name in dirs if name != "tests"]
+            for name in (*dirs, *files):
+                path = Path(directory) / name
+                if path.is_symlink():
+                    reject_test_input(path, root.name)
     os.makedirs(os.path.dirname(target_root), exist_ok=True)
     for transient_root in (staging_root, previous_root):
         if os.path.exists(transient_root):
@@ -234,7 +249,11 @@ def materialize_runner_families(state) -> None:
     common_target = os.path.join(staging_root, "common")
     if not os.path.isdir(common_source):
         raise FileNotFoundError(f"Shared runner build inputs are missing: {common_source}")
-    shutil.copytree(common_source, common_target)
+    shutil.copytree(
+        common_source,
+        common_target,
+        ignore=lambda directory, _names: {"tests"} if Path(directory) == Path(common_source) else set(),
+    )
     for manifest in manifests:
         destination = os.path.join(staging_root, manifest.path.name)
         shutil.copytree(

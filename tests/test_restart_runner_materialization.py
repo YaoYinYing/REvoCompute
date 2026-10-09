@@ -20,7 +20,12 @@ from revocompute_ctl.steps import materialize_runner_families
 def runner_source(tmp_path):
     source = tmp_path / "source"
     files = {
-        "common/runtime.py": "shared runtime",
+        "common/runtime/task.py": "shared runtime",
+        "common/runtime/tests/runtime.dat": "nested shared runtime bytes",
+        "common/fixtures/runtime.dat": "shared fixture runtime bytes",
+        "common/references/runtime.dat": "shared reference runtime bytes",
+        "common/tests/fast/test_runtime.py": "raise RuntimeError('never deploy')",
+        "common/tests/scientific/test_runtime.py": "raise RuntimeError('never deploy')",
         "demo/demo.def": "Bootstrap: docker\nFrom: scratch\n",
         "demo/run.sh": "#!/bin/sh\n",
         "demo/tasks/example/task.yaml": "id: example\n",
@@ -64,7 +69,7 @@ def runner_source(tmp_path):
             "image_artifact": "demo.sif",
             "entrypoint": ["/bin/sh", "/opt/revocompute/runtime/demo/run.sh"],
             "build_inputs": ["demo/fixtures/build.dat", "demo/goldens/build.dat"],
-            "runtime_overlay": ["common", "demo/run.sh", "demo/references", "demo/assets"],
+            "runtime_overlay": ["common/runtime", "demo/run.sh", "demo/references", "demo/assets"],
         },
     }
     (source / "demo" / "plugin.yaml").write_text(yaml.safe_dump(manifest), encoding="utf-8")
@@ -91,11 +96,13 @@ def test_snapshot_excludes_only_family_root_test_namespace(runner_source):
     expected = {
         path.relative_to(source): path.read_bytes()
         for path in source.rglob("*")
-        if path.is_file() and not path.is_relative_to(source / "demo" / "tests")
+        if path.is_file()
+        and not any(path.is_relative_to(source / family / "tests") for family in ("demo", "common"))
     }
     actual = {path.relative_to(target): path.read_bytes() for path in target.rglob("*") if path.is_file()}
     assert actual == expected
     assert not (target / "demo" / "tests").exists()
+    assert not (target / "common" / "tests").exists()
     assert load_plugin_families(target)[0].name == "demo"
 
 
@@ -105,6 +112,9 @@ def test_snapshot_excludes_only_family_root_test_namespace(runner_source):
         ("build_inputs", ["demo/tests/fake_modules/upstream.py"]),
         ("runtime_overlay", ["demo/tests/references"]),
         ("runtime_overlay", ["demo"]),
+        ("runtime_overlay", ["common/tests/fast"]),
+        ("runtime_overlay", ["common"]),
+        ("build_inputs", ["common/tests/fast/test_runtime.py"]),
         ("definition", "tests/reference_generation/regenerate.py"),
         ("tasks", ["tests/references/expected.json"]),
         ("access_policies", ["tests/references/expected.json"]),
@@ -123,6 +133,29 @@ def test_test_namespace_cannot_be_declared_as_deployment_input(runner_source, fi
     else:
         manifest["runtime"][field] = declaration
     (source / "demo" / "plugin.yaml").write_text(yaml.safe_dump(manifest), encoding="utf-8")
+    target = Path(state.server_dir()) / "docker" / "runners"
+    target.mkdir(parents=True)
+    current = target / "current.txt"
+    current.write_bytes(b"previous deployment")
+
+    with pytest.raises(ValueError, match="test-only namespace"):
+        materialize_runner_families(state)
+
+    assert current.read_bytes() == b"previous deployment"
+
+
+@pytest.mark.parametrize(
+    ("alias", "destination"),
+    [
+        ("demo/assets/alias", "demo/tests"),
+        ("demo/assets/alias.py", "common/tests/fast/test_runtime.py"),
+        ("common/alias", "demo/tests"),
+        ("demo/alias", "common"),
+    ],
+)
+def test_symlink_alias_cannot_copy_excluded_tests(runner_source, alias, destination):
+    source, state, _manifest = runner_source
+    (source / alias).symlink_to(source / destination)
     target = Path(state.server_dir()) / "docker" / "runners"
     target.mkdir(parents=True)
     current = target / "current.txt"
