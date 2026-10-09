@@ -1,9 +1,36 @@
 # Testing and CI
 
 Server tests exercise REvoCompute-owned behavior with synthetic Runner fixtures.
-Runner pytest tests belong under `tests/runners/<family>/` only when they execute
-small Runner-owned parsers, adapters, or preparation logic. Cross-component
-contracts belong under `tests/integration/`.
+Runner tests live beside their implementation under
+`docker/runners/<family>/tests/fast/` for executable adapters, wrappers, parsers,
+and artifacts. Tests requiring scientific stacks live under the family's
+`tests/scientific/` and run in its pinned environment. Shared Runner-only helpers
+live in `docker/runner_testkit/`, outside production plugin discovery.
+Cross-component generic contracts belong under `tests/integration/`.
+
+The default application fixture materializes only the Server-owned synthetic
+Runner root in `tests/fixtures/runners/`. Generic Server coverage ignores
+`tests/fleet/`, the separately collected boundary for shipped manifests,
+storyboards, and authentic result replays. Fleet fixtures explicitly opt into
+production discovery; generic Server fixtures never copy a production family.
+
+Run `make test-boundaries` to check executable AST imports and concrete family
+literals in Core and generic tests. The check derives family/task IDs from
+manifests, ignores comments/docstrings, and has bounded exceptions for fleet
+projections, frontend replay support, CI path policy tests, logical file formats,
+and legacy routes. A new unexplained family dependency fails this gate.
+
+`make runner-fast` collects only physical `tests/fast/` directories and cannot
+import scientific modules during collection. Its environment lacks JAX, torch,
+scikit-learn, and other model dependencies. Required tests fail when dependencies
+are missing; a skip is not a passing required contract. Server coverage and
+Runner contracts have no shared test modules.
+
+Deployment snapshots exclude only each family's root `tests/` namespace.
+Directories named `references`, `fixtures`, `goldens`, or nested `tests` outside
+that namespace remain production content. Declared build, overlay, task, policy,
+or workspace assets intersecting the test namespace are rejected before snapshot
+replacement. Live `test.yaml` inputs remain available in their declared locations.
 
 Do not pytest-test static YAML, Apptainer definitions, dependency pins, shell,
 JavaScript, CSS, HTML, workflows, or documentation. Real parsers, linters,
@@ -76,8 +103,8 @@ requests = mount_scenario(page, scenario).requests
 ### Using a real Runner manifest as a projection source
 
 When a payload must track a specific manifest, take it from the server's own
-projection rather than handwriting a duplicate. `tests/server/test_runner_manifest_frontend_projection.py`
-loads an isolated application through `conftest._load_pssm_module`, which
+projection rather than handwriting a duplicate. `tests/fleet/test_runner_manifest_frontend_projection.py`
+loads an isolated application through the explicit fleet fixture, which
 discovers the real `docker/runners/` tree exactly as production does, then reads
 `/compute/api/types`, `/compute/api/types/<name>`, and
 `/compute/api/task-parameters/<name>`. The tests assert on those projections and
@@ -164,13 +191,21 @@ owns the acceptance procedure.
 
 ```bash
 # Install in editable mode with test dependencies
-pip install -e ".[test]"
+uv venv
+uv pip install -e ".[test]"
 
 # Run the server-owned non-Docker suite
 make test
 
 # Run the same coverage target used by server CI
 make test-cov
+
+# Run Runner-owned fast contracts and shipped fleet projections
+make runner-fast
+make test-fleet
+
+# Enforce the ownership boundary
+make test-boundaries
 
 # Run the server directly without Docker
 python -m revocompute.app
@@ -180,3 +215,19 @@ Security regression checks for Docker socket exposure, admin self-lockout,
 banned users, and login throttling belong to this suite. The controls those
 checks protect are documented in
 [Deployment security](../reference/security.md).
+
+## CI ownership
+
+`REvoComputeTests` measures Server code with generic Server tests.
+`RunnerFastContracts` executes physical family fast directories and the separate
+fleet projection boundary. `RunnerScientificAcceptance` executes all required
+GREMLIN_LH fitting, artifact, upstream-equivalence and reference-generation cases
+in its locked environment, and EvoSplit tensor/clustering cases in its pinned
+Python 3.10 environment. The pinned upstream notebook is fetched at its immutable
+commit and verified by the reference generator before use.
+
+The existing `tools/classify_ci_scope.py` owns lane selection, including
+`runner_fast`; workflows do not add another path policy. Unknown paths, CI policy
+changes, and manual dispatch run every lane, and missing classifier output never
+skips a gate. Browser contracts and Compose full-stack validation retain their
+own jobs. Scientific acceptance does not contribute to Server coverage.

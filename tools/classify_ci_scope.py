@@ -13,7 +13,8 @@ Lanes
 
 ``docs``               documentation site build and repository layout check
 ``server``             server/contract pytest suite, coverage, registry determinism
-``runner_scientific``  GREMLIN_LH upstream-equivalence scientific acceptance
+``runner_fast``        Runner-owned executable contracts and fleet projections
+``runner_scientific``  pinned family scientific acceptance
 ``browser``            frontend typecheck/unit/build plus Playwright contracts
 ``compose``            deployment-controller contracts and the Compose full stack
 
@@ -60,7 +61,7 @@ import sys
 # Lane vocabulary
 # --------------------------------------------------------------------------- #
 
-LANES = ("docs", "server", "runner_scientific", "browser", "compose")
+LANES = ("docs", "server", "runner_fast", "runner_scientific", "browser", "compose")
 
 ALL_LANES = frozenset(LANES)
 
@@ -77,7 +78,7 @@ DOC_ONLY_FILES = frozenset({"mkdocs.yml", ".github/workflows/docs.yml"})
 # invalidates the assumptions every lane makes.
 FULL_MATRIX_FILES = frozenset(
     {"pyproject.toml", "uv.lock", ".coveragerc", "codecov.yml", "Makefile", ".gitattributes", ".gitignore",
-     "tools/classify_ci_scope.py"}
+     "tools/classify_ci_scope.py", "tools/check_test_boundaries.py"}
 )
 FULL_MATRIX_PREFIXES = (".github/",)
 
@@ -125,7 +126,7 @@ COMPOSE_PREFIXES = ("docker/nginx/", "docker/server/", "image/", "nginx_sites/")
 
 # Runner families whose scientific acceptance the ``runner_scientific`` lane
 # validates, and the Runner infrastructure it shares.
-SCIENTIFIC_RUNNER_FAMILIES = frozenset({"gremlin_lh", "pssm_gremlin"})
+SCIENTIFIC_RUNNER_FAMILIES = frozenset({"gremlin_lh", "pssm_gremlin", "evosplit"})
 SCIENTIFIC_RUNNER_PREFIXES = tuple(f"docker/runners/{family}/" for family in sorted(SCIENTIFIC_RUNNER_FAMILIES))
 SCIENTIFIC_FIXTURE_PREFIXES = tuple(f"tests/data/{family}/" for family in sorted(SCIENTIFIC_RUNNER_FAMILIES))
 SCIENTIFIC_TEST_PREFIXES = tuple(f"tests/runners/{family}/" for family in sorted(SCIENTIFIC_RUNNER_FAMILIES))
@@ -200,16 +201,22 @@ def _classify_path(path: str) -> frozenset[str]:
         return frozenset({"server", "compose"})
     if candidate == "docker/tools" or candidate.startswith("docker/tools/"):
         return frozenset({"server", "compose"})
+    if candidate == "docker/runner_testkit" or candidate.startswith("docker/runner_testkit/"):
+        return frozenset({"server", "runner_fast", "runner_scientific"})
     if candidate == "docker/runners/common" or candidate.startswith("docker/runners/common/"):
-        return frozenset({"server", "runner_scientific"})
+        return frozenset({"server", "runner_fast", "runner_scientific"})
     if _under(candidate, SCIENTIFIC_RUNNER_PREFIXES):
-        return frozenset({"server", "runner_scientific"})
+        return frozenset({"server", "runner_fast", "runner_scientific"})
     if candidate == "docker/runners" or candidate.startswith("docker/runners/"):
-        return frozenset({"server"})
+        return frozenset({"server", "runner_fast"})
     if candidate == "frontend" or candidate.startswith("frontend/"):
         return frozenset({"browser"})
     if _under(candidate, SCIENTIFIC_FIXTURE_PREFIXES) or _under(candidate, SCIENTIFIC_TEST_PREFIXES):
-        return frozenset({"server", "runner_scientific"})
+        return frozenset({"server", "runner_fast", "runner_scientific"})
+    if candidate.startswith("tests/fleet/"):
+        return frozenset({"server", "runner_fast", "browser"})
+    if candidate.startswith("tests/runners/"):
+        return frozenset({"server", "runner_fast"})
     if _under(candidate, BROWSER_TEST_PREFIXES) or candidate in BROWSER_TEST_FILES:
         return frozenset({"server", "browser"})
     if candidate == "tests" or candidate.startswith("tests/"):

@@ -23,6 +23,7 @@ jobs:
     outputs:
       lanes: ${{ steps.classify.outputs.lanes }}
       server: ${{ steps.classify.outputs.server }}
+      runner_fast: ${{ steps.classify.outputs.runner_fast }}
       runner_scientific: ${{ steps.classify.outputs.runner_scientific }}
       browser: ${{ steps.classify.outputs.browser }}
       compose: ${{ steps.classify.outputs.compose }}
@@ -58,8 +59,9 @@ jobs:
         if: steps.classify.outcome != 'success'
         run: |
           {
-            echo "lanes=docs,server,runner_scientific,browser,compose"
+            echo "lanes=docs,server,runner_fast,runner_scientific,browser,compose"
             echo "server=true"
+            echo "runner_fast=true"
             echo "runner_scientific=true"
             echo "browser=true"
             echo "compose=true"
@@ -102,15 +104,12 @@ jobs:
       - name: Run Python Server and Contract Tests with Coverage
         run: make test-cov COV_REPORT=xml:coverage.xml PYTEST="python -m pytest -n 4 --dist=load"
 
-      - name: Runner fast contracts
-        run: make runner-fast PYTEST="python -m pytest -n 2 --dist=load"
-
       - name: Runner/Server architecture boundary
         run: python3 tools/check_test_boundaries.py
 
       # Bounded registry/discovery determinism gate: re-runs the discovery,
-      # workflow-composer, and AF3 runner files under several xdist
-      # distributions plus the AF3 file alone, so residual test-scheduling-order
+      # synthetic multistage workflow-composer tests under several xdist
+      # distributions, so residual test-scheduling-order
       # dependence surfaces here rather than intermittently in the coverage run.
       # Reuses the canonical Makefile target (no duplicated pytest invocation);
       # the step timeout keeps the added cost bounded.
@@ -124,6 +123,27 @@ jobs:
           files: ./coverage.xml
           flags: server
 
+  RunnerFastContracts:
+    needs: ClassifyChanges
+    if: ${{ !cancelled() && needs.ClassifyChanges.outputs.runner_fast != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install fast contract dependencies (no scientific stack)
+        run: pip install -e ".[test]"
+      - name: Run required fast Runner contracts
+        run: make runner-fast PYTEST="python -m pytest -n 2 --dist=load"
+      - name: Exercise shipped fleet projections outside Server coverage
+        run: make test-fleet
+
   RunnerScientificAcceptance:
     needs: ClassifyChanges
     if: ${{ !cancelled() && needs.ClassifyChanges.outputs.runner_scientific != 'false' }}
@@ -132,9 +152,18 @@ jobs:
     permissions:
       contents: read
 
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - family: gremlin_lh
+            python: "3.12"
+          - family: evosplit
+            python: "3.10"
     env:
       JAX_PLATFORM_NAME: cpu
       MPLCONFIGDIR: /tmp/matplotlib
+      OMP_NUM_THREADS: "2"
 
     defaults:
       run:
@@ -149,13 +178,25 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python }}
 
       - name: Install the Runner's Pinned Scientific Stack
-        run: pip install -r docker/runners/gremlin_lh/requirements.lock pytest
+        run: |
+          if [ "${{ matrix.family }}" = evosplit ]; then
+            pip install --extra-index-url https://download.pytorch.org/whl/cu126 -r docker/runners/evosplit/requirements.lock pytest
+          else
+            pip install -r docker/runners/gremlin_lh/requirements.lock pytest PyYAML pydantic jsonschema
+          fi
 
-      - name: Run GREMLIN_LH Upstream Equivalence Acceptance
-        run: python -m pytest docker/runners/gremlin_lh/tests/test_upstream_equivalence.py -q -p no:cacheprovider --noconftest
+      - name: Fetch pinned upstream reference notebook
+        if: matrix.family == 'gremlin_lh'
+        run: |
+          notebook="$RUNNER_TEMP/GREMLIN_LH_outline_7.ipynb"
+          curl --fail --location --retry 2 https://raw.githubusercontent.com/sokrypton/GREMLIN_LH/6b8a6beb426fd31bb10c3fdd398abd3355b782f9/GREMLIN_LH_outline_7.ipynb --output "$notebook"
+          echo "REVOCOMPUTE_GREMLIN_NOTEBOOK=$notebook" >> "$GITHUB_ENV"
+
+      - name: Run required family-owned scientific acceptance
+        run: python -m pytest docker/runners/${{ matrix.family }}/tests/scientific -q -p no:cacheprovider --noconftest -p docker.runner_testkit.pytest_plugin --import-mode=importlib
 
   BrowserContracts:
     needs: ClassifyChanges
