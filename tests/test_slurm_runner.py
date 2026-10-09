@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import threading
 from dataclasses import replace
 from io import StringIO
 from types import SimpleNamespace
@@ -123,6 +124,34 @@ class _FakeSrunProcess:
     def kill(self) -> None:
         self.killed = True
         self.returncode = -9
+
+
+class _BarrierLineStream:
+    def __init__(self, line: str, ready: threading.Event, release: threading.Event) -> None:
+        self._line = line
+        self._ready = ready
+        self._release = release
+        self.closed = False
+
+    def readline(self) -> str:
+        self._ready.set()
+        self._release.wait()
+        line, self._line = self._line, ""
+        return line
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _EofSignalStream(StringIO):
+    def __init__(self, eof: threading.Event) -> None:
+        super().__init__("")
+        self._eof = eof
+
+    def readline(self) -> str:
+        value = super().readline()
+        self._eof.set()
+        return value
 
 
 def _policy(**overrides) -> ResolvedResources:
@@ -1455,6 +1484,33 @@ def test_submit_parses_job_id_from_srun_stderr_banner(tmp_path):
     with patch("subprocess.Popen", return_value=fake_proc):
         assert job.submit() == "4217"
     assert job.job_id == "4217"
+
+
+def test_stderr_eof_cannot_fail_submit_before_stdout_identity_is_released(tmp_path):
+    """One exhausted reader must leave the other reader authoritative."""
+    stdout_ready = threading.Event()
+    stdout_release = threading.Event()
+    stderr_eof = threading.Event()
+    job = SlurmJob("task-1", _make_task_type(), _make_runner(), _make_entities(), str(tmp_path / "out"))
+    fake_proc = _FakeSrunProcess(returncode=None)
+    fake_proc.stdout = _BarrierLineStream("REVODESIGN_JOB_ID=4217\n", stdout_ready, stdout_release)
+    fake_proc.stderr = _EofSignalStream(stderr_eof)
+    result: list[str] = []
+
+    with patch("subprocess.Popen", return_value=fake_proc):
+        submitter = threading.Thread(
+            target=lambda: result.append(job.submit()),
+            daemon=True,
+        )
+        submitter.start()
+        assert stdout_ready.wait(timeout=1)
+        assert stderr_eof.wait(timeout=1)
+        assert submitter.is_alive()
+        stdout_release.set()
+        submitter.join(timeout=2)
+
+    assert not submitter.is_alive()
+    assert result == ["4217"]
 
 
 def test_submit_rejects_unparseable_scheduler_id_and_terminates_srun(tmp_path):
