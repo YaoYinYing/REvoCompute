@@ -15,6 +15,8 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any
 
+from revocompute import resource_lifecycle
+from revocompute import resource_ledger as rloan
 from revocompute.config import ComputeConfig, env_float
 from revocompute.db import TaskDatabase
 from revocompute.maintenance.model import PeriodicTask
@@ -40,42 +42,100 @@ def _path_is_within(base_dir: str, candidate: str) -> bool:
     return common == base_abs
 
 
+class ArtifactRemovalError(RuntimeError):
+    """An owned artifact path was refused or could not be removed.
+
+    The lifecycle treats this remover as transactional -- a completed purge
+    frees exactly the bytes that were charged -- so a removal that cannot do
+    what it claims must fail closed.  A refused unsafe path or an ``rmtree``
+    that leaves bytes behind (a permission or I/O error) therefore raises
+    instead of being logged and swallowed: the purge records ``ERROR``, keeps
+    the charge, and a later pass retries, rather than releasing quota for data
+    that is still on disk.
+    """
+
+
+def _owned_path_exists(path: str) -> bool:
+    """Confirm presence or absence; an inspection failure is neither."""
+    try:
+        os.lstat(path)
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise ArtifactRemovalError(f"could not inspect owned path {path}: {exc}") from exc
+    return True
+
+
+def _remove_owned_tree(path: str, *, label: str) -> None:
+    """Remove *path* completely, or raise.  Already-absent is idempotent success."""
+    if not _owned_path_exists(path):
+        return
+    try:
+        shutil.rmtree(path)
+    except FileNotFoundError:
+        # A missing child is not proof that the owned root is gone. The same
+        # postcondition below decides whether concurrent removal completed it.
+        pass
+    except OSError as exc:
+        raise ArtifactRemovalError(f"could not remove {label} {path}: {exc}") from exc
+    if _owned_path_exists(path):
+        # A partial removal that left a locked entry behind would still return
+        # normally; the bytes are what the charge describes, so their survival
+        # is a failure.
+        raise ArtifactRemovalError(f"{label} {path} survived its removal")
+
+
 def delete_task_artifacts(task: dict[str, Any], results_folder: str, workspace_folder: str | None = None) -> None:
-    """Safely remove one task's result tree, archive cache, and input snapshot."""
+    """Safely remove one task's result tree, archive cache, and input snapshot.
+
+    The destructive boundary fails closed.  A path outside the folders this
+    deployment owns is refused, and a refusal or a failed removal raises
+    :class:`ArtifactRemovalError` rather than leaving the purge to record
+    success.  A path its owning folder does not contain is not this caller's to
+    delete, so it is skipped: the lifecycle row records the Task's durable data,
+    and an artifact this layout never owned is not part of it.
+    """
     resolver = StorageResolver(
         workspace_dir=workspace_folder or os.path.join(os.path.dirname(results_folder), "workspaces"),
         results_dir=results_folder,
     )
     try:
         safe_result_dir = resolver.get_task_root(task)
-    except ValueError:
-        logging.warning("Refusing to delete task with invalid storage identity: %s", task.get("md5sum"))
-        return
-    if safe_result_dir:
-        if os.path.isdir(safe_result_dir):
-            if safe_result_dir in {os.path.abspath(os.sep), os.path.abspath(os.path.expanduser("~"))}:
-                logging.warning("Refusing to delete unsafe root-like directory: %s", safe_result_dir)
-            elif not _path_is_within(results_folder, safe_result_dir):
-                logging.warning("Refusing to delete result directory outside RESULTS_FOLDER: %s", safe_result_dir)
-            else:
-                shutil.rmtree(safe_result_dir, ignore_errors=True)
+    except ValueError as exc:
+        raise ArtifactRemovalError(
+            f"invalid storage identity for task {task.get('md5sum')}: {exc}"
+        ) from exc
+    if safe_result_dir in {os.path.abspath(os.sep), os.path.abspath(os.path.expanduser("~"))}:
+        raise ArtifactRemovalError(f"refusing to delete unsafe root-like directory {safe_result_dir}")
+    if not _path_is_within(results_folder, safe_result_dir):
+        raise ArtifactRemovalError(f"refusing to delete result directory {safe_result_dir} outside RESULTS_FOLDER")
+    _remove_owned_tree(safe_result_dir, label="result tree")
 
     task_id = str(task.get("md5sum") or "").strip().lower()
     if not _TASK_ID_PATTERN.fullmatch(task_id):
-        logging.warning("Refusing to delete zip for invalid task id: %s", task.get("md5sum"))
-        return
+        raise ArtifactRemovalError(f"invalid task id for archive path: {task.get('md5sum')}")
     zip_path = resolver.get_archive_path(task)
-    if _path_is_within(results_folder, zip_path) and os.path.exists(zip_path):
-        os.remove(zip_path)
+    if _path_is_within(results_folder, zip_path) and _owned_path_exists(zip_path):
+        # A single file removes atomically, so its failure is a real one; a
+        # missing file means the bytes are already gone.
+        try:
+            os.remove(zip_path)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            raise ArtifactRemovalError(f"could not remove results archive {zip_path}: {exc}") from exc
+        if _owned_path_exists(zip_path):
+            raise ArtifactRemovalError(f"results archive {zip_path} survived its removal")
 
     if workspace_folder:
         try:
             workspace_dir = resolver.get_input_root(task)
-        except ValueError:
-            logging.warning("Refusing to delete invalid task input storage: %s", task_id)
-            return
-        if _path_is_within(workspace_folder, workspace_dir) and os.path.isdir(workspace_dir):
-            shutil.rmtree(workspace_dir, ignore_errors=True)
+        except ValueError as exc:
+            raise ArtifactRemovalError(
+                f"invalid task input storage for task {task_id}: {exc}"
+            ) from exc
+        if _path_is_within(workspace_folder, workspace_dir):
+            _remove_owned_tree(workspace_dir, label="input snapshot")
 
 
 def cleanup_expired_task_artifacts(
@@ -85,19 +145,38 @@ def cleanup_expired_task_artifacts(
     results_folder: str,
     now: float | None = None,
 ) -> int:
-    """Delete artifacts for terminal tasks older than *retention_days*."""
+    """Retire artifacts for terminal tasks older than *retention_days*.
+
+    Retention *decides* which Task has aged out; it does not delete.  The
+    deletion is the canonical data-lifecycle transaction — a durable request,
+    then one purge owner that removes the bytes and releases exactly the charged
+    logical bytes — because a retention path that deleted files on its own would
+    leave the charged ``ACTIVE`` lifecycle row behind and keep the user's storage
+    quota consumed forever for data that is gone.
+
+    The status marker the UI and API present (``deleting:*`` while a deletion is
+    in flight, ``cleaned:*`` once the bytes are gone) is *derived from the purge
+    outcome* rather than maintained as a parallel cleanup state machine: it is
+    claimed before the purge so a resubmission cannot be retired by mistake, and
+    completed only once the purge reports the data is gone.
+    """
     if retention_days <= 0:
         raise ValueError("retention_days must be positive")
-    cutoff = (time.time() if now is None else now) - retention_days * 86400
+    timestamp = time.time() if now is None else now
+    cutoff = timestamp - retention_days * 86400
+    workspace_folder = os.path.join(os.path.dirname(results_folder), "workspaces")
+    remove_artifacts = _artifact_remover(results_folder, workspace_folder)
     cleaned = 0
     for task in task_store.list_tasks():
         status = str(task.get("status") or "").strip().lower()
-        finished_at = task.get("finished_at")
         if status in _CLAIMED_CLEANUPS:
+            # A deletion that was already claimed and interrupted: resume it
+            # from the durable claim rather than deciding eligibility again.
             claim_status = status
             cleaned_status = _CLAIMED_CLEANUPS[status]
-        else:
-            if status not in _TERMINAL_RESULT_STATUSES or finished_at is None or finished_at > cutoff:
+        elif status in _TERMINAL_RESULT_STATUSES:
+            finished_at = task.get("finished_at")
+            if finished_at is None or finished_at > cutoff:
                 continue
             claim_status, cleaned_status = _CLEANUP_CLAIMS[status]
             if not task_store.claim_task_cleanup(
@@ -107,8 +186,14 @@ def cleanup_expired_task_artifacts(
                 claim_status=claim_status,
             ):
                 continue
-        workspace_folder = os.path.join(os.path.dirname(results_folder), "workspaces")
-        delete_task_artifacts(task, results_folder, workspace_folder)
+        else:
+            continue
+        if not _retire_expired_task(
+            task, task_store=task_store, remove_artifacts=remove_artifacts, at=timestamp
+        ):
+            # The lifecycle row records the failure and keeps the charge, so the
+            # next pass retries it; the claim stays in place meanwhile.
+            continue
         if not task_store.complete_task_cleanup(
             task["md5sum"],
             claim_status=claim_status,
@@ -118,6 +203,58 @@ def cleanup_expired_task_artifacts(
             continue
         cleaned += 1
     return cleaned
+
+
+def _artifact_remover(results_folder: str, workspace_folder: str) -> Callable[[dict[str, Any]], None]:
+    def remove_artifacts(task: dict[str, Any]) -> None:
+        delete_task_artifacts(task, results_folder, workspace_folder)
+
+    return remove_artifacts
+
+
+def _retire_expired_task(
+    task: dict[str, Any],
+    *,
+    task_store: TaskDatabase,
+    remove_artifacts: Callable[[dict[str, Any]], None],
+    at: float,
+) -> bool:
+    """Drive one Task's retirement through the canonical lifecycle, idempotently.
+
+    Returns whether the Task's durable data is gone — already, or as a result of
+    this call.  Every step is the lifecycle's own transition, so a repeated pass
+    (or a purge the maintenance task already completed) adds nothing.
+    """
+    task_id = str(task["md5sum"])
+    # The durable request precedes any filesystem work: after it, a crash is a
+    # resumable purge rather than an intact tree whose row still reads ACTIVE.
+    resource_lifecycle.request_data_deletion(task_store, task, actor_user_id=None, at=at)
+    record = task_store.get_data_lifecycle(task_id)
+    if record is None:  # pragma: no cover - request_data_deletion always records one
+        return False
+    state = str(record["state"])
+    if state == rloan.DataLifecycleState.PURGED.value:
+        return True
+    if state == rloan.DataLifecycleState.ERROR.value:
+        # A purge that failed keeps its charge; re-queue it through the same
+        # guarded transition the first attempt used rather than freeing quota.
+        if not task_store.requeue_data_lifecycle(task_id, at=at):
+            return False
+    elif state == rloan.DataLifecycleState.PURGING.value:
+        claimed_at = float(record.get("claimed_at") or record.get("updated_at") or 0.0)
+        if at - claimed_at < resource_lifecycle.PURGE_STALE_SECONDS:
+            # A live purge owns this Task right now.
+            return False
+        if not task_store.reclaim_stale_purge(task_id, at=at):
+            return False
+    try:
+        return resource_lifecycle.purge_task_data(
+            task_store, task, remove_artifacts=remove_artifacts, at=at
+        )
+    except Exception:
+        # Already recorded as ERROR with its charge intact; a later pass retries.
+        logging.exception("Retention purge failed for task %s", task_id)
+        return False
 
 
 def run_result_cleanup(retention_days: float) -> int:

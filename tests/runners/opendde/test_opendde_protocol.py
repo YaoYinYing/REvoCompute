@@ -170,7 +170,8 @@ def test_opendde_runner_passes_the_antibody_antigen_checkpoint(tmp_path):
     assert checkpoint.endswith("/checkpoint/opendde_abag.pt")
     # The runtime root is task-private, so the checkpoint resolves inside scratch
     # rather than the read-only provisioned mount.
-    assert checkpoint.startswith("/tmp/")
+    assert Path(checkpoint).is_relative_to(Path(os.environ.get("TMPDIR") or "/tmp"))
+    assert not Path(checkpoint).is_relative_to(database_root)
 
 
 def test_opendde_runner_keeps_torch_triangle_kernels_and_no_fusion(tmp_path):

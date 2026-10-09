@@ -54,3 +54,4 @@ nohup.ou*
 manage.sqlit*
 manage.sqlite
 HANDOFF.md
+.pytest-tmp/

@@ -384,19 +384,22 @@ def test_infrastructure_pulse_stays_idle_while_slurm_is_disabled(monkeypatch, tm
     assert probes == []
 
 
-def test_zero_refresh_interval_disables_the_pulse_instead_of_spinning(monkeypatch, tmp_path):
+def test_zero_refresh_interval_disables_probes_but_preserves_storage_repair(monkeypatch, tmp_path):
     """`Event.wait(0)` returns immediately, so a zero interval passed straight to
     the loop would probe the Slurm controller in an unbounded busy loop."""
     module = _pulse_module(monkeypatch, tmp_path, slurm_enabled=True)
     constructed = []
     monkeypatch.setenv("INFRA_REFRESH_SECONDS", "0")
     monkeypatch.setattr(
-        module.task_runtime.threading, "Thread", lambda *args, **kwargs: constructed.append(kwargs)
+        module.task_runtime.threading, "Thread",
+        lambda *args, **kwargs: constructed.append(kwargs) or SimpleNamespace(start=lambda: None),
     )
 
     module.task_runtime.start_infrastructure_pulse()
 
-    assert constructed == []
+    assert len(constructed) == 1
+    assert constructed[0]["args"][0] > 0
+    assert constructed[0]["kwargs"] == {"infrastructure_enabled": False}
 
 
 def test_negative_refresh_interval_is_rejected(monkeypatch, tmp_path):
@@ -422,3 +425,162 @@ def test_worker_ready_starts_the_pulse_without_consuming_a_task_slot(monkeypatch
     module.task_runtime._on_worker_ready(None)
 
     assert started == [True]
+
+
+# ---------------------------------------------------------------------------
+# Scheduler evidence is produced where the scheduler boundary exists
+# ---------------------------------------------------------------------------
+
+
+class _FakeAsyncResult:
+    def __init__(self, payload=None, error=None):
+        self._payload = payload
+        self._error = error
+
+    def get(self, timeout=None):
+        if self._error is not None:
+            raise self._error
+        return self._payload
+
+
+class _RecordingApp:
+    """A producer that records the task it was asked to run."""
+
+    def __init__(self, result):
+        self.sent = []
+        self._result = result
+
+    def send_task(self, name, **_options):
+        self.sent.append(name)
+        return self._result
+
+
+def test_timed_out_evidence_requests_are_discarded_by_the_real_worker(monkeypatch):
+    """A busy queue retains messages, but expired questions cannot run later."""
+    from datetime import datetime, timedelta, timezone
+    import uuid
+
+    from celery import Celery
+    from celery.exceptions import TimeoutError as CeleryTimeoutError
+    from celery.worker.request import Request
+    from revocompute import scheduler_evidence
+
+    app = Celery("expiry-test", broker="memory://", backend="cache+memory://", set_as_current=False)
+    app.conf.task_default_queue = f"evidence-expiry-{uuid.uuid4().hex}"
+    executed = []
+
+    @app.task(name=scheduler_evidence.SCHEDULER_EVIDENCE_TASK, shared=False, lazy=False)
+    def evidence():
+        executed.append(True)
+        return {"settled": 1}
+
+    clock = [datetime(2020, 1, 1, tzinfo=timezone.utc)]
+    monkeypatch.setattr(app, "now", lambda: clock[0])
+
+    def cannot_consume(*_args, **_kwargs):
+        raise CeleryTimeoutError("all worker slots occupied")
+
+    with monkeypatch.context() as busy:
+        busy.setattr(app.AsyncResult, "get", cannot_consume)
+        for _ in range(3):
+            assert scheduler_evidence.fetch_scheduler_evidence(
+                SimpleNamespace(list_unsettled_allocations=lambda: [1, 2]), app=app,
+            ) == {"settled": 0, "review": 2, "active": 0, "reservations_released": 0}
+            clock[0] += timedelta(seconds=60)
+
+    with app.connection() as connection:
+        with connection.SimpleQueue(app.conf.task_default_queue) as queue:
+            for _ in range(3):
+                message = queue.get(block=False)
+                request = Request(message, app=app, on_ack=lambda *_, m=message: m.ack())
+                request.execute()
+                assert executed == []
+                assert app.AsyncResult(request.id).state == "REVOKED"
+            assert queue.qsize() == 0
+            # A fresh question uses the same real worker path successfully.
+            clock[0] = datetime.now(timezone.utc)
+            result = app.send_task(scheduler_evidence.SCHEDULER_EVIDENCE_TASK,
+                                   expires=scheduler_evidence.SCHEDULER_EVIDENCE_WAIT_SECONDS)
+            message = queue.get(block=False)
+            Request(message, app=app, on_ack=lambda *_: message.ack()).execute()
+            assert executed == [True]
+            assert result.get(timeout=1) == {"settled": 1}
+    app.close()
+
+
+def test_the_maintenance_pass_dispatches_scheduler_evidence_to_the_worker():
+    """The scheduler question crosses the process boundary, by task name.
+
+    The maintenance scheduler is APScheduler in its own process and has no
+    ``scontrol``; running the Celery task *body* locally answers every question
+    with "the scheduler is unavailable".  The pass therefore dispatches the
+    worker-owned task and reads its bounded answer.
+    """
+    from revocompute import scheduler_evidence
+
+    app = _RecordingApp(_FakeAsyncResult({"settled": 3, "review": 1, "active": 0, "reservations_released": 2}))
+
+    outcome = scheduler_evidence.dispatch_scheduler_evidence(unsettled=0, app=app)
+
+    assert app.sent == [scheduler_evidence.SCHEDULER_EVIDENCE_TASK]
+    assert scheduler_evidence.SCHEDULER_EVIDENCE_TASK == "reconcile_slurm_allocations"
+    assert outcome == {"settled": 3, "review": 1, "active": 0, "reservations_released": 2}
+
+
+def test_an_unavailable_worker_reports_unknown_never_zero():
+    """No broker, no worker, a timeout: the allocations stay unknown.
+
+    A fabricated zero would settle real allocations as free computation, and a
+    released count would hand back entitlement the scheduler may still hold --
+    neither is available without the evidence, so the pass reports the unknown
+    quantity and releases nothing.
+    """
+    from revocompute import scheduler_evidence
+
+    for error in (OSError("no broker"), TimeoutError("timed out"), RuntimeError("worker gone")):
+        app = _RecordingApp(_FakeAsyncResult(error=error))
+        outcome = scheduler_evidence.fetch_scheduler_evidence(
+            SimpleNamespace(list_unsettled_allocations=lambda: [1, 2, 3]), app=app
+        )
+        assert outcome == {"settled": 0, "review": 3, "active": 0, "reservations_released": 0}
+
+
+def test_a_worker_that_returns_nothing_is_not_read_as_a_settlement():
+    """An absent or malformed result is unknown, never an invented outcome."""
+    from revocompute import scheduler_evidence
+
+    for payload in (None, "not a dict", 17):
+        app = _RecordingApp(_FakeAsyncResult(payload))
+        outcome = scheduler_evidence.fetch_scheduler_evidence(
+            SimpleNamespace(list_unsettled_allocations=lambda: [1]), app=app
+        )
+        assert outcome == {"settled": 0, "review": 1, "active": 0, "reservations_released": 0}
+
+
+def test_the_resource_maintenance_pass_asks_the_worker_and_records_review(monkeypatch, tmp_path):
+    """End to end: the pass calls the shared boundary, not the task body."""
+    from revocompute.db import TaskDatabase
+    from revocompute.maintenance.tasks import resource_maintenance as task_module
+
+    seen: list[int] = []
+
+    def _fake_fetch(store, *args, **kwargs):
+        seen.append(len(store.list_unsettled_allocations()))
+        return {"settled": 0, "review": 1, "active": 0, "reservations_released": 0}
+
+    monkeypatch.setattr(task_module, "fetch_scheduler_evidence", _fake_fetch)
+
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"), monthly_gpu_seconds=10_000)
+    database.record_allocation_start(
+        user_id=7, task_id="a" * 32, stage_id="model", slurm_job_id="9900",
+        gpu_count=1, cpu_cores=1, started_at=1_000.0,
+    )
+
+    monkeypatch.setenv("SERVER_DIR", str(tmp_path))
+    monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
+
+    report = task_module.run_resource_maintenance(task_store=database, results_folder=str(tmp_path / "r"))
+
+    assert seen and report["settled_allocations"] == 0
+    # Unknown is not zero: the allocation is still unsettled.
+    assert database.list_unsettled_allocations()

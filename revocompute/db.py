@@ -724,6 +724,26 @@ class TaskDatabase:
             Column("manifest_size", Integer, nullable=False),
             Column("revision", Integer, nullable=False, default=1),
             Column("published_at", Float, nullable=False),
+            # The logical-storage charge this publication owes, and the state of
+            # that charge.
+            #
+            # A publication and its accounting are one fact with two effects, and
+            # the write that anchors the manifest is the only server-owned moment
+            # at which both the result's identity and its size are known: the
+            # result tree belongs to the runner's Unix identity, so its size can
+            # never be re-derived later from the tree itself.  Splitting the
+            # charge into a second write leaves the window this column closes —
+            # bytes published and anchored, the charge missing, and nothing
+            # durable that says a charge is owed.
+            #
+            # ``charge_state = 'pending'`` is *not charged yet*, which is exactly
+            # the case a reconciliation pass repairs; a successful charge records
+            # the amount and the state ``charged``.  A charge the purge already
+            # released is ``released`` and is never repaired: those bytes were
+            # freed, and the lifecycle — not this column — decided that.
+            Column("charge_bytes", Integer, nullable=True),
+            Column("charge_state", String, nullable=False, server_default="pending"),
+            Column("charged_at", Float, nullable=True),
         )
         self._initialize()
 
@@ -866,6 +886,25 @@ class TaskDatabase:
                 or not columns.get("resource_count", False)
             ):
                 self._rebuild_table(conn, self.resource_allocations_table)
+        if "result_publications" in tables:
+            columns = {column["name"] for column in inspector.get_columns("result_publications")}
+            if "charge_state" not in columns:
+                # The charge state is the default for a publication that predates
+                # this column: it was published, and whether it was charged is
+                # exactly what reconciliation will now establish — so the
+                # conservative answer is "pending", never "charged".
+                conn.exec_driver_sql(
+                    "ALTER TABLE result_publications "
+                    "ADD COLUMN charge_bytes INTEGER DEFAULT NULL"
+                )
+                conn.exec_driver_sql(
+                    "ALTER TABLE result_publications "
+                    "ADD COLUMN charge_state VARCHAR NOT NULL DEFAULT 'pending'"
+                )
+                conn.exec_driver_sql(
+                    "ALTER TABLE result_publications "
+                    "ADD COLUMN charged_at FLOAT DEFAULT NULL"
+                )
         if "resource_reservations" in tables:
             columns = {column["name"] for column in inspector.get_columns("resource_reservations")}
             indexes = {index["name"] for index in inspector.get_indexes("resource_reservations")}
@@ -1617,19 +1656,21 @@ class TaskDatabase:
         """Unsettled allocations: how many, and a conservative base-unit reserve.
 
         An allocation whose authoritative elapsed time is unavailable has
-        definitely consumed something, so it is never treated as zero.  Each one
-        reserves at least as much as a single admission hold would — the same
-        quantum that bounds a pending submission — which keeps the reserve
-        proportional to concurrency instead of stampeding to the full scheduler
-        window, and means a user with running work cannot be admitted as if that
-        work had consumed nothing.
+        definitely consumed something, so it is never treated as zero.  The
+        reserve is a *base-unit* quantity — the same unit the allocation will be
+        settled in — so it is an upper bound on what settlement will charge:
+        ``max(quantum, resource_count * elapsed)``.  The quantum is applied to the
+        final quantity, not to the count, because one GPU running for ten seconds
+        is ten GPU-seconds, not ten quantum-multiples of the scheduler window.  A
+        run long enough for ``count * elapsed`` to pass the quantum reserves its
+        own elapsed quantity instead, so the reserve is never smaller than the
+        usage that will replace it.
 
-        The reserve scales with the allocation's ``resource_count``, so an
-        allocation of many cores or GPUs reserves proportionally — otherwise a
-        large allocation would cost no more than a single-GPU one until it
-        settled.  ``min_quantity`` is the policy floor for a *countless*
-        allocation (the migrated CPU-only rows), which then behaves exactly as it
-        did before.
+        A genuinely unknown shape (``resource_count`` is ``None``) keeps a
+        non-zero reserve scaled by the elapsed time it has been running: the
+        allocation really held something for that long, and a naive
+        ``max(quantum, 0 * elapsed)`` would collapse it to zero and re-create
+        exactly the free computation the unknown-is-not-zero rule forbids.
 
         ``exclude_slurm_job_id`` drops one allocation from the reserve.  The
         allocation-start decision uses it for the allocation it is deciding,
@@ -1657,12 +1698,19 @@ class TaskDatabase:
         quantum = int(rloan.DEFAULT_ADMISSION_QUANTUM.get(unit, 0))
         total = 0
         for count, started_at in rows:
-            elapsed = max(0.0, now - float(started_at))
-            # An unknown shape reserves the quantum, never zero: the allocation
-            # really held something, so it must not be admitted against as if it
-            # held nothing.
-            reserved = quantum if count is None else max(quantum, 0, int(count))
-            total += reserved * max(1, int(elapsed))
+            # The same second count settlement will charge with: a whole-second
+            # ceiling, floored at one so an allocation that has only just started
+            # still reserves a positive base-unit quantity.
+            elapsed = max(1, math.ceil(max(0.0, now - float(started_at))))
+            if count is None:
+                # An unknown shape reserves the quantum for every second it has
+                # held the resource: it definitely consumed *something*, so it is
+                # never admitted against as if it held nothing, and the floor
+                # grows with the elapsed time it has been running.
+                total += quantum * elapsed
+                continue
+            observed = max(0, int(count)) * elapsed
+            total += max(quantum, observed)
         return len(rows), total
 
     def storage_entitlement(self, user_id: int) -> rloan.StorageEntitlement:
@@ -2362,7 +2410,13 @@ class TaskDatabase:
         return record
 
     def record_result_publication(
-        self, task_id: str, *, manifest_sha256: str, manifest_size: int, published_at: float
+        self,
+        task_id: str,
+        *,
+        manifest_sha256: str,
+        manifest_size: int,
+        published_at: float,
+        charge_bytes: int | None = None,
     ) -> int:
         """Anchor one finalized result manifest's identity in server-owned state.
 
@@ -2379,30 +2433,37 @@ class TaskDatabase:
             raise ValueError("manifest_sha256 must be a hex SHA-256 digest")
         if not isinstance(manifest_size, int) or isinstance(manifest_size, bool) or manifest_size < 0:
             raise ValueError("manifest_size must be a non-negative integer")
+        if charge_bytes is not None and (
+            not isinstance(charge_bytes, int) or isinstance(charge_bytes, bool) or charge_bytes < 0
+        ):
+            raise ValueError("charge_bytes must be a non-negative integer")
+        # Even a zero-byte replacement needs settlement: a previous publication
+        # may have charged bytes which the replacement no longer owns.
         with self.engine.begin() as conn:
-            revision = conn.execute(
-                select(self.result_publications_table.c.revision).where(
-                    self.result_publications_table.c.task_id == task_id
-                )
-            ).scalar_one_or_none()
             stmt = sqlite_insert(self.result_publications_table).values(
                 task_id=task_id,
                 manifest_sha256=digest,
                 manifest_size=manifest_size,
-                revision=(int(revision) + 1) if revision is not None else 1,
+                revision=1,
                 published_at=published_at,
+                charge_bytes=charge_bytes,
+                charge_state="pending",
+                charged_at=None,
             )
             stmt = stmt.on_conflict_do_update(
                 index_elements=[self.result_publications_table.c.task_id],
                 set_={
                     "manifest_sha256": stmt.excluded.manifest_sha256,
                     "manifest_size": stmt.excluded.manifest_size,
-                    "revision": stmt.excluded.revision,
+                    "revision": self.result_publications_table.c.revision + 1,
                     "published_at": stmt.excluded.published_at,
+                    "charge_bytes": stmt.excluded.charge_bytes,
+                    "charge_state": stmt.excluded.charge_state,
+                    "charged_at": stmt.excluded.charged_at,
                 },
             )
-            conn.execute(stmt)
-        return (int(revision) + 1) if revision is not None else 1
+            revision = conn.execute(stmt.returning(self.result_publications_table.c.revision)).scalar_one()
+        return int(revision)
 
     def get_result_publication(self, task_id: str) -> dict[str, Any] | None:
         """Return the anchored publication identity for one task, if any."""
@@ -2410,6 +2471,212 @@ class TaskDatabase:
         with self.engine.connect() as conn:
             row = conn.execute(stmt).mappings().first()
         return dict(row) if row else None
+
+    def charge_data_ownership(
+        self, task_id: str, *, user_id: int, logical_bytes: int = 0, at: float | None = None
+    ) -> str:
+        """Record a published result's ownership in ONE guarded transition.
+
+        The charge and the decision that it is still allowed are the same
+        transaction, serialized against the purge by ``BEGIN IMMEDIATE``, because
+        a check outside it races: a caller that reads "the data is still owned",
+        has a purge land, and then charges would re-open a ``PURGED`` row and bill
+        a subject for bytes that are gone.
+
+        Returns ``"charged"`` when this call created the row and appended its
+        ``storage_usage`` fact; ``"already_charged"`` when the Task's ownership is
+        already on record (nothing is written, so a repeated pass cannot
+        double-charge; the logical size is refreshed from this caller's own
+        measurement when it differs); and ``"released"`` when the lifecycle is
+        deletion-ward, ``ERROR`` (an interrupted removal a later pass retries), or
+        ``PURGED`` -- nothing is written, because those bytes are gone or on their
+        way out, and a deletion that already happened is not re-opened by a
+        charge. ``"unowned"`` records no lifecycle row or ledger charge.
+        Publication callers use :meth:`charge_result_publication` so settlement
+        also guards the anchored revision and closes its marker atomically.
+        """
+        timestamp = time.time() if at is None else at
+        size = max(0, int(logical_bytes))
+        with self.engine.connect() as conn:
+            conn.exec_driver_sql("BEGIN IMMEDIATE")
+            existing = (
+                conn.execute(
+                    select(self.data_lifecycle_table).where(self.data_lifecycle_table.c.task_id == task_id)
+                )
+                .mappings()
+                .one_or_none()
+            )
+            outcome = self._charge_data_ownership_in_connection(
+                conn, task_id, existing, user_id=user_id, size=size, timestamp=timestamp
+            )
+            conn.commit()
+        return outcome
+
+    def charge_result_publication(
+        self,
+        task_id: str,
+        *,
+        revision: int,
+        manifest_sha256: str,
+        user_id: int,
+        logical_bytes: int,
+        at: float | None = None,
+    ) -> str:
+        """Settle exactly one anchored publication, including its pending marker.
+
+        Identity, deletion state, ownership, append-only byte adjustment and the
+        publication marker share one transaction. A superseded publisher or
+        repair snapshot returns ``stale`` without changing any current fact.
+        A replacement adjusts the previously accounted bytes by their exact
+        delta; replaying a settled revision appends nothing.
+        """
+        timestamp = time.time() if at is None else at
+        size = max(0, int(logical_bytes))
+        with self.engine.connect() as conn:
+            conn.exec_driver_sql("BEGIN IMMEDIATE")
+            publication = conn.execute(
+                select(self.result_publications_table).where(self.result_publications_table.c.task_id == task_id)
+            ).mappings().one_or_none()
+            if (
+                publication is None
+                or publication["revision"] != revision
+                or publication["manifest_sha256"] != manifest_sha256
+            ):
+                return "stale"
+            if publication["charge_state"] == "released":
+                return "released"
+            if publication["charge_state"] != "pending":
+                return "unowned" if publication["charge_state"] == "unowned" else "already_charged"
+            if user_id > 0 and publication["charge_bytes"] is not None and publication["charge_bytes"] != size:
+                raise ValueError("Storage charge does not match the anchored publication amount")
+            existing = conn.execute(
+                select(self.data_lifecycle_table).where(self.data_lifecycle_table.c.task_id == task_id)
+            ).mappings().one_or_none()
+            outcome = self._charge_data_ownership_in_connection(
+                conn, task_id, existing, user_id=user_id, size=size, timestamp=timestamp,
+                settle_publication=True,
+            )
+            state = {"released": "released", "unowned": "unowned"}.get(outcome, "charged")
+            conn.execute(
+                update(self.result_publications_table)
+                .where(
+                    self.result_publications_table.c.task_id == task_id,
+                    self.result_publications_table.c.revision == revision,
+                    self.result_publications_table.c.manifest_sha256 == manifest_sha256,
+                )
+                .values(
+                    charge_state=state,
+                    charge_bytes=size if state == "charged" else publication["charge_bytes"],
+                    charged_at=timestamp if state == "charged" else None,
+                )
+            )
+            conn.commit()
+        return outcome
+
+    def _charge_data_ownership_in_connection(
+        self, conn, task_id: str, existing, *, user_id: int, size: int, timestamp: float,
+        settle_publication: bool = False,
+    ) -> str:
+        """The guarded body of :meth:`charge_data_ownership`, inside its transaction."""
+        if existing is not None and str(existing["state"]) not in (
+            rloan.DataLifecycleState.ACTIVE.value,
+            rloan.DataLifecycleState.ARCHIVED.value,
+        ):
+            return "released"
+        if user_id <= 0:
+            return "unowned"
+        if existing is None:
+            claimed = conn.execute(
+                sqlite_insert(self.data_lifecycle_table)
+                .values(
+                    task_id=task_id,
+                    subject_type=rloan.SUBJECT_USER,
+                    subject_id=user_id,
+                    state=rloan.DataLifecycleState.ACTIVE.value,
+                    logical_bytes=size,
+                    accounted_bytes=size,
+                    charge_revision=1,
+                    updated_at=timestamp,
+                )
+                .on_conflict_do_nothing(index_elements=[self.data_lifecycle_table.c.task_id])
+            )
+            if not claimed.rowcount:
+                # Another writer got there first: its charge is the fact.
+                return "already_charged"
+            self._append_storage_fact(
+                conn,
+                user_id=user_id,
+                task_id=task_id,
+                quantity=-size,
+                reason="Durable result published",
+                reason_code=rloan.LedgerReason.STORAGE_CHARGED.value,
+                idempotency_key=f"storage_usage:{task_id}:1",
+                timestamp=timestamp,
+            )
+            return "charged"
+        if settle_publication:
+            difference = size - int(existing["accounted_bytes"])
+            charge_revision = int(existing["charge_revision"]) + bool(difference)
+            conn.execute(
+                update(self.data_lifecycle_table)
+                .where(self.data_lifecycle_table.c.task_id == task_id)
+                .values(
+                    logical_bytes=size, accounted_bytes=size,
+                    charge_revision=charge_revision, updated_at=timestamp,
+                )
+            )
+            if difference:
+                self._append_storage_fact(
+                    conn, user_id=user_id, task_id=task_id, quantity=-difference,
+                    reason="Durable result publication revised",
+                    reason_code=(
+                        rloan.LedgerReason.STORAGE_CHARGED.value if difference > 0
+                        else rloan.LedgerReason.STORAGE_RELEASED.value
+                    ),
+                    idempotency_key=f"storage_usage:{task_id}:{charge_revision}", timestamp=timestamp,
+                )
+                return "charged"
+            return "already_charged"
+        if int(existing["logical_bytes"]) != size:
+            # A recomputation that found a different size updates the logical
+            # fact.  The ledger fact stays as charged until a purge releases
+            # exactly it, so no pass can double-count.
+            conn.execute(
+                update(self.data_lifecycle_table)
+                .where(self.data_lifecycle_table.c.task_id == task_id)
+                .values(logical_bytes=size, updated_at=timestamp)
+            )
+        return "already_charged"
+
+    def list_pending_storage_publications(
+        self, *, limit: int = 500, after: tuple[float, str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Anchored publications whose logical-storage charge has not been recorded.
+
+        A publication whose bytes are already gone (``released``) is excluded by
+        the state itself, never by re-deriving anything: the lifecycle owns that
+        decision, and this reader only answers "which publications still owe a
+        charge".
+        """
+        if limit < 1 or limit > 5000:
+            raise ValueError("limit must be between 1 and 5000")
+        stmt = (
+            select(self.result_publications_table)
+            .where(self.result_publications_table.c.charge_state == "pending")
+            .order_by(self.result_publications_table.c.published_at, self.result_publications_table.c.task_id)
+            .limit(limit)
+        )
+        if after is not None:
+            published_at, task_id = after
+            stmt = stmt.where(or_(
+                self.result_publications_table.c.published_at > published_at,
+                and_(
+                    self.result_publications_table.c.published_at == published_at,
+                    self.result_publications_table.c.task_id > task_id,
+                ),
+            ))
+        with self.engine.connect() as conn:
+            return [dict(row) for row in conn.execute(stmt).mappings().all()]
 
     def list_resource_observations(
         self,
@@ -3931,6 +4198,7 @@ class TaskDatabase:
         user_id: int,
         logical_bytes: int = 0,
         at: float | None = None,
+        allow_reopen: bool = False,
     ) -> dict[str, Any]:
         """Register one Task's durable data and charge its logical ownership once.
 
@@ -3945,7 +4213,22 @@ class TaskDatabase:
         be charged again or the user gets quota for free.  Each charge carries a
         monotonic charge revision, so a re-charge is a distinct idempotent fact
         rather than a duplicate of the first one.
+
+        ``allow_reopen`` is the explicit publication transition for a Task whose
+        bytes really came back after a purge: only a caller that has established
+        that may re-open a ``PURGED`` row and charge it again.  Every other
+        registration uses guarded :meth:`charge_data_ownership`; live and repair
+        publication settlement uses :meth:`charge_result_publication`, because an unconditional reopen
+        would let a stale charge re-open a deletion that already happened.
         """
+        if user_id <= 0:
+            raise ValueError("Data ownership requires an owning user")
+        if not allow_reopen:
+            self.charge_data_ownership(task_id, user_id=user_id, logical_bytes=logical_bytes, at=at)
+            record = self.get_data_lifecycle(task_id)
+            if record is None:
+                raise RuntimeError("The guarded ownership transition yielded no lifecycle row")
+            return record
         timestamp = time.time() if at is None else at
         size = max(0, int(logical_bytes))
         with self.engine.begin() as conn:
@@ -4246,6 +4529,19 @@ class TaskDatabase:
                     error="",
                 )
             )
+            if completed.rowcount:
+                # The purge is the authority on these bytes, so it also closes the
+                # publication's charge marker in the same transaction: the bytes
+                # are gone, and a repair pass must never re-charge a release the
+                # lifecycle already made.
+                conn.execute(
+                    update(self.result_publications_table)
+                    .where(
+                        self.result_publications_table.c.task_id == task_id,
+                        self.result_publications_table.c.charge_state != "released",
+                    )
+                    .values(charge_state="released")
+                )
             return completed.rowcount == 1
 
     def mark_data_lifecycle_error(self, task_id: str, *, error: str, at: float | None = None) -> bool:

@@ -133,23 +133,65 @@ Task moves to `DELETE_REQUESTED` durably before any filesystem work, one worker
 claims it into `PURGING`, and the quota that was charged is released only when
 the owned bytes are actually gone. A crash anywhere in that sequence leaves a
 resumable deletion, and a failed purge keeps the charge and its error so a later
-pass can retry it. A partial purge therefore frees nothing, and a completed purge
-releases exactly the bytes it charged, once. Recovery re-enters *from the durable
+pass can retry it. Failure to inspect an owned result, archive, or input path is
+a removal failure, never evidence of absence. A partial purge therefore frees
+nothing, and a completed purge releases exactly the bytes it charged, once.
+Recovery re-enters *from the durable
 state*, so a stale `PURGING` row is reclaimed and retried and a worker that died
 between its claim and its completion cannot hold a subject's quota forever.
-`PURGED` is a lifecycle state rather than a tombstone, so a result published
-again after a purge is charged again.
+`PURGED` is a lifecycle state rather than a tombstone: a result published again
+after a purge is charged again, but that reopen is an explicit publication
+transition rather than an unconditional side effect of registering ownership. A
+charge -- the live publication and every repair pass alike -- is one guarded
+transition that decides and writes together, so a deletion-ward, failed, or
+`PURGED` lifecycle it meets answers *released* and the charge writes nothing.
 
 Deletion and publication cannot resurrect each other. A Task whose data is in a
 deletion-ward lifecycle state is not republished by a worker that is still
 finishing: the durable lifecycle row wins over the worker's result tree, so a
-delete that lands mid-finalization is not re-materialized and re-charged.
+delete that lands mid-finalization is not re-materialized and re-charged. A
+purge that lands after the worker's ownership read but before its charge has the
+same effect, because the decision and the charge are one transaction.
+An ownerless publication closes as `unowned` without charging subject zero; that
+branch uses the same guarded transaction, so it cannot bypass an accepted deletion.
+
+Storage settlement carries the anchored publication revision and manifest digest.
+The lifecycle bytes, append-only ledger adjustment and publication charge marker
+commit together. A stale live publisher or repair snapshot cannot settle or resize
+a newer publication. A replacement accounts its exact byte difference, including
+a decrease to zero; replaying the same settled revision adds no ledger fact.
+The worker's existing parent-process pulse repairs pending charges during normal
+long-lived operation, even when Slurm probes and optional resource maintenance
+are disabled. With automatic probes disabled, storage repair runs every 60 seconds.
+Each bounded pass advances through pending anchors and wraps at the end, so
+permanently unresolved older results cannot starve a later repairable charge.
+
+A publication anchored before the charge was recorded alongside it owes an amount
+that is *unknown*, not zero. The repair derives it from the verified anchored
+manifest's own declared artifact sizes (the bytes Core published, never a
+directory walk over the result tree) and charges it once. A publication whose
+anchor is unreadable, replaced, or otherwise no longer verifiable stays
+unresolved and reviewable instead of being closed as a zero-byte charge.
 
 Automatic age-based purge is not enabled by default. An operator can turn on the
 `resource-maintenance` periodic task with `RESOURCE_MAINTENANCE_SECONDS` (see
 the configuration reference); it finishes *authorized* deletions and runs a
 bounded reconciliation pass, and it never decides on its own that data is old
-enough to delete.
+enough to delete. Automatic *retention* is a separate opt-in
+(`RESULT_RETENTION_DAYS`), and it only decides which terminal Task has aged out:
+the deletion is the same lifecycle transaction above, so the bytes and the charge
+cannot diverge. The Task's status marker (`deleting:*` while a purge is in
+flight, `cleaned:*` once the bytes are gone) is derived from that purge rather
+than maintained by a second cleanup path.
+
+Recurring reconciliation asks the *worker* for scheduler evidence, because only
+the worker has `scontrol`: this process dispatches the worker-owned
+`reconcile_slurm_allocations` task over the broker and waits for it, bounded. A
+worker that cannot be reached leaves the unsettled allocations unsettled and
+reports them as unknown — never as zero — and releases no scheduler-owned
+reservation, because releasing one requires the evidence the dispatch could not
+fetch. Settlement is idempotent per `(unit, slurm_job_id)`, so a retry, a restart
+pass, and a maintenance pass that overlap still charge once.
 
 That interval is also what makes *recurring* allocation recovery periodic. A
 worker restart runs the full recovery pass (`worker_ready`), and each dispatch

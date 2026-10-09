@@ -112,6 +112,42 @@ DEFAULT_TASK_SCRATCH_GUARD_SECONDS = 5.0
 #: scratch tree cannot be mistaken for one that measured zero bytes.
 _SCRATCH_GUARD_PREFIX = "scratch_guard."
 
+#: The one GPU-count reader the wrapper emits, used by both the compute-node
+#: receipt and the resource envelope so the two cannot disagree.
+#:
+#: Slurm spells an allocation's accelerators two ways, and the *variable* says
+#: which spelling it is: ``SLURM_GPUS_ON_NODE`` is a *count* (``2``) — the normal
+#: form — while ``SLURM_JOB_GPUS`` and ``CUDA_VISIBLE_DEVICES`` are device
+#: *identifier lists* (``0``, ``0,1``).  Counting the numeric form by commas
+#: collapses ``2`` to one device, so a two-GPU receipt would under-state the
+#: allocation while the canonical start callback uses the requested count, and
+#: the identity check between the two would refuse a real multi-GPU run.
+#: Reading a one-device list as the count ``0`` is the mirror error.
+#:
+#: The rule is therefore: in ``count`` mode an integer *is* the count; in
+#: ``list`` mode the member count is the count; the scheduler's ``NoDevFiles``
+#: sentinel is zero; an empty value is *absent* (the caller falls back to the
+#: next spelling); and anything else is refused rather than guessed.  A refusal
+#: never becomes a number here — the caller keeps the value the next spelling
+#: yields, so the result is never larger than the scheduler evidence supports.
+_GPU_COUNT_FUNCTION = (
+    "resolve_gpu_count() {",
+    '  local mode="${1:-}" value="${2:-}"',
+    '  case "${value}" in',
+    '    ("NoDevFiles") echo 0; return 0 ;;',
+    '    ("") return 1 ;;',
+    '    (*[!0-9,]*) return 1 ;;',
+    '    (*,,*|,*|*,) return 1 ;;',
+    "  esac",
+    '  if [[ "${mode}" == "count" ]]; then',
+    '    case "${value}" in (*[!0-9]*) return 1 ;; (*) echo "${value}"; return 0 ;; esac',
+    "  fi",
+    '  local commas="${value//[^,]/}"',
+    '  echo "$(( ${#commas} + 1 ))"',
+    "  return 0",
+    "}",
+)
+
 #: The capacity guard the allocation wrapper runs beside a task's scratch
 #: directory.  It is a separate small program (its own process, signals, and
 #: exit trap) rather than a shell function, so stopping it cannot disturb the
@@ -953,6 +989,11 @@ class SlurmJob(Job):
             "#!/bin/bash",
             "set -euo pipefail",
             "",
+            # The single GPU-count reader, defined before anything reads a
+            # GPU count: the receipt below and the envelope further down
+            # must agree about one allocation's shape.
+            *_GPU_COUNT_FUNCTION,
+            "",
             # The allocation exists the moment the scheduler starts this script,
             # so the FIRST thing it does is take a durable receipt of that fact —
             # before any gate wait, any stdout line, and any scientific work.
@@ -965,14 +1006,16 @@ class SlurmJob(Job):
             'mkdir -p -- "$(dirname -- "${allocation_receipt}")"',
             'receipt_cpus="${SLURM_CPUS_PER_TASK:-}"',
             'case "${receipt_cpus}" in (*[!0-9]*|"") receipt_cpus=0 ;; esac',
-            'receipt_gpus="${SLURM_GPUS_ON_NODE:-}"',
-            'case "${receipt_gpus}" in (*[!0-9]*|"") receipt_gpus="${SLURM_JOB_GPUS:-${CUDA_VISIBLE_DEVICES:-}}" ;; esac',
-            'case "${receipt_gpus}" in',
-            '  ("NoDevFiles") receipt_gpus=0 ;;',
-            '  (*[!0-9,]*) receipt_gpus=0 ;;',
-            '  ("") receipt_gpus=0 ;;',
-            '  (*) receipt_gpus="$(awk -F, \'{print NF}\' <<< "${receipt_gpus}")" ;;',
-            "esac",
+            # The count keeps its own value when the scheduler reported one; a
+            # device-ID list is counted; and a value that is neither leaves the
+            # count unknown (0 = held no GPU) rather than guessed.  Never a
+            # number larger than the scheduler's own evidence supports.
+            "receipt_gpus=''",
+            'if receipt_gpus="$(resolve_gpu_count count "${SLURM_GPUS_ON_NODE:-}")"; then :; else',
+            '  if receipt_gpus="$(resolve_gpu_count list "${SLURM_JOB_GPUS:-${CUDA_VISIBLE_DEVICES:-}}")"; then :; else',
+            "    receipt_gpus=0",
+            "  fi",
+            "fi",
             'receipt_tmp="${allocation_receipt}.$$.tmp"',
             "{",
             "  printf 'schema_version=1\\n'",
@@ -1317,10 +1360,15 @@ class SlurmJob(Job):
             [
                 "# -- allocation resource observation --",
                 'allocated_gpu_ids="${SLURM_JOB_GPUS:-${CUDA_VISIBLE_DEVICES:-}}"',
-                'allocated_gpus_on_node="${SLURM_GPUS_ON_NODE:-}"',
-                'if [[ -z "${allocated_gpus_on_node}" && -n "${allocated_gpu_ids}" '
-                '&& "${allocated_gpu_ids}" != "NoDevFiles" ]]; then',
-                '  allocated_gpus_on_node="$(awk -F, \'{print NF}\' <<< "${allocated_gpu_ids}")"',
+                # Same reader as the receipt, so the envelope and the receipt
+                # describe one allocation's shape the same way.  An unresolvable
+                # spelling leaves the count empty here, which the envelope
+                # reports as absent — unknown, never a fabricated zero.
+                "allocated_gpus_on_node=''",
+                'if allocated_gpus_on_node="$(resolve_gpu_count count "${SLURM_GPUS_ON_NODE:-}")"; then :; else',
+                '  if allocated_gpus_on_node="$(resolve_gpu_count list "${allocated_gpu_ids}")"; then :; else',
+                "    allocated_gpus_on_node=''",
+                "  fi",
                 "fi",
                 "start_scratch_guard",
                 "if [[ -x /usr/bin/time ]]; then",

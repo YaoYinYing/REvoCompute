@@ -81,7 +81,9 @@ def test_running_allocation_with_unknown_elapsed_time_blocks_admission(tmp_path)
     entitlement = database.compute_entitlement(81, at=at)
     assert entitlement.used == 0
     assert entitlement.unsettled == 1
-    assert entitlement.unsettled_quantity > 0
+    # A one-GPU allocation measured at this instant reserves its bounded
+    # base-unit quantity: max(admission_quantum, 1 GPU * 1 second) == 3600.
+    assert entitlement.unsettled_quantity == 3600
     assert entitlement.usage_complete is False
     # The settle-only arithmetic would say 3_000; the admission balance says the
     # running allocation has already claimed its share.
@@ -105,8 +107,11 @@ def test_unknown_elapsed_allocation_narrows_but_does_not_invent_a_hold(tmp_path)
 
     decision = _reserve(database, 82, task_id="b" * 32, at=at)
     assert decision["allowed"] is True
-    assert decision["unsettled"] > 0
-    assert decision["quantity"] > 0
+    # One GPU that has just started: the elapsed time is a whole-second ceiling
+    # floored at one, so the reserve is exactly the admission quantum -- in base
+    # units, not quantum-multiplied-by-count.
+    assert decision["unsettled"] == 3600
+    assert decision["quantity"] == 3600
     # The held quantity is drawn from the balance that remains after the
     # unsettled reserve, so the two together never exceed the allowance.
     assert decision["quantity"] + decision["unsettled"] <= 10_000
@@ -147,8 +152,118 @@ def test_allocation_without_slurm_accounting_is_never_charged_zero(tmp_path, mon
     # A reviewed allocation is still unsettled, so it still constrains admission.
     entitlement = database.compute_entitlement(84, at=at)
     assert entitlement.unsettled == 1
-    assert entitlement.unsettled_quantity > 0
+    assert entitlement.unsettled_quantity == 3600
     assert database.compute_entitlement(84, at=at).used == 0
+
+
+# ---------------------------------------------------------------------------
+# The unsettled reserve is a base-unit quantity
+# ---------------------------------------------------------------------------
+
+
+def test_the_reserve_is_the_base_unit_quantity_not_the_count_times_the_quantum(tmp_path):
+    """One GPU for ten seconds is ten GPU-seconds.
+
+    The admission reserve is what settlement will later charge, so it has to be
+    computed in the same base units: ``max(admission_quantum, count * elapsed)``.
+    Applying the quantum to the *count* before multiplying by elapsed reserves
+    3600 * 10 for a single GPU -- 36,000 GPU-seconds for ten seconds of work --
+    and would refuse concurrent submissions for a balance nothing consumed.
+    """
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"), monthly_gpu_seconds=10_000_000)
+    at = _timestamp(2026, 9, 5)
+
+    _start(database, 301, job_id="9401", at=at, gpus=1)
+    assert database.compute_entitlement(301, at=at + 10).unsettled_quantity == 3_600
+
+    _start(database, 302, job_id="9402", at=at, gpus=2)
+    # Two GPUs for ten seconds: still below the quantum, so still the quantum.
+    assert database.compute_entitlement(302, at=at + 10).unsettled_quantity == 3_600
+
+
+def test_the_reserve_passes_the_quantum_once_the_elapsed_quantity_does(tmp_path):
+    """Past the quantum the reserve is the allocation's own elapsed quantity."""
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"), monthly_gpu_seconds=10_000_000)
+    at = _timestamp(2026, 9, 5)
+
+    _start(database, 303, job_id="9403", at=at, gpus=2)
+    # 2 GPUs * 3600 s == 7200 GPU-s, above the 3600 quantum.
+    assert database.compute_entitlement(303, at=at + 3600).unsettled_quantity == 7_200
+
+    _start(database, 304, job_id="9404", at=at, gpus=1)
+    assert database.compute_entitlement(304, at=at + 3600).unsettled_quantity == 3_600
+
+
+def test_an_unknown_shape_still_reserves_a_non_zero_floor(tmp_path):
+    """Unknown is not zero, and not the quantum either -- it keeps growing.
+
+    ``max(quantum, count * elapsed)`` collapses to zero for a NULL count, which
+    is exactly the free-computation case the unknown-is-not-zero rule forbids.
+    An allocation whose shape was never reported therefore reserves the quantum
+    for every second it has been running.
+    """
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"), monthly_gpu_seconds=10_000_000)
+    at = _timestamp(2026, 9, 5)
+    task_id = "d1" + "0" * 30
+    database.observe_allocation_start(
+        user_id=305, task_id=task_id, stage_id="model", slurm_job_id="9405",
+        gpu_count=1, cpu_cores=2, started_at=at,
+    )
+    # Drop the recorded shape: this is the scheduler-log-only case.
+    with database.engine.begin() as conn:
+        conn.exec_driver_sql(
+            "UPDATE resource_allocations SET resource_count = NULL WHERE slurm_job_id = '9405'"
+        )
+
+    assert database.compute_entitlement(305, at=at + 10).unsettled_quantity == 36_000
+    assert database.compute_entitlement(305, at=at + 3600).unsettled_quantity == 12_960_000
+
+
+def test_the_reserve_sums_every_unsettled_allocation_and_honours_the_exclusion(tmp_path):
+    """Multiple unsettled allocations add up; a decision excludes its own fact.
+
+    The exclusion is load-bearing: an allocation-start decision that counted the
+    ACTIVE row it is about to write would refuse itself, because that row
+    reserves a quantum before it has any elapsed time to settle from.  The
+    reserve is asserted in exact base units, both with and without the exclusion.
+    """
+    at = _timestamp(2026, 9, 5)
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"), monthly_gpu_seconds=10_000)
+
+    _start(database, 306, job_id="9406", at=at, gpus=1)
+    _start(database, 306, job_id="9407", at=at, gpus=3)
+
+    # One GPU at this instant reserves the quantum; three GPUs at this instant
+    # are three GPU-seconds, still below it.  3600 + 3600 == 7200.
+    entitlement = database.compute_entitlement(306, at=at)
+    assert entitlement.unsettled == 2
+    assert entitlement.unsettled_quantity == 7_200
+    assert entitlement.remaining == 2_800
+
+    with database.engine.connect() as conn:
+        counted, counted_quantity = database._unsettled_in_connection(conn, 306, "gpu_second", "", at)
+        _, excluded_quantity = database._unsettled_in_connection(
+            conn, 306, "gpu_second", "", at, exclude_slurm_job_id="9406"
+        )
+
+    assert (counted, counted_quantity) == (2, 7_200)
+    # Dropping one allocation drops exactly that allocation's own reserve.
+    assert excluded_quantity == 3_600
+
+
+def test_a_settled_allocation_no_longer_reserves_anything(tmp_path):
+    """Settlement replaces the reserve with the measured fact, exactly once."""
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"), monthly_gpu_seconds=10_000_000)
+    at = _timestamp(2026, 9, 5)
+    _start(database, 307, job_id="9409", at=at, gpus=2)
+
+    assert database.compute_entitlement(307, at=at + 10).unsettled_quantity == 3_600
+    database.settle_allocation_elapsed("9409", elapsed_seconds=10, finished_at=at + 10)
+
+    entitlement = database.compute_entitlement(307, at=at + 10)
+    assert entitlement.unsettled == 0
+    assert entitlement.unsettled_quantity == 0
+    assert entitlement.used == 20
 
 
 # ---------------------------------------------------------------------------

@@ -706,7 +706,8 @@ def test_run_compute_task_records_executor_error(monkeypatch, tmp_path):
     assert not (Path(module.app.config["RESULTS_FOLDER"]) / f"{md5sum}_results.zip").exists()
 
 
-def test_failed_finalize_after_a_completed_purge_leaves_no_result_residue(monkeypatch, tmp_path):
+@pytest.mark.parametrize("purge_at", ["before", "after_ownership_read"])
+def test_failed_finalize_after_a_completed_purge_leaves_no_result_residue(monkeypatch, tmp_path, purge_at):
     """A purge that completed while the worker was failing stays authoritative.
 
     Writing the failure report first and letting publication refuse it would
@@ -723,13 +724,29 @@ def test_failed_finalize_after_a_completed_purge_leaves_no_result_residue(monkey
     module.task_store.ensure_data_lifecycle(
         md5sum, user_id=int(task["submitted_by_user_id"]), logical_bytes=4096, at=time.time()
     )
-    assert module.task_store.claim_data_deletion(
-        md5sum, user_id=int(task["submitted_by_user_id"]), actor_user_id=None, at=time.time()
-    )
-    assert module.task_store.begin_data_purge(md5sum, at=time.time())
-    assert module.task_store.complete_data_purge(md5sum, at=time.time())
-    shutil.rmtree(result_dir, ignore_errors=True)
-    assert not result_dir.exists()
+    from revocompute import resource_lifecycle
+
+    def purge():
+        resource_lifecycle.request_data_deletion(module.task_store, task, actor_user_id=None)
+        assert resource_lifecycle.purge_task_data(
+            module.task_store, task, remove_artifacts=module._delete_task_artifacts
+        )
+        assert not result_dir.exists()
+
+    if purge_at == "before":
+        purge()
+    else:
+        real_check = module.task_runtime._data_still_owned
+        checked = []
+
+        def stale_check(task_id):
+            owned = real_check(task_id)
+            if not checked:
+                checked.append(True)
+                purge()
+            return owned
+
+        monkeypatch.setattr(module.task_runtime, "_data_still_owned", stale_check)
 
     module.task_runtime._finalize_failed_results(task, "scheduler connection denied", finished_at=time.time())
 
@@ -738,6 +755,14 @@ def test_failed_finalize_after_a_completed_purge_leaves_no_result_residue(monkey
     assert not (result_dir / "manifest.json").exists()
     # Nothing was charged for residue that does not exist.
     assert module.task_store.logical_owned_bytes(int(task["submitted_by_user_id"])) == 0
+    assert module.task_store.get_data_lifecycle(md5sum)["state"] == "PURGED"
+    assert module.task_store.get_result_publication(md5sum) is None
+    released = [
+        entry
+        for entry in module.task_store.list_ledger(int(task["submitted_by_user_id"]))
+        if entry["reason_code"] == "storage_released"
+    ]
+    assert [entry["quantity"] for entry in released] == [4096]
 
 
 def test_run_compute_task_finalizes_uncompressed_result_manifest(monkeypatch, tmp_path):
@@ -1604,7 +1629,17 @@ def test_run_compute_task_does_not_resurrect_deleted_task(monkeypatch, tmp_path)
     assert not zip_path.exists()
 
 
-def test_delete_task_artifacts_skips_paths_outside_results_folder(monkeypatch, tmp_path):
+def test_a_task_without_a_storage_identity_fails_the_removal_closed(monkeypatch, tmp_path):
+    """An unresolvable storage identity must raise, not be silently skipped.
+
+    The destructive boundary is what ``purge_task_data`` treats as transactional:
+    a remover that returned here would let the lifecycle complete a purge for
+    bytes it never removed.  Raising keeps the lifecycle in ERROR with the charge
+    intact, so a later pass retries rather than reporting a delete that did not
+    happen.
+    """
+    from revocompute.maintenance.tasks.result_cleanup import ArtifactRemovalError
+
     module = _load_pssm_module(
         monkeypatch,
         tmp_path,
@@ -1619,12 +1654,13 @@ def test_delete_task_artifacts_skips_paths_outside_results_folder(monkeypatch, t
     external_result_dir.mkdir(parents=True, exist_ok=True)
     (external_result_dir / "artifact.txt").write_text("payload\n", encoding="utf-8")
 
-    module._delete_task_artifacts(
-        {
-            "md5sum": md5sum,
-            "result_dir": str(external_result_dir),
-        }
-    )
+    with pytest.raises(ArtifactRemovalError):
+        module._delete_task_artifacts(
+            {
+                "md5sum": md5sum,
+                "result_dir": str(external_result_dir),
+            }
+        )
 
     assert external_result_dir.exists()
 
@@ -2146,7 +2182,8 @@ def test_a_purged_task_is_not_republished_by_a_finishing_worker(monkeypatch, tmp
     assert module.task_store.get_data_lifecycle(task_id)["state"] == "DELETE_REQUESTED"
 
 
-def test_a_purge_that_lands_during_finalize_is_not_republished_or_recharged(monkeypatch, tmp_path):
+@pytest.mark.parametrize("ownerless", [False, True])
+def test_a_purge_that_lands_during_finalize_is_not_republished_or_recharged(monkeypatch, tmp_path, ownerless):
     """The window between the finalize guard and the charge is real, and deletion wins.
 
     ``_finalize_results_manifest`` reads the durable lifecycle once at the top
@@ -2165,6 +2202,8 @@ def test_a_purge_that_lands_during_finalize_is_not_republished_or_recharged(monk
         extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "gremlin"},
     )
     owner = _task_owner(module, "purge-during-finalize")
+    if ownerless:
+        owner["submitted_by_user_id"] = 0
     user_id = int(owner["submitted_by_user_id"])
     task_id = "9" * 32
     module.task_store.upsert_task(
@@ -2179,7 +2218,8 @@ def test_a_purge_that_lands_during_finalize_is_not_republished_or_recharged(monk
         **owner,
     )
     task = module.task_store.get_task(task_id)
-    module.task_store.ensure_data_lifecycle(task_id, user_id=user_id, logical_bytes=64, at=time.time())
+    if not ownerless:
+        module.task_store.ensure_data_lifecycle(task_id, user_id=user_id, logical_bytes=64, at=time.time())
     result_dir = module.task_runtime._task_result_dir(task)
     charges_before = [
         entry for entry in module.task_store.list_ledger(user_id)
