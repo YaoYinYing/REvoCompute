@@ -108,3 +108,14 @@ mkdocs build --strict
 The build fails on a broken relative link, an unlisted page, or a missing nav
 target. Continuous integration runs the same command, so a page is not
 documented until `mkdocs build --strict` passes.
+
+## Runner test ownership
+
+Server and protocol tests use synthetic Runner fixtures and are collected by the
+Server lane. Each production Runner owns its fast contract tests under
+`docker/runners/<family>/tests/`; pinned scientific acceptance remains in that
+same directory and runs in the Runner's pinned environment. Shared Runner test
+helpers live outside production family discovery. Run `make runner-fast` for
+contract tests and use the family-specific scientific acceptance command in the
+Runner documentation. Deployment materialization excludes these test, reference,
+fake-module, golden, and regeneration directories.

@@ -187,6 +187,12 @@ def prune_runtime_bundles(state, keep: dict[str, str]) -> None:
         print(f"[SLURM] Pruned {len(removed)} superseded runtime bundle(s).")
 
 
+def _runner_test_payload_ignore(_directory: str, names: list[str]) -> set[str]:
+    """Keep test/support/scientific validation material out of deployment payloads."""
+    excluded = {"tests", "__pycache__", "fake_modules", "references", "reference", "reference_generation", "goldens"}
+    return {name for name in names if name in excluded or name.endswith(".pyc")}
+
+
 def materialize_runner_families(state) -> None:
     """Atomically replace the server instance's enabled Runner snapshot."""
     from revocompute_ctl import SERVER_ROOT
@@ -214,7 +220,7 @@ def materialize_runner_families(state) -> None:
         if enabled and manifest.id not in enabled:
             continue
         destination = os.path.join(staging_root, manifest.path.name)
-        shutil.copytree(manifest.path, destination)
+        shutil.copytree(manifest.path, destination, ignore=_runner_test_payload_ignore)
     had_previous = os.path.exists(target_root)
     try:
         if had_previous:

@@ -21,7 +21,9 @@ from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[3]
+pytestmark = pytest.mark.runner_contract
+
+ROOT = Path(__file__).resolve().parents[4]
 DATA = ROOT / "tests" / "data" / "gremlin_lh"
 TRANSCRIPTION_PATH = DATA / "upstream_notebook_reference.py"
 GENERATOR_PATH = DATA / "generate_upstream_reference.py"

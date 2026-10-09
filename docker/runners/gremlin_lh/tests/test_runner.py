@@ -22,7 +22,13 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
-from runner_protocol import ROOT, run_with_manifest
+
+pytestmark = pytest.mark.runner_contract
+import sys
+
+ROOT = Path(__file__).resolve().parents[4]
+sys.path.insert(0, str(ROOT / "docker" / "runners" / "_testkit"))
+from runner_protocol import run_with_manifest
 
 
 FAMILY = ROOT / "docker" / "runners" / "gremlin_lh"

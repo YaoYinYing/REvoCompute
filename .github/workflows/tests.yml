@@ -102,6 +102,12 @@ jobs:
       - name: Run Python Server and Contract Tests with Coverage
         run: make test-cov COV_REPORT=xml:coverage.xml PYTEST="python -m pytest -n 4 --dist=load"
 
+      - name: Runner fast contracts
+        run: make runner-fast PYTEST="python -m pytest -n 2 --dist=load"
+
+      - name: Runner/Server architecture boundary
+        run: python3 tools/check_test_boundaries.py
+
       # Bounded registry/discovery determinism gate: re-runs the discovery,
       # workflow-composer, and AF3 runner files under several xdist
       # distributions plus the AF3 file alone, so residual test-scheduling-order
@@ -149,7 +155,7 @@ jobs:
         run: pip install -r docker/runners/gremlin_lh/requirements.lock pytest
 
       - name: Run GREMLIN_LH Upstream Equivalence Acceptance
-        run: python -m pytest tests/runners/gremlin_lh/test_upstream_equivalence.py -q -p no:cacheprovider --noconftest
+        run: python -m pytest docker/runners/gremlin_lh/tests/test_upstream_equivalence.py -q -p no:cacheprovider --noconftest
 
   BrowserContracts:
     needs: ClassifyChanges

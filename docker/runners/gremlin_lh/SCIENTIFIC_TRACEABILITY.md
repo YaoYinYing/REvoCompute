@@ -421,7 +421,7 @@ corrected record.
     --upstream /path/to/GREMLIN_LH_outline_7.ipynb
 
 # Fast protocol contract plus Runner-owned logic (needs jax/optax/matplotlib).
-.venv/bin/python -m pytest tests/runners/gremlin_lh -q
+.venv/bin/python -m pytest docker/runners/gremlin_lh/tests -q
 
 # Generic family contract.
 .venv/bin/python -m revocompute doctor --config-root docker/runners --runner gremlin_lh --strict

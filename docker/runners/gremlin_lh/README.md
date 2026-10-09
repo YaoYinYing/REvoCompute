@@ -245,7 +245,7 @@ Two layers are kept deliberately separate; neither is a substitute for the other
 ```bash
 # Fast protocol contract (tiny synthetic fixture) plus Runner-owned unit logic.
 # Needs jax/optax/matplotlib and skips those cases when the stack is absent.
-python -m pytest tests/runners/gremlin_lh -q
+python -m pytest docker/runners/gremlin_lh/tests -q
 
 # Generic family contract (Doctor).
 python -m revocompute doctor --config-root docker/runners --runner gremlin_lh --strict

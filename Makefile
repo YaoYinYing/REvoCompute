@@ -1,24 +1,32 @@
-.PHONY: test test-all test-unit test-browser test-cov test-registry-xdist test-docker-full-stack
+.PHONY: test server-test runner-fast test-all test-unit test-browser test-cov test-registry-xdist test-docker-full-stack
 
 PYTEST ?= python -m pytest
 COV_REPORT ?= term-missing
 BROWSER_WORKERS ?= 2
 REGISTRY_WORKERS ?= 4
 
+SERVER_TESTS := $(shell find tests -type f -name 'test*.py' ! -path 'tests/runners/*' | sort)
+
+server-test:
+	$(PYTEST) $(SERVER_TESTS) -v
+
+runner-fast:
+	$(PYTEST) docker/runners/*/tests -m "runner_contract and not scientific_acceptance" -q -p no:cacheprovider
+
 test:
-	$(PYTEST) tests/ -v
+	$(PYTEST) $(SERVER_TESTS) -v
 
 test-all:
 	$(PYTEST) tests/ -v
 
 test-unit:
-	$(PYTEST) tests/ -m "not browser" -v
+	$(PYTEST) $(SERVER_TESTS) -m "not browser" -v
 
 test-browser:
-	$(PYTEST) tests/ -m browser -n $(BROWSER_WORKERS) --dist=load -v
+	$(PYTEST) $(SERVER_TESTS) -m browser -n $(BROWSER_WORKERS) --dist=load -v
 
 test-cov:
-	$(PYTEST) tests/ -m "not browser" -v \
+	$(PYTEST) $(SERVER_TESTS) -m "not browser" -v \
 		--cov-config=.coveragerc --cov=revocompute \
 		--cov-report=$(COV_REPORT)
 
@@ -34,13 +42,8 @@ test-registry-xdist:
 		echo "== registry determinism run $$run/$$(echo $(REGISTRY_DISTS) | wc -w) (--dist=$$dist) =="; \
 		$(PYTEST) tests/test_registry_determinism.py tests/test_plugin_discovery.py \
 			tests/test_workflow_composer.py tests/test_workspace_plugin_architecture.py \
-			tests/runners/alphafold3/test_runner.py \
 			-n $(REGISTRY_WORKERS) --dist=$$dist -q -p no:cacheprovider || exit 1; \
 	done
-	@echo "== registry determinism: AF3 runner file run alone (no sibling test may install state) =="
-	@$(PYTEST) tests/runners/alphafold3/test_runner.py -q -p no:cacheprovider || exit 1
-	@echo "== registry determinism: AF3 preflight case run alone =="
-	@$(PYTEST) tests/runners/alphafold3/test_runner.py -k preflight -q -p no:cacheprovider || exit 1
 
 test-docker-full-stack:
 	bash tests/run_full_stack_test.sh

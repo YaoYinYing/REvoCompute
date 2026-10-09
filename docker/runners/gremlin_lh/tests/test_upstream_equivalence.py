@@ -50,7 +50,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-ROOT = Path(__file__).resolve().parents[3]
+pytestmark = pytest.mark.scientific_acceptance
+
+ROOT = Path(__file__).resolve().parents[4]
 FAMILY = ROOT / "docker" / "runners" / "gremlin_lh"
 ADAPTER_PATH = FAMILY / "fit_model.py"
 RECEIPT_PATH = ROOT / "tests" / "data" / "gremlin_lh" / "upstream_reference.json"

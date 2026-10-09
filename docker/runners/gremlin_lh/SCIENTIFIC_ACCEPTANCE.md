@@ -193,7 +193,7 @@ benchmark datasets).
 
 ```bash
 # Runner + upstream-equivalence tests (needs the pinned jax/optax/matplotlib stack).
-PATH="$PWD/.venv/bin:$PATH" .venv/bin/python -m pytest tests/runners/gremlin_lh -q
+PATH="$PWD/.venv/bin:$PATH" .venv/bin/python -m pytest docker/runners/gremlin_lh/tests -q
 
 # Regenerate the receipt from the pinned notebook (maintainer only; not CI):
 .venv/bin/python tests/data/gremlin_lh/generate_upstream_reference.py \
