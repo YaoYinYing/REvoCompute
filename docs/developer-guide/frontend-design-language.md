@@ -427,7 +427,7 @@ regions, in this order:
 ```text
 Compute        Runners, Dashboard
 Account        Profile
-Administration User control, Server logs, Configuration   (administrators only)
+Administration Runner fleet, User control, Server logs, Configuration   (administrators only)
 ```
 
 A region is a quiet label over its destinations, separated from the next region
@@ -443,6 +443,11 @@ is rendered only for a session the server projects as an administrator, so an
 ordinary user or an anonymous visitor never sees a forbidden destination. The
 route guard remains the authoritative boundary; navigation only reflects it.
 
+Account destinations follow session state: anonymous visitors are offered Sign
+in, authenticated users Profile. Visible text, tooltip, accessible name and
+destination must agree at both the rail and top-bar identity affordance. An
+identity's accessible name includes the displayed name as well as its purpose.
+
 The structure is designed so further system surfaces can join a region as they
 are introduced. A destination is added when its route exists — not as a
 placeholder.
@@ -456,10 +461,11 @@ Mobile navigation should be designed for touch and limited width.
 The navigation model may differ while preserving the same information
 architecture and vocabulary.
 
-A bottom bar cannot label a group of items, so region headings are not rendered
-there; the destinations sit directly on the bar and the current one still marks
-itself. A destination added by the Administration region joins the bar the same
-way it joins the rail.
+A bottom bar cannot label a group of items, so Compute and Account destinations
+sit directly on it without region headings; the current one still marks itself.
+Administration occupies a separately named secondary surface above the bar.
+Page-bottom clearance follows that surface's rendered height, including wrapped
+or translated labels.
 
 ---
 
@@ -553,6 +559,15 @@ A persistent notice:
 It should feel like the system speaking clearly, not like a warning banner
 trying to stop the user.
 
+Persistent notices and transient feedback share a stack that clears navigation,
+including mobile Administration. Multiple long notices scroll within the
+remaining viewport so global actions stay reachable; hiding a notice releases
+its space. Compact title summaries let operational chrome yield to the work
+object; readers disclose full messages with native keyboard-accessible controls.
+Critical messages start open. The global notice affordance opens full messages
+and returns to summaries; adjacent hide/restore actions preserve a reader’s
+expanded message and reading position.
+
 ---
 
 ## 13. Guided learning
@@ -597,9 +612,9 @@ Deep explanation belongs in documentation; the tour teaches orientation.
 
 ## 14. Dashboard
 
-The Dashboard structure is intentionally conservative.
-
-The current overall shape is useful and should remain recognizable.
+Dashboard is a task register: the task collection gets the working measure,
+while aggregate counts remain an overview in the margin. Its composition need
+not resemble the method reference or the input preparation surface.
 
 ### 14.1 Header
 
@@ -613,7 +628,9 @@ A page title can be strong without dominating the screen.
 
 Task totals are an overview, not five independent products.
 
-Keep the group visually coherent.
+Keep the group visually coherent. On wide screens, a narrow overview margin
+leaves the task register a continuous measure. On narrow screens, the overview
+becomes one compact group rather than a tall stack of equal KPI tiles.
 
 Local semantic cues are allowed.
 
@@ -625,9 +642,13 @@ Do not add decorative trend graphics.
 
 The default filter surface is intentionally simple.
 
-High-frequency controls remain visible.
+Search remains visible. On phones, secondary filters and ordering share a
+keyboard-operable disclosure so the first task identity appears before the
+fixed navigation. A closed disclosure must state when its filters are active;
+closing it or changing view must preserve their effect. Desktop exposes those
+controls directly.
 
-Low-frequency controls enter an **Advanced search** mode.
+Date bounds and regular expressions enter an **Advanced search** mode.
 
 Search/filter controls should align as a system rather than looking like a row
 of unrelated form fields.
@@ -652,12 +673,13 @@ from search/filter semantics.
 
 ---
 
-## 15. Task cards
-
-Cards remain part of REvoCompute.
+## 15. Task cards and register rows
 
 A Task is an independent computational object with identity, lifecycle,
-metadata, result, and actions. A boundary is therefore meaningful.
+metadata, result, and actions. A boundary is meaningful, but it can be a ruled
+row rather than a closed card. Detailed view uses the full register measure;
+Compact retains cards, and Table provides a comparison grid. Expanding one
+task’s input preview must not consume a neighbouring task’s column.
 
 ### 15.1 What a Task card is not
 
@@ -690,6 +712,8 @@ Metadata remains typography and layout, not micro-cards.
 ### 15.3 Machine values
 
 Task ID, job ID, hashes, and similar identifiers use machine-text conventions.
+Detailed task identities wrap and remain selectable at narrow widths; the
+layout must not depend on hiding part of an identifier.
 
 Dates, durations, and numeric values use consistent formatting.
 
@@ -730,6 +754,20 @@ Comfortable card mode is allowed.
 
 Compact mode should become more registry-like rather than simply shrinking the
 same card.
+
+Runner detail is a readable method reference. Method identity and the canonical
+use case lead; runtime facts form a smaller ruled colophon, not a competing
+summary card. On narrow layouts, native runtime disclosure keeps the compute
+class in its summary and returns space to the scientific guidance; desktop
+exposes those facts directly. A section index supports jumping between guidance, inputs,
+controls, and citations. It sticks beside the reference on wide screens and
+returns to normal flow on narrow screens. Jump targets receive keyboard focus.
+
+Scientific guidance deserves larger prose than parameter metadata. Give
+considerations their full reading measure, and preserve every server-projected
+parameter description, default, range, and flag. Reference rows reflow when the
+contract would otherwise be squeezed into unreadable columns. Do not impose
+the catalog’s or Dashboard’s composition on this document.
 
 ---
 
@@ -784,7 +822,7 @@ The visual language does not require every page to look the same.
 
 | Surface | Character |
 | --- | --- |
-| Dashboard | calm overview |
+| Dashboard | task register |
 | Runner catalog | curated registry |
 | Runner detail | method reference |
 | Create Task | controlled preparation |

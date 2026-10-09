@@ -158,10 +158,6 @@ export class FleetAdmin {
   constructor(private readonly shell: AppShell) {}
 
   async mount(root: HTMLElement): Promise<void> {
-    const heading = element('div', 'admin-section-heading');
-    const copy = element('div', '');
-    copy.append(text('h2', 'Runner fleet'), text('p', 'Derived readiness, transient capacity, and access for every enabled Runner family.', 'admin-section-copy'));
-    heading.append(copy, this.refreshButton);
     this.refreshButton.addEventListener('click', () => void this.load());
 
     const toolbar = element('div', 'admin-toolbar');
@@ -186,6 +182,7 @@ export class FleetAdmin {
       element('label', 'admin-field', [text('span', 'Readiness'), filter]),
       element('label', 'admin-field', [text('span', 'Order'), sort]),
       this.count,
+      this.refreshButton,
     );
 
     const scroll = element('div', 'admin-table-scroll');
@@ -197,7 +194,7 @@ export class FleetAdmin {
     table.append(head, this.table);
     scroll.append(table);
 
-    root.append(heading, this.executorBanner, toolbar, scroll, this.detail);
+    root.append(this.executorBanner, toolbar, scroll, this.detail);
     await this.load();
   }
 

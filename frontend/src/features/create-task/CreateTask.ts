@@ -87,6 +87,7 @@ export class CreateTask {
       const definition = await getTaskDefinition(name, controller.signal); if (generation !== this.generation) return;
       this.definition = definition; this.preflight = null; this.renderWorkbench(); this.setBusy(false); this.revision++; await this.workspace.mount(definition);
       if (generation !== this.generation) return;
+      if (this.status.classList.contains('busy')) this.setStatus('');
       this.refreshValidation(); window.scrollTo({ top: 0, behavior: 'auto' });
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') return;
