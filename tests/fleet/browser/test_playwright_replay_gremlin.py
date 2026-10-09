@@ -32,7 +32,7 @@ from playwright.sync_api import Page, expect
 
 pytestmark = pytest.mark.browser
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 ORIGIN = "https://revocompute.example"
 BUNDLE_PATH = ROOT / "tests" / "data" / "gremlin_lh_replay" / "2kl8_seed0_944ed43af62e.json"
 

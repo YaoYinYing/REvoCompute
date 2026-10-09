@@ -35,7 +35,7 @@ from frontend_fixtures import project_manifest_for_serve
 
 pytestmark = pytest.mark.browser
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 # The golden case is a real production run, not a fixture: its manifest,
 # artifacts, and storyboard are staged by whoever took the receipt. Point
 # ``REVOCOMPUTE_GREMLIN_STAGE`` at that directory to run this test; when it is

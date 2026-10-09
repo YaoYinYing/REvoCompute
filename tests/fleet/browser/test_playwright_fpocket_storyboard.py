@@ -23,7 +23,7 @@ from browser_frontend_assets import install_scientific_assets
 
 pytestmark = pytest.mark.browser
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 STORYBOARD = ROOT / "docker" / "runners" / "fpocket" / "storyboard" / "index.js"
 LIVE_POCKETS = ROOT / "tests/data/fpocket/live/pockets.csv"
 

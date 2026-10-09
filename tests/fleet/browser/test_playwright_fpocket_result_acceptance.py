@@ -33,7 +33,7 @@ from frontend_fixtures import project_manifest_for_serve
 
 pytestmark = pytest.mark.browser
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 FAMILY = ROOT / "docker/runners/fpocket"
 RETAINED_RUN = ROOT / "docker/runners/fpocket/tests/fast/fixtures/1SUO_out"
 INPUT_STRUCTURE = ROOT / "tests/data/pdb/1SUO.pdb"

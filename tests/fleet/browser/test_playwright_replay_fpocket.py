@@ -31,7 +31,7 @@ from playwright.sync_api import Page, expect
 
 pytestmark = pytest.mark.browser
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 ORIGIN = "https://revocompute.example"
 BUNDLE_PATH = ROOT / "tests/data/fpocket_replay/1suo_2pockets.json"
 
