@@ -331,6 +331,13 @@ class SlurmJob(Job):
         self._allocation_started_callback = allocation_started_callback
         self._allocation_finished_callback = allocation_finished_callback
         self._job_id_event = threading.Event()
+        # Identity is available as soon as either reader finds it.  Completion
+        # of one reader is insufficient: the other may still contain the
+        # wrapper's identity line.  This lock protects the two completion bits
+        # and the unsuccessful-search decision.
+        self._job_id_reader_lock = threading.Lock()
+        self._stdout_reader_done = False
+        self._stderr_reader_done = False
         self._allocation_live_lock = threading.Lock()
         self._resolved_resource_policy = resource_policy
         if scratch_backend not in {"disk", "ram"}:
@@ -380,6 +387,7 @@ class SlurmJob(Job):
         # Background threads for live stdout/stderr capture.  The stdout
         # thread also parses REVODESIGN_STAGE: markers.
         self._stdout_lines, self._stderr_lines = [], []
+        self._stdout_reader_done = self._stderr_reader_done = False
         self._stdout_thread = threading.Thread(target=self._read_stdout, daemon=True)
         self._stderr_thread = threading.Thread(target=self._read_stderr, daemon=True)
         self._stdout_thread.start()
@@ -1473,11 +1481,12 @@ class SlurmJob(Job):
             except Exception:  # surface, never mask status updates
                 logging.exception("Stage callback failed for task %s", self.task_id)
 
-        for line in iter(stream.readline, ""):
-            self._stdout_lines.append(line)
-            if line.startswith(JOB_ID_PREFIX):
-                candidate = line.split("=", 1)[1].strip()
-                if candidate.isdigit():
+        try:
+            for line in iter(stream.readline, ""):
+                self._stdout_lines.append(line)
+                if line.startswith(JOB_ID_PREFIX):
+                    candidate = line.split("=", 1)[1].strip()
+                    if candidate.isdigit():
                     # The wrapper prints this line itself, so it is evidence the
                     # request reached a compute node and started — which a queued
                     # srun stderr banner never is.  Recorded independently of the
@@ -1486,12 +1495,12 @@ class SlurmJob(Job):
                     # wrapper itself ran.  ``_wrapper_started_at`` is the start
                     # stamp the ``poll()`` backstop uses on a host with no
                     # scheduler query.
-                    if self._slurm_job_id is None:
-                        self._slurm_job_id = candidate
-                        self._job_id_event.set()
-                    self._wrapper_started = True
-                    if self._wrapper_started_at is None:
-                        self._wrapper_started_at = time.time()
+                        if self._slurm_job_id is None:
+                            self._slurm_job_id = candidate
+                            self._job_id_event.set()
+                        self._wrapper_started = True
+                        if self._wrapper_started_at is None:
+                            self._wrapper_started_at = time.time()
                     # Persist the execution fact NOW, from the thread that saw it,
                     # rather than deferring to ``submit()``: a process death
                     # between this observation and the scheduler-owned reservation
@@ -1502,27 +1511,42 @@ class SlurmJob(Job):
                     # reservation — so a failure here must STOP the wrapper rather
                     # than let it run an allocation whose fact was never written.
                     # It propagates to ``submit()``, which tears the job down.
-                    self._notify_dispatched()
-            elif line.startswith(ALLOCATION_LIVE_PREFIX):
+                        self._notify_dispatched()
+                elif line.startswith(ALLOCATION_LIVE_PREFIX):
                 # The wrapper observed its own job in RUNNING state on the
                 # compute node.  This — not job identity — is what starts
                 # allocation accounting, and it is the signal the wrapper waits
                 # on before it releases the scientific command.
-                live = line.split("=", 1)[1].strip()
-                if live.isdigit():
-                    self._allocation_started_at = time.time()
-                    self._notify_allocation_live()
-                    if markers and self.stage_callback:
+                    live = line.split("=", 1)[1].strip()
+                    if live.isdigit():
+                        self._allocation_started_at = time.time()
+                        self._notify_allocation_live()
+                        if markers and self.stage_callback:
                         # The allocation is now genuinely running, before the
                         # scientific tool has printed its first marker.  Emit the
                         # first declared stage as a liveness signal so the Task
                         # reads as running from the moment it holds resources.
-                        emit_stage(next(iter(markers)))
-            if markers and self.stage_callback:
-                stage = extract_stage_from_log_line(line, markers)
-                if stage:
-                    emit_stage(stage)
-        stream.close()
+                            emit_stage(next(iter(markers)))
+                if markers and self.stage_callback:
+                    stage = extract_stage_from_log_line(line, markers)
+                    if stage:
+                        emit_stage(stage)
+        finally:
+            stream.close()
+            self._job_id_reader_finished("stdout")
+
+    def _job_id_reader_finished(self, stream_name: str) -> None:
+        with self._job_id_reader_lock:
+            if stream_name == "stdout":
+                self._stdout_reader_done = True
+            else:
+                self._stderr_reader_done = True
+            if (
+                self._slurm_job_id is None
+                and self._stdout_reader_done
+                and self._stderr_reader_done
+            ):
+                self._job_id_event.set()
 
     def _read_stderr(self) -> None:
         stream = self._process.stderr
@@ -1534,9 +1558,8 @@ class SlurmJob(Job):
                     self._slurm_job_id = match.group(1)
                     self._job_id_event.set()
         finally:
-            if self._slurm_job_id is None:
-                self._job_id_event.set()  # no banner seen — stop the wait
             stream.close()
+            self._job_id_reader_finished("stderr")
 
     def _save_output(self) -> None:
         # Keep scheduler diagnostics in a clearly named, previewable namespace
