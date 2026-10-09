@@ -76,7 +76,8 @@ DOC_ONLY_FILES = frozenset({"mkdocs.yml", ".github/workflows/docs.yml"})
 # Build-system, dependency-resolution, coverage, and CI-policy paths: any change
 # invalidates the assumptions every lane makes.
 FULL_MATRIX_FILES = frozenset(
-    {"pyproject.toml", "uv.lock", ".coveragerc", "codecov.yml", "Makefile", ".gitattributes", ".gitignore"}
+    {"pyproject.toml", "uv.lock", ".coveragerc", "codecov.yml", "Makefile", ".gitattributes", ".gitignore",
+     "tools/classify_ci_scope.py"}
 )
 FULL_MATRIX_PREFIXES = (".github/",)
 

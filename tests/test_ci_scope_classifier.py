@@ -210,3 +210,7 @@ def test_cli_writes_every_lane_key_and_a_broad_default(tmp_path, monkeypatch):
     lines = {line.split("=", 1)[0]: line.split("=", 1)[1] for line in output.read_text().splitlines()}
     assert all(lines[lane] == "true" for lane in classify.LANES)
     assert lines["full"] == "true"
+
+
+def test_classifier_policy_change_requires_full_matrix():
+    assert classify.classify_paths(["tools/classify_ci_scope.py"]) == classify.ALL_LANES
