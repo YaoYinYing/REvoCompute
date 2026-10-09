@@ -155,6 +155,15 @@ same effect, because the decision and the charge are one transaction.
 An ownerless publication closes as `unowned` without charging subject zero; that
 branch uses the same guarded transaction, so it cannot bypass an accepted deletion.
 
+Storage settlement carries the anchored publication revision and manifest digest.
+The lifecycle bytes, append-only ledger adjustment and publication charge marker
+commit together. A stale live publisher or repair snapshot cannot settle or resize
+a newer publication. A replacement accounts its exact byte difference, including
+a decrease to zero; replaying the same settled revision adds no ledger fact.
+The worker's existing parent-process pulse repairs pending charges during normal
+long-lived operation, even when Slurm probes and optional resource maintenance
+are disabled. With automatic probes disabled, storage repair runs every 60 seconds.
+
 A publication anchored before the charge was recorded alongside it owes an amount
 that is *unknown*, not zero. The repair derives it from the verified anchored
 manifest's own declared artifact sizes (the bytes Core published, never a

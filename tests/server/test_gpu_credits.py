@@ -692,7 +692,7 @@ def test_an_unanswered_maintenance_pass_releases_no_queued_commitment(monkeypatc
     module.task_store.record_reservation_dispatch(task_id=task_id, slurm_job_id="8811", at=at + 1)
 
     class _Unreachable:
-        def send_task(self, name):
+        def send_task(self, name, **_options):
             raise OSError("no broker")
 
     outcome = fetch_scheduler_evidence(module.task_store, app=_Unreachable())

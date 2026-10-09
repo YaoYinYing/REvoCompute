@@ -27,7 +27,7 @@ from revocompute.storage import ResultPublicationError
 from conftest import _load_pssm_module, _test_client_auth, _upsert_task_for_user
 
 
-def _task(module, tmp_path, *, status: str = "finished") -> tuple[str, Path]:
+def _task(module, tmp_path, *, status: str = "finished", task_type: str = "gremlin") -> tuple[str, Path]:
     task_id = uuid.uuid4().hex
     result_dir = tmp_path / f"result-{task_id[:8]}"
     result_dir.mkdir()
@@ -39,7 +39,7 @@ def _task(module, tmp_path, *, status: str = "finished") -> tuple[str, Path]:
         result_dir=result_dir,
         username="tester",
         status=status,
-        task_type="gremlin",
+        task_type=task_type,
     )
     return task_id, result_dir
 
@@ -68,7 +68,7 @@ def _fail_charge(module, monkeypatch, *, error=OSError("database is locked")) ->
     def _raise(*_args, **_kwargs):
         raise error
 
-    monkeypatch.setattr(module.task_store, "charge_data_ownership", _raise)
+    monkeypatch.setattr(module.task_store, "charge_result_publication", _raise)
 
 
 def _publish(module, task_id: str, result_dir: Path, *, bytes_written: int = 4096) -> None:
@@ -87,6 +87,182 @@ def _upgrade_pre_charge_anchor(database: TaskDatabase) -> None:
     database.engine.dispose()
     reopened = TaskDatabase(path)
     reopened.engine.dispose()
+
+
+@pytest.mark.parametrize("completion_order", ["older_first", "newer_first"])
+def test_two_live_publishers_settle_only_the_current_revision(monkeypatch, tmp_path, completion_order):
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id, result_dir = _task(module, tmp_path, task_type="synthetic-storage")
+    store = module.task_store
+    charge = module.task_runtime._charge_logical_storage
+    user_id = store.get_task(task_id)["submitted_by_user_id"]
+    newer_call = []
+
+    def older_paused_after_publication(*args, **kwargs):
+        older = store.get_result_publication(task_id)
+        with monkeypatch.context() as pause_newer:
+            pause_newer.setattr(
+                module.task_runtime, "_charge_logical_storage",
+                lambda *new_args, **new_kwargs: newer_call.append((new_args, new_kwargs)),
+            )
+            _publish(module, task_id, result_dir, bytes_written=8192)
+        newer = store.get_result_publication(task_id)
+        assert newer["revision"] == older["revision"] + 1
+        assert newer["manifest_sha256"] != older["manifest_sha256"]
+        assert older["charge_bytes"] == 4096 and newer["charge_bytes"] == 8192
+        if completion_order == "older_first":
+            charge(*args, **kwargs)
+            assert store.get_result_publication(task_id) == newer
+            assert store.get_data_lifecycle(task_id) is None
+            assert store.list_ledger(user_id) == []
+            charge(*newer_call[0][0], **newer_call[0][1])
+        else:
+            charge(*newer_call[0][0], **newer_call[0][1])
+            settled = store.get_result_publication(task_id)
+            lifecycle = store.get_data_lifecycle(task_id)
+            facts = store.list_ledger(user_id)
+            charge(*args, **kwargs)
+            assert store.get_result_publication(task_id) == settled
+            assert store.get_data_lifecycle(task_id) == lifecycle
+            assert store.list_ledger(user_id) == facts
+
+    monkeypatch.setattr(module.task_runtime, "_charge_logical_storage", older_paused_after_publication)
+    _publish(module, task_id, result_dir, bytes_written=4096)
+    publication = store.get_result_publication(task_id)
+    assert publication["revision"] == 2 and publication["charge_state"] == "charged"
+    assert publication["charge_bytes"] == 8192
+    lifecycle = store.get_data_lifecycle(task_id)
+    assert lifecycle["logical_bytes"] == lifecycle["accounted_bytes"] == 8192
+    assert [fact["quantity"] for fact in store.list_ledger(user_id)] == [-8192]
+    charge(*newer_call[0][0], **newer_call[0][1])
+    assert [fact["quantity"] for fact in store.list_ledger(user_id)] == [-8192]
+
+
+@pytest.mark.parametrize("newer_settled", [False, True])
+def test_a_repair_snapshot_cannot_settle_a_newer_publication(monkeypatch, tmp_path, newer_settled):
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id, result_dir = _task(module, tmp_path, task_type="synthetic-storage")
+    with monkeypatch.context() as failure:
+        _fail_charge(module, failure)
+        _publish(module, task_id, result_dir, bytes_written=4096)
+    storage = module.task_runtime._storage()
+    publication_state = storage.publication_state
+    newer, newer_lifecycle, newer_facts = [], [], []
+
+    def replace_after_pending_snapshot(task):
+        if not newer:
+            with monkeypatch.context() as failure:
+                if not newer_settled:
+                    _fail_charge(module, failure)
+                _publish(module, task_id, result_dir, bytes_written=8192)
+            newer.append(module.task_store.get_result_publication(task_id))
+            newer_lifecycle.append(module.task_store.get_data_lifecycle(task_id))
+            newer_facts.append(module.task_store.list_ledger(task["submitted_by_user_id"]))
+        return publication_state(task)
+
+    with monkeypatch.context() as race:
+        race.setattr(module.task_runtime, "_storage", lambda: storage)
+        race.setattr(storage, "publication_state", replace_after_pending_snapshot)
+        assert module.task_runtime._reconcile_pending_storage_charges()["charged"] == 0
+    assert module.task_store.get_result_publication(task_id) == newer[0]
+    assert module.task_store.get_data_lifecycle(task_id) == newer_lifecycle[0]
+    assert module.task_store.list_ledger(module.task_store.get_task(task_id)["submitted_by_user_id"]) == newer_facts[0]
+    assert module.task_runtime._reconcile_pending_storage_charges()["charged"] == (0 if newer_settled else 1)
+    lifecycle = module.task_store.get_data_lifecycle(task_id)
+    assert lifecycle["logical_bytes"] == lifecycle["accounted_bytes"] == 8192
+    assert module.task_store.get_result_publication(task_id)["charge_bytes"] == 8192
+    assert [fact["quantity"] for fact in module.task_store.list_ledger(lifecycle["subject_id"])] == [-8192]
+
+
+def test_failure_closing_a_publication_rolls_back_its_lifecycle_and_facts(monkeypatch, tmp_path):
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id, result_dir = _task(module, tmp_path, task_type="synthetic-storage")
+    store = module.task_store
+    with store.engine.begin() as conn:
+        conn.exec_driver_sql("""CREATE TRIGGER interrupt_charge BEFORE UPDATE OF charge_state ON result_publications
+            WHEN NEW.charge_state = 'charged' BEGIN SELECT RAISE(ABORT, 'marker write interrupted'); END""")
+    _publish(module, task_id, result_dir)
+    assert store.get_result_publication(task_id)["charge_state"] == "pending"
+    assert store.get_data_lifecycle(task_id) is None
+    assert store.list_ledger(store.get_task(task_id)["submitted_by_user_id"]) == []
+    with store.engine.begin() as conn:
+        conn.exec_driver_sql("DROP TRIGGER interrupt_charge")
+    assert module.task_runtime._reconcile_pending_storage_charges()["charged"] == 1
+    lifecycle = store.get_data_lifecycle(task_id)
+    assert store.get_result_publication(task_id)["charge_bytes"] == lifecycle["accounted_bytes"] == 4096
+    assert [fact["quantity"] for fact in store.list_ledger(lifecycle["subject_id"])] == [-4096]
+    assert module.task_runtime._reconcile_pending_storage_charges()["charged"] == 0
+
+
+@pytest.mark.parametrize("new_size", [8192, 2048, 0])
+def test_a_new_publication_rebalances_the_append_only_storage_facts(monkeypatch, tmp_path, new_size):
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id, result_dir = _task(module, tmp_path, task_type="synthetic-storage")
+    _publish(module, task_id, result_dir, bytes_written=4096)
+    user_id = module.task_store.get_task(task_id)["submitted_by_user_id"]
+    first_facts = module.task_store.list_ledger(user_id)
+    _publish(module, task_id, result_dir, bytes_written=new_size)
+    publication = module.task_store.get_result_publication(task_id)
+    lifecycle = module.task_store.get_data_lifecycle(task_id)
+    assert publication["charge_state"] == "charged"
+    assert publication["charge_bytes"] == lifecycle["logical_bytes"] == lifecycle["accounted_bytes"] == new_size
+    facts = module.task_store.list_ledger(user_id)
+    assert all(fact in facts for fact in first_facts)
+    assert sum(fact["quantity"] for fact in facts) == -new_size
+    assert module.task_runtime._reconcile_pending_storage_charges()["charged"] == 0
+    assert module.task_store.list_ledger(user_id) == facts
+
+
+@pytest.mark.parametrize("infra_refresh", ["15", "0"])
+def test_the_ordinary_worker_pulse_repairs_a_charge_without_a_restart(monkeypatch, tmp_path, infra_refresh):
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={
+        "RUNNER_UID": "1234", "RUNNER_GID": "5678", "RESOURCE_MAINTENANCE_SECONDS": "0",
+        "INFRA_REFRESH_SECONDS": infra_refresh,
+    })
+    task_id, result_dir = _task(module, tmp_path, task_type="synthetic-storage")
+    with monkeypatch.context() as failure:
+        _fail_charge(module, failure)
+        _publish(module, task_id, result_dir)
+    assert module.task_store.get_result_publication(task_id)["charge_state"] == "pending"
+    calls = []
+
+    class ThreePulses:
+        def wait(self, interval):
+            assert interval > 0
+            calls.append(interval)
+            return len(calls) > 3
+
+    started = []
+
+    class InlineThread:
+        def __init__(self, *, target, args, kwargs=None, **_):
+            self.target, self.args, self.kwargs = target, args, kwargs or {}
+
+        def start(self):
+            started.append(True)
+            self.target(*self.args, **self.kwargs)
+
+    monkeypatch.setattr(module.task_runtime.threading, "Thread", InlineThread)
+    monkeypatch.setattr(module.task_runtime.threading, "Event", ThreePulses)
+    real_charge = module.task_store.charge_result_publication
+    attempts = []
+
+    def fail_first_pulse(*args, **kwargs):
+        attempts.append(True)
+        if len(attempts) == 1:
+            raise OSError("transient database interruption during repair")
+        return real_charge(*args, **kwargs)
+
+    monkeypatch.setattr(module.task_store, "charge_result_publication", fail_first_pulse)
+    monkeypatch.setattr(module.task_runtime, "_manage_db", type("DisabledSlurm", (), {"slurm_enabled": lambda _: False})())
+    module.task_runtime.start_infrastructure_pulse()
+    assert started == [True]
+    assert attempts == [True, True]  # failed pass, repaired pass, then no pending work
+    publication = module.task_store.get_result_publication(task_id)
+    lifecycle = module.task_store.get_data_lifecycle(task_id)
+    assert publication["charge_state"] == "charged"
+    assert publication["charge_bytes"] == lifecycle["logical_bytes"] == lifecycle["accounted_bytes"] == 4096
+    assert [fact["quantity"] for fact in module.task_store.list_ledger(lifecycle["subject_id"])] == [-4096]
 
 
 def test_a_charge_that_fails_leaves_a_pending_publication_and_is_repaired(monkeypatch, tmp_path) -> None:
@@ -350,19 +526,19 @@ def test_a_purge_that_lands_mid_repair_leaves_the_publication_released(monkeypat
     # Establish ownership, then let a purge complete exactly at the repair's
     # charge transition -- after its ownership read, before its charge.
     module.task_store.ensure_data_lifecycle(task_id, user_id=user_id, logical_bytes=4096)
-    real_charge = module.task_store.charge_data_ownership
+    real_charge = module.task_store.charge_result_publication
     purged: list[bool] = []
 
-    def _purge_then_charge(task_id_arg, *, user_id, logical_bytes=0, at=None):
+    def _purge_then_charge(task_id_arg, **fields):
         if not purged:
             resource_lifecycle.request_data_deletion(module.task_store, task, actor_user_id=None)
             resource_lifecycle.purge_task_data(
                 module.task_store, task, remove_artifacts=module._delete_task_artifacts
             )
             purged.append(True)
-        return real_charge(task_id_arg, user_id=user_id, logical_bytes=logical_bytes, at=at)
+        return real_charge(task_id_arg, **fields)
 
-    monkeypatch.setattr(module.task_store, "charge_data_ownership", _purge_then_charge)
+    monkeypatch.setattr(module.task_store, "charge_result_publication", _purge_then_charge)
     charges_before = [
         entry
         for entry in module.task_store.list_ledger(user_id)

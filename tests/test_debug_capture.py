@@ -143,7 +143,8 @@ class _FakeTaskStore:
                 # the double records it too: a repair pass reading a fake anchor
                 # must see the same fields the real one carries.
                 "charge_bytes": charge_bytes,
-                "charge_state": "charged" if charge_bytes == 0 else "pending",
+                "charge_state": "pending",
+                "revision": len(self.publications) + 1,
             }
         )
         return len(self.publications)
@@ -151,30 +152,21 @@ class _FakeTaskStore:
     def get_result_publication(self, md5sum):
         return self.publications[-1] if self.publications else None
 
-    def mark_publication_charged(self, task_id, *, charge_bytes, at):
-        if self.publications:
-            self.publications[-1]["charge_state"] = "charged"
-            self.publications[-1]["charge_bytes"] = charge_bytes
-        return True
-
-    def mark_publication_released(self, task_id):
-        if self.publications:
-            self.publications[-1]["charge_state"] = "released"
-        return True
-
     def list_pending_storage_publications(self, *, limit=500):
         return [row for row in self.publications if row.get("charge_state") == "pending"]
 
     def ensure_data_lifecycle(self, task_id, *, user_id, logical_bytes=0, at=None):
         return {"task_id": task_id, "state": "ACTIVE", "logical_bytes": logical_bytes}
 
-    def charge_data_ownership(self, task_id, *, user_id, logical_bytes=0, at=None):
+    def charge_result_publication(self, task_id, *, revision, manifest_sha256, user_id, logical_bytes, at=None):
         # The guarded transition the live publication now uses: the fake models
         # only the task row, so the data is always still owned here.
         if user_id <= 0:
             if self.publications:
                 self.publications[-1]["charge_state"] = "unowned"
             return "unowned"
+        self.publications[-1]["charge_state"] = "charged"
+        self.publications[-1]["charge_bytes"] = logical_bytes
         return "charged"
 
     def get_data_lifecycle(self, task_id):

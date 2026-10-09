@@ -86,9 +86,14 @@ def dispatch_scheduler_evidence(*, unsettled: int = 0, app: Celery | None = None
     or an error — which is a different fact from any result the worker could
     return.  ``unsettled`` is the number of allocations awaiting evidence, so a
     caller can report the unknown quantity without re-reading the store.
+    Requests expire within the same usefulness window: a busy worker discards
+    unanswered old questions when capacity returns instead of executing a
+    backlog of stale maintenance work.
     """
     try:
-        outcome = (app or scheduler_evidence_app()).send_task(SCHEDULER_EVIDENCE_TASK).get(
+        outcome = (app or scheduler_evidence_app()).send_task(
+            SCHEDULER_EVIDENCE_TASK, expires=SCHEDULER_EVIDENCE_WAIT_SECONDS,
+        ).get(
             timeout=SCHEDULER_EVIDENCE_WAIT_SECONDS
         )
     except Exception as exc:  # pylint: disable=broad-except
