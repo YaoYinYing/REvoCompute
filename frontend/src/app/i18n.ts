@@ -66,6 +66,9 @@ const en: Dictionary = {
 
   // Dashboard
   'dashboard.title': 'Dashboard',
+  'dashboard.register': 'Task register',
+  'dashboard.filters.summary': 'Filters & order',
+  'dashboard.filters.active': 'Filters & order · active',
   'dashboard.action.newTask': 'New task',
   'dashboard.action.refresh': 'Refresh',
   'dashboard.stats.label': 'Task totals',
@@ -140,7 +143,7 @@ const en: Dictionary = {
   'tour.entry': 'Guided tour',
   'tour.resume': 'Resume tour',
   'tour.start': 'Start the tour',
-  'tour.restart': 'Restart guided tour',
+  'tour.restart': 'Restart tour',
   'tour.stepOf': 'Step {current} of {total}',
   'tour.next': 'Next',
   'tour.back': 'Back',
@@ -202,6 +205,9 @@ const zhCN: Dictionary = {
   'page.notFound.action': '浏览计算模块',
 
   'dashboard.title': '任务面板',
+  'dashboard.register': '计算任务记录',
+  'dashboard.filters.summary': '筛选与排序',
+  'dashboard.filters.active': '筛选与排序 · 已启用',
   'dashboard.action.newTask': '新建任务',
   'dashboard.action.refresh': '刷新',
   'dashboard.stats.label': '任务统计',

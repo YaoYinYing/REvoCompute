@@ -51,18 +51,35 @@ export async function mountRunnerDetail(root: HTMLElement, name: string, shell: 
     const back = document.createElement('a'); back.href = '/runners'; back.className = 'back-link'; back.innerHTML = '<i data-lucide="arrow-left"></i><span>Runner catalog</span>';
     const head = document.createElement('header'); head.className = 'runner-detail-heading'; const intro = document.createElement('div'); intro.append(back, text('p', task.category.replaceAll('_', ' '), 'page-kicker'), text('h1', task.display_name), text('p', task.summary, 'runner-intro'));
     const access = text('p', accessLabel(task), `access-banner ${task.access.restricted && !task.access.granted ? 'restricted' : ''}`); if (task.access.restricted && task.access.description) access.append(`. ${task.access.description}`); intro.append(access); const actions = document.createElement('div'); actions.className = 'page-actions'; actions.append(createTaskLink(task)); const dashboard = document.createElement('a'); dashboard.href = '/compute/dashboard'; dashboard.className = 'secondary-button'; dashboard.textContent = 'Dashboard'; actions.append(dashboard); intro.append(actions);
-    const facts = document.createElement('dl'); facts.className = 'runner-facts'; const roles = task.inputs || []; const factValues: Array<[string, string]> = [['Runtime family', task.runtime_family || '-'], ['Compute', task.gpus ? 'GPU' : 'CPU'], ['Network', task.requires_network ? 'Required' : 'Isolated'], ['Input roles', String(roles.length)], ['Parameters', String(Object.keys(schema.properties || {}).length)]]; factValues.forEach(([label, value]) => { const row = document.createElement('div'); row.append(text('dt', label), text('dd', value)); facts.append(row); }); head.append(intro, facts); root.append(head);
-    root.append(detailSection('Scientific contract', 'When to use this method', guidance(task)));
-    if (task.workflow?.length) root.append(detailSection('Execution', 'Workflow stages', stages(task)));
-    root.append(detailSection('Inputs', 'Accepted data roles', inputRoles(task)));
-    root.append(detailSection('Controls', 'Task parameters', parameters(schema.properties || {}, new Set(schema.required || []))));
-    if (task.citations?.length) root.append(detailSection('References', 'Citations', citations(task)));
-    const cta = document.createElement('section'); cta.className = 'runner-detail-cta'; cta.append(text('div', `Configure ${task.display_name} with the active server contract.`), createTaskLink(task)); root.append(cta);
+    const facts = document.createElement('dl'); facts.className = 'runner-facts'; const roles = task.inputs || []; const factValues: Array<[string, string]> = [['Runtime family', task.runtime_family || '-'], ['Compute', task.gpus ? 'GPU' : 'CPU'], ['Network', task.requires_network ? 'Required' : 'Isolated'], ['Input roles', String(roles.length)], ['Parameters', String(Object.keys(schema.properties || {}).length)]]; factValues.forEach(([label, value]) => { const row = document.createElement('div'); row.append(text('dt', label), text('dd', value)); facts.append(row); }); const runtime = document.createElement('details'); runtime.className = 'method-runtime';
+    runtime.append(text('summary', `Runtime facts · ${task.gpus ? 'GPU' : 'CPU'}`), facts);
+    const narrow = window.matchMedia('(max-width: 56rem)');
+    const syncRuntime = (): void => { runtime.open = !narrow.matches; };
+    syncRuntime(); narrow.addEventListener('change', syncRuntime);
+    head.append(intro, runtime); root.append(head);
+    const body = document.createElement('div'); body.className = 'method-reference';
+    const index = document.createElement('nav'); index.className = 'method-index'; index.setAttribute('aria-label', 'On this method');
+    index.append(text('p', 'On this method', 'page-kicker'));
+    const content = document.createElement('div'); content.className = 'method-sections';
+    const addSection = (id: string, kicker: string, heading: string, contents: HTMLElement): void => {
+      const section = detailSection(heading, contents); section.id = id; section.tabIndex = -1;
+      const title = section.querySelector('h2')!; title.id = `${id}-title`;
+      section.setAttribute('aria-labelledby', title.id);
+      const link = document.createElement('a'); link.href = `#${id}`; link.textContent = kicker;
+      index.append(link); content.append(section);
+    };
+    addSection('scientific-contract', 'Scientific contract', 'When to use this method', guidance(task));
+    if (task.workflow?.length) addSection('execution', 'Execution', 'Workflow stages', stages(task));
+    addSection('inputs', 'Inputs', 'Accepted data roles', inputRoles(task));
+    addSection('controls', 'Controls', 'Task parameters', parameters(schema.properties || {}, new Set(schema.required || [])));
+    if (task.citations?.length) addSection('references', 'References', 'Citations', citations(task));
+    body.append(index, content); root.append(body);
+    const cta = document.createElement('section'); cta.className = 'runner-detail-cta'; cta.append(text('div', `Configure ${task.display_name} with the active server contract.`), createTaskLink(task)); content.append(cta);
     createIcons({ icons: { ArrowLeft, ArrowRight, BookOpen, Cpu, ExternalLink, ShieldCheck, Zap }, root });
   } catch (error) { root.replaceChildren(text('h1', 'Runner unavailable'), text('p', (error as Error).message || 'Unable to load this runner.', 'empty-state')); shell.notify('Unable to load the runner contract.', 'error'); }
 }
 
-function detailSection(kicker: string, heading: string, content: HTMLElement): HTMLElement { const section = document.createElement('section'); section.className = 'detail-section'; const head = document.createElement('header'); head.append(text('p', kicker, 'page-kicker'), text('h2', heading)); section.append(head, content); return section; }
+function detailSection(heading: string, content: HTMLElement): HTMLElement { const section = document.createElement('section'); section.className = 'detail-section'; const head = document.createElement('header'); head.append(text('h2', heading)); section.append(head, content); return section; }
 function guidance(task: TaskTypeDetail): HTMLElement { const grid = document.createElement('div'); grid.className = 'guidance-grid'; const values: Array<[string, string]> = [['Use when', task.use_when], ['Provide', task.input_summary], ['Receive', task.output_summary]]; values.forEach(([title, body]) => { const item = document.createElement('article'); item.append(text('h3', title), text('p', body)); grid.append(item); }); if (task.considerations.length) { const item = document.createElement('article'); item.append(text('h3', 'Consider')); const list = document.createElement('ul'); task.considerations.forEach(value => { const row = document.createElement('li'); row.textContent = value; list.append(row); }); item.append(list); grid.append(item); } return grid; }
 function stages(task: TaskTypeDetail): HTMLElement { const list = document.createElement('ol'); list.className = 'stage-list'; task.workflow?.forEach((stage, index) => { const item = document.createElement('li'); item.append(text('span', String(index + 1).padStart(2, '0')), text('strong', stage.display_name), text('small', [stage.requires_gpu ? 'GPU' : 'CPU', stage.requires_network ? 'network' : 'isolated'].join(' / '))); list.append(item); }); return list; }
 function inputRoles(task: TaskTypeDetail): HTMLElement { const list = document.createElement('div'); list.className = 'input-role-list'; (task.inputs || []).forEach(role => { const item = document.createElement('article'); item.append(text('h3', role.title), text('code', role.id), text('p', role.description || role.type)); const formats = text('p', role.formats.join(', '), 'role-formats'); item.append(formats); list.append(item); }); if (!list.childElementCount) list.append(text('p', 'This method does not require uploaded files.', 'empty-state')); return list; }
