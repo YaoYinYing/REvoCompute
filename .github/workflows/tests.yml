@@ -8,17 +8,24 @@ on:
     branches: [main]
 
 jobs:
-  # Lightweight change-set classifier: documentation-only changes skip the
-  # expensive matrix below. The workflow itself stays triggered on its normal
-  # events so the other jobs are still created (skipped, not absent), which keeps
-  # branch-protection expected-check semantics intact.
+  # One classifier decides which validation lanes a change set can affect
+  # (tools/classify_ci_scope.py is the single source of truth for that policy).
+  # The job is deliberately fail-closed: if the classifier errors, is skipped, or
+  # produces nothing, every lane below runs. Each gated job therefore tests
+  # `!= 'false'` rather than `== 'true'`, so a missing output can only widen
+  # validation, never silently skip it. The workflow stays triggered on its normal
+  # events so the other jobs are still created (skipped, not absent).
   ClassifyChanges:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: read
     outputs:
-      run_tests: ${{ steps.classify.outputs.run_tests }}
+      lanes: ${{ steps.classify.outputs.lanes }}
+      server: ${{ steps.classify.outputs.server }}
+      runner_scientific: ${{ steps.classify.outputs.runner_scientific }}
+      browser: ${{ steps.classify.outputs.browser }}
+      compose: ${{ steps.classify.outputs.compose }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -28,6 +35,9 @@ jobs:
 
       - name: Classify Change Set
         id: classify
+        # A classification failure must not skip validation, so the step is
+        # non-fatal and the next step restores the broad default.
+        continue-on-error: true
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             base="${{ github.event.pull_request.base.sha }}"
@@ -37,16 +47,27 @@ jobs:
             base="${{ github.event.before }}"
             head="${{ github.sha }}"
           fi
-          # The classifier fails safe: workflow_dispatch, an empty/zero/unknown
-          # range, or any non-documentation path keeps run_tests=true.
+          # The classifier fails closed: workflow_dispatch, an empty/zero/unknown
+          # range, or any path it cannot place selects every lane.
           python3 tools/classify_ci_scope.py \
             --event "${{ github.event_name }}" \
             --base "$base" \
             --head "$head"
 
+      - name: Restore the broad default when classification did not complete
+        if: steps.classify.outcome != 'success'
+        run: |
+          {
+            echo "lanes=docs,server,runner_scientific,browser,compose"
+            echo "server=true"
+            echo "runner_scientific=true"
+            echo "browser=true"
+            echo "compose=true"
+          } >> "$GITHUB_OUTPUT"
+
   REvoComputeTests:
     needs: ClassifyChanges
-    if: needs.ClassifyChanges.outputs.run_tests == 'true'
+    if: ${{ !cancelled() && needs.ClassifyChanges.outputs.server != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -99,7 +120,7 @@ jobs:
 
   RunnerScientificAcceptance:
     needs: ClassifyChanges
-    if: needs.ClassifyChanges.outputs.run_tests == 'true'
+    if: ${{ !cancelled() && needs.ClassifyChanges.outputs.runner_scientific != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -132,7 +153,7 @@ jobs:
 
   BrowserContracts:
     needs: ClassifyChanges
-    if: needs.ClassifyChanges.outputs.run_tests == 'true'
+    if: ${{ !cancelled() && needs.ClassifyChanges.outputs.browser != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -200,7 +221,7 @@ jobs:
 
   ServerComposeFullStack:
     needs: ClassifyChanges
-    if: needs.ClassifyChanges.outputs.run_tests == 'true'
+    if: ${{ !cancelled() && needs.ClassifyChanges.outputs.compose != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
