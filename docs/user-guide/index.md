@@ -14,6 +14,8 @@ delivered and inspected.
   fallback.
 - [Access and Runner Availability](access-and-runner-availability.md) — why
   readiness and entitlement are separate from your ability to submit.
+- [Agent MCP Interface](mcp-interface.md) — the Model Context Protocol surface
+  for agent hosts: endpoint, credentials, primitives, opaque handles, and limits.
 
 If you operate the server rather than use it, start with the
 [Operator Guide](../operator-guide/index.md).

@@ -49,6 +49,7 @@ nav:
       - Task States and Result Delivery: user-guide/task-states.md
       - Results: user-guide/results.md
       - Access and Runner Availability: user-guide/access-and-runner-availability.md
+      - Agent MCP Interface: user-guide/mcp-interface.md
   - Operator Guide:
       - Overview: operator-guide/index.md
       - Installation and Host Preparation: operator-guide/installation.md

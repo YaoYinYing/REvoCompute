@@ -75,6 +75,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[test]"
 
+      - name: Enforce the MCP adapter boundary
+        run: python tools/check_mcp_boundary.py
+
       - name: Run Python Server and Contract Tests with Coverage
         run: make test-cov COV_REPORT=xml:coverage.xml PYTEST="python -m pytest -n 4 --dist=load"
 

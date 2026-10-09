@@ -456,6 +456,21 @@ def _is_deleted_status(status: Any) -> bool:
 # ---------------------------------------------------------------------------
 importlib.import_module("revocompute.routes")
 
+# ---------------------------------------------------------------------------
+# Optional MCP protocol surface.
+#
+# When the deployment enables it (``MCP_ENABLED=true``) the MCP endpoint is
+# served by a companion ASGI listener inside *this* process, so the canonical
+# rate limiter, application state, and admission path are the same objects the
+# HTTP API uses.  It is off by default and absent entirely when the optional
+# ``mcp`` extra is not installed, so the HTTP API and Web application are never
+# affected by it.
+# ---------------------------------------------------------------------------
+try:
+    importlib.import_module("revocompute.mcp.asgi").start_companion_listener()
+except ModuleNotFoundError:
+    logging.getLogger(__name__).info("MCP surface disabled: the optional 'mcp' extra is not installed")
+
 if __name__ == "__main__":
     # Containerized server binds to all interfaces by design.
     app.run(host="0.0.0.0", port=CONFIG.port)  # nosec B104

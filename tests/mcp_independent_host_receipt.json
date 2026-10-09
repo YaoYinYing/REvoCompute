@@ -1,0 +1,129 @@
+{
+  "accepted_limitation": "The independent-host acceptance (tests/mcp_independent_host.py) installs each host into an isolated environment at run time, so it needs network access to PyPI (for fastmcp) and npm (for @modelcontextprotocol/sdk) plus uv/npm/node on PATH. It is a live-acceptance script, not a pytest case, and is not wired into CI for that reason: CI's required gates stay deterministic and offline. The committed receipts are the durable evidence, each naming the exact head it was produced at.",
+  "exact_head": "b8a51a1dd24184203bf6dd3d125039c7f7f0b41f",
+  "failures": [],
+  "host": "fastmcp",
+  "host_key": "fastmcp",
+  "host_protocol_library": "mcp 2.3.0",
+  "host_runner": "uv",
+  "host_version": "4.0.11",
+  "protocol_version": "2025-11-25",
+  "server": {
+    "name": "revocompute",
+    "version": "1.30.0"
+  },
+  "steps": {
+    "cancel_terminal_task": {
+      "error": true,
+      "error_class": "TASK_NOT_CANCELLABLE"
+    },
+    "discover_tasks": {
+      "count": 56,
+      "error": false,
+      "sample": "alphafold"
+    },
+    "inspect_task": {
+      "error": false,
+      "has_schema": true,
+      "task_type": "alphafold"
+    },
+    "list_resources": {
+      "error": false,
+      "uris": [
+        "revocompute://skills"
+      ]
+    },
+    "list_tools": {
+      "count": 14,
+      "error": false
+    },
+    "negative_anonymous": {
+      "error": true,
+      "error_class": "AUTH_REQUIRED"
+    },
+    "negative_cross_user_handle": {
+      "error": true,
+      "error_class": "TASK_NOT_FOUND"
+    },
+    "negative_invalid_bearer": {
+      "error": true,
+      "error_class": "AUTH_REQUIRED"
+    },
+    "negative_invalid_parameters": {
+      "error": true,
+      "error_class": "INVALID_PARAMETERS"
+    },
+    "negative_missing_artifact": {
+      "error": true,
+      "error_class": "ARTIFACT_NOT_FOUND"
+    },
+    "negative_oversized_artifact": {
+      "content_base64": null,
+      "error": false,
+      "inline": false,
+      "leaks_task_id": false
+    },
+    "negative_quarantined_artifact": {
+      "content_base64": null,
+      "detail": "unanchored",
+      "error": true,
+      "error_class": "RESULT_NOT_READY"
+    },
+    "negative_stolen_handle": {
+      "error": true,
+      "error_class": "TASK_NOT_FOUND"
+    },
+    "negative_traversal": {
+      "error": true,
+      "error_class": "ARTIFACT_NOT_FOUND"
+    },
+    "negative_unknown_submit": {
+      "error": true,
+      "error_class": "TASK_NOT_FOUND"
+    },
+    "preflight_task": {
+      "error": false,
+      "error_class": null,
+      "valid": true
+    },
+    "results_own_handle": {
+      "artifacts": 1,
+      "error": false
+    },
+    "retrieve_artifact": {
+      "bytes_ok": true,
+      "error": false,
+      "inline": true
+    },
+    "retry_submit": {
+      "error": false,
+      "fresh_handle": true
+    },
+    "status_own_handle": {
+      "error": false,
+      "status": "finished"
+    },
+    "submit_task": {
+      "error": false,
+      "error_class": null,
+      "handle_is_not_task_id": true,
+      "handle_returned": true
+    }
+  },
+  "tools": [
+    "call_tool",
+    "cancel_task",
+    "discover_tasks",
+    "discover_tools",
+    "get_task_results",
+    "get_task_status",
+    "get_tool_call_status",
+    "get_tool_results",
+    "inspect_task",
+    "inspect_tool",
+    "preflight_task",
+    "retrieve_artifact",
+    "retrieve_tool_output",
+    "submit_task"
+  ]
+}
