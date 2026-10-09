@@ -152,7 +152,7 @@ class _FakeTaskStore:
     def get_result_publication(self, md5sum):
         return self.publications[-1] if self.publications else None
 
-    def list_pending_storage_publications(self, *, limit=500):
+    def list_pending_storage_publications(self, *, limit=500, after=None):
         return [row for row in self.publications if row.get("charge_state") == "pending"]
 
     def ensure_data_lifecycle(self, task_id, *, user_id, logical_bytes=0, at=None):

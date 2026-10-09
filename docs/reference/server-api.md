@@ -163,6 +163,8 @@ a decrease to zero; replaying the same settled revision adds no ledger fact.
 The worker's existing parent-process pulse repairs pending charges during normal
 long-lived operation, even when Slurm probes and optional resource maintenance
 are disabled. With automatic probes disabled, storage repair runs every 60 seconds.
+Each bounded pass advances through pending anchors and wraps at the end, so
+permanently unresolved older results cannot starve a later repairable charge.
 
 A publication anchored before the charge was recorded alongside it owes an amount
 that is *unknown*, not zero. The repair derives it from the verified anchored

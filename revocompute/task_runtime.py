@@ -3101,6 +3101,12 @@ def _anchored_publication_bytes(storage: StorageResolver, task: dict[str, Any]) 
     return total
 
 
+# Only a traversal cursor; durable pending anchors remain the repair authority.
+# Lost on restart, it is rebuilt by scanning again. Unresolved rows must not
+# monopolize the bounded first page on every pulse.
+_pending_storage_charge_cursor: tuple[float, str] | None = None
+
+
 def _reconcile_pending_storage_charges() -> dict[str, int]:
     """Charge the storage of every anchored publication that still owes it.
 
@@ -3141,9 +3147,17 @@ def _reconcile_pending_storage_charges() -> dict[str, int]:
     Idempotent, and safe to run beside a live publisher: the store's transitions
     admit each task's charge once.
     """
+    global _pending_storage_charge_cursor
     storage = _storage()
     charged = released = skipped = 0
-    for record in task_store.list_pending_storage_publications():
+    records = task_store.list_pending_storage_publications(after=_pending_storage_charge_cursor)
+    if not records and _pending_storage_charge_cursor is not None:
+        _pending_storage_charge_cursor = None
+        records = task_store.list_pending_storage_publications()
+    if records:
+        last = records[-1]
+        _pending_storage_charge_cursor = (float(last["published_at"]), str(last["task_id"]))
+    for record in records:
         task_id = str(record["task_id"])
         task = task_store.get_task(task_id)
         if task is None:
@@ -3327,7 +3341,7 @@ def probe_compute_infrastructure():
 
 
 @celery.task(name="reconcile_slurm_allocations", max_retries=0)
-def reconcile_slurm_allocations():
+def reconcile_slurm_allocations(*, evidence_deadline: float | None = None):
     """Reconcile durable unsettled allocations from worker-side Slurm evidence.
 
     Two evidence-driven passes, no wall-clock guesswork: settle the allocations
@@ -3342,6 +3356,10 @@ def reconcile_slurm_allocations():
     idempotent per ``usage:<unit>:<slurm_job>``, so a concurrent pass and a retry
     can never double-charge.
     """
+    # Prefork can reserve an unexpired message and buffer it behind a busy
+    # child. Broker expiry alone does not protect that later execution edge.
+    if evidence_deadline is not None and time.time() >= evidence_deadline:
+        return None
     outcome = _reconcile_slurm_allocations()
     outcome["reservations_released"] = _reclaim_abandoned_reservations()
     return outcome

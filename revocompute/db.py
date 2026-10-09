@@ -2648,7 +2648,9 @@ class TaskDatabase:
             )
         return "already_charged"
 
-    def list_pending_storage_publications(self, *, limit: int = 500) -> list[dict[str, Any]]:
+    def list_pending_storage_publications(
+        self, *, limit: int = 500, after: tuple[float, str] | None = None,
+    ) -> list[dict[str, Any]]:
         """Anchored publications whose logical-storage charge has not been recorded.
 
         A publication whose bytes are already gone (``released``) is excluded by
@@ -2661,9 +2663,18 @@ class TaskDatabase:
         stmt = (
             select(self.result_publications_table)
             .where(self.result_publications_table.c.charge_state == "pending")
-            .order_by(self.result_publications_table.c.published_at)
+            .order_by(self.result_publications_table.c.published_at, self.result_publications_table.c.task_id)
             .limit(limit)
         )
+        if after is not None:
+            published_at, task_id = after
+            stmt = stmt.where(or_(
+                self.result_publications_table.c.published_at > published_at,
+                and_(
+                    self.result_publications_table.c.published_at == published_at,
+                    self.result_publications_table.c.task_id > task_id,
+                ),
+            ))
         with self.engine.connect() as conn:
             return [dict(row) for row in conn.execute(stmt).mappings().all()]
 

@@ -265,6 +265,44 @@ def test_the_ordinary_worker_pulse_repairs_a_charge_without_a_restart(monkeypatc
     assert [fact["quantity"] for fact in module.task_store.list_ledger(lifecycle["subject_id"])] == [-4096]
 
 
+def test_unresolved_older_anchors_cannot_starve_a_later_pending_charge(monkeypatch, tmp_path):
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id, result_dir = _task(module, tmp_path, task_type="synthetic-storage")
+    store = module.task_store
+    task = store.get_task(task_id)
+    with store.engine.begin() as conn:
+        for number in range(1001):
+            older_id = f"{number:032x}"
+            conn.execute(store.tasks_table.insert().values(
+                md5sum=older_id, filename="input.fasta", file_path="input.fasta", uploaded_at=1,
+                status="finished", is_binary=0, task_type="synthetic-storage",
+                submitted_by_user_id=task["submitted_by_user_id"], storage_key=task["storage_key"],
+            ))
+            # Legitimate crash after anchoring, before any manifest was installed.
+            # Equal timestamps exercise the task-ID tie breaker in pagination.
+            conn.execute(store.result_publications_table.insert().values(
+                task_id=older_id, manifest_sha256="0" * 64, manifest_size=2,
+                revision=1, published_at=1, charge_bytes=7, charge_state="pending",
+            ))
+    with monkeypatch.context() as failure:
+        _fail_charge(module, failure)
+        _publish(module, task_id, result_dir)
+    assert module.task_runtime._reconcile_pending_storage_charges() == {"charged": 0, "released": 0, "skipped": 500}
+    assert module.task_runtime._reconcile_pending_storage_charges() == {"charged": 0, "released": 0, "skipped": 500}
+    assert module.task_runtime._reconcile_pending_storage_charges() == {"charged": 1, "released": 0, "skipped": 1}
+    assert store.get_result_publication(task_id)["charge_state"] == "charged"
+    lifecycle = store.get_data_lifecycle(task_id)
+    assert lifecycle["logical_bytes"] == lifecycle["accounted_bytes"] == 4096
+    facts = store.list_ledger(task["submitted_by_user_id"])
+    assert [fact["quantity"] for fact in facts] == [-4096]
+    # End-of-scan wraps so unresolved records stay retryable. Restart discards
+    # only the cursor and cannot replay an already settled charge.
+    assert module.task_runtime._reconcile_pending_storage_charges()["skipped"] == 500
+    module.task_runtime._pending_storage_charge_cursor = None
+    assert module.task_runtime._reconcile_pending_storage_charges()["skipped"] == 500
+    assert store.list_ledger(task["submitted_by_user_id"]) == facts
+
+
 def test_a_charge_that_fails_leaves_a_pending_publication_and_is_repaired(monkeypatch, tmp_path) -> None:
     """The split the review found: manifest installed, charge missing, no marker.
 

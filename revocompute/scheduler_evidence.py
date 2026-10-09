@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from typing import Any
 
 from celery import Celery
@@ -93,6 +94,7 @@ def dispatch_scheduler_evidence(*, unsettled: int = 0, app: Celery | None = None
     try:
         outcome = (app or scheduler_evidence_app()).send_task(
             SCHEDULER_EVIDENCE_TASK, expires=SCHEDULER_EVIDENCE_WAIT_SECONDS,
+            kwargs={"evidence_deadline": time.time() + SCHEDULER_EVIDENCE_WAIT_SECONDS},
         ).get(
             timeout=SCHEDULER_EVIDENCE_WAIT_SECONDS
         )
