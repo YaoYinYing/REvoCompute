@@ -55,9 +55,20 @@ class ArtifactRemovalError(RuntimeError):
     """
 
 
+def _owned_path_exists(path: str) -> bool:
+    """Confirm presence or absence; an inspection failure is neither."""
+    try:
+        os.lstat(path)
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise ArtifactRemovalError(f"could not inspect owned path {path}: {exc}") from exc
+    return True
+
+
 def _remove_owned_tree(path: str, *, label: str) -> None:
     """Remove *path* completely, or raise.  Already-absent is idempotent success."""
-    if not os.path.lexists(path):
+    if not _owned_path_exists(path):
         return
     try:
         shutil.rmtree(path)
@@ -67,7 +78,7 @@ def _remove_owned_tree(path: str, *, label: str) -> None:
         pass
     except OSError as exc:
         raise ArtifactRemovalError(f"could not remove {label} {path}: {exc}") from exc
-    if os.path.lexists(path):
+    if _owned_path_exists(path):
         # A partial removal that left a locked entry behind would still return
         # normally; the bytes are what the charge describes, so their survival
         # is a failure.
@@ -94,20 +105,17 @@ def delete_task_artifacts(task: dict[str, Any], results_folder: str, workspace_f
         raise ArtifactRemovalError(
             f"invalid storage identity for task {task.get('md5sum')}: {exc}"
         ) from exc
-    if os.path.lexists(safe_result_dir):
-        if safe_result_dir in {os.path.abspath(os.sep), os.path.abspath(os.path.expanduser("~"))}:
-            raise ArtifactRemovalError(f"refusing to delete unsafe root-like directory {safe_result_dir}")
-        if not _path_is_within(results_folder, safe_result_dir):
-            raise ArtifactRemovalError(
-                f"refusing to delete result directory {safe_result_dir} outside RESULTS_FOLDER"
-            )
-        _remove_owned_tree(safe_result_dir, label="result tree")
+    if safe_result_dir in {os.path.abspath(os.sep), os.path.abspath(os.path.expanduser("~"))}:
+        raise ArtifactRemovalError(f"refusing to delete unsafe root-like directory {safe_result_dir}")
+    if not _path_is_within(results_folder, safe_result_dir):
+        raise ArtifactRemovalError(f"refusing to delete result directory {safe_result_dir} outside RESULTS_FOLDER")
+    _remove_owned_tree(safe_result_dir, label="result tree")
 
     task_id = str(task.get("md5sum") or "").strip().lower()
     if not _TASK_ID_PATTERN.fullmatch(task_id):
         raise ArtifactRemovalError(f"invalid task id for archive path: {task.get('md5sum')}")
     zip_path = resolver.get_archive_path(task)
-    if _path_is_within(results_folder, zip_path) and os.path.lexists(zip_path):
+    if _path_is_within(results_folder, zip_path) and _owned_path_exists(zip_path):
         # A single file removes atomically, so its failure is a real one; a
         # missing file means the bytes are already gone.
         try:
@@ -116,6 +124,8 @@ def delete_task_artifacts(task: dict[str, Any], results_folder: str, workspace_f
             pass
         except OSError as exc:
             raise ArtifactRemovalError(f"could not remove results archive {zip_path}: {exc}") from exc
+        if _owned_path_exists(zip_path):
+            raise ArtifactRemovalError(f"results archive {zip_path} survived its removal")
 
     if workspace_folder:
         try:

@@ -133,8 +133,10 @@ Task moves to `DELETE_REQUESTED` durably before any filesystem work, one worker
 claims it into `PURGING`, and the quota that was charged is released only when
 the owned bytes are actually gone. A crash anywhere in that sequence leaves a
 resumable deletion, and a failed purge keeps the charge and its error so a later
-pass can retry it. A partial purge therefore frees nothing, and a completed purge
-releases exactly the bytes it charged, once. Recovery re-enters *from the durable
+pass can retry it. Failure to inspect an owned result, archive, or input path is
+a removal failure, never evidence of absence. A partial purge therefore frees
+nothing, and a completed purge releases exactly the bytes it charged, once.
+Recovery re-enters *from the durable
 state*, so a stale `PURGING` row is reclaimed and retried and a worker that died
 between its claim and its completion cannot hold a subject's quota forever.
 `PURGED` is a lifecycle state rather than a tombstone: a result published again

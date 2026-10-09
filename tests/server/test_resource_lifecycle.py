@@ -324,6 +324,59 @@ def test_a_crashed_purge_reaches_purged_and_releases_the_charged_bytes_once(tmp_
     assert database.logical_owned_bytes(30) == 0
 
 
+@pytest.mark.parametrize("unreadable", ["result", "archive", "input"])
+def test_an_unreadable_owned_path_is_not_treated_as_absent(tmp_path, monkeypatch, unreadable):
+    from pathlib import Path
+
+    from revocompute.maintenance.tasks import result_cleanup as cleanup
+    from revocompute.storage import StorageResolver
+
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    now = 2_000_000_000.0
+    task_id = "de" + "0" * 30
+    results = tmp_path / "results"
+    workspaces = tmp_path / "workspaces"
+    _retention_task(database, task_id, user_id=55, finished_at=now - 31 * 86400)
+    _charge(database, task_id, user_id=55, owned=GIB)
+    task = database.get_task(task_id)
+    resolver = StorageResolver(workspace_dir=str(workspaces), results_dir=str(results))
+    paths = {
+        "result": Path(resolver.get_task_root(task)),
+        "archive": Path(resolver.get_archive_path(task)),
+        "input": Path(resolver.get_input_root(task)),
+    }
+    for kind, path in paths.items():
+        if kind == "archive":
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"archive")
+        else:
+            path.mkdir(parents=True, exist_ok=True)
+            (path / "artifact.txt").write_text("owned bytes", encoding="utf-8")
+    lstat = cleanup.os.lstat
+
+    def refuse_inspection(path, *args, **kwargs):
+        if str(path) == str(paths[unreadable]):
+            raise PermissionError("owned path cannot be inspected")
+        return lstat(path, *args, **kwargs)
+
+    with monkeypatch.context() as failure:
+        failure.setattr(cleanup.os, "lstat", refuse_inspection)
+        assert cleanup.cleanup_expired_task_artifacts(
+            30, task_store=database, results_folder=str(results), now=now
+        ) == 0
+
+    assert database.get_data_lifecycle(task_id)["state"] == DataLifecycleState.ERROR.value
+    assert database.logical_owned_bytes(55) == GIB
+    assert paths[unreadable].exists()
+    assert cleanup.cleanup_expired_task_artifacts(
+        30, task_store=database, results_folder=str(results), now=now + 1
+    ) == 1
+    assert not any(path.exists() for path in paths.values())
+    assert database.logical_owned_bytes(55) == 0
+    released = [entry for entry in database.list_ledger(55) if entry["reason_code"] == "storage_released"]
+    assert [entry["quantity"] for entry in released] == [GIB]
+
+
 def test_cancellation_acknowledges_the_claim_without_releasing_failed_cleanup(monkeypatch, tmp_path):
     """Cancellation succeeds independently of cleanup, which must not free quota."""
     from inspect import unwrap
