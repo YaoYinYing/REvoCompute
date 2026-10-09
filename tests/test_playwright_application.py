@@ -41,7 +41,7 @@ def _detail() -> dict:
         **_catalog()["task_types"][0],
         "use_when": "Use this for a small sequence summary.",
         "input_summary": "One protein sequence.", "output_summary": "A text summary.",
-        "considerations": [], "runtime_family": "example", "gpus": False, "requires_network": False,
+        "considerations": [], "runtime_family": "demo", "gpus": False, "requires_network": False,
         "inputs": [{
             "id": "sequence", "title": "Protein sequence", "type": "protein_sequence",
             "formats": ["fasta"], "extensions": [".fasta", ".fa"], "accept": ".fasta,.fa",
@@ -337,7 +337,7 @@ def _install_app(page: Page) -> list[str]:
     config = {
         "task_types": [{
             "tool": "sequence_demo", "display_name": "Sequence demo", "enabled": True, "requires_gpu": False,
-            "runtime_family": "example", "is_workflow_stage": False, "category": "evolution", "inputs": [],
+            "runtime_family": "demo", "is_workflow_stage": False, "category": "evolution", "inputs": [],
             "parameter_count": 1, "stage_count": 0, "effective_resources": {"cpus": 2, "memory": "4G"},
         }],
         "resources": {"cpus": 2, "memory": "4G", "max_runtime_seconds": 3600, "slurm_partition": "cpu"},
@@ -1310,7 +1310,7 @@ def test_real_rfdiffusion_workspace_normalizes_and_collects_structure_selection(
     client = backend.app.test_client()
     auth_headers = _test_client_auth(backend)
     catalog_response = client.get("/compute/api/types")
-    detail_response = client.get("/compute/api/types/rfdiffusion")
+    detail_response = client.get("/compute/api/types/workspace_task")
     assert catalog_response.status_code == detail_response.status_code == 200
     catalog = catalog_response.get_json()
     detail = detail_response.get_json()
@@ -1323,7 +1323,7 @@ def test_real_rfdiffusion_workspace_normalizes_and_collects_structure_selection(
     assert module_response.status_code == stylesheet_response.status_code == 200
 
     page.route(f"{ORIGIN}/compute/api/types", lambda route: route.fulfill(json=catalog))
-    page.route(f"{ORIGIN}/compute/api/types/rfdiffusion", lambda route: route.fulfill(json=detail))
+    page.route(f"{ORIGIN}/compute/api/types/workspace_task", lambda route: route.fulfill(json=detail))
     page.route(
         f"{ORIGIN}{detail['parameters_url']}",
         lambda route: route.fulfill(json=parameters_response.get_json()),
@@ -1349,7 +1349,7 @@ def test_real_rfdiffusion_workspace_normalizes_and_collects_structure_selection(
         payload = route.request.post_data_json
         normalizations.append(payload)
         response = client.post(
-            "/compute/api/types/rfdiffusion/workspace/normalize",
+            "/compute/api/types/workspace_task/workspace/normalize",
             headers=auth_headers,
             json=payload,
         )
@@ -1359,7 +1359,7 @@ def test_real_rfdiffusion_workspace_normalizes_and_collects_structure_selection(
             body=response.get_data(),
         )
 
-    page.route(f"{ORIGIN}/compute/api/types/rfdiffusion/workspace/normalize", normalize)
+    page.route(f"{ORIGIN}/compute/api/types/workspace_task/workspace/normalize", normalize)
     preflight_bodies: list[bytes] = []
 
     def preflight(route) -> None:
@@ -1380,14 +1380,14 @@ def test_real_rfdiffusion_workspace_normalizes_and_collects_structure_selection(
             "errors": [],
         })
 
-    page.route(f"{ORIGIN}/compute/api/preflight/rfdiffusion", preflight)
+    page.route(f"{ORIGIN}/compute/api/preflight/workspace_task", preflight)
     # Submission is exercised elsewhere; here it stops the single-action flow on a
     # server error so the workbench stays mounted for the post-preflight assertions.
     page.route(f"{ORIGIN}/compute/api/post", lambda route: route.fulfill(status=500, json={"error": "not exercised"}))
-    page.goto(f"{ORIGIN}/compute/create_task?task_type=rfdiffusion")
+    page.goto(f"{ORIGIN}/compute/create_task?task_type=workspace_task")
 
     expect(page.get_by_role("heading", name="RFdiffusion", exact=True)).to_be_visible()
-    expect(page.locator('link[data-workspace-plugin="placer-rfdiffusion:rfdiffusion-regions"]')).to_have_count(1)
+    expect(page.locator('link[data-workspace-plugin="workspace_runner:workspace_task-regions"]')).to_have_count(1)
     page.locator("#rfd_mode").select_option("binder")
     expect(page.locator(".rfd-status")).to_contain_text("needs a target and hotspots")
 
@@ -1437,5 +1437,5 @@ def test_real_rfdiffusion_workspace_normalizes_and_collects_structure_selection(
     assert f"{ORIGIN}{stylesheet_url}" in requested
 
     page.get_by_role("button", name="Change method", exact=True).click()
-    expect(page.locator('link[data-workspace-plugin="placer-rfdiffusion:rfdiffusion-regions"]')).to_have_count(0)
+    expect(page.locator('link[data-workspace-plugin="workspace_runner:workspace_task-regions"]')).to_have_count(0)
     assert page.evaluate("window.__viewerDisposals") == 1

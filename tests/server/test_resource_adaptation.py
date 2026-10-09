@@ -34,17 +34,11 @@ import sys
 import uuid
 
 ROOT = Path(__file__).resolve().parents[2]
-# The runner tree shares the observation wire shape with this module, so the
-# guidance-binding regression can drive the real server output into the real
-# runner binder instead of re-deriving the match rule in the test.
-COMMON = ROOT / "docker/runners/common/runtime"
-if str(COMMON) not in sys.path:
-    sys.path.insert(0, str(COMMON))
 
 
 def _observation(**overrides):
     payload = {
-        "runner": "esmfold2",
+        "runner": "gpu_runner",
         "runner_version": "1",
         "model_revision": "fast",
         "runtime_fingerprint": "fp-1",
@@ -56,7 +50,7 @@ def _observation(**overrides):
             "mig_profile": "",
         },
         "features": {
-            "runner": "esmfold2",
+            "runner": "gpu_runner",
             "model_revision": "fast",
             "runtime_fingerprint": "fp-1",
             "sequence_length": 400,
@@ -92,7 +86,7 @@ def test_a_fallback_changing_a_scientific_parameter_is_rejected():
     with pytest.raises(ValueError, match="non-resource parameter"):
         _load_resource_adaptation(
             {"stage": "recover", "fallback_plans": [{"label": "x", "adjustments": {"num_samples": 2}}]},
-            "esmfold2_predict",
+            "gpu_runner_predict",
         )
     with pytest.raises(ValueError, match="non-resource parameter"):
         _load_resource_adaptation(
@@ -100,7 +94,7 @@ def test_a_fallback_changing_a_scientific_parameter_is_rejected():
                 "stage": "observe",
                 "fallback_plans": [{"label": "x", "adjustments": {"seed": 7}}],
             },
-            "esmfold2_predict",
+            "gpu_runner_predict",
         )
 
 
@@ -134,7 +128,7 @@ def test_declared_policy_and_execution_settings_are_loaded():
                 {"label": "split-samples", "title": "Split samples", "adjustments": {"sample_group_size": 1}}
             ],
         },
-        "esmfold2_predict",
+        "gpu_runner_predict",
     )
     assert adaptation.stage == "recover"
     assert [plan.label for plan in adaptation.fallback_plans] == ["split-samples"]
@@ -191,7 +185,7 @@ def test_guidance_avoids_a_plan_that_only_ever_failed():
     guidance = rm.guidance_for(plans, [*rows, split_oom], stage="avoid")
     (profile,) = guidance["profiles"]
     assert (profile["runner"], profile["model_revision"], profile["runtime_fingerprint"]) == (
-        "esmfold2",
+        "gpu_runner",
         "fast",
         "fp-1",
     )
@@ -256,7 +250,7 @@ def test_guidance_never_borrows_another_profiles_oom():
     same_profile = [rm.ResourceObservation.from_dict(_observation(work_item=f"p{i}")) for i in range(4)]
     foreign = rm.ResourceObservation.from_dict(
         _observation(
-            runner="esmfold2",
+            runner="gpu_runner",
             model_revision="standard",
             runtime_fingerprint="fp-other",
             outcome="oom",
@@ -301,15 +295,15 @@ def test_known_failure_knowledge_survives_a_restart_by_rebuilding_from_rows(tmp_
     restarted = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
     rebuilt = rm.VRAMEstimator(
         rm.ResourceObservation.from_dict(ro._observation_payload(row))
-        for row in restarted.list_resource_observations(runners=("esmfold2",))
+        for row in restarted.list_resource_observations(runners=("gpu_runner",))
     )
 
-    guidance = ro.observations_for_guidance("esmfold2", adaptation, store=restarted)
+    guidance = ro.observations_for_guidance("gpu_runner", adaptation, store=restarted)
     assert guidance["profiles"][0]["model_revision"] == "fast"
     assert guidance["profiles"][0]["runtime_fingerprint"] == "fp-1"
     assert guidance["profiles"][0]["known_failing_plans"] == ["split"]
     assert rebuilt.known_failure_envelope(
-        rm.WorkloadFeatures("esmfold2", "fast", "fp-1", 400), rm.DeviceProfile("nvidia", "A100-PCIE-40GB", "8.0", 40960)
+        rm.WorkloadFeatures("gpu_runner", "fast", "fp-1", 400), rm.DeviceProfile("nvidia", "A100-PCIE-40GB", "8.0", 40960)
     ) is not None
 
 
@@ -319,71 +313,6 @@ def test_guidance_is_total_for_unknown_stages_and_plans():
     assert guidance["plan_order"] == [""]
 
 
-def test_published_guidance_binds_only_the_revision_runtime_and_device_it_names(tmp_path):
-    """The server's output and the runner's binder must agree on the identity.
-
-    Two revisions are qualified in one store on the same GPU. The runner's own
-    binder, driven with the block the server actually published, must select its
-    own revision's threshold and nothing when its revision, runtime, or device
-    has no entry — the end-to-end form of the isolation the unit tests assert.
-    """
-    from persistent_runner import PlanSequence
-
-    store = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
-    for revision, threshold_vram in (("fast", 2000), ("standard", 4000)):
-        for index in range(4):
-            store.record_resource_observation(
-                _observation(
-                    model_revision=revision,
-                    task_id=f"{revision}{index:026d}",
-                    work_item=f"p{revision}{index}",
-                    attempt=1,
-                )
-            )
-        store.record_resource_observation(
-            _observation(
-                model_revision=revision,
-                features={
-                    "runner": "esmfold2",
-                    "model_revision": revision,
-                    "runtime_fingerprint": "fp-1",
-                    "sequence_length": threshold_vram,
-                    "sequence_count": 1,
-                    "batch_size": 1,
-                    "sample_count": 1,
-                    "parameters": {},
-                },
-                # The *default* plan is the one that OOMed, so this profile's
-                # evidence is that its default is a known failure above the
-                # threshold — the reactive ladder is not what the test exercises.
-                task_id=f"{revision}oom",
-                work_item=f"p{revision}9",
-                attempt=2,
-                outcome="oom",
-                available_mb=100,
-                plan_label="",
-            )
-        )
-    plans = FallbackPlan.parse_all([{"label": "split", "adjustments": {"sample_group_size": 1}}])
-    adaptation = ResourceAdaptation(stage="avoid", fallback_plans=plans)
-    device = {"model": "A100-PCIE-40GB", "total_vram_mb": 40960}
-
-    guidance = ro.observations_for_guidance("esmfold2", adaptation, store=store)
-    assert [entry["model_revision"] for entry in guidance["profiles"]] == ["fast", "standard"]
-
-    def bind(revision, fingerprint, bound_device=device):
-        sequence = PlanSequence(
-            adaptation.to_dict(), {**guidance, "plan_order": ["", "split"]}, {"max_item_attempts": 2}
-        )
-        sequence.bind_identity(revision, fingerprint, bound_device)
-        return sequence.plan_for(0, [], scale=2000).label
-
-    assert bind("fast", "fp-1") == "split", "the evidenced default is skipped for its own revision"
-    assert bind("standard", "fp-1") == "", "a foreign revision keeps the default path"
-    assert bind("fast", "fp-other") == "", "a changed runtime keeps the default path"
-    assert bind("fast", "fp-1", {"model": "H100-PCIE-80GB", "total_vram_mb": 81559}) == "", (
-        "a different device keeps the default path"
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -398,7 +327,7 @@ def test_a_re_read_stdout_line_does_not_append_a_duplicate(tmp_path):
     assert store.record_resource_observation(_observation()) is None, "same attempt must dedupe"
     retry = store.record_resource_observation(_observation(attempt=2, plan_label="split"))
     assert retry is not None, "a bounded retry is a distinct attempt"
-    rows = store.list_resource_observations(runners=("esmfold2",))
+    rows = store.list_resource_observations(runners=("gpu_runner",))
     assert [(row["attempt"], row["plan_label"]) for row in rows] == [(2, "split"), (1, "")]
     assert store.list_resource_observations(runners=("other",)) == []
     assert store.list_resource_observations(model_versions=("fast",))
@@ -452,15 +381,15 @@ def test_a_poisoned_row_does_not_silence_the_families_guidance(tmp_path):
     with store.engine.begin() as conn:
         conn.execute(
             store.resource_observations_table.insert().values(
-                runner="esmfold2",
+                runner="gpu_runner",
                 model_version="fast",
-                observation_json=json.dumps({"runner": "esmfold2"}),
+                observation_json=json.dumps({"runner": "gpu_runner"}),
                 created_at=1.0,
             )
         )
     plans = FallbackPlan.parse_all([{"label": "split", "adjustments": {"sample_group_size": 1}}])
     guidance = ro.observations_for_guidance(
-        "esmfold2", ResourceAdaptation(stage="recover", fallback_plans=plans), store=store
+        "gpu_runner", ResourceAdaptation(stage="recover", fallback_plans=plans), store=store
     )
     assert guidance["plan_order"] == ["", "split"]
     assert guidance["stage"] == "recover"
@@ -472,13 +401,13 @@ def test_a_poisoned_row_alone_still_yields_guidance(tmp_path):
     with empty.engine.begin() as conn:
         conn.execute(
             empty.resource_observations_table.insert().values(
-                runner="esmfold2",
+                runner="gpu_runner",
                 model_version="fast",
-                observation_json=json.dumps({"runner": "esmfold2"}),
+                observation_json=json.dumps({"runner": "gpu_runner"}),
                 created_at=1.0,
             )
         )
-    assert ro.observations_for_guidance("esmfold2", ResourceAdaptation(), store=empty)["plan_order"] == [""]
+    assert ro.observations_for_guidance("gpu_runner", ResourceAdaptation(), store=empty)["plan_order"] == [""]
 
 
 def test_resource_observations_are_retained_newest_first_per_profile(tmp_path, monkeypatch):
@@ -491,7 +420,7 @@ def test_resource_observations_are_retained_newest_first_per_profile(tmp_path, m
         store.record_resource_observation(
             _observation(runner="other", task_id=f"{index:032x}", work_item=f"p{index}", attempt=1)
         )
-    kept = store.list_resource_observations(runners=("esmfold2",), limit=50)
+    kept = store.list_resource_observations(runners=("gpu_runner",), limit=50)
     assert [row["work_item"] for row in kept] == ["p4", "p3", "p2"]
     assert len(store.list_resource_observations(runners=("other",), limit=50)) == 3
 
@@ -513,7 +442,7 @@ def test_retention_is_stratified_so_one_device_class_cannot_evict_another(tmp_pa
             _observation(device=a100_device, task_id=f"{index:032x}", work_item=f"common{index}", attempt=1)
         )
 
-    kept = store.list_resource_observations(runners=("esmfold2",), limit=50)
+    kept = store.list_resource_observations(runners=("gpu_runner",), limit=50)
     classes = {row["device_class"] for row in kept}
     assert classes == {"nvidia/A100", "nvidia/H100"}
     assert [row["work_item"] for row in kept if row["device_class"] == "nvidia/H100"] == ["rare"]
@@ -531,7 +460,7 @@ def test_deleting_a_task_removes_its_progress_row(tmp_path):
         uploaded_at=1.0,
         status="failed",
         is_binary=0,
-        task_type="alphafold",
+        task_type="multistage_runner",
         storage_key="tester",
         submitted_by_user_id=1,
     )
@@ -554,7 +483,7 @@ def test_re_preparing_an_unowned_task_clears_its_stale_progress(tmp_path):
         uploaded_at=time.time(),
         status="failed",
         is_binary=0,
-        task_type="alphafold",
+        task_type="multistage_runner",
         storage_key="tester",
         submitted_by_user_id=1,
     )
@@ -615,13 +544,13 @@ def test_the_observation_workflow_state_column_stays_workflow_owned(tmp_path):
         uploaded_at=1.0,
         status="running",
         is_binary=0,
-        task_type="alphafold",
+        task_type="multistage_runner",
         storage_key="tester",
         submitted_by_user_id=1,
-        workflow_state=json.dumps({"alphafold.model": {"status": "running"}}),
+        workflow_state=json.dumps({"multistage_runner.model": {"status": "running"}}),
     )
     store.record_task_progress(task_id, progress={"total_items": 1}, outcome="SUCCESS")
-    assert json.loads(store.get_task(task_id)["workflow_state"]) == {"alphafold.model": {"status": "running"}}
+    assert json.loads(store.get_task(task_id)["workflow_state"]) == {"multistage_runner.model": {"status": "running"}}
 
 
 def test_work_items_manifest_projection_is_ordered_and_bounded(tmp_path):
@@ -630,7 +559,7 @@ def test_work_items_manifest_projection_is_ordered_and_bounded(tmp_path):
     manifest = {
         "version": 1,
         "task_id": "e" * 32,
-        "runner": "esmfold2",
+        "runner": "gpu_runner",
         "outcome": "PARTIAL_SUCCESS",
         "items": [
             {"id": "long", "status": "SUCCEEDED", "attempts": 1, "output_path": "long/", "error": None},
@@ -664,7 +593,7 @@ def test_work_items_projection_publishes_the_recovery_provenance(tmp_path):
     result_dir.mkdir()
     manifest = {
         "version": 1,
-        "runner": "esmfold2",
+        "runner": "gpu_runner",
         "outcome": "SUCCESS",
         "items": [
             {
@@ -745,53 +674,6 @@ def test_recovery_action_class_reports_the_most_impactful_action(tmp_path):
     assert ro.recovery_action_class({"recovery": ["not a record"]}) == ""
 
 
-def test_a_sample_grouping_plan_publishes_its_runner_class_across_layers(tmp_path):
-    """The class the runner assigns is the class the ResultManifest publishes.
-
-    A ``sample_group_size`` split is a scientific-output change, not a neutral
-    resource knob, so the runner classifies it ``scientific_output`` and the
-    server must republish exactly that — the runner classification and the
-    server projection agree on this key across layers.
-    """
-    from persistent_runner import classify_adjustments
-
-    runner_class = classify_adjustments({"sample_group_size": 1, "cache_clear": True})
-    assert runner_class == "scientific_output"
-    assert runner_class == ro.RECOVERY_ACTION_SCIENTIFIC_OUTPUT
-
-    result_dir = tmp_path / "grouping"
-    result_dir.mkdir()
-    (result_dir / "work_items.json").write_text(
-        json.dumps(
-            {
-                "items": [
-                    {
-                        "id": "a",
-                        "status": "SUCCEEDED",
-                        "recovery": [
-                            {"attempt": 1, "plan_label": "", "action": "", "resources": {},
-                             "effective_parameters": {"sample_groups": [4]}},
-                            {
-                                "attempt": 2,
-                                "plan_label": "samples_two_at_a_time",
-                                "action": runner_class,
-                                "resources": {},
-                                "effective_parameters": {"sample_groups": [2, 2]},
-                            },
-                        ],
-                    }
-                ]
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    projection = ro.work_items_projection(str(result_dir))
-
-    item = projection["work_items"][0]
-    assert item["recovery_action"] == ro.RECOVERY_ACTION_SCIENTIFIC_OUTPUT
-    assert [record["action"] for record in item["recovery"]] == ["", "scientific_output"]
-    assert item["recovery"][-1]["effective_parameters"]["sample_groups"] == [2, 2]
 
 
 def test_work_items_recovery_records_are_bounded(tmp_path):
@@ -893,14 +775,14 @@ def test_submission_manifest_is_v4_and_keeps_params_and_inputs(monkeypatch, tmp_
     module = _load_pssm_module(
         monkeypatch,
         tmp_path,
-        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "example"},
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "cpu_runner"},
     )
     get_task_type = module.task_runtime._get_task_type
     client = module.app.test_client()
     auth_header = _test_client_auth(module)
 
     class _Queued:
-        id = "queued-example"
+        id = "queued-demo"
 
     monkeypatch.setattr(module.run_compute_task, "apply_async", lambda *args, **kwargs: _Queued())
     with (ROOT / "tests/data/msa/2KL8.fasta").open("rb") as handle:
@@ -908,7 +790,7 @@ def test_submission_manifest_is_v4_and_keeps_params_and_inputs(monkeypatch, tmp_
             "/compute/api/post",
             headers=auth_header,
             data={
-                "task_type": "sequence_statistics",
+                "task_type": "cpu_runner",
                 "params[mass_precision]": "4",
                 "file": (handle, "2KL8.fasta"),
                 "input_roles": "sequence",
@@ -932,7 +814,7 @@ def test_submission_manifest_is_v4_and_keeps_params_and_inputs(monkeypatch, tmp_
     # Whatever the owning manifest declares is exactly what the runner is told:
     # the example family declares a serial fallback, an undeclared family would
     # project an empty plan list.
-    declared = get_task_type("sequence_statistics")[0].resource_adaptation
+    declared = get_task_type("cpu_runner")[0].resource_adaptation
     assert manifest["resource_adaptation"] == declared.to_dict()
     assert manifest["resource_guidance"]["plan_order"] == ["", *[plan.label for plan in declared.fallback_plans]]
     assert manifest["resource_guidance"]["profiles"] == []
@@ -1036,7 +918,7 @@ def test_a_partial_success_still_finalizes_as_finished(monkeypatch, tmp_path):
     module = _load_pssm_module(
         monkeypatch,
         tmp_path,
-        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "esmfold2"},
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "gpu_runner"},
     )
     # The bearer identity must exist before the task row is owned by it:
     # ``_task_owner`` creates the user unverified, so an auth header taken
@@ -1052,7 +934,7 @@ def test_a_partial_success_still_finalizes_as_finished(monkeypatch, tmp_path):
             {
                 "version": 1,
                 "task_id": md5sum,
-                "runner": "esmfold2",
+                "runner": "gpu_runner",
                 "outcome": "PARTIAL_SUCCESS",
                 "items": [
                     {"id": "protein_001", "status": "SUCCEEDED", "attempts": 1, "output_path": "protein_001/"},
@@ -1085,7 +967,7 @@ def test_a_partial_success_still_finalizes_as_finished(monkeypatch, tmp_path):
         file_path=result_dir / "multi.fasta",
         result_dir=result_dir,
         username="tester",
-        task_type="esmfold2_predict",
+        task_type="gpu_runner_predict",
     )
     task = module.task_store.get_task(md5sum)
     module.task_runtime._finalize_results_manifest(task, execution_state="completed", finished_at=1_700_000_000)
@@ -1114,7 +996,7 @@ def test_a_single_item_task_publishes_a_null_outcome(monkeypatch, tmp_path):
     module = _load_pssm_module(
         monkeypatch,
         tmp_path,
-        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "esmfold2"},
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "gpu_runner"},
     )
     auth_header = _test_client_auth(module)
     del auth_header
@@ -1129,7 +1011,7 @@ def test_a_single_item_task_publishes_a_null_outcome(monkeypatch, tmp_path):
         file_path=result_dir / "one.fasta",
         result_dir=result_dir,
         username="tester",
-        task_type="esmfold2_predict",
+        task_type="gpu_runner_predict",
     )
     module.task_runtime._finalize_results_manifest(
         module.task_store.get_task(md5sum), execution_state="completed", finished_at=1_700_000_000
@@ -1149,7 +1031,7 @@ def test_running_payload_reports_live_per_item_progress(monkeypatch, tmp_path):
     module = _load_pssm_module(
         monkeypatch,
         tmp_path,
-        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "esmfold2"},
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "gpu_runner"},
     )
     auth_header = _test_client_auth(module)
     md5sum = uuid.uuid4().hex
@@ -1160,7 +1042,7 @@ def test_running_payload_reports_live_per_item_progress(monkeypatch, tmp_path):
             {
                 "version": 1,
                 "task_id": md5sum,
-                "runner": "esmfold2",
+                "runner": "gpu_runner",
                 "outcome": None,
                 "items": [
                     {"id": "protein_001", "status": "SUCCEEDED", "attempts": 1, "output_path": "protein_001/"},
@@ -1179,7 +1061,7 @@ def test_running_payload_reports_live_per_item_progress(monkeypatch, tmp_path):
         result_dir=result_dir,
         username="tester",
         status="running",
-        task_type="esmfold2_predict",
+        task_type="gpu_runner_predict",
     )
 
     client = module.app.test_client()
@@ -1204,7 +1086,7 @@ def test_live_progress_falls_back_to_the_runners_own_report(monkeypatch, tmp_pat
     module = _load_pssm_module(
         monkeypatch,
         tmp_path,
-        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "esmfold2"},
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "gpu_runner"},
     )
     auth_header = _test_client_auth(module)
     md5sum = uuid.uuid4().hex
@@ -1218,7 +1100,7 @@ def test_live_progress_falls_back_to_the_runners_own_report(monkeypatch, tmp_pat
         result_dir=result_dir,
         username="tester",
         status="running",
-        task_type="esmfold2_predict",
+        task_type="gpu_runner_predict",
     )
     module.task_store.record_task_progress(
         md5sum, progress={"total_items": 500, "completed_items": 217, "failed_items": 3}, outcome="PARTIAL_SUCCESS"
@@ -1233,7 +1115,7 @@ def test_a_non_running_task_never_reads_the_live_manifest(monkeypatch, tmp_path)
     module = _load_pssm_module(
         monkeypatch,
         tmp_path,
-        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "esmfold2"},
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "gpu_runner"},
     )
     _test_client_auth(module)
     md5sum = uuid.uuid4().hex
@@ -1248,7 +1130,7 @@ def test_a_non_running_task_never_reads_the_live_manifest(monkeypatch, tmp_path)
         result_dir=result_dir,
         username="tester",
         status="finished",
-        task_type="esmfold2_predict",
+        task_type="gpu_runner_predict",
     )
     task = module.task_store.get_task(md5sum)
     assert module.task_runtime._progress_summary(task) is None
@@ -1259,7 +1141,7 @@ def test_one_bad_manifest_does_not_500_the_dashboard(monkeypatch, tmp_path):
     module = _load_pssm_module(
         monkeypatch,
         tmp_path,
-        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "esmfold2"},
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "gpu_runner"},
     )
     auth_header = _test_client_auth(module)
     hostile = tmp_path / "hostile"
@@ -1273,7 +1155,7 @@ def test_one_bad_manifest_does_not_500_the_dashboard(monkeypatch, tmp_path):
         result_dir=hostile,
         username="tester",
         status="running",
-        task_type="esmfold2_predict",
+        task_type="gpu_runner_predict",
     )
     # The runner owns its result tree, so it can plant a manifest that points at
     # another task's tree; the reader must refuse it rather than publish that
@@ -1298,7 +1180,7 @@ def test_one_bad_manifest_does_not_500_the_dashboard(monkeypatch, tmp_path):
         result_dir=result_dir,
         username="tester",
         status="running",
-        task_type="esmfold2_predict",
+        task_type="gpu_runner_predict",
     )
 
     client = module.app.test_client()

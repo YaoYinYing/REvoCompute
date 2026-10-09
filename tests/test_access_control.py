@@ -29,7 +29,7 @@ def _write_policy(directory: Path, **updates) -> None:
     }
     policy.update(updates)
     directory.mkdir(exist_ok=True)
-    (directory / "example.yaml").write_text(yaml.safe_dump(policy), encoding="utf-8")
+    (directory / "demo.yaml").write_text(yaml.safe_dump(policy), encoding="utf-8")
 
 
 def test_policy_loader_accepts_strict_declarative_policy(tmp_path):

@@ -210,176 +210,12 @@ def test_served_openapi_declares_only_live_api_routes(monkeypatch, tmp_path):
     assert all(operation_ids)
 
 
-def test_task_type_api_exposes_runtime_family_and_gpu_contract(monkeypatch, tmp_path):
-    module = _load_pssm_module(
-        monkeypatch,
-        tmp_path,
-        extra_env={
-            "RUNNER_UID": "1234",
-            "RUNNER_GID": "5678",
-            "ENABLED_TASKRUNNERS": "mpnn",
-        },
-    )
-    client = module.app.test_client()
-
-    response = client.get("/compute/api/types")
-    assert response.status_code == 200
-    catalog = response.get_json()
-    assert all(set(category) == {"name", "label"} for category in catalog["categories"])
-    laser = next(item for item in catalog["task_types"] if item["name"] == "lasermpnn")
-    assert set(laser) == {
-        "name",
-        "display_name",
-        "category",
-        "summary",
-        "access",
-        "detail_url",
-        "parameters_url",
-    }
-    assert laser["detail_url"] == "/compute/api/types/lasermpnn"
-    assert laser["parameters_url"] == "/compute/api/task-parameters/lasermpnn"
-    assert not ({"params", "parameter_schema", "runtime_family", "workflow", "citations"} & set(laser))
-
-    form_response = client.get("/compute/api/types/lasermpnn")
-    assert form_response.status_code == 200
-    form = form_response.get_json()
-    assert form["runtime_family"] == "mpnn"
-    assert form["gpus"] is False
-    # Resource usage is not part of the user-facing submission review.
-    assert "resources" not in form
-    assert form["definition_version"] == 4
-    assert form["input_workspace"]["version"] == 3
-    assert form["input_workspace"]["steps"][0]["capabilities"][0]["plugin"] == "files"
-    assert form["input_workspace"]["steps"][-1]["capabilities"][-1]["plugin"] == "review"
-    assert form["max_request_bytes"] == 16 * 1024 * 1024
-    assert form["inputs"][0]["id"] == "structure"
-    assert form["parameters_url"] == "/compute/api/task-parameters/lasermpnn"
-    assert "parameter_schema" not in form
-    assert "params" not in form
-
-    proteinmpnn = client.get("/compute/api/task-parameters/proteinmpnn").get_json()
-    assert proteinmpnn["properties"]["seed"]["x-ui-control"] == {"kind": "seed", "random": {"minimum": 1}}
-    Draft202012Validator(proteinmpnn).validate({"seed": 0})
 
 
-def test_pythia_citations_are_published_in_forms_and_results(monkeypatch, tmp_path):
-    module = _load_pssm_module(
-        monkeypatch,
-        tmp_path,
-        extra_env={
-            "RUNNER_UID": "1234",
-            "RUNNER_GID": "5678",
-            "ENABLED_TASKRUNNERS": "pythia_ddg",
-        },
-    )
-    client = module.app.test_client()
-    auth_header = _test_client_auth(module)
-    expected = [
-        {
-            "num": 1,
-            "doi": "10.1016/j.xinn.2024.100750",
-            "title": "Structure-based self-supervised learning enables ultrafast protein stability prediction upon mutation",
-            "url": "https://doi.org/10.1016/j.xinn.2024.100750",
-        }
-    ]
-
-    form_response = client.get("/compute/api/types/pythia_ddg")
-    assert form_response.status_code == 200
-    assert form_response.get_json()["citations"] == expected
-
-    md5sum = uuid.uuid4().hex
-    result_dir = tmp_path / "pythia_citations"
-    result_dir.mkdir()
-    input_path = result_dir / "input.pdb"
-    input_path.write_text("END\n", encoding="utf-8")
-    _upsert_task_for_user(
-        module,
-        md5sum,
-        filename=input_path.name,
-        file_path=input_path,
-        result_dir=result_dir,
-        username="tester",
-        task_type="pythia_ddg",
-    )
-    module.task_runtime._finalize_results_manifest(
-        module.task_store.get_task(md5sum), execution_state="completed", finished_at=1_700_000_000
-    )
-
-    result_response = client.get(f"/compute/api/results/{md5sum}", headers=auth_header)
-    assert result_response.status_code == 200
-    result = result_response.get_json()
-    assert result["run"]["citations"] == expected
-    citation_artifact = next(artifact for artifact in result["artifacts"] if artifact["path"] == "citations.bib")
-    assert citation_artifact["role"] == "provenance"
-    assert "10.1016/j.xinn.2024.100750" in (result_dir / "citations.bib").read_text(encoding="utf-8")
 
 
-def test_multiple_citations_export_in_num_order_from_source_bibtex(monkeypatch, tmp_path):
-    module = _load_pssm_module(
-        monkeypatch,
-        tmp_path,
-        extra_env={
-            "RUNNER_UID": "1234",
-            "RUNNER_GID": "5678",
-            "ENABLED_TASKRUNNERS": "gremlin_lh",
-        },
-    )
-    client = module.app.test_client()
-    auth_header = _test_client_auth(module)
-    detail = client.get("/compute/api/types/gremlin_lh_fit").get_json()
-    assert [citation["num"] for citation in detail["citations"]] == [1, 2]
-    assert detail["citations"][0]["url"] == "https://doi.org/10.1103/PRXLife.2.023005"
-    assert "Disentanglement" in detail["citations"][0]["title"]
-
-    md5sum = uuid.uuid4().hex
-    result_dir = tmp_path / "gremlin_citations"
-    result_dir.mkdir()
-    input_path = result_dir / "input.a3m"
-    input_path.write_text(">a\nACDE\n>b\nACDF\n", encoding="utf-8")
-    _upsert_task_for_user(
-        module,
-        md5sum,
-        filename=input_path.name,
-        file_path=input_path,
-        result_dir=result_dir,
-        username="tester",
-        task_type="gremlin_lh_fit",
-    )
-    module.task_runtime._finalize_results_manifest(
-        module.task_store.get_task(md5sum), execution_state="completed", finished_at=1_700_000_000
-    )
-
-    exported = (result_dir / "citations.bib").read_text(encoding="utf-8")
-    assert exported.count("@article") == 2
-    assert exported.index("Wang_2024") < exported.index("Kamisetty_2013")
-    assert "10.1103/prxlife.2.023005" in exported
-    assert "10.1073/pnas.1314045110" in exported
-    assert exported.endswith("}\n")
-
-    run = client.get(f"/compute/api/results/{md5sum}", headers=auth_header).get_json()["run"]
-    assert [citation["num"] for citation in run["citations"]] == [1, 2]
-    assert run["citations"][1]["url"] == "https://doi.org/10.1073/pnas.1314045110"
 
 
-def test_api_projects_presentation_safe_title_from_marked_up_bibtex(monkeypatch, tmp_path):
-    module = _load_pssm_module(
-        monkeypatch,
-        tmp_path,
-        extra_env={
-            "RUNNER_UID": "1234",
-            "RUNNER_GID": "5678",
-            "ENABLED_TASKRUNNERS": "autodock_gpu",
-        },
-    )
-    client = module.app.test_client()
-
-    response = client.get("/compute/api/types/autodock_gpu")
-
-    assert response.status_code == 200
-    citation = response.get_json()["citations"][0]
-    assert citation["title"] == "Accelerating AutoDock4 with GPUs and Gradient-Based Local Search"
-    assert "<" not in citation["title"] and ">" not in citation["title"]
-    assert citation["url"] == "https://doi.org/10.1021/acs.jctc.0c01006"
 
 def test_anonymous_task_parameter_endpoints_return_canonical_schemas_without_side_effects(monkeypatch, tmp_path):
     module = _load_pssm_module(monkeypatch, tmp_path, {"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
@@ -387,7 +223,7 @@ def test_anonymous_task_parameter_endpoints_return_canonical_schemas_without_sid
     catalog = client.get("/compute/api/types").get_json()["task_types"]
     route_globals = module.app.view_functions["task_parameter_schema"].__globals__
     source_schemas = {}
-    for task_yaml in ROOT.glob("docker/runners/*/tasks/*/task.yaml"):
+    for task_yaml in Path(module.CONFIG.runners_dir).glob("*/tasks/*/task.yaml"):
         declaration = yaml.safe_load(task_yaml.read_text(encoding="utf-8"))
         task_name = declaration.get("id") or declaration.get("name") or task_yaml.parent.name
         source_schemas[task_name] = declaration["parameters"]
@@ -461,7 +297,7 @@ def test_anonymous_skills_document_is_static_api_bootstrap_without_side_effects(
 def test_submission_manifest_carries_params(monkeypatch, tmp_path):
     """The snapshot's task.json must include param entities — param entities
     carry type=param.type (e.g. 'str'), never the literal 'param' (this bit
-    the easifa reaction path: an empty manifest params dict silently
+    the profile_runner reaction path: an empty manifest params dict silently
     selected the wo_reactions model)."""
     module = _load_pssm_module(
         monkeypatch,
@@ -469,7 +305,7 @@ def test_submission_manifest_carries_params(monkeypatch, tmp_path):
         extra_env={
             "RUNNER_UID": "1234",
             "RUNNER_GID": "5678",
-            "ENABLED_TASKRUNNERS": "gremlin",
+            "ENABLED_TASKRUNNERS": "cpu_runner",
         },
     )
     client = module.app.test_client()
@@ -484,7 +320,7 @@ def test_submission_manifest_carries_params(monkeypatch, tmp_path):
             "/compute/api/post",
             headers=auth_header,
                 data={
-                    "task_type": "gremlin",
+                    "task_type": "cpu_runner",
                     "params[iter]": "100",
                     "file": (fh, "2KL8.fasta"),
                     "input_roles": "sequence",
@@ -496,7 +332,7 @@ def test_submission_manifest_carries_params(monkeypatch, tmp_path):
     assert resp.get_json() == {
         "task_id": md5sum,
         "md5sum": md5sum,
-        "task_type": "gremlin",
+        "task_type": "cpu_runner",
         "display_name": "2KL8.fasta",
         "status": "pending",
         "terminal": False,
@@ -509,7 +345,7 @@ def test_submission_manifest_carries_params(monkeypatch, tmp_path):
     assert status["task_id"] == md5sum
     assert status["results_url"] == f"/compute/api/results/{md5sum}"
     assert status["terminal"] is False
-    assert status["task_type"] == "gremlin"
+    assert status["task_type"] == "cpu_runner"
     assert {"params", "parameter_schema"}.isdisjoint(status)
     task = module.task_store.get_task(md5sum)
     manifest_path = Path(module.app.config["storage_resolver"].get_input_root(task)) / "inputs" / "task.json"
@@ -518,11 +354,11 @@ def test_submission_manifest_carries_params(monkeypatch, tmp_path):
     assert manifest["inputs"]["sequence"][0]["relative_path"] == "2KL8.fasta"
 
 
-def test_alphafold_multimer_submission_preserves_selected_preset(monkeypatch, tmp_path):
+def test_multistage_runner_multimer_submission_preserves_selected_preset(monkeypatch, tmp_path):
     module = _load_pssm_module(
         monkeypatch,
         tmp_path,
-        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "alphafold"},
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "multistage_runner"},
     )
     client = module.app.test_client()
     auth_header = _test_client_auth(module)
@@ -530,7 +366,7 @@ def test_alphafold_multimer_submission_preserves_selected_preset(monkeypatch, tm
     module.app.config["user_db"].update_user(user["id"], allow_gpu_use=True)
 
     class _Queued:
-        id = "queued-alphafold-multimer"
+        id = "queued-multistage_runner-multimer"
 
     monkeypatch.setattr(module.run_compute_task, "apply_async", lambda *args, **kwargs: _Queued())
     fasta_path = Path(__file__).resolve().parents[1] / "tests/data/fasta/Sli_S4.fasta"
@@ -539,7 +375,7 @@ def test_alphafold_multimer_submission_preserves_selected_preset(monkeypatch, tm
             "/compute/api/post",
             headers=auth_header,
             data={
-                "task_type": "alphafold",
+                "task_type": "multistage_runner",
                 "params[model_preset]": "multimer",
                 "file": (handle, fasta_path.name),
                 "input_roles": "sequence",
@@ -555,9 +391,9 @@ def test_alphafold_multimer_submission_preserves_selected_preset(monkeypatch, tm
     )
     input_form = json.loads(task["input_form"])
     assert manifest["params"]["model_preset"] == "multimer"
-    assert set(input_form["resource_policies"]) == {"alphafold.features", "alphafold.model"}
-    assert input_form["resource_policies"]["alphafold.features"]["requires_gpu"] is False
-    assert input_form["resource_policies"]["alphafold.model"]["requires_gpu"] is True
+    assert set(input_form["resource_policies"]) == {"multistage_runner.features", "multistage_runner.model"}
+    assert input_form["resource_policies"]["multistage_runner.features"]["requires_gpu"] is False
+    assert input_form["resource_policies"]["multistage_runner.model"]["requires_gpu"] is True
 
 
 def test_dashboard_serves_structure_preview_for_pdb_tasks(monkeypatch, tmp_path):
@@ -567,7 +403,7 @@ def test_dashboard_serves_structure_preview_for_pdb_tasks(monkeypatch, tmp_path)
         extra_env={
             "RUNNER_UID": "1234",
             "RUNNER_GID": "5678",
-            "ENABLED_TASKRUNNERS": "pythia_ddg",
+            "ENABLED_TASKRUNNERS": "structure_runner",
         },
     )
     client = module.app.test_client()
@@ -579,7 +415,7 @@ def test_dashboard_serves_structure_preview_for_pdb_tasks(monkeypatch, tmp_path)
         b"END\n"
     )
     md5sum = _insert_pending_task(
-        module, result_dir, filename="input.pdb", content=pdb_content, task_type="pythia_ddg"
+        module, result_dir, filename="input.pdb", content=pdb_content, task_type="structure_runner"
     )
 
     tasks = client.get("/compute/api/tasks", headers=auth_header)
@@ -606,7 +442,7 @@ def _insert_pending_task(
     filename: str = "input.fasta",
     entities: list[dict] | None = None,
     content: bytes = b">test\nACDE\n",
-    task_type: str = "gremlin",
+    task_type: str = "cpu_runner",
 ) -> str:
     result_dir.mkdir(parents=True, exist_ok=True)
     fasta_path = result_dir / filename
@@ -618,7 +454,7 @@ def _insert_pending_task(
     role = "sequence"
     logical_type = "sequence_alignment"
     format_name = Path(filename).suffix.removeprefix(".")
-    if task_type == "pythia_ddg":
+    if task_type == "structure_runner":
         role = "structure"
         logical_type = "protein_structure"
     snapshot_path = snapshot_root / role / filename
@@ -789,7 +625,7 @@ def test_run_compute_task_finalizes_uncompressed_result_manifest(monkeypatch, tm
         if stage_callback:
             stage_callback("hhblits")
             stage_callback("hhfilter")
-            stage_callback("gremlin")
+            stage_callback("cpu_runner")
             stage_callback("blast")
         output_path = Path(output_dir)
         (output_path / "log").mkdir(parents=True, exist_ok=True)
@@ -858,12 +694,12 @@ def test_single_stage_slurm_task_transitions_from_queued_to_running(monkeypatch,
         extra_env={
             "RUNNER_UID": "1234",
             "RUNNER_GID": "5678",
-            "ENABLED_TASKRUNNERS": "opendde",
+            "ENABLED_TASKRUNNERS": "cpu_runner",
         },
     )
     result_dir = tmp_path / "result"
     md5sum = _insert_pending_task(module, result_dir)
-    module.task_store.update_task(md5sum, task_type="opendde")
+    module.task_store.update_task(md5sum, task_type="cpu_runner")
     observed_statuses: list[str] = []
     original_update_task = module.task_store.update_task
 
@@ -875,7 +711,7 @@ def test_single_stage_slurm_task_transitions_from_queued_to_running(monkeypatch,
     def _fake_runner(task_id, tt, runner, entities, output_dir, stage_callback=None, username=""):
         del task_id, tt, runner, entities, username
         if stage_callback:
-            stage_callback("opendde")
+            stage_callback("cpu_runner")
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
         (output_path / "model.cif").write_text("data_model\n", encoding="utf-8")
@@ -884,7 +720,7 @@ def test_single_stage_slurm_task_transitions_from_queued_to_running(monkeypatch,
     monkeypatch.setattr(module.task_store, "update_task", _track_update)
     monkeypatch.setattr(module.task_runtime, "_run_compute_job", _fake_runner)
 
-    module.run_compute_task(md5sum, "opendde", {})
+    module.run_compute_task(md5sum, "cpu_runner", {})
 
     assert observed_statuses == ["queued", "running", "finished"]
 
@@ -903,11 +739,11 @@ def test_worker_recovery_cancels_slurm_orphans_and_preserves_unstarted_queue(mon
             "slurm_job_id": "4154",
             "run_stage": "design",
             "started_at": 123.0,
-            "task_type": "gremlin",
+            "task_type": "cpu_runner",
         },
-        {"md5sum": "b" * 32, "status": "running", "started_at": 456.0, "task_type": "gremlin"},
-        {"md5sum": "c" * 32, "status": "queued", "task_type": "gremlin"},
-        {"md5sum": "d" * 32, "status": "pending", "task_type": "gremlin"},
+        {"md5sum": "b" * 32, "status": "running", "started_at": 456.0, "task_type": "cpu_runner"},
+        {"md5sum": "c" * 32, "status": "queued", "task_type": "cpu_runner"},
+        {"md5sum": "d" * 32, "status": "pending", "task_type": "cpu_runner"},
     ]
     failures = []
     cancellations = []
@@ -984,7 +820,7 @@ def test_worker_recovery_fails_legacy_docker_task(monkeypatch, tmp_path):
         "md5sum": "e" * 32,
         "status": "running",
         "container_id": "container-1",
-        "task_type": "gremlin",
+        "task_type": "cpu_runner",
         "storage_key": "test-user-abcdef",
     }
     failures = []
@@ -1002,7 +838,7 @@ def test_multi_file_submission_creates_isolated_workspace_snapshot(monkeypatch, 
         tmp_path,
         extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
     )
-    base_type, runner = module.task_runtime._get_task_type("gremlin")
+    base_type, runner = module.task_runtime._get_task_type("cpu_runner")
     conftest._inject_task_type(module, 
         replace(
             base_type,
@@ -1156,18 +992,18 @@ def test_result_manifest_allows_only_published_artifacts(monkeypatch, tmp_path):
     assert unpublished.status_code == 404
 
 
-def test_gremlin_logical_file_api_preserves_declared_viewer_and_download(monkeypatch, tmp_path):
+def test_cpu_runner_logical_file_api_preserves_declared_viewer_and_download(monkeypatch, tmp_path):
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     client = module.app.test_client()
     auth_header = _test_client_auth(module)
     md5sum = uuid.uuid4().hex
-    result_dir = tmp_path / "gremlin_storyboard"
-    (result_dir / "gremlin_msa").mkdir(parents=True)
+    result_dir = tmp_path / "cpu_runner_storyboard"
+    (result_dir / "cpu_runner_msa").mkdir(parents=True)
     (result_dir / "pssm_msa").mkdir()
-    (result_dir / "gremlin_res").mkdir()
-    (result_dir / "gremlin_msa" / "input.i90c75.a3m").write_text(">query\nACDE\n", encoding="utf-8")
+    (result_dir / "cpu_runner_res").mkdir()
+    (result_dir / "cpu_runner_msa" / "input.i90c75.a3m").write_text(">query\nACDE\n", encoding="utf-8")
     (result_dir / "pssm_msa" / "input_ascii_mtx_file").write_text("pssm\n", encoding="utf-8")
-    (result_dir / "gremlin_res" / "input_GREMLIN_mtx.png").write_bytes(b"png")
+    (result_dir / "cpu_runner_res" / "input_GREMLIN_mtx.png").write_bytes(b"png")
     _upsert_task_for_user(
         module,
         md5sum,
@@ -1220,7 +1056,7 @@ def test_task_configured_linked_result_and_bounded_table_api(monkeypatch, tmp_pa
     module = _load_pssm_module(
         monkeypatch,
         tmp_path,
-        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "easifa"},
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "profile_runner"},
     )
     client = module.app.test_client()
     auth_header = _test_client_auth(module)
@@ -1245,7 +1081,7 @@ def test_task_configured_linked_result_and_bounded_table_api(monkeypatch, tmp_pa
     )
     module.task_store.update_task(
         md5sum,
-        task_type="easifa",
+        task_type="profile_runner",
         input_form=json.dumps(
             {
                 "user": "private-owner",
@@ -1310,7 +1146,7 @@ def test_result_output_check_reports_missing_required_artifact(monkeypatch, tmp_
     module = _load_pssm_module(
         monkeypatch,
         tmp_path,
-        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "easifa"},
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "profile_runner"},
     )
     md5sum = uuid.uuid4().hex
     result_dir = tmp_path / "incomplete_results"
@@ -1328,7 +1164,7 @@ def test_result_output_check_reports_missing_required_artifact(monkeypatch, tmp_
         username="tester",
         status="finished",
     )
-    module.task_store.update_task(md5sum, task_type="easifa")
+    module.task_store.update_task(md5sum, task_type="profile_runner")
     manifest = module.task_runtime._finalize_results_manifest(
         module.task_store.get_task(md5sum), execution_state="completed", finished_at=1_700_000_000
     )
@@ -1393,56 +1229,6 @@ def test_failed_execution_manifest_is_not_assessed(monkeypatch, tmp_path):
     assert diagnostic["path"] == "task_failed.txt"
 
 
-def test_rfdiffusion_workspace_normalization_and_structure_free_submission(monkeypatch, tmp_path):
-    module = _load_pssm_module(
-        monkeypatch,
-        tmp_path,
-        extra_env={
-            "RUNNER_UID": "1234",
-            "RUNNER_GID": "5678",
-            "ENABLED_TASKRUNNERS": "placer-rfdiffusion",
-        },
-    )
-    client = module.app.test_client()
-    auth_header = _test_client_auth(module)
-    user = module.app.config["user_db"].get_user_by_username("tester")
-    module.app.config["user_db"].update_user(user["id"], allow_gpu_use=True)
-    state = {
-        "mode": "unconditional",
-        "segments": [{"kind": "generated", "min_length": 40, "max_length": 40}],
-        "hotspots": [],
-    }
-    normalized = client.post(
-        "/compute/api/types/rfdiffusion/workspace/normalize",
-        json={"capability_id": "design_regions", "value": state},
-        headers=auth_header,
-    )
-
-    class _Queued:
-        id = "queued-rfdiffusion"
-
-    monkeypatch.setattr(module.run_compute_task, "apply_async", lambda *args, **kwargs: _Queued())
-    submitted = client.post(
-        "/compute/api/post",
-        data={
-            "task_type": "rfdiffusion",
-            "workspace": json.dumps({"version": 2, "capabilities": {"design_regions": state}}),
-        },
-        headers=auth_header,
-    )
-
-    assert normalized.status_code == 200
-    assert normalized.get_json()["params"]["contig"] == "40-40"
-    assert submitted.status_code == 302, submitted.get_json()
-    task = module.task_store.get_task(submitted.headers["Location"].rsplit("/", 1)[-1])
-    manifest = json.loads(
-        (Path(module.app.config["storage_resolver"].get_input_root(task)) / "inputs" / "task.json").read_text(
-            encoding="utf-8"
-        )
-    )
-    assert manifest["inputs"] == {"assets": [], "structure": []}
-    assert manifest["params"]["design_mode"] == "unconditional"
-    assert manifest["params"]["contig"] == "40-40"
 
 
 def test_page_csp_forbids_inline_scripts(monkeypatch, tmp_path):
@@ -1708,7 +1494,7 @@ def test_cleanup_expired_task_artifacts_only_removes_old_terminal_results(monkey
             source_ip="127.0.0.1",
             user_agent="pytest",
             username="tester",
-            task_type="gremlin",
+            task_type="cpu_runner",
             submitted_by_user_id=int(owner["submitted_by_user_id"]),
             storage_key=owner["storage_key"],
         )
@@ -1762,7 +1548,7 @@ def test_cleanup_skips_task_replaced_before_atomic_claim(monkeypatch, tmp_path):
         status="finished",
         is_binary=0,
         username="tester",
-        task_type="gremlin",
+        task_type="cpu_runner",
         submitted_by_user_id=int(owner["submitted_by_user_id"]),
         storage_key=owner["storage_key"],
     )
@@ -1820,7 +1606,7 @@ def test_upload_records_headers_and_local_user(monkeypatch, tmp_path):
     response = client.post(
         "/compute/api/post",
         data={
-            "task_type": "gremlin",
+            "task_type": "cpu_runner",
             "file": (io.BytesIO(b">test\nACDE\n"), "upload.fasta"),
             "input_roles": "sequence",
         },
@@ -1905,7 +1691,7 @@ def _upsert_task_for_user(
     username: str,
     status: str = "finished",
     run_stage: str | None = None,
-    task_type: str = "gremlin",
+    task_type: str = "cpu_runner",
 ) -> None:
     owner = _task_owner(module, username)
     _relocate_task_artifacts(module, md5sum, result_dir, owner)
@@ -2042,7 +1828,7 @@ def test_polling_terminal_flag_covers_settled_outcomes(monkeypatch, tmp_path):
 
 
 
-def _submit_gremlin(module, client, headers, *, task_type: str = "gremlin", data: bytes = b">test\nACDE\n"):
+def _submit_cpu_runner(module, client, headers, *, task_type: str = "cpu_runner", data: bytes = b">test\nACDE\n"):
     """POST one minimal Swiss-Prot-style submission and return the response."""
     return client.post(
         "/compute/api/post",
@@ -2066,7 +1852,7 @@ def test_durable_storage_soft_limit_refuses_a_submission_of_any_kind(monkeypatch
     module = _load_pssm_module(
         monkeypatch,
         tmp_path,
-        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "gremlin"},
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "cpu_runner"},
     )
     client = module.app.test_client()
     headers = _test_client_auth(module)
@@ -2081,7 +1867,7 @@ def test_durable_storage_soft_limit_refuses_a_submission_of_any_kind(monkeypatch
 
     monkeypatch.setattr(module.run_compute_task, "apply_async", lambda *a, **kw: _DummyAsyncResult())
 
-    response = _submit_gremlin(module, client, headers)
+    response = _submit_cpu_runner(module, client, headers)
 
     assert response.status_code == 403
     payload = response.get_json()
@@ -2104,7 +1890,7 @@ def test_a_result_that_crossed_the_soft_limit_keeps_its_bytes_and_blocks_the_nex
     module = _load_pssm_module(
         monkeypatch,
         tmp_path,
-        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "gremlin"},
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "cpu_runner"},
     )
     module.task_store._storage_soft_limit = 8
     client = module.app.test_client()
@@ -2115,7 +1901,7 @@ def test_a_result_that_crossed_the_soft_limit_keeps_its_bytes_and_blocks_the_nex
         id = "celery-test-id"
 
     monkeypatch.setattr(module.run_compute_task, "apply_async", lambda *a, **kw: _DummyAsyncResult())
-    accepted = _submit_gremlin(module, client, headers, data=b">crossing\nACDEFGHIKLMNPQRSTVWY\n")
+    accepted = _submit_cpu_runner(module, client, headers, data=b">crossing\nACDEFGHIKLMNPQRSTVWY\n")
     assert accepted.status_code == 302
 
     # A published result larger than the ceiling is charged and kept: the
@@ -2129,7 +1915,7 @@ def test_a_result_that_crossed_the_soft_limit_keeps_its_bytes_and_blocks_the_nex
     assert record["state"] == DataLifecycleState.ACTIVE.value
 
     # The next submission of any kind is refused at the same ceiling.
-    refused = _submit_gremlin(module, client, headers)
+    refused = _submit_cpu_runner(module, client, headers)
     assert refused.status_code == 403
     assert refused.get_json()["details"][0]["code"] == "storage_soft_limit_exceeded"
 
@@ -2150,7 +1936,7 @@ def test_a_purged_task_is_not_republished_by_a_finishing_worker(monkeypatch, tmp
     module = _load_pssm_module(
         monkeypatch,
         tmp_path,
-        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "gremlin"},
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "cpu_runner"},
     )
     owner = _task_owner(module, "purge-vs-finalize")
     task_id = "e" * 32
@@ -2162,7 +1948,7 @@ def test_a_purged_task_is_not_republished_by_a_finishing_worker(monkeypatch, tmp
         status="running",
         is_binary=0,
         username="purge-vs-finalize",
-        task_type="gremlin",
+        task_type="cpu_runner",
         **owner,
     )
     task = module.task_store.get_task(task_id)
@@ -2199,7 +1985,7 @@ def test_a_purge_that_lands_during_finalize_is_not_republished_or_recharged(monk
     module = _load_pssm_module(
         monkeypatch,
         tmp_path,
-        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "gremlin"},
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "cpu_runner"},
     )
     owner = _task_owner(module, "purge-during-finalize")
     if ownerless:
@@ -2214,7 +2000,7 @@ def test_a_purge_that_lands_during_finalize_is_not_republished_or_recharged(monk
         status="running",
         is_binary=0,
         username="purge-during-finalize",
-        task_type="gremlin",
+        task_type="cpu_runner",
         **owner,
     )
     task = module.task_store.get_task(task_id)
@@ -2272,7 +2058,7 @@ def test_a_finished_task_with_no_deletion_request_still_publishes_normally(monke
     module = _load_pssm_module(
         monkeypatch,
         tmp_path,
-        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "gremlin"},
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "cpu_runner"},
     )
     owner = _task_owner(module, "finalize-normal")
     task_id = "f" * 32
@@ -2284,7 +2070,7 @@ def test_a_finished_task_with_no_deletion_request_still_publishes_normally(monke
         status="running",
         is_binary=0,
         username="finalize-normal",
-        task_type="gremlin",
+        task_type="cpu_runner",
         **owner,
     )
     task = module.task_store.get_task(task_id)
@@ -2318,7 +2104,7 @@ def test_private_dashboard_blocks_non_owner_access(monkeypatch, tmp_path):
     upload = client.post(
         "/compute/api/post",
         data={
-            "task_type": "gremlin",
+            "task_type": "cpu_runner",
             "file": (io.BytesIO(b">test\nACDE\n"), "upload.fasta"),
             "input_roles": "sequence",
         },
@@ -2370,7 +2156,7 @@ def test_removed_public_dashboard_env_is_silently_ignored(monkeypatch, tmp_path)
     upload = client.post(
         "/compute/api/post",
         data={
-            "task_type": "gremlin",
+            "task_type": "cpu_runner",
             "file": (io.BytesIO(b">test\nACDE\n"), "upload.fasta"),
             "input_roles": "sequence",
         },
@@ -2412,7 +2198,7 @@ def test_task_id_is_scoped_by_user(monkeypatch, tmp_path):
     owner_upload = client.post(
         "/compute/api/post",
         data={
-            "task_type": "gremlin",
+            "task_type": "cpu_runner",
             "file": (io.BytesIO(b">test\nACDE\n"), "same.fasta"),
             "input_roles": "sequence",
         },
@@ -2424,7 +2210,7 @@ def test_task_id_is_scoped_by_user(monkeypatch, tmp_path):
     other_upload = client.post(
         "/compute/api/post",
         data={
-            "task_type": "gremlin",
+            "task_type": "cpu_runner",
             "file": (io.BytesIO(b">test\nACDE\n"), "same.fasta"),
             "input_roles": "sequence",
         },
@@ -2499,7 +2285,7 @@ def test_private_mode_scopes_task_id_by_user(monkeypatch, tmp_path):
     other_header = _test_client_auth(module, "other", "password2")
 
     payload = {
-        "task_type": "gremlin",
+        "task_type": "cpu_runner",
         "file": (io.BytesIO(b">test\nACDE\n"), "same.fasta"),
         "input_roles": "sequence",
     }
@@ -2510,7 +2296,7 @@ def test_private_mode_scopes_task_id_by_user(monkeypatch, tmp_path):
     other_upload = client.post(
         "/compute/api/post",
         data={
-            "task_type": "gremlin",
+            "task_type": "cpu_runner",
             "file": (io.BytesIO(b">test\nACDE\n"), "same.fasta"),
             "input_roles": "sequence",
         },
@@ -2592,7 +2378,7 @@ def test_cleanup_claim_blocks_resubmission_and_user_deletion(monkeypatch, tmp_pa
     submitted = client.post(
         "/compute/api/post",
         data={
-            "task_type": "gremlin",
+            "task_type": "cpu_runner",
             "file": (io.BytesIO(content), "cleanup-race.fasta"),
             "input_roles": "sequence",
         },
@@ -2605,7 +2391,7 @@ def test_cleanup_claim_blocks_resubmission_and_user_deletion(monkeypatch, tmp_pa
     resubmitted = client.post(
         "/compute/api/post",
         data={
-            "task_type": "gremlin",
+            "task_type": "cpu_runner",
             "file": (io.BytesIO(content), "cleanup-race.fasta"),
             "input_roles": "sequence",
         },

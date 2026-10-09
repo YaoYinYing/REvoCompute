@@ -201,7 +201,7 @@ def test_mcp_rate_limit_identity_survives_a_rotated_forwarded_for(mcp_app, ident
             real_ip="198.51.100.20",
             forwarded_for=f"203.0.113.{i}, 10.0.0.{i}",
         )
-        statuses.append(call_canonical(principal, "POST", "/compute/api/preflight/gremlin", data={}).status)
+        statuses.append(call_canonical(principal, "POST", "/compute/api/preflight/cpu_runner", data={}).status)
 
     assert statuses[:limit] == [200] * limit, statuses
     assert statuses[limit:] == [429, 429], f"a rotated XFF must not refresh the bucket: {statuses}"
@@ -398,10 +398,10 @@ def test_mcp_and_http_consume_one_shared_admission_budget(mcp_app):
 
     mcp_refusals = 0
     for _ in range(limit):
-        response = _call("/compute/api/preflight/gremlin")
+        response = _call("/compute/api/preflight/cpu_runner")
         assert response.status == 200, response.status
     for _ in range(limit):
-        response = _call("/compute/api/preflight/gremlin")
+        response = _call("/compute/api/preflight/cpu_runner")
         if response.status == 429:
             mcp_refusals += 1
     assert mcp_refusals == limit, "the shared budget must refuse past the limit"
@@ -410,7 +410,7 @@ def test_mcp_and_http_consume_one_shared_admission_budget(mcp_app):
     # the MCP calls never touched a socket.
     http_client = app.test_client()
     http_response = http_client.post(
-        "/compute/api/preflight/gremlin",
+        "/compute/api/preflight/cpu_runner",
         headers={"Authorization": "Bearer test"},
         environ_overrides={"REMOTE_ADDR": client_ip},
     )
@@ -819,7 +819,7 @@ def _seed_finished_task(module, username: str = "mcp-tester") -> str:
         source_ip="127.0.0.1",
         user_agent="pytest",
         username=username,
-        task_type="gremlin",
+        task_type="cpu_runner",
         submitted_by_user_id=int(owner["submitted_by_user_id"]),
         storage_key=owner["storage_key"],
     )
@@ -886,7 +886,7 @@ def test_results_are_not_ready_before_the_task_finishes(mcp_app):
         source_ip="127.0.0.1",
         user_agent="pytest",
         username="mcp-tester",
-        task_type="gremlin",
+        task_type="cpu_runner",
         submitted_by_user_id=int(owner["submitted_by_user_id"]),
         storage_key=owner["storage_key"],
     )
@@ -912,7 +912,7 @@ def test_cancel_requires_ownership_and_a_cancellable_state(mcp_app):
         source_ip="127.0.0.1",
         user_agent="pytest",
         username="mcp-tester",
-        task_type="gremlin",
+        task_type="cpu_runner",
         submitted_by_user_id=int(owner["submitted_by_user_id"]),
         storage_key=owner["storage_key"],
     )
@@ -1048,7 +1048,7 @@ def _publish_manifest(
     manifest = {
         "schema_version": 3,
         "task_id": task_id,
-        "task_type": "gremlin",
+        "task_type": "cpu_runner",
         "created_at": "2026-01-01T00:00:00+00:00",
         "run": {},
         "output_check": {"state": "ok", "checks": [], "problems": []},
@@ -1088,7 +1088,7 @@ def _seed_published_artifact(module, tmp_path, *, username: str = "mcp-tester") 
         source_ip="127.0.0.1",
         user_agent="pytest",
         username=username,
-        task_type="gremlin",
+        task_type="cpu_runner",
         submitted_by_user_id=int(owner["submitted_by_user_id"]),
         storage_key=owner["storage_key"],
     )
@@ -1171,7 +1171,7 @@ def test_inline_artifact_content_is_byte_exact_for_a_json_media_type(mcp_app, tm
         source_ip="127.0.0.1",
         user_agent="pytest",
         username="mcp-tester",
-        task_type="gremlin",
+        task_type="cpu_runner",
         submitted_by_user_id=int(owner["submitted_by_user_id"]),
         storage_key=owner["storage_key"],
     )
@@ -1235,7 +1235,7 @@ def test_oversized_artifact_returns_metadata_not_content(mcp_app, tmp_path):
         source_ip="127.0.0.1",
         user_agent="pytest",
         username="mcp-tester",
-        task_type="gremlin",
+        task_type="cpu_runner",
         submitted_by_user_id=int(owner["submitted_by_user_id"]),
         storage_key=owner["storage_key"],
     )
@@ -1293,7 +1293,7 @@ def _seed_unpublished_artifact(module, tmp_path, *, username: str = "mcp-tester"
         source_ip="127.0.0.1",
         user_agent="pytest",
         username=username,
-        task_type="gremlin",
+        task_type="cpu_runner",
         submitted_by_user_id=int(owner["submitted_by_user_id"]),
         storage_key=owner["storage_key"],
     )
@@ -1394,20 +1394,20 @@ def test_classifier_covers_every_canonical_admission_vocabulary():
 # ---------------------------------------------------------------------------
 
 
-def _restrict_gremlin(module, *, requestable: bool = True) -> None:
-    """Restrict the gremlin TaskType with an access policy the caller lacks."""
+def _restrict_cpu_runner(module, *, requestable: bool = True) -> None:
+    """Restrict the cpu_runner TaskType with an access policy the caller lacks."""
     import shutil
 
     import yaml
 
     from revocompute.task_types import discover_plugins
 
-    source_family = Path(__file__).resolve().parents[2] / "docker" / "runners" / "pssm_gremlin"
-    family_dir = Path(module.CONFIG.runners_dir) / "pssm_gremlin"
+    source_family = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "runners" / "cpu_runner"
+    family_dir = Path(module.CONFIG.runners_dir) / "cpu_runner"
     shutil.copytree(source_family, family_dir, dirs_exist_ok=True)
     policy_dir = Path(module.CONFIG.runners_dir) / "common" / "policy"
     policy_dir.mkdir(parents=True, exist_ok=True)
-    (policy_dir / "example.yaml").write_text(
+    (policy_dir / "demo.yaml").write_text(
         yaml.safe_dump(
             {
                 "id": "example_academic_runner",
@@ -1424,11 +1424,11 @@ def _restrict_gremlin(module, *, requestable: bool = True) -> None:
     )
     manifest_path = family_dir / "plugin.yaml"
     manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
-    manifest["access_policies"] = ["common/policy/example.yaml"]
+    manifest["access_policies"] = ["common/policy/demo.yaml"]
     manifest["contributions"] = {"access_policies": ["example_academic_runner"]}
     manifest.setdefault("runtime", {})["access_policy"] = "example_academic_runner"
     manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
-    discover_plugins(module.CONFIG.runners_dir, {"gremlin"})
+    discover_plugins(module.CONFIG.runners_dir, {"cpu_runner"})
 
 
 def _submit_payload(role: str = "sequence") -> list[dict[str, object]]:
@@ -1451,12 +1451,12 @@ def test_missing_entitlement_is_denied_through_the_canonical_admission_path(mcp_
     from revocompute.mcp.handles import canonical_state
     from revocompute.mcp.services import submit_task
 
-    _restrict_gremlin(mcp_app)
+    _restrict_cpu_runner(mcp_app)
     principal = _principal(mcp_app)
     with pytest.raises(McpError) as excinfo:
         submit_task(
             principal,
-            task_type="gremlin",
+            task_type="cpu_runner",
             params={},
             inputs=_submit_payload(),
             handle_store=canonical_state().handles,
@@ -1475,7 +1475,7 @@ def test_entitled_caller_passes_the_same_admission_path(mcp_app):
     from revocompute.mcp.handles import canonical_state
     from revocompute.mcp.services import submit_task
 
-    _restrict_gremlin(mcp_app)
+    _restrict_cpu_runner(mcp_app)
     principal = _principal(mcp_app)
     db = mcp_app.app.config["user_db"]
     db.grant_entitlement(
@@ -1487,7 +1487,7 @@ def test_entitled_caller_passes_the_same_admission_path(mcp_app):
     )
     payload = submit_task(
         principal,
-        task_type="gremlin",
+        task_type="cpu_runner",
         params={},
         inputs=_submit_payload(),
         handle_store=canonical_state().handles,
@@ -1508,7 +1508,7 @@ def test_non_ready_runner_is_not_admitted(mcp_app):
     try:
         submit_task(
             principal,
-            task_type="gremlin",
+            task_type="cpu_runner",
             params={},
             inputs=_submit_payload(),
             handle_store=canonical_state().handles,
@@ -1591,7 +1591,7 @@ def _register_gpu_task_type(module):
     """Register a synthetic GPU TaskType, as the canonical admission tests do."""
     from dataclasses import replace
 
-    base, runner = module.task_runtime._get_task_type("gremlin")
+    base, runner = module.task_runtime._get_task_type("cpu_runner")
     task_type = replace(base, name="mcp_gpu_test", gpus=True)
     _conftest._inject_task_type(module, task_type, runner)
     return task_type.name

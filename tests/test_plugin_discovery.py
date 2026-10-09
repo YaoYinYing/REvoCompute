@@ -189,7 +189,7 @@ def test_runner_configuration_is_loaded_from_manifest_family_tree(tmp_path):
     task_dir = family / "tasks" / "echo"
     task_dir.mkdir(parents=True)
     (family / "plugin.yaml").write_text(
-        "id: gremlin\nversion: '1'\nruntime:\n  image_artifact: demo.sif\n  definition: demo.def\n"
+        "id: cpu_runner\nversion: '1'\nruntime:\n  image_artifact: demo.sif\n  definition: demo.def\n"
         "tasks: [tasks/echo/task.yaml]\n",
         encoding="utf-8",
     )
@@ -199,9 +199,9 @@ def test_runner_configuration_is_loaded_from_manifest_family_tree(tmp_path):
         "id: echo\ndisplay_name: Echo\n" + INPUTS, encoding="utf-8"
     )
 
-    discover_plugins(str(tmp_path), {"gremlin"})
+    discover_plugins(str(tmp_path), {"cpu_runner"})
     task, runner = get("echo")
-    assert task.runtime.name == "gremlin"
+    assert task.runtime.name == "cpu_runner"
     assert runner.max_runtime_seconds == 42
 
 
@@ -341,46 +341,8 @@ def test_workflow_stage_must_declare_both_capability_keys(tmp_path):
     ]
 
 
-def test_every_production_workflow_declares_both_capability_keys():
-    """Every shipped workflow stage states both capabilities explicitly.
-
-    The loader already rejects a missing key, so this asserts the *content* of
-    the loaded fleet: a stage must not silently carry a default that disagrees
-    with what its Runner does.
-    """
-    discover_plugins(str(ROOT / "docker" / "runners"))
-    workflows = [task for task in list_types() if task.workflow]
-    assert workflows, "no production workflow task was discovered"
-    declared = set()
-    for task in workflows:
-        for stage in task.workflow:
-            declared.add((task.name, stage.name, stage.requires_gpu, stage.requires_network))
-    # The known network-dependent stages must say so; the known offline ones
-    # must not claim a capability they do not use.
-    by_stage = {(name, stage): (gpu, net) for name, stage, gpu, net in declared}
-    assert by_stage[("colabfold_af2", "colabfold_af2.features")][1] is True
-    assert by_stage[("colabfold_af2", "colabfold_af2.model")][1] is False
-    assert by_stage[("alphafold", "alphafold.features")][1] is False
-    assert by_stage[("alphafold3", "alphafold3.features")][1] is False
 
 
-def test_every_production_workflow_partitions_its_stage_markers():
-    """Every shipped composed task partitions its markers through the loader.
-
-    The loader rejects an omitted/duplicated/out-of-order marker, so this
-    asserts the *content* of the loaded fleet: each task's concatenated stage
-    markers must equal its ordered task-level marker sequence.  A manifest that
-    emitted a marker no stage owns would otherwise load and silently drop that
-    marker at run time.
-    """
-    discover_plugins(str(ROOT / "docker" / "runners"))
-    workflows = [task for task in list_types() if task.workflow]
-    assert workflows, "no production workflow task was discovered"
-    for task in workflows:
-        declared = [marker for stage in task.workflow for marker in stage.stage_markers]
-        assert declared == list(task.stage_markers), (
-            f"{task.name} workflow stage markers {declared} do not partition {list(task.stage_markers)}"
-        )
 
 
 def test_workflow_stage_markers_must_partition_declared_markers(tmp_path):

@@ -26,6 +26,7 @@ SLURM_COMPOSE = ROOT / "docker-compose.slurm.yml"
 
 SAFE_ENV = {
     "SERVER_DIR": str(ROOT),
+    "RUNNERS_DIR": str(ROOT / "docker" / "runners"),
     "LOG_DIR": str(ROOT / "logs"),
     "AUTH_DIR": str(ROOT / "auth-data"),
     "ADMIN_USERS": "admin",

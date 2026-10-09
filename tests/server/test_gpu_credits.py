@@ -57,7 +57,7 @@ def _own_task(database: TaskDatabase, task_id: str, *, user_id: int) -> None:
         username=f"user-{user_id}",
         submitted_by_user_id=user_id,
         storage_key=f"user-{user_id}",
-        task_type="gremlin",
+        task_type="cpu_runner",
     )
 
 

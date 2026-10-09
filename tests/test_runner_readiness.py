@@ -394,14 +394,14 @@ def test_runner_status_all_accepts_zero_family_instance(evidence, monkeypatch, c
 def test_real_identity_keeps_build_and_validation_freshness_separate(tmp_path):
     repo = tmp_path / "repo"
     runners = repo / "docker" / "runners"
-    shutil.copytree(ROOT / "docker" / "runners" / "alphafold3", runners / "alphafold3")
-    shutil.copytree(ROOT / "docker" / "runners" / "common", runners / "common")
-    fixture = repo / "tests" / "data" / "json" / "alphafold3_tiny.json"
+    shutil.copytree(ROOT / "tests" / "fixtures" / "runners" / "restricted_runner", runners / "restricted_runner")
+    shutil.copytree(ROOT / "tests" / "fixtures" / "runners" / "common", runners / "common")
+    fixture = repo / "tests" / "data" / "synthetic" / "sequence.fasta"
     fixture.parent.mkdir(parents=True)
-    shutil.copyfile(ROOT / "tests" / "data" / "json" / "alphafold3_tiny.json", fixture)
+    shutil.copyfile(ROOT / "tests" / "data" / "synthetic" / "sequence.fasta", fixture)
 
     original = load_plugin_families(runners)[0]
-    image = tmp_path / "images" / "alphafold3_v1.sif"
+    image = tmp_path / "images" / "restricted_runner_v1.sif"
     image.parent.mkdir()
     image.write_bytes(b"exact-active-sif")
     family = replace(original, slurm_image=str(image))
@@ -426,7 +426,7 @@ def test_real_identity_keeps_build_and_validation_freshness_separate(tmp_path):
             "runtime_bundle_sha256": bundle,
             "test_definition_digest": identity.plan.digest,
             "configuration_digest": identity.configuration_digest,
-            "cases": [{"case_id": "minimal-alphafold3", "passed": True}],
+            "cases": [{"case_id": "minimal-synthetic", "passed": True}],
         },
     )
 
@@ -434,17 +434,17 @@ def test_real_identity_keeps_build_and_validation_freshness_separate(tmp_path):
 
     manage_path = Path(state.server_dir()) / "manage.sqlite"
     database = ManageDatabase(str(manage_path))
-    database.task_type_upsert("alphafold3.features", cpus=6, memory="12G")
+    database.task_type_upsert("restricted_runner.features", cpus=6, memory="12G")
     resources_changed = resolve_runner_readiness(state, family)
     assert resources_changed.status is RunnerReadinessStatus.VALIDATION_STALE
     assert resources_changed.build_provenance_current
 
-    database.task_type_upsert("alphafold3.features", cpus=None, memory=None)
+    database.task_type_upsert("restricted_runner.features", cpus=None, memory=None)
     assert resolve_runner_readiness(state, family).status is RunnerReadinessStatus.READY
     database.close()
 
     connection = sqlite3.connect(manage_path)
-    connection.execute("UPDATE task_type_config SET cpus = 0 WHERE tool = 'alphafold3.features'")
+    connection.execute("UPDATE task_type_config SET cpus = 0 WHERE tool = 'restricted_runner.features'")
     connection.commit()
     connection.close()
     malformed = resolve_runner_readiness(state, family)
@@ -452,7 +452,7 @@ def test_real_identity_keeps_build_and_validation_freshness_separate(tmp_path):
     assert malformed.reason_code == "CONFIGURATION_INVALID"
 
     connection = sqlite3.connect(manage_path)
-    connection.execute("UPDATE task_type_config SET cpus = NULL WHERE tool = 'alphafold3.features'")
+    connection.execute("UPDATE task_type_config SET cpus = NULL WHERE tool = 'restricted_runner.features'")
     connection.commit()
     connection.close()
     assert resolve_runner_readiness(state, family).status is RunnerReadinessStatus.READY
@@ -460,14 +460,9 @@ def test_real_identity_keeps_build_and_validation_freshness_separate(tmp_path):
     task = family.root / "tasks" / "predict" / "task.yaml"
     original_task = task.read_text(encoding="utf-8")
     presentation_edits = (
-        ("display_name: AlphaFold 3", "display_name: Changed AlphaFold 3"),
-        ("summary: AlphaFold 3", "summary: Changed AlphaFold 3"),
-        ("description: Latest structure release date", "description: Newest structure release date"),
-        (
-            "type: string\n      description: Latest",
-            "type: string\n      x-help: Pick a date.\n      description: Latest",
-        ),
-        ("title={Accurate structure prediction", "title={Precise structure prediction"),
+        ("display_name: Synthetic", "display_name: Changed Synthetic"),
+        ("summary: Synthetic", "summary: Changed Synthetic"),
+        ("description: Synthetic bounded", "description: Changed bounded"),
     )
     for old, new in presentation_edits:
         assert old in original_task
@@ -477,7 +472,7 @@ def test_real_identity_keeps_build_and_validation_freshness_separate(tmp_path):
         assert task_changed.build_provenance_current
 
     task.write_text(original_task, encoding="utf-8")
-    task.write_text(original_task.replace("default: 10", "default: 11", 1), encoding="utf-8")
+    task.write_text(original_task.replace("default: 100", "default: 101", 1), encoding="utf-8")
     contract_changed = resolve_runner_readiness(state, family)
     assert contract_changed.status is RunnerReadinessStatus.VALIDATION_STALE
     assert contract_changed.build_provenance_current
@@ -508,19 +503,19 @@ def test_real_identity_keeps_build_and_validation_freshness_separate(tmp_path):
 def test_validation_identity_binds_effective_workflow_resources_not_sources(tmp_path):
     repo = tmp_path / "repo"
     runners = repo / "docker" / "runners"
-    shutil.copytree(ROOT / "docker" / "runners" / "alphafold3", runners / "alphafold3")
-    shutil.copytree(ROOT / "docker" / "runners" / "common", runners / "common")
-    fixture = repo / "tests" / "data" / "json" / "alphafold3_tiny.json"
+    shutil.copytree(ROOT / "tests" / "fixtures" / "runners" / "restricted_runner", runners / "restricted_runner")
+    shutil.copytree(ROOT / "tests" / "fixtures" / "runners" / "common", runners / "common")
+    fixture = repo / "tests" / "data" / "synthetic" / "sequence.fasta"
     fixture.parent.mkdir(parents=True)
-    shutil.copyfile(ROOT / "tests" / "data" / "json" / "alphafold3_tiny.json", fixture)
+    shutil.copyfile(ROOT / "tests" / "data" / "synthetic" / "sequence.fasta", fixture)
     family = load_plugin_families(runners)[0]
 
     from_global = ResourcePolicyValues({"cpus": "4", "memory": "8G"}, {})
     from_stages = ResourcePolicyValues(
         {},
         {
-            "alphafold3.features": {"cpus": 4, "memory": "8G"},
-            "alphafold3.model": {"cpus": 4, "memory": "8G"},
+            "restricted_runner.features": {"cpus": 4, "memory": "8G"},
+            "restricted_runner.model": {"cpus": 4, "memory": "8G"},
         },
     )
     changed = ResourcePolicyValues({"cpus": "8", "memory": "8G"}, {})
@@ -531,37 +526,37 @@ def test_validation_identity_binds_effective_workflow_resources_not_sources(tmp_
 
     assert global_identity.configuration_digest == stage_identity.configuration_digest
     assert global_identity.configuration_digest != changed_identity.configuration_digest
-    snapshots = global_identity.required_resource_snapshots()["alphafold3"]["resource_policies"]
-    assert set(snapshots) == {"alphafold3.features", "alphafold3.model"}
-    assert snapshots["alphafold3.features"]["requires_gpu"] is False
-    assert snapshots["alphafold3.model"]["requires_gpu"] is True
-    assert snapshots["alphafold3.model"]["gres"] == "gpu:1"
+    snapshots = global_identity.required_resource_snapshots()["restricted_runner"]["resource_policies"]
+    assert set(snapshots) == {"restricted_runner.features", "restricted_runner.model"}
+    assert snapshots["restricted_runner.features"]["requires_gpu"] is False
+    assert snapshots["restricted_runner.model"]["requires_gpu"] is True
+    assert snapshots["restricted_runner.model"]["gres"] == "gpu:1"
 
 
 @pytest.mark.parametrize(
     ("stage", "field", "value"),
     [
-        ("alphafold3.features", "cpus", 2),
-        ("alphafold3.features", "memory", "8G"),
-        ("alphafold3.features", "max_runtime_seconds", 7200),
-        ("alphafold3.features", "slurm_partition", "normal"),
-        ("alphafold3.model", "slurm_gres", "gpu:a100:1"),
-        ("alphafold3.features", "slurm_nodes", 2),
-        ("alphafold3.features", "slurm_ntasks", 2),
-        ("alphafold3.features", "slurm_qos", "normal"),
-        ("alphafold3.features", "slurm_account", "research"),
-        ("alphafold3.features", "slurm_constraint", "avx2"),
-        ("alphafold3.features", "slurm_exclusive", True),
+        ("restricted_runner.features", "cpus", 2),
+        ("restricted_runner.features", "memory", "8G"),
+        ("restricted_runner.features", "max_runtime_seconds", 3600),
+        ("restricted_runner.features", "slurm_partition", "normal"),
+        ("restricted_runner.model", "slurm_gres", "gpu:a100:1"),
+        ("restricted_runner.features", "slurm_nodes", 2),
+        ("restricted_runner.features", "slurm_ntasks", 2),
+        ("restricted_runner.features", "slurm_qos", "normal"),
+        ("restricted_runner.features", "slurm_account", "research"),
+        ("restricted_runner.features", "slurm_constraint", "avx2"),
+        ("restricted_runner.features", "slurm_exclusive", True),
     ],
 )
 def test_each_effective_resource_field_changes_validation_identity(tmp_path, stage, field, value):
     repo = tmp_path / "repo"
     runners = repo / "docker" / "runners"
-    shutil.copytree(ROOT / "docker" / "runners" / "alphafold3", runners / "alphafold3")
-    shutil.copytree(ROOT / "docker" / "runners" / "common", runners / "common")
-    fixture = repo / "tests" / "data" / "json" / "alphafold3_tiny.json"
+    shutil.copytree(ROOT / "tests" / "fixtures" / "runners" / "restricted_runner", runners / "restricted_runner")
+    shutil.copytree(ROOT / "tests" / "fixtures" / "runners" / "common", runners / "common")
+    fixture = repo / "tests" / "data" / "synthetic" / "sequence.fasta"
     fixture.parent.mkdir(parents=True)
-    shutil.copyfile(ROOT / "tests" / "data" / "json" / "alphafold3_tiny.json", fixture)
+    shutil.copyfile(ROOT / "tests" / "data" / "synthetic" / "sequence.fasta", fixture)
     family = load_plugin_families(runners)[0]
 
     baseline = load_validation_identity(family, resource_provider=ResourcePolicyValues({}, {}), repo_root=repo)
@@ -574,11 +569,11 @@ def test_each_effective_resource_field_changes_validation_identity(tmp_path, sta
     assert changed.configuration_digest != baseline.configuration_digest
 
 
-def _copied_family(tmp_path, family="alphafold3"):
+def _copied_family(tmp_path, family="restricted_runner"):
     repo = tmp_path / "repo"
     runners = repo / "docker" / "runners"
-    shutil.copytree(ROOT / "docker" / "runners" / family, runners / family)
-    shutil.copytree(ROOT / "docker" / "runners" / "common", runners / "common")
+    shutil.copytree(ROOT / "tests" / "fixtures" / "runners" / family, runners / family)
+    shutil.copytree(ROOT / "tests" / "fixtures" / "runners" / "common", runners / "common")
     plan = yaml.safe_load((runners / family / "test.yaml").read_text(encoding="utf-8"))
     for collection in plan["collections"].values():
         for case in collection["cases"]:
@@ -592,7 +587,7 @@ def _copied_family(tmp_path, family="alphafold3"):
 
 def test_result_mapping_acceptance_fields_change_validation_identity(tmp_path):
     repo, _runners, _family = _copied_family(tmp_path)
-    family = replace(_family, root=_runners / "alphafold3")
+    family = replace(_family, root=_runners / "restricted_runner")
     task = family.root / "tasks" / "predict" / "task.yaml"
     original = task.read_text(encoding="utf-8")
     providers = ResourcePolicyValues({}, {})
@@ -623,7 +618,7 @@ def test_workflow_marker_ownership_changes_validation_identity(tmp_path):
     receipt validated is not the one the corrected manifest declares.
     """
     repo, runners, _family = _copied_family(tmp_path)
-    family = replace(_family, root=runners / "alphafold3")
+    family = replace(_family, root=runners / "restricted_runner")
     task = family.root / "tasks" / "predict" / "task.yaml"
     original = task.read_text(encoding="utf-8")
     providers = ResourcePolicyValues({}, {})
@@ -652,13 +647,13 @@ def test_workflow_marker_ownership_changes_validation_identity(tmp_path):
 
 def test_access_policy_and_workspace_assets_change_validation_identity(tmp_path):
     repo, runners, _family = _copied_family(tmp_path)
-    family = replace(_family, root=runners / "alphafold3")
+    family = replace(_family, root=runners / "restricted_runner")
     providers = ResourcePolicyValues({}, {})
     baseline = load_validation_identity(family, resource_provider=providers, repo_root=repo)
 
-    policy = runners / "common" / "policy" / "alphafold3_noncommercial.yaml"
+    policy = runners / "common" / "policy" / "synthetic_noncommercial.yaml"
     original_policy = policy.read_text(encoding="utf-8")
-    policy.write_text(original_policy.replace("- alphafold3_noncommercial", "- some_entitlement"), encoding="utf-8")
+    policy.write_text(original_policy.replace("- synthetic_noncommercial", "- some_entitlement"), encoding="utf-8")
     assert (
         load_validation_identity(family, resource_provider=providers, repo_root=repo).configuration_digest
         != baseline.configuration_digest
@@ -669,9 +664,9 @@ def test_access_policy_and_workspace_assets_change_validation_identity(tmp_path)
         == baseline.configuration_digest
     )
 
-    workspace_repo, workspace_runners, workspace_family = _copied_family(tmp_path / "workspace", "placer-rfdiffusion")
-    workspace_family = replace(workspace_family, root=workspace_runners / "placer-rfdiffusion")
-    source = workspace_runners / "placer-rfdiffusion" / "workspace" / "regions" / "backend.py"
+    workspace_repo, workspace_runners, workspace_family = _copied_family(tmp_path / "workspace", "workspace_runner")
+    workspace_family = replace(workspace_family, root=workspace_runners / "workspace_runner")
+    source = workspace_runners / "workspace_runner" / "workspace" / "regions" / "backend.py"
     workspace_baseline = load_validation_identity(
         workspace_family, resource_provider=providers, repo_root=workspace_repo
     )
@@ -685,17 +680,17 @@ def test_access_policy_and_workspace_assets_change_validation_identity(tmp_path)
 
 
 def test_workspace_backend_entrypoint_change_and_optional_schema(tmp_path):
-    repo, runners, _family = _copied_family(tmp_path, "placer-rfdiffusion")
-    family = replace(_family, root=runners / "placer-rfdiffusion")
+    repo, runners, _family = _copied_family(tmp_path, "workspace_runner")
+    family = replace(_family, root=runners / "workspace_runner")
     providers = ResourcePolicyValues({}, {})
-    plugin = runners / "placer-rfdiffusion" / "plugin.yaml"
+    plugin = runners / "workspace_runner" / "plugin.yaml"
     original = plugin.read_text(encoding="utf-8")
 
     baseline = load_validation_identity(family, resource_provider=providers, repo_root=repo)
 
     # Re-binding the role to another callable in the same module changes accepted
     # normalization even though the module bytes are identical.
-    rebound = original.replace("backend.py:normalize_rfdiffusion", "backend.py:normalize_capability", 1)
+    rebound = original.replace("backend.py:normalize", "backend.py:normalize_capability", 1)
     assert rebound != original
     plugin.write_text(rebound, encoding="utf-8")
     assert (
@@ -712,14 +707,14 @@ def test_workspace_backend_entrypoint_change_and_optional_schema(tmp_path):
 def test_workspace_projection_tolerates_a_plugin_without_a_configuration_schema(tmp_path):
     from revocompute.runner_live_test import _validation_workspace_capabilities
 
-    _repo, runners, _family = _copied_family(tmp_path, "placer-rfdiffusion")
-    family_root = runners / "placer-rfdiffusion"
+    _repo, runners, _family = _copied_family(tmp_path, "workspace_runner")
+    family_root = runners / "workspace_runner"
     doc = yaml.safe_load((family_root / "plugin.yaml").read_text(encoding="utf-8"))
     declaration = doc["contributions"]["input_workspace_plugins"][0]
     assert "configuration_schema" in declaration
     del declaration["configuration_schema"]
 
     projection = _validation_workspace_capabilities(family_root, doc)
-    entry = projection["rfdiffusion-regions"]
+    entry = projection["workspace_task-regions"]
     assert entry["assets"]["workspace/regions/index.js"]
-    assert entry["backend"]["normalizer"]["entrypoint"] == "workspace/regions/backend.py:normalize_rfdiffusion"
+    assert entry["backend"]["normalizer"]["entrypoint"] == "workspace/regions/backend.py:normalize"

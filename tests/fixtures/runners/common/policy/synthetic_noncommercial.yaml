@@ -1,0 +1,13 @@
+description: Synthetic entitlement contract.
+id: synthetic_noncommercial
+label: Synthetic restricted access
+license:
+  name: Synthetic License
+  url: https://example.invalid/license
+match: all
+notice:
+  summary: Requires authorization.
+  title: Restricted access
+requestable: true
+requires:
+- synthetic_noncommercial

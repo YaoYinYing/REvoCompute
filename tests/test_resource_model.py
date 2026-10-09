@@ -34,11 +34,11 @@ OTHER_DEVICE = DeviceProfile("nvidia", "H100-PCIE-80GB", "9.0", 81559)
 
 def _observation(length: int, peak: int, *, device: DeviceProfile = DEVICE, seed: int = 0) -> ResourceObservation:
     return ResourceObservation(
-        runner="esmfold2",
+        runner="gpu_runner",
         model_revision="fast",
         runtime_fingerprint="fp-1",
         device=device,
-        features=WorkloadFeatures("esmfold2", "fast", "fp-1", length + seed, sample_count=1),
+        features=WorkloadFeatures("gpu_runner", "fast", "fp-1", length + seed, sample_count=1),
         outcome=OUTCOME_SUCCESS,
         baseline_mb=8000,
         peak_reserved_mb=peak,
@@ -52,7 +52,7 @@ def _fitted_estimator() -> VRAMEstimator:
 
 
 def test_prediction_is_bounded_and_ordered() -> None:
-    prediction = _fitted_estimator().predict(WorkloadFeatures("esmfold2", "fast", "fp-1", 900), DEVICE)
+    prediction = _fitted_estimator().predict(WorkloadFeatures("gpu_runner", "fast", "fp-1", 900), DEVICE)
 
     assert prediction.applicable
     assert 0 < prediction.expected_mb <= prediction.upper_bound_mb
@@ -60,7 +60,7 @@ def test_prediction_is_bounded_and_ordered() -> None:
 
 
 def test_out_of_distribution_workload_is_refused_not_extrapolated() -> None:
-    prediction = _fitted_estimator().predict(WorkloadFeatures("esmfold2", "fast", "fp-1", 100_000), DEVICE)
+    prediction = _fitted_estimator().predict(WorkloadFeatures("gpu_runner", "fast", "fp-1", 100_000), DEVICE)
 
     assert not prediction.applicable
     assert prediction.source == "extrapolation"
@@ -69,14 +69,14 @@ def test_out_of_distribution_workload_is_refused_not_extrapolated() -> None:
 def test_cold_start_reports_inapplicable_rather_than_a_guess() -> None:
     estimator = VRAMEstimator([_observation(100, 14000)])
 
-    prediction = estimator.predict(WorkloadFeatures("esmfold2", "fast", "fp-1", 100), DEVICE)
+    prediction = estimator.predict(WorkloadFeatures("gpu_runner", "fast", "fp-1", 100), DEVICE)
 
     assert not prediction.applicable
     assert prediction.confidence < 0.5
 
 
 def test_new_device_class_starts_from_the_shared_baseline() -> None:
-    prediction = _fitted_estimator().predict(WorkloadFeatures("esmfold2", "fast", "fp-1", 900), OTHER_DEVICE)
+    prediction = _fitted_estimator().predict(WorkloadFeatures("gpu_runner", "fast", "fp-1", 900), OTHER_DEVICE)
 
     assert prediction.applicable
     assert prediction.expected_mb > 0
@@ -89,7 +89,7 @@ def test_new_device_class_without_same_runner_evidence_is_refused() -> None:
     # Same runner, unseen device class: the runner's shared envelope (observed
     # on its own classes) still bounds the request, so a huge ask is refused
     # rather than extrapolated with a confident bound.
-    big = estimator.predict(WorkloadFeatures("esmfold2", "fast", "fp-1", 100_000), unseen)
+    big = estimator.predict(WorkloadFeatures("gpu_runner", "fast", "fp-1", 100_000), unseen)
     assert not big.applicable
     assert big.source == "extrapolation"
     assert big.basis["observed_max_scale"] > 0
@@ -103,8 +103,8 @@ def test_new_device_class_without_same_runner_evidence_is_refused() -> None:
 def test_runtime_change_demotes_old_observations_instead_of_hiding_them() -> None:
     estimator = _fitted_estimator()
 
-    matched = estimator.predict(WorkloadFeatures("esmfold2", "fast", "fp-1", 900), DEVICE)
-    mismatched = estimator.predict(WorkloadFeatures("esmfold2", "fast", "fp-2", 900), DEVICE)
+    matched = estimator.predict(WorkloadFeatures("gpu_runner", "fast", "fp-1", 900), DEVICE)
+    mismatched = estimator.predict(WorkloadFeatures("gpu_runner", "fast", "fp-2", 900), DEVICE)
 
     assert len(estimator.observations) == 4
     assert mismatched.source in {"fitted", "heuristic_median"}
@@ -122,7 +122,7 @@ def test_runtime_change_demotes_old_observations_instead_of_hiding_them() -> Non
 
 def test_foreign_runner_evidence_cannot_move_another_runners_prediction() -> None:
     baseline = _fitted_estimator()
-    features = WorkloadFeatures("esmfold2", "fast", "fp-1", 900)
+    features = WorkloadFeatures("gpu_runner", "fast", "fp-1", 900)
     alone = baseline.predict(features, DEVICE)
     foreign = [
         ResourceObservation(
@@ -154,11 +154,11 @@ def test_oom_is_retained_as_a_censored_constraint() -> None:
     estimator = _fitted_estimator()
     estimator.observe(
         ResourceObservation(
-            runner="esmfold2",
+            runner="gpu_runner",
             model_revision="fast",
             runtime_fingerprint="fp-1",
             device=DEVICE,
-            features=WorkloadFeatures("esmfold2", "fast", "fp-1", 2000),
+            features=WorkloadFeatures("gpu_runner", "fast", "fp-1", 2000),
             outcome=OUTCOME_OOM,
             baseline_mb=8000,
             available_mb=39000,
@@ -168,16 +168,16 @@ def test_oom_is_retained_as_a_censored_constraint() -> None:
 
     # The failed row is not training data, but it is evidence about the boundary.
     assert len(estimator.observations) == 5
-    assert estimator.known_failure_envelope(WorkloadFeatures("esmfold2", "fast", "fp-1", 100), DEVICE) == 2000
+    assert estimator.known_failure_envelope(WorkloadFeatures("gpu_runner", "fast", "fp-1", 100), DEVICE) == 2000
 
 
 def test_interference_is_excluded_from_training() -> None:
     noisy = ResourceObservation(
-        runner="esmfold2",
+        runner="gpu_runner",
         model_revision="fast",
         runtime_fingerprint="fp-1",
         device=DEVICE,
-        features=WorkloadFeatures("esmfold2", "fast", "fp-1", 900),
+        features=WorkloadFeatures("gpu_runner", "fast", "fp-1", 900),
         outcome=OUTCOME_SUCCESS,
         baseline_mb=8000,
         peak_reserved_mb=39000,
@@ -191,29 +191,29 @@ def test_interference_is_excluded_from_training() -> None:
     estimator = VRAMEstimator([noisy, *[_observation(length, 20000 + length) for length in (100, 300, 600, 1200)]])
     # A contaminated row is diagnostic only: it must not be learned as extra
     # workload demand.
-    assert estimator.predict(WorkloadFeatures("esmfold2", "fast", "fp-1", 100), DEVICE).upper_bound_mb < 39000
+    assert estimator.predict(WorkloadFeatures("gpu_runner", "fast", "fp-1", 100), DEVICE).upper_bound_mb < 39000
 
 
 def test_a_large_legitimate_run_is_not_demoted_to_interference() -> None:
     # A big run on an idle device: the available memory at start covered the
     # workload, and the peak exceeding it is simply how memory reporting works.
     legitimate = ResourceObservation(
-        runner="esmfold2",
+        runner="gpu_runner",
         model_revision="fast",
         runtime_fingerprint="fp-1",
         device=DEVICE,
-        features=WorkloadFeatures("esmfold2", "fast", "fp-1", 1200),
+        features=WorkloadFeatures("gpu_runner", "fast", "fp-1", 1200),
         outcome=OUTCOME_SUCCESS,
         baseline_mb=8000,
         peak_reserved_mb=44000,
         available_mb=39000,
     )
     unknown = ResourceObservation(
-        runner="esmfold2",
+        runner="gpu_runner",
         model_revision="fast",
         runtime_fingerprint="fp-1",
         device=DEVICE,
-        features=WorkloadFeatures("esmfold2", "fast", "fp-1", 1200),
+        features=WorkloadFeatures("gpu_runner", "fast", "fp-1", 1200),
         outcome=OUTCOME_SUCCESS,
         baseline_mb=8000,
         peak_reserved_mb=44000,
@@ -231,11 +231,11 @@ def test_total_peak_above_free_memory_is_not_interference_when_growth_fits() -> 
     not have fitted in the free memory does.
     """
     row = ResourceObservation(
-        runner="esmfold2",
+        runner="gpu_runner",
         model_revision="fast",
         runtime_fingerprint="fp-1",
         device=DeviceProfile("nvidia", "A100-PCIE-40GB", "8.0", 40960),
-        features=WorkloadFeatures("esmfold2", "fast", "fp-1", 900),
+        features=WorkloadFeatures("gpu_runner", "fast", "fp-1", 900),
         outcome=OUTCOME_SUCCESS,
         baseline_mb=10240,
         peak_process_mb=35840,
@@ -254,12 +254,12 @@ def test_a_string_valued_material_setting_round_trips() -> None:
     boundary depends on fail to store.
     """
     payload = {
-        "runner": "esmfold2",
+        "runner": "gpu_runner",
         "model_revision": "fast",
         "runtime_fingerprint": "fp-1",
         "device": {"vendor": "nvidia", "model": "A100-PCIE-40GB", "compute_capability": "8.0", "total_vram_mb": 40960},
         "features": {
-            "runner": "esmfold2",
+            "runner": "gpu_runner",
             "model_revision": "fast",
             "runtime_fingerprint": "fp-1",
             "sequence_length": 900,
@@ -276,7 +276,7 @@ def test_a_string_valued_material_setting_round_trips() -> None:
     }
     row = ResourceObservation.from_dict(payload)
     assert row.features.parameters["kernel_backend"] == "reference"
-    projected = WorkloadFeatures("esmfold2", "fast", "fp-1", 900, sample_count=4).with_adjustments(
+    projected = WorkloadFeatures("gpu_runner", "fast", "fp-1", 900, sample_count=4).with_adjustments(
         {"kernel_backend": "reference", "sample_group_size": 1}
     )
     assert projected.parameters["kernel_backend"] == "reference"
@@ -292,22 +292,22 @@ def test_interfered_success_does_not_erase_a_known_failure() -> None:
     plans = FallbackPlan.parse_all([{"label": "split", "adjustments": {"sample_group_size": 1}}])
     rows = [_observation(length, peak) for length, peak in ((100, 14000), (300, 18000), (600, 26000), (1200, 44000))]
     oom = ResourceObservation(
-        runner="esmfold2",
+        runner="gpu_runner",
         model_revision="fast",
         runtime_fingerprint="fp-1",
         device=DEVICE,
-        features=WorkloadFeatures("esmfold2", "fast", "fp-1", 2000),
+        features=WorkloadFeatures("gpu_runner", "fast", "fp-1", 2000),
         outcome=OUTCOME_OOM,
         baseline_mb=8000,
         available_mb=39000,
         plan_label="split",
     )
     polluted = ResourceObservation(
-        runner="esmfold2",
+        runner="gpu_runner",
         model_revision="fast",
         runtime_fingerprint="fp-1",
         device=DEVICE,
-        features=WorkloadFeatures("esmfold2", "fast", "fp-1", 1500),
+        features=WorkloadFeatures("gpu_runner", "fast", "fp-1", 1500),
         outcome=OUTCOME_SUCCESS,
         baseline_mb=8000,
         peak_reserved_mb=40000,
@@ -333,11 +333,11 @@ def test_guidance_never_aggregates_across_revisions_or_runtimes() -> None:
     rows = [_observation(length, peak) for length, peak in ((100, 14000), (300, 18000), (600, 26000), (1200, 44000))]
     other_revision = [
         ResourceObservation(
-            runner="esmfold2",
+            runner="gpu_runner",
             model_revision="standard",
             runtime_fingerprint="fp-1",
             device=DEVICE,
-            features=WorkloadFeatures("esmfold2", "standard", "fp-1", 2000),
+            features=WorkloadFeatures("gpu_runner", "standard", "fp-1", 2000),
             outcome=OUTCOME_OOM,
             baseline_mb=8000,
             available_mb=39000,
@@ -351,11 +351,11 @@ def test_guidance_never_aggregates_across_revisions_or_runtimes() -> None:
     changed_runtime = [_observation(length, peak) for length, peak in ((100, 14000),)]
     changed_runtime.append(
         ResourceObservation(
-            runner="esmfold2",
+            runner="gpu_runner",
             model_revision="fast",
             runtime_fingerprint="fp-2",
             device=DEVICE,
-            features=WorkloadFeatures("esmfold2", "fast", "fp-2", 2000),
+            features=WorkloadFeatures("gpu_runner", "fast", "fp-2", 2000),
             outcome=OUTCOME_OOM,
             baseline_mb=8000,
             available_mb=39000,
@@ -378,11 +378,11 @@ def test_avoidance_guidance_is_bound_by_model_revision_and_runtime() -> None:
     def successes(revision: str, fingerprint: str) -> list[ResourceObservation]:
         return [
             ResourceObservation(
-                runner="esmfold2",
+                runner="gpu_runner",
                 model_revision=revision,
                 runtime_fingerprint=fingerprint,
                 device=DEVICE,
-                features=WorkloadFeatures("esmfold2", revision, fingerprint, length),
+                features=WorkloadFeatures("gpu_runner", revision, fingerprint, length),
                 outcome=OUTCOME_SUCCESS,
                 baseline_mb=8000,
                 peak_reserved_mb=peak,
@@ -392,11 +392,11 @@ def test_avoidance_guidance_is_bound_by_model_revision_and_runtime() -> None:
 
     def oom(revision: str, fingerprint: str, length: int) -> ResourceObservation:
         return ResourceObservation(
-            runner="esmfold2",
+            runner="gpu_runner",
             model_revision=revision,
             runtime_fingerprint=fingerprint,
             device=DEVICE,
-            features=WorkloadFeatures("esmfold2", revision, fingerprint, length),
+            features=WorkloadFeatures("gpu_runner", revision, fingerprint, length),
             outcome=OUTCOME_OOM,
             baseline_mb=8000,
             available_mb=39000,
@@ -429,7 +429,7 @@ def test_avoidance_guidance_is_bound_by_model_revision_and_runtime() -> None:
         ("fast", "fp-1"),
         ("standard", "fp-1"),
     ]
-    assert revisions[0]["runner"] == "esmfold2"
+    assert revisions[0]["runner"] == "gpu_runner"
     assert select(revisions, "fast", "fp-1")["avoid_scale_at_or_above"] == 2000
     assert select(revisions, "standard", "fp-1")["avoid_scale_at_or_above"] == 4000
     assert select(revisions, "standard", "fp-1")["known_failing_plans"] == ["split"]
@@ -466,11 +466,11 @@ def test_a_plan_is_evaluated_with_its_own_effective_features() -> None:
     estimator = VRAMEstimator(
         [
             ResourceObservation(
-                runner="esmfold2",
+                runner="gpu_runner",
                 model_revision="fast",
                 runtime_fingerprint="fp-1",
                 device=DEVICE,
-                features=WorkloadFeatures("esmfold2", "fast", "fp-1", 900, sample_count=c, concurrent_samples=c),
+                features=WorkloadFeatures("gpu_runner", "fast", "fp-1", 900, sample_count=c, concurrent_samples=c),
                 outcome=OUTCOME_SUCCESS,
                 baseline_mb=8000,
                 peak_reserved_mb=peak,
@@ -483,7 +483,7 @@ def test_a_plan_is_evaluated_with_its_own_effective_features() -> None:
         FallbackPlan.parse_all([{"label": "split", "adjustments": {"sample_group_size": 1}}]),
         stage="recover",
     )
-    requested = WorkloadFeatures("esmfold2", "fast", "fp-1", 900, sample_count=8, concurrent_samples=8)
+    requested = WorkloadFeatures("gpu_runner", "fast", "fp-1", 900, sample_count=8, concurrent_samples=8)
     effective = estimator.predict(requested.with_adjustments({"sample_group_size": 1}), DEVICE)
 
     decision = planner.decide(requested, DEVICE, 30000, attempt=1)
@@ -495,7 +495,7 @@ def test_a_plan_is_evaluated_with_its_own_effective_features() -> None:
 
 def test_effective_concurrency_is_a_separate_feature_from_requested_samples() -> None:
     """An 8-sample request run as 2+2+2+2 is not shaped like eight simultaneous."""
-    requested = WorkloadFeatures("esmfold2", "fast", "fp-1", 900, sample_count=8, concurrent_samples=8)
+    requested = WorkloadFeatures("gpu_runner", "fast", "fp-1", 900, sample_count=8, concurrent_samples=8)
     grouped = requested.with_adjustments({"sample_group_size": 2})
 
     assert (grouped.sample_count, grouped.concurrent_samples) == (8, 2)
@@ -508,7 +508,7 @@ def test_effective_concurrency_is_a_separate_feature_from_requested_samples() ->
     # count is the only available reading of the same shape, and it is validated.
     older = WorkloadFeatures.from_mapping(
         {
-            "runner": "esmfold2",
+            "runner": "gpu_runner",
             "model_revision": "fast",
             "runtime_fingerprint": "fp-1",
             "sequence_length": 900,
@@ -517,7 +517,7 @@ def test_effective_concurrency_is_a_separate_feature_from_requested_samples() ->
     )
     assert older.concurrent_samples == 8
     with pytest.raises(ResourceModelError):
-        WorkloadFeatures("esmfold2", "fast", "fp-1", 900, concurrent_samples=0)
+        WorkloadFeatures("gpu_runner", "fast", "fp-1", 900, concurrent_samples=0)
 
 
 def test_guidance_is_derived_from_stored_rows_without_any_estimator() -> None:
@@ -526,11 +526,11 @@ def test_guidance_is_derived_from_stored_rows_without_any_estimator() -> None:
     rows = [_observation(length, peak) for length, peak in ((100, 14000), (300, 18000), (600, 26000), (1200, 44000))]
     rows.append(
         ResourceObservation(
-            runner="esmfold2",
+            runner="gpu_runner",
             model_revision="fast",
             runtime_fingerprint="fp-1",
             device=DEVICE,
-            features=WorkloadFeatures("esmfold2", "fast", "fp-1", 2000),
+            features=WorkloadFeatures("gpu_runner", "fast", "fp-1", 2000),
             outcome=OUTCOME_OOM,
             baseline_mb=8000,
             available_mb=39000,
@@ -545,7 +545,7 @@ def test_guidance_is_derived_from_stored_rows_without_any_estimator() -> None:
     assert set(guidance) == {"stage", "plan_order", "profiles"}
     assert guidance["profiles"] == [
         {
-            "runner": "esmfold2",
+            "runner": "gpu_runner",
             "model_revision": "fast",
             "runtime_fingerprint": "fp-1",
             "device_model": "A100-PCIE-40GB",
@@ -565,11 +565,11 @@ def test_profile_evidence_does_not_leak_across_devices_or_vram_classes() -> None
 
     def oom(device: DeviceProfile, length: int) -> ResourceObservation:
         return ResourceObservation(
-            runner="esmfold2",
+            runner="gpu_runner",
             model_revision="fast",
             runtime_fingerprint="fp-1",
             device=device,
-            features=WorkloadFeatures("esmfold2", "fast", "fp-1", length),
+            features=WorkloadFeatures("gpu_runner", "fast", "fp-1", length),
             outcome=OUTCOME_OOM,
             baseline_mb=8000,
             available_mb=39000,
@@ -581,7 +581,7 @@ def test_profile_evidence_does_not_leak_across_devices_or_vram_classes() -> None
     guidance = guidance_for(plans, [*rows, oom(small, 2000)], stage="avoid")
     assert guidance["profiles"] == [
         {
-            "runner": "esmfold2",
+            "runner": "gpu_runner",
             "model_revision": "fast",
             "runtime_fingerprint": "fp-1",
             "device_model": "A100-PCIE-40GB",
@@ -619,7 +619,7 @@ def test_observe_stage_never_modifies_a_successful_execution() -> None:
         FallbackPlan.parse_all([{"label": "split", "adjustments": {"sample_group_size": 1}}]),
         stage="observe",
     )
-    features = WorkloadFeatures("esmfold2", "fast", "fp-1", 100_000)
+    features = WorkloadFeatures("gpu_runner", "fast", "fp-1", 100_000)
 
     decision = planner.decide(features, DEVICE, 40960, attempt=0)
     retry = planner.decide(features, DEVICE, 40960, attempt=1)
@@ -640,14 +640,14 @@ def test_recover_stage_walks_declared_fallbacks_within_a_budget() -> None:
         stage="recover",
     )
 
-    assert planner.decide(WorkloadFeatures("esmfold2", "fast", "fp-1", 100), DEVICE, 40960, attempt=0).plan_label == ""
-    assert planner.decide(WorkloadFeatures("esmfold2", "fast", "fp-1", 100), DEVICE, 40960, attempt=1).plan_label == "split"
+    assert planner.decide(WorkloadFeatures("gpu_runner", "fast", "fp-1", 100), DEVICE, 40960, attempt=0).plan_label == ""
+    assert planner.decide(WorkloadFeatures("gpu_runner", "fast", "fp-1", 100), DEVICE, 40960, attempt=1).plan_label == "split"
     second = planner.decide(
-        WorkloadFeatures("esmfold2", "fast", "fp-1", 100), DEVICE, 40960, attempt=2, failed_plans=("split",)
+        WorkloadFeatures("gpu_runner", "fast", "fp-1", 100), DEVICE, 40960, attempt=2, failed_plans=("split",)
     )
     assert second.plan_label == "offload"
     exhausted = planner.decide(
-        WorkloadFeatures("esmfold2", "fast", "fp-1", 100), DEVICE, 40960, attempt=3, failed_plans=("split", "offload")
+        WorkloadFeatures("gpu_runner", "fast", "fp-1", 100), DEVICE, 40960, attempt=3, failed_plans=("split", "offload")
     )
     assert exhausted.action == "reject"
     assert "FAILED_RESOURCE" in exhausted.reason
@@ -659,7 +659,7 @@ def test_recover_stage_rejects_only_when_the_bound_cannot_fit() -> None:
         FallbackPlan.parse_all([{"label": "split", "adjustments": {"sample_group_size": 1}}]),
         stage="recover",
     )
-    features = WorkloadFeatures("esmfold2", "fast", "fp-1", 900)
+    features = WorkloadFeatures("gpu_runner", "fast", "fp-1", 900)
     prediction = _fitted_estimator().predict(features, DEVICE)
     assert prediction.applicable and prediction.upper_bound_mb > 0
 
@@ -678,11 +678,11 @@ def test_avoid_stage_skips_a_known_failure_region_on_the_first_attempt() -> None
     estimator = _fitted_estimator()
     estimator.observe(
         ResourceObservation(
-            runner="esmfold2",
+            runner="gpu_runner",
             model_revision="fast",
             runtime_fingerprint="fp-1",
             device=DEVICE,
-            features=WorkloadFeatures("esmfold2", "fast", "fp-1", 900),
+            features=WorkloadFeatures("gpu_runner", "fast", "fp-1", 900),
             outcome=OUTCOME_OOM,
             baseline_mb=8000,
             available_mb=39000,
@@ -694,7 +694,7 @@ def test_avoid_stage_skips_a_known_failure_region_on_the_first_attempt() -> None
         stage="avoid",
     )
 
-    decision = planner.decide(WorkloadFeatures("esmfold2", "fast", "fp-1", 2000), DEVICE, 40960, attempt=0)
+    decision = planner.decide(WorkloadFeatures("gpu_runner", "fast", "fp-1", 2000), DEVICE, 40960, attempt=0)
 
     assert decision.action == "adapt"
     assert decision.plan_label == "split"
@@ -705,11 +705,11 @@ def test_avoid_stage_leaves_unrelated_workloads_on_the_default_path() -> None:
     estimator = _fitted_estimator()
     estimator.observe(
         ResourceObservation(
-            runner="esmfold2",
+            runner="gpu_runner",
             model_revision="fast",
             runtime_fingerprint="fp-1",
             device=DEVICE,
-            features=WorkloadFeatures("esmfold2", "fast", "fp-1", 900),
+            features=WorkloadFeatures("gpu_runner", "fast", "fp-1", 900),
             outcome=OUTCOME_OOM,
             baseline_mb=8000,
             available_mb=39000,
@@ -717,7 +717,7 @@ def test_avoid_stage_leaves_unrelated_workloads_on_the_default_path() -> None:
     )
     planner = ResourcePlanner(estimator, (), stage="avoid")
 
-    decision = planner.decide(WorkloadFeatures("esmfold2", "fast", "fp-1", 100), DEVICE, 40960, attempt=0)
+    decision = planner.decide(WorkloadFeatures("gpu_runner", "fast", "fp-1", 100), DEVICE, 40960, attempt=0)
 
     assert decision.action == "allow"
 
@@ -729,7 +729,7 @@ def test_decisions_are_explainable() -> None:
         stage="recover",
     )
 
-    decision = planner.decide(WorkloadFeatures("esmfold2", "fast", "fp-1", 400), DEVICE, 40960, attempt=1)
+    decision = planner.decide(WorkloadFeatures("gpu_runner", "fast", "fp-1", 400), DEVICE, 40960, attempt=1)
 
     assert decision.explain()
     assert decision.prediction is not None
@@ -739,11 +739,11 @@ def test_state_round_trips_through_plain_json() -> None:
     estimator = _fitted_estimator()
     estimator.observe(
         ResourceObservation(
-            runner="esmfold2",
+            runner="gpu_runner",
             model_revision="fast",
             runtime_fingerprint="fp-1",
             device=DEVICE,
-            features=WorkloadFeatures("esmfold2", "fast", "fp-1", 2000),
+            features=WorkloadFeatures("gpu_runner", "fast", "fp-1", 2000),
             outcome=OUTCOME_OOM,
             baseline_mb=8000,
             available_mb=39000,
@@ -758,7 +758,7 @@ def test_state_round_trips_through_plain_json() -> None:
     assert len(loaded.observations) == len(estimator.observations)
     assert "numpy" not in json.dumps(loaded.to_dict()).lower()
     # The persisted rows are the same evidence: the failure envelope survives.
-    assert loaded.known_failure_envelope(WorkloadFeatures("esmfold2", "fast", "fp-1", 100), DEVICE) == 2000
+    assert loaded.known_failure_envelope(WorkloadFeatures("gpu_runner", "fast", "fp-1", 100), DEVICE) == 2000
 
 
 def test_device_profile_shares_observations_across_equivalent_devices() -> None:

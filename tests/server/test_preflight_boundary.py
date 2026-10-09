@@ -26,7 +26,7 @@ def test_security_rejection_has_no_durable_or_queue_side_effects(monkeypatch, tm
         tmp_path,
         extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
     )
-    base, runner = module.task_runtime._get_task_type("gremlin")
+    base, runner = module.task_runtime._get_task_type("cpu_runner")
     conftest._inject_task_type(module, 
         replace(
             base,
@@ -84,7 +84,7 @@ def test_runner_owned_workspace_code_runs_only_after_core_file_security(monkeypa
         extra_env={
             "RUNNER_UID": "1234",
             "RUNNER_GID": "5678",
-            "ENABLED_TASKRUNNERS": "placer-rfdiffusion",
+            "ENABLED_TASKRUNNERS": "workspace_runner",
         },
     )
     auth_header = _test_client_auth(module)
@@ -106,7 +106,7 @@ def test_runner_owned_workspace_code_runs_only_after_core_file_security(monkeypa
         "workspace_backend",
         lambda identifier: (
             (runner_normalizer, None)
-            if identifier == "rfdiffusion-regions" or identifier.endswith(":rfdiffusion-regions")
+            if identifier == "workspace_task-regions" or identifier.endswith(":workspace_task-regions")
             else real_workspace_backend(identifier)
         ),
     )
@@ -117,7 +117,7 @@ def test_runner_owned_workspace_code_runs_only_after_core_file_security(monkeypa
         "/compute/api/post",
         headers=auth_header,
         data={
-            "task_type": "rfdiffusion",
+            "task_type": "workspace_task",
             "workspace": json.dumps(
                 {
                     "version": 2,
@@ -170,7 +170,7 @@ def test_successful_preflight_never_invokes_runner_owned_workspace_code(monkeypa
         extra_env={
             "RUNNER_UID": "1234",
             "RUNNER_GID": "5678",
-            "ENABLED_TASKRUNNERS": "placer-rfdiffusion",
+            "ENABLED_TASKRUNNERS": "workspace_runner",
         },
     )
     auth_header = _test_client_auth(module)
@@ -195,14 +195,14 @@ def test_successful_preflight_never_invokes_runner_owned_workspace_code(monkeypa
         "workspace_backend",
         lambda identifier: (
             (runner_normalizer, runner_validator)
-            if identifier == "rfdiffusion-regions" or identifier.endswith(":rfdiffusion-regions")
+            if identifier == "workspace_task-regions" or identifier.endswith(":workspace_task-regions")
             else real_workspace_backend(identifier)
         ),
     )
     pdb = Path(__file__).resolve().parents[2] / "tests" / "data" / "3fap_hf3_A_short.pdb"
 
     response = module.app.test_client().post(
-        "/compute/api/preflight/rfdiffusion",
+        "/compute/api/preflight/workspace_task",
         headers=auth_header,
         data={
             "workspace": _rfdiffusion_workspace(),
@@ -225,7 +225,7 @@ def test_submission_runs_runner_workspace_code_as_task_preparation(monkeypatch, 
         extra_env={
             "RUNNER_UID": "1234",
             "RUNNER_GID": "5678",
-            "ENABLED_TASKRUNNERS": "placer-rfdiffusion",
+            "ENABLED_TASKRUNNERS": "workspace_runner",
         },
     )
     auth_header = _test_client_auth(module)
@@ -247,7 +247,7 @@ def test_submission_runs_runner_workspace_code_as_task_preparation(monkeypatch, 
         "workspace_backend",
         lambda identifier: (
             (runner_normalizer, None)
-            if identifier == "rfdiffusion-regions" or identifier.endswith(":rfdiffusion-regions")
+            if identifier == "workspace_task-regions" or identifier.endswith(":workspace_task-regions")
             else real_workspace_backend(identifier)
         ),
     )
@@ -264,7 +264,7 @@ def test_submission_runs_runner_workspace_code_as_task_preparation(monkeypatch, 
         "/compute/api/post",
         headers=auth_header,
         data={
-            "task_type": "rfdiffusion",
+            "task_type": "workspace_task",
             "workspace": _rfdiffusion_workspace(),
             "files": (io.BytesIO(pdb.read_bytes()), "complex.pdb"),
             "input_roles": "structure",
@@ -294,7 +294,7 @@ def test_workspace_document_is_bounded_before_runner_code(monkeypatch, tmp_path,
         extra_env={
             "RUNNER_UID": "1234",
             "RUNNER_GID": "5678",
-            "ENABLED_TASKRUNNERS": "placer-rfdiffusion",
+            "ENABLED_TASKRUNNERS": "workspace_runner",
         },
     )
     auth_header = _test_client_auth(module)
@@ -312,13 +312,13 @@ def test_workspace_document_is_bounded_before_runner_code(monkeypatch, tmp_path,
         "workspace_backend",
         lambda identifier: (
             (lambda value: calls.append(value) or {"params": {}}, None)
-            if identifier == "rfdiffusion-regions" or identifier.endswith(":rfdiffusion-regions")
+            if identifier == "workspace_task-regions" or identifier.endswith(":workspace_task-regions")
             else real_workspace_backend(identifier)
         ),
     )
 
     response = module.app.test_client().post(
-        "/compute/api/preflight/rfdiffusion",
+        "/compute/api/preflight/workspace_task",
         headers=auth_header,
         data={
             "workspace": _WORKSPACE_ATTACKS[attack],
@@ -360,7 +360,7 @@ def test_read_only_preflight_reuses_validation_without_side_effects(monkeypatch,
     before = {root: sorted(path.relative_to(root) for path in root.rglob("*") if path.is_file()) for root in roots}
 
     response = module.app.test_client().post(
-        "/compute/api/preflight/gremlin",
+        "/compute/api/preflight/cpu_runner",
         headers=_test_client_auth(module),
         data={
             "files": (io.BytesIO(b">sequence\nACDEFGHIK\n"), "sequence.fasta"),
@@ -395,7 +395,7 @@ def test_preflight_classifies_contract_rejection(monkeypatch, tmp_path):
         extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
     )
     response = module.app.test_client().post(
-        "/compute/api/preflight/gremlin",
+        "/compute/api/preflight/cpu_runner",
         headers=_test_client_auth(module),
         data={
             "files": (io.BytesIO(b">sequence\nACDEFGHIK\n"), "sequence.fasta"),
@@ -416,11 +416,11 @@ def test_preflight_classifies_admission_denial(monkeypatch, tmp_path):
         extra_env={
             "RUNNER_UID": "1234",
             "RUNNER_GID": "5678",
-            "ENABLED_TASKRUNNERS": "gnina",
+            "ENABLED_TASKRUNNERS": "typed_runner",
         },
     )
     response = module.app.test_client().post(
-        "/compute/api/preflight/gnina",
+        "/compute/api/preflight/typed_runner",
         headers=_test_client_auth(module),
     )
 
@@ -429,7 +429,7 @@ def test_preflight_classifies_admission_denial(monkeypatch, tmp_path):
     assert response.get_json()["errors"][0]["code"] == "admission_denied"
 
 
-@pytest.mark.parametrize("endpoint", ["/compute/api/preflight/gremlin", "/compute/api/post"])
+@pytest.mark.parametrize("endpoint", ["/compute/api/preflight/cpu_runner", "/compute/api/post"])
 def test_infrastructure_rejection_runs_after_security_and_leaves_no_durable_task(monkeypatch, tmp_path, endpoint):
     module = _load_pssm_module(
         monkeypatch,
@@ -464,7 +464,7 @@ def test_infrastructure_rejection_runs_after_security_and_leaves_no_durable_task
         endpoint,
         headers=_test_client_auth(module),
         data={
-            "task_type": "gremlin",
+            "task_type": "cpu_runner",
             "files": (io.BytesIO(b">sequence\nACDEFGHIK\n"), "sequence.fasta"),
             "input_roles": "sequence",
         },
@@ -510,7 +510,7 @@ def test_preflight_projects_degraded_readiness_and_busy_capacity_without_blockin
     )
 
     response = module.app.test_client().post(
-        "/compute/api/preflight/gremlin",
+        "/compute/api/preflight/cpu_runner",
         headers=_test_client_auth(module),
         data={
             "files": (io.BytesIO(b">sequence\nACDEFGHIK\n"), "sequence.fasta"),
@@ -584,7 +584,7 @@ def test_cpu_preflight_ignores_unavailable_gpu_inventory(monkeypatch, tmp_path):
             content_type="multipart/form-data",
         )
 
-    cpu = submit("gremlin")
+    cpu = submit("cpu_runner")
     gpu = submit("gpu_test")
 
     # The global aggregate is UNAVAILABLE because of the GPU probe ...
@@ -596,7 +596,7 @@ def test_cpu_preflight_ignores_unavailable_gpu_inventory(monkeypatch, tmp_path):
 
 
 def _register_gpu_test_type(module):
-    base, runner = module.task_runtime._get_task_type("gremlin")
+    base, runner = module.task_runtime._get_task_type("cpu_runner")
     conftest._inject_task_type(module, replace(base, name="gpu_test", gpus=True), runner)
 
 
@@ -807,7 +807,7 @@ def test_cpu_preflight_is_accepted_with_exhausted_gpu_credit(monkeypatch, tmp_pa
     )
 
     response = module.app.test_client().post(
-        "/compute/api/preflight/gremlin",
+        "/compute/api/preflight/cpu_runner",
         headers=headers,
         data={
             "files": (io.BytesIO(b">sequence\nACDEFGHIK\n"), "sequence.fasta"),
@@ -840,14 +840,14 @@ def test_user_concurrency_policy_blocks_preflight_without_side_effects(monkeypat
             username=user["username"],
             submitted_by_user_id=user["id"],
             storage_key=user["storage_key"],
-            task_type="gremlin",
+            task_type="cpu_runner",
         )
     before = module.task_store.list_tasks()
     queued = []
     monkeypatch.setattr(module.run_compute_task, "apply_async", lambda *args, **kwargs: queued.append(True))
 
     response = module.app.test_client().post(
-        "/compute/api/preflight/gremlin",
+        "/compute/api/preflight/cpu_runner",
         headers=headers,
         data={
             "files": (io.BytesIO(b">sequence\nACDEFGHIK\n"), "sequence.fasta"),
@@ -890,7 +890,7 @@ def test_adversarial_input_paths_fail_before_quarantine_or_queue(monkeypatch, tm
     monkeypatch.setattr(module.run_compute_task, "apply_async", lambda *args, **kwargs: queued.append(True))
 
     response = module.app.test_client().post(
-        "/compute/api/preflight/gremlin",
+        "/compute/api/preflight/cpu_runner",
         headers=_test_client_auth(module),
         data={
             "files": (io.BytesIO(b">sequence\nACDEFGHIK\n"), "sequence.fasta"),
@@ -953,7 +953,7 @@ def test_file_count_limit_fails_before_quarantine_or_queue(monkeypatch, tmp_path
         tmp_path,
         extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
     )
-    base, runner = module.task_runtime._get_task_type("gremlin")
+    base, runner = module.task_runtime._get_task_type("cpu_runner")
     conftest._inject_task_type(module, 
         replace(
             base,
@@ -1002,7 +1002,7 @@ def test_upload_byte_limits_remove_quarantine_and_never_queue(
         tmp_path,
         extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
     )
-    base, runner = module.task_runtime._get_task_type("gremlin")
+    base, runner = module.task_runtime._get_task_type("cpu_runner")
     conftest._inject_task_type(module, 
         replace(
             base,
@@ -1034,7 +1034,7 @@ def test_upload_byte_limits_remove_quarantine_and_never_queue(
     assert not list(Path(module.app.config["UPLOAD_FOLDER"]).glob(".tmp_*"))
 
 
-@pytest.mark.parametrize("endpoint", ["/compute/api/preflight/gremlin", "/compute/api/post"])
+@pytest.mark.parametrize("endpoint", ["/compute/api/preflight/cpu_runner", "/compute/api/post"])
 def test_request_body_limit_is_structured_and_has_no_side_effects(monkeypatch, tmp_path, endpoint):
     module = _load_pssm_module(
         monkeypatch,
@@ -1049,7 +1049,7 @@ def test_request_body_limit_is_structured_and_has_no_side_effects(monkeypatch, t
         endpoint,
         headers=_test_client_auth(module),
         data={
-            "task_type": "gremlin",
+            "task_type": "cpu_runner",
             "files": (io.BytesIO(b">sequence\n" + b"A" * 512 + b"\n"), "sequence.fasta"),
             "input_roles": "sequence",
         },
@@ -1074,7 +1074,7 @@ def test_browser_generated_specification_uses_the_same_core_security_profile(mon
         tmp_path,
         extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
     )
-    base, runner = module.task_runtime._get_task_type("gremlin")
+    base, runner = module.task_runtime._get_task_type("cpu_runner")
     conftest._inject_task_type(module,
         replace(
             base,

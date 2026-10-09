@@ -12,12 +12,6 @@ import yaml
 from revocompute.doctor import diagnose, main
 
 
-def test_doctor_task_scope_validates_all_mpnn_family_smoke_cases():
-    root = Path(__file__).resolve().parents[1] / "docker" / "runners"
-
-    for task in ("proteinmpnn", "ligandmpnn"):
-        report = diagnose(root, runner="mpnn", task=task)
-        assert report.ok, [(item.code, item.message) for item in report.diagnostics]
 
 
 def test_doctor_task_scope_keeps_sibling_family_contract_visible(tmp_path):

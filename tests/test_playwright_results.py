@@ -69,7 +69,7 @@ def _manifest(*, artifacts: list[dict] | None = None, status: str = "finished", 
     return {
         "schema_version": 3,
         "task_id": TASK_ID,
-        "task_type": "example",
+        "task_type": "demo",
         "created_at": "2026-09-29T00:00:00Z",
         "status": status,
         "terminal": True,
@@ -91,7 +91,7 @@ def _manifest(*, artifacts: list[dict] | None = None, status: str = "finished", 
 def _status(*, available: bool = True, terminal: bool = True, status: str = "finished") -> dict:
     return {
         "task_id": TASK_ID,
-        "task_type": "example",
+        "task_type": "demo",
         "display_name": "safe result name.fasta",
         "status": status,
         "terminal": terminal,

@@ -128,7 +128,7 @@ def test_exact_candidate_tool_runtime_lifecycle_and_scientific_outputs(tmp_path)
             manager,
             workspace,
             registry.get("fasta_inspect"),
-            REPO_ROOT / "tests" / "data" / "simplefold_tiny.fa",
+            REPO_ROOT / "tests" / "data" / "gpu_runner_tiny.fa",
             "sequence",
             "sequence.fasta",
             {},

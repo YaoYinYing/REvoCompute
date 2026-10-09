@@ -32,11 +32,11 @@ def test_expected_file_tree_resolves_logical_files_without_paths() -> None:
 
 def test_runner_root_honors_isolated_runner_mount(monkeypatch, tmp_path) -> None:
     runners = tmp_path / "candidate-runners"
-    family = runners / "easifa"
+    family = runners / "profile_runner"
     family.mkdir(parents=True)
     monkeypatch.setenv("RUNNERS_DIR", str(runners))
 
-    runtime = type("Runtime", (), {"root": str(family), "definition": "easifa.def"})()
+    runtime = type("Runtime", (), {"root": str(family), "definition": "profile_runner.def"})()
     task_type = type("TaskType", (), {"runtime": runtime})()
 
     assert runner_root(task_type, str(tmp_path / "isolated-server")) == family.resolve()

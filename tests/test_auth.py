@@ -624,9 +624,9 @@ def test_login_return_to_accepts_local_paths_and_rejects_external_urls(monkeypat
 
     auth_header = _test_client_auth(module)
     returned = client.get(
-        "/compute/login?return_to=%2Fcompute%2Fcreate_task%3Ftask_type%3Dgremlin", headers=auth_header
+        "/compute/login?return_to=%2Fcompute%2Fcreate_task%3Ftask_type%3Dcpu_runner", headers=auth_header
     )
-    assert returned.headers["Location"] == "/compute/create_task?task_type=gremlin"
+    assert returned.headers["Location"] == "/compute/create_task?task_type=cpu_runner"
 
     external = client.get("/compute/login?return_to=https%3A%2F%2Fevil.example", headers=auth_header)
     assert external.headers["Location"] == "/compute/dashboard"
@@ -938,7 +938,7 @@ def test_upload_rejects_empty_filename(monkeypatch, tmp_path):
     auth_header = _test_client_auth(module)
     resp = client.post(
         "/compute/api/post",
-        data={"task_type": "gremlin", "file": (io.BytesIO(b">test\nACDE\n"), ""), "input_roles": "sequence"},
+        data={"task_type": "cpu_runner", "file": (io.BytesIO(b">test\nACDE\n"), ""), "input_roles": "sequence"},
         headers=auth_header,
     )
     assert resp.status_code == 400
@@ -953,7 +953,7 @@ def test_upload_rejects_non_fasta_extension(monkeypatch, tmp_path):
     resp = client.post(
         "/compute/api/post",
         data={
-            "task_type": "gremlin",
+            "task_type": "cpu_runner",
             "file": (io.BytesIO(b">test\nACDE\n"), "upload.txt"),
             "input_roles": "sequence",
         },
@@ -971,7 +971,7 @@ def test_upload_rejects_binary_content(monkeypatch, tmp_path):
     resp = client.post(
         "/compute/api/post",
         data={
-            "task_type": "gremlin",
+            "task_type": "cpu_runner",
             "file": (io.BytesIO(b"\x00\x01\x02\x03"), "binary.fasta"),
             "input_roles": "sequence",
         },
@@ -989,7 +989,7 @@ def test_upload_rejects_invalid_fasta_content(monkeypatch, tmp_path):
     resp = client.post(
         "/compute/api/post",
         data={
-            "task_type": "gremlin",
+            "task_type": "cpu_runner",
             "file": (io.BytesIO(b"Not a FASTA file\njust some text\n"), "bad.fasta"),
             "input_roles": "sequence",
         },
@@ -1016,7 +1016,7 @@ def test_upload_enforces_active_task_cap(monkeypatch, tmp_path):
         resp = client.post(
             "/compute/api/post",
             data={
-                "task_type": "gremlin",
+                "task_type": "cpu_runner",
                 "file": (io.BytesIO(content), f"task{i}.fasta"),
                 "input_roles": "sequence",
             },
@@ -1027,7 +1027,7 @@ def test_upload_enforces_active_task_cap(monkeypatch, tmp_path):
     resp = client.post(
         "/compute/api/post",
         data={
-            "task_type": "gremlin",
+            "task_type": "cpu_runner",
             "file": (io.BytesIO(b">overflow\nSEQVENCE\n"), "task_overflow.fasta"),
             "input_roles": "sequence",
         },
@@ -1051,7 +1051,7 @@ def test_upload_deduplicates_by_content_and_user(monkeypatch, tmp_path):
     resp1 = client.post(
         "/compute/api/post",
         data={
-            "task_type": "gremlin",
+            "task_type": "cpu_runner",
             "file": (io.BytesIO(fasta_content), "seqs.fasta"),
             "input_roles": "sequence",
         },
@@ -1061,7 +1061,7 @@ def test_upload_deduplicates_by_content_and_user(monkeypatch, tmp_path):
     resp2 = client.post(
         "/compute/api/post",
         data={
-            "task_type": "gremlin",
+            "task_type": "cpu_runner",
             "file": (io.BytesIO(fasta_content), "seqs.fasta"),
             "input_roles": "sequence",
         },
@@ -1090,7 +1090,7 @@ def test_upload_different_users_get_different_ids_for_same_content(monkeypatch, 
     resp1 = client.post(
         "/compute/api/post",
         data={
-            "task_type": "gremlin",
+            "task_type": "cpu_runner",
             "file": (io.BytesIO(fasta_content), "same.fasta"),
             "input_roles": "sequence",
         },
@@ -1100,7 +1100,7 @@ def test_upload_different_users_get_different_ids_for_same_content(monkeypatch, 
     resp2 = client.post(
         "/compute/api/post",
         data={
-            "task_type": "gremlin",
+            "task_type": "cpu_runner",
             "file": (io.BytesIO(fasta_content), "same.fasta"),
             "input_roles": "sequence",
         },

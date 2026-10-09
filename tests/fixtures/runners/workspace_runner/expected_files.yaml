@@ -1,0 +1,12 @@
+result:
+  files:
+    alignment:
+      pattern: alignment/*.a3m
+      cardinality: one
+      required: false
+      type: alignment
+    profile:
+      path: profile.tsv
+      cardinality: one
+      required: false
+      type: table

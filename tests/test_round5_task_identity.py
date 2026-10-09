@@ -40,7 +40,7 @@ def _submit(client, auth_header, filename="in.fasta"):
     return client.post(
         "/compute/api/post",
         data={
-            "task_type": "gremlin",
+            "task_type": "cpu_runner",
             "files": (io.BytesIO(b">x\nACDE\n"), filename),
             "input_roles": "sequence",
         },
@@ -68,7 +68,7 @@ def test_a_cancelled_task_id_is_not_reused_or_dispatched_twice(monkeypatch, tmp_
     module = _load_pssm_module(
         monkeypatch,
         tmp_path,
-        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "gremlin"},
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "cpu_runner"},
     )
     client = module.app.test_client()
     auth_header = _test_client_auth(module)
@@ -112,7 +112,7 @@ def test_a_deleted_task_id_is_reserved_against_resubmission(monkeypatch, tmp_pat
     module = _load_pssm_module(
         monkeypatch,
         tmp_path,
-        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "gremlin"},
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "cpu_runner"},
     )
     client = module.app.test_client()
     auth_header = _test_client_auth(module)
@@ -143,7 +143,7 @@ def test_a_fresh_input_path_still_creates_a_new_id(monkeypatch, tmp_path):
     module = _load_pssm_module(
         monkeypatch,
         tmp_path,
-        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "gremlin"},
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "cpu_runner"},
     )
     client = module.app.test_client()
     auth_header = _test_client_auth(module)
@@ -186,7 +186,7 @@ def test_upsert_refuses_a_reserved_row_without_wiping_it(monkeypatch, tmp_path):
     row = module.task_store.get_task(md5sum)
     assert row is not None
     assert row["status"] == "cancelled"
-    assert row["task_type"] == "gremlin"
+    assert row["task_type"] == "cpu_runner"
     assert row["filename"] == "in.fasta"
 
     # A caller that *names* the ID (a live-test fixture, a re-seed) is not
@@ -213,7 +213,7 @@ def test_a_failed_row_that_still_owns_an_allocation_is_reserved(monkeypatch, tmp
     module = _load_pssm_module(
         monkeypatch,
         tmp_path,
-        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "gremlin"},
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "cpu_runner"},
     )
     client = module.app.test_client()
     auth_header = _test_client_auth(module)
@@ -262,7 +262,7 @@ def test_concurrent_first_submissions_do_not_destroy_each_others_snapshot(monkey
     module = _load_pssm_module(
         monkeypatch,
         tmp_path,
-        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "gremlin"},
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "cpu_runner"},
     )
     client = module.app.test_client()
     auth_header = _test_client_auth(module)
@@ -348,7 +348,7 @@ def _insert_pending_row(module, md5sum: str, *, uploaded_at: float | None = None
         source_ip="127.0.0.1",
         user_agent="pytest",
         username="tester",
-        task_type="gremlin",
+        task_type="cpu_runner",
         submitted_by_user_id=int(owner["submitted_by_user_id"]),
         storage_key=owner["storage_key"],
     )
@@ -415,7 +415,7 @@ def test_a_lost_preparation_claim_never_enters_materialization(monkeypatch, tmp_
     module = _load_pssm_module(
         monkeypatch,
         tmp_path,
-        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "gremlin"},
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "cpu_runner"},
     )
     client = module.app.test_client()
     auth_header = _test_client_auth(module)

@@ -61,12 +61,12 @@ def _finished_task_with_result(module, tmp_path) -> tuple[str, Path]:
     manifest = {
         "schema_version": 3,
         "task_id": md5sum,
-        "task_type": "gremlin",
+        "task_type": "cpu_runner",
         "created_at": "2026-01-01T00:00:00+00:00",
         "status": "finished",
         "terminal": True,
         "error": None,
-        "run": {"method": {"id": "gremlin", "name": "GREMLIN"}, "inputs": [], "parameters": []},
+        "run": {"method": {"id": "cpu_runner", "name": "GREMLIN"}, "inputs": [], "parameters": []},
         "output_check": {"state": "not_configured", "checks": [], "problems": []},
         "limitations": [],
         "views": [{"id": "logs", "plugin": "evidence-bundle", "role": "primary", "title": "Logs", "sources": {"files": ["results/summary.txt"]}}],
@@ -105,7 +105,7 @@ def _finished_task_with_result(module, tmp_path) -> tuple[str, Path]:
         source_ip="127.0.0.1",
         user_agent="pytest",
         username="tester",
-        task_type="gremlin",
+        task_type="cpu_runner",
         submitted_by_user_id=int(owner["submitted_by_user_id"]),
         storage_key=owner["storage_key"],
     )

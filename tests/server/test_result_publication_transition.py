@@ -27,7 +27,7 @@ from revocompute.storage import ResultPublicationError
 from conftest import _load_pssm_module, _test_client_auth, _upsert_task_for_user
 
 
-def _task(module, tmp_path, *, status: str = "finished", task_type: str = "gremlin") -> tuple[str, Path]:
+def _task(module, tmp_path, *, status: str = "finished", task_type: str = "cpu_runner") -> tuple[str, Path]:
     task_id = uuid.uuid4().hex
     result_dir = tmp_path / f"result-{task_id[:8]}"
     result_dir.mkdir()
@@ -840,7 +840,7 @@ def _unanchored_task(module, tmp_path, *, status: str = "finished") -> tuple[str
     manifest = {
         "schema_version": 3,
         "task_id": task_id,
-        "task_type": "gremlin",
+        "task_type": "cpu_runner",
         "output_check": {"state": "not_configured", "checks": [], "problems": []},
         "artifacts": [],
         "result": {"files": {}},

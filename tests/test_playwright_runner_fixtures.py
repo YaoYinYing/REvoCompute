@@ -375,11 +375,11 @@ def test_gpu_structure_runner_is_exercisable_without_weights_or_inference(page: 
     assert requests.submit()
 
 
-def test_pssm_gremlin_contract_projects_into_catalog_create_task_and_result(page: Page) -> None:
+def test_cpu_runner_contract_projects_into_catalog_create_task_and_result(page: Page) -> None:
     """The realistic PSSM-GREMLIN scenario renders its views from fixture bytes."""
     mount_scenario(page, pssm_gremlin_scenario())
 
-    page.goto(f"{ORIGIN}/runners/gremlin_lh_fit")
+    page.goto(f"{ORIGIN}/runners/cpu_runner_lh_fit")
     expect(page.get_by_role("heading", name="GREMLIN_LH Potts model", exact=True)).to_be_visible()
     expect(page.get_by_role("heading", name="Protein multiple-sequence alignment")).to_be_visible()
 

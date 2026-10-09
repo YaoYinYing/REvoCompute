@@ -1,0 +1,25 @@
+api_version: 1
+id: workspace_runner
+version: '1'
+runtime:
+  image_artifact: workspace_runner_v1.sif
+  definition: workspace_runner.def
+  build_inputs:
+  - workspace_runner/run.sh
+  runtime_overlay:
+  - workspace_runner/runtime.py
+  entrypoint:
+  - bash
+  - /app/run.sh
+tasks:
+- tasks/predict/task.yaml
+contributions:
+  input_workspace_plugins:
+  - id: workspace_task-regions
+    module: workspace/regions/index.js
+    styles:
+    - workspace/regions/style.css
+    configuration_schema: workspace/regions/schema.json
+    backend:
+      normalizer: workspace/regions/backend.py:normalize
+      validator: workspace/regions/backend.py:validate

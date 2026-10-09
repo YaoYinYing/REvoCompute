@@ -1,0 +1,7 @@
+result:
+  files:
+    structures:
+      pattern: ranked/*.cif
+      required: false
+      cardinality: many
+      type: structure

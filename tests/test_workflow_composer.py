@@ -44,7 +44,7 @@ def _isolated_runtime_state(monkeypatch, tmp_path):
     server_root = Path(__file__).resolve().parents[1]
     monkeypatch.setenv("SERVER_DIR", str(tmp_path))
     monkeypatch.setenv("CONFIG_DIR", str(server_root / "config"))
-    monkeypatch.setenv("ENABLED_TASKRUNNERS", "alphafold")
+    monkeypatch.setenv("ENABLED_TASKRUNNERS", "multistage_runner")
 
 
 def _policy(requires_gpu: bool) -> ResolvedResources:
@@ -68,13 +68,13 @@ def _policy(requires_gpu: bool) -> ResolvedResources:
 def test_composer_resumes_after_completed_feature_stage(monkeypatch):
     task_runtime = _live_task_runtime()
 
-    runtime = RuntimeFamily("alphafold", ("bash", "run.sh"), "runner.def", "image.sif")
+    runtime = RuntimeFamily("multistage_runner", ("bash", "run.sh"), "runner.def", "image.sif")
     stages = (
-        WorkflowStage("alphafold.features", "Features", False, ("-s", "features"), ("msa",)),
-        WorkflowStage("alphafold.model", "Model", True, ("-s", "model"), ("model",)),
+        WorkflowStage("multistage_runner.features", "Features", False, ("-s", "features"), ("msa",)),
+        WorkflowStage("multistage_runner.model", "Model", True, ("-s", "model"), ("model",)),
     )
     task_type = TaskType(
-        "alphafold",
+        "multistage_runner",
         "AlphaFold2",
         runtime,
         ".fasta",
@@ -107,7 +107,7 @@ def test_composer_resumes_after_completed_feature_stage(monkeypatch):
     monkeypatch.setattr(task_runtime.task_store, "update_task", _update)
     task = {
         "username": "tester",
-        "workflow_state": json.dumps({"alphafold.features": {"status": "completed", "job_id": "41"}}),
+        "workflow_state": json.dumps({"multistage_runner.features": {"status": "completed", "job_id": "41"}}),
     }
 
     result = task_runtime._run_compute_workflow(
@@ -117,40 +117,40 @@ def test_composer_resumes_after_completed_feature_stage(monkeypatch):
         RunnerConfig(),
         [],
         "/tmp/results",
-        {"alphafold.features": _policy(False), "alphafold.model": _policy(True)},
+        {"multistage_runner.features": _policy(False), "multistage_runner.model": _policy(True)},
         lambda stage: None,
     )
 
     assert result == JobState.COMPLETED
     assert len(created) == 1
-    assert created[0][0].name == "alphafold-model"
+    assert created[0][0].name == "multistage_runner-model"
     assert created[0][0].gpus is True
     assert created[0][1].requires_gpu is True
     final_state = json.loads(updates[-1]["workflow_state"])
-    assert final_state["alphafold.features"]["status"] == "completed"
-    assert final_state["alphafold.model"]["status"] == "completed"
+    assert final_state["multistage_runner.features"]["status"] == "completed"
+    assert final_state["multistage_runner.model"]["status"] == "completed"
 
 
 def test_gpu_workflow_uses_owning_runtime_for_allocation_authorization(monkeypatch):
     task_runtime = _live_task_runtime()
 
     access_policy = AccessPolicy(
-        "alphafold_noncommercial",
+        "synthetic_noncommercial",
         "AlphaFold access",
         "Restricted runtime",
-        ("alphafold_terms",),
+        ("synthetic_terms",),
         True,
     )
     runtime = RuntimeFamily(
-        "alphafold",
+        "multistage_runner",
         ("bash", "run.sh"),
         "runner.def",
         "image.sif",
         access_policy=access_policy,
     )
-    stage = WorkflowStage("alphafold.model", "Model", True, ("-s", "model"), ("model",))
+    stage = WorkflowStage("multistage_runner.model", "Model", True, ("-s", "model"), ("model",))
     task_type = TaskType(
-        "alphafold",
+        "multistage_runner",
         "AlphaFold2",
         runtime,
         ".fasta",
@@ -183,7 +183,7 @@ def test_gpu_workflow_uses_owning_runtime_for_allocation_authorization(monkeypat
         RunnerConfig(),
         [],
         "/tmp/results",
-        {"alphafold.model": _policy(True)},
+        {"multistage_runner.model": _policy(True)},
         lambda stage_name: None,
     )
 
@@ -192,10 +192,10 @@ def test_gpu_workflow_uses_owning_runtime_for_allocation_authorization(monkeypat
         {
             "task_id": "f" * 32,
             "user_id": 17,
-            "stage_id": "alphafold.model",
+            "stage_id": "multistage_runner.model",
             "resource_policy": _policy(True),
-            "required_entitlements": ("alphafold_terms",),
-            "runner_family": "alphafold",
+            "required_entitlements": ("synthetic_terms",),
+            "runner_family": "multistage_runner",
         }
     ]
 
@@ -203,10 +203,10 @@ def test_gpu_workflow_uses_owning_runtime_for_allocation_authorization(monkeypat
 def test_composer_does_not_submit_after_cancellation_claim_fails(monkeypatch):
     task_runtime = _live_task_runtime()
 
-    runtime = RuntimeFamily("alphafold", ("bash", "run.sh"), "runner.def", "image.sif")
-    stage = WorkflowStage("alphafold.model", "Model", True, ("-s", "model"), ("model",))
+    runtime = RuntimeFamily("multistage_runner", ("bash", "run.sh"), "runner.def", "image.sif")
+    stage = WorkflowStage("multistage_runner.model", "Model", True, ("-s", "model"), ("model",))
     task_type = TaskType(
-        "alphafold",
+        "multistage_runner",
         "AlphaFold2",
         runtime,
         ".fasta",
@@ -225,7 +225,7 @@ def test_composer_does_not_submit_after_cancellation_claim_fails(monkeypatch):
         RunnerConfig(),
         [],
         "/tmp/results",
-        {"alphafold.model": _policy(True)},
+        {"multistage_runner.model": _policy(True)},
         lambda stage_name: None,
     )
 
@@ -235,10 +235,10 @@ def test_composer_does_not_submit_after_cancellation_claim_fails(monkeypatch):
 def test_composer_cancels_submitted_job_when_handle_cannot_be_persisted(monkeypatch):
     task_runtime = _live_task_runtime()
 
-    runtime = RuntimeFamily("alphafold", ("bash", "run.sh"), "runner.def", "image.sif")
-    stage = WorkflowStage("alphafold.model", "Model", True, ("-s", "model"), ("model",))
+    runtime = RuntimeFamily("multistage_runner", ("bash", "run.sh"), "runner.def", "image.sif")
+    stage = WorkflowStage("multistage_runner.model", "Model", True, ("-s", "model"), ("model",))
     task_type = TaskType(
-        "alphafold",
+        "multistage_runner",
         "AlphaFold2",
         runtime,
         ".fasta",
@@ -267,7 +267,7 @@ def test_composer_cancels_submitted_job_when_handle_cannot_be_persisted(monkeypa
         RunnerConfig(),
         [],
         "/tmp/results",
-        {"alphafold.model": _policy(True)},
+        {"multistage_runner.model": _policy(True)},
         lambda stage_name: None,
     )
 
@@ -281,10 +281,10 @@ def test_workflow_recovery_claims_stops_and_requeues_once(monkeypatch):
     task = {
         "md5sum": "d" * 32,
         "status": "running",
-        "task_type": "alphafold",
+        "task_type": "multistage_runner",
         "slurm_job_id": "1234",
         "container_id": None,
-        "workflow_state": json.dumps({"alphafold.features": {"status": "running"}}),
+        "workflow_state": json.dumps({"multistage_runner.features": {"status": "running"}}),
     }
     claims = []
     stops = []
@@ -324,7 +324,7 @@ def test_workflow_recovery_claims_stops_and_requeues_once(monkeypatch):
 def test_workflow_recovery_enqueue_failure_stays_discoverable(monkeypatch):
     task_runtime = _live_task_runtime()
 
-    task = {"md5sum": "e" * 32, "status": "queued", "task_type": "alphafold"}
+    task = {"md5sum": "e" * 32, "status": "queued", "task_type": "multistage_runner"}
     updates = []
 
     class _TaskType:
@@ -371,7 +371,7 @@ def _real_af3_stage(runner_args: tuple[str, ...]):
     The composer derives each allocation from the discovered task, so the
     stage-local marker set here is exactly what the stage parser sees.
     """
-    task_type, runner = get("alphafold3")
+    task_type, runner = get("restricted_runner")
     stage = next(item for item in task_type.workflow if tuple(item.runner_args) == runner_args)
     markers = {name: task_type.stage_markers[name] for name in stage.stage_markers}
     return replace(
@@ -416,7 +416,7 @@ def _discover_af3_runners():
     # test in the same worker.
     from revocompute.task_types import isolated_discovery
 
-    with isolated_discovery(str(ROOT / "docker" / "runners"), {"alphafold", "alphafold3", "colabfold_af2"}):
+    with isolated_discovery(str(ROOT / "tests" / "fixtures" / "runners"), {"multistage_runner", "restricted_runner", "gpu_runner"}):
         yield
 
 
@@ -434,7 +434,7 @@ def _transitions(seen: list[str]) -> list[str]:
     return transitions
 
 
-def test_alphafold3_features_stage_observes_pipeline_and_validation_markers(tmp_path):
+def test_restricted_runner_features_stage_observes_pipeline_and_validation_markers(tmp_path):
     """The features allocation must accept both markers the Runner emits."""
     stage_tt, runner = _real_af3_stage(("-s", "features"))
     assert set(stage_tt.stage_markers) == {"data_pipeline", "feature_validation"}
@@ -454,7 +454,7 @@ def test_alphafold3_features_stage_observes_pipeline_and_validation_markers(tmp_
     assert seen[-1] == "feature_validation"
 
 
-def test_alphafold3_model_stage_observes_inference_and_validation_markers(tmp_path):
+def test_restricted_runner_model_stage_observes_inference_and_validation_markers(tmp_path):
     stage_tt, runner = _real_af3_stage(("-s", "model"))
     assert set(stage_tt.stage_markers) == {"inference", "output_validation"}
 
@@ -471,7 +471,7 @@ def test_alphafold3_model_stage_observes_inference_and_validation_markers(tmp_pa
     assert seen[-1] == list(stage_tt.stage_markers)[-1]
 
 
-def test_alphafold3_stage_ignores_duplicate_and_foreign_markers(tmp_path):
+def test_restricted_runner_stage_ignores_duplicate_and_foreign_markers(tmp_path):
     """Duplicate lines must not double-advance, and another stage's marker is
     not observable by the active stage."""
     features, runner = _real_af3_stage(("-s", "features"))
@@ -509,7 +509,7 @@ def test_composed_af3_workflow_advances_task_run_stage_through_all_markers(monke
     """The composer's stage callbacks expose every task-level marker in order."""
     task_runtime = _live_task_runtime()
 
-    task_type, runner = get("alphafold3")
+    task_type, runner = get("restricted_runner")
     task_level = list(task_type.stage_markers)
     assert task_level == ["data_pipeline", "feature_validation", "inference", "output_validation"]
 
@@ -565,7 +565,7 @@ def test_composed_af3_workflow_advances_task_run_stage_through_all_markers(monke
     assert seen == task_level
 
 
-def test_alphafold3_running_trace_represents_every_phase_in_order(monkeypatch):
+def test_restricted_runner_running_trace_represents_every_phase_in_order(monkeypatch):
     """The running trace can place run_stage at any of the four AF3 phases.
 
     Before the corrected ownership the task-level markers were correct but the
@@ -575,14 +575,14 @@ def test_alphafold3_running_trace_represents_every_phase_in_order(monkeypatch):
     """
     task_runtime = _live_task_runtime()
 
-    task_type, runner = get("alphafold3")
+    task_type, runner = get("restricted_runner")
     monkeypatch.setattr(task_runtime, "_get_task_type", lambda name: (task_type, runner))
     ordered = list(task_type.stage_markers)
     assert ordered == ["data_pipeline", "feature_validation", "inference", "output_validation"]
 
     for index, marker in enumerate(ordered):
         trace = task_runtime._build_running_trace(
-            {"status": "running", "task_type": "alphafold3", "run_stage": marker}
+            {"status": "running", "task_type": "restricted_runner", "run_stage": marker}
         )
         lines = trace.splitlines()
         assert len(lines) == len(ordered)

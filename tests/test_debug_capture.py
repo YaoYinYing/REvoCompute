@@ -86,7 +86,7 @@ def _make_task(rt, relative_paths=("query.fasta",)):
     result_dir.mkdir(parents=True)
     task = {
         "md5sum": md5,
-        "task_type": "gremlin",
+        "task_type": "cpu_runner",
         "username": "alice",
         **identity,
         "input_form": json.dumps(
@@ -190,7 +190,7 @@ def test_capture_writes_submission_json_and_input_copies(rt, tmp_path):
     assert (debug_dir / "inputs/sequence/query.fasta").read_bytes() == b">seq0\nACDE\n"
 
     submission = json.loads((debug_dir / "submission.json").read_text(encoding="utf-8"))
-    assert submission["task_type"] == "gremlin"
+    assert submission["task_type"] == "cpu_runner"
     assert submission["username"] == "alice"
     assert submission["submitted_at"] == "2026-08-14T00:00:00+00:00"
     assert submission["params"] == {"max_iter": 5}

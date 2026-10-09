@@ -45,7 +45,7 @@ def _isolated_env(root: Path) -> None:
     (root / "logs").mkdir(parents=True, exist_ok=True)
     (root / "runtime-bundles").mkdir(parents=True, exist_ok=True)
     shutil.copytree(REPO_ROOT / "config" / "access_policies", root / "config" / "access_policies", dirs_exist_ok=True)
-    shutil.copytree(REPO_ROOT / "docker" / "runners", root / "docker" / "runners")
+    shutil.copytree(REPO_ROOT / "tests" / "fixtures" / "runners", root / "docker" / "runners")
     shutil.copytree(REPO_ROOT / "docker" / "tools", root / "docker" / "tools")
     # A real deployment materializes each family's Runtime Bundle before it
     # accepts submissions; a submission fails closed without one.
@@ -118,7 +118,7 @@ def _seed_finished_task(
     manifest = {
         "schema_version": 3,
         "task_id": task_id,
-        "task_type": "gremlin",
+        "task_type": "cpu_runner",
         "created_at": "2026-01-01T00:00:00+00:00",
         "run": {},
         "output_check": {"state": "ok", "checks": [], "problems": []},
@@ -153,7 +153,7 @@ def _seed_finished_task(
         source_ip="127.0.0.1",
         user_agent="mcp-acceptance",
         username=username,
-        task_type="gremlin",
+        task_type="cpu_runner",
         submitted_by_user_id=int(user["id"]),
         storage_key=user["storage_key"],
     )
