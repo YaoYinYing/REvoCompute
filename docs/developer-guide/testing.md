@@ -158,7 +158,7 @@ Mount one in a browser test with
 `replay_scenario(gremlin_lh_runner(), ReplayBundle.load(path))`; a mismatched
 task id still resolves to 404. The checked-in GREMLIN_LH 2KL8 bundle lives under
 `tests/data/gremlin_lh_replay/`, `tests/fleet/test_replay_bundle.py` covers the
-round-trip and drift guarantees, and `tests/fleet/test_playwright_replay_gremlin.py`
+round-trip and drift guarantees, and `tests/fleet/browser/test_playwright_replay_gremlin.py`
 drives the real frontend against it.
 
 A replay bundle proves **frontend compatibility with authentic Runner output**.
@@ -220,7 +220,8 @@ checks protect are documented in
 
 `REvoComputeTests` measures Server code with generic Server tests.
 `RunnerFastContracts` executes physical family fast directories and the separate
-fleet projection boundary. `RunnerScientificAcceptance` executes all required
+fleet projection boundary (with `tests/fleet/browser/` physically excluded).
+`RunnerScientificAcceptance` executes all required
 GREMLIN_LH fitting, artifact, upstream-equivalence and reference-generation cases
 in its locked environment, and EvoSplit tensor/clustering cases in its pinned
 Python 3.10 environment. The pinned upstream notebook is fetched at its immutable
