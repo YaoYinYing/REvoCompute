@@ -46,6 +46,7 @@ from flask import (
 from pydantic import ValidationError
 from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.http import parse_range_header
+from revocompute.admin_pages import register_admin_pages
 from revocompute.access_control import (
     authorize,
     policy_state,
@@ -341,33 +342,6 @@ def legacy_pssm_gremlin_create_task():
 @app.route("/compute/profile", methods=["GET"])
 @login_required
 def profile_page():
-    return _serve_frontend_entry(private=True)
-
-
-@app.route("/compute/user_control", methods=["GET"])
-@login_required
-def user_control_page():
-    """Admin-only user management page."""
-    if g.current_user.get("role") != "admin":
-        return _serve_frontend_entry(private=True, status=403)
-    return _serve_frontend_entry(private=True)
-
-
-@app.route("/compute/logs", methods=["GET"])
-@login_required
-def log_viewer_page():
-    """Admin-only active-log viewer."""
-    if g.current_user.get("role") != "admin":
-        return _serve_frontend_entry(private=True, status=403)
-    return _serve_frontend_entry(private=True)
-
-
-@app.route("/compute/configuration", methods=["GET"])
-@login_required
-def configuration_page():
-    """Admin-only runtime configuration page."""
-    if g.current_user.get("role") != "admin":
-        return _serve_frontend_entry(private=True, status=403)
     return _serve_frontend_entry(private=True)
 
 
@@ -3041,6 +3015,12 @@ def _serve_frontend_entry(*, private: bool = False, status: int = 200):
     response.status_code = status
     response.headers["Cache-Control"] = "private, no-store" if private else "no-cache"
     return response
+
+
+# Every Administration destination the frontend shell navigates to is served
+# from the one declaration the page-route parity contract reads, immediately
+# beside the frontend-shell server it renders.
+register_admin_pages(app, _serve_frontend_entry)
 
 
 _MAX_LEGAL_DOCUMENT_BYTES = 64 * 1024
