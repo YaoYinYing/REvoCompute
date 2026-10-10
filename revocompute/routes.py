@@ -125,13 +125,17 @@ from revocompute.placement import (
     PlacementDecision,
     PlacementError,
     explain_placement,
+    place_stage,
+    placement_policy,
     resolve_submission_placement,
 )
 from revocompute.resource_policy import (
     GLOBAL_RESOURCE_KEYS,
     ResolvedResources,
+    ResourcePolicyValues,
     ResourceValidationError,
     normalize_resource_value,
+    serialize_resource_value,
 )
 from revocompute.result_projection import project_result_manifest
 from revocompute.storage import (
@@ -5368,6 +5372,7 @@ def admin_set_config():
                 raise ResourceValidationError(
                     f"Partition {partition!r} for {config['tool']!r} is not in allowed_queues"
                 )
+        _validate_proposed_placement(manage_db, proposed_globals, proposed_tasks)
     except ResourceValidationError as exc:
         return jsonify({"error": str(exc)}), 400
 
@@ -5385,3 +5390,57 @@ def admin_set_config():
     count = manage_db.apply_resource_updates(pending_task_updates, pending_resources)
 
     return jsonify({"message": f"{count} setting(s) updated"}), 200
+
+
+def _validate_proposed_placement(
+    manage_db: Any,
+    proposed_globals: dict[str, Any],
+    proposed_tasks: dict[str, dict[str, Any]],
+) -> None:
+    """Refuse a configuration that would leave a task type impossible to place.
+
+    A resource policy that blocks every submission of a task type is a broken
+    deployment, and the operator's own configuration change is the cheapest place
+    to say so: the alternative is discovering it as a 503 at the next submission —
+    or worse, as work running on a queue nobody chose.  The proposed values are
+    resolved through the same resolver and placement verifier a submission uses,
+    so this check cannot approve a policy the submission path would then reject,
+    and it cannot disagree with the decision a Task will record.
+
+    Only the keys the caller actually changed are re-checked, each against its own
+    profile's declared GPU requirement: a value that is valid for an accelerator
+    type can be exactly the one that breaks a CPU type.  An unchanged profile was
+    already placeable, and re-resolving all of them on every edit would make a
+    configuration save fail for a reason the operator did not cause.
+    """
+    from revocompute.task_types import get as get_task_type
+
+    effective = dict(manage_db.resource_all())
+    effective.update({key: serialize_resource_value(key, value) for key, value in proposed_globals.items()})
+    task_values = {
+        name: {**dict(manage_db.task_type_get(name) or {}), **fields} for name, fields in proposed_tasks.items()
+    }
+    policy = ResourcePolicyValues(effective, task_values)
+    for tool, fields in proposed_tasks.items():
+        try:
+            task_type, runner = get_task_type(tool)
+        except KeyError:
+            continue
+        requires_gpu = bool(fields.get("slurm_gres")) or task_type.gpus
+        try:
+            place_stage(
+                policy.resolve_task_resources,
+                owner=tool,
+                stage=None,
+                requires_accelerator=requires_gpu,
+                requirement=getattr(task_type, "accelerator_requirement", None),
+                policy=placement_policy(policy, tool),
+                default_timeout_seconds=runner.max_runtime_seconds,
+            )
+        except PlacementError as exc:
+            raise ResourceValidationError(
+                f"Task type {tool!r} would be impossible to place ({exc.reason_code}): {exc}"
+            ) from exc
+        except ResourceValidationError as exc:
+            raise ResourceValidationError(f"Task type {tool!r} would be impossible to place: {exc}") from exc
+

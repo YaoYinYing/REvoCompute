@@ -5,7 +5,7 @@ import { initialTaskQuery, queryTasks } from '../src/features/dashboard/task-que
 const task = (overrides: Partial<TaskSummary>): TaskSummary => ({
   task_id: 'a'.repeat(32), task_type: 'example', display_name: 'model.fasta', status: 'finished', terminal: true,
   submitted_at: '2026-09-20T10:00:00Z', finished_at: '2026-09-20T10:01:00Z', walltime_seconds: 60,
-  owner: 'owner', progress: null, outcome: 'SUCCESS', error: null,
+  owner: 'owner', placement: null, progress: null, outcome: 'SUCCESS', error: null,
   result: { available: true, publication: 'available', page_url: '/result', manifest_url: '/manifest', archive_ready: false, archive_request_allowed: true, archive_request_url: '/archive', download_url: null },
   actions: { cancel: { allowed: false, url: '/cancel' }, delete: { allowed: true, url: '/delete' } }, input_preview: null,
   ...overrides,
