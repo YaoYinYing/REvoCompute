@@ -28,7 +28,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from conftest import _load_pssm_module, _test_client_auth
+from conftest import _load_pssm_module, _test_client_auth, _upsert_task_for_user
 from revocompute.manage_db import ManageDatabase
 from revocompute.placement import (
     ACCELERATOR_CLASS_MISMATCH,
@@ -590,6 +590,108 @@ def test_the_stored_placement_decision_is_readable_by_the_canonical_reader(monke
 
     assert decision.execution_class.identifier.startswith("cpu|")
     assert decision.reason_code == PLACED_CPU
+
+
+def test_the_task_list_reports_the_recorded_execution_class_not_a_recomputation(monkeypatch, tmp_path):
+    """The API reader answers from the Task's own decision, even after a policy edit.
+
+    This is the "why is this Task on that queue?" question an operator actually
+    asks, and the answer must be the decision that was made.  The policy is
+    re-pointed at a different queue afterwards: a reader that re-resolved would
+    report the new one.
+    """
+    module = _load_pssm_module(
+        monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"}
+    )
+    _run_queued(monkeypatch, module)
+    client = module.app.test_client()
+    assert _submit(client, _test_client_auth(module)).status_code in {200, 201, 202, 302}
+
+    before = client.get("/compute/api/tasks", headers=_test_client_auth(module)).get_json()["tasks"][0]
+    assert before["placement"] is not None
+    assert before["placement"]["id"].startswith("cpu|")
+
+    module.app.config["manage_db"].resource_set("slurm_partition", "elsewhere")
+
+    after = client.get("/compute/api/tasks", headers=_test_client_auth(module)).get_json()["tasks"][0]
+    assert after["placement"] == before["placement"]
+
+
+def test_the_task_list_reports_no_class_for_a_task_with_no_recorded_decision(monkeypatch, tmp_path):
+    """A Task that predates recorded decisions reports nothing, never a guess."""
+    module = _load_pssm_module(
+        monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"}
+    )
+    client = module.app.test_client()
+    headers = _test_client_auth(module)
+    task_root = tmp_path / "legacy-task"
+    task_root.mkdir()
+    _upsert_task_for_user(
+        module,
+        "b" * 32,
+        filename="old.fasta",
+        file_path=task_root / "old.fasta",
+        result_dir=task_root,
+        username="tester",
+        status="finished",
+    )
+    module.task_store.update_task("b" * 32, input_form=json.dumps({"entities": []}))
+    response = client.get("/compute/api/tasks", headers=headers)
+    assert response.status_code == 200, response.get_data(as_text=True)
+    tasks = response.get_json()["tasks"]
+
+    assert tasks[0]["placement"] is None
+
+
+def test_the_task_list_reports_no_class_when_the_record_contradicts_its_snapshot(monkeypatch, tmp_path):
+    """An edited record is not evidence, so it reads as absent rather than as truth."""
+    module = _load_pssm_module(
+        monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"}
+    )
+    client = module.app.test_client()
+    headers = _test_client_auth(module)
+    task_root = tmp_path / "edited-task"
+    task_root.mkdir()
+    _upsert_task_for_user(
+        module,
+        "c" * 32,
+        filename="old.fasta",
+        file_path=task_root / "old.fasta",
+        result_dir=task_root,
+        username="tester",
+        status="finished",
+    )
+    module.task_store.update_task(
+        "c" * 32,
+        input_form=json.dumps(
+            {
+                "entities": [],
+                "resource_policy": {
+                    "cpus": 1, "memory": "4G", "max_runtime_seconds": 60, "nodes": 1, "ntasks": 1,
+                    "requires_gpu": False, "partition": "normal", "gres": None, "qos": None,
+                    "account": None, "constraint": None, "exclusive": False,
+                },
+                "placement_decision": {
+                    "stage": None,
+                    "requires_accelerator": False,
+                    "accelerator_requirement": None,
+                    # The class names a partition the frozen snapshot does not,
+                    # so the two halves of one decision disagree.
+                    "execution_class": {
+                        "id": "cpu|elsewhere|none", "state": "cpu", "partition": "elsewhere",
+                        "device_class": None, "device_count": 0, "qos": None, "constraint": None,
+                        "account": None, "exclusive": False,
+                    },
+                    "policy_revision": "sha256:deadbeef",
+                    "reason_code": "placed_cpu",
+                    "reason": "Placed in the CPU class.",
+                },
+            }
+        ),
+    )
+    tasks = client.get("/compute/api/tasks", headers=headers).get_json()["tasks"]
+
+    assert tasks[0]["placement"] is None
 
 
 def test_an_admin_can_explain_where_a_task_type_would_be_placed(monkeypatch, tmp_path):
