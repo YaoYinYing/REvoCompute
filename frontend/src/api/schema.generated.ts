@@ -1489,6 +1489,86 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/compute/api/auth/admin/reports/tasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the bounded Task operations report
+         * @description Active, queued, running, and recently finished Tasks, each beside the placement decision recorded with its submission. The report reads the recorded decision and never re-derives one from current configuration.
+         */
+        get: operations["adminReportTasks"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/compute/api/auth/admin/reports/resources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the bounded resource operations report
+         * @description Per-subject CPU and GPU position, quota pressure, and durable storage ownership, composed from the canonical allocation, entitlement, and lifecycle records. A fact nobody measured is reported unknown rather than as zero.
+         */
+        get: operations["adminReportResources"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/compute/api/auth/admin/reports/integrity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the bounded platform integrity report
+         * @description Detected drift, unresolved allocation evidence, Runner readiness, and Operator Job state, with navigation to the surface that owns each. Detection and navigation only: there is deliberately no aggregate health score.
+         */
+        get: operations["adminReportIntegrity"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/compute/api/auth/admin/reports/activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the bounded Admin activity report
+         * @description Resource-policy mutations with their before and after values, merged with Operator Job history and bounded by a caller-named window.
+         */
+        get: operations["adminReportActivity"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -2817,6 +2897,131 @@ export interface components {
             /** @description False when an idempotent replay returned the existing job. */
             accepted: boolean;
         };
+        /** @description The bound applied to one report page. ``limit`` is the effective page size after clamping; an over-large request is clamped and says so rather than being refused. */
+        AdminReportWindow: {
+            limit: number;
+            limit_ceiling: number;
+        } & {
+            [key: string]: unknown;
+        };
+        /** @description A total and a maximum over the entries that carried the field. With nothing measured both numbers are null, never a zero total. */
+        AdminMeasurementSummary: {
+            /**
+             * @description Whether the quantity is a measured fact or a fact nobody observed.
+             * @enum {string}
+             */
+            state: "measured" | "unknown";
+            measured: number;
+            unmeasured: number;
+            total_seconds?: number | null;
+            max_seconds?: number | null;
+        };
+        /** @description The compact placement summary one profile contributes to a Task row. ``unrecorded`` and ``unreadable`` are reported as themselves so a Task older than the decision record is distinguishable from a record disagreeing with its own frozen snapshot. */
+        AdminPlacementView: {
+            stage: string | null;
+            /** @enum {string} */
+            state: "recorded" | "unrecorded" | "unreadable";
+            execution_class_id: string | null;
+            reason_code: string | null;
+            reason: string | null;
+            policy_revision: string | null;
+        };
+        AdminTaskEntry: {
+            task_id: string;
+            task_type: string | null;
+            status: string;
+            terminal: boolean;
+            owner: {
+                [key: string]: unknown;
+            };
+            submitted_at: number | null;
+            started_at?: number | null;
+            finished_at?: number | null;
+            walltime_seconds?: number | null;
+            queue_seconds?: number | null;
+            run_seconds?: number | null;
+            slurm_job_id?: string | null;
+            error?: string | null;
+            placement: components["schemas"]["AdminPlacementView"];
+            placements: components["schemas"]["AdminPlacementView"][];
+        };
+        AdminTaskReport: {
+            tasks: components["schemas"]["AdminTaskEntry"][];
+            counts_in_window: {
+                [key: string]: number;
+            };
+            limit_ceiling: number;
+            window: components["schemas"]["AdminReportWindow"];
+            recent_failures: {
+                [key: string]: unknown;
+            }[];
+            runtime: components["schemas"]["AdminMeasurementSummary"];
+            queue_latency: components["schemas"]["AdminMeasurementSummary"];
+            generated_at: number;
+        };
+        AdminSubjectResourceEntry: {
+            user_id: number;
+            username?: string | null;
+            cpu: {
+                [key: string]: unknown;
+            };
+            gpu: {
+                [key: string]: unknown;
+            };
+            storage: {
+                [key: string]: unknown;
+            };
+        } & {
+            [key: string]: unknown;
+        };
+        AdminResourceReport: {
+            /** @enum {string} */
+            scope: "deployment" | "subject";
+            subjects: components["schemas"]["AdminSubjectResourceEntry"][];
+            window: {
+                [key: string]: unknown;
+            };
+            limit_ceiling: number;
+            generated_at: number;
+        } & {
+            [key: string]: unknown;
+        };
+        /** @description Detected drift, unresolved evidence, Runner readiness, and Operator Job state. There is deliberately no aggregate health score. */
+        AdminIntegrityReport: {
+            state: string;
+            checked_at: number;
+            drift: {
+                [key: string]: unknown;
+            };
+            scheduler_evidence: {
+                [key: string]: unknown;
+            };
+            runner_readiness: {
+                [key: string]: unknown;
+            };
+            operator: {
+                [key: string]: unknown;
+            };
+        } & {
+            [key: string]: unknown;
+        };
+        AdminActivityReport: {
+            activity: {
+                [key: string]: unknown;
+            }[];
+            policy: {
+                [key: string]: unknown;
+            };
+            operator: {
+                [key: string]: unknown;
+            };
+            since: number | null;
+            limit: number;
+            limit_ceiling: number;
+            generated_at: number;
+        } & {
+            [key: string]: unknown;
+        };
     };
     responses: {
         /** @description Invalid request */
@@ -2876,6 +3081,8 @@ export interface components {
         /** @description Canonical Runner family identifier resolved from the registry. */
         RunnerFamily: string;
         OperatorJobId: string;
+        /** @description Page size, clamped to the report ceiling of 200; the response reports the effective page size. */
+        ReportLimit: number;
     };
     requestBodies: never;
     headers: never;
@@ -5398,6 +5605,118 @@ export interface operations {
                 };
                 content?: never;
             };
+        };
+    };
+    adminReportTasks: {
+        parameters: {
+            query?: {
+                /** @description Page size, clamped to the report ceiling of 200; the response reports the effective page size. */
+                limit?: components["parameters"]["ReportLimit"];
+                /** @description Comma-separated Task statuses narrowing the page; counts still cover the scanned window. */
+                status?: string;
+                /** @description Comma-separated Task types narrowing the page; counts still cover the scanned window. */
+                task_type?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A bounded page of Tasks with their recorded placement */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminTaskReport"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    adminReportResources: {
+        parameters: {
+            query?: {
+                /** @description Page size, clamped to the report ceiling of 200; the response reports the effective page size. */
+                limit?: components["parameters"]["ReportLimit"];
+                /** @description Restrict the report to one numeric user id. */
+                subject?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Per-subject resource position for the requested scope */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminResourceReport"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    adminReportIntegrity: {
+        parameters: {
+            query?: {
+                /** @description Page size, clamped to the report ceiling of 200; the response reports the effective page size. */
+                limit?: components["parameters"]["ReportLimit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Canonical drift, evidence, readiness, and job state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminIntegrityReport"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    adminReportActivity: {
+        parameters: {
+            query?: {
+                /** @description Page size, clamped to the report ceiling of 200; the response reports the effective page size. */
+                limit?: components["parameters"]["ReportLimit"];
+                /** @description Unix timestamp; only activity at or after it is returned. */
+                since?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Bounded policy mutation and Operator Job activity */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminActivityReport"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
         };
     };
 }

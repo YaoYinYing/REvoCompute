@@ -126,12 +126,29 @@ class AdminReportError(ValueError):
 
 
 def _bounded_limit(limit: Any, *, ceiling: int = MAX_LIMIT) -> int:
-    """Clamp one requested page size, refusing anything that is not a page size."""
+    """Clamp one requested page size, refusing a value that is not a page size.
+
+    A page size above the ceiling is *clamped*, not refused: a client asking for
+    more than the deployment serves has made no mistake the operator needs to act
+    on, and the response names the ceiling so the page it received is not mistaken
+    for everything that exists.  A value that is not a positive integer at all is
+    a real error and is refused.
+    """
     if isinstance(limit, bool) or not isinstance(limit, int):
         raise AdminReportError("limit must be an integer")
     if limit < 1:
         raise AdminReportError("limit must be a positive integer")
     return min(limit, ceiling)
+
+
+def parse_limit(raw: Any, *, default: int = DEFAULT_LIMIT) -> int:
+    """One requested ``limit`` query value as a page size, or a typed refusal."""
+    if raw is None or raw == "":
+        return default
+    text = str(raw).strip()
+    if not text.isdigit():
+        raise AdminReportError("limit must be a positive integer")
+    return _bounded_limit(int(text))
 
 
 def _optional_seconds(value: Any) -> float | None:
@@ -1155,6 +1172,7 @@ __all__ = [
     "UNIT_MEASURED",
     "UNIT_UNMEASURED",
     "admin_activity",
+    "parse_limit",
     "placement_projection",
     "placement_projections",
     "platform_integrity",

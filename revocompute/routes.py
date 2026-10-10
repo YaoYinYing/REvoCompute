@@ -47,6 +47,7 @@ from pydantic import ValidationError
 from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.http import parse_range_header
 from revocompute.admin_pages import register_admin_pages
+from revocompute import admin_reports
 from revocompute.access_control import (
     authorize,
     policy_state,
@@ -3598,6 +3599,141 @@ def require_admin():
     if g.current_user.get("role") != "admin":
         return jsonify({"error": "Admin access required"}), 403
     return None
+
+
+# ---------------------------------------------------------------------------
+# Administration read model
+# ---------------------------------------------------------------------------
+#
+# Four bounded reads over facts the system already owns: Tasks and their recorded
+# placement, per-subject resource position, platform integrity, and Admin
+# activity.  They add no state and derive no second answer — every field comes
+# from the canonical store that owns it, and a fact nobody measured is reported
+# unknown rather than as zero.  ``admin_reports`` owns the projection; these
+# handlers own only the authorization boundary and the bounded request parsing.
+
+
+def _admin_reports_context() -> dict[str, Any]:
+    """The canonical reads the report facade composes, resolved from the app.
+
+    Operator history and the deployment host view are optional by design: a
+    deployment that has no control plane supplies neither, and the report then
+    says the source was "not evaluated" instead of reporting an empty fleet or an
+    empty history as fact.
+    """
+    service = current_app.config.get("operator_service")
+    context: dict[str, Any] = {"task_store": task_store}
+    if service is not None:
+        context["operator_jobs"] = service.store
+        context["host"] = service.host
+        context["database"] = service.database
+    return context
+
+
+def _bounded_query_limit() -> int:
+    """The requested page size, clamped to the ceiling; a malformed size is refused."""
+    return admin_reports.parse_limit(request.args.get("limit"))
+
+
+@app.route("/compute/api/auth/admin/reports/tasks", methods=["GET"])
+@login_required
+def admin_report_tasks():
+    """Active, queued, running, and recently finished Tasks, with placement."""
+    if _blocked := require_admin():
+        return _blocked
+    context = _admin_reports_context()
+    try:
+        limit = _bounded_query_limit()
+    except admin_reports.AdminReportError as exc:
+        return jsonify({"error": str(exc)}), 400
+    statuses = [value for value in request.args.get("status", "").split(",") if value.strip()]
+    task_types = [value for value in request.args.get("task_type", "").split(",") if value.strip()]
+    return jsonify(
+        admin_reports.task_operations(
+            context["task_store"],
+            limit=limit,
+            statuses=statuses or None,
+            task_types=task_types or None,
+        )
+    )
+
+
+@app.route("/compute/api/auth/admin/reports/resources", methods=["GET"])
+@login_required
+def admin_report_resources():
+    """Per-subject CPU/GPU facts, quota pressure, and durable storage ownership."""
+    if _blocked := require_admin():
+        return _blocked
+    context = _admin_reports_context()
+    try:
+        limit = _bounded_query_limit()
+    except admin_reports.AdminReportError as exc:
+        return jsonify({"error": str(exc)}), 400
+    subject = request.args.get("subject")
+    if subject is not None and not str(subject).isdigit():
+        return jsonify({"error": "subject must be a numeric user id"}), 400
+    return jsonify(
+        admin_reports.resource_operations(
+            context["task_store"],
+            int(subject) if subject is not None else None,
+            limit=limit,
+        )
+    )
+
+
+@app.route("/compute/api/auth/admin/reports/integrity", methods=["GET"])
+@login_required
+def admin_report_integrity():
+    """Platform integrity: detected drift, unresolved evidence, readiness, jobs.
+
+    Detection and navigation only.  There is deliberately no aggregate health
+    score, because a single number would turn an unknown source, an unrepairable
+    drift, and a stale readiness verdict into one figure that is no longer an
+    operator's next step.
+    """
+    if _blocked := require_admin():
+        return _blocked
+    context = _admin_reports_context()
+    try:
+        limit = _bounded_query_limit()
+    except admin_reports.AdminReportError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify(
+        admin_reports.platform_integrity(
+            context["task_store"],
+            host=context.get("host"),
+            database=context.get("database"),
+            operator_jobs=context.get("operator_jobs"),
+            limit=limit,
+        )
+    )
+
+
+@app.route("/compute/api/auth/admin/reports/activity", methods=["GET"])
+@login_required
+def admin_report_activity():
+    """Bounded Admin/operator audit activity: policy mutations and Operator Jobs."""
+    if _blocked := require_admin():
+        return _blocked
+    context = _admin_reports_context()
+    try:
+        limit = _bounded_query_limit()
+    except admin_reports.AdminReportError as exc:
+        return jsonify({"error": str(exc)}), 400
+    since = request.args.get("since")
+    if since is not None:
+        try:
+            since = float(since)
+        except (TypeError, ValueError):
+            return jsonify({"error": "since must be a Unix timestamp"}), 400
+    return jsonify(
+        admin_reports.admin_activity(
+            context["task_store"],
+            limit=limit,
+            since=since,
+            operator_jobs=context.get("operator_jobs"),
+        )
+    )
 
 
 def _audit_runner_access(db, user_id: int, policy_id: str, outcome: str, reason_code: str, tt=None) -> None:

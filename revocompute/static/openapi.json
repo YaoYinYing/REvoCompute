@@ -1229,6 +1229,92 @@
           "403": {"$ref": "#/components/responses/Forbidden"}
         }
       }
+    },
+    "/compute/api/auth/admin/reports/tasks": {
+      "get": {
+        "tags": ["Administration reports"],
+        "summary": "Read the bounded Task operations report",
+        "description": "Active, queued, running, and recently finished Tasks, each beside the placement decision recorded with its submission. The report reads the recorded decision and never re-derives one from current configuration.",
+        "operationId": "adminReportTasks",
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+          {"$ref": "#/components/parameters/ReportLimit"},
+          {"name": "status", "in": "query", "required": false, "schema": {"type": "string"}, "description": "Comma-separated Task statuses narrowing the page; counts still cover the scanned window."},
+          {"name": "task_type", "in": "query", "required": false, "schema": {"type": "string"}, "description": "Comma-separated Task types narrowing the page; counts still cover the scanned window."}
+        ],
+        "responses": {
+          "200": {
+            "description": "A bounded page of Tasks with their recorded placement",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AdminTaskReport"}}}
+          },
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"}
+        }
+      }
+    },
+    "/compute/api/auth/admin/reports/resources": {
+      "get": {
+        "tags": ["Administration reports"],
+        "summary": "Read the bounded resource operations report",
+        "description": "Per-subject CPU and GPU position, quota pressure, and durable storage ownership, composed from the canonical allocation, entitlement, and lifecycle records. A fact nobody measured is reported unknown rather than as zero.",
+        "operationId": "adminReportResources",
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+          {"$ref": "#/components/parameters/ReportLimit"},
+          {"name": "subject", "in": "query", "required": false, "schema": {"type": "integer", "minimum": 1}, "description": "Restrict the report to one numeric user id."}
+        ],
+        "responses": {
+          "200": {
+            "description": "Per-subject resource position for the requested scope",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AdminResourceReport"}}}
+          },
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"}
+        }
+      }
+    },
+    "/compute/api/auth/admin/reports/integrity": {
+      "get": {
+        "tags": ["Administration reports"],
+        "summary": "Read the bounded platform integrity report",
+        "description": "Detected drift, unresolved allocation evidence, Runner readiness, and Operator Job state, with navigation to the surface that owns each. Detection and navigation only: there is deliberately no aggregate health score.",
+        "operationId": "adminReportIntegrity",
+        "security": [{"bearerAuth": []}],
+        "parameters": [{"$ref": "#/components/parameters/ReportLimit"}],
+        "responses": {
+          "200": {
+            "description": "Canonical drift, evidence, readiness, and job state",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AdminIntegrityReport"}}}
+          },
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"}
+        }
+      }
+    },
+    "/compute/api/auth/admin/reports/activity": {
+      "get": {
+        "tags": ["Administration reports"],
+        "summary": "Read the bounded Admin activity report",
+        "description": "Resource-policy mutations with their before and after values, merged with Operator Job history and bounded by a caller-named window.",
+        "operationId": "adminReportActivity",
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+          {"$ref": "#/components/parameters/ReportLimit"},
+          {"name": "since", "in": "query", "required": false, "schema": {"type": "number"}, "description": "Unix timestamp; only activity at or after it is returned."}
+        ],
+        "responses": {
+          "200": {
+            "description": "Bounded policy mutation and Operator Job activity",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AdminActivityReport"}}}
+          },
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"}
+        }
+      }
     }
   },
   "components": {
@@ -1250,7 +1336,8 @@
         "schema": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,63}$"},
         "description": "Canonical Runner family identifier resolved from the registry."
       },
-      "OperatorJobId": {"name": "job_id", "in": "path", "required": true, "schema": {"type": "string"}}
+      "OperatorJobId": {"name": "job_id", "in": "path", "required": true, "schema": {"type": "string"}},
+      "ReportLimit": {"name": "limit", "in": "query", "required": false, "schema": {"type": "integer", "minimum": 1, "default": 50}, "description": "Page size, clamped to the report ceiling of 200; the response reports the effective page size."}
     },
     "responses": {
       "BadRequest": {"description": "Invalid request", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}},
@@ -2817,6 +2904,132 @@
         "accepted": {"type": "boolean", "description": "False when an idempotent replay returned the existing job."}
       },
       "additionalProperties": false
+    },
+    "AdminReportWindow": {
+      "type": "object",
+      "description": "The bound applied to one report page. ``limit`` is the effective page size after clamping; an over-large request is clamped and says so rather than being refused.",
+      "required": ["limit", "limit_ceiling"],
+      "properties": {
+        "limit": {"type": "integer", "minimum": 1},
+        "limit_ceiling": {"type": "integer", "minimum": 1}
+      },
+      "additionalProperties": true
+    },
+    "AdminMeasurementSummary": {
+      "type": "object",
+      "description": "A total and a maximum over the entries that carried the field. With nothing measured both numbers are null, never a zero total.",
+      "required": ["state", "measured", "unmeasured"],
+      "properties": {
+        "state": {"type": "string", "enum": ["measured", "unknown"], "description": "Whether the quantity is a measured fact or a fact nobody observed."},
+        "measured": {"type": "integer", "minimum": 0},
+        "unmeasured": {"type": "integer", "minimum": 0},
+        "total_seconds": {"type": ["number", "null"]},
+        "max_seconds": {"type": ["number", "null"]}
+      },
+      "additionalProperties": false
+    },
+    "AdminPlacementView": {
+      "type": "object",
+      "description": "The compact placement summary one profile contributes to a Task row. ``unrecorded`` and ``unreadable`` are reported as themselves so a Task older than the decision record is distinguishable from a record disagreeing with its own frozen snapshot.",
+      "required": ["stage", "state", "execution_class_id", "reason_code", "reason", "policy_revision"],
+      "properties": {
+        "stage": {"type": ["string", "null"]},
+        "state": {"type": "string", "enum": ["recorded", "unrecorded", "unreadable"]},
+        "execution_class_id": {"type": ["string", "null"]},
+        "reason_code": {"type": ["string", "null"]},
+        "reason": {"type": ["string", "null"]},
+        "policy_revision": {"type": ["string", "null"]}
+      },
+      "additionalProperties": false
+    },
+    "AdminTaskEntry": {
+      "type": "object",
+      "required": ["task_id", "task_type", "status", "terminal", "owner", "submitted_at", "placement", "placements"],
+      "properties": {
+        "task_id": {"type": "string"},
+        "task_type": {"type": ["string", "null"]},
+        "status": {"type": "string"},
+        "terminal": {"type": "boolean"},
+        "owner": {"type": "object", "additionalProperties": true},
+        "submitted_at": {"type": ["number", "null"]},
+        "started_at": {"type": ["number", "null"]},
+        "finished_at": {"type": ["number", "null"]},
+        "walltime_seconds": {"type": ["number", "null"]},
+        "queue_seconds": {"type": ["number", "null"]},
+        "run_seconds": {"type": ["number", "null"]},
+        "slurm_job_id": {"type": ["string", "null"]},
+        "error": {"type": ["string", "null"]},
+        "placement": {"$ref": "#/components/schemas/AdminPlacementView"},
+        "placements": {"type": "array", "items": {"$ref": "#/components/schemas/AdminPlacementView"}}
+      },
+      "additionalProperties": false
+    },
+    "AdminTaskReport": {
+      "type": "object",
+      "required": ["tasks", "counts_in_window", "limit_ceiling", "window", "recent_failures", "runtime", "queue_latency", "generated_at"],
+      "properties": {
+        "tasks": {"type": "array", "items": {"$ref": "#/components/schemas/AdminTaskEntry"}},
+        "counts_in_window": {"type": "object", "additionalProperties": {"type": "integer"}},
+        "limit_ceiling": {"type": "integer", "minimum": 1},
+        "window": {"$ref": "#/components/schemas/AdminReportWindow"},
+        "recent_failures": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
+        "runtime": {"$ref": "#/components/schemas/AdminMeasurementSummary"},
+        "queue_latency": {"$ref": "#/components/schemas/AdminMeasurementSummary"},
+        "generated_at": {"type": "number"}
+      },
+      "additionalProperties": false
+    },
+    "AdminSubjectResourceEntry": {
+      "type": "object",
+      "required": ["user_id", "cpu", "gpu", "storage"],
+      "properties": {
+        "user_id": {"type": "integer"},
+        "username": {"type": ["string", "null"]},
+        "cpu": {"type": "object", "additionalProperties": true},
+        "gpu": {"type": "object", "additionalProperties": true},
+        "storage": {"type": "object", "additionalProperties": true}
+      },
+      "additionalProperties": true
+    },
+    "AdminResourceReport": {
+      "type": "object",
+      "required": ["scope", "subjects", "window", "limit_ceiling", "generated_at"],
+      "properties": {
+        "scope": {"type": "string", "enum": ["deployment", "subject"]},
+        "subjects": {"type": "array", "items": {"$ref": "#/components/schemas/AdminSubjectResourceEntry"}},
+        "window": {"type": "object", "additionalProperties": true},
+        "limit_ceiling": {"type": "integer", "minimum": 1},
+        "generated_at": {"type": "number"}
+      },
+      "additionalProperties": true
+    },
+    "AdminIntegrityReport": {
+      "type": "object",
+      "description": "Detected drift, unresolved evidence, Runner readiness, and Operator Job state. There is deliberately no aggregate health score.",
+      "required": ["state", "checked_at", "drift", "scheduler_evidence", "runner_readiness", "operator"],
+      "properties": {
+        "state": {"type": "string"},
+        "checked_at": {"type": "number"},
+        "drift": {"type": "object", "additionalProperties": true},
+        "scheduler_evidence": {"type": "object", "additionalProperties": true},
+        "runner_readiness": {"type": "object", "additionalProperties": true},
+        "operator": {"type": "object", "additionalProperties": true}
+      },
+      "additionalProperties": true
+    },
+    "AdminActivityReport": {
+      "type": "object",
+      "required": ["activity", "policy", "operator", "since", "limit", "limit_ceiling", "generated_at"],
+      "properties": {
+        "activity": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
+        "policy": {"type": "object", "additionalProperties": true},
+        "operator": {"type": "object", "additionalProperties": true},
+        "since": {"type": ["number", "null"]},
+        "limit": {"type": "integer", "minimum": 1},
+        "limit_ceiling": {"type": "integer", "minimum": 1},
+        "generated_at": {"type": "number"}
+      },
+      "additionalProperties": true
     }
     }
   }
