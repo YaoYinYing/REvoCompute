@@ -1422,6 +1422,54 @@ def test_a_manifest_just_below_the_ceiling_publishes_normally(monkeypatch, tmp_p
     assert module.app.config["storage_resolver"].load_manifest(module.task_store.get_task(task_id)) is not None
 
 
+def test_the_writer_anchors_exactly_at_the_reader_ceiling_and_not_above(monkeypatch, tmp_path) -> None:
+    """The manifest byte ceiling is one contract, on the byte.
+
+    The published manifest is re-published twice with the ceiling moved to the
+    exact serialized size the canonical reader already accepted and then one byte
+    below it.  At the limit the result is publishable and the reader accepts it;
+    one byte lower the writer refuses to anchor rather than emitting a manifest
+    its own reader must classify as unreadable.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    from revocompute import storage as storage_module
+
+    task_id = _finished_task(module, tmp_path)
+    result_dir = Path(module.app.config["storage_resolver"].get_task_root(module.task_store.get_task(task_id)))
+    for index in range(12):
+        (result_dir / f"result_{index:03d}.txt").write_text("value\n", encoding="utf-8")
+    module.task_runtime._finalize_results_manifest(
+        module.task_store.get_task(task_id), execution_state="completed", finished_at=1_700_000_000
+    )
+    exact = len((result_dir / "manifest.json").read_bytes())
+    storage = module.app.config["storage_resolver"]
+    task = module.task_store.get_task(task_id)
+    assert len(storage.load_manifest(task)["artifacts"]) == 12
+
+    # Exactly at the ceiling the same result set is published and readable.
+    monkeypatch.setattr(storage_module, "MANIFEST_MAX_BYTES", exact)
+    at_limit = module.task_runtime._finalize_results_manifest(
+        task, execution_state="completed", finished_at=1_700_000_001
+    )
+    assert len(at_limit["artifacts"]) == 12
+    assert len((result_dir / "manifest.json").read_bytes()) == exact
+    assert len(storage.load_manifest(module.task_store.get_task(task_id))["artifacts"]) == 12
+
+    # One byte below, the writer refuses to anchor the very same result set.
+    monkeypatch.setattr(storage_module, "MANIFEST_MAX_BYTES", exact - 1)
+    guard = module.task_runtime._finalize_results_manifest(
+        module.task_store.get_task(task_id), execution_state="completed", finished_at=1_700_000_002
+    )
+    assert guard["artifacts"] == []
+    assert any("manifest limit" in problem for problem in guard["output_check"]["problems"])
+    assert len((result_dir / "manifest.json").read_bytes()) <= exact - 1
+    # The refused publication is still a publication the reader can read: the
+    # guard skeleton is anchored, not a manifest no consumer can open.
+    refused = storage.load_manifest(module.task_store.get_task(task_id))
+    assert refused is not None and refused["artifacts"] == []
+    assert storage.resolve_artifact(task, "result_000.txt") is None
+
+
 def test_an_over_capacity_artifact_is_refused_without_reading_its_bytes(monkeypatch, tmp_path) -> None:
     """Capacity is enforced from the verified size, so the bytes are never read.
 
