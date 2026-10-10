@@ -14,21 +14,17 @@ import sys
 
 from revocompute.config import ComputeConfig, env_csv
 from revocompute.manage_db import read_resource_database
-from revocompute.resource_policy import ResourceValidationError, resolve_resources
-from revocompute.task_types import get as get_task_type
-from revocompute.task_types import discover_plugins, list_types
+from revocompute.placement import PlacementError, resolve_submission_placement
+from revocompute.resource_policy import ResourceValidationError, ResourcePolicyValues
+from revocompute.task_types import discover_plugins, get as get_task_type, list_types
 
 
 def main() -> int:
     config = ComputeConfig.from_env()
     discover_plugins(config.runners_dir, set(env_csv("ENABLED_TASKRUNNERS", "")))
     globals_, task_values = read_resource_database(config.manage_db_path)
-    stored_allowed = globals_.get("slurm_allowed_queues")
-    allowed = (
-        tuple(value.strip() for value in stored_allowed.split(",") if value.strip())
-        if stored_allowed is not None
-        else tuple(config.slurm_allowed_queues)
-    )
+    if globals_.get("slurm_allowed_queues") is None and config.slurm_allowed_queues:
+        globals_["slurm_allowed_queues"] = ",".join(config.slurm_allowed_queues)
     failed = False
     for task_type in list_types():
         _, runner = get_task_type(task_type.name)
@@ -36,28 +32,31 @@ def main() -> int:
         if task_config.get("enabled") == 0:
             print(f"[RESOURCE] {task_type.name}: disabled (not audited)")
             continue
-        profiles = [(task_type.name, task_type.gpus)]
-        if task_type.workflow:
-            profiles = [(stage.name, stage.requires_gpu) for stage in task_type.workflow]
-        for profile_name, requires_gpu in profiles:
-            values = task_values.get(profile_name, task_config if requires_gpu else {})
-            try:
-                resolved = resolve_resources(
-                    values.get,
-                    globals_.get,
-                    requires_gpu=requires_gpu,
-                    allowed_queues=allowed,
-                    default_timeout_seconds=runner.max_runtime_seconds,
-                )
-                accelerator = resolved.gres or "cpu"
-                partition = resolved.partition or "scheduler-default"
-                print(
-                    f"[RESOURCE] {profile_name}: cpus={resolved.cpus} memory={resolved.memory} "
-                    f"time={resolved.slurm_time} accelerator={accelerator} partition={partition}"
-                )
-            except ResourceValidationError as exc:
-                failed = True
-                print(f"[RESOURCE] {profile_name}: INVALID: {exc}", file=sys.stderr)
+        try:
+            # The audit resolves the same placement the submission path does, from
+            # the same persisted values, so a deployment cannot pass the preflight
+            # audit and then reject every submission at the placement boundary.
+            placement = resolve_submission_placement(
+                ResourcePolicyValues(globals_, task_values), task_type, runner
+            )
+        except PlacementError as exc:
+            failed = True
+            print(f"[RESOURCE] {task_type.name}: INVALID ({exc.reason_code}): {exc}", file=sys.stderr)
+            continue
+        except ResourceValidationError as exc:
+            failed = True
+            print(f"[RESOURCE] {task_type.name}: INVALID: {exc}", file=sys.stderr)
+            continue
+        for decision in [placement.primary_decision, *placement.stage_decisions.values()]:
+            if decision is None:
+                continue
+            resolved = decision.resources
+            label = decision.stage or task_type.name
+            print(
+                f"[RESOURCE] {label}: cpus={resolved.cpus} memory={resolved.memory} "
+                f"time={resolved.slurm_time} class={decision.execution_class.identifier} "
+                f"reason={decision.reason_code}"
+            )
     return 1 if failed else 0
 
 

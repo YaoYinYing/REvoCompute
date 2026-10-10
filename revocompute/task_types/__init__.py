@@ -27,6 +27,8 @@ from revocompute import runtime_bundle as rb
 from revocompute.access_control import AccessPolicy, load_policy_documents, resolve_policy
 from revocompute.citations import Citation, load_citations
 from revocompute.io_contracts import NamedFileRole, load_named_file_roles
+from revocompute.placement import AcceleratorRequirement
+from revocompute.resource_policy import ResourceValidationError
 
 # ---------------------------------------------------------------------------
 # Dataclasses
@@ -145,6 +147,11 @@ class WorkflowStage:
     runner_args: tuple[str, ...] = ()
     stage_markers: tuple[str, ...] = ()
     requires_network: bool = False
+    #: What this stage needs from an accelerator, in semantic terms (device class
+    #: and count).  Declared by the owning manifest, never as this deployment's
+    #: partition or GRES name: placement resolves the requirement against the
+    #: deployment's local policy.
+    accelerator_requirement: AcceleratorRequirement | None = None
 
 
 @dataclass(frozen=True)
@@ -1205,6 +1212,16 @@ def _load_workflow(raw: Any, task_name: str, stage_markers: dict[str, str]) -> t
         markers = tuple(raw_markers)
         if not markers:
             raise ValueError(f"Workflow stage {task_name}.{name} must declare at least one stage marker")
+        try:
+            accelerator_requirement = AcceleratorRequirement.parse(
+                entry.get("accelerator_requirement"), owner=f"Workflow stage {task_name}.{name}"
+            )
+        except ResourceValidationError as exc:
+            raise ValueError(str(exc)) from exc
+        if accelerator_requirement is not None and not requires_gpu:
+            raise ValueError(
+                f"Workflow stage {task_name}.{name} declares an accelerator requirement but requires_gpu is false"
+            )
         seen.add(name)
         stages.append(
             WorkflowStage(
@@ -1214,6 +1231,7 @@ def _load_workflow(raw: Any, task_name: str, stage_markers: dict[str, str]) -> t
                 requires_network=requires_network,
                 runner_args=tuple(runner_args),
                 stage_markers=markers,
+                accelerator_requirement=accelerator_requirement,
             )
         )
     declared = [marker for stage in stages for marker in stage.stage_markers]

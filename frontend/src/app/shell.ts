@@ -1,6 +1,7 @@
 import { Bell, Check, createIcons, FileText, Languages, LayoutDashboard, LogOut, MoonStar, Plus, ServerCog, Settings, SunMedium, UserRound, UsersRound, Workflow } from 'lucide';
 import type { CurrentUser } from '../api/app-api';
 import { authorizedJson, clearSessionCredential } from './session';
+import { ADMIN_DESTINATIONS } from './admin-destinations';
 import { appAsset } from './assets';
 import { applyLocale, locale, locales, setLocale, t, type Locale } from './i18n';
 import { cycleTheme, storedTheme, type ThemeMode } from './theme';
@@ -66,12 +67,7 @@ export function mountShell(root: HTMLElement): AppShell {
     ['account', [
       ['/compute/profile', 'user-round', t('shell.nav.profile')],
     ]],
-    ['admin', [
-      ['/compute/runner_fleet', 'server-cog', t('shell.admin.fleet')],
-      ['/compute/user_control', 'users-round', t('shell.admin.users')],
-      ['/compute/logs', 'file-text', t('shell.admin.logs')],
-      ['/compute/configuration', 'settings', t('shell.admin.configuration')],
-    ]],
+    ['admin', ADMIN_DESTINATIONS.map(destination => [destination.path, destination.icon, t(destination.label)] as NavDestination)],
   ];
   for (const [region, links] of destinations) {
     for (const [href, icon, label] of links) groups[region].items.append(navLink(href, icon, label));

@@ -2030,6 +2030,21 @@ def _execute_compute_task(
             if not isinstance(raw_policies, dict):
                 raise TypeError("resource_policies must be an object")
             resource_policies = {name: ResolvedResources.from_snapshot(policy) for name, policy in raw_policies.items()}
+            # A Task that recorded a placement decision must dispatch with the
+            # snapshot that decision was made against.  A decision with no
+            # snapshot is a snapshot that was lost or edited after submission,
+            # and dispatching it anyway would resolve today's policy for a Task
+            # that was placed under yesterday's — a second answer for a decision
+            # already made.  A row that recorded neither predates the decision
+            # record, so it legitimately falls through to the deployment's own
+            # resolver.
+            if parsed.get("placement_decision") and resource_policy is None:
+                raise ResourceValidationError("the recorded placement has no frozen resource snapshot to dispatch with")
+            raw_stage_decisions = parsed.get("placement_decisions", {})
+            if not isinstance(raw_stage_decisions, dict):
+                raise TypeError("placement_decisions must be an object")
+            if raw_stage_decisions and any(name not in resource_policies for name in raw_stage_decisions):
+                raise ResourceValidationError("a recorded stage placement has no frozen resource snapshot to dispatch with")
         except (json.JSONDecodeError, TypeError, ResourceValidationError):
             logging.warning("Task %s: input_form or resource policy is invalid.", md5sum)
             _record_failure(md5sum, task, time.time(), "", "Task input or resource policy is invalid")

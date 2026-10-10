@@ -45,6 +45,7 @@ from revocompute.resource_policy import (
     ResolvedResources,
     normalize_resource_value,
     resolve_resources,
+    serialize_resource_value,
 )
 
 _ALL_TASK_TYPE_FIELDS = CANONICAL_TASK_FIELDS
@@ -241,16 +242,10 @@ class ManageDatabase:
     def resource_set(self, key: str, value: object) -> None:
         if key not in GLOBAL_RESOURCE_KEYS:
             raise ValueError(f"Unknown global resource key: {key}")
-        normalized = normalize_resource_value(key, value)
-        if normalized is None:
+        serialized = serialize_resource_value(key, normalize_resource_value(key, value))
+        if serialized is None:
             self.resource_delete(key)
             return
-        if isinstance(normalized, bool):
-            serialized = "true" if normalized else "false"
-        elif isinstance(normalized, tuple):
-            serialized = ",".join(normalized)
-        else:
-            serialized = str(normalized)
         with self._lock:
             self._conn.execute(
                 "INSERT OR REPLACE INTO resource_config (key, value, updated_at) " "VALUES (?, ?, ?)",
@@ -296,15 +291,10 @@ class ManageDatabase:
                     if key not in GLOBAL_RESOURCE_KEYS:
                         raise ValueError(f"Unknown global resource key: {key}")
                     value = normalize_resource_value(key, raw_value)
-                    if value is None:
+                    serialized = serialize_resource_value(key, value)
+                    if serialized is None:
                         self._conn.execute("DELETE FROM resource_config WHERE key = ?", (key,))
                         continue
-                    if isinstance(value, bool):
-                        serialized = "true" if value else "false"
-                    elif isinstance(value, tuple):
-                        serialized = ",".join(value)
-                    else:
-                        serialized = str(value)
                     self._conn.execute(
                         "INSERT OR REPLACE INTO resource_config (key, value, updated_at) VALUES (?, ?, ?)",
                         (key, serialized, time.time()),

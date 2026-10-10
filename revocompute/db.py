@@ -45,6 +45,7 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 
 from revocompute import resource_ledger as rloan
 from revocompute import resource_model as rm
+from revocompute import storage_quota as squota
 from revocompute.operational_events import emit_event
 from revocompute.schema_epoch import require_current_schema
 
@@ -1571,7 +1572,13 @@ class TaskDatabase:
 
     @property
     def storage_soft_limit_bytes(self) -> int:
-        """Default soft durable-storage ceiling, in logical bytes."""
+        """The deployment default soft durable-storage ceiling, in logical bytes.
+
+        A *default*, not the ceiling any particular subject is admitted against:
+        the ceiling is :meth:`effective_storage_limit_bytes`, which resolves a
+        per-user policy over this value.  It is read here to configure a
+        deployment, never to decide admission.
+        """
         return self._storage_soft_limit
 
     def _period_totals(self, user_id: int, period: str, resource_class: str) -> dict[str, int]:
@@ -1714,10 +1721,16 @@ class TaskDatabase:
         return len(rows), total
 
     def storage_entitlement(self, user_id: int) -> rloan.StorageEntitlement:
-        """Logical owned bytes for one subject, with its configured soft ceiling."""
+        """Logical owned bytes for one subject, with the effective soft ceiling.
+
+        The ceiling is this subject's :meth:`effective_storage_limit_bytes`, not
+        the deployment field: a per-user override is how an admin states that one
+        subject differs, and an admission reader that used the deployment value
+        directly would silently ignore it.
+        """
         return rloan.StorageEntitlement(
             logical_owned_bytes=self.logical_owned_bytes(user_id),
-            soft_limit_bytes=self._storage_soft_limit or None,
+            soft_limit_bytes=self.effective_storage_limit_bytes(user_id),
         )
 
     def resource_envelope(self, user_id: int, *, at: float | None = None) -> rloan.ResourceEnvelope:
@@ -1898,6 +1911,181 @@ class TaskDatabase:
                 raise
         return dict(row)
 
+    def set_storage_quota(
+        self,
+        *,
+        user_id: int,
+        state: str,
+        limit_bytes: int | None,
+        actor_user_id: int,
+        reason: str,
+        idempotency_key: str,
+        updated_at: float | None = None,
+    ) -> dict[str, Any]:
+        """Set one subject's durable-storage quota policy.
+
+        This is a *policy* change and nothing else.  It writes the current policy
+        row and exactly one audit row — actor, target, before, after, reason,
+        timestamp — and appends no ``resource_ledger`` row, no ``storage_usage``
+        fact, and no change to ``logical_owned_bytes``.  Ownership is a fact about
+        what a subject already holds; it is not re-derived from a change of mind
+        about what they may hold.
+
+        Clearing and unlimited are different acts with different outcomes, so they
+        are different requests: ``state="inherit"`` removes the row and lets the
+        deployment default apply, ``state="unlimited"`` keeps a row that states
+        there is no ceiling.  The stored encoding is
+        :mod:`revocompute.storage_quota`'s: an *absent* row is INHERIT, an
+        ``allowance`` of ``-1`` is UNLIMITED, and every non-negative ``allowance``
+        is that many bytes — so ``0`` stays an honest ceiling of zero bytes.
+
+        Idempotent under *idempotency_key*, which is scoped to the subject it was
+        used for: an identical retry returns the prior audit row and appends
+        nothing, while a key reused for a different change to the same subject
+        (another policy, actor, or reason) raises rather than silently overwriting
+        the audit trail.
+        """
+        policy = squota.parse_quota_input(state, limit_bytes)
+        normalized_reason = str(reason).strip()
+        if not normalized_reason:
+            raise ValueError("reason is required")
+        if len(normalized_reason) > 1000:
+            raise ValueError("reason must be at most 1000 characters")
+        timestamp = time.time() if updated_at is None else updated_at
+        # The client key is scoped by user so it may be reused for a different
+        # subject; within one subject, a second *different* change under the same
+        # key is a conflict rather than a silent second audit row.
+        durable_key = f"storage_quota:user:{user_id}:{idempotency_key}"
+        operation = (
+            squota.OPERATION_CLEAR_STORAGE_QUOTA
+            if policy.state is squota.StorageQuotaState.INHERIT
+            else squota.OPERATION_SET_STORAGE_QUOTA
+        )
+        with self.engine.connect() as conn:
+            # BEGIN IMMEDIATE closes the read-compute-write race: two concurrent
+            # changes would otherwise each read the same prior policy and record
+            # an audit "before" that no longer describes the change they made.
+            conn.exec_driver_sql("BEGIN IMMEDIATE")
+            try:
+                prior = conn.execute(
+                    select(self.resource_policy_audit_table).where(
+                        self.resource_policy_audit_table.c.idempotency_key
+                        == f"policy_audit:{durable_key}"
+                    )
+                ).mappings().one_or_none()
+                if prior is not None:
+                    # The identity of a request is its actor, its reason, and the
+                    # policy it produced — never its "before", which a later
+                    # change may legitimately have moved on from.
+                    if (
+                        prior["actor_user_id"] != actor_user_id
+                        or prior["reason"] != normalized_reason
+                        or prior["operation"] != operation
+                        or prior["after_json"] != json.dumps(policy.to_dict(), sort_keys=True)
+                    ):
+                        raise ValueError("idempotency_key was already used for a different storage quota")
+                    conn.commit()
+                    return dict(prior)
+                before = self._storage_quota_policy_in_connection(conn, user_id)
+                if policy.state is squota.StorageQuotaState.INHERIT:
+                    conn.execute(
+                        self.resource_policies_table.delete().where(
+                            self.resource_policies_table.c.subject_type == rloan.SUBJECT_USER,
+                            self.resource_policies_table.c.subject_id == user_id,
+                            self.resource_policies_table.c.unit == squota.STORAGE_QUOTA_UNIT,
+                        )
+                    )
+                else:
+                    # Storage is filed with a named unit and an empty class, so it
+                    # can never collide with a compute allowance row: the policy
+                    # index is over ``(subject, unit, resource_class)`` and one
+                    # subject has exactly one storage policy.
+                    self._upsert_policy(
+                        conn,
+                        user_id=user_id,
+                        resource_class="",
+                        allowance=squota.stored_allowance(policy),
+                        actor_user_id=actor_user_id,
+                        timestamp=timestamp,
+                        unit=squota.STORAGE_QUOTA_UNIT,
+                    )
+                self._write_policy_audit(
+                    conn,
+                    user_id=user_id,
+                    actor_user_id=actor_user_id,
+                    operation=operation,
+                    before_json=before.to_dict(),
+                    after_json=policy.to_dict(),
+                    reason=normalized_reason,
+                    idempotency_key=durable_key,
+                    timestamp=timestamp,
+                    unit=squota.STORAGE_QUOTA_UNIT,
+                )
+                row = conn.execute(
+                    select(self.resource_policy_audit_table).where(
+                        self.resource_policy_audit_table.c.idempotency_key == f"policy_audit:{durable_key}"
+                    )
+                ).mappings().one()
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        return dict(row)
+
+    def _storage_quota_policy_in_connection(self, conn, user_id: int) -> squota.StorageQuotaPolicy:
+        """The stored storage-quota policy for one subject, inside a transaction."""
+        allowance = conn.execute(
+            select(self.resource_policies_table.c.allowance).where(
+                self.resource_policies_table.c.subject_type == rloan.SUBJECT_USER,
+                self.resource_policies_table.c.subject_id == user_id,
+                self.resource_policies_table.c.unit == squota.STORAGE_QUOTA_UNIT,
+            )
+        ).scalar_one_or_none()
+        if allowance is None:
+            return squota.INHERIT_POLICY
+        return squota.policy_from_stored_allowance(allowance)
+
+    def storage_quota_policy(self, user_id: int) -> squota.StorageQuotaPolicy:
+        """One subject's storage-quota policy; an absent row is ``INHERIT``."""
+        with self.engine.connect() as conn:
+            return self._storage_quota_policy_in_connection(conn, user_id)
+
+    def effective_storage_limit_bytes(self, user_id: int) -> int | None:
+        """The durable-storage ceiling admission applies to one subject.
+
+        ``None`` is no ceiling.  The deployment default is resolved through the
+        per-user policy — never applied directly — so an admin override and the
+        deployment value can never disagree about which one is in force.
+        """
+        policy = self.storage_quota_policy(user_id)
+        # A deployment that configures no default ceiling says so with 0; an
+        # admin who wants a real ceiling of zero bytes says it with a LIMITED
+        # policy, which is a per-user decision and never this field.
+        default = self._storage_soft_limit if self._storage_soft_limit > 0 else None
+        return policy.effective_limit_bytes(default)
+
+    def list_storage_quota_audit(self, user_id: int, *, limit: int = 50) -> list[dict[str, Any]]:
+        """The storage-quota policy mutations for one subject, newest first.
+
+        A filtered read of the one administrative audit table rather than a
+        second audit store: the filter is the policy unit this module writes, so
+        a compute-allowance change never appears as a quota change.
+        """
+        if limit < 1 or limit > 200:
+            raise ValueError("limit must be between 1 and 200")
+        stmt = (
+            select(self.resource_policy_audit_table)
+            .where(
+                self.resource_policy_audit_table.c.subject_type == rloan.SUBJECT_USER,
+                self.resource_policy_audit_table.c.subject_id == user_id,
+                self.resource_policy_audit_table.c.unit == squota.STORAGE_QUOTA_UNIT,
+            )
+            .order_by(desc(self.resource_policy_audit_table.c.id))
+            .limit(limit)
+        )
+        with self.engine.connect() as conn:
+            return [dict(row) for row in conn.execute(stmt).mappings().all()]
+
     def _upsert_policy(
         self,
         conn,
@@ -1907,11 +2095,19 @@ class TaskDatabase:
         allowance: int,
         actor_user_id: int,
         timestamp: float,
+        unit: str = rloan.UNIT_GPU_SECOND,
     ) -> None:
+        """Write one current policy row, keyed on ``(subject, unit, resource_class)``.
+
+        One writer for every unit: a compute allowance and a durable-storage quota
+        are the same kind of row in the same table, so filing them through two
+        near-identical statements would be two places to keep the conflict target
+        and the updated columns in step.
+        """
         policy = sqlite_insert(self.resource_policies_table).values(
             subject_type=rloan.SUBJECT_USER,
             subject_id=user_id,
-            unit=rloan.UNIT_GPU_SECOND,
+            unit=unit,
             resource_class=resource_class,
             allowance=allowance,
             updated_by_user_id=actor_user_id,

@@ -892,6 +892,43 @@ def test_admin_resource_api_returns_effective_policy_and_validates_updates(monke
     assert "allowed_queues" in forbidden_partition.get_json()["error"]
 
 
+def test_admin_resource_api_refuses_a_change_that_would_strand_a_task_type(monkeypatch, tmp_path):
+    """A configuration that makes an accelerator type impossible to place is refused.
+
+    The alternative is discovering it as a 503 at the next submission — or as work
+    running on a queue nobody chose — so the operator's own edit is where it is
+    reported.  The proposed values go through the same resolver and placement
+    verifier a submission uses, so the check cannot approve a policy the
+    submission path would reject.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    client = module.app.test_client()
+    admin_header = _admin_client_auth(module)
+
+    # ``cpu=normal`` says this deployment runs CPU work on ``normal`` and declares
+    # no accelerator class at all, so an accelerator profile has nowhere to go.
+    stranded = client.put(
+        "/compute/api/auth/admin/config",
+        headers=admin_header,
+        json={
+            "task_types": [{"tool": "gpu_runner", "slurm_partition": "normal"}],
+            "resources": {"slurm_execution_classes": "cpu=normal"},
+            "slurm": {"allowed_queues": ["normal"]},
+        },
+    )
+    assert stranded.status_code == 400
+    assert "gpu_runner" in stranded.get_json()["error"]
+
+    # The same partition is fine for the CPU profile, so the refusal is about the
+    # profile's own requirement rather than about the partition being unknown.
+    accepted = client.put(
+        "/compute/api/auth/admin/config",
+        headers=admin_header,
+        json={"task_types": [{"tool": "cpu_runner", "slurm_partition": "normal"}]},
+    )
+    assert accepted.status_code == 200
+
+
 def test_admin_resource_api_hides_stale_removed_runner_rows(monkeypatch, tmp_path):
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     client = module.app.test_client()

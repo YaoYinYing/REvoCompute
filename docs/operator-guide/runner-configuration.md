@@ -78,6 +78,34 @@ carry a per-task GPU GRES and never inherit a global GPU GRES. Configured
 partitions must belong to `slurm_allowed_queues`. The allocated CPU count is
 then forwarded into Apptainer's thread-control environment.
 
+### Execution classes
+
+`slurm_allowed_queues` says which partitions exist. `slurm_execution_classes`
+says which partition a *kind of work* belongs on, as a semicolon-separated map
+from a canonical requirement to a local queue:
+
+```text
+cpu=normal;a100=gpu;a100-80gb=gpu-large
+```
+
+A class key is either `cpu` or a device class — the same token a GRES names. The
+mapping is what keeps this deployment's queue names out of every task manifest: a
+manifest declares a *semantic* requirement (that a stage needs an accelerator,
+and optionally of which device class), and the deployment decides which local
+queue that resolves to.
+
+Resolution order for the partition is: an explicit per-task `slurm_partition`
+(an operator overriding one task), then the execution class for that work, then
+the global `slurm_partition`, then the first allowed queue. Nothing is left to
+Slurm's implicit default partition. A partition outside the deployment's queues
+is refused before the request reaches the scheduler, and a stage that requires an
+accelerator is refused outright when the deployment declares execution classes
+and none of them holds a device.
+
+`GET /compute/api/auth/admin/placement/explain/<task_type>` answers "where would
+this task's stages be placed, and why" without submitting anything, using the
+same resolution a submission performs.
+
 For Docker, the same CPU and memory values become `nano_cpus` and `mem_limit`,
 thread-control variables are set consistently, GPU jobs request one device,
 and a watchdog kills work that exceeds the snapshotted runtime. Invalid fields

@@ -58,10 +58,10 @@ from revocompute.live_tests import (
 )
 from revocompute.manage_db import read_resource_database
 from revocompute.result_storyboard import load_expected_file_tree
+from revocompute.placement import PlacementError, resolve_submission_placement
 from revocompute.resource_policy import (
     ResourcePolicyValues,
     ResolvedResources,
-    resolve_submission_resources,
 )
 
 
@@ -220,10 +220,17 @@ def load_validation_identity(
     try:
         for task_id in all_tasks:
             task_type, runner = definitions[task_id]
-            resource_policy, resource_policies = resolve_submission_resources(provider, task_type, runner)
+            # The validation identity hashes the same placement the submission
+            # path resolves, so a Runner is never validated against a resource
+            # plan it would not be submitted with.
+            placement = resolve_submission_placement(provider, task_type, runner)
             resource_snapshots.append(
-                TaskResourceSnapshot.from_resolved(task_id, resource_policy, resource_policies)
+                TaskResourceSnapshot.from_resolved(task_id, placement.primary, placement.stage_resources)
             )
+    except PlacementError as exc:
+        raise LiveTestConfigurationError(
+            f"Effective resource placement is impossible ({exc.reason_code}): {exc}"
+        ) from exc
     except (KeyError, TypeError, ValueError) as exc:
         raise LiveTestConfigurationError(f"Effective resource configuration cannot be resolved: {exc}") from exc
     required_tasks = {case.task for case in plan.select("smoke")}

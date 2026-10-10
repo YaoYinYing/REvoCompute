@@ -509,6 +509,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/compute/api/auth/admin/users/{user_id}/storage-quota": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get one user's effective durable-storage quota
+         * @description The ceiling admission applies to this subject, and which of the three decisions produced it. A ceiling of 0 is a real ceiling of zero bytes; state "inherit" means no per-user override exists and the deployment default applies.
+         */
+        get: operations["adminGetUserStorageQuota"];
+        /**
+         * Set one user's durable-storage quota policy
+         * @description A policy change, not an accounting one: it changes what the subject may retain and never what they already hold. "limited" names a non-negative limit_bytes, "unlimited" grants no ceiling, and "inherit" removes the override so the deployment default applies again. No resource_ledger row is appended and logical_owned_bytes is unchanged.
+         */
+        put: operations["adminSetUserStorageQuota"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/compute/api/gpu-credit": {
         parameters: {
             query?: never;
@@ -1489,6 +1513,106 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/compute/api/auth/admin/placement/explain/{task_type}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Explain where a task type's stages would be placed
+         * @description A read-only dry run over the canonical planning path: for each profile of a task type, the execution class it would resolve to today, the bounded reason, and the policy revision the resolution read. It never submits and never mutates state, and an impossible request is reported as its bounded reason rather than as an exception.
+         */
+        get: operations["adminExplainPlacement"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/compute/api/auth/admin/reports/tasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the bounded Task operations report
+         * @description Active, queued, running, and recently finished Tasks, each beside the placement decision recorded with its submission. The report reads the recorded decision and never re-derives one from current configuration.
+         */
+        get: operations["adminReportTasks"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/compute/api/auth/admin/reports/resources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the bounded resource operations report
+         * @description Per-subject CPU and GPU position, quota pressure, and durable storage ownership, composed from the canonical allocation, entitlement, and lifecycle records. A fact nobody measured is reported unknown rather than as zero.
+         */
+        get: operations["adminReportResources"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/compute/api/auth/admin/reports/integrity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the bounded platform integrity report
+         * @description Detected drift, unresolved allocation evidence, Runner readiness, and Operator Job state, with navigation to the surface that owns each. Detection and navigation only: there is deliberately no aggregate health score.
+         */
+        get: operations["adminReportIntegrity"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/compute/api/auth/admin/reports/activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the bounded Admin activity report
+         * @description Resource-policy mutations with their before and after values, merged with Operator Job history and bounded by a caller-named window.
+         */
+        get: operations["adminReportActivity"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -2055,11 +2179,13 @@ export interface components {
             usage_complete: boolean;
             evidence_sources: string[];
         };
-        /** @description Logical user-owned durable bytes, tracked separately from physical filesystem capacity. A successful computation that crosses soft_limit_bytes keeps its result; only later admission is restricted. */
+        /** @description Logical user-owned durable bytes, tracked separately from physical filesystem capacity. A successful computation that crosses soft_limit_bytes keeps its result; only later admission is restricted. soft_limit_bytes is null when no ceiling applies, which is not the same fact as a ceiling of zero bytes. */
         StorageEntitlement: {
             logical_owned_bytes: number;
+            /** @description The effective ceiling in bytes, or null when there is no ceiling. */
             soft_limit_bytes: number | null;
             remaining_bytes: number | null;
+            /** @description False when no ceiling applies, because over is undefined without one. */
             over_soft_limit: boolean;
         };
         /** @description The canonical per-subject resource position that downstream consumers project. */
@@ -2290,6 +2416,8 @@ export interface components {
             walltime_seconds: number | null;
             /** @description Username for administrator listings; null for ordinary users. */
             owner: string | null;
+            /** @description The execution class recorded when the Task was submitted, read from its frozen decision rather than recomputed. Null when the Task predates recorded decisions. */
+            placement: null | components["schemas"]["ExecutionClass"];
             /** @description Runner-owned structured progress, when available. */
             progress: {
                 [key: string]: unknown;
@@ -2301,6 +2429,21 @@ export interface components {
             result: components["schemas"]["TaskResultCapability"];
             actions: components["schemas"]["TaskActions"];
             input_preview: null | components["schemas"]["TaskInputPreview"];
+        };
+        ExecutionClass: {
+            /** @description Stable operator-facing identity of the class, so two decisions that selected the same class compare equal. */
+            id: string;
+            /** @enum {string} */
+            state: "cpu" | "accelerator";
+            /** @description The deployment-local queue the resolved request names. */
+            partition: string | null;
+            /** @description Accelerator class the GRES request named; null when untyped. */
+            device_class: string | null;
+            device_count: number;
+            qos: string | null;
+            constraint: string | null;
+            account: string | null;
+            exclusive: boolean;
         };
         TaskResultCapability: {
             available: boolean;
@@ -2800,6 +2943,229 @@ export interface components {
             /** @description False when an idempotent replay returned the existing job. */
             accepted: boolean;
         };
+        /** @description The effective durable-storage entitlement of one subject, exactly as admission reads it. soft_limit_bytes is the effective ceiling and is null when there is no ceiling; a ceiling of 0 is a real ceiling of zero bytes and is never a spelling of unlimited. */
+        StorageQuotaEntitlement: {
+            /** @enum {string} */
+            subject_type: "user";
+            subject_id: number;
+            /**
+             * @description Which decision is in force: an explicit ceiling, an explicit grant of no ceiling, or no per-user override (the deployment default applies).
+             * @enum {string}
+             */
+            state: "limited" | "unlimited" | "inherit";
+            soft_limit_bytes: number | null;
+            logical_owned_bytes: number;
+            remaining_bytes: number | null;
+            over_soft_limit: boolean;
+        };
+        /** @description One durable-storage quota change. The three decisions must not collapse into one another: limited names limit_bytes, unlimited and inherit name none. A request that carries a number where the decision takes none, or omits one where it is required, is refused. */
+        StorageQuotaUpdateRequest: {
+            /** @enum {string} */
+            state: "limited" | "unlimited" | "inherit";
+            limit_bytes?: number | null;
+            reason: string;
+            idempotency_key: string;
+        };
+        StorageQuotaMutationResult: {
+            entry_id: number;
+            storage_quota: components["schemas"]["StorageQuotaEntitlement"];
+        };
+        /** @description The bound applied to one report page. limit is the effective page size after clamping; an over-large request is clamped and says so rather than being refused. */
+        AdminReportWindow: {
+            limit: number;
+            limit_ceiling: number;
+        } & {
+            [key: string]: unknown;
+        };
+        /** @description A total and a maximum over the entries that carried the field. With nothing measured both numbers are null, never a zero total. */
+        AdminMeasurementSummary: {
+            /**
+             * @description Whether the quantity is a measured fact or a fact nobody observed.
+             * @enum {string}
+             */
+            state: "measured" | "unknown";
+            measured: number;
+            unmeasured: number;
+            total_seconds?: number | null;
+            max_seconds?: number | null;
+        };
+        /** @description The compact placement summary one profile contributes to a Task row. ``unrecorded`` and ``unreadable`` are reported as themselves so a Task older than the decision record is distinguishable from a record disagreeing with its own frozen snapshot. */
+        AdminPlacementView: {
+            stage: string | null;
+            /** @enum {string} */
+            state: "recorded" | "unrecorded" | "unreadable";
+            execution_class_id: string | null;
+            reason_code: string | null;
+            reason: string | null;
+            policy_revision: string | null;
+        };
+        /** @description The semantic accelerator a stage declares: a hardware-class token plus an optional device count. A null class means any accelerator class this deployment offers, and an absent count means the declaration does not constrain how many devices are allocated. */
+        AcceleratorRequirement: {
+            /** @description Device-class token such as a100, never a queue or host name; null means any accelerator class. */
+            class: string | null;
+            count?: number;
+        };
+        /** @description The frozen resource snapshot a submission records and the worker validates. It is the scheduler request itself, reported verbatim beside the decision derived from it rather than duplicated inside the decision. */
+        ResolvedResources: {
+            cpus: number;
+            memory: string;
+            max_runtime_seconds: number;
+            /** @description The scheduler spelling of max_runtime_seconds. */
+            slurm_time: string;
+            partition: string | null;
+            gres: string | null;
+            nodes: number;
+            ntasks: number;
+            qos: string | null;
+            account: string | null;
+            constraint: string | null;
+            exclusive: boolean;
+            requires_gpu: boolean;
+        };
+        /** @description One chosen placement: what was requested, against which policy revision, and the bounded reason. The resolved snapshot is reported beside the decision rather than recomputed into it. */
+        PlacementDecision: {
+            /** @description Workflow stage name; null for the primary profile. */
+            stage: string | null;
+            requires_accelerator: boolean;
+            accelerator_requirement: null | components["schemas"]["AcceleratorRequirement"];
+            execution_class: components["schemas"]["ExecutionClass"];
+            policy_revision: string;
+            /** @description Bounded, machine-readable reason for the choice. */
+            reason_code: string;
+            reason: string;
+            resources: components["schemas"]["ResolvedResources"];
+            resource_sources: {
+                [key: string]: string;
+            };
+        };
+        /** @description The placement a task type's profiles would receive today, or the bounded reason the request cannot be placed. placeable false always carries a bounded reason_code and an empty decisions list. */
+        AdminPlacementExplanation: {
+            task_type: string;
+            placeable: boolean;
+            reason_code: string | null;
+            reason: string | null;
+            decisions: components["schemas"]["PlacementDecision"][];
+        };
+        AdminTaskEntry: {
+            task_id: string;
+            task_type: string | null;
+            status: string;
+            terminal: boolean;
+            owner: {
+                [key: string]: unknown;
+            };
+            submitted_at: number | null;
+            started_at?: number | null;
+            finished_at?: number | null;
+            walltime_seconds?: number | null;
+            queue_seconds?: number | null;
+            run_seconds?: number | null;
+            slurm_job_id?: string | null;
+            error?: string | null;
+            placement: components["schemas"]["AdminPlacementView"];
+            placements: components["schemas"]["AdminPlacementView"][];
+        };
+        AdminTaskReport: {
+            tasks: components["schemas"]["AdminTaskEntry"][];
+            counts_in_window: {
+                [key: string]: number;
+            };
+            limit_ceiling: number;
+            window: components["schemas"]["AdminReportWindow"];
+            recent_failures: {
+                [key: string]: unknown;
+            }[];
+            runtime: components["schemas"]["AdminMeasurementSummary"];
+            queue_latency: components["schemas"]["AdminMeasurementSummary"];
+            generated_at: number;
+        };
+        /** @description One subject in the bounded deployment roll, summed with the canonical ledger arithmetic so the roll reports the same facts the per-subject view does. */
+        AdminSubjectResourceEntry: {
+            subject_id: number;
+            used_gpu_seconds: number;
+            used_cpu_core_seconds: number;
+            logical_owned_bytes: number;
+            units_measured: string[];
+        };
+        /** @description One subject's complete resource position, projected from canonical reads: the canonical envelope, the append-only ledger window behind it, per-class usage, durable storage, and unresolved allocations. A unit with no measured facts reports unknown rather than zero. The scope, the limit ceiling, and the requested page size are served beside the position, so one body fully describes which subject it is and how far its window reaches. */
+        AdminResourceSubjectReport: {
+            /** @enum {string} */
+            scope: "subject";
+            limit_ceiling: number;
+            limit: number;
+            subject: {
+                [key: string]: unknown;
+            };
+            period: string;
+            canonical_envelope: components["schemas"]["ResourceEntitlement"];
+            units: {
+                [key: string]: unknown;
+            }[];
+            allocation_facts: {
+                [key: string]: unknown;
+            };
+            class_breakdown: {
+                [key: string]: unknown;
+            };
+            storage: {
+                [key: string]: unknown;
+            };
+            ledger: {
+                [key: string]: unknown;
+            };
+            durable_data: {
+                [key: string]: unknown;
+            };
+        };
+        /** @description A bounded roll over the subjects this deployment has recorded facts for, each summed with the canonical ledger arithmetic. The scope and the limit ceiling are served beside the roll; the per-subject window and the count it was cut at are reported in `window`, since the roll never carries a single page size of its own. */
+        AdminResourceDeploymentReport: {
+            /** @enum {string} */
+            scope: "deployment";
+            limit_ceiling: number;
+            subjects: components["schemas"]["AdminSubjectResourceEntry"][];
+            window: {
+                [key: string]: unknown;
+            };
+            generated_at: number;
+        };
+        /** @description Per-subject resource operations. With a subject in scope the body is that subject's full position; without one it is a bounded deployment roll. The limit ceiling is reported at the top level beside the scope, not inside a nested window. */
+        AdminResourceReport: components["schemas"]["AdminResourceSubjectReport"] | components["schemas"]["AdminResourceDeploymentReport"];
+        /** @description Detected drift, unresolved evidence, Runner readiness, and Operator Job state. There is deliberately no aggregate health score. */
+        AdminIntegrityReport: {
+            state: string;
+            checked_at: number;
+            drift: {
+                [key: string]: unknown;
+            };
+            scheduler_evidence: {
+                [key: string]: unknown;
+            };
+            runner_readiness: {
+                [key: string]: unknown;
+            };
+            operator: {
+                [key: string]: unknown;
+            };
+        } & {
+            [key: string]: unknown;
+        };
+        AdminActivityReport: {
+            activity: {
+                [key: string]: unknown;
+            }[];
+            policy: {
+                [key: string]: unknown;
+            };
+            operator: {
+                [key: string]: unknown;
+            };
+            since: number | null;
+            limit: number;
+            limit_ceiling: number;
+            generated_at: number;
+        } & {
+            [key: string]: unknown;
+        };
     };
     responses: {
         /** @description Invalid request */
@@ -2859,6 +3225,8 @@ export interface components {
         /** @description Canonical Runner family identifier resolved from the registry. */
         RunnerFamily: string;
         OperatorJobId: string;
+        /** @description Page size, clamped to the report ceiling of 200; the response reports the effective page size. */
+        ReportLimit: number;
     };
     requestBodies: never;
     headers: never;
@@ -3593,6 +3961,68 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+        };
+    };
+    adminGetUserStorageQuota: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: components["parameters"]["UserId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The effective durable-storage entitlement */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StorageQuotaEntitlement"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    adminSetUserStorageQuota: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: components["parameters"]["UserId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StorageQuotaUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description The resulting effective durable-storage entitlement */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StorageQuotaMutationResult"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            /** @description The idempotency key was already used for a different storage-quota change */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     getCurrentGpuCredit: {
@@ -5381,6 +5811,144 @@ export interface operations {
                 };
                 content?: never;
             };
+        };
+    };
+    adminExplainPlacement: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @example gremlin */
+                name: components["parameters"]["TaskTypeName"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The placement each profile would receive, and why */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminPlacementExplanation"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    adminReportTasks: {
+        parameters: {
+            query?: {
+                /** @description Page size, clamped to the report ceiling of 200; the response reports the effective page size. */
+                limit?: components["parameters"]["ReportLimit"];
+                /** @description Comma-separated Task statuses narrowing the page; counts still cover the scanned window. */
+                status?: string;
+                /** @description Comma-separated Task types narrowing the page; counts still cover the scanned window. */
+                task_type?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A bounded page of Tasks with their recorded placement */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminTaskReport"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    adminReportResources: {
+        parameters: {
+            query?: {
+                /** @description Page size, clamped to the report ceiling of 200; the response reports the effective page size. */
+                limit?: components["parameters"]["ReportLimit"];
+                /** @description Restrict the report to one numeric user id. */
+                subject?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Per-subject resource position for the requested scope */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminResourceReport"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    adminReportIntegrity: {
+        parameters: {
+            query?: {
+                /** @description Page size, clamped to the report ceiling of 200; the response reports the effective page size. */
+                limit?: components["parameters"]["ReportLimit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Canonical drift, evidence, readiness, and job state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminIntegrityReport"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    adminReportActivity: {
+        parameters: {
+            query?: {
+                /** @description Page size, clamped to the report ceiling of 200; the response reports the effective page size. */
+                limit?: components["parameters"]["ReportLimit"];
+                /** @description Unix timestamp; only activity at or after it is returned. */
+                since?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Bounded policy mutation and Operator Job activity */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminActivityReport"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
         };
     };
 }
