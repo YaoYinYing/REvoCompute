@@ -502,7 +502,7 @@ def retrieve_artifact(
     )
     if response.status >= 400:
         raise classify(response.body, status=response.status)
-    raw = _read_verified_bytes(str(resolved.get("physical_path") or ""), size)
+    raw = _read_verified_stream(resolved.get("verified_stream"), size)
     import base64
 
     return {
@@ -516,15 +516,22 @@ def retrieve_artifact(
     }
 
 
-def _read_verified_bytes(path: str, expected_size: int) -> bytes:
-    """Read a resolver-verified published file, never beyond its published size."""
-    if not path:
+def _read_verified_stream(stream: Any, expected_size: int) -> bytes:
+    """Read a verified published descriptor, never beyond its published size.
+
+    The descriptor is the one whose size and SHA-256 the canonical resolver
+    checked against the manifest, so the bytes are read from the verified inode
+    rather than by resolving the artifact's name a second time -- a name that
+    could by then resolve to a different file.  The caller must close it.
+    """
+    if stream is None:
         raise McpError(ARTIFACT_NOT_FOUND, "Artifact not found")
     try:
-        with open(path, "rb") as handle:
-            data = handle.read(expected_size)
+        data = stream.read(expected_size)
     except OSError:
         raise McpError(ARTIFACT_NOT_FOUND, "Artifact not found") from None
+    finally:
+        stream.close()
     if len(data) != expected_size:
         # The file changed after verification: fail closed rather than serve a
         # different byte count than the manifest (and the caller) was told.

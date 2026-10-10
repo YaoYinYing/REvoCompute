@@ -2,7 +2,15 @@
 # Distributed under the terms of the GNU General Public License v3.0.
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Authoritative immutable user-owned task storage resolution."""
+"""Authoritative immutable user-owned task storage resolution.
+
+This module owns the one publication boundary the Server trusts: a Task result
+directory is an untrusted filesystem namespace written by the runner's Unix
+identity, so every byte a consumer serves is obtained through a verified
+descriptor opened relative to the trusted result root -- never by re-resolving a
+validated pathname, which is a statement about a name rather than about the file
+the reader ends up holding.
+"""
 from __future__ import annotations
 
 import hashlib
@@ -10,6 +18,8 @@ import json
 import os
 import re
 import stat
+from collections.abc import Iterator
+from dataclasses import dataclass
 from typing import Any
 
 _STORAGE_KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{2,119}\Z")
@@ -49,10 +59,239 @@ def safe_join(base_dir: str, *parts: str) -> str:
 # Stream a published artifact in bounded chunks: artifacts are scientific files
 # that can be gigabytes wide, so nothing here ever reads one wholly into memory.
 _HASH_CHUNK_BYTES = 1024 * 1024
-# The manifest authorizes artifact exposure, so it must not have a weaker trust
-# boundary than the artifacts it governs: it is opened as a private file like
-# any artifact and bounded like any other file a hostile result tree wrote.
-_MAX_MANIFEST_BYTES = 8 * 1024 * 1024
+
+#: The one maximum serialized-manifest byte limit, shared by the writer that
+#: anchors a manifest and the reader that serves it.  Two constants would be two
+#: contracts, and a writer that can emit a manifest its own reader must reject
+#: leaves a Task finished with a result no consumer can open.
+MANIFEST_MAX_BYTES = 8 * 1024 * 1024
+
+
+def manifest_byte_limit() -> int:
+    """Return the one serialized-manifest byte ceiling writer and reader share.
+
+    The single read site for the limit: the publication writer asks for the
+    ceiling instead of restating it, so the two sides cannot drift into two
+    contracts -- a writer that anchors a manifest the canonical reader classifies
+    as unreadable would leave a finished Task no consumer can open.
+    """
+    return MANIFEST_MAX_BYTES
+
+
+#: A component of a result-relative path.  The result tree is runner-writable
+#: and a hostile name is not merely long: a newline or a NUL in a manifest entry
+#: reaches HTTP headers, ZIP member names, and log lines.  A publisher that ever
+#: writes one through would create a publication its own reader refuses, so both
+#: sides judge a component with this expression.
+_MANIFEST_PATH_COMPONENT = re.compile(r"[^\x00-\x1f\x7f/\\]{1,255}\Z")
+
+
+def manifest_relative_parts(relative_path: str) -> tuple[str, ...] | None:
+    """Split a manifest-relative artifact path into its components, or ``None``.
+
+    The one path vocabulary every consumer shares: ``.``/``..``/empty/absolute
+    components, backslashes, control characters, and overlong components are
+    refused here rather than at each call site, so a path accepted by the reader
+    is a path the writer could have published.
+    """
+    if not isinstance(relative_path, str) or not relative_path:
+        return None
+    parts = relative_path.split("/")
+    if any(_MANIFEST_PATH_COMPONENT.fullmatch(part) is None or part in {".", ".."} for part in parts):
+        return None
+    return tuple(parts)
+
+
+@dataclass(frozen=True, slots=True)
+class _VerifiedFile:
+    """One verified published file: bytes prove the manifest entry, the file proves the archive."""
+
+    handle: Any
+    digest: str
+    size: int
+    mtime: float
+
+
+class _ResultTreeWalker:
+    """Enumerate and open files relative to one trusted, opened result root.
+
+    The root descriptor is opened once with ``O_DIRECTORY|O_NOFOLLOW``; every
+    walk and every open is relative to it.  A walk yields an opaque token that
+    holds the *opened parent descriptor* the entry was enumerated from, so
+    opening it later re-resolves only the entry's own name inside a directory
+    whose identity was already checked -- an intermediate component replaced by
+    a symlink after enumeration cannot redirect the open, because the open never
+    mentions that component again.
+    """
+
+    def __init__(self, root: str):
+        try:
+            info = os.stat(root, follow_symlinks=False)
+        except FileNotFoundError as exc:
+            # No result tree at all: the ordinary "nothing was published" case,
+            # not a refused publication.
+            raise FileNotFoundError(f"result root does not exist: {root}") from exc
+        except OSError as exc:
+            raise ArtifactIdentityError(f"result root is unreadable: {root}") from exc
+        if not stat.S_ISDIR(info.st_mode):
+            raise ArtifactIdentityError(f"result root is not a directory: {root}")
+        try:
+            self._root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0))
+        except OSError as exc:
+            raise ArtifactIdentityError(f"result root cannot be opened safely: {root}") from exc
+
+    def __enter__(self) -> "_ResultTreeWalker":
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
+
+    def close(self) -> None:
+        if self._root_fd >= 0:
+            os.close(self._root_fd)
+            self._root_fd = -1
+
+    def walk(self) -> Iterator[tuple[tuple[str, ...], int, str]]:
+        """Yield ``(relative parts, parent descriptor, name)`` for every entry.
+
+        Intermediate components are filesystem objects, not strings: a directory
+        that cannot be opened as a directory is never descended into, so a
+        symlinked or special component hides its contents instead of redirecting
+        the walk outside the result tree.
+        """
+        yield from self._walk(self._root_fd, ())
+
+    def _walk(self, directory_fd: int, prefix: tuple[str, ...]) -> Iterator[tuple[tuple[str, ...], int, str]]:
+        try:
+            names = sorted(os.listdir(directory_fd))
+        except OSError:
+            return
+        for name in names:
+            if _MANIFEST_PATH_COMPONENT.fullmatch(name) is None or name in {".", ".."}:
+                continue
+            path = (*prefix, name)
+            try:
+                info = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+            except OSError:
+                yield path, directory_fd, name
+                continue
+            # Only a real directory is descended into.  A symlink, a regular
+            # file, and every special file are yielded as candidates instead, so
+            # the publishability check refuses them by the same rule it applies
+            # everywhere else -- and a component that is not a directory hides
+            # its contents rather than redirecting the walk outside the root.
+            if not stat.S_ISDIR(info.st_mode):
+                yield path, directory_fd, name
+                continue
+            try:
+                child = os.open(
+                    name,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0),
+                    dir_fd=directory_fd,
+                )
+            except OSError:
+                # The component claimed to be a directory during enumeration and
+                # could not be re-opened as one: it was swapped in between, so
+                # fail closed and descend into nothing.
+                yield path, directory_fd, name
+                continue
+            try:
+                yield from self._walk(child, path)
+            finally:
+                os.close(child)
+
+    @staticmethod
+    def open_verified(
+        directory_fd: int, name: str, *, max_bytes: int | None = None, expected: tuple[int, str] | None = None
+    ) -> _VerifiedFile:
+        """Open one enumerated entry as a private regular file, no-follow.
+
+        ``O_NOFOLLOW`` refuses a final-component symlink atomically at open time
+        and the ``fstat`` runs on the *opened descriptor*, not on the name, so a
+        regular single-linked file is the only thing the descriptor can be
+        reading.  With ``expected`` the bytes are hashed once and must match the
+        manifest entry's ``(size, sha256)``, which is why a caller never needs a
+        second, later open of the same name.
+        """
+        descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0), dir_fd=directory_fd)
+        handle = os.fdopen(descriptor, "rb")
+        try:
+            status = os.fstat(handle.fileno())
+            if not stat.S_ISREG(status.st_mode) or status.st_nlink != 1:
+                raise ArtifactIdentityError(f"not a private regular file: {name}")
+            if max_bytes is None:
+                return _VerifiedFile(handle, "", status.st_size, status.st_mtime)
+            size, digest = _hash_bounded(handle, min(max_bytes, status.st_size))
+            if size != status.st_size:
+                # The bytes ran out before the size the descriptor reported: the
+                # file shrank while it was being read.
+                raise ArtifactIdentityError(f"published file changed while being read: {name}")
+            if expected is not None:
+                declared_size, declared_digest = expected
+                if size != declared_size:
+                    raise ArtifactIdentityError(f"published artifact does not match its declared size: {name}")
+                if digest != declared_digest:
+                    raise ArtifactIdentityError(f"published artifact does not match its declared digest: {name}")
+            handle.seek(0)
+            return _VerifiedFile(handle, digest, size, status.st_mtime)
+        except BaseException:
+            handle.close()
+            raise
+
+    def open_published_file(
+        self, parts: tuple[str, ...], *, max_bytes: int | None = None, expected: tuple[int, str] | None = None
+    ) -> _VerifiedFile:
+        """Open an already-validated result-relative path from the root.
+
+        Every intermediate component is opened relative to its parent with
+        ``O_DIRECTORY|O_NOFOLLOW`` and ``fstat``-checked, so a component swapped
+        for a symlink fails the open instead of being followed; each descriptor
+        stays open until the next one exists, so no directory can be exchanged
+        for a different one between two steps of the walk.
+        """
+        descriptors: list[int] = []
+        try:
+            current = self._root_fd
+            for part in parts[:-1]:
+                current = os.open(
+                    part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0), dir_fd=current
+                )
+                descriptors.append(current)
+            return self.open_verified(current, parts[-1], max_bytes=max_bytes, expected=expected)
+        except ArtifactIdentityError as exc:
+            # Not found is the one open failure that is not an identity refusal:
+            # a caller distinguishes "there is no manifest" from "the manifest is
+            # there and unusable", so a missing entry has to survive the
+            # normalization below.
+            if isinstance(exc.__cause__, FileNotFoundError):
+                raise exc.__cause__ from exc
+            raise
+        except FileNotFoundError:
+            raise
+        except OSError as exc:
+            raise ArtifactIdentityError(f"published entry is unreachable: {'/'.join(parts)}") from exc
+        finally:
+            for descriptor in descriptors:
+                os.close(descriptor)
+
+
+def _hash_bounded(handle: Any, limit: int) -> tuple[int, str]:
+    """Stream-hash at most *limit* bytes, returning ``(size, sha256)``.
+
+    The loop is bounded by the size the descriptor reported before the read
+    started, so an artifact that grows while it is being hashed cannot hold the
+    reader in an unbounded stream: the extra bytes are simply not hashed, and the
+    size mismatch that leaves is what rejects the candidate.
+    """
+    digest = hashlib.sha256()
+    size = 0
+    while size < limit:
+        chunk = handle.read(min(_HASH_CHUNK_BYTES, limit - size))
+        if not chunk:
+            break
+        digest.update(chunk)
+        size += len(chunk)
+    return size, digest.hexdigest()
 
 
 class ArtifactIdentityError(OSError):
@@ -62,36 +301,6 @@ class ArtifactIdentityError(OSError):
     all, so every caller that already fails closed on an unreadable file fails
     closed on a symlinked, linked, or substituted one with no extra branch.
     """
-
-
-def _open_published_file(path: str) -> Any:
-    """Open an artifact as a verified descriptor under the private-link contract.
-
-    ``O_NOFOLLOW`` refuses a final-component symlink atomically at open time, and
-    the ``fstat`` runs on the *opened descriptor* rather than on a pathname, so a
-    regular single-linked file is the only thing this descriptor can be reading.
-    The caller must close the returned handle.
-    """
-    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
-    handle = os.fdopen(descriptor, "rb")
-    try:
-        status = os.fstat(handle.fileno())
-        if not stat.S_ISREG(status.st_mode) or status.st_nlink != 1:
-            raise ArtifactIdentityError(f"not a private regular file: {path}")
-    except BaseException:
-        handle.close()
-        raise
-    return handle
-
-
-def _hash_open_file(handle: Any) -> tuple[str, int]:
-    """Stream-hash an open descriptor, returning ``(sha256, size)`` in bounded chunks."""
-    digest = hashlib.sha256()
-    size = 0
-    while chunk := handle.read(_HASH_CHUNK_BYTES):
-        digest.update(chunk)
-        size += len(chunk)
-    return digest.hexdigest(), size
 
 
 class PublicationAnchor:
@@ -248,33 +457,40 @@ class StorageResolver:
         One implementation of the publication read: every caller gets either the
         verified bytes or the state that explains the refusal, so no consumer can
         disagree with another about whether a result is published, and no
-        consumer has to re-derive the reason by re-opening the file.
+        consumer has to re-derive the reason by re-opening the file.  The bytes
+        come from a descriptor opened relative to the trusted result root, so an
+        intermediate directory swapped for a symlink cannot point the read at a
+        different manifest.
         """
         try:
-            manifest_path = self.get_manifest_path(task)
+            result_root = self.get_task_root(task)
         except (AttributeError, ValueError):
             return None, PUBLICATION_NOT_FINALIZED
         try:
-            handle = _open_published_file(manifest_path)
-        except (AttributeError, OSError, ValueError) as exc:
-            # No usable manifest on disk.  Whether *anything* was published is the
-            # anchor's answer, and the two "no anchor" cases are different facts:
-            # an anchor with the bytes gone is a publication lost after the fact,
-            # while a missing file with no anchor is simply a task that never
-            # finalized -- the ordinary not-yet case, not a quarantine.
+            with _ResultTreeWalker(result_root) as walker:
+                verified = walker.open_published_file(("manifest.json",), max_bytes=manifest_byte_limit())
+                try:
+                    data = verified.handle.read(manifest_byte_limit())
+                    if len(data) != verified.size:
+                        # The manifest changed between the descriptor's own size
+                        # report and the bounded read: it was replaced while it
+                        # was being read.
+                        raise ArtifactIdentityError("manifest changed while being read")
+                finally:
+                    verified.handle.close()
+        except FileNotFoundError:
+            # Nothing at the canonical manifest path at all.
             if self._anchor_row(task):
                 return None, PUBLICATION_MANIFEST_MISSING
-            # A manifest that exists but cannot be opened as a private regular
-            # file is not a publication either; it is a refused one, and saying
-            # "not finalized" for it would be false.
-            if isinstance(exc, ArtifactIdentityError) or os.path.lexists(manifest_path):
-                return None, PUBLICATION_MANIFEST_UNREADABLE
             return None, PUBLICATION_NOT_FINALIZED
-        with handle:
-            if os.fstat(handle.fileno()).st_size > _MAX_MANIFEST_BYTES:
-                return None, PUBLICATION_MANIFEST_UNREADABLE
-            data = handle.read(_MAX_MANIFEST_BYTES + 1)
-        if len(data) > _MAX_MANIFEST_BYTES:
+        except (AttributeError, OSError, ValueError):
+            # No usable manifest on disk.  Whether *anything* was published is
+            # the anchor's answer, and the two "no anchor" cases are different
+            # facts: an anchor with the bytes gone is a publication lost after
+            # the fact, while a missing file with no anchor is simply a task that
+            # never finalized -- the ordinary not-yet case, not a quarantine.
+            if self._anchor_row(task):
+                return None, PUBLICATION_MANIFEST_MISSING
             return None, PUBLICATION_MANIFEST_UNREADABLE
         anchor, raw = self._publication_anchor(task)
         if raw is not None and anchor is None:
@@ -288,6 +504,7 @@ class StorageResolver:
             return None, PUBLICATION_UNANCHORED
         if not anchor.matches(hashlib.sha256(data).hexdigest(), len(data)):
             return None, PUBLICATION_ANCHOR_MISMATCH
+        return data, PUBLICATION_AVAILABLE
         return data, PUBLICATION_AVAILABLE
 
     def publication_state(self, task: dict[str, Any]) -> str:
@@ -352,89 +569,92 @@ class StorageResolver:
 
     def resolve_declared_artifact(
         self, task: dict[str, Any], relative_path: str, manifest: dict[str, Any] | None = None
-    ) -> tuple[str, dict[str, Any]] | None:
-        """Resolve a manifest-declared artifact to its path and manifest entry.
+    ) -> tuple[tuple[str, ...], dict[str, Any]] | None:
+        """Resolve a manifest-declared artifact to its component parts and entry.
 
-        Path normalization and declaration lookup only.  Both the download
-        resolver and the results archive verify the bytes with
-        ``open_verified_artifact``, so both consume one identity contract.  A
-        caller that already holds the parsed manifest passes it in rather than
-        re-reading it once per artifact.
+        Path normalization and declaration lookup only.  The result is the
+        *components*, never a pathname: every consumer opens them relative to the
+        trusted result root through the one walker, so no consumer can turn a
+        declaration back into an absolute path and reopen it.  A caller that
+        already holds the parsed manifest passes it in rather than re-reading it
+        once per artifact.
         """
-        normalized = relative_path.replace("\\", "/")
-        parts = normalized.split("/")
-        if not normalized or normalized.startswith("/") or any(part in {"", ".", ".."} for part in parts):
+        parts = manifest_relative_parts(relative_path)
+        if parts is None:
             return None
         if manifest is None:
             manifest = self.load_manifest(task)
         if manifest is None:
             return None
-        artifact = next((item for item in manifest.get("artifacts", []) if item.get("path") == normalized), None)
+        declared = "/".join(parts)
+        artifact = next(
+            (item for item in manifest.get("artifacts", []) if isinstance(item, dict) and item.get("path") == declared),
+            None,
+        )
         if artifact is None:
             return None
-        try:
-            path = safe_join(self.get_task_root(task), *parts)
-        except (AttributeError, ValueError):
-            return None
-        return path, artifact
+        return parts, artifact
 
     @staticmethod
-    def open_verified_artifact(path: str, artifact: dict[str, Any]) -> tuple[Any, str]:
-        """Open a published artifact and verify it against its manifest entry.
-
-        This is *the* published-artifact identity contract: a private regular
-        file (no symlink, single link) whose declared size and SHA-256 match the
-        bytes of the opened descriptor.  Both are required — an entry without
-        them carries no identity evidence, so it fails closed rather than being
-        trusted on its pathname.  Returns ``(handle, digest)`` with the handle
-        rewound to the start; the caller must close it.
-        """
+    def _declared_identity(artifact: dict[str, Any]) -> tuple[int, str]:
+        """Return the ``(size, sha256)`` identity a manifest entry must carry."""
         declared_size = artifact.get("size")
         declared_digest = artifact.get("sha256")
         if not isinstance(declared_size, int) or isinstance(declared_size, bool) or declared_size < 0:
             raise ArtifactIdentityError("published artifact declares no usable size")
         if not isinstance(declared_digest, str) or not _SHA256.fullmatch(declared_digest):
             raise ArtifactIdentityError("published artifact declares no usable digest")
-        handle = _open_published_file(path)
-        try:
-            digest, size = _hash_open_file(handle)
-            if declared_size != size:
-                raise ArtifactIdentityError("published artifact does not match its declared size")
-            if declared_digest != digest:
-                raise ArtifactIdentityError("published artifact does not match its declared digest")
-            handle.seek(0)
-        except BaseException:
-            handle.close()
-            raise
-        return handle, digest
+        return declared_size, declared_digest
 
-    def resolve_artifact(self, task: dict[str, Any], relative_path: str) -> dict[str, Any] | None:
+    def open_verified_artifact(
+        self, task: dict[str, Any], relative_path: str, manifest: dict[str, Any] | None = None
+    ) -> dict[str, Any] | None:
         """Resolve a manifest-declared artifact and its verified open descriptor.
 
+        The one published-artifact identity contract: a private regular file (no
+        symlink, single link, every intermediate component a real directory)
+        whose declared size and SHA-256 match the bytes of the opened descriptor.
+        Both are required -- an entry without them carries no identity evidence.
         The returned ``verified_stream`` is the descriptor whose size and SHA-256
         were just checked against the manifest entry, left open and rewound.  A
-        consumer must read *that* descriptor rather than reopen ``physical_path``:
-        after publication identity has been verified, a pathname reopen would let
-        a replaced file serve bytes that never satisfied the manifest identity.
-        The provenance digest is the one computed while verifying that descriptor,
-        never a second open of the pathname.  The caller owns the descriptor and
-        must close it.
+        consumer must read *that* descriptor: after publication identity has been
+        verified, a reopen -- of a pathname, or of a name a second walk would
+        resolve again -- could serve bytes that never satisfied the manifest
+        identity.  The provenance digest is the one computed while verifying that
+        descriptor.  ``None`` means the artifact is refused; the caller owns the
+        descriptor of a returned result and must close it.
         """
-        resolved = self.resolve_declared_artifact(task, relative_path)
+        resolved = self.resolve_declared_artifact(task, relative_path, manifest)
         if resolved is None:
             return None
-        path, artifact = resolved
+        parts, artifact = resolved
         try:
-            stream, digest = self.open_verified_artifact(path, artifact)
+            declared = self._declared_identity(artifact)
+            verified = self._open_verified_parts(task, parts, declared)
         except (ArtifactIdentityError, OSError, ValueError):
             return None
         return {
             **artifact,
-            "path": relative_path.replace("\\", "/"),
-            "physical_path": path,
-            "verified_stream": stream,
-            "sha256": digest,
-            "size": os.fstat(stream.fileno()).st_size,
+            "path": "/".join(parts),
+            "verified_stream": verified.handle,
+            "sha256": verified.digest,
+            "size": verified.size,
             "type": artifact.get("type") or artifact.get("media_type"),
         }
+
+    def _open_verified_parts(
+        self, task: dict[str, Any], parts: tuple[str, ...], declared: tuple[int, str]
+    ) -> _VerifiedFile:
+        """Open *parts* from the task's trusted result root and verify the bytes."""
+        with _ResultTreeWalker(self.get_task_root(task)) as walker:
+            return walker.open_published_file(parts, max_bytes=declared[0], expected=declared)
+
+    def resolve_artifact(self, task: dict[str, Any], relative_path: str) -> dict[str, Any] | None:
+        """Resolve a manifest-declared artifact for a read consumer.
+
+        The name the download, projection, and Tool paths call.  It delegates to
+        the one implementation, so every consumer consumes one identity contract
+        whether or not it already holds the parsed manifest.
+        """
+        return self.open_verified_artifact(task, relative_path)
 

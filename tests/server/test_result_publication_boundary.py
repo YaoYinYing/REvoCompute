@@ -17,12 +17,14 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import stat
 import uuid
 import zipfile
 
 import pytest
 from revocompute.result_storyboard import ResultContractError, declared_file_roles, load_expected_file_tree
+from revocompute.storage import ResultPublicationError
 from revocompute.task_types import ArtifactSelector, ResultView
 
 from conftest import _load_pssm_module, _test_client_auth, _upsert_task_for_user
@@ -860,9 +862,12 @@ def test_a_large_artifact_is_streamed_in_bounded_chunks(monkeypatch, tmp_path) -
             observed.append(size)
             return self._stream.read(size)
 
-    def spy_open(self, path, artifact):
-        handle, digest = real_open_verified(path, artifact)
-        return _SpyStream(handle), digest
+    def spy_open(self, task, relative_path, manifest=None):
+        resolved = real_open_verified(self, task, relative_path, manifest)
+        if resolved is None:
+            return None
+        resolved["verified_stream"] = _SpyStream(resolved["verified_stream"])
+        return resolved
 
     monkeypatch.setattr(storage_module.StorageResolver, "open_verified_artifact", spy_open)
 
@@ -1082,7 +1087,9 @@ def test_every_publication_consumer_agrees_on_the_anchored_authority(monkeypatch
     task = module.task_store.get_task(task_id)
     storage = module.app.config["storage_resolver"]
     logical_url = _first_logical_url(module, task_id)
-    _replace_manifest(module, result_dir, _replacement_declaring(module, task_id, result_dir, "result.txt", b"score\n1.0\n"))
+    _replace_manifest(
+        module, result_dir, _replacement_declaring(module, task_id, result_dir, "result.txt", b"score\n1.0\n")
+    )
 
     client = module.app.test_client()
     verdicts = {
@@ -1175,3 +1182,449 @@ def test_the_existing_link_and_size_refusals_stay_closed_under_the_anchor(monkey
     # were about the tampering, not about the anchor being permanent.
     restored = module.app.test_client().get(f"/compute/api/results/{task_id}", headers=headers)
     assert restored.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# The publication walk is descriptor-relative, so an adversarial result tree
+# cannot redirect it with a name.  Every case below mutates the tree *between*
+# enumeration and open, driven by a barrier rather than a sleep: the walk is
+# paused inside ``os.stat``, the tree is rewritten, and the walk resumes.
+# ---------------------------------------------------------------------------
+
+
+class _SwapOnBarrier:
+    """Run *swap* once, the first time ``stat`` is called on a given name.
+
+    Holding the real ``stat`` open until the swap has landed is what makes the
+    race deterministic: there is no window to lose, so a walk that trusted a
+    pathname would fail this while a descriptor-relative one cannot.
+    """
+
+    def __init__(self, module, monkeypatch, swap, trigger: str):
+        self._swap = swap
+        self._trigger = trigger
+        self._done = False
+        self.fired = False
+        real = os.stat
+
+        def barrier(path, *args, **kwargs):
+            if not self._done and os.path.basename(str(path)) == trigger:
+                self._done = True
+                self.fired = True
+                swap()
+            return real(path, *args, **kwargs)
+
+        monkeypatch.setattr(module.task_runtime.os, "stat", barrier)
+
+
+def _fail_anchor(module, monkeypatch, *, error=OSError("database is locked")) -> None:
+    """Make the publication anchor transition fail, as a locked store would."""
+
+    def _raise(*_args, **_kwargs):
+        raise error
+
+    monkeypatch.setattr(module.task_store, "record_result_publication", _raise)
+
+
+def test_an_intermediate_directory_swapped_for_a_symlink_is_not_followed(monkeypatch, tmp_path) -> None:
+    """The classic TOCTOU: the directory is a real one at enumeration, a link at open.
+
+    ``publish/`` is a directory when the walk enumerates it and a symlink to the
+    runner's own home by the time its entry is stat-ed.  Publication must not
+    follow it: what reaches the manifest is a name that can only be resolved
+    inside the result tree, and the planted bytes never become a published
+    artifact.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id = _finished_task(module, tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("host secret\n", encoding="utf-8")
+    result_dir = Path(module.app.config["storage_resolver"].get_task_root(module.task_store.get_task(task_id)))
+
+    def build(root: Path) -> None:
+        (root / "publish").mkdir()
+        (root / "publish" / "secret.txt").write_text("intended\n", encoding="utf-8")
+
+    task = module.task_store.get_task(task_id)
+    build(result_dir)
+
+    def swap() -> None:
+        shutil.rmtree(result_dir / "publish")
+        (result_dir / "publish").symlink_to(outside, target_is_directory=True)
+
+    barrier = _SwapOnBarrier(module, monkeypatch, swap, "secret.txt")
+    manifest = module.task_runtime._finalize_results_manifest(
+        task, execution_state="completed", finished_at=1_700_000_000
+    )
+    assert barrier.fired, "the race was not exercised"
+
+    published = {artifact["path"]: artifact for artifact in manifest["artifacts"]}
+    assert "publish/secret.txt" not in published
+    # And what the manifest does declare resolves to the same bytes it hashed:
+    # the walk's names are the reader's names.
+    storage = module.app.config["storage_resolver"]
+    for relative_path in published:
+        resolved = storage.resolve_artifact(task, relative_path)
+        assert resolved is not None, relative_path
+        resolved["verified_stream"].close()
+
+
+def test_a_component_swapped_between_enumeration_and_open_is_refused(monkeypatch, tmp_path) -> None:
+    """A regular file replaced by a symlink mid-walk is not hashed through the link."""
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id = _finished_task(module, tmp_path)
+    outside = tmp_path / "outside.txt"
+    outside.write_text("host bytes\n", encoding="utf-8")
+    result_dir = Path(module.app.config["storage_resolver"].get_task_root(module.task_store.get_task(task_id)))
+
+    (result_dir / "target.txt").write_text("intended bytes\n", encoding="utf-8")
+
+    def swap() -> None:
+        (result_dir / "target.txt").unlink()
+        (result_dir / "target.txt").symlink_to(outside)
+
+    barrier = _SwapOnBarrier(module, monkeypatch, swap, "target.txt")
+    manifest = module.task_runtime._finalize_results_manifest(
+        module.task_store.get_task(task_id), execution_state="completed", finished_at=1_700_000_000
+    )
+    assert barrier.fired, "the race was not exercised"
+
+    assert "target.txt" not in {artifact["path"] for artifact in manifest["artifacts"]}
+    assert manifest["output_check"]["state"] == "failed"
+
+
+def test_intermediate_component_traversal_is_refused(monkeypatch, tmp_path) -> None:
+    """A ``..`` component is refused by the one path vocabulary both sides share."""
+    from revocompute.storage import manifest_relative_parts
+
+    assert manifest_relative_parts("../outside.txt") is None
+    assert manifest_relative_parts("a/../../b") is None
+    assert manifest_relative_parts("/etc/passwd") is None
+    assert manifest_relative_parts("") is None
+    assert manifest_relative_parts("a//b") is None
+    assert manifest_relative_parts("a\\b") is None
+    assert manifest_relative_parts("a/\x01b") is None
+    assert manifest_relative_parts("x" * 256 + "/f.txt") is None
+    assert manifest_relative_parts("dir/model.pdb") == ("dir", "model.pdb")
+
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id, result_dir, headers = _manifest_task(module, tmp_path)
+    task = module.task_store.get_task(task_id)
+    storage = module.app.config["storage_resolver"]
+    outside = tmp_path / "outside.txt"
+    outside.write_bytes(b"outside bytes\n")
+    # A manifest entry naming bytes outside the published root is never resolved.
+    for probe in ("../outside.txt", "a/../../outside.txt", "/etc/passwd"):
+        assert storage.resolve_declared_artifact(task, probe) is None
+    assert module.app.test_client().get(
+        f"/compute/api/results/{task_id}/artifacts/..%2Foutside.txt", headers=headers
+    ).status_code == 404
+
+
+def test_a_real_subdirectory_is_published_and_resolvable(monkeypatch, tmp_path) -> None:
+    """The descriptor walk keeps the ordinary nested case working end to end."""
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id = _finished_task(module, tmp_path)
+    content = b"score\n1.0\n"
+
+    def build(root: Path) -> None:
+        (root / "nested" / "deeper").mkdir(parents=True)
+        (root / "nested" / "deeper" / "result.txt").write_bytes(content)
+
+    manifest, result_dir = _finalize_dir(module, task_id, build)
+    published = {artifact["path"] for artifact in manifest["artifacts"]}
+    assert "nested/deeper/result.txt" in published
+
+    task = module.task_store.get_task(task_id)
+    resolved = module.app.config["storage_resolver"].resolve_artifact(task, "nested/deeper/result.txt")
+    assert resolved is not None
+    with resolved["verified_stream"] as stream:
+        assert stream.read() == content
+
+
+def test_an_anchored_manifest_over_the_byte_limit_is_never_written(monkeypatch, tmp_path) -> None:
+    """The writer and the reader share one ceiling, so neither can produce a dead publication.
+
+    An ordinary result set whose manifest would not fit the canonical byte limit
+    is refused as a capacity guard: the Task must not be finished with a manifest
+    its own reader classifies as unreadable.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    from revocompute import storage as storage_module
+
+    monkeypatch.setattr(storage_module, "MANIFEST_MAX_BYTES", 4096)
+    monkeypatch.setattr(module.task_runtime, "manifest_byte_limit", lambda: 4096)
+    task_id = _finished_task(module, tmp_path)
+
+    def build(root: Path) -> None:
+        for index in range(200):
+            (root / f"result_{index:03d}.txt").write_text("v\n", encoding="utf-8")
+
+    manifest, result_dir = _finalize_dir(module, task_id, build)
+
+    raw = (result_dir / "manifest.json").read_bytes()
+    assert len(raw) <= 4096
+    assert manifest["artifacts"] == []
+    assert manifest["output_check"]["state"] == "failed"
+    assert any("manifest limit" in problem for problem in manifest["output_check"]["problems"])
+    # And the canonical reader accepts exactly what the writer anchored.
+    task = module.task_store.get_task(task_id)
+    storage = module.app.config["storage_resolver"]
+    assert storage.load_manifest(task) is not None
+
+
+def test_a_manifest_just_below_the_ceiling_publishes_normally(monkeypatch, tmp_path) -> None:
+    """The boundary is a ceiling, not a target: an admitted manifest publishes.
+
+    A ceiling the serialized manifest cannot fit is refused as a capacity guard
+    -- the writer never anchors a manifest its own reader must reject -- and a
+    ceiling that admits the same rows publishes them unchanged.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    from revocompute import storage as storage_module
+
+    task_id = _finished_task(module, tmp_path)
+    result_dir = Path(module.app.config["storage_resolver"].get_task_root(module.task_store.get_task(task_id)))
+    for index in range(200):
+        (result_dir / f"result_{index:03d}.txt").write_text("value\n", encoding="utf-8")
+
+    # A ceiling the full serialized manifest does not fit but the bounded
+    # skeleton does: the writer refuses to anchor a manifest its own reader must
+    # reject, and says so as a capacity guard rather than anchoring a dead
+    # publication.
+    monkeypatch.setattr(storage_module, "MANIFEST_MAX_BYTES", 8192)
+    monkeypatch.setattr(module.task_runtime, "manifest_byte_limit", lambda: 8192)
+    guard = module.task_runtime._finalize_results_manifest(
+        module.task_store.get_task(task_id), execution_state="completed", finished_at=1_700_000_000
+    )
+    assert guard["artifacts"] == []
+    assert guard["total_size"] == 0
+    assert any("manifest limit" in problem for problem in guard["output_check"]["problems"])
+    assert guard.get("outcome") is None and guard.get("work_items") is None
+    assert len((result_dir / "manifest.json").read_bytes()) <= 8192
+    assert module.app.config["storage_resolver"].load_manifest(module.task_store.get_task(task_id)) is not None
+
+    # Every over-limit row is excluded from the published namespace, so what the
+    # canonical reader resolves is exactly what the writer declared: nothing.
+    task = module.task_store.get_task(task_id)
+    assert module.app.config["storage_resolver"].resolve_artifact(task, "result_000.txt") is None
+
+    # Re-publish under a ceiling comfortably above the manifest's own size: the
+    # same rows publish normally and the anchored bytes are readable.
+    monkeypatch.setattr(storage_module, "MANIFEST_MAX_BYTES", 1048576)
+    monkeypatch.setattr(module.task_runtime, "manifest_byte_limit", lambda: 1048576)
+    manifest_again = module.task_runtime._finalize_results_manifest(
+        module.task_store.get_task(task_id), execution_state="completed", finished_at=1_700_000_001
+    )
+    assert len(manifest_again["artifacts"]) == 200
+    assert len((result_dir / "manifest.json").read_bytes()) <= 1048576
+    assert module.app.config["storage_resolver"].load_manifest(module.task_store.get_task(task_id)) is not None
+
+
+def test_an_over_capacity_artifact_is_refused_before_it_is_hashed(monkeypatch, tmp_path) -> None:
+    """Capacity is enforced from the verified size, not by hashing the whole file."""
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id = _finished_task(module, tmp_path)
+    monkeypatch.setattr(module.task_runtime, "_published_byte_limit", lambda: 8)
+    reads: list[int] = []
+    real_read = os.read
+    real_open = os.open
+
+    def counting_read(fd, count):
+        reads.append(count)
+        return real_read(fd, count)
+
+    def build(root: Path) -> None:
+        (root / "huge.bin").write_bytes(b"x" * (4 * 1024 * 1024))
+
+    # The binary never enters the walk: it is over the whole budget, so its bytes
+    # are never read, which is what "bounded work" means.
+    manifest, _result_dir = _finalize_dir(module, task_id, build)
+
+    assert manifest["artifacts"] == []
+    assert any("capacity limit" in problem for problem in manifest["output_check"]["problems"])
+
+
+def test_an_artifact_that_grows_while_being_hashed_is_refused(monkeypatch, tmp_path) -> None:
+    """A file that grows under the reader is rejected, never hashed to its new size."""
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id = _finished_task(module, tmp_path)
+    result_dir = Path(module.app.config["storage_resolver"].get_task_root(module.task_store.get_task(task_id)))
+    target = result_dir / "growing.bin"
+    target.write_bytes(b"a" * 512)
+    real_open = os.open
+    grew = False
+
+    def growing_open(path, *args, **kwargs):
+        nonlocal grew
+        fd = real_open(path, *args, **kwargs)
+        if os.path.basename(str(path)) == "growing.bin" and not grew:
+            grew = True
+            # Grow the file through the descriptor the reader is about to hash,
+            # so the size it reported and the bytes it can read disagree.
+            os.write(fd, b"b" * 4096)
+            os.lseek(fd, 0, os.SEEK_SET)
+        return fd
+
+    monkeypatch.setattr(module.task_runtime.os, "open", growing_open)
+    manifest = module.task_runtime._finalize_results_manifest(
+        module.task_store.get_task(task_id), execution_state="completed", finished_at=1_700_000_000
+    )
+    assert grew
+    assert "growing.bin" not in {artifact["path"] for artifact in manifest["artifacts"]}
+    assert manifest["output_check"]["state"] == "failed"
+
+
+def test_an_artifact_truncated_while_being_hashed_is_refused(monkeypatch, tmp_path) -> None:
+    """A file truncated under the reader is rejected rather than digested short."""
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id = _finished_task(module, tmp_path)
+    result_dir = Path(module.app.config["storage_resolver"].get_task_root(module.task_store.get_task(task_id)))
+    target = result_dir / "truncating.bin"
+    target.write_bytes(b"a" * 4096)
+    real_open = os.open
+    truncated = False
+
+    def truncating_open(path, *args, **kwargs):
+        nonlocal truncated
+        fd = real_open(path, *args, **kwargs)
+        if os.path.basename(str(path)) == "truncating.bin" and not truncated:
+            truncated = True
+            os.ftruncate(fd, 0)
+            os.lseek(fd, 0, os.SEEK_SET)
+        return fd
+
+    monkeypatch.setattr(module.task_runtime.os, "open", truncating_open)
+    manifest = module.task_runtime._finalize_results_manifest(
+        module.task_store.get_task(task_id), execution_state="completed", finished_at=1_700_000_000
+    )
+    assert truncated
+    assert "truncating.bin" not in {artifact["path"] for artifact in manifest["artifacts"]}
+
+
+def test_an_artifact_replaced_by_a_hardlink_while_being_hashed_is_refused(monkeypatch, tmp_path) -> None:
+    """A second link appearing mid-hash means the bytes are not privately owned."""
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id = _finished_task(module, tmp_path)
+    result_dir = Path(module.app.config["storage_resolver"].get_task_root(module.task_store.get_task(task_id)))
+    target = result_dir / "linked.bin"
+    target.write_bytes(b"a" * 4096)
+    outside = tmp_path / "outside.bin"
+    real_open = os.open
+    linked = False
+
+    def linking_open(path, *args, **kwargs):
+        nonlocal linked
+        fd = real_open(path, *args, **kwargs)
+        if os.path.basename(str(path)) == "linked.bin" and not linked:
+            linked = True
+            os.link(target, outside)
+        return fd
+
+    monkeypatch.setattr(module.task_runtime.os, "open", linking_open)
+    manifest = module.task_runtime._finalize_results_manifest(
+        module.task_store.get_task(task_id), execution_state="completed", finished_at=1_700_000_000
+    )
+    assert linked
+    assert "linked.bin" not in {artifact["path"] for artifact in manifest["artifacts"]}
+    assert manifest["output_check"]["state"] == "failed"
+
+
+def test_no_publication_consumer_reopens_a_resolved_name(monkeypatch, tmp_path) -> None:
+    """A consumer reads the verified descriptor, never the artifact's name again.
+
+    The file is replaced immediately after resolution, so a consumer that
+    resolved the name a second time -- or reopened the resolved path -- would
+    serve the replacement bytes instead of the ones the manifest authorized.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    headers = _test_client_auth(module)
+    content = b"score\n1.0\n"
+    task_id, result_dir, _manifest = _single_artifact_task(module, tmp_path, content)
+    artifact = result_dir / "result.txt"
+    resolver = module.app.config["storage_resolver"]
+    resolve = resolver.resolve_artifact
+    replaced: list[int] = []
+
+    def replace_after_verify(task, relative_path):
+        resolved = resolve(task, relative_path)
+        if resolved is not None and not replaced:
+            # Replace after the *first* consumer has resolved, so the second
+            # resolution in the same request -- the one a name-based reader would
+            # make -- sees different bytes.
+            replaced.append(1)
+            swapped = artifact.with_suffix(".swapped")
+            swapped.write_bytes(b"substituted bytes\n")
+            os.replace(swapped, artifact)
+        return resolved
+
+    monkeypatch.setattr(resolver, "resolve_artifact", replace_after_verify)
+    client = module.app.test_client()
+
+    response = client.get(f"/compute/api/results/{task_id}/artifacts/result.txt", headers=headers)
+    assert replaced, "the substitution was never exercised"
+    assert response.status_code == 200
+    assert response.data == content
+    assert b"substituted" not in response.data
+
+
+def test_the_archive_refuses_a_quarantined_publication(monkeypatch, tmp_path) -> None:
+    """A quarantined publication cannot be packed, and the reason is reported."""
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    headers = _test_client_auth(module)
+    content = b"score\n1.0\n"
+    task_id, result_dir, _manifest = _single_artifact_task(module, tmp_path, content)
+    _replace_manifest(
+        module, result_dir, _replacement_declaring(module, task_id, result_dir, "result.txt", content)
+    )
+    task = module.task_store.get_task(task_id)
+    assert module.app.config["storage_resolver"].publication_state(task) == "anchor_mismatch"
+    client = module.app.test_client()
+
+    post = client.post(f"/compute/api/results/{task_id}/archive", headers=headers)
+    download = client.get(f"/compute/api/download/{task_id}", headers=headers)
+    with pytest.raises(FileNotFoundError):
+        module.task_runtime._build_results_archive(task)
+
+    assert post.status_code == 409
+    assert post.get_json()["result_publication"] == "anchor_mismatch"
+    assert download.status_code == 409
+    assert download.get_json()["result_publication"] == "anchor_mismatch"
+
+
+def test_a_retry_after_a_failed_publication_leaves_no_false_published_state(monkeypatch, tmp_path) -> None:
+    """A refused publication never leaves a manifest.published claim behind."""
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id = _finished_task(module, tmp_path)
+    events: list[tuple[str, dict]] = []
+    monkeypatch.setattr(module.task_runtime, "emit_event", lambda event, **fields: events.append((event, fields)))
+    _fail_anchor(module, monkeypatch, error=OSError("database is locked"))
+
+    def build(root: Path) -> None:
+        (root / "result.txt").write_text("score\n", encoding="utf-8")
+
+    task = module.task_store.get_task(task_id)
+    result_dir = Path(module.app.config["storage_resolver"].get_task_root(task))
+    build(result_dir)
+
+    with pytest.raises(ResultPublicationError):
+        module.task_runtime._finalize_results_manifest(task, execution_state="completed", finished_at=1_700_000_000)
+
+    assert [event for event, _ in events if event == "manifest.published"] == []
+    assert not (result_dir / "manifest.json").exists()
+    assert module.task_store.get_result_publication(task_id) is None
+    assert module.app.config["storage_resolver"].publication_state(
+        module.task_store.get_task(task_id)
+    ) == "not_finalized"
+
+    # The retry publishes through the ordinary transition and is then the
+    # authority every consumer agrees on.
+    monkeypatch.undo()
+    manifest = module.task_runtime._finalize_results_manifest(
+        task, execution_state="completed", finished_at=1_700_000_001
+    )
+    assert "result.txt" in {artifact["path"] for artifact in manifest["artifacts"]}
+    assert (
+        module.app.config["storage_resolver"].publication_state(module.task_store.get_task(task_id)) == "available"
+    )

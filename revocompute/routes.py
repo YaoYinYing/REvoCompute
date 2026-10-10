@@ -539,7 +539,7 @@ def _tool_task_artifact(tool_call_id: str, role: Any, expression: str) -> dict[s
         raise ToolWorkspaceError("Task artifact reference is unavailable")
     stream = resolved.pop("verified_stream")
     try:
-        # Materialize from the verified descriptor, not from ``physical_path``:
+        # Materialize from the verified descriptor, not from the resolved name:
         # the bytes copied into the Tool workspace are exactly the bytes whose
         # manifest identity was checked, so a replacement between resolution and
         # materialization cannot enter the workspace.
@@ -2479,20 +2479,35 @@ def get_result_storyboard_asset(md5sum: str, asset: str):
     return response
 
 
-def _result_artifact(task: dict[str, Any], relative_path: str) -> tuple[str, Any, dict[str, Any]] | None:
+def _result_artifact(task: dict[str, Any], relative_path: str) -> dict[str, Any] | None:
     """Resolve only regular files published by the task's finalized manifest.
 
-    Returns the path, the verified open descriptor, and the manifest entry.  The
-    descriptor's bytes and identity were just checked against the manifest, so a
-    consumer must consume *it* rather than reopen ``path``: after publication
-    identity has been verified, a pathname reopen would let a replaced file serve
-    bytes that never satisfied the manifest identity.
+    Returns the manifest entry plus the verified open descriptor
+    (``verified_stream``).  The descriptor's bytes and identity were just checked
+    against the manifest, so a consumer must consume *it* rather than resolve the
+    name again: after publication identity has been verified, a second resolution
+    -- of the same name, in the same request -- could serve bytes that never
+    satisfied the manifest identity.  The caller owns the descriptor and must
+    close it.
     """
-    resolved = current_app.config["storage_resolver"].resolve_artifact(task, relative_path)
+    return current_app.config["storage_resolver"].resolve_artifact(task, relative_path)
+
+
+def _with_verified_artifact(resolved: dict[str, Any] | None, task: dict[str, Any]) -> dict[str, Any] | None:
+    """Apply authorization to one resolved published artifact, or refuse it.
+
+    Every artifact surface -- the artifact download, the logical-file route, the
+    ndarray and table previews -- makes the same ownership/visibility decision
+    about the *same* verified descriptor, so the decision lives here instead of
+    being restated (and possibly restated differently) at each route.  ``None``
+    means "not visible"; the descriptor is closed before the refusal.
+    """
     if resolved is None:
         return None
-    stream = resolved.pop("verified_stream")
-    return resolved.pop("physical_path"), stream, resolved
+    if not _task_artifact_access_allowed(task, resolved):
+        resolved["verified_stream"].close()
+        return None
+    return resolved
 
 
 def _verified_payload(stream: Any) -> Response:
@@ -2570,13 +2585,10 @@ def get_result_artifact(md5sum: str, relative_path: str):
         return jsonify({"status": "not_found", "md5sum": md5sum}), 404
     if not _task_access_allowed(task):
         return _task_not_found(md5sum)
-    resolved = _result_artifact(task, relative_path)
+    resolved = _with_verified_artifact(_result_artifact(task, relative_path), task)
     if resolved is None:
         return jsonify({"error": "Artifact not found"}), 404
-    path, stream, artifact = resolved
-    if not _task_artifact_access_allowed(task, artifact):
-        stream.close()
-        return jsonify({"error": "Artifact not found"}), 404
+    stream, artifact = resolved["verified_stream"], resolved
     # Artifacts are untrusted runner output — default to attachment so they
     # are never rendered same-origin.  `?download=1` still forces a download
     # and `?download=0` explicitly opts back into inline rendering.
@@ -2593,7 +2605,7 @@ def get_result_artifact(md5sum: str, relative_path: str):
     response.headers.set(
         "Content-Disposition",
         "attachment" if as_attachment else "inline",
-        filename=os.path.basename(path),
+        filename=os.path.basename(str(resolved["path"])),
     )
     response.headers["Cache-Control"] = "private, no-store"
     # Defense in depth: even an explicitly-inline artifact runs no scripts.
@@ -2613,13 +2625,10 @@ def get_result_ndarray(md5sum: str, relative_path: str):
         return jsonify({"status": "not_found", "md5sum": md5sum}), 404
     if not _task_access_allowed(task):
         return _task_not_found(md5sum)
-    resolved = _result_artifact(task, relative_path)
+    resolved = _with_verified_artifact(_result_artifact(task, relative_path), task)
     if resolved is None:
         return jsonify({"error": "Array artifact not found"}), 404
-    _path, stream, artifact = resolved
-    if not _task_artifact_access_allowed(task, artifact):
-        stream.close()
-        return jsonify({"error": "Array artifact not found"}), 404
+    stream, artifact = resolved["verified_stream"], resolved
     if set(request.args) - {"key", "kind", "max_elements"}:
         stream.close()
         return jsonify({"error": "Invalid array query"}), 400
@@ -2673,13 +2682,10 @@ def get_result_table(md5sum: str, relative_path: str):
         return jsonify({"status": "not_found", "md5sum": md5sum}), 404
     if not _task_access_allowed(task):
         return _task_not_found(md5sum)
-    resolved = _result_artifact(task, relative_path)
+    resolved = _with_verified_artifact(_result_artifact(task, relative_path), task)
     if resolved is None:
         return jsonify({"error": "Table artifact not found"}), 404
-    _path, stream, artifact = resolved
-    if not _task_artifact_access_allowed(task, artifact):
-        stream.close()
-        return jsonify({"error": "Table artifact not found"}), 404
+    stream, artifact = resolved["verified_stream"], resolved
     declared_table = artifact.get("preview") == "table"
     if not declared_table:
         manifest = current_app.config["storage_resolver"].load_manifest(task) or {}
@@ -2740,7 +2746,6 @@ def get_result_table(md5sum: str, relative_path: str):
                 page_bytes += cost
                 rows.append(row)
     except (OSError, UnicodeError, csv.Error, ValueError):
-        stream.close()
         logging.exception("Table preview failed for task %s artifact %s", md5sum, relative_path)
         return jsonify({"error": "Table could not be previewed"}), 400
     return jsonify({"columns": columns, "rows": rows, "offset": offset, "limit": limit, "has_more": has_more})

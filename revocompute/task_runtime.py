@@ -12,6 +12,7 @@ opens the user database.
 from __future__ import annotations
 
 import csv
+import errno
 import hashlib
 import json
 import logging
@@ -70,12 +71,15 @@ from revocompute.result_storyboard import (
     storyboard_declaration,
 )
 from revocompute.storage import (
+    manifest_byte_limit,
     PUBLICATION_AVAILABLE,
     PUBLICATION_QUARANTINE_STATES,
     ArtifactIdentityError,
     PublicationAnchor,
     ResultPublicationError,
     StorageResolver,
+    _ResultTreeWalker,
+    manifest_relative_parts,
 )
 from revocompute.citations import citations_bibtex
 from revocompute.task_types import default_task_type, get as _get_task_type
@@ -252,31 +256,29 @@ def _write_verified_artifact(
 
     The bytes reaching the ZIP are streamed from the same descriptor the
     published-artifact identity contract was checked on, so a file swapped after
-    manifest finalization -- a new inode, a symlink, a hard-link substitute --
-    cannot land in the download: ``open_verified_artifact`` refuses it before a
-    byte is copied.
+    manifest finalization -- a new inode, a symlink, a hard-link substitute, an
+    intermediate directory exchanged for a symlink -- cannot land in the
+    download: the canonical resolver refuses it before a byte is copied.
     """
     relative_path = artifact.get("path", "")
-    resolved = storage.resolve_declared_artifact(task, relative_path, manifest)
+    resolved = storage.open_verified_artifact(task, relative_path, manifest)
     if resolved is None:
         # A path the manifest never declared -- an undeclared file, an escaping
-        # relative path, a malformed entry -- is not a publication, so it is
-        # refused here exactly like a swapped one.
+        # relative path, a malformed entry, a swapped or linked file -- is not a
+        # publication, so it is refused here exactly like a substituted one.
         raise FileNotFoundError(f"Published result artifact is unavailable: {relative_path}")
-    path, declared = resolved
+    handle = resolved["verified_stream"]
     try:
-        handle, _digest = storage.open_verified_artifact(path, declared)
-    except (ArtifactIdentityError, OSError, ValueError) as exc:
-        raise FileNotFoundError(f"Published result artifact is unavailable: {relative_path}") from exc
-    with handle:
         status = os.fstat(handle.fileno())
-        info = zipfile.ZipInfo(relative_path, date_time=time.localtime(max(status.st_mtime, _ZIP_EPOCH))[:6])
+        info = zipfile.ZipInfo(str(resolved["path"]), date_time=time.localtime(max(status.st_mtime, _ZIP_EPOCH))[:6])
         info.compress_type = zipfile.ZIP_DEFLATED
         info.file_size = status.st_size
         # ``file_size`` is the verified size, so ``ZipFile`` can decide the ZIP64
         # format up front instead of striding the artifact through memory.
         with archive.open(info, "w") as destination:
             shutil.copyfileobj(handle, destination, _ARCHIVE_CHUNK_BYTES)
+    finally:
+        handle.close()
 
 
 def _virtual_upload_path(filename: str) -> str:
@@ -1004,44 +1006,75 @@ def _published_byte_limit() -> int:
 _MAX_RECORDED_REFUSALS = 20
 
 
-def _publishable_artifact(path: str, relative_path: str) -> tuple[dict[str, Any] | None, str | None]:
-    """Return ``(artifact_record, reason)`` for one candidate under the result root.
+def _publishable_artifact(
+    directory_fd: int, filename: str, relative_path: str, remaining_bytes: int
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Return ``(artifact_record, reason)`` for one enumerated candidate.
 
-    Publication never follows a link and never registers a non-regular file.
-    The record's size and digest are taken from one descriptor opened with
-    ``O_NOFOLLOW`` and verified ``fstat``-regular, so the bytes hashed are the
-    bytes the manifest names: a swap between the type check and the read cannot
-    substitute a different inode.
+    Publication never follows a link and never registers a non-regular file.  The
+    candidate is opened relative to the *opened directory descriptor* it was
+    enumerated from -- never by re-resolving an absolute pathname -- so an
+    intermediate directory replaced by a symlink cannot redirect the open outside
+    the result root, and a component swapped between enumeration and open cannot
+    substitute a different inode: ``O_NOFOLLOW`` refuses the final-component
+    symlink atomically and the ``fstat`` runs on the opened descriptor, so the
+    bytes hashed are the bytes the manifest names.
+
+    The entry is classified from a no-follow stat *before* the open (a FIFO
+    opened for reading would block forever) and re-verified from the descriptor
+    after it, and the size the descriptor reports is checked against the
+    *remaining* publication budget before any byte is hashed.  The hash loop is
+    bounded by that same size, so an artifact that is already over capacity is
+    refused without being read and one that changes length while it is being
+    hashed is refused rather than hashed to an unbounded length.
     """
     try:
-        info = os.stat(path, follow_symlinks=False)
+        info = os.stat(filename, dir_fd=directory_fd, follow_symlinks=False)
     except OSError as exc:
         return None, f"unreadable ({exc.__class__.__name__})"
     if stat.S_ISLNK(info.st_mode):
         return None, "symbolic link"
+    if stat.S_ISDIR(info.st_mode):
+        return None, "directory"
     if not stat.S_ISREG(info.st_mode):
         return None, "special file"
     if info.st_nlink != 1:
         return None, "hard link"
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    if info.st_size > remaining_bytes:
+        # Bounded work, not a bounded result: an artifact that cannot fit in the
+        # remaining publication budget is refused from its verified size alone,
+        # before a single byte is read into the hasher.
+        return None, "over capacity"
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
     try:
-        descriptor = os.open(path, flags)
+        descriptor = os.open(filename, flags, dir_fd=directory_fd)
     except OSError as exc:
-        return None, f"unreadable ({exc.__class__.__name__})"
+        return None, "symbolic link" if exc.errno == errno.ELOOP else f"unreadable ({exc.__class__.__name__})"
     try:
         opened = os.fstat(descriptor)
         if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1:
             return None, "not a private regular file"
+        if opened.st_size > remaining_bytes:
+            return None, "over capacity"
         digest = hashlib.sha256()
+        size = 0
         with os.fdopen(descriptor, "rb") as handle:
             descriptor = -1
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            while size < opened.st_size:
+                chunk = handle.read(min(1024 * 1024, opened.st_size - size))
+                if not chunk:
+                    break
                 digest.update(chunk)
+                size += len(chunk)
     except OSError as exc:
         return None, f"unreadable ({exc.__class__.__name__})"
     finally:
         if descriptor >= 0:
             os.close(descriptor)
+    if size != opened.st_size:
+        # The bytes ran out before the size the descriptor reported: the entry
+        # changed while it was being read, so its digest describes no single file.
+        return None, "changed while being read"
     preview = _preview_kind(relative_path)
     return (
         {
@@ -1395,17 +1428,17 @@ def _finalize_results_manifest(
     total_published_bytes = 0
     published_paths: set[str] = set()
     skipped_unpublishable = 0
-    for root, dirs, files in os.walk(result_dir, followlinks=False):
-        if publication_capacity_guard:
-            # The tree is over capacity: stop walking rather than re-tripping
-            # the guard once per remaining directory, which would grow the
-            # manifest's ``problems`` list one entry at a time for an untrusted
-            # tree.  The capacity problem is recorded once, below.
-            break
-        dirs[:] = sorted(directory for directory in dirs if not os.path.islink(os.path.join(root, directory)))
-        for filename in sorted(files):
-            path = os.path.join(root, filename)
-            relative_path = os.path.relpath(path, result_dir).replace(os.sep, "/")
+    # The walk is the reader's walk: the trusted result root is opened once and
+    # every entry is enumerated and opened relative to it, so an intermediate
+    # directory replaced by a symlink cannot redirect publication outside the
+    # tree, and a logical name the manifest records is one the canonical reader
+    # resolves the same way.
+    walker = _ResultTreeWalker(result_dir)
+    try:
+        for relative_parts, directory_fd, filename in walker.walk():
+            if publication_capacity_guard:
+                break
+            relative_path = "/".join(relative_parts)
             if relative_path in {"manifest.json", _MANIFEST_TEMP_NAME}:
                 continue
             if filename == _COMPLETION_SENTINEL:
@@ -1418,8 +1451,23 @@ def _finalize_results_manifest(
                 # published namespace and must stay a set.
                 publication_problems.append(f"Duplicate published artifact path: {relative_path}")
                 continue
-            record, reason = _publishable_artifact(path, relative_path)
+            if len(artifacts) >= _published_artifact_limit():
+                publication_capacity_guard = True
+                break
+            # The remaining budget is what the next candidate may cost: an
+            # artifact that cannot fit is refused from its verified size alone,
+            # before it is hashed.
+            remaining = _published_byte_limit() - total_published_bytes
+            record, reason = _publishable_artifact(directory_fd, filename, relative_path, remaining)
             if record is None:
+                if reason == "over capacity":
+                    # An entry that cannot fit the remaining budget is the
+                    # capacity guard: it is refused from its verified size alone,
+                    # before a byte is hashed, and the walk stops rather than
+                    # re-tripping the guard once per remaining file.  The one
+                    # bounded problem entry below records it.
+                    publication_capacity_guard = True
+                    break
                 # A symlink, hard link, special file, or unreadable entry is not
                 # a publishable artifact.  It is excluded — never followed, never
                 # downgraded to "publish whatever is there".  The first few are
@@ -1432,15 +1480,14 @@ def _finalize_results_manifest(
                         f"Rejected non-publishable result entry {relative_path}: {reason}"
                     )
                 continue
-            if len(artifacts) >= _published_artifact_limit():
-                publication_capacity_guard = True
-                break
             total_published_bytes += record["size"]
             if total_published_bytes > _published_byte_limit():
                 publication_capacity_guard = True
                 break
             published_paths.add(relative_path)
             artifacts.append(record)
+    finally:
+        walker.close()
     if publication_capacity_guard:
         # One bounded entry per guard, whether the ceiling is the artifact count
         # or the aggregate bytes; the walk above has already stopped.
@@ -1538,6 +1585,40 @@ def _finalize_results_manifest(
     # bytes published, not a second serialization that could differ from them.
     payload = json.dumps(manifest, ensure_ascii=True, indent=2, sort_keys=True) + "\n"
     encoded = payload.encode("utf-8")
+    if len(encoded) > manifest_byte_limit():
+        # The writer and the reader share one ceiling, so a manifest the reader
+        # would classify as unreadable is never anchored.  An oversized manifest
+        # here is a result set that did not fit the admission the writer is
+        # allowed to make: the artifacts were each bounded before they were
+        # hashed and their total is inside the byte budget, so what overflowed is
+        # per-artifact framing rather than a scientific result.  The manifest is
+        # republished from an empty artifact set -- the skeleton that names the
+        # refusal is itself bounded -- so the capacity guard is published instead
+        # of anchoring a manifest no consumer can read.
+        publication_capacity_guard = True
+        publication_problems.append(
+            f"Result tree exceeds the {manifest_byte_limit()} byte publication manifest limit"
+        )
+        problems.extend(publication_problems)
+        manifest["artifacts"] = []
+        manifest["total_size"] = 0
+        manifest["output_check"]["state"] = "failed"
+        manifest["output_check"]["problems"] = problems
+        manifest.pop("work_items", None)
+        manifest.pop("progress", None)
+        manifest.pop("outcome", None)
+        manifest["result"] = {"files": {}}
+        manifest["views"] = []
+        payload = json.dumps(manifest, ensure_ascii=True, indent=2, sort_keys=True) + "\n"
+        encoded = payload.encode("utf-8")
+        artifacts = []
+    if len(encoded) > manifest_byte_limit():
+        # Bounded evidence could not express the refusal.  Publishing nothing is
+        # the only honest outcome left: the caller settles the Task as failed
+        # rather than anchoring a manifest its own canonical reader must reject.
+        raise ResultPublicationError(
+            f"result manifest for task {task.get('md5sum')} exceeds the canonical {manifest_byte_limit()} byte limit"
+        )
     with open(temporary, "w", encoding="utf-8") as handle:
         handle.write(payload)
         handle.flush()
