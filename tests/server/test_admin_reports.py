@@ -447,13 +447,56 @@ def test_storage_ownership_and_over_limit_come_from_the_lifecycle_rows(store):
     assert storage["logical_owned_bytes"] == 2 * GIB
     assert storage["effective_limit_bytes"] == GIB
     assert storage["over_limit"] is True
+    assert storage["policy"]["state"] == "inherit"
+    assert storage["policy"]["source"] == "deployment_default"
     assert report["durable_data"]["state_counts"] == {DataLifecycleState.ACTIVE.value: 1}
+
+
+def test_the_report_names_the_per_user_quota_the_admission_decision_uses(store):
+    """An override moves the reported ceiling, because it moves the enforced one.
+
+    The report must not name the deployment default while admission refuses on a
+    per-user override: two readers of "the ceiling" that disagree is exactly the
+    second answer this facade exists to prevent.
+    """
+    store.ensure_data_lifecycle("c" * 32, user_id=9, logical_bytes=2 * GIB)
+    store.set_storage_quota(
+        user_id=9,
+        state="limited",
+        limit_bytes=GIB,
+        actor_user_id=3,
+        reason="override under test",
+        idempotency_key="report-override",
+    )
+
+    storage = ar.resource_operations(store, 9)["storage"]
+
+    assert storage["effective_limit_bytes"] == GIB
+    assert storage["over_limit"] is True
+    assert storage["policy"] == {"state": "limited", "source": "per_user_override"}
+    # The deployment default is unchanged, so the two numbers are genuinely
+    # different facts about the same subject.
+    assert store.storage_soft_limit_bytes != GIB
+
+    store.set_storage_quota(
+        user_id=9,
+        state="unlimited",
+        limit_bytes=None,
+        actor_user_id=3,
+        reason="grant under test",
+        idempotency_key="report-unlimited",
+    )
+    granted = ar.resource_operations(store, 9)["storage"]
+    assert granted["effective_limit_bytes"] is None
+    assert granted["over_limit"] is None
+    assert granted["policy"] == {"state": "unlimited", "source": "per_user_override"}
 
 
 def test_a_deployment_with_no_storage_limit_reports_no_limit_not_a_zero_one(store):
     report = ar.resource_operations(store, 7)
 
     assert report["storage"]["effective_limit_bytes"] == store.storage_soft_limit_bytes or None
+    assert report["storage"]["policy"]["state"] in {"inherit", "limited", "unlimited"}
     if report["storage"]["effective_limit_bytes"] is None:
         assert report["storage"]["over_limit"] is None
         assert report["storage"]["remaining_bytes"] is None

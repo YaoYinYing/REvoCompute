@@ -572,23 +572,38 @@ def _compute_class_breakdown(ledger_rows: Sequence[Mapping[str, Any]], *, period
     ]
 
 
-def _storage_block(envelope: rloan.ResourceEnvelope, soft_limit_bytes: int | None) -> dict[str, Any]:
+def _storage_block(envelope: rloan.ResourceEnvelope, user_id: int, task_store: Any) -> dict[str, Any]:
     """Durable ownership for one subject: bytes owned, the effective limit, and state.
 
-    ``effective_limit_bytes is None`` means the deployment refuses nothing for
-    storage; it does not mean a zero limit.  ``over_limit`` is only ``True`` or
-    ``False`` once a limit exists, because "over" is undefined without one.
+    The ceiling is the *effective* one — the subject's own policy resolved over
+    the deployment default — because that is the number admission refuses on; a
+    report that named the deployment default instead would disagree with the
+    admission decision the moment an override exists.  ``policy.source`` names
+    which of the three decisions produced it, so an operator can tell "no
+    per-user override, the deployment default applies" from "an explicit grant of
+    no ceiling".
+
+    ``effective_limit_bytes is None`` means nothing caps this subject's storage;
+    it does not mean a zero limit.  ``over_limit`` is only ``True`` or ``False``
+    once a limit exists, because "over" is undefined without one.
     """
     storage = envelope.storage
+    if hasattr(task_store, "storage_quota_policy"):
+        policy = task_store.storage_quota_policy(user_id)
+        state = policy.state.value
+        source = "per_user_override" if state != "inherit" else "deployment_default"
+    else:
+        state = "limited" if envelope.storage.soft_limit_bytes is not None else "unlimited"
+        source = "deployment_default" if envelope.storage.soft_limit_bytes is not None else "unlimited"
+    limit = storage.soft_limit_bytes
     return {
         "logical_owned_bytes": storage.logical_owned_bytes,
-        "effective_limit_bytes": soft_limit_bytes,
-        "remaining_bytes": (
-            None if soft_limit_bytes is None else soft_limit_bytes - storage.logical_owned_bytes
-        ),
-        "over_limit": None if soft_limit_bytes is None else storage.over_soft_limit,
+        "effective_limit_bytes": limit,
+        "remaining_bytes": storage.remaining_bytes,
+        "over_limit": None if limit is None else storage.over_soft_limit,
         "policy": {
-            "source": "deployment_default" if soft_limit_bytes is not None else "unlimited",
+            "state": state,
+            "source": source,
         },
     }
 
@@ -725,7 +740,7 @@ def _resource_operations_for_user(
             "basis": "ledger_window",
             "window_limit": limit,
         },
-        "storage": _storage_block(envelope, task_store.storage_soft_limit_bytes or None),
+        "storage": _storage_block(envelope, int(user_id), task_store),
         "ledger": {
             "entries": rloan.normalize_ledger_rows(window),
             "window_limit": limit,

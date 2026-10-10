@@ -6,7 +6,7 @@ import { adminApi, type AdminUser, type AdminUserCreate, type AdminUserUpdate } 
 import { CreditAdmin } from '../credits/CreditAdmin';
 import { button, element, empty, formatCredits, openDialog, setBusy, text } from '../shared/dom';
 import { mountTabs } from '../shared/tabs';
-import { loadEnvelope } from './ResourceEnvelope';
+import { loadEnvelope, loadStorageQuota } from './ResourceEnvelope';
 
 export interface UserFilters { query: string; role: string; status: string }
 
@@ -220,14 +220,16 @@ export class UserAdmin {
   }
 
   /**
-   * The canonical resource envelope for one account, read only.
+   * The canonical resource envelope for one account, plus its quota control.
    *
    * It reads the same projection admission decides against, so an operator sees
-   * the position the server actually uses rather than a balance re-derived here.
+   * the position the server actually uses rather than a balance re-derived here,
+   * and the quota control sends one of the three decisions to the endpoint that
+   * owns it instead of composing an effective ceiling locally.
    */
   async openResourceEnvelope(user: AdminUser): Promise<void> {
-    const section = await loadEnvelope(user.id);
-    const root = element('div', 'resource-envelope-host', [section]);
+    const [envelope, quota] = await Promise.all([loadEnvelope(user.id), loadStorageQuota(user, this.shell)]);
+    const root = element('div', 'resource-envelope-host', [envelope, quota]);
     await openDialog({ title: `Resource envelope: ${user.full_name || user.username}`, content: root });
   }
 }

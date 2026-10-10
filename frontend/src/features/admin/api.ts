@@ -16,6 +16,8 @@ export type ComputeEntitlement = components['schemas']['ComputeEntitlement'];
 export type StorageEntitlement = components['schemas']['StorageEntitlement'];
 export type TaskPlacement = components['schemas']['TaskSummary']['placement'];
 export type TaskSummary = components['schemas']['TaskSummary'];
+export type StorageQuotaEntitlement = components['schemas']['StorageQuotaEntitlement'];
+export type StorageQuotaMutationResult = components['schemas']['StorageQuotaMutationResult'];
 
 export type AdminUser = components['schemas']['AdminUser'];
 export type AdminUserCreate = components['schemas']['AdminUserCreateRequest'];
@@ -88,6 +90,9 @@ export const adminApi = {
   setAllowance: (userId: number, monthlyGpuSeconds: number, idempotencyKey: string): Promise<GPUCreditMutationResult> => json(`/compute/api/auth/admin/users/${userId}/gpu-credit/allowance`, 'PUT', { monthly_gpu_seconds: monthlyGpuSeconds, idempotency_key: idempotencyKey }),
   resetUserCredit: (userId: number, reason: string, idempotencyKey: string): Promise<GPUCreditResetResult> => json(`/compute/api/auth/admin/users/${userId}/gpu-credit/reset`, 'POST', { reason, idempotency_key: idempotencyKey }),
   resetAllCredits: (reason: string, idempotencyKey: string): Promise<GPUCreditResetAllResult> => json('/compute/api/auth/admin/gpu-credit/reset', 'POST', { reason, idempotency_key: idempotencyKey }),
+  getUserStorageQuota: (userId: number): Promise<StorageQuotaEntitlement> => authorizedJson(`/compute/api/auth/admin/users/${userId}/storage-quota`),
+  setStorageQuota: (userId: number, state: string, limitBytes: number | null, reason: string, idempotencyKey: string): Promise<StorageQuotaMutationResult> =>
+    json(`/compute/api/auth/admin/users/${userId}/storage-quota`, 'PUT', { state, limit_bytes: limitBytes, reason, idempotency_key: idempotencyKey }),
   getReconciliation: (): Promise<GPUCreditReconciliation> => authorizedJson('/compute/api/auth/admin/gpu-credit/reconciliation'),
   reconcileCredits: (): Promise<GPUCreditReconciliation> => json('/compute/api/auth/admin/gpu-credit/reconciliation', 'POST'),
 
