@@ -61,14 +61,6 @@ OPERATION_CLEAR_STORAGE_QUOTA = "clear_storage_quota"
 #: keeps "unlimited" and "a limit of zero" distinguishable in one column.
 STORAGE_QUOTA_UNLIMITED_SENTINEL = -1
 
-#: The complete encoding of a policy in ``resource_policies``.  The column holds
-#: bytes, so the three decisions map onto a value, another value, and *no row at
-#: all*: INHERIT is the absent row, LIMITED is any ``allowance`` of zero or more,
-#: and UNLIMITED is :data:`STORAGE_QUOTA_UNLIMITED_SENTINEL`.
-STORAGE_QUOTA_ENCODING = (
-    f"INHERIT=absent row; LIMITED=allowance>=0; UNLIMITED=allowance={STORAGE_QUOTA_UNLIMITED_SENTINEL}"
-)
-
 #: Messages are bounded so an admin request that echoes back a huge or hostile
 #: state string cannot turn a validation error into an unbounded response.
 _MESSAGE_CHARS = 60

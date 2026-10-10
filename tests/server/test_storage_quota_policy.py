@@ -32,6 +32,7 @@ from revocompute.storage_quota import (
     StorageQuotaState,
     parse_quota_input,
 )
+from sqlalchemy import select
 
 GIB = 1024**3
 MB = 1024**2
@@ -61,8 +62,6 @@ def _set(database: TaskDatabase, user_id: int, state: str, limit_bytes=None, **o
 
 def _stored_allowances(database: TaskDatabase) -> dict[int, int]:
     """The raw ``resource_policies`` rows this module owns, keyed by subject."""
-    from sqlalchemy import select
-
     with database.engine.connect() as conn:
         rows = conn.execute(
             select(database.resource_policies_table).where(
@@ -94,10 +93,10 @@ def test_absent_row_limited_and_unlimited_round_trip_through_sqlite(tmp_path):
     """All three decisions survive storage without any two of them colliding.
 
     The distinction the schema has to preserve is absent-row versus ``LIMITED``
-    versus ``UNLIMITED``.  It is preserved by mapping them onto *different*
-    stored values: no row, a non-negative ``allowance``, and the reserved
-    sentinel — so a stored ``0`` still reads back as a limit of zero bytes
-    rather than as "no ceiling".
+    versus ``UNLIMITED``; it is preserved by mapping them onto *different* stored
+    values: no row, a non-negative ``allowance``, and the reserved sentinel — so a
+    stored ``0`` still reads back as a limit of zero bytes rather than as "no
+    ceiling".
     """
     database = _database(tmp_path)
 
@@ -107,7 +106,9 @@ def test_absent_row_limited_and_unlimited_round_trip_through_sqlite(tmp_path):
     _set(database, 42, "unlimited")
     _set(database, 43, "limited", 2 * GIB)
 
-    # ...and they survive a close and reopen of the same file.
+    # The stored bytes are exactly the encoding the module documents, and they
+    # survive a close and reopen of the same file.
+    assert _stored_allowances(database) == {41: 0, 42: STORAGE_QUOTA_UNLIMITED_SENTINEL, 43: 2 * GIB}
     database.engine.dispose()
     reopened = _database(tmp_path)
 
@@ -116,8 +117,6 @@ def test_absent_row_limited_and_unlimited_round_trip_through_sqlite(tmp_path):
     assert reopened.storage_quota_policy(42).limit_bytes is None
     assert reopened.storage_quota_policy(43) == StorageQuotaPolicy(StorageQuotaState.LIMITED, 2 * GIB)
     assert reopened.storage_quota_policy(44).state is StorageQuotaState.INHERIT
-
-    # The stored bytes are exactly the encoding the module documents.
     assert _stored_allowances(reopened) == {41: 0, 42: STORAGE_QUOTA_UNLIMITED_SENTINEL, 43: 2 * GIB}
 
 
