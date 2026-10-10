@@ -10,15 +10,20 @@ production Runner module into generic Server collection (or a scientific
 acceptance module into the fast Runner contract lane) fails closed instead of
 hiding behind an ``--ignore``/marker declaration.
 
-Targets are the lane invocations themselves, not Makefile text: the Server lane
-is the generic ``tests`` tree minus its one alternate boundary, and the fast
-lane is the neutral testkit plus every ``docker/runners/*/tests/fast`` found by
-``glob``.
+The targets are not re-declared here: the receipt asks ``make`` to expand the
+shipped lane variables (``SERVER_TESTS``, ``RUNNER_FAST_TESTS``, ``RUNNER_PYTEST``)
+from the repository ``Makefile`` and runs exactly the argv they denote. Executing
+the real build tool is what keeps the receipt honest — a Makefile-level change
+that broadens the Server scope or drops the fast lane's gating changes the argv
+this receipt collects, so the boundary is proven against the shipped policy
+rather than a private copy of it.
 """
 from __future__ import annotations
 
 import json
 import os
+import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -28,25 +33,20 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# The generic Server lane, verbatim: the whole ``tests`` tree except the fleet
-# boundary that owns its own collection. Fleet is the only other lane under
-# ``tests``, so this scope is complete for proving no production Runner module is
-# reachable from generic Server collection, and it stays bounded to a few seconds.
-SERVER_TARGETS = ["tests", "--ignore=tests/fleet"]
+# The shipped lane definitions live in the Makefile; these are only the variable
+# names whose expansion the receipt consumes.
+SERVER_TESTS_VAR = "SERVER_TESTS"
+RUNNER_FAST_TESTS_VAR = "RUNNER_FAST_TESTS"
+RUNNER_PYTEST_VAR = "RUNNER_PYTEST"
 
-# Gate the fast lane through the same plugin/import mode ``make runner-fast`` uses.
-FAST_PLUGIN = "docker.runner_testkit.pytest_plugin"
+# Runner-owned trees the generic Server lane must never reach: production family
+# implementations, and the test namespace family tests move into when they leave
+# the generic tree.
+RUNNER_OWNED_DIRS = ("docker/runners", "tests/runners")
+
+# The neutral testkit path. The fast lane's shipped targets already name it; this
+# literal is only for staging the miniature fixture below.
 TESTKIT_FAST = "docker/runner_testkit/tests/fast"
-
-
-def _family_fast(root: Path) -> list[str]:
-    """Every family's fast-contract directory, as the fast lane's Makefile globs."""
-    return sorted(path.relative_to(root).as_posix() for path in root.glob("docker/runners/*/tests/fast"))
-
-
-# Resolved at import: the autouse Server fence guards ``os.scandir`` while a test
-# runs, and a directory glob on the production Runner root trips it.
-FAMILY_FAST = _family_fast(ROOT)
 
 # pytest exits 0 only for a clean collection; 5 (nothing collected) and any
 # collection error are not receipts.
@@ -82,6 +82,58 @@ def pytest_collection_modifyitems(config, items):
 '''
 
 
+# ── resolving the shipped lanes ───────────────────────────────────────────────
+
+
+def _make_expand(root: Path, variable: str) -> list[str]:
+    """Ask ``make`` to expand one shipped lane variable into its argv tokens.
+
+    Reading the Makefile textually would test a copy of the policy; running the
+    real build tool against it executes the policy itself. ``make`` absent is a
+    hard failure — the receipt cannot prove the boundary without the definition
+    it is proving.
+    """
+    make = shutil.which("make")
+    assert make is not None, "make is required to resolve the shipped test lanes but was not found on PATH"
+    recipe = f'__receipt: ; @printf "%s\\n" "$({variable})"'
+    result = subprocess.run(
+        [make, "-s", "--no-print-directory", "-C", str(root), "--eval", recipe, "__receipt"],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        f"make failed to expand the shipped {variable} (exit {result.returncode}):\n{result.stdout}\n{result.stderr}"
+    )
+    tokens = shlex.split(result.stdout)
+    assert tokens, f"the shipped {variable} expanded to an empty lane"
+    return tokens
+
+
+def _runner_pytest_args(root: Path) -> list[str]:
+    """The pytest options the shipped fast lane puts on its command line.
+
+    ``RUNNER_PYTEST`` is a full program (``python -m pytest -p <plugin> ...``);
+    the receipt supplies its own interpreter and probe plugin, so it takes only
+    the options the lane puts after ``pytest`` — this is what carries the lane's
+    testkit gating and import mode. Everything up to and including ``pytest`` is
+    the interpreter/pytest invocation the receipt replaces.
+    """
+    program = _make_expand(root, RUNNER_PYTEST_VAR)
+    pytest_at = next((index for index, token in enumerate(program) if token == "pytest"), None)
+    assert pytest_at is not None, f"the shipped fast lane is not a pytest invocation: {program}"
+    options = program[pytest_at + 1:]
+    for index, token in enumerate(options):
+        if token.startswith("-"):
+            args = options[index:]
+            break
+    else:
+        args = []
+    assert any("runner_testkit" in token for token in args), (
+        f"the shipped fast lane lost its neutral testkit gating: {program}"
+    )
+    return args
+
+
 # ── bounded collection probe ──────────────────────────────────────────────────
 
 
@@ -100,7 +152,7 @@ def _probe_environment(search_path: list[str], items_path: Path) -> dict[str, st
     return environment
 
 
-def _collect(root: Path, targets: list[str], *, runner_lane: bool = False) -> list[dict]:
+def _collect(root: Path, targets: list[str], *, runner_args: list[str] | None = None) -> list[dict]:
     """Run one bounded ``--collect-only`` and return the collected item records."""
     with tempfile.TemporaryDirectory(prefix="collection-receipt-") as directory:
         workspace = Path(directory)
@@ -108,8 +160,8 @@ def _collect(root: Path, targets: list[str], *, runner_lane: bool = False) -> li
         items_path = workspace / "collected-items.json"
         program = [sys.executable, "-m", "pytest", *targets, "--collect-only", "-q", "-p", "no:cacheprovider"]
         search_path = [str(workspace)]
-        if runner_lane:
-            program += ["-p", FAST_PLUGIN, "--import-mode=importlib"]
+        if runner_args:
+            program += runner_args
             search_path.insert(0, str(root))
         program += ["-p", "collection_receipt_probe"]
         result = subprocess.run(
@@ -145,12 +197,15 @@ def _collected_files(records: list[dict]) -> set[str]:
 
 
 def _runner_offenders(records: list[dict], root: Path = ROOT) -> list[dict]:
-    """Items whose node id or imported module reaches into production Runner dirs."""
+    """Items whose node id or imported module reaches into a Runner-owned tree."""
     return [
         record
         for record in records
-        if _is_under(record["nodeid"].split("::", 1)[0], "docker/runners", root)
-        or _is_under(record["module"], "docker/runners", root)
+        if any(
+            _is_under(record["nodeid"].split("::", 1)[0], directory, root)
+            or _is_under(record["module"], directory, root)
+            for directory in RUNNER_OWNED_DIRS
+        )
     ]
 
 
@@ -169,20 +224,22 @@ def _scientific_offenders(records: list[dict], root: Path = ROOT) -> list[dict]:
 
 
 def test_server_lane_collection_never_reaches_a_production_runner_module() -> None:
-    """Generic Server collection must carry neither a Runner path nor science."""
-    records = _collect(ROOT, SERVER_TARGETS)
+    """Generic Server collection, as the Makefile ships it, carries neither a Runner path nor science."""
+    targets = _make_expand(ROOT, SERVER_TESTS_VAR)
+    records = _collect(ROOT, targets)
 
     assert len(records) > _MIN_SERVER_ITEMS, f"Server lane collected only {len(records)} items"
     leaked = _runner_offenders(records)
-    assert not leaked, f"Server lane reached production Runner tests: {leaked[:3]}"
+    assert not leaked, f"Server lane reached Runner-owned tests: {leaked[:3]}"
     assert not _scientific_offenders(records), (
         f"Server lane carried scientific acceptance: {_scientific_offenders(records)[:3]}"
     )
 
 
 def test_fast_lane_collection_stays_within_fast_contracts() -> None:
-    """The fast contract lane is fast-only, and still reaches every family."""
-    records = _collect(ROOT, [TESTKIT_FAST, *FAMILY_FAST], runner_lane=True)
+    """The fast contract lane the Makefile ships is fast-only, and still reaches every family."""
+    targets = _make_expand(ROOT, RUNNER_FAST_TESTS_VAR)
+    records = _collect(ROOT, targets, runner_args=_runner_pytest_args(ROOT))
 
     assert len(records) > _MIN_FAST_ITEMS, f"fast lane collected only {len(records)} items"
     files = _collected_files(records)
@@ -191,7 +248,7 @@ def test_fast_lane_collection_stays_within_fast_contracts() -> None:
     assert not any(_within_tests_subdirectory(item, "scientific") for item in files)
     assert not _scientific_offenders(records)
     # The lane must still reach the neutral testkit and at least one family.
-    assert any(_is_under(item, TESTKIT_FAST) for item in files), "fast lane lost the neutral testkit"
+    assert any(_is_under(item, "docker/runner_testkit") for item in targets), "fast lane lost the neutral testkit"
     assert any(_is_under(item, "docker/runners") for item in files), "fast lane collected no family contract"
 
 
@@ -249,7 +306,10 @@ def test_staged_lane_receipts_hold_on_a_miniature_tree(staged_toolkit: Path) -> 
     assert not _runner_offenders(server_records, staged_toolkit)
 
     fast_records = _collect(
-        staged_toolkit, [TESTKIT_FAST, *_family_fast(staged_toolkit)], runner_lane=True
+        staged_toolkit,
+        [TESTKIT_FAST, *(sorted(p.relative_to(staged_toolkit).as_posix()
+                                 for p in staged_toolkit.glob("docker/runners/*/tests/fast")))],
+        runner_args=["-p", "docker.runner_testkit.pytest_plugin", "--import-mode=importlib"],
     )
     fast_files = _collected_files(fast_records)
     assert fast_records, "staged fast lane collected nothing"
@@ -262,8 +322,16 @@ def test_staged_lane_receipts_hold_on_a_miniature_tree(staged_toolkit: Path) -> 
     assert scientific_records, "the staged scientific module was not collectible"
 
 
-def test_lane_receipt_flags_a_lane_that_collects_runner_modules(staged_toolkit: Path) -> None:
-    """The receipt must fail, not pass, when a lane is wired to the Runner tree."""
+def test_lane_receipt_flags_a_lane_that_collects_runner_modules(staged_toolkit: Path, tmp_path: Path) -> None:
+    """The receipt must fail, not pass, when a lane is wired to a Runner-owned tree."""
     offenders = _runner_offenders(_collect(staged_toolkit, ["docker/runners"]), staged_toolkit)
-    assert offenders, "a lane collecting Runner modules must be reported"
+    assert offenders, "a lane collecting production Runner modules must be reported"
     assert all(_is_under(record["nodeid"].split("::", 1)[0], "docker/runners", staged_toolkit) for record in offenders)
+
+    # A family test moved into the runner-owned test namespace is the same leak.
+    (tmp_path / "tests/runners/staged_family").mkdir(parents=True)
+    (tmp_path / "tests/runners/staged_family/test_x.py").write_text(
+        "def test_x():\n    assert True\n", encoding="utf-8"
+    )
+    moved = _runner_offenders(_collect(tmp_path, ["tests"]), tmp_path)
+    assert moved, "a lane collecting tests/runners modules must be reported"

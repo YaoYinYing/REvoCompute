@@ -65,8 +65,10 @@ ALL = frozenset(classify.LANES)
         # to generic backend-only.
         (["docker/runners/gremlin_lh/task.yaml"], {"server", "runner_fast", "runner_scientific"}),
         (["docker/runners/gremlin_lh/runner.yaml"], {"server", "runner_fast", "runner_scientific"}),
-        (["tests/data/gremlin_lh/upstream_reference.json"], {"server", "runner_fast", "runner_scientific"}),
-        (["tests/runners/gremlin_lh/test_upstream_equivalence.py"], {"server", "runner_fast", "runner_scientific"}),
+        (["docker/runners/gremlin_lh/tests/scientific/references/upstream_reference.json"], {"server", "runner_fast", "runner_scientific"}),
+        (["docker/runners/gremlin_lh/tests/scientific/test_upstream_equivalence.py"], {"server", "runner_fast", "runner_scientific"}),
+        # Scientific fixtures that still live under the shared tests/data corpus.
+        (["tests/data/evosplit/minimal.a3m"], {"server", "runner_fast", "runner_scientific"}),
         (["docker/runners/common/runner_common.py"], {"server", "runner_fast", "runner_scientific"}),
         # An ordinary Runner receives both generic and family-owned contracts.
         (["docker/runners/fpocket/fpocket.def"], {"server", "runner_fast"}),

@@ -128,8 +128,11 @@ COMPOSE_PREFIXES = ("docker/nginx/", "docker/server/", "image/", "nginx_sites/")
 # validates, and the Runner infrastructure it shares.
 SCIENTIFIC_RUNNER_FAMILIES = frozenset({"gremlin_lh", "pssm_gremlin", "evosplit"})
 SCIENTIFIC_RUNNER_PREFIXES = tuple(f"docker/runners/{family}/" for family in sorted(SCIENTIFIC_RUNNER_FAMILIES))
-SCIENTIFIC_FIXTURE_PREFIXES = tuple(f"tests/data/{family}/" for family in sorted(SCIENTIFIC_RUNNER_FAMILIES))
-SCIENTIFIC_TEST_PREFIXES = tuple(f"tests/runners/{family}/" for family in sorted(SCIENTIFIC_RUNNER_FAMILIES))
+# Scientific Runner fixtures that still live under the shared ``tests/data``
+# corpus rather than inside the family directory. Family-owned scientific test
+# code now lives under ``docker/runners/<family>/tests/scientific/`` and is
+# already covered by ``SCIENTIFIC_RUNNER_PREFIXES``.
+SCIENTIFIC_FIXTURE_PREFIXES = ("tests/data/evosplit/",)
 
 # Server surfaces the deployment controller and full-stack gate exercise end to
 # end (submission, scheduling, bundles, maintenance, operator control).
@@ -211,12 +214,10 @@ def _classify_path(path: str) -> frozenset[str]:
         return frozenset({"server", "runner_fast"})
     if candidate == "frontend" or candidate.startswith("frontend/"):
         return frozenset({"browser"})
-    if _under(candidate, SCIENTIFIC_FIXTURE_PREFIXES) or _under(candidate, SCIENTIFIC_TEST_PREFIXES):
+    if _under(candidate, SCIENTIFIC_FIXTURE_PREFIXES):
         return frozenset({"server", "runner_fast", "runner_scientific"})
     if candidate.startswith("tests/fleet/"):
         return frozenset({"server", "runner_fast", "browser"})
-    if candidate.startswith("tests/runners/"):
-        return frozenset({"server", "runner_fast"})
     if _under(candidate, BROWSER_TEST_PREFIXES) or candidate in BROWSER_TEST_FILES:
         return frozenset({"server", "browser"})
     if candidate == "tests" or candidate.startswith("tests/"):

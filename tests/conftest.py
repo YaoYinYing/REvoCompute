@@ -14,6 +14,7 @@ from __future__ import annotations
 import importlib.util
 import builtins
 import hashlib
+import io
 import os
 import shutil
 import sys
@@ -66,35 +67,68 @@ def _deny_production_runner_root(request, monkeypatch):
     Installed-fleet projections have their own structurally separate collection
     and must opt in through their physical tests/fleet ownership.
     """
-    if "fleet" in request.path.relative_to(Path(TEST_ROOT)).parts:
+    if request.path.is_relative_to(Path(TEST_ROOT) / "fleet"):
         monkeypatch.setenv("RUNNERS_DIR", str(SERVER_DIR / "docker" / "runners"))
         return
-    production = SERVER_DIR / "docker" / "runners"
+    production = os.path.realpath(SERVER_DIR / "docker" / "runners")
     original_open = builtins.open
     original_path_open = Path.open
+    original_iterdir = Path.iterdir
     original_scandir = os.scandir
+    original_listdir = os.listdir
+    original_os_open = os.open
+    original_walk = os.walk
 
-    def check(path):
-        if isinstance(path, (str, bytes, os.PathLike)):
-            candidate = Path(os.fsdecode(path)).absolute()
-            if candidate == production or production in candidate.parents:
-                raise AssertionError(f"Server test accessed production Runner root: {candidate}")
+    def deny(path):
+        """Fail on any access equal to or beneath the production Runner tree.
+
+        ``realpath`` collapses symlinks and ``..`` so an alias cannot slip past
+        a purely lexical check. Every read or directory-listing entry point a
+        test could reach the tree through is guarded, so the invariant holds
+        for the syscall, not for one favoured API.
+        """
+        if not isinstance(path, (str, bytes, os.PathLike)):
+            return
+        candidate = os.path.realpath(path)
+        if candidate == production or candidate.startswith(production + os.sep):
+            raise AssertionError(f"Server test accessed production Runner root: {path}")
 
     def guarded_open(path, *args, **kwargs):
-        check(path)
+        deny(path)
         return original_open(path, *args, **kwargs)
 
     def guarded_path_open(path, *args, **kwargs):
-        check(path)
+        deny(path)
         return original_path_open(path, *args, **kwargs)
 
-    def guarded_scandir(path):
-        check(path)
-        return original_scandir(path)
+    def guarded_iterdir(path, *args, **kwargs):
+        deny(path)
+        return original_iterdir(path, *args, **kwargs)
+
+    def guarded_scandir(path=".", *args, **kwargs):
+        deny(path)
+        return original_scandir(path, *args, **kwargs)
+
+    def guarded_listdir(path=".", *args, **kwargs):
+        deny(path)
+        return original_listdir(path, *args, **kwargs)
+
+    def guarded_os_open(path, *args, **kwargs):
+        deny(path)
+        return original_os_open(path, *args, **kwargs)
+
+    def guarded_walk(top, *args, **kwargs):
+        deny(top)
+        return original_walk(top, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "open", guarded_open)
+    monkeypatch.setattr(io, "open", guarded_open)
     monkeypatch.setattr(Path, "open", guarded_path_open)
+    monkeypatch.setattr(Path, "iterdir", guarded_iterdir)
     monkeypatch.setattr(os, "scandir", guarded_scandir)
+    monkeypatch.setattr(os, "listdir", guarded_listdir)
+    monkeypatch.setattr(os, "open", guarded_os_open)
+    monkeypatch.setattr(os, "walk", guarded_walk)
 
 
 @pytest.fixture(autouse=True)

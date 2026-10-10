@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_doctor_task_scope_validates_all_mpnn_family_smoke_cases():
-    root = Path(__file__).resolve().parents[2] / "docker" / "runners"
+    root = ROOT / "docker" / "runners"
 
     for task in ("proteinmpnn", "ligandmpnn"):
         report = diagnose(root, runner="mpnn", task=task)
