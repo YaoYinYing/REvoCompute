@@ -10,6 +10,13 @@ export type GPUCreditMutationResult = components['schemas']['GPUCreditMutationRe
 export type InfrastructureReadiness = components['schemas']['InfrastructureReadiness'];
 export type TaskCatalog = components['schemas']['TaskCatalog'];
 
+export type ExecutionClass = components['schemas']['ExecutionClass'];
+export type ResourceEntitlement = components['schemas']['ResourceEntitlement'];
+export type ComputeEntitlement = components['schemas']['ComputeEntitlement'];
+export type StorageEntitlement = components['schemas']['StorageEntitlement'];
+export type TaskPlacement = components['schemas']['TaskSummary']['placement'];
+export type TaskSummary = components['schemas']['TaskSummary'];
+
 export type AdminUser = components['schemas']['AdminUser'];
 export type AdminUserCreate = components['schemas']['AdminUserCreateRequest'];
 export type AdminUserUpdate = components['schemas']['AdminUserUpdateRequest'];
@@ -86,6 +93,8 @@ export const adminApi = {
 
   getConfiguration: (): Promise<AdminConfiguration> => authorizedJson('/compute/api/auth/admin/config'),
   updateConfiguration: (update: Partial<Pick<AdminConfiguration, 'task_types' | 'resources' | 'slurm'>>): Promise<{ message: string }> => json('/compute/api/auth/admin/config', 'PUT', update),
+  listTasks: (): Promise<TaskSummary[]> => authorizedJson<components['schemas']['TaskList']>('/compute/api/tasks').then(data => data.tasks),
+  getUserEntitlement: (userId: number): Promise<ResourceEntitlement> => authorizedJson(`/compute/api/auth/admin/users/${userId}/resource-entitlement`),
   getTaskCatalog: (): Promise<TaskCatalog> => authorizedJson('/compute/api/types'),
   getInfrastructure: (): Promise<InfrastructureReadiness> => authorizedJson('/compute/api/infrastructure'),
   refreshInfrastructure: (): Promise<InfrastructureReadiness> => json('/compute/api/auth/admin/infrastructure/refresh', 'POST'),

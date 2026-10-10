@@ -6,6 +6,7 @@ import { adminApi, type AdminUser, type AdminUserCreate, type AdminUserUpdate } 
 import { CreditAdmin } from '../credits/CreditAdmin';
 import { button, element, empty, formatCredits, openDialog, setBusy, text } from '../shared/dom';
 import { mountTabs } from '../shared/tabs';
+import { loadEnvelope } from './ResourceEnvelope';
 
 export interface UserFilters { query: string; role: string; status: string }
 
@@ -137,8 +138,9 @@ export class UserAdmin {
     const edit = button('Edit'); edit.addEventListener('click', () => void this.openEdit(user));
     const credit = button('Credits'); credit.addEventListener('click', () => void this.credits.open(user));
     const access = button('Access'); access.addEventListener('click', () => void this.access.openUser(user));
+    const envelope = button('Resources'); envelope.addEventListener('click', () => void this.openResourceEnvelope(user));
     const remove = button('Delete', 'admin-text-danger'); remove.disabled = ownAccount; remove.addEventListener('click', () => void this.deleteUser(user));
-    return element('tr', '', [element('td', 'admin-select-cell', [checkbox]), identity, text('td', user.affiliation || 'Not provided'), text('td', user.role), gpu, statuses, element('td', 'admin-table-actions', [edit, credit, access, remove])]);
+    return element('tr', '', [element('td', 'admin-select-cell', [checkbox]), identity, text('td', user.affiliation || 'Not provided'), text('td', user.role), gpu, statuses, element('td', 'admin-table-actions', [edit, credit, access, envelope, remove])]);
   }
 
   private renderBatch(): void {
@@ -215,5 +217,17 @@ export class UserAdmin {
     if (!value) return;
     try { await adminApi.updateUser(user.id, value); await this.loadUsers(); this.shell.notify('User updated.', 'success'); }
     catch (error) { this.shell.notify((error as Error).message, 'error'); }
+  }
+
+  /**
+   * The canonical resource envelope for one account, read only.
+   *
+   * It reads the same projection admission decides against, so an operator sees
+   * the position the server actually uses rather than a balance re-derived here.
+   */
+  async openResourceEnvelope(user: AdminUser): Promise<void> {
+    const section = await loadEnvelope(user.id);
+    const root = element('div', 'resource-envelope-host', [section]);
+    await openDialog({ title: `Resource envelope: ${user.full_name || user.username}`, content: root });
   }
 }
