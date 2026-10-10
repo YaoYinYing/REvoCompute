@@ -70,8 +70,8 @@ from revocompute.result_storyboard import (
     resolve_expected_files,
     storyboard_declaration,
 )
+from revocompute import storage as storage_module
 from revocompute.storage import (
-    manifest_byte_limit,
     PUBLICATION_AVAILABLE,
     PUBLICATION_QUARANTINE_STATES,
     ArtifactChangedError,
@@ -1569,7 +1569,7 @@ def _finalize_results_manifest(
     # bytes published, not a second serialization that could differ from them.
     payload = json.dumps(manifest, ensure_ascii=True, indent=2, sort_keys=True) + "\n"
     encoded = payload.encode("utf-8")
-    if len(encoded) > manifest_byte_limit():
+    if len(encoded) > storage_module.manifest_byte_limit():
         # The writer and the reader share one ceiling, so a manifest the reader
         # would classify as unreadable is never anchored.  An oversized manifest
         # here is a result set that did not fit the admission the writer is
@@ -1581,7 +1581,7 @@ def _finalize_results_manifest(
         # of anchoring a manifest no consumer can read.
         publication_capacity_guard = True
         publication_problems.append(
-            f"Result tree exceeds the {manifest_byte_limit()} byte publication manifest limit"
+            f"Result tree exceeds the {storage_module.manifest_byte_limit()} byte publication manifest limit"
         )
         problems.extend(publication_problems)
         manifest["artifacts"] = []
@@ -1596,12 +1596,12 @@ def _finalize_results_manifest(
         payload = json.dumps(manifest, ensure_ascii=True, indent=2, sort_keys=True) + "\n"
         encoded = payload.encode("utf-8")
         artifacts = []
-    if len(encoded) > manifest_byte_limit():
+    if len(encoded) > storage_module.manifest_byte_limit():
         # Bounded evidence could not express the refusal.  Publishing nothing is
         # the only honest outcome left: the caller settles the Task as failed
         # rather than anchoring a manifest its own canonical reader must reject.
         raise ResultPublicationError(
-            f"result manifest for task {task.get('md5sum')} exceeds the canonical {manifest_byte_limit()} byte limit"
+            f"result manifest for task {task.get('md5sum')} exceeds the canonical {storage_module.manifest_byte_limit()} byte limit"
         )
     with open(temporary, "w", encoding="utf-8") as handle:
         handle.write(payload)

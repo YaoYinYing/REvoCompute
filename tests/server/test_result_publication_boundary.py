@@ -1354,7 +1354,7 @@ def test_an_anchored_manifest_over_the_byte_limit_is_never_written(monkeypatch, 
     from revocompute import storage as storage_module
 
     monkeypatch.setattr(storage_module, "MANIFEST_MAX_BYTES", 4096)
-    monkeypatch.setattr(module.task_runtime, "manifest_byte_limit", lambda: 4096)
+    monkeypatch.setattr(module.task_runtime.storage_module, "MANIFEST_MAX_BYTES", 4096)
     task_id = _finished_task(module, tmp_path)
 
     def build(root: Path) -> None:
@@ -1394,7 +1394,7 @@ def test_a_manifest_just_below_the_ceiling_publishes_normally(monkeypatch, tmp_p
     # reject, and says so as a capacity guard rather than anchoring a dead
     # publication.
     monkeypatch.setattr(storage_module, "MANIFEST_MAX_BYTES", 8192)
-    monkeypatch.setattr(module.task_runtime, "manifest_byte_limit", lambda: 8192)
+    monkeypatch.setattr(module.task_runtime.storage_module, "MANIFEST_MAX_BYTES", 8192)
     guard = module.task_runtime._finalize_results_manifest(
         module.task_store.get_task(task_id), execution_state="completed", finished_at=1_700_000_000
     )
@@ -1413,7 +1413,7 @@ def test_a_manifest_just_below_the_ceiling_publishes_normally(monkeypatch, tmp_p
     # Re-publish under a ceiling comfortably above the manifest's own size: the
     # same rows publish normally and the anchored bytes are readable.
     monkeypatch.setattr(storage_module, "MANIFEST_MAX_BYTES", 1048576)
-    monkeypatch.setattr(module.task_runtime, "manifest_byte_limit", lambda: 1048576)
+    monkeypatch.setattr(module.task_runtime.storage_module, "MANIFEST_MAX_BYTES", 1048576)
     manifest_again = module.task_runtime._finalize_results_manifest(
         module.task_store.get_task(task_id), execution_state="completed", finished_at=1_700_000_001
     )
