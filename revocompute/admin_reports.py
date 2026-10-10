@@ -545,11 +545,21 @@ def _pressure(entitlement: rloan.ComputeEntitlement, *, measured: bool) -> str:
 
 
 def _compute_class_breakdown(ledger_rows: Sequence[Mapping[str, Any]], *, period: str) -> list[dict[str, Any]]:
-    """Per-resource-class usage, summed from the same ledger rows admission reads.
+    """Per-resource-class usage for one ledger *window*, by recorded class.
 
     A class is a *report* of the one ledger, never a second balance: the
     deployment has a single allowance, so a per-class "remaining" would be a
-    second answer that can contradict the decision admission actually made.
+    second answer that can contradict the decision admission actually made.  The
+    buckets group the window's rows for *this* period by the class each row was
+    recorded under, so they add back up to that period's recorded GPU usage.
+
+    The empty bucket is rows whose request named *no* device class (a plain
+    ``gpu:1``), which is a different fact from the class-agnostic allowance
+    scope: ``TaskDatabase.class_usage`` reports the empty class as the
+    every-class total, because the empty scope is the one balance admission
+    decides on.  Both facts are true and are not the same number, so this
+    projection reports the window it was given rather than claiming to be that
+    reader.
     """
     usage: dict[str, int] = {}
     for row in ledger_rows:

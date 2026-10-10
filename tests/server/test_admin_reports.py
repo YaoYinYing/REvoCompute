@@ -501,6 +501,48 @@ def test_a_deployment_with_no_storage_limit_reports_no_limit_not_a_zero_one(stor
         assert report["storage"]["remaining_bytes"] is None
 
 
+def test_the_per_class_breakdown_reports_the_classes_the_ledger_recorded(store):
+    """Two requests, one typed and one untyped, are reported by their own class.
+
+    The report is a view of the ledger *window* it was handed, filtered to the
+    subject's current period: a typed request is recorded under its device class
+    and an untyped one under the empty class, and the buckets add back up to that
+    period's recorded usage.  It is deliberately not ``TaskDatabase.class_usage``:
+    that reader answers the empty class with every-class usage, because the empty
+    scope is the one allowance admission decides on.
+    """
+    at = time.time()
+    store.record_allocation_start(
+        user_id=7, task_id="a" * 32, stage_id="model", slurm_job_id="9703",
+        gpu_count=2, cpu_cores=1, started_at=at, gres="gpu:a100:2",
+    )
+    store.settle_allocation_elapsed("9703", elapsed_seconds=100, finished_at=at + 100)
+    store.record_allocation_start(
+        user_id=7, task_id="b" * 32, stage_id="model", slurm_job_id="9704",
+        gpu_count=1, cpu_cores=1, started_at=at, gres="gpu:1",
+    )
+    store.settle_allocation_elapsed("9704", elapsed_seconds=50, finished_at=at + 50)
+
+    report = ar.resource_operations(store, 7)
+    period = report["period"]
+    classes = {item["resource_class"]: item["used_gpu_seconds"] for item in report["class_breakdown"]["classes"]}
+
+    # The canonical per-class reader and this projection agree about the typed
+    # class, because a named class selects the same rows in both.
+    assert store.class_usage(7, gres="gpu:a100:1", period=period) == 200
+    assert classes == {None: 50, "a100": 200}
+    # The buckets partition the period's recorded GPU usage: nothing is dropped
+    # and nothing is invented.
+    window = store.list_ledger(7, unit="gpu_second", limit=50)
+    assert sum(classes.values()) == -sum(
+        int(row["quantity"]) for row in window
+        if row["kind"] == "usage" and row["period"] == period
+    )
+    # The empty bucket is a real recorded fact — an untyped request — and it is
+    # not the class-agnostic allowance total the canonical reader reports.
+    assert store.class_usage(7, gres="gpu:1", period=period) == 250
+
+
 def test_the_deployment_roll_reports_only_subjects_with_measured_facts(store):
     store.ensure_data_lifecycle("e" * 32, user_id=11, logical_bytes=GIB)
     store.set_compute_allowance(
