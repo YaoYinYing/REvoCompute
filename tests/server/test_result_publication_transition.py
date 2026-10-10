@@ -24,7 +24,7 @@ from revocompute import resource_lifecycle
 from revocompute.db import TaskDatabase
 from revocompute.storage import ResultPublicationError
 
-from conftest import _load_pssm_module, _test_client_auth, _upsert_task_for_user
+from conftest import _load_pssm_module, _publish_archive, _replace_archive, _test_client_auth, _upsert_task_for_user
 
 
 def _task(module, tmp_path, *, status: str = "finished", task_type: str = "cpu_runner") -> tuple[str, Path]:
@@ -970,18 +970,19 @@ def test_a_quarantined_result_cannot_be_published_into_a_new_archive(monkeypatch
 # ---------------------------------------------------------------------------
 
 
-def _cached_archive(module, task_id: str, payload: bytes = b"PK archive bytes") -> Path:
-    """Place a pre-existing results ZIP where the download route looks for it.
+def _cached_archive(module, task_id: str, payload: bytes | None = None) -> Path:
+    """Place a results ZIP where the download route looks for it.
 
     A quarantined task's ZIP is exactly this: bytes written before the result was
     refused, still sitting in the archive namespace.  Nothing about the ZIP
     proves it is a publication, which is why the download route may not decide
-    from its presence.
+    from its presence.  The default is a real repackaging of the task's anchored
+    publication (the raw *payload* override is how a caller writes a ZIP that is
+    not one).
     """
-    archive = Path(module.app.config["storage_resolver"].get_archive_path(module.task_store.get_task(task_id)))
-    archive.parent.mkdir(parents=True, exist_ok=True)
-    archive.write_bytes(payload)
-    return archive
+    if payload is not None:
+        return _replace_archive(module, task_id, payload)
+    return _publish_archive(module, task_id)
 
 
 def test_a_quarantined_cached_archive_is_refused_with_a_reason_not_served(monkeypatch, tmp_path) -> None:
@@ -1010,8 +1011,11 @@ def test_a_quarantined_result_advertises_no_download_or_archive_affordance(monke
     """No surface offers a link the download route would refuse."""
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     headers = _test_client_auth(module)
-    task_id, _result_dir = _unanchored_task(module, tmp_path)
-    _cached_archive(module, task_id)
+    task_id, result_dir = _unanchored_task(module, tmp_path)
+    # A well-formed private ZIP at the canonical archive name.  It is not a
+    # publication, and no publication is anchored for this task either, so the
+    # affordance must be absent: nothing offers a link the download route refuses.
+    _replace_archive(module, task_id, b"PK\x03\x04 pre-anchor archive bytes\n")
     client = module.app.test_client()
 
     summary = next(
@@ -1038,8 +1042,11 @@ def test_an_available_archive_is_downloaded_unchanged(monkeypatch, tmp_path) -> 
     module.task_runtime._finalize_results_manifest(
         module.task_store.get_task(task_id), execution_state="completed", finished_at=1_700_000_000
     )
-    payload = b"PK\x03\x04 published archive bytes\n"
-    _cached_archive(module, task_id, payload)
+    # A real archive of the publication, which is what a build installs and what
+    # the download route accepts: its members carry the anchored manifest and the
+    # manifest's declared artifacts, byte for byte.
+    archive = _publish_archive(module, task_id)
+    payload = archive.read_bytes()
 
     response = module.app.test_client().get(f"/compute/api/download/{task_id}", headers=headers)
 
@@ -1055,7 +1062,7 @@ def test_a_task_that_never_finalized_is_not_served_an_archive(monkeypatch, tmp_p
     task_id, result_dir = _task(module, tmp_path)
     assert not (result_dir / "manifest.json").exists()
     # Even a ZIP left behind by an aborted run is not a publication.
-    _cached_archive(module, task_id)
+    _replace_archive(module, task_id, b"PK\x03\x04 aborted-run bytes\n")
 
     response = module.app.test_client().get(f"/compute/api/download/{task_id}", headers=headers)
 

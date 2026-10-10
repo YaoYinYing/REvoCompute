@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -27,7 +28,7 @@ from revocompute.result_storyboard import ResultContractError, declared_file_rol
 from revocompute.storage import ResultPublicationError
 from revocompute.task_types import ArtifactSelector, ResultView
 
-from conftest import _load_pssm_module, _test_client_auth, _upsert_task_for_user
+from conftest import _load_pssm_module, _publish_archive, _replace_archive, _test_client_auth, _upsert_task_for_user
 
 
 def _finished_task(module, tmp_path, task_type: str = "cpu_runner") -> str:
@@ -1657,6 +1658,47 @@ def test_an_artifact_truncated_while_being_hashed_is_refused(monkeypatch, tmp_pa
     assert "truncating.bin" not in {artifact["path"] for artifact in manifest["artifacts"]}
 
 
+def test_an_artifact_that_grows_only_after_the_hash_is_refused(monkeypatch, tmp_path) -> None:
+    """Growth that begins after the bytes were read is caught by a post-hash check.
+
+    The hash loop is bounded by the size the descriptor reported before the read,
+    so an inode appended to during the read still yields a digest matching its
+    original prefix.  The bound alone is therefore not the check: the descriptor's
+    size is compared *after* the read, and a file that is no longer the length its
+    digest describes is refused.  The append is injected at the end of the read,
+    which is exactly the window a size-only-before check would miss.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id = _finished_task(module, tmp_path)
+    task = module.task_store.get_task(task_id)
+    result_dir = Path(module.app.config["storage_resolver"].get_task_root(task))
+    target = result_dir / "late-growth.bin"
+    target.write_bytes(b"a" * 4096)
+
+    import revocompute.storage as storage_module
+
+    real_hash = storage_module._hash_bounded
+    grew: list[int] = []
+
+    def growing_hash(handle, limit):
+        result = real_hash(handle, limit)
+        if not grew:
+            # Extend the very inode the digest was taken from, after the read.
+            grew.append(1)
+            os.write(handle.fileno(), b"b" * 8192)
+            os.lseek(handle.fileno(), 0, os.SEEK_SET)
+        return result
+
+    monkeypatch.setattr(storage_module, "_hash_bounded", growing_hash)
+    manifest = module.task_runtime._finalize_results_manifest(
+        task, execution_state="completed", finished_at=1_700_000_000
+    )
+
+    assert grew, "the late growth was never injected"
+    assert "late-growth.bin" not in {artifact["path"] for artifact in manifest["artifacts"]}
+    assert any("late-growth.bin" in problem for problem in manifest["output_check"]["problems"])
+
+
 def test_an_artifact_replaced_by_a_hardlink_while_being_hashed_is_refused(monkeypatch, tmp_path) -> None:
     """A second link appearing mid-hash means the bytes are not privately owned."""
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
@@ -1685,7 +1727,29 @@ def test_an_artifact_replaced_by_a_hardlink_while_being_hashed_is_refused(monkey
     assert manifest["output_check"]["state"] == "failed"
 
 
+def test_a_consumer_that_closes_its_stream_releases_the_descriptor(monkeypatch, tmp_path) -> None:
+    """The pinned stream owns the descriptor, and closing it releases it.
+
+    A consumer is handed the verified descriptor and closes it -- every route
+    and the archive builder do.  The pin sits in front of the file object, so it
+    has to forward ``close`` to it; a wrapper that only closed itself would leak
+    one descriptor per request.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id, _result_dir, _manifest = _single_artifact_task(module, tmp_path, b"score\n1.0\n")
+    task = module.task_store.get_task(task_id)
+    resolved = module.app.config["storage_resolver"].resolve_artifact(task, "result.txt")
+    stream = resolved["verified_stream"]
+    descriptor = stream.fileno()
+
+    stream.close()
+
+    with pytest.raises(OSError):
+        os.fstat(descriptor)
+
+
 def test_no_publication_consumer_reopens_a_resolved_name(monkeypatch, tmp_path) -> None:
+
     """A consumer reads the verified descriptor, never the artifact's name again.
 
     The file is replaced immediately after resolution, so a consumer that
@@ -1745,6 +1809,161 @@ def test_the_archive_refuses_a_quarantined_publication(monkeypatch, tmp_path) ->
     assert post.get_json()["result_publication"] == "anchor_mismatch"
     assert download.status_code == 409
     assert download.get_json()["result_publication"] == "anchor_mismatch"
+
+
+def test_a_cached_archive_that_is_not_the_publication_is_refused(monkeypatch, tmp_path) -> None:
+    """A well-formed ZIP whose members are not the publication is not served.
+
+    The archive cache lives in the same runner-writable tree as the results, so a
+    private regular ZIP at the canonical name is not evidence of a publication:
+    the route decides on the *members* of the opened archive, which must be
+    exactly the anchored manifest plus its declared artifacts.  A ZIP the runner
+    assembled itself has to fail closed even though it is an ordinary file.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    headers = _test_client_auth(module)
+    task_id, result_dir, _manifest = _single_artifact_task(module, tmp_path, b"score\n1.0\n")
+    _publish_archive(module, task_id)
+    # The same canonical name, now holding a ZIP whose single member never
+    # satisfied the manifest identity.
+    forged = io.BytesIO()
+    with zipfile.ZipFile(forged, "w") as archive:
+        archive.writestr("result.txt", b"unverified bytes\n")
+        archive.writestr("manifest.json", b'{"artifacts": []}')
+    archive_path = _replace_archive(module, task_id, forged.getvalue())
+    client = module.app.test_client()
+
+    download = client.get(f"/compute/api/download/{task_id}", headers=headers)
+    summary = next(
+        item
+        for item in client.get("/compute/api/tasks", headers=headers).get_json()["tasks"]
+        if item["task_id"] == task_id
+    )
+
+    assert archive_path.is_file()
+    # The name holds a private regular file, which is all an *advertisement* can
+    # see cheaply.  The delivery is what decides: it refuses, because the members
+    # are not the publication, and the advertised link answers that same refusal
+    # rather than streaming the ZIP.
+    assert download.status_code == 409
+    assert b"unverified" not in download.data
+    assert summary["result"]["archive_ready"] is True
+    assert client.get(summary["result"]["download_url"], headers=headers).status_code == 409
+
+
+def test_a_cached_archive_swapped_after_opening_is_not_delivered(monkeypatch, tmp_path) -> None:
+    """The delivered bytes are the descriptor's, not a later pathname's.
+
+    The archive is opened once and verified from that descriptor; the name is
+    replaced with a different private regular file immediately after, which is
+    the window a pathname-based delivery (an offload to a front end, or a
+    reopen for a send) would lose to.  The refusal proves the bytes streamed
+    are the ones the descriptor was verified as.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    headers = _test_client_auth(module)
+    task_id, _result_dir, _manifest = _single_artifact_task(module, tmp_path, b"score\n1.0\n")
+    archive_path = _publish_archive(module, task_id)
+    published_bytes = archive_path.read_bytes()
+    import revocompute.storage as storage_module
+
+    real_verify = storage_module.verified_publication_archive
+    swapped: list[int] = []
+
+    def swap_after_open(source, manifest_bytes, artifacts):
+        result = real_verify(source, manifest_bytes, artifacts)
+        if not swapped:
+            swapped.append(1)
+            # The name now holds a *different* private regular file: whatever
+            # reads by name from here on gets bytes that were never verified.
+            archive_path.write_bytes(b"PK\x03\x04 substituted archive\n")
+        return result
+
+    monkeypatch.setattr(storage_module, "verified_publication_archive", swap_after_open)
+
+    response = module.app.test_client().get(f"/compute/api/download/{task_id}", headers=headers)
+
+    assert swapped, "the substitution was never exercised"
+    assert response.status_code == 200
+    # Byte for byte the verified archive, and nothing of the substituted one.
+    assert response.data == published_bytes
+    assert b"substituted" not in response.data
+    assert archive_path.read_bytes() != published_bytes
+
+
+def test_a_cached_archive_symlink_is_refused(monkeypatch, tmp_path) -> None:
+    """A symlink planted at the canonical archive name is never followed."""
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    headers = _test_client_auth(module)
+    task_id, _result_dir, _manifest = _single_artifact_task(module, tmp_path, b"score\n1.0\n")
+    archive_path = _publish_archive(module, task_id)
+    outside = tmp_path / "outside.zip"
+    outside.write_bytes(archive_path.read_bytes())
+    archive_path.unlink()
+    archive_path.symlink_to(outside)
+
+    download = module.app.test_client().get(f"/compute/api/download/{task_id}", headers=headers)
+
+    assert download.status_code == 409
+    assert download.get_json()["status"] == "not_requested"
+
+
+def test_a_planted_name_cannot_capture_the_manifest_publication(monkeypatch, tmp_path) -> None:
+    """The writer opens descriptors, never a runner-controlled name.
+
+    The manifest is written by the runner's Unix identity inside a
+    runner-writable tree, so a symlink planted at the canonical name must not be
+    able to capture the write.  The candidate is created with ``O_CREAT|O_EXCL``
+    and published with ``renameat``, so the canonical path is *replaced* rather
+    than written through, and the symlink's target is never touched.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id = _finished_task(module, tmp_path)
+    task = module.task_store.get_task(task_id)
+    result_dir = Path(module.app.config["storage_resolver"].get_task_root(task))
+    (result_dir / "result.txt").write_text("score\n", encoding="utf-8")
+    outside = tmp_path / "outside-manifest.json"
+    outside.write_text("{}\n", encoding="utf-8")
+    (result_dir / "manifest.json").symlink_to(outside)
+
+    module.task_runtime._finalize_results_manifest(
+        task, execution_state="completed", finished_at=1_700_000_000
+    )
+
+    published = result_dir / "manifest.json"
+    assert not published.is_symlink()
+    assert published.is_file()
+    assert json.loads(published.read_text(encoding="utf-8"))["task_id"] == task_id
+    # The symlink's target is untouched: the write landed on the canonical name,
+    # never through the link.
+    assert outside.read_text(encoding="utf-8") == "{}\n"
+    assert module.app.config["storage_resolver"].publication_state(task) == "available"
+
+
+def test_a_planted_candidate_name_cannot_be_adopted(monkeypatch, tmp_path) -> None:
+    """A file at the candidate-name shape is neither reused nor published.
+
+    The candidate is created ``O_EXCL`` from an unpredictable name and removed if
+    it never becomes the publication, so nothing a runner plants can be the object
+    the writer writes into.  The walk excludes the candidate namespace outright, so
+    such a file is not a published artifact either.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id = _finished_task(module, tmp_path)
+    task = module.task_store.get_task(task_id)
+    result_dir = Path(module.app.config["storage_resolver"].get_task_root(task))
+    (result_dir / "result.txt").write_text("score\n", encoding="utf-8")
+    planted = result_dir / ".manifest.json.tmp-planted"
+    planted.write_text("not a publication", encoding="utf-8")
+
+    module.task_runtime._finalize_results_manifest(
+        task, execution_state="completed", finished_at=1_700_000_000
+    )
+
+    assert planted.read_text(encoding="utf-8") == "not a publication"
+    manifest = module.app.config["storage_resolver"].load_manifest(module.task_store.get_task(task_id))
+    assert planted.name not in {artifact["path"] for artifact in manifest["artifacts"]}
+    assert json.loads((result_dir / "manifest.json").read_text(encoding="utf-8"))["task_id"] == task_id
 
 
 def test_a_retry_after_a_failed_publication_leaves_no_false_published_state(monkeypatch, tmp_path) -> None:

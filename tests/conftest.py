@@ -15,12 +15,14 @@ import importlib.util
 import builtins
 import hashlib
 import io
+import json
 import os
 import shutil
 import sys
 import tempfile
 import time
 import uuid
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -395,6 +397,43 @@ def _relocate_task_artifacts(module, md5sum: str, source_dir: Path | str, owner:
         archive.parent.mkdir(parents=True, exist_ok=True)
         old_archive.replace(archive)
     return destination
+
+
+def _publish_archive(module, md5sum: str) -> Path:
+    """Install the results archive a real build installs for *md5sum*.
+
+    The archive's members are exactly a repackaging of the anchored manifest and
+    the published artifacts, so it satisfies the member-identity contract the
+    download route enforces.  A fixture that just wrote arbitrary bytes at the
+    canonical name would be describing an archive that is not the publication --
+    the state the route is built to refuse.
+    """
+    resolver = module.app.config["storage_resolver"]
+    task = module.task_store.get_task(md5sum)
+    archive = Path(resolver.get_archive_path(task))
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    manifest_bytes = resolver.read_manifest_bytes(task)
+    if manifest_bytes is None:
+        raise AssertionError("archive fixtures require a finalized publication")
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_STORED) as body:
+        body.writestr("manifest.json", manifest_bytes)
+        for artifact in json.loads(manifest_bytes).get("artifacts", []):
+            handle = resolver.resolve_artifact(task, artifact["path"])
+            if handle is None:
+                raise AssertionError(f"archive fixtures require the published artifact {artifact['path']!r}")
+            try:
+                body.writestr(artifact["path"], handle["verified_stream"].read())
+            finally:
+                handle["verified_stream"].close()
+    return archive
+
+
+def _replace_archive(module, md5sum: str, payload: bytes) -> Path:
+    """Install *payload* at the canonical archive name, ignoring the publication."""
+    archive = Path(module.app.config["storage_resolver"].get_archive_path(module.task_store.get_task(md5sum)))
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    archive.write_bytes(payload)
+    return archive
 
 
 def _upsert_task_for_user(

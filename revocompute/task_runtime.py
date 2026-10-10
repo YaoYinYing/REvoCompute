@@ -22,6 +22,7 @@ import shutil
 import signal
 import stat
 import subprocess
+import tempfile
 import threading
 import time
 import zipfile
@@ -983,10 +984,12 @@ def _public_run_record(task: dict[str, Any], task_type: Any, finished_at: float)
 # diagnostic.
 _COMPLETION_SENTINEL = "task_finished"
 
-# The name publication writes its candidate manifest under before the atomic
-# rename.  One constant serves both the writer and the walk that excludes it, so
-# a runner-placed temp of the same name is never published as an artifact.
-_MANIFEST_TEMP_NAME = ".manifest.json.tmp"
+# The prefix publication writes its candidate manifest under before the atomic
+# rename.  One prefix serves both the writer and the walk that excludes it, so a
+# runner-placed temp of the same shape is never published as an artifact.  The
+# name is unpredictable (pid + monotonic ns on top of the prefix) *and* created
+# with ``O_EXCL``, so nothing at that name can be captured by an earlier file.
+_MANIFEST_TEMP_PREFIX = ".manifest.json.tmp"
 
 # Publication capacity guards.  Runner output is an untrusted filesystem
 # namespace, so the manifest the Server registers is bounded in both entry count
@@ -1434,7 +1437,11 @@ def _finalize_results_manifest(
             if publication_capacity_guard:
                 break
             relative_path = "/".join(relative_parts)
-            if relative_path in {"manifest.json", _MANIFEST_TEMP_NAME}:
+            if relative_path in {"manifest.json", _MANIFEST_TEMP_PREFIX} or relative_path.startswith(
+                f"{_MANIFEST_TEMP_PREFIX}-"
+            ):
+                # This run's candidate manifest temp (and any stale one) is the
+                # writer's namespace, not a published artifact.
                 continue
             if filename == _COMPLETION_SENTINEL:
                 # The runner's execution sentinel is not a published artifact.
@@ -1574,8 +1581,6 @@ def _finalize_results_manifest(
     # passed result set that silently dropped files it could not safely publish,
     # and a tree with only refused entries still publishes a valid manifest (with
     # no artifacts) rather than degrading to "publish the unsafe tree".
-    temporary = _safe_join(result_dir, _MANIFEST_TEMP_NAME)
-    destination = _safe_join(result_dir, "manifest.json")
     # One serialization, written once: the bytes anchored below are the exact
     # bytes published, not a second serialization that could differ from them.
     payload = json.dumps(manifest, ensure_ascii=True, indent=2, sort_keys=True) + "\n"
@@ -1615,42 +1620,74 @@ def _finalize_results_manifest(
             f"result manifest for task {task.get('md5sum')} exceeds the "
             f"canonical {storage_module.manifest_byte_limit()} byte limit"
         )
-    with open(temporary, "w", encoding="utf-8") as handle:
-        handle.write(payload)
-        handle.flush()
-        os.fsync(handle.fileno())
-    # The manifest is self-describing — it declares its artifacts, their sizes,
-    # and their digests — and it is written by the runner's Unix identity inside
-    # the runner-owned result tree, so nothing *in* that tree can say whether the
-    # file just published is the one Core finalized.  Anchoring the finalized
-    # bytes in server-owned state is what makes that question answerable: every
-    # later read of the manifest is checked against this record, so a
-    # post-finalization replacement (which could otherwise declare its own sizes
-    # and digests and thereby authorize its own publication) fails closed.
+    # The manifest is written through *opened descriptors*, never by name.  The
+    # publication path is the one place an anchor is established for bytes that
+    # live inside a runner-writable tree, so writing the candidate with ``open()``
+    # would let a symlink planted at a predictable name capture the write, and the
+    # ordered pair of writes could land a manifest at the canonical path whose
+    # bytes are not the ones that were anchored.  A fresh name created with
+    # ``O_EXCL|O_NOFOLLOW`` cannot be a symlink the runner planted, and the
+    # ``renameat`` that publishes it replaces the canonical name instead of
+    # following it, so the bytes at ``manifest.json`` are exactly ``encoded``.
     #
-    # The anchor is established BEFORE the bytes become visible at the canonical
-    # path, and both happen before any publication is claimed.  The order matters
-    # at the split point, and both directions are bounded and honest: an anchor
-    # failure removes the candidate bytes, leaves no canonical manifest, no
-    # event, and a task that is not finished; a crash between the two steps
-    # leaves the anchor ahead of the bytes, which a reader reports as
-    # ``manifest_missing`` (nothing published at the canonical path yet) or
-    # ``anchor_mismatch`` (a re-publication whose bytes had not landed) -- never
-    # as an available result, and never as an available result that is wrong.  A
-    # later publication of the same task supersedes the abandoned anchor.
-    # The logical bytes this publication owns: measured from the manifest's own
-    # artifacts, never inferred later from a directory size, because a shared
-    # read-only asset or a Runner SIF in the tree is not a user's bytes.
+    # The canonical path is created *last*: the anchor is recorded while the
+    # candidate is still only a temp name, so there is no instant -- and no crash
+    # point -- at which a reader can see a manifest the anchor does not already
+    # describe.  A crash between the anchor and the rename leaves no manifest at
+    # the canonical path, which every reader answers as ``manifest_missing``, and
+    # a later publication of the same task supersedes the abandoned anchor.
+    #
+    # The logical bytes this publication owns are measured from the manifest's own
+    # artifacts, never inferred later from a directory size: a shared read-only
+    # asset or a Runner SIF in the tree is not a user's bytes.
     owned_bytes = sum(int(item.get("size") or 0) for item in artifacts)
+    os.makedirs(result_dir, exist_ok=True)
+    replaced = False
     try:
-        publication = _anchor_result_manifest(task, encoded, published_at=finished_at, charge_bytes=owned_bytes)
+        with _ResultTreeWalker(result_dir) as walker:
+            candidate_name = f"{_MANIFEST_TEMP_PREFIX}-{os.getpid()}-{time.time_ns()}.tmp"
+            try:
+                descriptor = walker.create_entry(candidate_name)
+                try:
+                    body = os.fdopen(descriptor, "wb")
+                    try:
+                        body.write(encoded)
+                        body.flush()
+                        os.fsync(body.fileno())
+                    finally:
+                        body.close()
+                    publication = _anchor_result_manifest(
+                        task, encoded, published_at=finished_at, charge_bytes=owned_bytes
+                    )
+                    walker.replace_entry(candidate_name, "manifest.json")
+                    replaced = True
+                except BaseException:
+                    try:
+                        os.close(descriptor)
+                    except OSError:
+                        pass
+                    raise
+            finally:
+                if not replaced:
+                    # The candidate never became the publication: the temp name is
+                    # removed, so a failed or abandoned publication leaves no
+                    # candidate manifest behind at any name.
+                    try:
+                        walker.unlink_entry(candidate_name)
+                    except OSError:
+                        pass
     except BaseException:
-        try:
-            os.unlink(temporary)
-        except OSError:
-            pass
+        if replaced:
+            # The bytes this worker published must not outlive a publication Core
+            # did not confirm: a manifest at the canonical name with no anchor row
+            # is precisely the "unanchored" state, and leaving one behind would
+            # hand the next reader a candidate this run never finished.
+            try:
+                with _ResultTreeWalker(result_dir) as walker:
+                    walker.unlink_entry("manifest.json")
+            except OSError:
+                pass
         raise
-    os.replace(temporary, destination)
     _charge_logical_storage(task, manifest, result_dir, publication=publication, owned_bytes=owned_bytes)
     emit_event(
         "manifest.published",
@@ -1760,6 +1797,11 @@ def _build_results_archive(task: dict) -> str:
     can never describe a different manifest than the one that selected the
     entries.  A file replaced after the manifest was finalized therefore fails
     the whole archive closed instead of being smuggled into the download.
+
+    Every member is *stored*, not compressed, so the archive is a byte copy of
+    the published artifacts and the manifest.  A later verification of the
+    archive is then a read of the very bytes a download would deliver, with no
+    decompressor asked to interpret runner-controlled data.
     """
     zip_filename = _task_zip_path(task)
     storage = _storage()
@@ -1770,16 +1812,26 @@ def _build_results_archive(task: dict) -> str:
         manifest = json.loads(manifest_bytes)
     except json.JSONDecodeError as exc:
         raise FileNotFoundError("Result manifest is not finalized") from exc
-    temporary_zip = f"{os.path.splitext(zip_filename)[0]}.tmp-{os.getpid()}-{time.time_ns()}.zip"
+    zip_directory = os.path.dirname(zip_filename)
+    os.makedirs(zip_directory, exist_ok=True)
+    # ``mkstemp`` names a fresh file in the target directory and opens it with
+    # ``O_EXCL``, so the temporary is a private regular file this process owns:
+    # a symlink or hard link planted at a predictable name is never followed,
+    # and the final ``os.replace`` lands on the canonical name atomically.
+    descriptor, temporary_zip = tempfile.mkstemp(dir=zip_directory, prefix=f".{task['md5sum']}-", suffix=".zip")
     try:
-        with zipfile.ZipFile(temporary_zip, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-            _write_manifest_entry(archive, manifest_bytes)
-            for artifact in manifest.get("artifacts", []):
-                _write_verified_artifact(archive, storage, task, manifest, artifact)
+        with open(descriptor, "wb") as body:
+            with zipfile.ZipFile(body, "w", compression=zipfile.ZIP_STORED) as archive:
+                _write_manifest_entry(archive, manifest_bytes)
+                for artifact in manifest.get("artifacts", []):
+                    _write_verified_artifact(archive, storage, task, manifest, artifact)
         os.replace(temporary_zip, zip_filename)
-    finally:
-        if os.path.exists(temporary_zip):
+    except BaseException:
+        try:
             os.unlink(temporary_zip)
+        except OSError:
+            pass
+        raise
     return zip_filename
 
 
@@ -3522,9 +3574,16 @@ def cancel_compute_resources(self, slurm_job_id: str | None = None, container_id
 
 @celery.task(name="build_results_archive", bind=True, max_retries=0)
 def build_results_archive(self, md5sum: str):
-    """Create the full-task ZIP only after a user explicitly requests it."""
+    """Create the full-task ZIP only after a user explicitly requests it.
+
+    Building is a publication from the same authority as serving one, so a result
+    the canonical reader refuses is never packed: the caller gets the bounded
+    state and the reason instead of an archive assembled from a quarantine.
+    """
     task_id = _normalize_task_id(md5sum)
     task = task_store.get_task(task_id) if task_id else None
     if task is None or task.get("status") not in {"finished", "failed"}:
         raise ValueError("Task results are not ready")
+    if _storage().publication_state(task) != PUBLICATION_AVAILABLE:
+        raise ValueError("Task results are not published")
     return _build_results_archive(task)

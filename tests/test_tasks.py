@@ -23,7 +23,14 @@ import pytest
 import requests
 import yaml
 import conftest
-from conftest import _anchor_result_publication, _extract_md5, _load_pssm_module, _relocate_task_artifacts, _task_owner
+from conftest import (
+    _anchor_result_publication,
+    _extract_md5,
+    _load_pssm_module,
+    _publish_archive,
+    _relocate_task_artifacts,
+    _task_owner,
+)
 from jsonschema import Draft202012Validator
 from revocompute.resource_ledger import DataLifecycleState
 from revocompute.task_types import TaskInputRole
@@ -2012,11 +2019,11 @@ def test_a_purge_that_lands_during_finalize_is_not_republished_or_recharged(monk
         if entry["reason_code"] == "storage_charged"
     ]
 
-    # The publication's last filesystem step is ``os.replace``; the purge lands
-    # immediately after it and before the charge, which is precisely the window
-    # under test.
-    def _purge_then_replace(src, dst):
-        real_os.replace(src, dst)
+    # The publication's last filesystem step is the rename that installs the
+    # manifest at its canonical name; the purge lands immediately after it and
+    # before the charge, which is precisely the window under test.
+    def _purge_then_rename(src, dst, **kwargs):
+        real_os.rename(src, dst, **kwargs)
         # Drive the real lifecycle transaction: request, claim, complete.
         now = time.time()
         module.task_store.claim_data_deletion(
@@ -2025,9 +2032,13 @@ def test_a_purge_that_lands_during_finalize_is_not_republished_or_recharged(monk
         module.task_store.begin_data_purge(task_id, at=now)
         module.task_store.complete_data_purge(task_id, at=now)
 
+    # The rename that publishes the manifest is issued by the storage owner of the
+    # walker, so the injection belongs on that module's ``os``.
+    import revocompute.storage as storage_module
+
     shim = SimpleNamespace(**{name: getattr(real_os, name) for name in dir(real_os) if not name.startswith("_")})
-    shim.replace = _purge_then_replace
-    monkeypatch.setattr(module.task_runtime, "os", shim)
+    shim.rename = _purge_then_rename
+    monkeypatch.setattr(storage_module, "os", shim)
 
     with pytest.raises(module.task_runtime.DataPurgedError):
         module.task_runtime._finalize_results_manifest(
@@ -2719,8 +2730,6 @@ def test_download_uses_safe_fasta_prefix_filename(monkeypatch, tmp_path):
     result_dir.mkdir(parents=True, exist_ok=True)
     upload_file = tmp_path / "unsafe_upload.fasta"
     upload_file.write_text(">x\nACDE\n", encoding="utf-8")
-    zip_path = Path(module.app.config["RESULTS_FOLDER"]) / f"{md5sum}_results.zip"
-    zip_path.write_bytes(b"zip")
 
     original_filename = "../unsafe name;\r\nX-Test:1.fasta"
     _upsert_task_for_user(
@@ -2739,10 +2748,11 @@ def test_download_uses_safe_fasta_prefix_filename(monkeypatch, tmp_path):
     module.task_runtime._finalize_results_manifest(
         module.task_store.get_task(md5sum), execution_state="completed", finished_at=1_700_000_000
     )
+    archive = _publish_archive(module, md5sum)
 
     response = client.get(f"/compute/api/download/{md5sum}", headers=auth_header)
     assert response.status_code == 200
-    assert response.headers["Content-Length"] == str(len(b"zip"))
+    assert response.headers["Content-Length"] == str(archive.stat().st_size)
     disposition = response.headers.get("Content-Disposition", "")
     expected_prefix = secure_filename(os.path.splitext(os.path.basename(original_filename))[0]) or "result"
     assert "attachment" in disposition
@@ -2751,7 +2761,7 @@ def test_download_uses_safe_fasta_prefix_filename(monkeypatch, tmp_path):
     assert "\n" not in disposition
 
 
-def test_nginx_download_offload_returns_internal_redirect(monkeypatch, tmp_path):
+def test_a_download_in_nginx_mode_delivers_the_verified_archive_directly(monkeypatch, tmp_path):
     module = _load_pssm_module(
         monkeypatch,
         tmp_path,
@@ -2769,8 +2779,6 @@ def test_nginx_download_offload_returns_internal_redirect(monkeypatch, tmp_path)
     result_dir.mkdir(parents=True)
     upload_file = result_dir / "input.fasta"
     upload_file.write_text(">x\nACDE\n", encoding="utf-8")
-    archive = Path(module.app.config["RESULTS_FOLDER"]) / f"{md5sum}_results.zip"
-    archive.write_bytes(b"zip")
     _upsert_task_for_user(
         module,
         md5sum,
@@ -2784,22 +2792,25 @@ def test_nginx_download_offload_returns_internal_redirect(monkeypatch, tmp_path)
     module.task_runtime._finalize_results_manifest(
         module.task_store.get_task(md5sum), execution_state="completed", finished_at=1_700_000_000
     )
+    _publish_archive(module, md5sum)
 
     response = client.get(f"/compute/api/download/{md5sum}", headers=auth_header)
     head_response = client.head(f"/compute/api/download/{md5sum}", headers=auth_header)
     task = module.task_store.get_task(md5sum)
     archive = Path(module.app.config["storage_resolver"].get_archive_path(task))
-    internal_archive = archive.relative_to(Path(module.app.config["RESULTS_FOLDER"])).as_posix()
 
+    # The ZIP is a publication, so its bytes are delivered from the verified
+    # descriptor and its members are checked against the anchored manifest: an
+    # ``X-Accel-Redirect`` would hand the mutable pathname to nginx to reopen,
+    # which is exactly the check-then-use the descriptor-bound read removes.
     assert response.status_code == 200
-    assert response.data == b""
-    assert response.headers["X-Accel-Redirect"] == f"/_protected_results/{internal_archive}"
     assert response.headers["Content-Type"] == "application/zip"
     assert response.headers["Cache-Control"] == "private, no-store"
     assert response.headers["Content-Disposition"].startswith("attachment;")
+    assert response.data == archive.read_bytes()
+    assert "X-Accel-Redirect" not in response.headers
     assert head_response.status_code == 200
-    assert head_response.data == b""
-    assert head_response.headers["X-Accel-Redirect"] == f"/_protected_results/{internal_archive}"
+    assert "X-Accel-Redirect" not in head_response.headers
 
 
 def test_download_does_not_pack_missing_archive_in_request(monkeypatch, tmp_path):
@@ -2856,10 +2867,6 @@ def test_failed_task_archive_is_downloadable(monkeypatch, tmp_path):
     result_dir.mkdir(parents=True, exist_ok=True)
     upload_file = tmp_path / "failed.fasta"
     upload_file.write_text(">x\nACDE\n", encoding="utf-8")
-    zip_path = Path(module.app.config["RESULTS_FOLDER"]) / f"{md5sum}_results.zip"
-    with zipfile.ZipFile(zip_path, "w") as archive:
-        archive.writestr("task_failed.txt", "runner failed\n")
-
     _upsert_task_for_user(
         module,
         md5sum,
@@ -2875,12 +2882,13 @@ def test_failed_task_archive_is_downloadable(monkeypatch, tmp_path):
     module.task_runtime._finalize_results_manifest(
         module.task_store.get_task(md5sum), execution_state="failed", finished_at=1_700_000_000
     )
+    archive = _publish_archive(module, md5sum)
 
     response = client.get(f"/compute/api/download/{md5sum}", headers=auth_header)
     assert response.status_code == 200
     disposition = response.headers.get("Content-Disposition", "")
     assert "attachment" in disposition
-    assert response.data
+    assert response.data == archive.read_bytes()
 
 
 # ==================================================================
