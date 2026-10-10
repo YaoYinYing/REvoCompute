@@ -104,12 +104,11 @@ def manifest_relative_parts(relative_path: str) -> tuple[str, ...] | None:
 
 @dataclass(frozen=True, slots=True)
 class _VerifiedFile:
-    """One verified published file: bytes prove the manifest entry, the file proves the archive."""
+    """One verified published file: the descriptor plus the digests of its bytes."""
 
     handle: Any
     digest: str
     size: int
-    mtime: float
 
 
 class _ResultTreeWalker:
@@ -202,16 +201,21 @@ class _ResultTreeWalker:
 
     @staticmethod
     def open_verified(
-        directory_fd: int, name: str, *, max_bytes: int | None = None, expected: tuple[int, str] | None = None
+        directory_fd: int, name: str, *, max_bytes: int, expected: tuple[int, str] | None = None
     ) -> _VerifiedFile:
-        """Open one enumerated entry as a private regular file, no-follow.
+        """Open one enumerated entry as a verified private regular file.
 
-        ``O_NOFOLLOW`` refuses a final-component symlink atomically at open time
-        and the ``fstat`` runs on the *opened descriptor*, not on the name, so a
-        regular single-linked file is the only thing the descriptor can be
-        reading.  With ``expected`` the bytes are hashed once and must match the
-        manifest entry's ``(size, sha256)``, which is why a caller never needs a
-        second, later open of the same name.
+        The one bounded-hash implementation in the system: the reader and the
+        publication writer both consume it, so neither can drift into a second
+        idea of what "the published bytes" are.  ``O_NOFOLLOW`` refuses a
+        final-component symlink atomically at open time and the ``fstat`` runs on
+        the *opened descriptor*, not on the name, so a regular single-linked file
+        is the only thing the descriptor can be reading.  The size the descriptor
+        reports is checked against *max_bytes* before any byte is read, and the
+        hash loop is bounded by that same size, so an entry that grows underneath
+        the hasher yields a size mismatch instead of an unbounded read.  With
+        ``expected`` the bytes must also match the manifest entry's
+        ``(size, sha256)``, which is why no caller needs a second open of the name.
         """
         descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0), dir_fd=directory_fd)
         handle = os.fdopen(descriptor, "rb")
@@ -219,16 +223,10 @@ class _ResultTreeWalker:
             status = os.fstat(handle.fileno())
             if not stat.S_ISREG(status.st_mode) or status.st_nlink != 1:
                 raise ArtifactIdentityError(f"not a private regular file: {name}")
-            if max_bytes is None:
-                return _VerifiedFile(handle, "", status.st_size, status.st_mtime)
             if status.st_size > max_bytes:
-                # Over the bound the caller is allowed to hold: refused from the
-                # descriptor's own size, before a byte is hashed.
                 raise ArtifactOversizedError(f"published file exceeds its bound: {name}")
             size, digest = _hash_bounded(handle, status.st_size)
             if size != status.st_size:
-                # The bytes ran out before the size the descriptor reported: the
-                # file shrank while it was being read.
                 raise ArtifactChangedError(f"published file changed while being read: {name}")
             if expected is not None:
                 declared_size, declared_digest = expected
@@ -237,7 +235,7 @@ class _ResultTreeWalker:
                 if digest != declared_digest:
                     raise ArtifactIdentityError(f"published artifact does not match its declared digest: {name}")
             handle.seek(0)
-            return _VerifiedFile(handle, digest, size, status.st_mtime)
+            return _VerifiedFile(handle, digest, size)
         except BaseException:
             handle.close()
             raise
