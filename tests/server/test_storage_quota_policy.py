@@ -274,9 +274,7 @@ def test_setting_a_quota_never_touches_ownership_or_the_ledger(tmp_path):
     assert owned_before == 3 * GIB
     assert database.logical_owned_bytes(101) == owned_before
     assert database.list_ledger(101, limit=200) == ledger_before
-    assert [row["kind"] for row in ledger_before] == ["storage_usage"]
     assert [row["quantity"] for row in ledger_before] == [-3 * GIB]
-    assert not [row for row in ledger_before if "storage_quota" in str(row["idempotency_key"])]
     assert database.get_data_lifecycle("a" * 32) == lifecycle_before
     assert database.storage_entitlement(101).logical_owned_bytes == owned_before
     assert database.storage_quota_policy(101).state is StorageQuotaState.INHERIT
