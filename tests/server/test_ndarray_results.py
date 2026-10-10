@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import os
 from pathlib import Path
@@ -355,6 +356,56 @@ def test_a_replaced_array_cannot_be_projected_from_the_reopened_pathname(monkeyp
 
     assert response.status_code == 200
     assert response.get_json()["data"] == [1.0, 2.0, 3.0]
+
+
+def test_bytes_appended_after_verification_never_reach_a_typed_projection(monkeypatch, tmp_path) -> None:
+    """The length pin bounds the parsers that read the raw descriptor.
+
+    An NPY projection drives the array library over the verified descriptor, and
+    that reader finds its own header and bounds by the header's declared shape --
+    never by the stream it was handed.  With the descriptor pinned to the verified
+    length, bytes appended after identity verification are unreachable however the
+    parser reads, and the projection still describes exactly the bytes the manifest
+    declared: the appended bytes are a *valid* NPY array, so only the pin keeps
+    them out of the projection.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    client = module.app.test_client()
+    headers = _test_client_auth(module)
+    original = np.array([0.8, 0.7], dtype=np.float64)
+    md5sum = _finished_task(module, tmp_path, {"values.npy": original})
+    task = module.task_store.get_task(md5sum)
+    artifact_path = Path(module.app.config["storage_resolver"].get_task_root(task)) / "values.npy"
+    resolver = module.app.config["storage_resolver"]
+    resolve = resolver.resolve_artifact
+
+    def append_after_verify(task_arg, relative_path):
+        resolved = resolve(task_arg, relative_path)
+        if resolved is not None:
+            # Same inode, same link count, and the appended bytes are a *valid*
+            # NPY array: only the pin keeps them out of the projection.
+            extra = io.BytesIO()
+            np.save(extra, np.array([9.9, 9.9], dtype=np.float64))
+            with open(artifact_path, "ab") as handle:
+                handle.write(extra.getvalue())
+        return resolved
+
+    monkeypatch.setattr(resolver, "resolve_artifact", append_after_verify)
+
+    response = client.get(
+        f"/compute/api/results/{md5sum}/ndarrays/values.npy?max_elements=2", headers=headers
+    )
+    # The array library reads the descriptor that was verified against the manifest,
+    # so the projection describes the declared bytes and never the appended ones.
+    later = client.get(
+        f"/compute/api/results/{md5sum}/ndarrays/values.npy?max_elements=2", headers=headers
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["data"] == [0.8, 0.7]
+    # A fresh resolution of the grown file is refused outright -- the bytes no
+    # longer match the manifest identity -- so nothing is projected from them.
+    assert later.status_code == 404
 
 
 def test_an_array_replaced_before_resolution_is_refused(monkeypatch, tmp_path) -> None:

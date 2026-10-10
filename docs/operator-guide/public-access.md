@@ -5,10 +5,11 @@ stays internal-only. Terminate TLS either with a Cloudflare Tunnel or a
 host reverse proxy.
 
 Docker Compose publishes the Nginx `gateway` service. The Flask/Gunicorn `web`
-service is internal-only. Nginx proxies application requests and serves
-authorized individual artifacts or optional ZIP bytes with an internal
-`X-Accel-Redirect`. The gateway mounts only `${SERVER_DIR}/results` and mounts
-it read-only.
+service is internal-only. Nginx proxies application requests; authorized result
+bytes — individual artifacts and optional ZIP archives — are streamed by `web`
+from the verified publication descriptor, never by an internal redirect that
+would have the gateway reopen a mutable pathname. The gateway mounts only
+`${SERVER_DIR}/results` and mounts it read-only.
 
 ## Option A: Cloudflare Tunnel
 
