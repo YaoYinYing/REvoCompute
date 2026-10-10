@@ -71,7 +71,7 @@ def test_task_capability_resolves_runner_owned_plugin_without_core_changes(tmp_p
     # Discover into an isolated registry and read the Task from that manager:
     # a synthetic family must never be installed as the process-global registry,
     # or the next test in the same worker (e.g. the composer's AF3 workflow) finds
-    # real families like ``alphafold3`` missing. The returned TaskType is frozen
+    # real families like ``restricted_runner`` missing. The returned TaskType is frozen
     # and self-contained, so it stays valid after the global is restored.
     with isolated_discovery(str(tmp_path)) as manager:
         task = manager.contributions.resolve("tasks", "demo")

@@ -1,0 +1,48 @@
+id: typed_runner
+display_name: Synthetic typed_runner
+category: analysis
+summary: Synthetic protocol behavior.
+inputs:
+  receptor:
+    title: Receptor structure
+    type: protein_structure
+    formats:
+    - pdb
+    - cif
+    cardinality:
+      min: 1
+      max: 1
+  ligand:
+    title: Ligand
+    type: small_molecule
+    formats:
+    - sdf
+    - mol2
+    cardinality:
+      min: 1
+      max: 1
+parameters:
+  type: object
+  additionalProperties: false
+  properties:
+    iter:
+      type: integer
+      default: 100
+      minimum: 1
+      maximum: 10000
+      description: Synthetic bounded control for protocol validation.
+    seed:
+      type: integer
+      default: 0
+      description: Synthetic random seed.
+    center_x:
+      type: number
+      minimum: -100
+      maximum: 100
+      description: Synthetic bounded coordinate.
+stage_markers:
+  hhblits: Collect input
+  hhfilter: Filter input
+  cpu_runner: Calculate result
+  blast: Export profile
+gpus: true

@@ -191,10 +191,10 @@ builders, normalizers, or postprocessors. Do not write tests that merely read
 and restate YAML, shell, definition, or documentation text.
 
 Every family also ships one focused **contract test** under
-`tests/runners/<family>/`. It executes the family's real entrypoint against a
+`docker/runners/<family>/tests/fast/`. It executes the family's real entrypoint against a
 `task.json` and proves the Runner consumes the declared named input role and the
 server-resolved parameters, rather than positional files or environment values.
-`tests/runners/example/test_analyze.py` is the canonical reference to copy.
+`docker/runners/example/tests/fast/test_analyze.py` is the canonical reference to copy.
 
 ## 6. Run Doctor
 

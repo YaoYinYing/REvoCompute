@@ -104,10 +104,10 @@ def test_authenticated_login_redirect_accepts_only_safe_local_return_target(monk
     headers = _test_client_auth(module)
 
     local = client.get(
-        "/compute/login?return_to=%2Fcompute%2Fcreate_task%3Ftask_type%3Dgremlin", headers=headers
+        "/compute/login?return_to=%2Fcompute%2Fcreate_task%3Ftask_type%3Dcpu_runner", headers=headers
     )
     assert local.status_code == 302
-    assert local.headers["Location"] == "/compute/create_task?task_type=gremlin"
+    assert local.headers["Location"] == "/compute/create_task?task_type=cpu_runner"
 
     for unsafe in ("https://evil.example", "//evil.example", "//[", "/\\evil.example", "/%0d%0aLocation:evil"):
         response = client.get("/compute/login", query_string={"return_to": unsafe}, headers=headers)

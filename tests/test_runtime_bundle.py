@@ -82,26 +82,26 @@ def test_family_identity_covers_only_its_own_declaration(tmp_path: Path) -> None
         root,
         {
             "common/runtime/lifecycle.py": ("LIFECYCLE = 1\n", False),
-            "simplefold/finalize.py": ("FINALIZE = 1\n", False),
-            "esmfold2/predict.py": ("PREDICT = 1\n", False),
+            "gpu_runner/finalize.py": ("FINALIZE = 1\n", False),
+            "batch_runner/predict.py": ("PREDICT = 1\n", False),
         },
     )
-    simplefold = ["common/runtime/lifecycle.py", "simplefold/finalize.py"]
-    esmfold = ["common/runtime/lifecycle.py", "esmfold2/predict.py"]
+    gpu_runner = ["common/runtime/lifecycle.py", "gpu_runner/finalize.py"]
+    batch_runner = ["common/runtime/lifecycle.py", "batch_runner/predict.py"]
     shared_before, esm_before = (
-        rb.overlay_digest(root, simplefold),
-        rb.overlay_digest(root, esmfold),
+        rb.overlay_digest(root, gpu_runner),
+        rb.overlay_digest(root, batch_runner),
     )
 
-    _overlay(root, {"simplefold/finalize.py": ("FINALIZE = 2\n", False)})
+    _overlay(root, {"gpu_runner/finalize.py": ("FINALIZE = 2\n", False)})
 
-    assert rb.overlay_digest(root, simplefold) != shared_before
-    assert rb.overlay_digest(root, esmfold) == esm_before
+    assert rb.overlay_digest(root, gpu_runner) != shared_before
+    assert rb.overlay_digest(root, batch_runner) == esm_before
 
     # A change in the *shared* helper invalidates every family that declares it.
     _overlay(root, {"common/runtime/lifecycle.py": ("LIFECYCLE = 2\n", False)})
-    assert rb.overlay_digest(root, simplefold) != shared_before
-    assert rb.overlay_digest(root, esmfold) != esm_before
+    assert rb.overlay_digest(root, gpu_runner) != shared_before
+    assert rb.overlay_digest(root, batch_runner) != esm_before
 
 
 @pytest.mark.parametrize(

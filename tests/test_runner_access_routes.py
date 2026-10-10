@@ -17,17 +17,17 @@ from revocompute.task_types import discover_plugins
 
 def _restrict_runtime(
     module,
-    runtime: str = "gremlin",
+    runtime: str = "cpu_runner",
     *,
     requestable: bool = True,
     requires: list[str] | None = None,
 ) -> None:
-    source_family = Path(__file__).resolve().parents[1] / "docker" / "runners" / "pssm_gremlin"
-    family_dir = Path(module.CONFIG.runners_dir) / "pssm_gremlin"
+    source_family = Path(__file__).resolve().parent / "fixtures" / "runners" / runtime
+    family_dir = Path(module.CONFIG.runners_dir) / runtime
     shutil.copytree(source_family, family_dir, dirs_exist_ok=True)
     policy_dir = Path(module.CONFIG.runners_dir) / "common" / "policy"
     policy_dir.mkdir(parents=True, exist_ok=True)
-    (policy_dir / "example.yaml").write_text(
+    (policy_dir / "demo.yaml").write_text(
         yaml.safe_dump(
             {
                 "id": "example_academic_runner",
@@ -44,16 +44,16 @@ def _restrict_runtime(
     )
     manifest_path = family_dir / "plugin.yaml"
     manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
-    manifest["access_policies"] = ["common/policy/example.yaml"]
+    manifest["access_policies"] = ["common/policy/demo.yaml"]
     manifest["contributions"] = {"access_policies": ["example_academic_runner"]}
     manifest.setdefault("runtime", {})["access_policy"] = "example_academic_runner"
     manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
     discover_plugins(module.CONFIG.runners_dir, {runtime})
 
 
-def _submit_gremlin(client, headers):
+def _submit_cpu_runner(client, headers):
     data = {
-        "task_type": "gremlin",
+        "task_type": "cpu_runner",
         "params[iter]": "100",
         "file": (io.BytesIO(b">x\nACDE\n"), "x.fasta"),
         "input_roles": "sequence",
@@ -81,11 +81,11 @@ def test_progressive_cooldown_audit_and_admin_visibility(monkeypatch, tmp_path):
     db = module.app.config["user_db"]
     user = db.get_user_by_username("tester")
 
-    assert _submit_gremlin(client, user_headers).status_code == 403
-    assert _submit_gremlin(client, user_headers).status_code == 403
-    suspended = _submit_gremlin(client, user_headers)
+    assert _submit_cpu_runner(client, user_headers).status_code == 403
+    assert _submit_cpu_runner(client, user_headers).status_code == 403
+    suspended = _submit_cpu_runner(client, user_headers)
     assert suspended.status_code == 403
-    blocked = _submit_gremlin(client, user_headers)
+    blocked = _submit_cpu_runner(client, user_headers)
     assert blocked.status_code == 429
     assert int(blocked.headers["Retry-After"]) >= 1
 
@@ -114,7 +114,7 @@ def test_progressive_cooldown_audit_and_admin_visibility(monkeypatch, tmp_path):
     assert "email" in authorized and "affiliation" in authorized
     policies = client.get("/compute/api/auth/admin/access/policies", headers=admin_headers).get_json()["policies"]
     assert next(item for item in policies if item["policy_id"] == "example_academic_runner")["suspended_users"] == 0
-    assert _submit_gremlin(client, user_headers).status_code == 302
+    assert _submit_cpu_runner(client, user_headers).status_code == 302
     latest = client.get("/compute/api/auth/admin/access/events?limit=1", headers=admin_headers).get_json()["events"][0]
     assert latest["event_type"] == "runner_access_allowed"
     assert latest["reason_code"] == "task_accepted"
@@ -141,7 +141,7 @@ def test_production_admission_blocks_non_ready_before_queue_side_effect(monkeypa
             next_action="live-test",
         ),
     )
-    response = _submit_gremlin(module.app.test_client(), _test_client_auth(module))
+    response = _submit_cpu_runner(module.app.test_client(), _test_client_auth(module))
     assert response.status_code == 503
     assert response.get_json()["reason"] == "RECEIPT_STALE"
     assert queued == []
@@ -177,7 +177,7 @@ def test_production_admission_allows_ready_runner(monkeypatch, tmp_path):
         admission_block=lambda **kwargs: None,
     )
     _stub_queue(module, monkeypatch)
-    response = _submit_gremlin(module.app.test_client(), _test_client_auth(module))
+    response = _submit_cpu_runner(module.app.test_client(), _test_client_auth(module))
     assert response.status_code == 302
 
 
@@ -190,10 +190,10 @@ def test_bearer_and_api_key_share_policy_cooldown(monkeypatch, tmp_path):
     user = db.get_user_by_username("tester")
     api_key = {"X-API-Key": db.generate_api_key(user["id"])}
 
-    assert _submit_gremlin(client, bearer).status_code == 403
-    assert _submit_gremlin(client, api_key).status_code == 403
-    assert _submit_gremlin(client, bearer).status_code == 403
-    response = _submit_gremlin(client, api_key)
+    assert _submit_cpu_runner(client, bearer).status_code == 403
+    assert _submit_cpu_runner(client, api_key).status_code == 403
+    assert _submit_cpu_runner(client, bearer).status_code == 403
+    response = _submit_cpu_runner(client, api_key)
     assert response.status_code == 429
     assert response.headers["Retry-After"]
 
@@ -207,7 +207,7 @@ def test_audit_failure_never_weakens_entitlement_denial(monkeypatch, tmp_path):
         "record_runner_access_event",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("audit unavailable")),
     )
-    response = _submit_gremlin(module.app.test_client(), headers)
+    response = _submit_cpu_runner(module.app.test_client(), headers)
     assert response.status_code == 403
     assert response.get_json()["error"] == "Runner access required"
 
@@ -222,7 +222,7 @@ def test_user_request_admin_review_and_direct_grant_routes(monkeypatch, tmp_path
     user = module.app.config["user_db"].get_user_by_username("tester")
 
     catalog = client.get("/compute/api/types", headers=user_headers).get_json()
-    access = next(item for item in catalog["task_types"] if item["name"] == "gremlin")["access"]
+    access = next(item for item in catalog["task_types"] if item["name"] == "cpu_runner")["access"]
     assert access["restricted"] is True and access["granted"] is False
     assert {"requires", "missing_entitlements", "requestable_entitlements"}.isdisjoint(access)
     current_access = client.get("/compute/api/access", headers=user_headers).get_json()
@@ -231,7 +231,7 @@ def test_user_request_admin_review_and_direct_grant_routes(monkeypatch, tmp_path
     assert current_access["policies"][0]["expired"] is False
     assert current_access["policies"][0]["expires_at"] is None
     anonymous = client.get("/compute/api/types").get_json()
-    anonymous_access = next(item for item in anonymous["task_types"] if item["name"] == "gremlin")["access"]
+    anonymous_access = next(item for item in anonymous["task_types"] if item["name"] == "cpu_runner")["access"]
     assert anonymous_access["granted"] is False and anonymous_access["request_status"] is None
     assert {"requires", "missing_entitlements", "requestable_entitlements"}.isdisjoint(anonymous_access)
     unknown = client.post(
@@ -260,14 +260,14 @@ def test_user_request_admin_review_and_direct_grant_routes(monkeypatch, tmp_path
     )
     assert approved.status_code == 200
     grant_id = approved.get_json()["grant"]["id"]
-    assert _submit_gremlin(client, user_headers).status_code == 302
+    assert _submit_cpu_runner(client, user_headers).status_code == 302
     assert (
         client.post(
             f"/compute/api/auth/admin/users/{user['id']}/entitlements/{grant_id}/revoke", headers=admin_headers
         ).status_code
         == 200
     )
-    assert _submit_gremlin(client, user_headers).status_code == 403
+    assert _submit_cpu_runner(client, user_headers).status_code == 403
 
     direct = client.post(
         f"/compute/api/auth/admin/users/{user['id']}/entitlements",
@@ -372,7 +372,7 @@ def test_denial_precedes_upload_task_and_queue_side_effects(monkeypatch, tmp_pat
         "apply_async",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError()),
     )
-    response = _submit_gremlin(client, headers)
+    response = _submit_cpu_runner(client, headers)
     assert response.status_code == 403
     assert response.get_json() == {
         "error": "Runner access required",
@@ -389,7 +389,7 @@ def test_expired_grant_and_admin_role_do_not_bypass_policy(monkeypatch, tmp_path
     client = module.app.test_client()
     admin_headers = _admin_client_auth(module)
     admin = module.app.config["user_db"].get_user_by_username("sysadmin")
-    assert _submit_gremlin(client, admin_headers).status_code == 403
+    assert _submit_cpu_runner(client, admin_headers).status_code == 403
     module.app.config["user_db"].grant_entitlement(
         admin["id"],
         "example_academic",
@@ -398,7 +398,7 @@ def test_expired_grant_and_admin_role_do_not_bypass_policy(monkeypatch, tmp_path
         expires_at=time.time() + 0.01,
     )
     time.sleep(0.02)
-    assert _submit_gremlin(client, admin_headers).status_code == 403
+    assert _submit_cpu_runner(client, admin_headers).status_code == 403
 
 
 def test_api_key_submission_uses_same_entitlement_check(monkeypatch, tmp_path):
@@ -410,25 +410,25 @@ def test_api_key_submission_uses_same_entitlement_check(monkeypatch, tmp_path):
     db = module.app.config["user_db"]
     user = db.get_user_by_username("tester")
     api_headers = {"X-API-Key": db.generate_api_key(user["id"])}
-    assert _submit_gremlin(client, api_headers).status_code == 403
+    assert _submit_cpu_runner(client, api_headers).status_code == 403
     db.grant_entitlement(user["id"], "example_academic", granted_by=user["id"], basis="other")
-    assert _submit_gremlin(client, api_headers).status_code == 302
+    assert _submit_cpu_runner(client, api_headers).status_code == 302
 
 
 def test_public_runner_is_unaffected(monkeypatch, tmp_path):
     module = _load_pssm_module(monkeypatch, tmp_path, {"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     _stub_queue(module, monkeypatch)
     client = module.app.test_client()
-    assert _submit_gremlin(client, _test_client_auth(module)).status_code == 302
+    assert _submit_cpu_runner(client, _test_client_auth(module)).status_code == 302
 
 
 def test_restricted_gpu_runner_requires_entitlement_and_gpu_access(monkeypatch, tmp_path):
     module = _load_pssm_module(
         monkeypatch,
         tmp_path,
-        {"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "alphafold"},
+        {"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "multistage_runner"},
     )
-    _restrict_runtime(module, "alphafold")
+    _restrict_runtime(module, "multistage_runner")
     _stub_queue(module, monkeypatch)
     client = module.app.test_client()
     headers = _test_client_auth(module)
@@ -440,15 +440,15 @@ def test_restricted_gpu_runner_requires_entitlement_and_gpu_access(monkeypatch, 
             "/compute/api/post",
             headers=headers,
             data={
-                "task_type": "alphafold",
+                "task_type": "multistage_runner",
                 "file": (io.BytesIO(b">x\nACDE\n"), "x.fasta"),
                 "input_roles": "sequence",
             },
             content_type="multipart/form-data",
         )
 
-    # GPU capability checks run before restricted-runner entitlement checks.
-    assert submit().get_json()["error"].startswith("GPU access required")
+    # Runner entitlement precedes resource admission; neither denial may enqueue.
+    assert submit().get_json()["error"].startswith("Runner access required")
     db.grant_entitlement(user["id"], "example_academic", granted_by=user["id"], basis="other")
     assert submit().get_json()["error"].startswith("GPU access required")
     db.update_user(user["id"], allow_gpu_use=True)
@@ -467,7 +467,7 @@ def test_runner_entitlement_is_bound_to_each_submitting_user(monkeypatch, tmp_pa
     db.grant_entitlement(owner["id"], "example_academic", granted_by=owner["id"], basis="other")
 
     client = module.app.test_client()
-    assert _submit_gremlin(client, member_headers).status_code == 403
+    assert _submit_cpu_runner(client, member_headers).status_code == 403
     db.grant_entitlement(member["id"], "example_academic", granted_by=owner["id"], basis="other")
-    assert _submit_gremlin(client, member_headers).status_code == 302
-    assert _submit_gremlin(client, owner_headers).status_code in {202, 302}
+    assert _submit_cpu_runner(client, member_headers).status_code == 302
+    assert _submit_cpu_runner(client, owner_headers).status_code in {202, 302}

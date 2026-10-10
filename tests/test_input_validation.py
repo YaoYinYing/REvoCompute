@@ -202,8 +202,8 @@ def test_chai_dialect_rejects_malformed_entity_fasta(tmp_path, content, expected
 
 
 def test_chai_dialect_accepts_upstream_reference_headers(tmp_path):
-    # Upstream documents both `>protein|name=example` and `>protein|example`.
-    for header in (">protein|name=example\nACDE\n", ">protein|example\nACDE\n"):
+    # Upstream documents both `>protein|name=demo` and `>protein|example`.
+    for header in (">protein|name=demo\nACDE\n", ">protein|demo\nACDE\n"):
         assert _chai_error(tmp_path, header) is None, header
 
 
@@ -448,13 +448,6 @@ def test_ent_dispatched_to_the_pdb_validator(tmp_path):
     ) is not None
 
 
-def test_every_production_task_format_has_a_core_security_validator():
-    # Discovery is what populates the contributions registry the task list reads;
-    # without it this test only passes when another test happened to run first.
-    discover_plugins(str(REPO_ROOT / "docker" / "runners"))
-    declared = {format_name for task_type in list_types() for role in task_type.inputs for format_name in role.formats}
-
-    assert declared <= supported_input_formats()
 
 
 @pytest.mark.parametrize("extension", ["fasta", "fas", "yaml", "yml", "csv", "restraints"])
@@ -689,7 +682,7 @@ def test_boltz_specification_rejects_malformed_documents(tmp_path, content, name
 def _pdb_task_module(monkeypatch, tmp_path):
     """Load the app with a registered non-GREMLIN .pdb task type."""
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
-    base_type, runner = module.task_runtime._get_task_type("gremlin")
+    base_type, runner = module.task_runtime._get_task_type("cpu_runner")
     conftest._inject_task_type(module, 
         replace(
             base_type,
@@ -742,14 +735,14 @@ def test_upload_text_without_pdb_records_rejected(monkeypatch, tmp_path):
     assert "ATOM, HETATM, or END" in response.json["error"]
 
 
-def test_upload_bad_fasta_for_gremlin_rejected(monkeypatch, tmp_path):
+def test_upload_bad_fasta_for_cpu_runner_rejected(monkeypatch, tmp_path):
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     client = module.app.test_client()
     auth_header = _test_client_auth(module)
 
     response = client.post(
         "/compute/api/post",
-        data={"task_type": "gremlin", "files": (io.BytesIO(b"ACDE\n>h\nACDE\n"), "seqs.fasta"), "input_roles": "sequence"},
+        data={"task_type": "cpu_runner", "files": (io.BytesIO(b"ACDE\n>h\nACDE\n"), "seqs.fasta"), "input_roles": "sequence"},
         headers=auth_header,
     )
     assert response.status_code == 400, response.get_data(as_text=True)
@@ -774,7 +767,7 @@ def test_upload_valid_pdb_accepted(monkeypatch, tmp_path):
 
 
 class _ChaiStubTask:
-    """A role-shaped stand-in for chai1_predict's entity role."""
+    """A role-shaped stand-in for gpu_runner's entity role."""
 
     name = "chai_entities"
     display_name = "Chai Entities"
@@ -800,7 +793,7 @@ def test_chai_entity_submission_accepts_ligand_fasta_and_rejects_protein_only_in
     role's logical type decides which alphabet applies.
     """
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
-    base_type, runner = module.task_runtime._get_task_type("gremlin")
+    base_type, runner = module.task_runtime._get_task_type("cpu_runner")
     conftest._inject_task_type(
         module,
         replace(

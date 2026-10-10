@@ -28,7 +28,7 @@ from revocompute.task_types import ArtifactSelector, ResultView
 from conftest import _load_pssm_module, _test_client_auth, _upsert_task_for_user
 
 
-def _finished_task(module, tmp_path, task_type: str = "gremlin") -> str:
+def _finished_task(module, tmp_path, task_type: str = "cpu_runner") -> str:
     task_id = uuid.uuid4().hex
     result_dir = tmp_path / "result"
     result_dir.mkdir()
@@ -189,9 +189,9 @@ def test_declared_role_survives_the_published_manifest(monkeypatch, tmp_path) ->
     module = _load_pssm_module(
         monkeypatch,
         tmp_path,
-        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "chai1"},
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "gpu_runner"},
     )
-    task_id = _finished_task(module, tmp_path, task_type="chai1_predict")
+    task_id = _finished_task(module, tmp_path, task_type="gpu_runner")
     task = module.task_store.get_task(task_id)
     result_dir = Path(module.app.config["storage_resolver"].get_task_root(task))
     (result_dir / "ranking.json").write_text('{"order": []}\n', encoding="utf-8")
@@ -278,9 +278,9 @@ def test_exact_path_declarations_reach_the_published_manifest(monkeypatch, tmp_p
     module = _load_pssm_module(
         monkeypatch,
         tmp_path,
-        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "chai1"},
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "gpu_runner"},
     )
-    task_id = _finished_task(module, tmp_path, task_type="chai1_predict")
+    task_id = _finished_task(module, tmp_path, task_type="gpu_runner")
     task = module.task_store.get_task(task_id)
     result_dir = Path(module.app.config["storage_resolver"].get_task_root(task))
     for name in (
@@ -978,8 +978,8 @@ def _anchored_task(module, tmp_path) -> tuple[str, Path, dict[str, str]]:
     def build(root: Path) -> None:
         (root / "result.txt").write_bytes(b"score\n1.0\n")
         (root / "scores.json").write_text(json.dumps({"plddt": [0.9, 0.8]}), encoding="utf-8")
-        (root / "gremlin_msa").mkdir()
-        (root / "gremlin_msa" / "input.i90c75.a3m").write_text(">query\nACDE\n", encoding="utf-8")
+        (root / "cpu_runner_msa").mkdir()
+        (root / "cpu_runner_msa" / "input.i90c75.a3m").write_text(">query\nACDE\n", encoding="utf-8")
 
     manifest, result_dir = _finalize_dir(module, task_id, build)
     assert manifest["result"]["files"]["alignment"], manifest["result"]["files"]

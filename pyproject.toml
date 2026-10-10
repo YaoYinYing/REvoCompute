@@ -70,4 +70,6 @@ testpaths = ["tests"]
 markers = [
     "browser: Playwright acceptance contracts that require a browser runtime",
     "molstar_csp: headed-browser qualification of the production Mol* bundle under strict CSP",
+    "runner_contract: fast production Runner protocol/behavior contract",
+    "scientific_acceptance: pinned Runner scientific validation",
 ]

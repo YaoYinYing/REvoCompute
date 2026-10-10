@@ -48,7 +48,7 @@ def _own_task(database: TaskDatabase, task_id: str, *, user_id: int) -> None:
         username=f"user-{user_id}",
         submitted_by_user_id=user_id,
         storage_key=f"user-{user_id}",
-        task_type="gremlin",
+        task_type="cpu_runner",
     )
 
 
@@ -219,7 +219,7 @@ def test_drift_reports_stale_reservations_and_terminal_tasks_with_unsettled_usag
         username="tester",
         submitted_by_user_id=19,
         storage_key="tester",
-        task_type="gremlin",
+        task_type="cpu_runner",
     )
     database.record_allocation_start(
         user_id=19,
@@ -664,7 +664,7 @@ def _retention_task(database: TaskDatabase, task_id: str, *, user_id: int, finis
         username=f"user-{user_id}",
         submitted_by_user_id=user_id,
         storage_key=f"user-{user_id}",
-        task_type="gremlin",
+        task_type="cpu_runner",
     )
 
 

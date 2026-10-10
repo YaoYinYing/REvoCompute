@@ -1,0 +1,84 @@
+id: multistage_runner
+display_name: Synthetic multistage_runner
+category: analysis
+summary: Synthetic protocol behavior.
+inputs:
+  sequence:
+    title: Sequence
+    type: protein_sequence
+    formats:
+    - fasta
+    cardinality:
+      min: 1
+      max: 1
+input_workspace:
+  steps:
+  - id: material
+    title: Material
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: Input
+    - plugin: sequence
+      id: sequence_editor
+      title: Sequence
+      options:
+        role: sequence
+  - id: settings
+    title: Settings
+    capabilities:
+    - plugin: parameters
+      id: task_parameters
+      title: Controls
+  - id: review
+    title: Review
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Review
+      options:
+        show_paths: true
+parameters:
+  type: object
+  additionalProperties: false
+  properties:
+    iter:
+      type: integer
+      default: 100
+      minimum: 1
+      maximum: 10000
+      description: Synthetic bounded control for protocol validation.
+    model_preset:
+      type: string
+      default: monomer
+      enum:
+      - monomer
+      - multimer
+      description: Synthetic execution mode.
+stage_markers:
+  data_pipeline: Prepare inputs
+  feature_validation: Validate inputs
+  inference: Execute calculation
+  output_validation: Validate outputs
+workflow:
+- name: features
+  display_name: Preparation
+  requires_gpu: false
+  requires_network: false
+  runner_args:
+  - -s
+  - features
+  stage_markers:
+  - data_pipeline
+  - feature_validation
+- name: model
+  display_name: Calculation
+  requires_gpu: true
+  requires_network: false
+  runner_args:
+  - -s
+  - model
+  stage_markers:
+  - inference
+  - output_validation
+gpus: true

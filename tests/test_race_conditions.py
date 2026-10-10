@@ -151,7 +151,7 @@ def test_race_upload_dedup_race_condition(monkeypatch, tmp_path):
     r1 = client.post(
         "/compute/api/post",
         data={
-            "task_type": "gremlin",
+            "task_type": "cpu_runner",
             "file": (io.BytesIO(content), "same.fasta"),
             "input_roles": "sequence",
         },
@@ -162,7 +162,7 @@ def test_race_upload_dedup_race_condition(monkeypatch, tmp_path):
     r2 = client.post(
         "/compute/api/post",
         data={
-            "task_type": "gremlin",
+            "task_type": "cpu_runner",
             "file": (io.BytesIO(content), "same.fasta"),
             "input_roles": "sequence",
         },
@@ -226,7 +226,7 @@ def test_execute_compute_task_claims_dispatch_exactly_once(monkeypatch, tmp_path
         source_ip="127.0.0.1",
         user_agent="pytest",
         username="tester",
-        task_type="gremlin",
+        task_type="cpu_runner",
         submitted_by_user_id=int(owner["submitted_by_user_id"]),
         storage_key=owner["storage_key"],
         input_form=json.dumps(

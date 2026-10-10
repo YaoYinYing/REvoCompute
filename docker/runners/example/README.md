@@ -60,7 +60,7 @@ and scientific metadata. Keep user-facing parameters and input roles in the
 owning `task.yaml`; keep deployment-only values in `runner.yaml`.
 
 The family ships its focused contract test at
-`tests/runners/example/test_analyze.py`. It executes the real `run.sh` against a
+`docker/runners/example/tests/fast/test_analyze.py`. It executes the real `run.sh` against a
 `task.json` contract and proves the Runner consumes the declared named input
 role and the server-resolved parameters, commits one directory per FASTA record,
 and resumes and reports partial success. Copy that test alongside the family and
@@ -70,7 +70,7 @@ From the repository root, exercise the executable contract and parsed manifest
 validation with:
 
 ```bash
-uv run pytest tests/runners/example/test_analyze.py
+uv run pytest docker/runners/example/tests/fast/test_analyze.py
 uv run python -m revocompute doctor --config-root docker/runners --runner example --strict
 ```
 

@@ -115,7 +115,7 @@ def test_unowned_task_looks_missing_on_every_read_surface(monkeypatch, tmp_path)
     upload = client.post(
         "/compute/api/post",
         data={
-            "task_type": "gremlin",
+            "task_type": "cpu_runner",
             "files": (io.BytesIO(b">test\nACDE\n"), "upload.fasta"),
             "input_roles": "sequence",
         },
@@ -245,7 +245,7 @@ def test_guest_is_rejected_at_every_compute_boundary(monkeypatch, tmp_path):
     submission = client.post(
         "/compute/api/post",
         data={
-            "task_type": "gremlin",
+            "task_type": "cpu_runner",
             "files": (io.BytesIO(b">guest\nACDE\n"), "guest.fasta"),
             "input_roles": "sequence",
         },
@@ -255,9 +255,9 @@ def test_guest_is_rejected_at_every_compute_boundary(monkeypatch, tmp_path):
     assert "Guest" in submission.json["error"]
 
     preflight = client.post(
-        "/compute/api/preflight/gremlin",
+        "/compute/api/preflight/cpu_runner",
         data={
-            "task_type": "gremlin",
+            "task_type": "cpu_runner",
             "files": (io.BytesIO(b">guest\nACDE\n"), "guest.fasta"),
             "input_roles": "sequence",
         },
@@ -325,7 +325,7 @@ def test_a_non_finite_parameter_is_rejected(monkeypatch, tmp_path):
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     with pytest.raises(ValidationError) as caught:
         TaskSubmissionRequest.model_validate(
-            {"task_type": "gnina", "params": {"center_x": "nan"}}
+            {"task_type": "typed_runner", "params": {"center_x": "nan"}}
         )
     assert "finite" in str(caught.value)
 
@@ -334,11 +334,12 @@ def test_an_unbounded_float_parameter_rejects_nan(monkeypatch, tmp_path):
     """A number parameter with no min/max must still reject NaN.
 
     This is the case JSON Schema cannot cover: ``minimum``/``maximum`` are both
-    false for NaN, so the bound check passes it through.
+    false for NaN, so the bound check passes it through.  ``offset`` carries no
+    bounds.
     """
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     with pytest.raises(ValidationError) as caught:
         TaskSubmissionRequest.model_validate(
-            {"task_type": "autodock_vina", "params": {"center_x": "nan"}}
+            {"task_type": "cpu_runner", "params": {"offset": "nan"}}
         )
     assert "finite" in str(caught.value)

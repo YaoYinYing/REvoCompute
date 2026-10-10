@@ -27,14 +27,14 @@ def _make_task_type(**kwargs):
     from revocompute.task_types import RuntimeFamily, TaskInputRole, TaskType
 
     defaults = dict(
-        name="gremlin",
+        name="cpu_runner",
         display_name="GREMLIN",
         runtime=RuntimeFamily(
-            name="gremlin",
+            name="cpu_runner",
             entrypoint=("bash", "/app/run.sh"),
-            definition="docker/gremlin/gremlin.def",
-            slurm_image="/opt/images/gremlin_v1.sif",
-            image_artifact="gremlin_v1.sif",
+            definition="docker/cpu_runner/cpu_runner.def",
+            slurm_image="/opt/images/cpu_runner_v1.sif",
+            image_artifact="cpu_runner_v1.sif",
         ),
         inputs=(
             TaskInputRole(
@@ -48,7 +48,7 @@ def _make_task_type(**kwargs):
         ),
         stage_markers={
             "hhblits": "HHblits MSA",
-            "gremlin": "GREMLIN opt",
+            "cpu_runner": "GREMLIN opt",
         },
     )
     defaults.update(kwargs)
@@ -266,7 +266,7 @@ def test_gpu_wrapper_samples_assigned_device_and_emits_resource_evidence(tmp_pat
     job._job_id = "42"
     job._stdout_lines = result.stdout.splitlines(keepends=True)
     job._save_output()
-    resource = output_dir / "execution" / "slurm-alice-gremlin-task-1.resource.json"
+    resource = output_dir / "execution" / "slurm-alice-cpu_runner-task-1.resource.json"
     payload = json.loads(resource.read_text(encoding="utf-8"))
     assert payload["allocated_gpus_on_node"] == "1"
     assert payload["allocated_gpu_ids"] == "0"
@@ -336,7 +336,7 @@ def _run_gpu_wrapper(tmp_path, *, env_gpus: dict[str, str]) -> dict:
     job._stdout_lines = result.stdout.splitlines(keepends=True)
     job._save_output()
     payload = json.loads(
-        (output_dir / "execution" / "slurm-alice-gremlin-task-1.resource.json").read_text(encoding="utf-8")
+        (output_dir / "execution" / "slurm-alice-cpu_runner-task-1.resource.json").read_text(encoding="utf-8")
     )
     receipt = job.read_allocation_receipt()
     assert receipt is not None, "the wrapper must leave its compute-node receipt"
@@ -460,7 +460,7 @@ def test_resource_markers_start_a_line_after_output_without_a_trailing_newline(t
     job._job_id = "42"
     job._stdout_lines = result.stdout.splitlines(keepends=True)
     job._save_output()
-    resource = output_dir / "execution" / "slurm-alice-gremlin-task-1.resource.json"
+    resource = output_dir / "execution" / "slurm-alice-cpu_runner-task-1.resource.json"
     assert resource.is_file()
     assert json.loads(resource.read_text(encoding="utf-8"))["job_id"] == "42"
 
@@ -488,7 +488,7 @@ def test_build_srun_args_includes_job_name(tmp_path):
     )
     args = job._build_srun_args()
     job_name = next(a for a in args if a.startswith("--job-name="))
-    assert "revocomput_testuser_gremlin_abcdef12" == job_name.split("=", 1)[1]
+    assert "revocomput_testuser_cpu_runner_abcdef12" == job_name.split("=", 1)[1]
 
 
 def test_build_srun_args_no_db_defaults(tmp_path):
@@ -500,7 +500,7 @@ def test_build_srun_args_no_db_defaults(tmp_path):
     assert "--nodes=1" in args
     assert "--ntasks=1" in args
     assert f"--chdir={tmp_path / 'out'}" in args
-    assert "--job-name=revocomput_unknown_gremlin_task-1" in args
+    assert "--job-name=revocomput_unknown_cpu_runner_task-1" in args
 
 
 def test_build_srun_args_gpu_task_reserves_one_gpu_by_default(tmp_path):
@@ -574,7 +574,7 @@ def test_render_apptainer_binds_and_env(tmp_path):
     assert "export APPTAINERENV_TASK_MANIFEST=" in script
     assert "export APPTAINERENV_CUDA_VISIBLE_DEVICES=" in script
     assert "-i '/workspace/inputs/task.json'" in script
-    assert "/opt/images/gremlin_v1.sif" in script
+    assert "/opt/images/cpu_runner_v1.sif" in script
 
 
 def test_render_apptainer_omits_nvidia_flag_for_cpu_task(tmp_path):
@@ -638,10 +638,10 @@ def test_render_apptainer_ships_params_via_manifest(tmp_path):
 
 
 def test_render_apptainer_passes_runtime_subcommand(tmp_path):
-    task_type = _make_task_type(runner_args=("rfdiffusion",))
+    task_type = _make_task_type(runner_args=("workspace_task",))
     job = SlurmJob("task-1", task_type, _make_runner(), _make_entities(), str(tmp_path / "out"))
     script = job._render_wrapper()
-    assert "'/opt/images/gremlin_v1.sif' 'bash' '/app/run.sh' 'rfdiffusion' -i" in script
+    assert "'/opt/images/cpu_runner_v1.sif' 'bash' '/app/run.sh' 'workspace_task' -i" in script
 
 
 def test_render_apptainer_raises_without_sif_image(tmp_path):
@@ -855,14 +855,14 @@ def test_render_apptainer_quotes_paths_and_environment_values(tmp_path):
         "workspace_key": "alice task",
     }
     task_type = _make_task_type(
-        runtime=replace(_make_task_type().runtime, slurm_image="/opt/images/gremlin's image.sif")
+        runtime=replace(_make_task_type().runtime, slurm_image="/opt/images/cpu_runner's image.sif")
     )
     runner = _make_runner(
-        env={"GREMLIN_DB": "/data/db path/gremlin's db"},
+        env={"GREMLIN_DB": "/data/db path/cpu_runner's db"},
         mounts=(
             RunnerMount(
-                host_path="/data/db path/gremlin's db",
-                container_path="/opt/db path/gremlin",
+                host_path="/data/db path/cpu_runner's db",
+                container_path="/opt/db path/cpu_runner",
                 mode="ro",
             ),
         ),
@@ -872,8 +872,8 @@ def test_render_apptainer_quotes_paths_and_environment_values(tmp_path):
 
     assert _sh_quote("/srv/workspaces/alice's task/inputs/input file.fasta") in script
     assert _sh_quote("/srv/workspaces/alice's task/inputs") in script
-    assert _sh_quote("/data/db path/gremlin's db") in script
-    assert _sh_quote("/opt/images/gremlin's image.sif") in script
+    assert _sh_quote("/data/db path/cpu_runner's db") in script
+    assert _sh_quote("/opt/images/cpu_runner's image.sif") in script
     assert _sh_quote("/workspace/inputs/task.json") in script
 
 
@@ -935,7 +935,7 @@ def test_submit_invokes_srun_with_resource_args_and_wrapper(tmp_path):
         # of a job killed before the wrapper's first statement.  Only stderr is
         # redirected, so the wrapper's stdout protocol stays on its pipe.
         f"--error={Path(job.allocation_dir) / 'allocation-%j.err'}",
-        "--job-name=revocomput_alice_example_com_gremlin_abcdef12",
+        "--job-name=revocomput_alice_example_com_cpu_runner_abcdef12",
         "/bin/bash",
         str(wrapper),
     ]
@@ -1552,7 +1552,7 @@ def test_allocation_live_emits_first_stage_as_liveness_signal(tmp_path):
     stdout = StringIO(
         "REVODESIGN_JOB_ID=4154\n"
         "REVODESIGN_ALLOCATION_LIVE=4154\n"
-        "REVODESIGN_STAGE:gremlin\n"
+        "REVODESIGN_STAGE:cpu_runner\n"
     )
     job._process = SimpleNamespace(stdout=stdout)
 
@@ -1562,7 +1562,7 @@ def test_allocation_live_emits_first_stage_as_liveness_signal(tmp_path):
     assert job._job_id_event.is_set()
     # The first declared stage is the allocation's own liveness signal, emitted
     # when it starts running — never on the bare job identity.
-    assert stages_seen == ["hhblits", "gremlin"]
+    assert stages_seen == ["hhblits", "cpu_runner"]
     assert stdout.closed
 
 
@@ -1588,7 +1588,7 @@ def test_job_identity_alone_emits_no_stage(tmp_path):
 
 def test_submit_poll_lifecycle_maps_exit_zero_with_result_to_completed(tmp_path):
     job = SlurmJob("task-1", _make_task_type(), _make_runner(), _make_entities(), str(tmp_path / "out"))
-    fake_proc = _FakeSrunProcess(stdout="REVODESIGN_JOB_ID=4217\nREVODESIGN_STAGE:gremlin\n", returncode=0)
+    fake_proc = _FakeSrunProcess(stdout="REVODESIGN_JOB_ID=4217\nREVODESIGN_STAGE:cpu_runner\n", returncode=0)
 
     with patch("subprocess.Popen", return_value=fake_proc):
         assert job.submit() == "4217"
@@ -1643,7 +1643,7 @@ def test_poll_maps_nonzero_srun_exit_to_failed_and_saves_scheduler_logs(tmp_path
         job.submit()
         assert job.poll() == JobState.FAILED
 
-    stderr = tmp_path / "out" / "execution" / "slurm-bob-gremlin-task-1.stderr.log"
+    stderr = tmp_path / "out" / "execution" / "slurm-bob-cpu_runner-task-1.stderr.log"
     assert stderr.read_text() == "slurmstepd: error: task exited with exit code 1\n"
 
 
@@ -1675,14 +1675,14 @@ def test_slurm_output_is_named_previewable_execution_diagnostics(tmp_path):
         username="alice",
     )
     job._job_id = "srun-32"
-    job._stdout_lines = ["REVODESIGN_STAGE:proteinmpnn\n"]
+    job._stdout_lines = ["REVODESIGN_STAGE:structure_runner\n"]
     job._stderr_lines = ["warning\n"]
 
     job._save_output()
 
-    stdout = tmp_path / "out" / "execution" / "slurm-alice-gremlin-task-1.stdout.log"
-    stderr = tmp_path / "out" / "execution" / "slurm-alice-gremlin-task-1.stderr.log"
-    assert stdout.read_text() == "REVODESIGN_STAGE:proteinmpnn\n"
+    stdout = tmp_path / "out" / "execution" / "slurm-alice-cpu_runner-task-1.stdout.log"
+    stderr = tmp_path / "out" / "execution" / "slurm-alice-cpu_runner-task-1.stderr.log"
+    assert stdout.read_text() == "REVODESIGN_STAGE:structure_runner\n"
     assert stderr.read_text() == "warning\n"
     assert job._is_execution_log(str(stdout))
 
@@ -1725,7 +1725,7 @@ def test_slurm_resource_observation_is_bounded_diagnostic_not_scientific_output(
 
     job._save_output()
 
-    resource = tmp_path / "out" / "execution" / "slurm-alice-gremlin-task-1.resource.json"
+    resource = tmp_path / "out" / "execution" / "slurm-alice-cpu_runner-task-1.resource.json"
     payload = json.loads(resource.read_text(encoding="utf-8"))
     assert payload["job_id"] == "42"
     assert payload["max_rss_kib"] == 2048
@@ -1760,8 +1760,8 @@ def test_slurm_resource_observation_uses_final_stdout_envelope_without_leaking_i
 
     job._save_output()
 
-    resource = tmp_path / "out" / "execution" / "slurm-alice-gremlin-task-1.resource.json"
-    stdout = tmp_path / "out" / "execution" / "slurm-alice-gremlin-task-1.stdout.log"
+    resource = tmp_path / "out" / "execution" / "slurm-alice-cpu_runner-task-1.resource.json"
+    stdout = tmp_path / "out" / "execution" / "slurm-alice-cpu_runner-task-1.stdout.log"
     assert json.loads(resource.read_text(encoding="utf-8"))["elapsed_seconds"] == 1.25
     assert stdout.read_text(encoding="utf-8") == "REVODESIGN_JOB_ID=42\n"
 
@@ -1796,7 +1796,7 @@ def test_slurm_resource_observation_preserves_bounded_gpu_metrics(tmp_path):
 
     job._save_output()
 
-    resource = tmp_path / "out" / "execution" / "slurm-alice-gremlin-task-1.resource.json"
+    resource = tmp_path / "out" / "execution" / "slurm-alice-cpu_runner-task-1.resource.json"
     payload = json.loads(resource.read_text(encoding="utf-8"))
     assert payload["gpu_memory_peak_mib"] == 1024
     assert payload["gpu_utilization_peak_percent"] == 75
@@ -1934,11 +1934,11 @@ def test_runner_protocol_lines_are_ingested_from_stdout(tmp_path):
         task_store=store,
     )
     observation = {
-        "runner": "gremlin",
+        "runner": "cpu_runner",
         "model_revision": "m1",
         "runtime_fingerprint": "fp",
         "device": {"vendor": "nvidia", "model": "A100-PCIE-40GB", "compute_capability": "8.0", "total_vram_mb": 40960},
-        "features": {"runner": "gremlin", "model_revision": "m1", "runtime_fingerprint": "fp", "sequence_length": 100},
+        "features": {"runner": "cpu_runner", "model_revision": "m1", "runtime_fingerprint": "fp", "sequence_length": 100},
         "outcome": "oom",
         "baseline_mb": 100,
         "available_mb": 20000,
@@ -1946,7 +1946,7 @@ def test_runner_protocol_lines_are_ingested_from_stdout(tmp_path):
         "attempt": 2,
     }
     job._stdout_lines = [
-        "REVODESIGN_STAGE:gremlin\n",
+        "REVODESIGN_STAGE:cpu_runner\n",
         "REVODESIGN_PROGRESS:" + json.dumps({"total_items": 4, "completed_items": 2}) + "\n",
         "REVODESIGN_PROGRESS:" + json.dumps({"total_items": 4, "completed_items": 3}) + "\n",
         "REVODESIGN_OBSERVATION:" + json.dumps(observation) + "\n",
@@ -2054,7 +2054,7 @@ def test_a_hostile_stdout_line_never_skips_poll_cleanup(tmp_path):
 # different one.
 
 
-def _bundle_job(tmp_path, digest: str | None, *, family: str = "gremlin"):
+def _bundle_job(tmp_path, digest: str | None, *, family: str = "cpu_runner"):
     """A job whose input snapshot pins ``digest`` (or declares no bundle)."""
     store = tmp_path / "runtime-bundles"
     inputs = tmp_path / "workspace" / "task-1" / "inputs"
@@ -2079,12 +2079,12 @@ def _bundle_job(tmp_path, digest: str | None, *, family: str = "gremlin"):
 def _materialized_bundle(tmp_path) -> tuple[str, Path]:
     from revocompute import runtime_bundle
 
-    root = tmp_path / "runners" / "gremlin"
+    root = tmp_path / "runners" / "cpu_runner"
     root.mkdir(parents=True)
     (root / "run.sh").write_text("#!/bin/sh\n", encoding="utf-8")
     os.chmod(root / "run.sh", 0o755)
     store = tmp_path / "runtime-bundles"
-    digest, path = runtime_bundle.materialize(root.parent, ["gremlin/run.sh"], store)
+    digest, path = runtime_bundle.materialize(root.parent, ["cpu_runner/run.sh"], store)
     return digest, path
 
 
@@ -2128,11 +2128,11 @@ def test_capture_log_omits_protocol_lines_and_keeps_runner_diagnostics(tmp_path)
         "REVODESIGN_JOB_ID=42\n",
         "model loaded\n",
         "REVODESIGN_PROGRESS:" + json.dumps({"total_items": 1}) + "\n",
-        "REVODESIGN_OBSERVATION:" + json.dumps({"runner": "gremlin"}) + "\n",
+        "REVODESIGN_OBSERVATION:" + json.dumps({"runner": "cpu_runner"}) + "\n",
         "REVODESIGN_TASK_OUTCOME:SUCCESS\n",
     ]
 
     job._save_output()
 
-    stdout = tmp_path / "out" / "execution" / "slurm-alice-gremlin-task-1.stdout.log"
+    stdout = tmp_path / "out" / "execution" / "slurm-alice-cpu_runner-task-1.stdout.log"
     assert stdout.read_text(encoding="utf-8") == "REVODESIGN_JOB_ID=42\nmodel loaded\n"

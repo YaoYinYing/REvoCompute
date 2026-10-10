@@ -102,12 +102,12 @@ def _manifest() -> dict:
     return {
         "schema_version": 3,
         "task_id": TASK_ID,
-        "task_type": "gremlin_lh_fit",
+        "task_type": "cpu_runner_lh_fit",
         "created_at": "2026-01-01T00:00:00+00:00",
         "status": "finished",
         "terminal": True,
         "error": None,
-        "run": {"method": {"id": "gremlin_lh_fit", "name": "GREMLIN_LH"}, "inputs": [], "parameters": []},
+        "run": {"method": {"id": "cpu_runner_lh_fit", "name": "GREMLIN_LH"}, "inputs": [], "parameters": []},
         "output_check": {"state": "passed", "checks": [], "problems": []},
         "limitations": [],
         "views": [

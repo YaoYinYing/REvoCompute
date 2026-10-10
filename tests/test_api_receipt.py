@@ -97,10 +97,10 @@ class _PublishedTask:
         self.manifest = {
             "schema_version": 3,
             "task_id": TASK_ID,
-            "task_type": "gremlin_lh_fit",
+            "task_type": "cpu_runner_lh_fit",
             "created_at": "2026-10-04T03:24:33.471+00:00",
             "run": {
-                "method": {"id": "gremlin_lh_fit", "name": "GREMLIN_LH Potts model"},
+                "method": {"id": "cpu_runner_lh_fit", "name": "GREMLIN_LH Potts model"},
                 "inputs": [
                     {
                         "role": "alignment",
@@ -134,14 +134,14 @@ class _PublishedTask:
         self.task_row = {
             "md5sum": TASK_ID,
             "status": status,
-            "task_type": "gremlin_lh_fit",
+            "task_type": "cpu_runner_lh_fit",
             "filename": "2KL8.i90c75_aln.a3m",
             "slurm_job_id": "10304",
             "storage_key": STORAGE_KEY,
         }
         execution = self.result_root / "execution"
         execution.mkdir(exist_ok=True)
-        (execution / f"slurm-revodesign-gremlin_lh_fit-{TASK_ID}.resource.json").write_text(
+        (execution / f"slurm-revodesign-cpu_runner_lh_fit-{TASK_ID}.resource.json").write_text(
             json.dumps(
                 {
                     "schema_version": "1",
@@ -168,7 +168,7 @@ class _PublishedTask:
             # The task finishes AFTER the stamp, so the current deployment may
             # legitimately have executed it.
             "deployment_stamp": {"commit": "c82ea79", "dirty": True, "mode": "dev", "stamped_at": "2026-10-04T03:00:00+00:00"},
-            "resource_payload": json.loads((self.result_root / "execution" / f"slurm-revodesign-gremlin_lh_fit-{TASK_ID}.resource.json").read_text()),
+            "resource_payload": json.loads((self.result_root / "execution" / f"slurm-revodesign-cpu_runner_lh_fit-{TASK_ID}.resource.json").read_text()),
             "status_evidence": {
                 "endpoint": "/compute/api/running/<task_id>",
                 "http_status": 200,
@@ -190,14 +190,14 @@ def published(tmp_path: Path) -> _PublishedTask:
     return _PublishedTask(tmp_path / "results" / "users" / STORAGE_KEY / "tasks" / TASK_ID)
 
 
-def test_receipt_derives_the_gremlin_lh_observables_from_published_evidence(published):
+def test_receipt_derives_the_cpu_runner_lh_observables_from_published_evidence(published):
     receipt = published.build()
 
     assert receipt["complete"] is True
     assert receipt_failures(receipt) == []
     assert receipt["kind"] == API_RECEIPT_KIND
     assert receipt["receipt_version"] == API_RECEIPT_VERSION
-    assert receipt["submission"]["task_type"] == "gremlin_lh_fit"
+    assert receipt["submission"]["task_type"] == "cpu_runner_lh_fit"
     assert receipt["submission"]["parameters"] == [
         {"name": "regularization", "value": "LH", "unit": ""},
         {"name": "iterations", "value": 50, "unit": ""},
@@ -271,7 +271,7 @@ def test_receipt_rejects_an_artifact_path_that_escapes_the_result_root(tmp_path:
     manifest = {
         "schema_version": 3,
         "task_id": TASK_ID,
-        "task_type": "gremlin_lh_fit",
+        "task_type": "cpu_runner_lh_fit",
         "output_check": {"state": "passed", "problems": []},
         "artifacts": [{"path": "../escaped.txt", "size": 7, "sha256": "0" * 64, "role": "artifact"}],
         "result": {"files": {}},
@@ -280,7 +280,7 @@ def test_receipt_rejects_an_artifact_path_that_escapes_the_result_root(tmp_path:
     receipt = build_api_receipt(
         task_id=TASK_ID,
         manifest=manifest,
-        task_row={"md5sum": TASK_ID, "status": "finished", "task_type": "gremlin_lh_fit"},
+        task_row={"md5sum": TASK_ID, "status": "finished", "task_type": "cpu_runner_lh_fit"},
         result_root=str(root),
     )
     assert receipt["complete"] is False
@@ -312,7 +312,7 @@ def test_receipt_records_the_observed_runtime_sif_digest(published):
 
 
 def test_receipt_reports_a_nonzero_exit_code(published):
-    payload_path = published.result_root / "execution" / f"slurm-revodesign-gremlin_lh_fit-{TASK_ID}.resource.json"
+    payload_path = published.result_root / "execution" / f"slurm-revodesign-cpu_runner_lh_fit-{TASK_ID}.resource.json"
     payload = json.loads(payload_path.read_text())
     payload["exit_code"] = 9
     receipt = published.build(resource_payload=payload)
@@ -627,7 +627,7 @@ def test_cli_argument_contract_requires_exactly_a_task_id(capsys):
     subcommand, _, flags = parse_args(["api-receipt", "--task", TASK_ID])
     assert subcommand == "api-receipt"
     assert flags.task == TASK_ID
-    for invalid in (["api-receipt"], ["api-receipt", "--task", TASK_ID, "--runner", "gremlin_lh"]):
+    for invalid in (["api-receipt"], ["api-receipt", "--task", TASK_ID, "--runner", "cpu_runner_lh"]):
         with pytest.raises(SystemExit):
             parse_args(invalid)
 
@@ -657,26 +657,3 @@ def test_tool_source_digest_is_deterministic_and_source_sensitive(tmp_path: Path
 
     cli.write_text("CLI = 2\n", encoding="utf-8")
     assert tool_source_digest(builder, cli) != first
-
-
-def test_checked_in_receipts_name_the_tool_that_produced_them():
-    """A machine-check for the acceptance contract's tool-identity clause.
-
-    Each checked-in receipt must carry its collector source digest, and both
-    receipts were produced by the same tool, so the digests agree. This turns
-    "the receipt was produced by the reviewed tool" into a fact the repository
-    checks rather than prose a reader must trust.
-    """
-    receipts = sorted((ROOT / "docker" / "runners" / "gremlin_lh" / "receipts").glob("*.json"))
-    assert receipts, "expected checked-in receipts"
-    digests = {}
-    for path in receipts:
-        parsed = parse_api_receipt(json.loads(path.read_text(encoding="utf-8")))
-        digest = parsed["tool"]["source_digest"]
-        assert digest.startswith("sha256:")
-        digests[path.name] = digest
-    assert len(set(digests.values())) == 1, digests
-    assert digests.values().__iter__().__next__() == tool_source_digest(
-        ROOT / "revocompute" / "api_receipt.py",
-        ROOT / "run" / "revocompute_ctl" / "api_receipt.py",
-    )

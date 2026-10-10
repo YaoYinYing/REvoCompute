@@ -1,0 +1,11 @@
+collections:
+  smoke:
+    cases:
+    - id: minimal-synthetic
+      task: cpu_runner
+      input:
+        roles:
+          sequence:
+          - tests/data/synthetic/sequence.fasta
+      parameters: {}
+version: 1

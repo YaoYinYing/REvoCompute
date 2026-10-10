@@ -63,13 +63,20 @@ ALL = frozenset(classify.LANES)
         (["revocompute/operator_jobs.py"], {"server", "compose"}),
         # Scientific families keep their scientific acceptance and never degrade
         # to generic backend-only.
-        (["docker/runners/gremlin_lh/task.yaml"], {"server", "runner_scientific"}),
-        (["docker/runners/gremlin_lh/runner.yaml"], {"server", "runner_scientific"}),
-        (["tests/data/gremlin_lh/upstream_reference.json"], {"server", "runner_scientific"}),
-        (["tests/runners/gremlin_lh/test_upstream_equivalence.py"], {"server", "runner_scientific"}),
-        (["docker/runners/common/runner_common.py"], {"server", "runner_scientific"}),
-        # An ordinary runner family runs server tests only.
-        (["docker/runners/fpocket/fpocket.def"], {"server"}),
+        (["docker/runners/gremlin_lh/task.yaml"], {"server", "runner_fast", "runner_scientific"}),
+        (["docker/runners/gremlin_lh/runner.yaml"], {"server", "runner_fast", "runner_scientific"}),
+        (["docker/runners/gremlin_lh/tests/scientific/references/upstream_reference.json"], {"server", "runner_fast", "runner_scientific"}),
+        (["docker/runners/gremlin_lh/tests/scientific/test_upstream_equivalence.py"], {"server", "runner_fast", "runner_scientific"}),
+        # Scientific fixtures that still live under the shared tests/data corpus.
+        (["tests/data/evosplit/minimal.a3m"], {"server", "runner_fast", "runner_scientific"}),
+        (["docker/runners/common/runner_common.py"], {"server", "runner_fast", "runner_scientific"}),
+        # An ordinary Runner receives both generic and family-owned contracts.
+        (["docker/runners/fpocket/fpocket.def"], {"server", "runner_fast"}),
+        (["docker/runners/fpocket/tests/fast/test_adapter.py"], {"server", "runner_fast"}),
+        (["docker/runners/evosplit/tests/scientific/test_adapter.py"], {"server", "runner_fast", "runner_scientific"}),
+        (["docker/runner_testkit/pytest_plugin.py"], {"server", "runner_fast", "runner_scientific"}),
+        (["tests/fleet/test_manifest_projection.py"], {"server", "runner_fast", "browser"}),
+        (["tools/check_test_boundaries.py"], ALL),
         # Deployment and controller paths run the Compose lane.
         (["docker-compose.yml"], {"compose"}),
         (["docker-compose.slurm.yml"], {"compose"}),
@@ -178,7 +185,7 @@ def test_git_range_reads_the_prs_own_paths():
 
 def test_forged_lane_output_cannot_be_trusted_and_defaults_stay_broad():
     """The lane vocabulary is closed: a caller cannot invent a lane the gates ignore."""
-    assert set(classify.LANES) == {"docs", "server", "runner_scientific", "browser", "compose"}
+    assert set(classify.LANES) == {"docs", "server", "runner_fast", "runner_scientific", "browser", "compose"}
     assert classify.ALL_LANES == frozenset(classify.LANES)
 
 

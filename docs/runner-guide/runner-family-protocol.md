@@ -30,3 +30,28 @@ simultaneous build and execution changes report `BUILD_STALE`, not merely
 A family whose Task may contain many independent work items additionally owns
 the persistent runtime lifecycle, per-item commit, and resume semantics
 described in [Persistent Execution](persistent-execution.md).
+
+
+## Repository test ownership
+
+The family owns executable tests under `tests/fast/` and pinned scientific
+acceptance under `tests/scientific/`. Keep fake modules, references, goldens, and
+regeneration utilities inside that family-root `tests/` namespace: deployment
+materialization excludes it. Runtime/build assets must live outside it and be
+explicitly declared in the manifest. The shared `docker/runner_testkit/` is a
+sibling of the production Runner root and is never discovered as a plugin.
+
+Run one family's fast contracts from the repository root:
+
+```bash
+python -m pytest -p docker.runner_testkit.pytest_plugin --import-mode=importlib \
+  docker/runners/<family>/tests/fast
+```
+
+`make runner-fast` collects every family's fast directory. Scientific directories
+are never imported by that command. Run scientific tests with the family's
+locked dependencies and documented acceptance command; missing required
+dependencies are failures, not optional skips. Generic Server protocol tests
+use Server-owned synthetic fixtures, and shipped manifest projections are
+separately named fleet tests. [Testing and CI](../developer-guide/testing.md)
+owns lane and collection policy.

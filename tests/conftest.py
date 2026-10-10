@@ -12,7 +12,9 @@ Run through the server-owned Makefile::
 from __future__ import annotations
 
 import importlib.util
+import builtins
 import hashlib
+import io
 import os
 import shutil
 import sys
@@ -35,6 +37,7 @@ if str(RUN_DIR) not in sys.path:
 # ponytail: slurm_runner calls ComputeConfig.from_env()
 # at import time — set minimal defaults so unit tests can import without a full env.
 os.environ.setdefault("SERVER_DIR", str(SERVER_DIR))
+os.environ["RUNNERS_DIR"] = str(SERVER_DIR / "tests" / "fixtures" / "runners")
 os.environ.setdefault("RUNNER_UID", "1000")
 os.environ.setdefault("RUNNER_GID", "1000")
 _SESSION_TEMP = tempfile.TemporaryDirectory(prefix="revocompute-pytest-")
@@ -55,6 +58,77 @@ TEST_ROOT = str(Path(__file__).resolve().parent)
 # modules alive until the test finishes, then close their resources explicitly
 # so the full suite does not exhaust the process file-descriptor limit.
 _LOADED_APP_MODULES: list[object] = []
+
+
+@pytest.fixture(autouse=True)
+def _deny_production_runner_root(request, monkeypatch):
+    """Every generic Server test fails on access to the installed Runner tree.
+
+    Installed-fleet projections have their own structurally separate collection
+    and must opt in through their physical tests/fleet ownership.
+    """
+    if request.path.is_relative_to(Path(TEST_ROOT) / "fleet"):
+        monkeypatch.setenv("RUNNERS_DIR", str(SERVER_DIR / "docker" / "runners"))
+        return
+    production = os.path.realpath(SERVER_DIR / "docker" / "runners")
+    original_open = builtins.open
+    original_path_open = Path.open
+    original_iterdir = Path.iterdir
+    original_scandir = os.scandir
+    original_listdir = os.listdir
+    original_os_open = os.open
+    original_walk = os.walk
+
+    def deny(path):
+        """Fail on any access equal to or beneath the production Runner tree.
+
+        ``realpath`` collapses symlinks and ``..`` so an alias cannot slip past
+        a purely lexical check. Every read or directory-listing entry point a
+        test could reach the tree through is guarded, so the invariant holds
+        for the syscall, not for one favoured API.
+        """
+        if not isinstance(path, (str, bytes, os.PathLike)):
+            return
+        candidate = os.path.realpath(path)
+        if candidate == production or candidate.startswith(production + os.sep):
+            raise AssertionError(f"Server test accessed production Runner root: {path}")
+
+    def guarded_open(path, *args, **kwargs):
+        deny(path)
+        return original_open(path, *args, **kwargs)
+
+    def guarded_path_open(path, *args, **kwargs):
+        deny(path)
+        return original_path_open(path, *args, **kwargs)
+
+    def guarded_iterdir(path, *args, **kwargs):
+        deny(path)
+        return original_iterdir(path, *args, **kwargs)
+
+    def guarded_scandir(path=".", *args, **kwargs):
+        deny(path)
+        return original_scandir(path, *args, **kwargs)
+
+    def guarded_listdir(path=".", *args, **kwargs):
+        deny(path)
+        return original_listdir(path, *args, **kwargs)
+
+    def guarded_os_open(path, *args, **kwargs):
+        deny(path)
+        return original_os_open(path, *args, **kwargs)
+
+    def guarded_walk(top, *args, **kwargs):
+        deny(top)
+        return original_walk(top, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", guarded_open)
+    monkeypatch.setattr(io, "open", guarded_open)
+    monkeypatch.setattr(Path, "open", guarded_path_open)
+    monkeypatch.setattr(Path, "iterdir", guarded_iterdir)
+    monkeypatch.setattr(os, "scandir", guarded_scandir)
+    monkeypatch.setattr(os, "listdir", guarded_listdir)
+    monkeypatch.setattr(os, "open", guarded_os_open)
+    monkeypatch.setattr(os, "walk", guarded_walk)
 
 
 @pytest.fixture(autouse=True)
@@ -123,7 +197,7 @@ def _materialize_runtime_bundles(runner_root: Path, store_root: Path) -> None:
     runtime_bundle.write_index(store_root, index)
 
 
-def _load_pssm_module(monkeypatch, tmp_path, extra_env: dict | None = None):
+def _load_pssm_module(monkeypatch, tmp_path, extra_env: dict | None = None, *, runner_root: Path | None = None):
     """Load a fresh copy of ``revocompute.py`` with test-isolated env vars.
 
     ``revocompute.py`` creates ``app``, ``celery``, ``CONFIG``, and
@@ -148,7 +222,7 @@ def _load_pssm_module(monkeypatch, tmp_path, extra_env: dict | None = None):
     )
     # Production discovery reads the server-instance plugin tree.  Materialize
     # the source runner families for isolated application tests as setup does.
-    shutil.copytree(Path(REPO_DIR) / "docker" / "runners", env_root / "docker" / "runners")
+    shutil.copytree(runner_root or Path(TEST_ROOT) / "fixtures" / "runners", env_root / "docker" / "runners")
     shutil.copytree(Path(REPO_DIR) / "docker" / "tools", env_root / "docker" / "tools")
     for folder in ("uniref30", "uniref90"):
         (env_root / folder).mkdir(exist_ok=True)
@@ -159,6 +233,7 @@ def _load_pssm_module(monkeypatch, tmp_path, extra_env: dict | None = None):
 
     base_env = {
         "SERVER_DIR": str(env_root),
+        "RUNNERS_DIR": str(env_root / "docker" / "runners"),
         "DB_PATH": str(db_path),
         "MANAGE_DB_PATH": str(env_root / "manage.sqlite3"),
         "LOG_DIR": str(log_dir),
@@ -332,7 +407,7 @@ def _upsert_task_for_user(
     username: str,
     status: str = "finished",
     run_stage: str | None = None,
-    task_type: str = "gremlin",
+    task_type: str = "cpu_runner",
 ) -> None:
     owner = _task_owner(module, username)
     _relocate_task_artifacts(module, md5sum, result_dir, owner)
@@ -375,7 +450,7 @@ def _anchor_result_publication(module, md5sum: str) -> None:
     )
 
 
-def _insert_pending_task(module, result_dir: Path, filename: str = "input.fasta", task_type: str = "gremlin") -> str:
+def _insert_pending_task(module, result_dir: Path, filename: str = "input.fasta", task_type: str = "cpu_runner") -> str:
     result_dir.mkdir(parents=True, exist_ok=True)
     fasta_path = result_dir / filename
     fasta_path.write_text(">test\nACDE\n", encoding="utf-8")
@@ -421,3 +496,8 @@ def _inject_task_type(module, task_type, runner):
     contributions.register("tasks", task_type.name, task_type, plugin_id="test")
     contributions.register("runner_configs", task_type.name, runner, plugin_id="test")
     return task_type
+
+
+def _load_fleet_module(monkeypatch, tmp_path, extra_env: dict | None = None):
+    """Explicit installed-fleet projection/replay boundary, excluded from Server collection."""
+    return _load_pssm_module(monkeypatch, tmp_path, extra_env, runner_root=Path(REPO_DIR) / "docker" / "runners")

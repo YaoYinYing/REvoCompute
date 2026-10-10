@@ -35,7 +35,7 @@ def test_request_and_preflight_events_share_safe_request_id(monkeypatch, tmp_pat
         extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
     )
     response = module.app.test_client().post(
-        "/compute/api/preflight/gremlin",
+        "/compute/api/preflight/cpu_runner",
         headers={**_test_client_auth(module), "X-Request-ID": "client-request-42"},
         data={
             "files": (io.BytesIO(b">private-sequence\nACDEFGHIK\n"), "private.fasta"),
@@ -77,7 +77,7 @@ def test_submission_persists_and_queues_request_correlation(monkeypatch, tmp_pat
         "/compute/api/post",
         headers={**_test_client_auth(module), "X-Request-ID": "submission-request-42"},
         data={
-            "task_type": "gremlin",
+            "task_type": "cpu_runner",
             "files": (io.BytesIO(b">private-sequence\nACDEFGHIK\n"), "private.fasta"),
             "input_roles": "sequence",
         },
@@ -114,7 +114,7 @@ def test_worker_events_continue_submission_correlation(monkeypatch, tmp_path):
     )
     task = {
         "md5sum": "a" * 32,
-        "task_type": "gremlin",
+        "task_type": "cpu_runner",
         "status": "finished",
         "run_stage": "blast",
         "celery_task_id": "celery-42",
@@ -123,7 +123,7 @@ def test_worker_events_continue_submission_correlation(monkeypatch, tmp_path):
     monkeypatch.setattr(module.task_runtime.task_store, "get_task", lambda _task_id: task)
     monkeypatch.setattr(module.task_runtime, "_execute_compute_task", lambda *args, **kwargs: None)
 
-    module.task_runtime.run_compute_task.run(task["md5sum"], task_type="gremlin")
+    module.task_runtime.run_compute_task.run(task["md5sum"], task_type="cpu_runner")
 
     events = _events(module)
     assert [event["event"] for event in events] == [
@@ -144,7 +144,7 @@ def test_worker_failure_keeps_correlation(monkeypatch, tmp_path):
     )
     task = {
         "md5sum": "b" * 32,
-        "task_type": "gremlin",
+        "task_type": "cpu_runner",
         "status": "running",
         "input_form": json.dumps({"request_id": "failed-request-42"}),
     }
@@ -156,7 +156,7 @@ def test_worker_failure_keeps_correlation(monkeypatch, tmp_path):
     )
 
     with pytest.raises(RuntimeError, match="worker failed"):
-        module.task_runtime.run_compute_task.run(task["md5sum"], task_type="gremlin")
+        module.task_runtime.run_compute_task.run(task["md5sum"], task_type="cpu_runner")
 
     events = _events(module)
     assert [event["event"] for event in events] == ["worker.task.started", "worker.task.failed"]

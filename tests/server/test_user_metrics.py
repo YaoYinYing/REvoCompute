@@ -23,7 +23,7 @@ def _project(module):
     return route.__globals__["_project_user_metrics"]
 
 
-def _task(uploaded_at: float, status: str, walltime: float | None = None, task_type: str = "gremlin") -> dict:
+def _task(uploaded_at: float, status: str, walltime: float | None = None, task_type: str = "cpu_runner") -> dict:
     return {
         "md5sum": "0" * 32,
         "status": status,
@@ -64,7 +64,7 @@ def test_user_metrics_projects_counts_runtimes_and_a_bounded_series(monkeypatch,
     assert daily["activity"][-2]["count"] == 2
     assert daily["activity"][-4]["count"] == 1
     assert daily["distribution"] == [
-        {"task_type": "gremlin", "label": "PSSM-GREMLIN", "gpu": False, "tasks": 3}
+        {"task_type": "cpu_runner", "label": "Synthetic cpu_runner", "gpu": False, "tasks": 3}
     ]
 
     empty = project([], window="daily", now=now)
@@ -140,7 +140,7 @@ def test_gpu_task_identity_and_gpu_minutes_follow_the_task_type_contract(monkeyp
     """GPU classification resolves through TaskType.gpus, never a TaskType list."""
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     project = _project(module)
-    base, runner = module.task_runtime._get_task_type("gremlin")
+    base, runner = module.task_runtime._get_task_type("cpu_runner")
     conftest._inject_task_type(
         module,
         replace(base, name="gpu_metrics_test", display_name="GPU Metrics Test", gpus=True),
@@ -234,7 +234,7 @@ def _insert_task(module, owner: dict, uploaded_at: float, status: str, walltime:
         source_ip="127.0.0.1",
         user_agent="pytest",
         username=owner["username"],
-        task_type="gremlin",
+        task_type="cpu_runner",
         submitted_by_user_id=int(owner["id"]),
         storage_key=owner["storage_key"],
     )

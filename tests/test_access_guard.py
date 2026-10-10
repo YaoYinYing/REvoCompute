@@ -40,7 +40,7 @@ class FakeRedis:
 def test_progressive_thresholds_and_bounded_window(monkeypatch):
     redis = FakeRedis()
     monkeypatch.setattr(access_guard, "get_redis", lambda: redis)
-    user, policy = 7, "alphafold3_noncommercial"
+    user, policy = 7, "synthetic_noncommercial"
     for expected in (1, 2):
         state = access_guard.record_denial(user, policy)
         assert state.denial_count == expected

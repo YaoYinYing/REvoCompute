@@ -479,7 +479,7 @@ def test_rce_large_binary_upload_not_executed(monkeypatch, tmp_path):
         data={
             "files": (io.BytesIO(elf_header), "payload.fasta"),
             "input_roles": "sequence",
-            "task_type": "gremlin",
+            "task_type": "cpu_runner",
         },
         headers=auth_header,
     )

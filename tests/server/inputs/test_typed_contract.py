@@ -24,7 +24,7 @@ def module(monkeypatch, tmp_path):
     loaded = _load_pssm_module(
         monkeypatch,
         tmp_path,
-        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "gnina"},
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "typed_runner"},
     )
     user = loaded.app.config["user_db"].create_user(
         "typed-inputs", "typed-inputs@test.local", "password", registration_status="approved", user_status="active"
@@ -47,7 +47,7 @@ def _submit(module, files, roles):
     return module.app.test_client().post(
         "/compute/api/post",
         headers=_headers(module),
-        data={"task_type": "gnina", "files": files, "input_roles": roles},
+        data={"task_type": "typed_runner", "files": files, "input_roles": roles},
         content_type="multipart/form-data",
     )
 
@@ -97,7 +97,7 @@ def test_role_contract_rejections_are_structured(module, files, roles, code, rol
 
 
 def test_declared_format_without_core_security_validator_fails_closed(module):
-    base, runner = module.task_runtime._get_task_type("gnina")
+    base, runner = module.task_runtime._get_task_type("typed_runner")
     conftest._inject_task_type(module, 
         replace(
             base,

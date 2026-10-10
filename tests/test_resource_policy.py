@@ -139,7 +139,7 @@ def test_manage_database_migrates_canonical_columns_and_resolves_policy(tmp_path
         "tool TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 1, "
         "cpus INTEGER, memory TEXT)"
     )
-    connection.execute("INSERT INTO task_type_config (tool, cpus, memory) VALUES ('gremlin', 6, '12G')")
+    connection.execute("INSERT INTO task_type_config (tool, cpus, memory) VALUES ('cpu_runner', 6, '12G')")
     connection.commit()
     connection.close()
 
@@ -147,11 +147,11 @@ def test_manage_database_migrates_canonical_columns_and_resolves_policy(tmp_path
     try:
         columns = {row[1] for row in database._conn.execute("PRAGMA table_info(task_type_config)")}
         assert {"cpus", "memory"}.issubset(columns)
-        resources = database.resolve_task_resources("gremlin", requires_gpu=False, default_timeout_seconds=3600)
+        resources = database.resolve_task_resources("cpu_runner", requires_gpu=False, default_timeout_seconds=3600)
         assert resources.cpus == 6
         assert resources.memory == "12G"
-        database.task_type_upsert("gremlin", cpus=10, memory="20G")
-        updated = database.resolve_task_resources("gremlin", requires_gpu=False, default_timeout_seconds=3600)
+        database.task_type_upsert("cpu_runner", cpus=10, memory="20G")
+        updated = database.resolve_task_resources("cpu_runner", requires_gpu=False, default_timeout_seconds=3600)
         assert updated.cpus == 10
         assert updated.memory == "20G"
     finally:
@@ -167,7 +167,7 @@ def test_preflight_database_read_is_read_only(tmp_path):
     connection.execute(
         "CREATE TABLE resource_config (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at REAL NOT NULL)"
     )
-    connection.execute("INSERT INTO task_type_config VALUES ('gremlin', 1, 4)")
+    connection.execute("INSERT INTO task_type_config VALUES ('cpu_runner', 1, 4)")
     connection.execute("INSERT INTO resource_config VALUES ('memory', '8G', 0)")
     connection.commit()
     before = [row[1] for row in connection.execute("PRAGMA table_info(task_type_config)")]
@@ -175,7 +175,7 @@ def test_preflight_database_read_is_read_only(tmp_path):
 
     globals_, tasks = read_resource_database(str(database_path))
     assert globals_["memory"] == "8G"
-    assert tasks["gremlin"]["cpus"] == 4
+    assert tasks["cpu_runner"]["cpus"] == 4
 
     connection = sqlite3.connect(database_path)
     try:

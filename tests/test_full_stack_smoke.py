@@ -10,7 +10,7 @@ import pytest
 from full_stack_smoke import _wait_for_task, _wait_for_worker, run_full_stack_checks
 
 
-def test_production_smoke_allows_long_running_gremlin_jobs() -> None:
+def test_production_smoke_allows_long_running_cpu_runner_jobs() -> None:
     assert run_full_stack_checks.__defaults__ == (7200.0,)
 
 

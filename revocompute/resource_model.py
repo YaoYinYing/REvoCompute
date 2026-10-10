@@ -1089,10 +1089,10 @@ def _self_check() -> None:
     other = DeviceProfile("nvidia", "H100-PCIE-80GB", "9.0", 81559)
     rows = []
     for length, peak in ((100, 14000), (300, 18000), (600, 26000), (1200, 44000)):
-        features = WorkloadFeatures("esmfold2", "fast", "fp-1", length)
+        features = WorkloadFeatures("synthetic_fold", "fast", "fp-1", length)
         rows.append(
             ResourceObservation(
-                runner="esmfold2",
+                runner="synthetic_fold",
                 model_revision="fast",
                 runtime_fingerprint="fp-1",
                 device=device,
@@ -1103,21 +1103,21 @@ def _self_check() -> None:
             )
         )
     estimator = VRAMEstimator(rows)
-    prediction = estimator.predict(WorkloadFeatures("esmfold2", "fast", "fp-1", 900), device)
+    prediction = estimator.predict(WorkloadFeatures("synthetic_fold", "fast", "fp-1", 900), device)
     assert prediction.applicable and prediction.expected_mb > 0, prediction.explain()
     assert prediction.upper_bound_mb >= prediction.expected_mb
     # A new device class starts from the shared model, not from zero.
-    shared = estimator.predict(WorkloadFeatures("esmfold2", "fast", "fp-1", 900), other)
+    shared = estimator.predict(WorkloadFeatures("synthetic_fold", "fast", "fp-1", 900), other)
     assert shared.applicable and shared.expected_mb > 0, shared.explain()
     # Out-of-distribution asks are refused rather than extrapolated.
-    assert not estimator.predict(WorkloadFeatures("esmfold2", "fast", "fp-1", 100_000), device).applicable
+    assert not estimator.predict(WorkloadFeatures("synthetic_fold", "fast", "fp-1", 100_000), device).applicable
     # A device class with no same-runner evidence at all is refused, not guessed.
     assert not estimator.predict(WorkloadFeatures("otherfold", "fast", "fp-1", 100_000), device).applicable
     unseen = DeviceProfile("amd", "MI300", "9.0", 192000)
-    assert estimator.predict(WorkloadFeatures("esmfold2", "fast", "fp-1", 900), unseen).applicable
+    assert estimator.predict(WorkloadFeatures("synthetic_fold", "fast", "fp-1", 900), unseen).applicable
     # A changed runtime demotes old rows to a weaker prior instead of hiding
     # them, and cannot confer applicability: the mismatched ask is not trusted.
-    demoted = estimator.predict(WorkloadFeatures("esmfold2", "fast", "fp-2", 900), device)
+    demoted = estimator.predict(WorkloadFeatures("synthetic_fold", "fast", "fp-2", 900), device)
     assert not demoted.applicable and demoted.confidence < prediction.confidence, demoted.explain()
     # Evidence from an unrelated runner/model cannot move this runner's answer.
     foreign = [
@@ -1133,7 +1133,7 @@ def _self_check() -> None:
         )
         for length in (100, 300, 600, 1200, 100, 300, 600, 1200, 100, 300)
     ]
-    blended = VRAMEstimator([*rows, *foreign]).predict(WorkloadFeatures("esmfold2", "fast", "fp-1", 900), device)
+    blended = VRAMEstimator([*rows, *foreign]).predict(WorkloadFeatures("synthetic_fold", "fast", "fp-1", 900), device)
     assert abs(blended.expected_mb - prediction.expected_mb) < 2000, blended.explain()
     # Confirmed device names reduce to one class per family.
     assert DeviceProfile("nvidia", "NVIDIA H100 PCIe", "9.0", 81559).device_class == DeviceProfile(
@@ -1144,11 +1144,11 @@ def _self_check() -> None:
         [{"label": "split", "adjustments": {"sample_group_size": 1}}, {"label": "offload", "adjustments": {"cpu_offload": True}}]
     )
     planner = ResourcePlanner(estimator, plans, stage="recover")
-    assert planner.decide(WorkloadFeatures("esmfold2", "fast", "fp-1", 100_000), device, 40000).action == "allow"
-    assert planner.decide(WorkloadFeatures("esmfold2", "fast", "fp-1", 100_000), device, 40000, attempt=1).plan_label == "split"
-    second = planner.decide(WorkloadFeatures("esmfold2", "fast", "fp-1", 100_000), device, 40000, attempt=2, failed_plans=("split",))
+    assert planner.decide(WorkloadFeatures("synthetic_fold", "fast", "fp-1", 100_000), device, 40000).action == "allow"
+    assert planner.decide(WorkloadFeatures("synthetic_fold", "fast", "fp-1", 100_000), device, 40000, attempt=1).plan_label == "split"
+    second = planner.decide(WorkloadFeatures("synthetic_fold", "fast", "fp-1", 100_000), device, 40000, attempt=2, failed_plans=("split",))
     assert second.plan_label == "offload", second.explain()
-    exhausted = planner.decide(WorkloadFeatures("esmfold2", "fast", "fp-1", 100), device, 40000, attempt=3, failed_plans=("split", "offload"))
+    exhausted = planner.decide(WorkloadFeatures("synthetic_fold", "fast", "fp-1", 100), device, 40000, attempt=3, failed_plans=("split", "offload"))
     assert exhausted.action == "reject" and not exhausted.allowed, exhausted.explain()
 
     # A fallback may not silently change science.
@@ -1161,26 +1161,26 @@ def _self_check() -> None:
 
     # Interference is recognized from device availability, not learned as demand.
     noisy = ResourceObservation(
-        runner="esmfold2",
+        runner="synthetic_fold",
         model_revision="fast",
         runtime_fingerprint="fp-1",
         device=device,
-        features=WorkloadFeatures("esmfold2", "fast", "fp-1", 900),
+        features=WorkloadFeatures("synthetic_fold", "fast", "fp-1", 900),
         outcome=OUTCOME_SUCCESS,
         baseline_mb=8000,
         peak_reserved_mb=39000,
         available_mb=20000,
     )
     assert noisy.effective_quality == QUALITY_INTERFERENCE
-    assert not VRAMEstimator([noisy]).predict(WorkloadFeatures("esmfold2", "fast", "fp-1", 900), device).applicable
+    assert not VRAMEstimator([noisy]).predict(WorkloadFeatures("synthetic_fold", "fast", "fp-1", 900), device).applicable
     # A large legitimate run whose incremental growth fits the free memory is
     # not interference, however far its total peak rises above the free memory.
     legitimate = ResourceObservation(
-        runner="esmfold2",
+        runner="synthetic_fold",
         model_revision="fast",
         runtime_fingerprint="fp-1",
         device=device,
-        features=WorkloadFeatures("esmfold2", "fast", "fp-1", 900),
+        features=WorkloadFeatures("synthetic_fold", "fast", "fp-1", 900),
         outcome=OUTCOME_SUCCESS,
         baseline_mb=10240,
         peak_process_mb=35840,
@@ -1191,13 +1191,13 @@ def _self_check() -> None:
 
     # Requested multiplicity is provenance; the effective concurrent shape is
     # what the estimator sees, and a plan projects into it.
-    requested = WorkloadFeatures("esmfold2", "fast", "fp-1", 900, sample_count=8, concurrent_samples=8)
+    requested = WorkloadFeatures("synthetic_fold", "fast", "fp-1", 900, sample_count=8, concurrent_samples=8)
     assert WorkloadFeatures.from_mapping(
-        {"runner": "esmfold2", "model_revision": "fast", "runtime_fingerprint": "fp-1",
+        {"runner": "synthetic_fold", "model_revision": "fast", "runtime_fingerprint": "fp-1",
          "sequence_length": 900, "sample_count": 8}
     ).concurrent_samples == 8
     assert WorkloadFeatures.from_mapping(
-        {"runner": "esmfold2", "model_revision": "fast", "runtime_fingerprint": "fp-1",
+        {"runner": "synthetic_fold", "model_revision": "fast", "runtime_fingerprint": "fp-1",
          "sequence_length": 900, "sample_count": 8, "concurrent_samples": 2}
     ).vector().tolist()[-2] == math.log(2)
     grouped = requested.with_adjustments({"sample_group_size": 2})
@@ -1211,11 +1211,11 @@ def _self_check() -> None:
     assert observing["plan_order"] == ["", "split", "offload"]
     assert observing["profiles"] == []
     censored = ResourceObservation(
-        runner="esmfold2",
+        runner="synthetic_fold",
         model_revision="fast",
         runtime_fingerprint="fp-1",
         device=device,
-        features=WorkloadFeatures("esmfold2", "fast", "fp-1", 1500),
+        features=WorkloadFeatures("synthetic_fold", "fast", "fp-1", 1500),
         outcome=OUTCOME_OOM,
         baseline_mb=8000,
         peak_reserved_mb=44000,
@@ -1226,7 +1226,7 @@ def _self_check() -> None:
     # established as failing — the boundary belongs to the scale threshold.
     assert avoiding["profiles"] == [
         {
-            "runner": "esmfold2",
+            "runner": "synthetic_fold",
             "model_revision": "fast",
             "runtime_fingerprint": "fp-1",
             "device_model": "A100-PCIE-40GB",
@@ -1236,11 +1236,11 @@ def _self_check() -> None:
         }
     ], avoiding
     never_succeeded = ResourceObservation(
-        runner="esmfold2",
+        runner="synthetic_fold",
         model_revision="fast",
         runtime_fingerprint="fp-1",
         device=device,
-        features=WorkloadFeatures("esmfold2", "fast", "fp-1", 900),
+        features=WorkloadFeatures("synthetic_fold", "fast", "fp-1", 900),
         outcome=OUTCOME_OOM,
         baseline_mb=8000,
         peak_reserved_mb=44000,
@@ -1255,7 +1255,7 @@ def _self_check() -> None:
     # Evidence scoped to the same runner/model/fingerprint but a different exact
     # device publishes its own entry: one device's threshold never leaks into
     # another's, because the runner selects the entry after it knows its GPU.
-    other_oom = replace(never_succeeded, device=other, features=WorkloadFeatures("esmfold2", "fast", "fp-1", 2000))
+    other_oom = replace(never_succeeded, device=other, features=WorkloadFeatures("synthetic_fold", "fast", "fp-1", 2000))
     split_devices = guidance_for(plans, [*rows, never_succeeded, other_oom], stage="avoid")
     published = [
         (entry["device_model"], entry["total_vram_mb"], entry["avoid_scale_at_or_above"])
@@ -1267,9 +1267,9 @@ def _self_check() -> None:
     # from the plan; one that cannot fit even at the last fallback is refused
     # with the bound as its reason.
     forgiving = ResourcePlanner(estimator, plans, stage="recover")
-    fits = forgiving.decide(WorkloadFeatures("esmfold2", "fast", "fp-1", 900), device, 1_000_000, attempt=1)
+    fits = forgiving.decide(WorkloadFeatures("synthetic_fold", "fast", "fp-1", 900), device, 1_000_000, attempt=1)
     assert fits.action == "adapt" and fits.plan_label == "split", fits.explain()
-    too_small = forgiving.decide(WorkloadFeatures("esmfold2", "fast", "fp-1", 900), device, 12000, attempt=1)
+    too_small = forgiving.decide(WorkloadFeatures("synthetic_fold", "fast", "fp-1", 900), device, 12000, attempt=1)
     assert too_small.action == "reject" and "exceeds available VRAM" in too_small.reason, too_small.explain()
 
     # The candidate fallback is judged on its own effective shape, not the
@@ -1278,11 +1278,11 @@ def _self_check() -> None:
     multiplicity = VRAMEstimator(
         [
             ResourceObservation(
-                runner="esmfold2",
+                runner="synthetic_fold",
                 model_revision="fast",
                 runtime_fingerprint="fp-1",
                 device=device,
-                features=WorkloadFeatures("esmfold2", "fast", "fp-1", 900, sample_count=c, concurrent_samples=c),
+                features=WorkloadFeatures("synthetic_fold", "fast", "fp-1", 900, sample_count=c, concurrent_samples=c),
                 outcome=OUTCOME_SUCCESS,
                 baseline_mb=8000,
                 peak_reserved_mb=peak,
@@ -1290,7 +1290,7 @@ def _self_check() -> None:
             for c, peak in ((1, 12000), (2, 16000), (4, 20000), (8, 26000))
         ]
     )
-    requested = WorkloadFeatures("esmfold2", "fast", "fp-1", 900, sample_count=8, concurrent_samples=8)
+    requested = WorkloadFeatures("synthetic_fold", "fast", "fp-1", 900, sample_count=8, concurrent_samples=8)
     lowered = requested.with_adjustments({"sample_group_size": 1})
     assert lowered.concurrent_samples == 1 and lowered.sample_count == 8
     assert multiplicity.predict(lowered, device).expected_mb < multiplicity.predict(requested, device).expected_mb

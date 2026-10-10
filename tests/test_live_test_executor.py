@@ -21,7 +21,7 @@ def test_worker_executor_rejects_removed_legacy_request(tmp_path):
     artifact = tmp_path / "candidate.sif"
     artifact.write_bytes(b"candidate")
     request.write_text(json.dumps({
-        "task_id": "a" * 32, "task_type": "easifa", "result_path": str(result_path),
+        "task_id": "a" * 32, "task_type": "profile_runner", "result_path": str(result_path),
         "artifact_path": str(artifact), "artifact_sha256": "sha256:" + __import__("hashlib").sha256(b"candidate").hexdigest(),
     }))
     with pytest.raises(ValueError, match="invalid schema"):
@@ -34,13 +34,13 @@ def test_fileless_live_case_serializes_explicit_task_workspace_identity(tmp_path
     snapshot_root = tmp_path / "workspace" / ("a" * 32) / "inputs"
     form = json.loads(
         live_test_executor._task_input_form(
-            [], snapshot_root, "live-test-pallatom", {"resource_policy": None}, "sha256:" + "a" * 64
+            [], snapshot_root, "live-test-fileless_runner", {"resource_policy": None}, "sha256:" + "a" * 64
         )
     )
     assert form["entities"] == []
     # These two fields are exactly what task_runtime._execute_compute_task
     # consumes to append the explicit workspace entity.
-    assert form["workspace_key"] == "live-test-pallatom"
+    assert form["workspace_key"] == "live-test-fileless_runner"
     assert form["snapshot_root"] == str(snapshot_root)
     assert form["resource_policy"] is None
     assert form["runtime_bundle_sha256"] == "sha256:" + "a" * 64
@@ -142,7 +142,7 @@ def test_scheduler_resource_observation_uses_bounded_wrapper_fallback(monkeypatc
     )
     execution = tmp_path / "execution"
     execution.mkdir()
-    (execution / "slurm-example.resource.json").write_text(
+    (execution / "slurm-demo.resource.json").write_text(
         json.dumps(
             {
                 "schema_version": 1,
@@ -188,7 +188,7 @@ def test_scheduler_resource_observation_accepts_a_wrapper_payload_with_scratch_e
     )
     execution = tmp_path / "execution"
     execution.mkdir()
-    (execution / "slurm-example.resource.json").write_text(
+    (execution / "slurm-demo.resource.json").write_text(
         json.dumps(
             {
                 "schema_version": 1,
@@ -220,7 +220,7 @@ def test_scheduler_resource_observation_accepts_a_wrapper_payload_with_scratch_e
 def test_wrapper_resource_observation_rejects_oversized_or_unknown_content(tmp_path):
     execution = tmp_path / "execution"
     execution.mkdir()
-    candidate = execution / "slurm-example.resource.json"
+    candidate = execution / "slurm-demo.resource.json"
     candidate.write_text(
         json.dumps({"source": "allocation_wrapper", "job_id": "42", "secret": "do-not-publish"}),
         encoding="utf-8",

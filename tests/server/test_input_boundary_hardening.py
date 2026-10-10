@@ -34,7 +34,7 @@ HOSTILE = b"ATOM      1  CA  ALA A   1\n"  # no END and no full record — still
 
 def _pdb_only(module, *, minimum: int = 1, maximum: int = 2):
     """Register a synthetic family whose structure role accepts up to two files."""
-    base, runner = module.task_runtime._get_task_type("gremlin")
+    base, runner = module.task_runtime._get_task_type("cpu_runner")
     conftest._inject_task_type(
         module,
         # ``replace`` on the frozen TaskType, exactly as the preflight tests do.
@@ -160,7 +160,7 @@ def test_the_snapshot_carries_a_receipt_bound_to_the_admitted_bytes(monkeypatch,
         "/compute/api/post",
         headers=_test_client_auth(module),
         data={
-            "task_type": "gremlin",
+            "task_type": "cpu_runner",
             "file": (io.BytesIO(FASTA), "2KL8.fasta"),
             "input_roles": "sequence",
         },
@@ -202,7 +202,7 @@ def test_a_swapped_blob_is_refused_before_any_dispatch(monkeypatch, tmp_path):
         "/compute/api/post",
         headers=_test_client_auth(module),
         data={
-            "task_type": "gremlin",
+            "task_type": "cpu_runner",
             "file": (io.BytesIO(FASTA), "2KL8.fasta"),
             "input_roles": "sequence",
         },
@@ -245,7 +245,7 @@ def test_an_untampered_blob_executes_and_records_the_same_receipt(monkeypatch, t
         "/compute/api/post",
         headers=_test_client_auth(module),
         data={
-            "task_type": "gremlin",
+            "task_type": "cpu_runner",
             "file": (io.BytesIO(FASTA), "2KL8.fasta"),
             "input_roles": "sequence",
         },
@@ -479,14 +479,14 @@ def test_the_workspace_normalize_post_carries_the_shared_csrf_gate(monkeypatch, 
 
     # A caller with no credential at all is refused.
     anonymous = client.post(
-        "/compute/api/types/gremlin/workspace/normalize",
+        "/compute/api/types/cpu_runner/workspace/normalize",
         json={"capability_id": "sequence_editor", "value": ">x\nACDE\n"},
     )
     assert anonymous.status_code in {401, 403}
 
     # A Bearer caller reaches the normalizer.
     authorized = client.post(
-        "/compute/api/types/gremlin/workspace/normalize",
+        "/compute/api/types/cpu_runner/workspace/normalize",
         json={"capability_id": "sequence_editor", "value": ">x\nACDE\n"},
         headers=token_only,
     )
@@ -510,7 +510,7 @@ def test_a_live_receipted_row_actually_takes_the_receipt_branch(monkeypatch, tmp
         "/compute/api/post",
         headers=_test_client_auth(module),
         data={
-            "task_type": "gremlin",
+            "task_type": "cpu_runner",
             "file": (io.BytesIO(FASTA), "2KL8.fasta"),
             "input_roles": "sequence",
         },
@@ -560,7 +560,7 @@ def test_a_stale_validator_revision_is_refused_even_with_matching_bytes(monkeypa
         "/compute/api/post",
         headers=_test_client_auth(module),
         data={
-            "task_type": "gremlin",
+            "task_type": "cpu_runner",
             "file": (io.BytesIO(FASTA), "2KL8.fasta"),
             "input_roles": "sequence",
         },
@@ -601,7 +601,7 @@ def test_a_forged_receipt_cannot_skip_real_validation(monkeypatch, tmp_path):
         "/compute/api/post",
         headers=_test_client_auth(module),
         data={
-            "task_type": "gremlin",
+            "task_type": "cpu_runner",
             "file": (io.BytesIO(FASTA), "2KL8.fasta"),
             "input_roles": "sequence",
         },
@@ -684,7 +684,7 @@ def test_a_prefix_pair_across_different_roles_is_allowed(monkeypatch, tmp_path):
         tmp_path,
         extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
     )
-    base, runner = module.task_runtime._get_task_type("gremlin")
+    base, runner = module.task_runtime._get_task_type("cpu_runner")
     conftest._inject_task_type(
         module,
         __import__("dataclasses").replace(
@@ -729,7 +729,7 @@ def test_an_isolated_resource_limit_surfaces_its_bounded_code(monkeypatch, tmp_p
     _pdb_only(module, maximum=1)
     # Reuse the isolated validator on a format this synthetic role accepts by
     # forcing the YAML path through the family's declared format set.
-    base, runner = module.task_runtime._get_task_type("gremlin")
+    base, runner = module.task_runtime._get_task_type("cpu_runner")
     conftest._inject_task_type(
         module,
         __import__("dataclasses").replace(

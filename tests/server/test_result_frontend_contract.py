@@ -40,7 +40,7 @@ def test_task_status_distinguishes_active_failed_and_hidden_results(monkeypatch,
         result_dir=running_dir,
         username="tester",
         status="running",
-        task_type="gremlin",
+        task_type="cpu_runner",
     )
 
     active = client.get(f"/compute/api/running/{running_id}", headers=owner)
@@ -56,7 +56,7 @@ def test_task_status_distinguishes_active_failed_and_hidden_results(monkeypatch,
         "status": "running",
         "status_url": f"/compute/api/running/{running_id}",
         "task_id": running_id,
-        "task_type": "gremlin",
+        "task_type": "cpu_runner",
         "terminal": False,
     }
     spec = client.get("/openapi.json").get_json()
@@ -78,7 +78,7 @@ def test_task_status_distinguishes_active_failed_and_hidden_results(monkeypatch,
         result_dir=failed_dir,
         username="tester",
         status="failed",
-        task_type="gremlin",
+        task_type="cpu_runner",
     )
     task = module.task_store.get_task(failed_id)
     module.task_runtime._finalize_results_manifest(task, execution_state="failed", finished_at=1_700_000_000)
@@ -87,7 +87,7 @@ def test_task_status_distinguishes_active_failed_and_hidden_results(monkeypatch,
 
     failed = client.get(f"/compute/api/running/{failed_id}", headers=owner)
     assert failed.status_code == 200
-    assert failed.get_json()["task_type"] == "gremlin"
+    assert failed.get_json()["task_type"] == "cpu_runner"
     assert failed.get_json()["terminal"] is True
     assert failed.get_json()["result_available"] is True
     assert failed.get_json()["error"] == "runner failed in <result_dir>"
@@ -198,7 +198,7 @@ def test_result_logical_structure_preserves_confidence_encoding(monkeypatch, tmp
     module = _load_pssm_module(
         monkeypatch,
         tmp_path,
-        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "chai1"},
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "gpu_runner"},
     )
     client = module.app.test_client()
     headers = _test_client_auth(module)
@@ -215,7 +215,7 @@ def test_result_logical_structure_preserves_confidence_encoding(monkeypatch, tmp
         result_dir=result_dir,
         username="tester",
         status="finished",
-        task_type="chai1_predict",
+        task_type="gpu_runner",
     )
     module.task_runtime._finalize_results_manifest(
         module.task_store.get_task(task_id), execution_state="completed", finished_at=1_700_000_000

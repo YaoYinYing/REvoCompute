@@ -160,7 +160,7 @@ def test_task_artifact_to_tool_is_materialized_for_owner_only(monkeypatch, tmp_p
         username="owner",
         submitted_by_user_id=owner["id"],
         storage_key=owner["storage_key"],
-        task_type="gremlin",
+        task_type="cpu_runner",
     )
     _anchor_result_publication(module, source_id)
 
@@ -224,7 +224,7 @@ def _artifact_source_task(module, content: bytes) -> tuple[str, Path]:
         username="owner",
         submitted_by_user_id=owner["id"],
         storage_key=owner["storage_key"],
-        task_type="gremlin",
+        task_type="cpu_runner",
     )
     _anchor_result_publication(module, source_id)
     return source_id, artifact

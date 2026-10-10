@@ -17,7 +17,7 @@ def _module(monkeypatch, tmp_path):
     return _load_pssm_module(
         monkeypatch,
         tmp_path,
-        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "pythia_ddg"},
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "structure_runner"},
     )
 
 
@@ -31,9 +31,9 @@ def test_a_long_input_basename_is_rejected_not_500(monkeypatch, tmp_path):
     name = "a" * 240 + ".pdb"
     print("\nfinal component length:", len(name) + len(".tmp_0123456789abcdef_"))
     response = client.post(
-        "/compute/api/preflight/pythia_ddg",
+        "/compute/api/preflight/structure_runner",
         data={
-            "task_type": "pythia_ddg",
+            "task_type": "structure_runner",
             "files": (io.BytesIO(b"ATOM      1  N   ALA A   1\n"), name),
             "input_roles": "structure",
         },
@@ -56,9 +56,9 @@ def test_preflight_is_rate_limited(monkeypatch, tmp_path):
     codes = []
     for _ in range(31):
         response = client.post(
-            "/compute/api/preflight/pythia_ddg",
+            "/compute/api/preflight/structure_runner",
             data={
-                "task_type": "pythia_ddg",
+                "task_type": "structure_runner",
                 "files": (io.BytesIO(b"ATOM      1  N   ALA A   1\n"), "x.pdb"),
                 "input_roles": "structure",
             },
@@ -81,9 +81,9 @@ def test_a_deep_but_legal_path_is_rejected_not_500(monkeypatch, tmp_path):
     auth_header = _test_client_auth(module)
     deep = "/".join(["a" * 200] * 25)
     response = client.post(
-        "/compute/api/preflight/pythia_ddg",
+        "/compute/api/preflight/structure_runner",
         data={
-            "task_type": "pythia_ddg",
+            "task_type": "structure_runner",
             "files": (io.BytesIO(b"ATOM      1  N   ALA A   1\n"), "s.pdb"),
             "input_roles": "structure",
             "input_paths": deep + "/s.pdb",

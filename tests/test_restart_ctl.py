@@ -57,10 +57,10 @@ def test_controller_root_is_repository_root():
 
 
 def test_plugin_runtime_declares_direct_sif_contract():
-    families = {family.name: family for family in load_plugin_families(SERVER_ROOT / "docker" / "runners")}
-    assert families["alphafold3"].definition == "alphafold3.def"
-    assert families["alphafold3"].image_artifact == "alphafold3_v1.sif"
-    assert families["alphafold3"].build_inputs
+    families = {family.name: family for family in load_plugin_families(SERVER_ROOT / "tests" / "fixtures" / "runners")}
+    assert families["restricted_runner"].definition == "restricted_runner.def"
+    assert families["restricted_runner"].image_artifact == "restricted_runner_v1.sif"
+    assert families["restricted_runner"].build_inputs
 
 
 def test_plugin_runtime_rejects_invalid_build_inputs(tmp_path):
@@ -188,7 +188,7 @@ def _deploy_env(tmp_path: Path, config_dir: Path | None = None) -> tuple[Path, P
         "RUNNER_GID=1000",
         "RUNNER_USERNAME=revodesign",
         "RUNNER_GROUP=revodesign",
-        "SERVER_IMAGE=example/revodesign-server:latest",
+        "SERVER_IMAGE=demo/revodesign-server:latest",
     ]
     lines.append(f"CONFIG_DIR={config_dir}")
     runner_source = tmp_path / "runner-source"
@@ -452,10 +452,10 @@ def test_keep_gateway_sweep_failure_restores_current_instance(monkeypatch, tmp_p
 
 def test_advancing_runner_source_does_not_mutate_current_instance_snapshot(monkeypatch, tmp_path):
     source = tmp_path / "source-runners"
-    shutil.copytree(SERVER_DIR / "docker" / "runners" / "common", source / "common")
-    shutil.copytree(SERVER_DIR / "docker" / "runners" / "bioemu", source / "bioemu")
-    task_path = source / "bioemu" / "tasks" / "bioemu" / "task.yaml"
-    old_text = task_path.read_text(encoding="utf-8").replace("x-ui-control: {kind: seed}", "x-ui-control: seed")
+    shutil.copytree(SERVER_DIR / "tests" / "fixtures" / "runners" / "common", source / "common")
+    shutil.copytree(SERVER_DIR / "tests" / "fixtures" / "runners" / "cpu_runner", source / "cpu_runner")
+    task_path = source / "cpu_runner" / "tasks" / "predict" / "task.yaml"
+    old_text = task_path.read_text(encoding="utf-8").replace("x-ui-control:\n        kind: seed", "x-ui-control: seed")
     task_path.write_text(old_text, encoding="utf-8")
     deployed = tmp_path / "server"
     state = EnvState(
@@ -463,15 +463,15 @@ def test_advancing_runner_source_does_not_mutate_current_instance_snapshot(monke
         values={
             "SERVER_DIR": str(deployed),
             "RUNNER_SOURCE_ROOT": str(source),
-            "ENABLED_TASKRUNNERS": "bioemu",
+            "ENABLED_TASKRUNNERS": "cpu_runner",
             "USE_SLURM": "1",
         },
     )
     steps_mod.materialize_runner_families(state)
-    deployed_task = deployed / "docker" / "runners" / "bioemu" / "tasks" / "bioemu" / "task.yaml"
+    deployed_task = deployed / "docker" / "runners" / "cpu_runner" / "tasks" / "predict" / "task.yaml"
     assert "x-ui-control: seed" in deployed_task.read_text(encoding="utf-8")
 
-    task_path.write_text(old_text.replace("x-ui-control: seed", "x-ui-control: {kind: seed}"), encoding="utf-8")
+    task_path.write_text(old_text.replace("x-ui-control: seed", "x-ui-control:\n        kind: seed"), encoding="utf-8")
     observed = []
 
     def old_instance_run(argv, **kwargs):
@@ -482,10 +482,10 @@ def test_advancing_runner_source_does_not_mutate_current_instance_snapshot(monke
     sweep_mod.pre_stop_sweep_slurm(state, ("docker", "compose"))
 
     assert observed and all("x-ui-control: seed" in text for text in observed)
-    assert "x-ui-control: {kind: seed}" not in deployed_task.read_text(encoding="utf-8")
+    assert "x-ui-control:\n        kind: seed" not in deployed_task.read_text(encoding="utf-8")
 
     steps_mod.materialize_runner_families(state)
-    assert "x-ui-control: {kind: seed}" in deployed_task.read_text(encoding="utf-8")
+    assert "x-ui-control:\n        kind: seed" in deployed_task.read_text(encoding="utf-8")
 
 
 def _tool_source(tmp_path: Path) -> Path:
@@ -599,7 +599,7 @@ def test_prepare_builds_enabled_tool_sifs(monkeypatch, tmp_path):
     bin_dir = _write_shims(tmp_path)
     monkeypatch.setenv("SHIM_LOG", str(tmp_path / "docker.log"))
     result = _run_cli(
-        monkeypatch, tmp_path, env_file, bin_dir, "prepare", "--build-sif", "--enabled-runners=freebindcraft"
+        monkeypatch, tmp_path, env_file, bin_dir, "prepare", "--build-sif", "--enabled-runners=cpu_runner"
     )
 
     assert result.returncode == 0, result.stderr
@@ -655,13 +655,13 @@ def test_prepare_builds_only_selected_runner(monkeypatch, tmp_path):
     bin_dir = _write_shims(tmp_path)
     monkeypatch.setenv("SHIM_LOG", str(tmp_path / "docker.log"))
     result = _run_cli(
-        monkeypatch, tmp_path, env_file, bin_dir, "prepare", "--build-sif", "--enabled-runners=freebindcraft"
+        monkeypatch, tmp_path, env_file, bin_dir, "prepare", "--build-sif", "--enabled-runners=cpu_runner"
     )
 
     assert result.returncode == 0, result.stderr
     commands = (tmp_path / "docker.log").read_text(encoding="utf-8")
-    assert "freebindcraft.sif.next.build" in commands
-    assert "freebindcraft/freebindcraft.def" in commands
+    assert "cpu_runner.sif.next.build" in commands
+    assert "cpu_runner/cpu_runner.def" in commands
     assert "build web worker" not in commands
 
 
@@ -670,11 +670,11 @@ def test_prepare_fails_when_selected_runner_build_fails(monkeypatch, tmp_path):
     bin_dir = _write_shims(tmp_path)
     monkeypatch.setenv("APPTAINER_FAIL", "1")
     result = _run_cli(
-        monkeypatch, tmp_path, env_file, bin_dir, "prepare", "--build-sif", "--enabled-runners=freebindcraft"
+        monkeypatch, tmp_path, env_file, bin_dir, "prepare", "--build-sif", "--enabled-runners=cpu_runner"
     )
 
     assert result.returncode == 1
-    assert "Direct SIF build failed for freebindcraft" in result.stderr
+    assert "Direct SIF build failed for cpu_runner" in result.stderr
 
 
 def test_prepare_rejects_unknown_runner(monkeypatch, tmp_path):
@@ -723,21 +723,21 @@ def test_keep_gateway_flag(subcommand):
 
 
 def test_live_test_scope_arguments_are_command_specific():
-    parsed, _username, flags = main_mod.parse_args(["live-test", "--runner", "gremlin", "--collection", "smoke"])
+    parsed, _username, flags = main_mod.parse_args(["live-test", "--runner", "cpu_runner", "--collection", "smoke"])
     assert parsed == "live-test"
-    assert flags.runner == "gremlin"
+    assert flags.runner == "cpu_runner"
     assert flags.collection == "smoke"
     with pytest.raises(SystemExit):
-        main_mod.parse_args(["build", "--runner", "gremlin"])
+        main_mod.parse_args(["build", "--runner", "cpu_runner"])
 
 
 def test_runner_status_scope_and_json_arguments_are_command_specific():
-    parsed, _username, flags = main_mod.parse_args(["runner-status", "--runner", "gremlin", "--json"])
+    parsed, _username, flags = main_mod.parse_args(["runner-status", "--runner", "cpu_runner", "--json"])
     assert parsed == "runner-status"
-    assert flags.runner == "gremlin"
+    assert flags.runner == "cpu_runner"
     assert flags.as_json
     with pytest.raises(SystemExit):
-        main_mod.parse_args(["runner-status", "--task", "pssm_gremlin"])
+        main_mod.parse_args(["runner-status", "--task", "cpu_runner"])
 
 
 def test_down_keep_gateway_leaves_gateway_serving_maintenance(monkeypatch, tmp_path):
@@ -1454,8 +1454,17 @@ def test_result_storage_accepts_configured_runner_group(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("failure_step", ["up", "readiness"])
 def test_failed_activation_keeps_maintenance(monkeypatch, tmp_path, failure_step):
+    from test_process_isolation import _make_runner_source
+
     events = []
-    state = EnvState(str(tmp_path / "server.env"), values={"SERVER_DIR": str(tmp_path), "ADMIN_USERS": "admin"})
+    state = EnvState(
+        str(tmp_path / "server.env"),
+        values={
+            "SERVER_DIR": str(tmp_path),
+            "ADMIN_USERS": "admin",
+            "RUNNER_SOURCE_ROOT": _make_runner_source(tmp_path / "runner-source", executor="slurm"),
+        },
+    )
 
     def fail_at(phase):
         if failure_step == phase:
@@ -1554,7 +1563,7 @@ def test_upload_gate_returns_503_under_maintenance_sentinel(monkeypatch, tmp_pat
 
     def payload():
         # werkzeug closes the file object while building the body — one per request.
-        return {"file": (io.BytesIO(b">seq\nACDEFGHIK"), "t.fasta"), "task_type": "gremlin"}
+        return {"file": (io.BytesIO(b">seq\nACDEFGHIK"), "t.fasta"), "task_type": "cpu_runner"}
 
     sentinel = Path(module.CONFIG.server_dir) / ".maintenance"
     sentinel.write_text("deployment maintenance\n", encoding="utf-8")

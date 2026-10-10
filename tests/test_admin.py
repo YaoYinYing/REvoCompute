@@ -842,33 +842,33 @@ def test_admin_resource_api_returns_effective_policy_and_validates_updates(monke
     updated = client.put(
         "/compute/api/auth/admin/config",
         headers=admin_header,
-        json={"task_types": [{"tool": "gremlin", "cpus": 8, "memory": "16G", "max_runtime_seconds": 3600}]},
+        json={"task_types": [{"tool": "cpu_runner", "cpus": 8, "memory": "16G", "max_runtime_seconds": 3600}]},
     )
     assert updated.status_code == 200
     payload = client.get("/compute/api/auth/admin/config", headers=admin_header).get_json()
-    gremlin = next(item for item in payload["task_types"] if item["tool"] == "gremlin")
-    assert gremlin["effective_resources"]["cpus"] == 8
-    assert gremlin["effective_resources"]["memory"] == "16G"
-    assert gremlin["effective_resources"]["slurm_time"] == "01:00:00"
-    assert gremlin["resource_error"] is None
+    cpu_runner = next(item for item in payload["task_types"] if item["tool"] == "cpu_runner")
+    assert cpu_runner["effective_resources"]["cpus"] == 8
+    assert cpu_runner["effective_resources"]["memory"] == "16G"
+    assert cpu_runner["effective_resources"]["slurm_time"] == "01:00:00"
+    assert cpu_runner["resource_error"] is None
 
     invalid = client.put(
         "/compute/api/auth/admin/config",
         headers=admin_header,
-        json={"task_types": [{"tool": "gremlin", "cpus": 0}]},
+        json={"task_types": [{"tool": "cpu_runner", "cpus": 0}]},
     )
     assert invalid.status_code == 400
     assert "positive integer" in invalid.get_json()["error"]
     mixed_invalid = client.put(
         "/compute/api/auth/admin/config",
         headers=admin_header,
-        json={"task_types": [{"tool": "gremlin", "cpus": 4, "memory": "unbounded"}]},
+        json={"task_types": [{"tool": "cpu_runner", "cpus": 4, "memory": "unbounded"}]},
     )
     assert mixed_invalid.status_code == 400
     unchanged = client.get("/compute/api/auth/admin/config", headers=admin_header).get_json()
-    gremlin = next(item for item in unchanged["task_types"] if item["tool"] == "gremlin")
-    assert gremlin["cpus"] == 8
-    assert gremlin["memory"] == "16G"
+    cpu_runner = next(item for item in unchanged["task_types"] if item["tool"] == "cpu_runner")
+    assert cpu_runner["cpus"] == 8
+    assert cpu_runner["memory"] == "16G"
 
     unknown = client.put(
         "/compute/api/auth/admin/config",
@@ -886,7 +886,7 @@ def test_admin_resource_api_returns_effective_policy_and_validates_updates(monke
     forbidden_partition = client.put(
         "/compute/api/auth/admin/config",
         headers=admin_header,
-        json={"task_types": [{"tool": "gremlin", "slurm_partition": "debug"}]},
+        json={"task_types": [{"tool": "cpu_runner", "slurm_partition": "debug"}]},
     )
     assert forbidden_partition.status_code == 400
     assert "allowed_queues" in forbidden_partition.get_json()["error"]
@@ -909,25 +909,25 @@ def test_admin_resource_updates_only_invalidate_affected_readiness(monkeypatch, 
     admin_header = _admin_client_auth(module)
     readiness = Path(module.CONFIG.server_dir) / "readiness"
     readiness.mkdir(parents=True)
-    for runner in ("gremlin", "esm"):
+    for runner in ("cpu_runner", "gpu_runner"):
         (readiness / f"{runner}.json").write_text("{}", encoding="utf-8")
 
     changed = client.put(
         "/compute/api/auth/admin/config",
         headers=admin_header,
-        json={"task_types": [{"tool": "gremlin", "cpus": 8}]},
+        json={"task_types": [{"tool": "cpu_runner", "cpus": 8}]},
     )
     assert changed.status_code == 200
-    assert not (readiness / "gremlin.json").exists()
-    assert (readiness / "esm.json").exists()
+    assert not (readiness / "cpu_runner.json").exists()
+    assert (readiness / "gpu_runner.json").exists()
 
     unchanged = client.put(
         "/compute/api/auth/admin/config",
         headers=admin_header,
-        json={"task_types": [{"tool": "gremlin", "cpus": 8}]},
+        json={"task_types": [{"tool": "cpu_runner", "cpus": 8}]},
     )
     assert unchanged.get_json()["message"] == "0 setting(s) updated"
-    assert (readiness / "esm.json").exists()
+    assert (readiness / "gpu_runner.json").exists()
 
     global_change = client.put(
         "/compute/api/auth/admin/config",

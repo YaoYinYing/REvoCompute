@@ -1,0 +1,11 @@
+collections:
+  smoke:
+    cases:
+    - id: minimal-synthetic
+      task: workspace_task
+      input:
+        roles:
+          structure:
+          - tests/data/3fap_hf3_A_short.pdb
+      parameters: {}
+version: 1

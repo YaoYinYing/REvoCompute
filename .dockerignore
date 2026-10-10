@@ -9,3 +9,7 @@ frontend/dist
 revocompute/static/vendor/molstar
 revocompute/static/app
 test-results
+
+# Explicit repository-only Runner test namespaces; runtime asset names remain untouched.
+docker/runners/*/tests
+docker/runner_testkit

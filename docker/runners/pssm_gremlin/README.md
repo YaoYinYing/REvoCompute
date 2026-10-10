@@ -231,7 +231,7 @@ and `hhblits`/`psiblast` report their own errors for an unreadable UniRef30.
 
 ```bash
 # Runner-owned unit logic and the tiny mock databases in tests/data/msa.
-python -m pytest tests/runners/gremlin -q
+python -m pytest docker/runners/pssm_gremlin/tests/fast -q
 
 # Generic family contract (Doctor) against this family.
 python -m revocompute doctor --config-root docker/runners --runner gremlin --strict

@@ -106,7 +106,7 @@ def _run_restart_script(
         "RUNNER_GID": gid,
         "RUNNER_USERNAME": pwd.getpwuid(int(uid)).pw_name if int(uid) == os.getuid() else pwd.getpwuid(os.getuid()).pw_name,
         "RUNNER_GROUP": grp.getgrgid(int(gid)).gr_name if int(gid) == os.getgid() else grp.getgrgid(os.getgid()).gr_name,
-        "SERVER_IMAGE": "example/revodesign-server:latest",
+        "SERVER_IMAGE": "demo/revodesign-server:latest",
     }
     generated_config = config_dir is None
     if generated_config:
@@ -175,7 +175,7 @@ def _printed_credentials(result, prefix):
 def _make_runner_source(source_root: Path, *, executor="docker", missing_sif=None):
     source_root = Path(source_root)
     source_root.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(Path(REPO_DIR) / "docker" / "runners", source_root / "runners")
+    shutil.copytree(Path(REPO_DIR) / "tests" / "fixtures" / "runners", source_root / "runners")
     sif_dir = source_root / "sifs"
     sif_dir.mkdir()
     for plugin_dir in sorted((source_root / "runners").iterdir()):
@@ -324,7 +324,7 @@ def test_prepared_restart_validates_new_snapshot_after_down_without_build_or_pul
 
 
 def test_prepared_restart_rejects_missing_sif_after_down(tmp_path):
-    config_dir = _make_deployed_config(tmp_path, executor="slurm", missing_sif="esm")
+    config_dir = _make_deployed_config(tmp_path, executor="slurm", missing_sif="gpu_runner")
     result, commands = _run_restart_script(
         tmp_path / "deployment",
         "restart",
@@ -643,7 +643,7 @@ def test_global_slurm_executor_selects_override_without_cli_backend_flag(tmp_pat
 
 
 def test_missing_global_slurm_family_image_is_rejected_before_new_instance_starts(tmp_path):
-    config_dir = _make_deployed_config(tmp_path, executor="slurm", missing_sif="esm")
+    config_dir = _make_deployed_config(tmp_path, executor="slurm", missing_sif="gpu_runner")
     result, commands = _run_restart_script(
         tmp_path / "deployment",
         "restart",
@@ -653,7 +653,7 @@ def test_missing_global_slurm_family_image_is_rejected_before_new_instance_start
 
     assert result.returncode != 0
     assert "Missing SIF image" in result.stderr
-    assert "esm.sif" in result.stderr
+    assert "gpu_runner.sif" in result.stderr
     assert any(command.endswith(" down") for command in commands)
     assert not any(" pull " in command or " up " in command for command in commands)
 
