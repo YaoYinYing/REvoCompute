@@ -40,8 +40,9 @@ Where each answer comes from:
 Three rules hold everywhere below:
 
 1. **Unknown is never zero.**  A quantity nobody measured is ``None`` with a
-   state or provenance label; a unit with no recorded facts is reported as
-   unrecorded, and an allocation whose shape no one observed stays unknown.
+   state or provenance label; a unit whose consumption was never measured is
+   reported unmeasured with the canonical allowance beside it, and an allocation
+   whose shape no one observed stays unknown.
 2. **Every read is bounded.**  Each entry point takes an explicit ``limit`` whose
    ceiling is the canonical readers' own ceiling, plus explicit counts of what a
    bound cut off, so a large deployment degrades into a labelled truncation
@@ -309,13 +310,14 @@ _TERMINAL_STATUSES = frozenset(
 
 
 def _placement_view(placement: Mapping[str, Any]) -> dict[str, Any]:
-    """The compact placement summary a Task list row carries.
+    """The compact placement summary one profile contributes to a Task row.
 
     A label, not a verdict: ``unrecorded`` and ``unreadable`` are reported as
     themselves, so an operator can tell a Task older than the decision record from
     a record that disagrees with its own frozen snapshot.
     """
     return {
+        "stage": placement["stage"],
         "state": placement["state"],
         "execution_class_id": placement["execution_class_id"],
         "reason_code": placement["reason_code"],
