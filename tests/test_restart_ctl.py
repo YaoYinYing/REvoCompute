@@ -1454,8 +1454,17 @@ def test_result_storage_accepts_configured_runner_group(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("failure_step", ["up", "readiness"])
 def test_failed_activation_keeps_maintenance(monkeypatch, tmp_path, failure_step):
+    from test_process_isolation import _make_runner_source
+
     events = []
-    state = EnvState(str(tmp_path / "server.env"), values={"SERVER_DIR": str(tmp_path), "ADMIN_USERS": "admin"})
+    state = EnvState(
+        str(tmp_path / "server.env"),
+        values={
+            "SERVER_DIR": str(tmp_path),
+            "ADMIN_USERS": "admin",
+            "RUNNER_SOURCE_ROOT": _make_runner_source(tmp_path / "runner-source", executor="slurm"),
+        },
+    )
 
     def fail_at(phase):
         if failure_step == phase:

@@ -9,8 +9,8 @@ does not claim.
 
 | Responsibility | Where it is exercised |
 | --- | --- |
-| Correct invocation of the pinned upstream binary | `run.sh` + `detect.py` (`tests/runners/fpocket`) |
-| Clear failure on a non-zero exit or missing/malformed output | `run.sh` guards, `normalize_results.py` errors, `tests/runners/fpocket/test_fpocket_results.py` |
+| Correct invocation of the pinned upstream binary | `run.sh` + `detect.py` (`docker/runners/fpocket/tests/fast`) |
+| Clear failure on a non-zero exit or missing/malformed output | `run.sh` guards, `normalize_results.py` errors, `docker/runners/fpocket/tests/fast/test_fpocket_integration.py` |
 | Parsing the raw output into the declared table | `normalize_results.py` + its fixture tests |
 | A valid ResultManifest and a useful result presentation | `expected_files.yaml`, `tasks/fpocket/task.yaml` views, `storyboard/` |
 

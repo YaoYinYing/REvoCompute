@@ -35,6 +35,11 @@ parameters:
       type: integer
       default: 0
       description: Synthetic random seed.
+    center_x:
+      type: number
+      minimum: -100
+      maximum: 100
+      description: Synthetic bounded coordinate.
 stage_markers:
   hhblits: Collect input
   hhfilter: Filter input

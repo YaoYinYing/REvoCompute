@@ -28,7 +28,7 @@ does, and is reported as such.
 
 | Layer | Artifact | Proves | GPU/SIF |
 | --- | --- | --- | --- |
-| 1. Mechanism | this family + `tests/runners/mock_gpu_example/` | persistent lifecycle, recovery ladder, provenance, resume, projection | none |
+| 1. Mechanism | this family + `docker/runners/mock_gpu_example/tests/fast/` | persistent lifecycle, recovery ladder, provenance, resume, projection | none |
 | 2. Model science | real ESMFold2 / SimpleFold runtime | model-specific scientific equivalence | GPU |
 | 3. Deployment | production SIF + Slurm live test | packaging / integration | GPU + SIF |
 
@@ -62,7 +62,7 @@ that the lifecycle drops before it consumes an attempt.
 ## Running it
 
 ```bash
-uv run pytest tests/runners/mock_gpu_example/
+uv run pytest docker/runners/mock_gpu_example/tests/fast/
 uv run python -m revocompute doctor --config-root docker/runners --runner mock_gpu_example --strict
 ```
 

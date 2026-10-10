@@ -117,6 +117,8 @@ def check_repository(root: Path) -> list[str]:
         violations.append("docker/runners/_testkit: testkit must be outside production discovery root")
     if (root / "tests" / "runners").exists():
         violations.append("tests/runners: family tests must be Runner-owned")
+    if (root / "tests" / "runner_protocol.py").exists():
+        violations.append("tests/runner_protocol.py: Runner testkit must live in docker/runner_testkit")
     return violations
 
 

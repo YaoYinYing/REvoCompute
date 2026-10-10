@@ -71,3 +71,13 @@ def test_reserved_documentation_hosts_are_not_runner_identities(source: str) -> 
 def test_documentation_host_normalization_does_not_allow_runner_dependencies() -> None:
     assert checker.inspect_source('family = "example"', "tests/server/test_http.py", {"example"})
     assert checker.inspect_source('path = "docker/runners/example/plugin.yaml"', "tests/server/test_http.py", {"example"})
+
+
+def test_server_test_namespace_cannot_carry_a_runner_testkit(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(checker, "ROOT", tmp_path)
+    family = tmp_path / "docker" / "runners" / "some_family"
+    family.mkdir(parents=True)
+    (family / "plugin.yaml").write_text("id: some_runtime\n", encoding="utf-8")
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "runner_protocol.py").write_text("ROOT = 1\n", encoding="utf-8")
+    assert "tests/runner_protocol.py: Runner testkit must live in docker/runner_testkit" in checker.check_repository(tmp_path)

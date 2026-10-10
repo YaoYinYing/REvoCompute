@@ -334,11 +334,12 @@ def test_an_unbounded_float_parameter_rejects_nan(monkeypatch, tmp_path):
     """A number parameter with no min/max must still reject NaN.
 
     This is the case JSON Schema cannot cover: ``minimum``/``maximum`` are both
-    false for NaN, so the bound check passes it through.
+    false for NaN, so the bound check passes it through.  ``offset`` carries no
+    bounds.
     """
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     with pytest.raises(ValidationError) as caught:
         TaskSubmissionRequest.model_validate(
-            {"task_type": "cpu_runner", "params": {"center_x": "nan"}}
+            {"task_type": "cpu_runner", "params": {"offset": "nan"}}
         )
     assert "finite" in str(caught.value)

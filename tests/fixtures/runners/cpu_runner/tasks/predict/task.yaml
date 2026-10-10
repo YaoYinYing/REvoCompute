@@ -61,6 +61,9 @@ parameters:
       maximum: 6
       default: 2
       description: Synthetic bounded precision.
+    offset:
+      type: number
+      description: Synthetic unbounded offset.
 stage_markers:
   hhblits: Collect input
   hhfilter: Filter input
