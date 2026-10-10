@@ -125,7 +125,7 @@ class AdminReportError(ValueError):
     """
 
 
-def _bounded_limit(limit: Any, *, ceiling: int = MAX_LIMIT) -> int:
+def _bounded_limit(limit: Any) -> int:
     """Clamp one requested page size, refusing a value that is not a page size.
 
     A page size above the ceiling is *clamped*, not refused: a client asking for
@@ -138,13 +138,13 @@ def _bounded_limit(limit: Any, *, ceiling: int = MAX_LIMIT) -> int:
         raise AdminReportError("limit must be an integer")
     if limit < 1:
         raise AdminReportError("limit must be a positive integer")
-    return min(limit, ceiling)
+    return min(limit, MAX_LIMIT)
 
 
-def parse_limit(raw: Any, *, default: int = DEFAULT_LIMIT) -> int:
+def parse_limit(raw: Any) -> int:
     """One requested ``limit`` query value as a page size, or a typed refusal."""
     if raw is None or raw == "":
-        return default
+        return DEFAULT_LIMIT
     text = str(raw).strip()
     if not text.isdigit():
         raise AdminReportError("limit must be a positive integer")
@@ -406,7 +406,6 @@ def task_operations(
     limit: int = DEFAULT_LIMIT,
     statuses: Iterable[str] | None = None,
     task_types: Iterable[str] | None = None,
-    now: float | None = None,
 ) -> dict[str, Any]:
     """Active, queued, running, and recently finished Tasks, newest first.
 
@@ -486,7 +485,7 @@ def task_operations(
         # ones whose canonical timestamps support the number.
         "runtime": _duration_summary(page_entries, "walltime_seconds"),
         "queue_latency": _duration_summary(page_entries, "queue_seconds"),
-        "generated_at": time.time() if now is None else now,
+        "generated_at": time.time(),
     }
 
 
@@ -588,13 +587,9 @@ def _storage_block(envelope: rloan.ResourceEnvelope, user_id: int, task_store: A
     once a limit exists, because "over" is undefined without one.
     """
     storage = envelope.storage
-    if hasattr(task_store, "storage_quota_policy"):
-        policy = task_store.storage_quota_policy(user_id)
-        state = policy.state.value
-        source = "per_user_override" if state != "inherit" else "deployment_default"
-    else:
-        state = "limited" if envelope.storage.soft_limit_bytes is not None else "unlimited"
-        source = "deployment_default" if envelope.storage.soft_limit_bytes is not None else "unlimited"
+    policy = task_store.storage_quota_policy(user_id)
+    state = policy.state.value
+    source = "per_user_override" if state != "inherit" else "deployment_default"
     limit = storage.soft_limit_bytes
     return {
         "logical_owned_bytes": storage.logical_owned_bytes,
@@ -635,12 +630,17 @@ def _allocation_facts(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
                 total_cpu = None
             continue
         if unit == rloan.UNIT_GPU_SECOND:
-            total_gpu = (total_gpu or 0) + int(count)
+            # Once a row of this unit is unknown-shaped the unit's total is unknown
+            # for good: adding a later known row back into ``None`` would publish a
+            # lower bound as a total, and make the answer depend on row order.
+            if total_gpu is not None:
+                total_gpu += int(count)
             if int(count):
                 resource_class = str(record.get("resource_class") or "")
                 classes[resource_class] = classes.get(resource_class, 0) + int(count)
         elif unit == rloan.UNIT_CPU_CORE_SECOND:
-            total_cpu = (total_cpu or 0) + int(count)
+            if total_cpu is not None:
+                total_cpu += int(count)
     return {
         "allocated_gpu_devices": total_gpu,
         "allocated_cpu_cores": total_cpu,
@@ -667,10 +667,10 @@ def _measured_units(rows: Sequence[Mapping[str, Any]]) -> set[str]:
 
 
 def _resource_operations_for_user(
-    task_store: Any, user_id: int, *, limit: int, at: float | None
+    task_store: Any, user_id: int, *, limit: int
 ) -> dict[str, Any]:
     """One subject's complete resource position, projected from canonical reads."""
-    envelope = task_store.resource_envelope(user_id, at=at)
+    envelope = task_store.resource_envelope(user_id)
     window = task_store.list_ledger(user_id, limit=limit)
     unsettled = [
         record
@@ -796,7 +796,7 @@ def _canonical_subject_ids(task_store: Any, *, limit: int) -> tuple[list[int], b
     return ordered[:MAX_ACTIVITY_SUBJECTS], len(ordered) > MAX_ACTIVITY_SUBJECTS
 
 
-def _resource_operations_fleet(task_store: Any, *, limit: int, at: float | None) -> dict[str, Any]:
+def _resource_operations_fleet(task_store: Any, *, limit: int) -> dict[str, Any]:
     """A bounded roll over the subjects this deployment has real facts for.
 
     Each subject's usage is summed with the canonical ledger arithmetic over its
@@ -830,7 +830,7 @@ def _resource_operations_fleet(task_store: Any, *, limit: int, at: float | None)
             "limit": limit,
             "truncated": truncated,
         },
-        "generated_at": time.time() if at is None else at,
+        "generated_at": time.time(),
     }
 
 
@@ -839,7 +839,6 @@ def resource_operations(
     user_id: int | None = None,
     *,
     limit: int = DEFAULT_LIMIT,
-    at: float | None = None,
 ) -> dict[str, Any]:
     """Per-subject CPU/GPU allocation facts, entitlement pressure, and durable storage.
 
@@ -862,13 +861,13 @@ def resource_operations(
         return {
             "scope": "deployment",
             "limit_ceiling": MAX_LIMIT,
-            **_resource_operations_fleet(task_store, limit=page, at=at),
+            **_resource_operations_fleet(task_store, limit=page),
         }
     return {
         "scope": "subject",
         "limit_ceiling": MAX_LIMIT,
         "limit": page,
-        **_resource_operations_for_user(task_store, int(user_id), limit=page, at=at),
+        **_resource_operations_for_user(task_store, int(user_id), limit=page),
     }
 
 
@@ -980,7 +979,6 @@ def platform_integrity(
     database: Any = None,
     operator_jobs: Any = None,
     limit: int = DEFAULT_LIMIT,
-    now: float | None = None,
 ) -> dict[str, Any]:
     """Bounded detection-and-navigation report over canonical consistency facts.
 
@@ -1010,7 +1008,7 @@ def platform_integrity(
     was *detected*, and every anomaly carries the subject an operator opens next.
     """
     page = _bounded_limit(limit)
-    timestamp = time.time() if now is None else now
+    timestamp = time.time()
     drift = rlife.detect_drift(task_store, now=timestamp)
     unsettled = task_store.list_unsettled_allocations()
     unknown_shape = [row for row in unsettled if row.get("resource_count") is None]
@@ -1116,7 +1114,6 @@ def admin_activity(
     limit: int = DEFAULT_LIMIT,
     since: float | None = None,
     operator_jobs: Any = None,
-    now: float | None = None,
 ) -> dict[str, Any]:
     """Bounded Admin/operator audit activity: policy mutations and Operator Jobs.
 
@@ -1131,7 +1128,7 @@ def admin_activity(
     store is supplied — an empty history and an unread one are different facts.
     """
     page = _bounded_limit(limit)
-    timestamp = time.time() if now is None else now
+    timestamp = time.time()
     if since is not None:
         since = float(since)
     policy = _policy_activity(task_store, limit=page, since=since)
@@ -1170,21 +1167,11 @@ def admin_activity(
 
 
 __all__ = [
-    "ACTIVE_TASK_STATUSES",
     "AdminReportError",
-    "DEFAULT_LIMIT",
-    "DELETED_STATUSES",
-    "FAILED_TASK_STATUSES",
-    "FINISHED_TASK_STATUSES",
     "MAX_LIMIT",
-    "MAX_TASK_SCAN",
     "PLACEMENT_RECORDED",
     "PLACEMENT_UNREADABLE",
     "PLACEMENT_UNRECORDED",
-    "QUEUED_TASK_STATUSES",
-    "RUNNING_TASK_STATUSES",
-    "MEASUREMENT_KINDS",
-    "UNIT_MEASURED",
     "UNIT_UNMEASURED",
     "admin_activity",
     "parse_limit",

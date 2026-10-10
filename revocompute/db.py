@@ -1996,12 +1996,18 @@ class TaskDatabase:
                         )
                     )
                 else:
-                    self._upsert_storage_policy(
+                    # Storage is filed with a named unit and an empty class, so it
+                    # can never collide with a compute allowance row: the policy
+                    # index is over ``(subject, unit, resource_class)`` and one
+                    # subject has exactly one storage policy.
+                    self._upsert_policy(
                         conn,
                         user_id=user_id,
+                        resource_class="",
                         allowance=squota.stored_allowance(policy),
                         actor_user_id=actor_user_id,
                         timestamp=timestamp,
+                        unit=squota.STORAGE_QUOTA_UNIT,
                     )
                 self._write_policy_audit(
                     conn,
@@ -2025,48 +2031,6 @@ class TaskDatabase:
                 conn.rollback()
                 raise
         return dict(row)
-
-    def _upsert_storage_policy(
-        self,
-        conn,
-        *,
-        user_id: int,
-        allowance: int,
-        actor_user_id: int,
-        timestamp: float,
-    ) -> None:
-        """Write the current storage-quota row, keyed on the unit and no class.
-
-        Storage is filed with a named unit and an empty class, so it can never
-        collide with a compute allowance row: the resource-policy index is over
-        ``(subject, unit, resource_class)`` and one subject has exactly one
-        storage policy.
-        """
-        conn.execute(
-            sqlite_insert(self.resource_policies_table)
-            .values(
-                subject_type=rloan.SUBJECT_USER,
-                subject_id=user_id,
-                unit=squota.STORAGE_QUOTA_UNIT,
-                resource_class="",
-                allowance=allowance,
-                updated_by_user_id=actor_user_id,
-                updated_at=timestamp,
-            )
-            .on_conflict_do_update(
-                index_elements=[
-                    self.resource_policies_table.c.subject_type,
-                    self.resource_policies_table.c.subject_id,
-                    self.resource_policies_table.c.unit,
-                    self.resource_policies_table.c.resource_class,
-                ],
-                set_={
-                    "allowance": allowance,
-                    "updated_by_user_id": actor_user_id,
-                    "updated_at": timestamp,
-                },
-            )
-        )
 
     def _storage_quota_policy_in_connection(self, conn, user_id: int) -> squota.StorageQuotaPolicy:
         """The stored storage-quota policy for one subject, inside a transaction."""
@@ -2131,11 +2095,19 @@ class TaskDatabase:
         allowance: int,
         actor_user_id: int,
         timestamp: float,
+        unit: str = rloan.UNIT_GPU_SECOND,
     ) -> None:
+        """Write one current policy row, keyed on ``(subject, unit, resource_class)``.
+
+        One writer for every unit: a compute allowance and a durable-storage quota
+        are the same kind of row in the same table, so filing them through two
+        near-identical statements would be two places to keep the conflict target
+        and the updated columns in step.
+        """
         policy = sqlite_insert(self.resource_policies_table).values(
             subject_type=rloan.SUBJECT_USER,
             subject_id=user_id,
-            unit=rloan.UNIT_GPU_SECOND,
+            unit=unit,
             resource_class=resource_class,
             allowance=allowance,
             updated_by_user_id=actor_user_id,

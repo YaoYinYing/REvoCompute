@@ -46,7 +46,7 @@ import hashlib
 import json
 import re
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from revocompute import resource_ledger as rloan
@@ -225,17 +225,12 @@ class PlacementPolicy:
 
     ``revision`` is a digest of exactly the configuration values resolution reads,
     so a policy edit produces a new revision while an already-submitted Task keeps
-    the revision it recorded.  ``allowed_queues`` is the deployment's partition
-    vocabulary; the resolution of a partition name against it stays in
-    ``resolve_resources``, which owns it.
+    the revision it recorded.  The resolved partition vocabulary is deliberately
+    *not* carried here: ``resolve_resources`` owns the queue allowlist, and a copy
+    of it in the decision record would be a second spelling of one fact.
     """
 
-    allowed_queues: tuple[str, ...] = ()
     revision: str = "sha256:unconfigured"
-    namespace: Mapping[str, Any] = field(default_factory=dict)
-
-    def to_dict(self) -> dict[str, Any]:
-        return {"revision": self.revision, "allowed_queues": list(self.allowed_queues)}
 
 
 def deployment_policy_revision(namespace: Mapping[str, Any]) -> str:
@@ -254,13 +249,12 @@ def placement_policy(manage_db: Any, tool: str) -> PlacementPolicy:
     change a decision always produces a new revision while an already-submitted
     Task keeps the revision it recorded.
     """
-    allowed = tuple(manage_db.slurm_allowed_queues())
     task_values = manage_db.task_type_get(tool) or {}
     namespace = {
         "tool": tool,
         **policy_revision_namespace(task_values.get, manage_db.resource_all().get),
     }
-    return PlacementPolicy(allowed_queues=allowed, revision=deployment_policy_revision(namespace), namespace=namespace)
+    return PlacementPolicy(revision=deployment_policy_revision(namespace))
 
 
 @dataclass(frozen=True, slots=True)
@@ -564,10 +558,6 @@ class SubmissionPlacement:
     stage_resources: dict[str, ResolvedResources]
     primary_decision: PlacementDecision | None
     stage_decisions: dict[str, PlacementDecision]
-
-    @property
-    def decisions(self) -> dict[str, PlacementDecision]:
-        return dict(self.stage_decisions)
 
     def public_input_fields(self) -> dict[str, Any]:
         """The immutable snapshot fields written into a Task's ``input_form``."""
