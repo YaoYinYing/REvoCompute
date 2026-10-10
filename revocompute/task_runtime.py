@@ -12,7 +12,6 @@ opens the user database.
 from __future__ import annotations
 
 import csv
-import errno
 import hashlib
 import json
 import logging
@@ -81,7 +80,6 @@ from revocompute.storage import (
     ResultPublicationError,
     StorageResolver,
     _ResultTreeWalker,
-    manifest_relative_parts,
 )
 from revocompute.citations import citations_bibtex
 from revocompute.task_types import default_task_type, get as _get_task_type
@@ -271,10 +269,13 @@ def _write_verified_artifact(
         raise FileNotFoundError(f"Published result artifact is unavailable: {relative_path}")
     handle = resolved["verified_stream"]
     try:
-        status = os.fstat(handle.fileno())
-        info = zipfile.ZipInfo(str(resolved["path"]), date_time=time.localtime(max(status.st_mtime, _ZIP_EPOCH))[:6])
+        # The entry's length is the one the manifest authorized -- the size the
+        # descriptor's digest was checked against -- never a fresh ``fstat`` that
+        # a grown file would inflate.
+        modified = os.fstat(handle.fileno()).st_mtime
+        info = zipfile.ZipInfo(str(resolved["path"]), date_time=time.localtime(max(modified, _ZIP_EPOCH))[:6])
         info.compress_type = zipfile.ZIP_DEFLATED
-        info.file_size = status.st_size
+        info.file_size = int(resolved["size"])
         # ``file_size`` is the verified size, so ``ZipFile`` can decide the ZIP64
         # format up front instead of striding the artifact through memory.
         with archive.open(info, "w") as destination:
@@ -1014,28 +1015,24 @@ def _publishable_artifact(
     """Return ``(artifact_record, reason)`` for one enumerated candidate.
 
     Publication never follows a link and never registers a non-regular file.  The
-    candidate is opened relative to the *opened directory descriptor* it was
-    enumerated from -- never by re-resolving an absolute pathname -- so an
-    intermediate directory replaced by a symlink cannot redirect the open outside
-    the result root, and a component swapped between enumeration and open cannot
-    substitute a different inode: ``O_NOFOLLOW`` refuses the final-component
-    symlink atomically and the ``fstat`` runs on the opened descriptor, so the
-    bytes hashed are the bytes the manifest names.
+    candidate is opened by the same ``open_verified`` the reader uses, relative to
+    the *opened directory descriptor* it was enumerated from -- never by
+    re-resolving an absolute pathname -- so an intermediate directory replaced by
+    a symlink cannot redirect the open outside the result root, and the type
+    check runs on the opened descriptor, so a name swapped in between cannot
+    substitute a different inode.
 
-    The entry is classified from a no-follow stat *before* the open -- a FIFO
-    opened for reading would block this worker forever -- and the bytes are then
-    hashed by the same ``open_verified`` the reader uses, bounded by the
-    remaining publication budget: the size the descriptor reports is checked
-    before a byte is read, so an over-capacity entry is refused unread, and the
-    hash loop cannot outrun a file that grows underneath it.
+    The candidate is classified from a no-follow stat *first* only so the refusal
+    carries the vocabulary an operator reads -- a symlinked, linked, or special
+    entry says which it was -- while ``open_verified`` remains the decision.  Its
+    bound is the remaining publication budget, so an over-capacity entry is
+    refused from its verified size before a byte is read and the hash loop cannot
+    outrun a file that grows underneath it.
     """
     try:
         info = os.stat(filename, dir_fd=directory_fd, follow_symlinks=False)
     except OSError as exc:
         return None, f"unreadable ({exc.__class__.__name__})"
-    # The entry is classified without following a link and *before* the open: a
-    # FIFO opened for reading would block this worker forever, and a symlink or a
-    # second link is never a published artifact.
     if stat.S_ISLNK(info.st_mode):
         return None, "symbolic link"
     if stat.S_ISDIR(info.st_mode):
@@ -1056,9 +1053,15 @@ def _publishable_artifact(
         # before a single byte is read into the hasher.
         return None, "over capacity"
     except ArtifactIdentityError:
+        # The descriptor proved it is not a private regular file: the name was
+        # swapped for a link, or a second link appeared, between the check above
+        # and the open that decided.
         return None, "not a private regular file"
     except OSError as exc:
-        return None, "symbolic link" if exc.errno == errno.ELOOP else f"unreadable ({exc.__class__.__name__})"
+        return None, f"unreadable ({exc.__class__.__name__})"
+    # The manifest needs this file's size and digest, and a walk of a large result
+    # set must not hold one descriptor per artifact to have them.
+    verified.handle.close()
     preview = _preview_kind(relative_path)
     return (
         {
@@ -1601,7 +1604,8 @@ def _finalize_results_manifest(
         # the only honest outcome left: the caller settles the Task as failed
         # rather than anchoring a manifest its own canonical reader must reject.
         raise ResultPublicationError(
-            f"result manifest for task {task.get('md5sum')} exceeds the canonical {storage_module.manifest_byte_limit()} byte limit"
+            f"result manifest for task {task.get('md5sum')} exceeds the "
+            f"canonical {storage_module.manifest_byte_limit()} byte limit"
         )
     with open(temporary, "w", encoding="utf-8") as handle:
         handle.write(payload)

@@ -1422,28 +1422,134 @@ def test_a_manifest_just_below_the_ceiling_publishes_normally(monkeypatch, tmp_p
     assert module.app.config["storage_resolver"].load_manifest(module.task_store.get_task(task_id)) is not None
 
 
-def test_an_over_capacity_artifact_is_refused_before_it_is_hashed(monkeypatch, tmp_path) -> None:
-    """Capacity is enforced from the verified size, not by hashing the whole file."""
+def test_an_over_capacity_artifact_is_refused_without_reading_its_bytes(monkeypatch, tmp_path) -> None:
+    """Capacity is enforced from the verified size, so the bytes are never read.
+
+    The probe counts the reads the publication actually performs on the
+    over-capacity file: a reader that hashed first and compared afterwards would
+    show the whole 4 MiB here.
+    """
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     task_id = _finished_task(module, tmp_path)
     monkeypatch.setattr(module.task_runtime, "_published_byte_limit", lambda: 8)
-    reads: list[int] = []
-    real_read = os.read
-    real_open = os.open
+    result_dir = Path(module.app.config["storage_resolver"].get_task_root(module.task_store.get_task(task_id)))
+    target = result_dir / "huge.bin"
+    target.write_bytes(b"x" * (4 * 1024 * 1024))
+    hashed: list[int] = []
 
-    def counting_read(fd, count):
-        reads.append(count)
-        return real_read(fd, count)
+    import revocompute.storage as storage_module
 
-    def build(root: Path) -> None:
-        (root / "huge.bin").write_bytes(b"x" * (4 * 1024 * 1024))
+    real_hash = storage_module._hash_bounded
 
-    # The binary never enters the walk: it is over the whole budget, so its bytes
-    # are never read, which is what "bounded work" means.
-    manifest, _result_dir = _finalize_dir(module, task_id, build)
+    def counting_hash(handle, limit):
+        # The bounded hasher is the only reader of an artifact's bytes during
+        # publication, so counting what it is asked to read counts the work.
+        hashed.append(limit)
+        return real_hash(handle, limit)
+
+    monkeypatch.setattr(storage_module, "_hash_bounded", counting_hash)
+
+    manifest = module.task_runtime._finalize_results_manifest(
+        module.task_store.get_task(task_id), execution_state="completed", finished_at=1_700_000_000
+    )
 
     assert manifest["artifacts"] == []
     assert any("capacity limit" in problem for problem in manifest["output_check"]["problems"])
+    # Nothing was hashed at all: the verified size was already over the budget,
+    # so the bounded hasher was never entered for this file.
+    assert hashed == []
+    assert target.stat().st_size == 4 * 1024 * 1024
+
+
+def test_a_fifo_where_the_manifest_belongs_cannot_block_the_reader(monkeypatch, tmp_path) -> None:
+    """A hostile entry type is refused from its descriptor, never waited on.
+
+    A FIFO opened for reading would block forever, so ``publication_state``,
+    ``load_manifest``, and the download would each hang a shared worker while a
+    runner-owned task simply never writes to the pipe.  The one walker opens
+    non-blocking and refuses anything that is not a private regular file.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id, result_dir, headers = _manifest_task(module, tmp_path)
+    manifest_path = result_dir / "manifest.json"
+    manifest_path.unlink()
+    os.mkfifo(manifest_path)
+    task = module.task_store.get_task(task_id)
+    storage = module.app.config["storage_resolver"]
+    client = module.app.test_client()
+
+    # Every reader answers, and none of them can be blocked by the pipe.
+    assert storage.publication_state(task) == "manifest_unreadable"
+    assert storage.load_manifest(task) is None
+    assert storage.resolve_artifact(task, "result.txt") is None
+    assert client.get(f"/compute/api/results/{task_id}", headers=headers).status_code == 404
+    assert client.get(f"/compute/api/results/{task_id}/artifacts/result.txt", headers=headers).status_code == 404
+
+
+def test_a_fifo_where_an_artifact_belongs_is_refused_not_opened(monkeypatch, tmp_path) -> None:
+    """A declared artifact replaced by a FIFO is refused, not opened and waited on."""
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id, result_dir, _manifest = _single_artifact_task(module, tmp_path, b"score\n1.0\n")
+    artifact = result_dir / "result.txt"
+    artifact.unlink()
+    os.mkfifo(artifact)
+    task = module.task_store.get_task(task_id)
+
+    assert module.app.config["storage_resolver"].resolve_artifact(task, "result.txt") is None
+    with pytest.raises(FileNotFoundError):
+        module.task_runtime._build_results_archive(task)
+
+
+def test_a_journaled_entry_is_never_hung_on_by_the_walk(monkeypatch, tmp_path) -> None:
+    """The publication walk refuses a journal-owned FIFO instead of blocking on it."""
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id = _finished_task(module, tmp_path)
+    result_dir = Path(module.app.config["storage_resolver"].get_task_root(module.task_store.get_task(task_id)))
+    (result_dir / "real.txt").write_text("real\n", encoding="utf-8")
+    os.mkfifo(result_dir / "journal.fifo")
+
+    manifest = module.task_runtime._finalize_results_manifest(
+        module.task_store.get_task(task_id), execution_state="completed", finished_at=1_700_000_000
+    )
+
+    published = {artifact["path"] for artifact in manifest["artifacts"]}
+    assert "real.txt" in published
+    assert "journal.fifo" not in published
+    assert any("journal.fifo" in problem for problem in manifest["output_check"]["problems"])
+
+
+def test_a_flagged_published_file_cannot_be_extended_after_verification(monkeypatch, tmp_path) -> None:
+    """Bytes appended after identity verification do not reach the caller.
+
+    The published artifact contract is a length: the descriptor a consumer reads
+    is the one whose size and digest were checked, so bytes appended to the same
+    inode afterwards -- which keep the inode, the link count, and the manifest
+    entry's declared prefix -- must not be served.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    headers = _test_client_auth(module)
+    content = b"score\n1.0\n"
+    task_id, result_dir, _manifest = _single_artifact_task(module, tmp_path, content)
+    artifact = result_dir / "result.txt"
+    resolver = module.app.config["storage_resolver"]
+    resolve = resolver.resolve_artifact
+
+    def append_after_verify(task, relative_path):
+        resolved = resolve(task, relative_path)
+        if resolved is not None:
+            # Same inode, same link count: only the length changes, which is
+            # exactly what a manifest entry cannot describe.
+            with open(artifact, "ab") as handle:
+                handle.write(b"UNVERIFIED-APPENDED-BYTES\n")
+        return resolved
+
+    monkeypatch.setattr(resolver, "resolve_artifact", append_after_verify)
+
+    response = module.app.test_client().get(
+        f"/compute/api/results/{task_id}/artifacts/result.txt", headers=headers
+    )
+
+    assert b"UNVERIFIED" not in response.data
 
 
 def test_an_artifact_that_grows_while_being_hashed_is_refused(monkeypatch, tmp_path) -> None:

@@ -60,6 +60,14 @@ def safe_join(base_dir: str, *parts: str) -> str:
 # that can be gigabytes wide, so nothing here ever reads one wholly into memory.
 _HASH_CHUNK_BYTES = 1024 * 1024
 
+#: How every published path is opened: read-only (no write can be requested of a
+#: published file), no-follow (a final-component symlink is refused atomically at
+#: open time), close-on-exec, and **non-blocking**.  ``O_NONBLOCK`` is what makes
+#: the type check that follows reachable for every entry: a FIFO or a socket with
+#: no peer would otherwise block the open itself, so one hostile name in one
+#: runner-owned result tree could hold a shared Server worker forever.
+SAFE_OPEN_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0) | os.O_NONBLOCK
+
 #: The one maximum serialized-manifest byte limit, shared by the writer that
 #: anchors a manifest and the reader that serves it.  Two constants would be two
 #: contracts, and a writer that can emit a manifest its own reader must reject
@@ -78,11 +86,12 @@ def manifest_byte_limit() -> int:
     return MANIFEST_MAX_BYTES
 
 
-#: A component of a result-relative path.  The result tree is runner-writable
-#: and a hostile name is not merely long: a newline or a NUL in a manifest entry
-#: reaches HTTP headers, ZIP member names, and log lines.  A publisher that ever
-#: writes one through would create a publication its own reader refuses, so both
-#: sides judge a component with this expression.
+#: A component of a result-relative path.  The result tree is runner-writable and
+#: a hostile name is not merely long: a control character in a manifest entry
+#: reaches HTTP headers, ZIP member names, and log lines, and ``.``/``..`` are
+#: names the walker never emits.  One expression judges a component for the
+#: writer, the reader, the walk, and the archive, so the vocabulary cannot differ
+#: between them.
 _MANIFEST_PATH_COMPONENT = re.compile(r"[^\x00-\x1f\x7f/\\]{1,255}\Z")
 
 
@@ -102,13 +111,99 @@ def manifest_relative_parts(relative_path: str) -> tuple[str, ...] | None:
     return tuple(parts)
 
 
+class _PinnedReader:
+    """A verified descriptor served as exactly the bytes whose identity was checked.
+
+    Publication verifies a descriptor's size and digest, and a consumer then reads
+    that descriptor.  The descriptor alone is not enough: bytes appended to the
+    same inode afterwards keep the inode and the link count, so a length that is
+    re-read at consumption time would hand a caller bytes the manifest never
+    authorized.  The pin is the verified size, so the file yields one version --
+    the verified one -- however it grows afterwards.
+    """
+
+    __slots__ = ("_handle", "_size")
+
+    def __init__(self, handle: Any, size: int):
+        self._handle = handle
+        self._size = size
+
+    def read(self, size: int = -1) -> bytes:
+        remaining = self._size - self._handle.tell()
+        if remaining <= 0:
+            return b""
+        if size is None or size < 0:
+            return self._handle.read(remaining)
+        return self._handle.read(min(size, remaining))
+
+    def readinto(self, buffer: Any) -> int:
+        remaining = self._size - self._handle.tell()
+        if remaining <= 0:
+            return 0
+        view = memoryview(buffer)
+        if view.nbytes > remaining:
+            return self._handle.readinto(view[:remaining])
+        return self._handle.readinto(view)
+
+    def seek(self, offset: int, whence: int = 0) -> int:
+        return self._handle.seek(offset, whence)
+
+    def tell(self) -> int:
+        return self._handle.tell()
+
+    def fileno(self) -> int:
+        return self._handle.fileno()
+
+    def readable(self) -> bool:
+        return True
+
+    def seekable(self) -> bool:
+        return self._handle.seekable()
+
+    def close(self) -> None:
+        self._handle.close()
+
+    @property
+    def closed(self) -> bool:
+        return self._handle.closed
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._handle, name)
+
+    def __enter__(self) -> "_PinnedReader":
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
+
+
 @dataclass(frozen=True, slots=True)
 class _VerifiedFile:
-    """One verified published file: the descriptor plus the digests of its bytes."""
+    """One verified published file: the pinned descriptor and the digest of its bytes."""
 
     handle: Any
     digest: str
     size: int
+
+
+def _open_published_regular_file(path: str) -> bool:
+    """Whether *path* is an ordinary private regular file, opened and closed here.
+
+    The cached-artifact check: a byte on disk at a canonical name is not evidence
+    of anything inside the runner-writable results tree, so a candidate is opened
+    once -- read-only, non-blocking, no-final-symlink -- and accepted only if its
+    own descriptor proves it is a regular file with a single link.  The descriptor
+    is closed immediately: the caller re-opens the name for its own delivery.
+    """
+    try:
+        descriptor = os.open(path, SAFE_OPEN_FLAGS)
+    except OSError:
+        return False
+    try:
+        status = os.fstat(descriptor)
+        return stat.S_ISREG(status.st_mode) and status.st_nlink == 1
+    finally:
+        os.close(descriptor)
 
 
 class _ResultTreeWalker:
@@ -135,7 +230,7 @@ class _ResultTreeWalker:
         if not stat.S_ISDIR(info.st_mode):
             raise ArtifactIdentityError(f"result root is not a directory: {root}")
         try:
-            self._root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0))
+            self._root_fd = os.open(root, SAFE_OPEN_FLAGS | os.O_DIRECTORY)
         except OSError as exc:
             raise ArtifactIdentityError(f"result root cannot be opened safely: {root}") from exc
 
@@ -183,11 +278,7 @@ class _ResultTreeWalker:
                 yield path, directory_fd, name
                 continue
             try:
-                child = os.open(
-                    name,
-                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0),
-                    dir_fd=directory_fd,
-                )
+                child = os.open(name, SAFE_OPEN_FLAGS | os.O_DIRECTORY, dir_fd=directory_fd)
             except OSError:
                 # The component claimed to be a directory during enumeration and
                 # could not be re-opened as one: it was swapped in between, so
@@ -207,21 +298,28 @@ class _ResultTreeWalker:
 
         The one bounded-hash implementation in the system: the reader and the
         publication writer both consume it, so neither can drift into a second
-        idea of what "the published bytes" are.  ``O_NOFOLLOW`` refuses a
-        final-component symlink atomically at open time and the ``fstat`` runs on
-        the *opened descriptor*, not on the name, so a regular single-linked file
-        is the only thing the descriptor can be reading.  The size the descriptor
-        reports is checked against *max_bytes* before any byte is read, and the
-        hash loop is bounded by that same size, so an entry that grows underneath
-        the hasher yields a size mismatch instead of an unbounded read.  With
-        ``expected`` the bytes must also match the manifest entry's
-        ``(size, sha256)``, which is why no caller needs a second open of the name.
+        idea of what "the published bytes" are.  The rule is read the type from
+        the *opened descriptor* -- never from the name -- and refuse anything
+        that is not a private regular file, so a symlink, a directory, a second
+        link, a FIFO, a socket, and a device are all rejected by one check that no
+        name swap can outrun.  The descriptor is opened with ``SAFE_OPEN_FLAGS``,
+        so the open itself cannot block on an empty FIFO and the check is always
+        reachable.  The size the descriptor reports is checked against
+        *max_bytes* before any byte is read, and the hash loop is bounded by that
+        same size, so an entry that grows underneath the hasher yields a size
+        mismatch instead of an unbounded read.  With ``expected`` the bytes must
+        also match the manifest entry's ``(size, sha256)``, which is why no caller
+        needs a second open of the name.
         """
-        descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0), dir_fd=directory_fd)
+        descriptor = os.open(name, SAFE_OPEN_FLAGS, dir_fd=directory_fd)
         handle = os.fdopen(descriptor, "rb")
         try:
             status = os.fstat(handle.fileno())
             if not stat.S_ISREG(status.st_mode) or status.st_nlink != 1:
+                # One rule for every kind of non-publication: a symlink, a
+                # directory, a FIFO, a socket, a device, or a file with a second
+                # link is not a published artifact, and the type is read from the
+                # descriptor rather than from the name that produced it.
                 raise ArtifactIdentityError(f"not a private regular file: {name}")
             if status.st_size > max_bytes:
                 raise ArtifactOversizedError(f"published file exceeds its bound: {name}")
@@ -235,7 +333,7 @@ class _ResultTreeWalker:
                 if digest != declared_digest:
                     raise ArtifactIdentityError(f"published artifact does not match its declared digest: {name}")
             handle.seek(0)
-            return _VerifiedFile(handle, digest, size)
+            return _VerifiedFile(_PinnedReader(handle, size), digest, size)
         except BaseException:
             handle.close()
             raise
@@ -255,9 +353,7 @@ class _ResultTreeWalker:
         try:
             current = self._root_fd
             for part in parts[:-1]:
-                current = os.open(
-                    part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0), dir_fd=current
-                )
+                current = os.open(part, SAFE_OPEN_FLAGS | os.O_DIRECTORY, dir_fd=current)
                 descriptors.append(current)
             return self.open_verified(current, parts[-1], max_bytes=max_bytes, expected=expected)
         except ArtifactIdentityError as exc:
@@ -496,20 +592,24 @@ class StorageResolver:
                         raise ArtifactIdentityError("manifest changed while being read")
                 finally:
                     verified.handle.close()
-        except FileNotFoundError:
-            # Nothing at the canonical manifest path at all.
+        except (AttributeError, OSError, ValueError):
+            # No usable manifest.  Three different facts, and each is answered on
+            # its own evidence:
+            #
+            # * a manifest is there and is not a usable private regular file -- a
+            #   symlink, a second link, an entry of another type, an oversized or
+            #   truncated one, or one that changed while it was being read -- is
+            #   *refused*, because the bytes reachable at the canonical path are
+            #   not the bytes a publication would have installed;
+            # * with no manifest at all, an anchor says a publication once existed
+            #   and its bytes are gone;
+            # * with neither, no publication was ever made: the ordinary
+            #   not-yet case, not a quarantine.
+            if os.path.lexists(os.path.join(result_root, "manifest.json")):
+                return None, PUBLICATION_MANIFEST_UNREADABLE
             if self._anchor_row(task):
                 return None, PUBLICATION_MANIFEST_MISSING
             return None, PUBLICATION_NOT_FINALIZED
-        except (AttributeError, OSError, ValueError):
-            # No usable manifest on disk.  Whether *anything* was published is
-            # the anchor's answer, and the two "no anchor" cases are different
-            # facts: an anchor with the bytes gone is a publication lost after
-            # the fact, while a missing file with no anchor is simply a task that
-            # never finalized -- the ordinary not-yet case, not a quarantine.
-            if self._anchor_row(task):
-                return None, PUBLICATION_MANIFEST_MISSING
-            return None, PUBLICATION_MANIFEST_UNREADABLE
         anchor, raw = self._publication_anchor(task)
         if raw is not None and anchor is None:
             return None, PUBLICATION_ANCHOR_INVALID

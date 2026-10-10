@@ -2377,7 +2377,7 @@ def get_results(md5sum):
             404,
         )
 
-    archive_ready = os.path.isfile(_task_zip_path(task))
+    archive_ready = _cached_archive_path(task) is not None
     payload = dict(manifest)
     full_results = _task_full_results_allowed(task)
     if not full_results:
@@ -2447,6 +2447,25 @@ def get_result_logical_file(md5sum: str, file_id: str):
     return get_result_artifact(md5sum, files[index]["path"])
 
 
+def _cached_archive_path(task: dict[str, Any]) -> str | None:
+    """Return the cached results archive if it is the publication's own bytes.
+
+    The ZIP is optional and derived: building one is a publication decision, so
+    the download serves a cached archive only when the result is *available* and
+    the archive is the ordinary private file a builder installed atomically at
+    the canonical name.  A linked, replaced, or non-regular entry is refused
+    rather than handed to a later pathname open -- the archive cache is inside the
+    runner-writable results tree, so "the bytes are there" is not evidence.
+    """
+    from revocompute.storage import _open_published_regular_file
+
+    try:
+        archive = _task_zip_path(task)
+    except (OSError, ValueError):
+        return None
+    return archive if _open_published_regular_file(archive) else None
+
+
 @app.route("/compute/api/results/<md5sum>/storyboard/<path:asset>", methods=["GET"])
 @optional_user
 def get_result_storyboard_asset(md5sum: str, asset: str):
@@ -2510,15 +2529,16 @@ def _with_verified_artifact(resolved: dict[str, Any] | None, task: dict[str, Any
     return resolved
 
 
-def _verified_payload(stream: Any) -> Response:
+def _verified_payload(stream: Any, size: int) -> Response:
     """Stream a verified descriptor directly, never reopening its pathname.
 
     Everything — full body, HEAD, and a single bounded ``Range`` — reads from the
     one verified descriptor, so no later pathname open can substitute different
-    bytes.  Range support lives here rather than in ``send_from_directory``
-    because that helper would reopen the pathname that was just verified.
+    bytes.  The length is the one the manifest authorized and the digest was
+    checked against, never a fresh ``fstat`` of a file that may have grown since.
+    Range support lives here rather than in ``send_from_directory`` because that
+    helper would reopen the pathname that was just verified.
     """
-    size = os.fstat(stream.fileno()).st_size
     raw_range = request.headers.get("Range", "")
     if request.method == "HEAD":
         stream.close()
@@ -2600,7 +2620,7 @@ def get_result_artifact(md5sum: str, relative_path: str):
     # bound delivery therefore replaces the offload on this endpoint; a redesign
     # that could keep the offload needs an immutable publication store, which is
     # out of scope for this change.
-    response = _verified_payload(stream)
+    response = _verified_payload(stream, int(resolved["size"]))
     response.mimetype = artifact.get("media_type") or "application/octet-stream"
     response.headers.set(
         "Content-Disposition",
@@ -2772,7 +2792,7 @@ def request_results_archive(md5sum: str):
     publication = _result_publication_state(task)
     if publication != PUBLICATION_AVAILABLE:
         return _publication_refusal_response(md5sum, publication)
-    if os.path.isfile(_task_zip_path(task)):
+    if _cached_archive_path(task) is not None:
         return jsonify({"status": "ready", "download_url": f"/compute/api/download/{md5sum}"}), 200
     async_result = build_results_archive.apply_async(args=[md5sum])
     return jsonify({"status": "building", "job_id": async_result.id, "md5sum": md5sum}), 202
@@ -2810,8 +2830,8 @@ def download_results(md5sum):
     if publication != PUBLICATION_AVAILABLE:
         return _publication_refusal_response(md5sum, publication)
 
-    zip_filename = _task_zip_path(task)
-    if not os.path.exists(zip_filename):
+    zip_filename = _cached_archive_path(task)
+    if zip_filename is None:
         return (
             jsonify(
                 {
@@ -2960,7 +2980,7 @@ def _task_list_summary(task: dict[str, Any], *, include_owner: bool) -> dict[str
     publication = _result_publication_state(task)
     result_available = publication == PUBLICATION_AVAILABLE
     try:
-        archive_ready = os.path.isfile(_task_zip_path(task)) and result_available
+        archive_ready = _cached_archive_path(task) is not None and result_available
     except (OSError, ValueError):
         archive_ready = False
     can_cancel = _task_mutation_allowed(task) and status in {"pending", "queued", "running"}
