@@ -474,6 +474,7 @@ def retrieve_artifact(
     size = int(resolved.get("size") or 0)
     encoded = quote(normalized, safe="/")
     if size > max_inline_bytes:
+        resolved["verified_stream"].close()
         return {
             "artifact_path": normalized,
             "size": size,
