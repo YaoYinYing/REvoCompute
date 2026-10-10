@@ -63,7 +63,8 @@ export function storageState(storage: StorageEntitlement): string {
   return storage.over_soft_limit ? 'Over ceiling' : 'Within ceiling';
 }
 
-function computeTable(entries: ComputeEntitlement[]): HTMLElement {  if (!entries.length) return text('p', 'No compute entitlement is recorded for this user.', 'admin-empty');
+function computeTable(entries: ComputeEntitlement[]): HTMLElement {
+  if (!entries.length) return text('p', 'No compute entitlement is recorded for this user.', 'admin-empty');
   const table = element('table', 'admin-table resource-envelope-table');
   const head = element('thead');
   head.append(element('tr', '', ['Unit', 'Class', 'Enforced', 'Allowance', 'Used', 'Reserved', 'Remaining', 'Usage'].map(label => text('th', label))));
