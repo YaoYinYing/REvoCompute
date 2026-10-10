@@ -274,9 +274,7 @@ def placement_projections(task_row: Mapping[str, Any]) -> list[dict[str, Any]]:
     reported against different snapshots of its own submission record — the pair
     read for a stage is the pair written for that stage.
     """
-    projections = [
-        placement_projection(task_row, stage=None)
-    ]
+    projections = [placement_projection(task_row, stage=None)]
     form = _form_payload(task_row)
     decisions = form.get("placement_decisions") if form is not None else None
     if isinstance(decisions, Mapping):
@@ -649,7 +647,9 @@ def _resource_operations_for_user(
     ]
     # An allocation fact is a measurement of a resource, whether or not its
     # elapsed time has settled yet, so a live allocation makes its unit measured.
-    measured = _measured_units(window) | {str(record.get("unit") or "") for record in unsettled}
+    measured = _measured_units(window) | {
+        str(record.get("unit") or "") for record in unsettled
+    }
     period = envelope.period
     units: list[dict[str, Any]] = []
     for entitlement in envelope.compute:
@@ -693,11 +693,11 @@ def _resource_operations_for_user(
     return {
         "subject": {"subject_type": envelope.subject_type, "subject_id": envelope.subject_id},
         "period": period,
-        "units": units,
         # The canonical envelope, unaltered: the same projection the existing
         # Admin entitlement route serves, so an operator comparing the two can
         # never find a field this facade rounded differently.
         "canonical_envelope": envelope.to_dict(),
+        "units": units,
         "allocation_facts": {
             **_allocation_facts(unsettled),
             "unsettled_allocations": unsettled_facts,
