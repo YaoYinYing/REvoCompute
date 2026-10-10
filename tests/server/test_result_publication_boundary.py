@@ -631,7 +631,31 @@ def test_a_manifest_path_escaping_the_result_root_fails_closed(monkeypatch, tmp_
         module.task_runtime._build_results_archive(module.task_store.get_task(task_id))
 
 
+def test_the_archive_a_build_installs_passes_its_own_delivery_check(monkeypatch, tmp_path) -> None:
+    """The built ZIP is the archive the download route accepts.
+
+    Building and serving are one contract: a build that produced a ZIP the
+    delivery check refuses would leave a Task whose archive is never
+    downloadable.  The build therefore writes the members *stored*, so the
+    bytes the verification reads are the bytes a download delivers.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    headers = _test_client_auth(module)
+    content = b"score\n1.0\n"
+    task_id, _result_dir, _manifest = _single_artifact_task(module, tmp_path, content)
+
+    archive_path = Path(module.task_runtime._build_results_archive(module.task_store.get_task(task_id)))
+    with zipfile.ZipFile(archive_path) as archive:
+        assert all(info.compress_type == zipfile.ZIP_STORED for info in archive.infolist())
+
+    response = module.app.test_client().get(f"/compute/api/download/{task_id}", headers=headers)
+
+    assert response.status_code == 200
+    assert response.data == archive_path.read_bytes()
+
+
 def test_the_archive_writes_the_manifest_bytes_it_verified(monkeypatch, tmp_path) -> None:
+
     """The archived manifest is the exact byte stream that selected the entries.
 
     A replacement of ``manifest.json`` after the read cannot pair manifest A's
