@@ -490,11 +490,9 @@ def retrieve_artifact(
     # Authorize + gate on publication through the canonical artifact route (so
     # ownership, role visibility, and *publication* are its rules), but read the
     # bytes from the resolver's already-verified descriptor rather than the
-    # route's response body.  The route answers an empty body plus
-    # ``X-Accel-Redirect`` in the shipped ``nginx`` download mode and
-    # content-negotiates otherwise, so a response-body read silently returned
-    # empty content; the verified descriptor is the same content in every mode,
-    # and a quarantined result is refused by the route before any bytes are read.
+    # route's response body: the descriptor is the verified content in every
+    # delivery mode, and a quarantined result is refused by the route before any
+    # bytes are read.
     try:
         response = call_canonical(
             principal,

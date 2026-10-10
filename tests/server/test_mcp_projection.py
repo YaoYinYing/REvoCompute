@@ -1121,19 +1121,15 @@ def test_unpublished_artifact_path_is_not_found(mcp_app, tmp_path):
 _EXPECTED_TEXT = ("result" + chr(10)).encode()
 
 
-@pytest.mark.parametrize("download_mode", ["nginx", "flask"])
-def test_inline_artifact_content_is_byte_exact_in_every_download_mode(mcp_app, tmp_path, download_mode):
-    """Inlined bytes are the published bytes regardless of download mode.
+def test_inline_artifact_content_is_byte_exact(mcp_app, tmp_path):
+    """Inlined bytes are the published bytes, never a re-read of the name.
 
-    The shipped deployment serves results with ``RESULT_DOWNLOAD_MODE=nginx``,
-    where the canonical download route answers an empty body plus
-    ``X-Accel-Redirect``.  A projection that inlined the *response body* silently
-    returned empty content for every artifact in that mode; this pins byte-exact
-    content in both modes so the silent drop cannot regress.
+    The projection reads the resolver's verified artifact rather than the
+    download route's response body, so the inlined content is exactly what the
+    manifest declares.
     """
     from revocompute.mcp.services import retrieve_artifact
 
-    mcp_app.app.config["RESULT_DOWNLOAD_MODE"] = download_mode
     principal = _principal(mcp_app)
     task_id = _seed_published_artifact(mcp_app, tmp_path)
     payload = retrieve_artifact(principal, operation_id=task_id, artifact_path="output.txt")

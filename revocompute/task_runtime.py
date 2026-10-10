@@ -1390,6 +1390,36 @@ def _anchor_result_manifest(
         ) from exc
 
 
+def _publish_result_tree_file(result_dir: str, name: str, payload: str) -> None:
+    """Write *payload* to *name* inside *result_dir*, descriptor-bound.
+
+    The same create/rename primitive the manifest uses: ``name`` is at a
+    canonical spot inside the runner-owned result tree, so writing it by path
+    would let a symlink planted there capture the write.  A fresh candidate is
+    created with ``O_CREAT|O_EXCL|O_NOFOLLOW``, written through that descriptor,
+    and published with ``renameat``; a failure removes the candidate.
+    """
+    with _ResultTreeWalker(result_dir) as walker:
+        candidate = f".{name}.tmp-{os.getpid()}-{time.time_ns()}"
+        descriptor = walker.create_entry(candidate)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                descriptor = None
+                handle.write(payload)
+            walker.replace_entry(candidate, name)
+        except BaseException:
+            if descriptor is not None:
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+            try:
+                walker.unlink_entry(candidate)
+            except OSError:
+                pass
+            raise
+
+
 def _finalize_results_manifest(
     task: dict[str, Any],
     *,
@@ -1415,8 +1445,7 @@ def _finalize_results_manifest(
     except KeyError:
         task_type = None
     if task_type is not None and task_type.citations:
-        with open(os.path.join(result_dir, "citations.bib"), "w", encoding="utf-8") as handle:
-            handle.write(citations_bibtex(task_type.citations))
+        _publish_result_tree_file(result_dir, "citations.bib", citations_bibtex(task_type.citations))
     artifacts: list[dict[str, Any]] = []
     publication_problems: list[str] = []
     publication_capacity_guard = False
@@ -1853,15 +1882,15 @@ def _finalize_failed_results(task: dict, error: Any, *, finished_at: float) -> N
         return
     try:
         os.makedirs(result_dir, exist_ok=True)
-        report_path = os.path.join(result_dir, "task_failed.txt")
         message = _sanitize_task_error(task, error) or "Task failed."
         task_type_name = task.get("task_type") or default_task_type()
-        with open(report_path, "w", encoding="utf-8") as handle:
-            handle.write(f"REvoDesign {task_type_name} task failed\n")
-            handle.write(f"Task ID: {task.get('md5sum', 'unknown')}\n")
-            handle.write(f"Input: {task.get('filename', 'unknown')}\n\n")
-            handle.write(message)
-            handle.write("\n")
+        report = (
+            f"REvoDesign {task_type_name} task failed\n"
+            f"Task ID: {task.get('md5sum', 'unknown')}\n"
+            f"Input: {task.get('filename', 'unknown')}\n\n"
+            f"{message}\n"
+        )
+        _publish_result_tree_file(result_dir, "task_failed.txt", report)
         _finalize_results_manifest(task, execution_state="failed", finished_at=finished_at)
     except DataPurgedError:
         _abandon_published_result(task, result_dir)
@@ -2091,10 +2120,11 @@ def _capture_debug_submission(task: dict[str, Any], entities: list[dict], params
             "submitted_at": form.get("submitted_at") or task.get("uploaded_at"),
             "inputs": files,
         }
-        submission_path = _safe_join(debug_dir, "submission.json")
-        with open(submission_path, "w", encoding="utf-8") as handle:
-            json.dump(submission, handle, ensure_ascii=True, indent=2, sort_keys=True)
-            handle.write("\n")
+        _publish_result_tree_file(
+            debug_dir,
+            "submission.json",
+            json.dumps(submission, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
+        )
     except Exception as exc:  # pylint: disable=broad-except
         logging.warning("Failed to capture debug submission for task %s: %s", task.get("md5sum"), exc)
 

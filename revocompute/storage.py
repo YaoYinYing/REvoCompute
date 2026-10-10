@@ -123,85 +123,147 @@ def manifest_relative_parts(relative_path: str) -> tuple[str, ...] | None:
     return tuple(parts)
 
 
-class _PinnedBytes(io.RawIOBase):
-    """One verified descriptor, served as exactly the bytes whose identity was checked.
+def snapshot_regular_file(descriptor: int) -> bytes:
+    """Read an already-opened private regular file into a bounded private image.
 
-    A verified descriptor is not enough on its own: bytes appended to the same
-    inode afterwards keep the inode and the link count, so a length re-read at
-    consumption time would hand a caller bytes the manifest never authorized.
-    The pin is the verified size, so the object yields one version -- the
-    verified one -- however the inode grows afterwards.
+    The cached-archive path's half of the copy contract: the archive is verified
+    against the anchored manifest and then delivered, so the object delivered has
+    to be the object verified -- a rewrite of the same length in place would
+    otherwise keep the inode, the link count, and the length and be served as the
+    publication.  One bounded read, one copy, and the caller verifies and serves
+    the copy.
 
-    The pin lives below every reader, not above them.  Only ``readinto`` releases
-    bytes, and it is clamped to the verified size, so ``read``, ``readinto``,
-    ``read1``, ``readline``, ``peek``, ``io.BufferedReader``, ``io.TextIOWrapper``,
-    ``csv.reader``, ``zipfile``, and the array readers all share the same bound
-    because every one of them ultimately fills a buffer through ``readinto`` here.
-    A wrapper that instead delegated attributes to the raw file would leak -- some
-    of those readers fill their buffer through ``read1`` -- which is exactly what
-    this object refuses to do: what it is not one of the reads above is a private
-    attribute and is hidden, so a consumer can never reach the underlying file
-    around the pin.
+    The descriptor is consumed: the read wraps it in a file object, so it is
+    closed on every path out of this call and the caller must not close it again.
+    """
+    with os.fdopen(descriptor, "rb") as handle:
+        return _read_bounded(handle, os.fstat(handle.fileno()).st_size)[0]
+
+
+def _read_bounded(handle: Any, limit: int, *, chunk_bytes: int = _HASH_CHUNK_BYTES) -> tuple[bytes, str]:
+    """Read at most *limit* bytes and return ``(bytes, sha256)``.
+
+    One read, one digest, one byte image: the digest a caller compares against a
+    manifest entry and the bytes a consumer receives come from the same pass, so
+    no rewrite of the underlying inode between the two can be served as verified.
+    The loop is bounded by the size the descriptor reported before the read
+    started, so an artifact that grows while it is being read cannot hold the
+    reader in an unbounded stream: the extra bytes are simply not read, and the
+    size mismatch that leaves is what rejects the candidate.
+    """
+    digest = hashlib.sha256()
+    data = bytearray()
+    handle.seek(0)
+    while len(data) < limit:
+        chunk = handle.read(min(chunk_bytes, limit - len(data)))
+        if not chunk:
+            break
+        digest.update(chunk)
+        data.extend(chunk)
+    return bytes(data), digest.hexdigest()
+
+
+class _SnapshotStream:
+    """A private byte image of one verified artifact, served under the file protocol.
+
+    The verified bytes are copied once, and every consumer reads the copy: what a
+    caller is handed is a version of the file rather than a window onto a mutable
+    inode, so a same-length rewrite of the runner's file after verification reaches
+    nothing.  The size the image was copied at bounds every read, so growth,
+    shrinkage, and substitution all have no path in.
+
+    The descriptor the bytes were read from is *kept*, not closed, because a
+    consumer may still ask the verified file about metadata the read does not
+    describe -- its modification time, which a ZIP member header carries.  Content
+    never comes from the descriptor again: only :meth:`fileno` reaches it, and it
+    exists so a caller can ``fstat`` the very inode the bytes were verified as.
+    Closing this stream closes that descriptor too, exactly once.
     """
 
-    #: The shared file-object protocol.  Everything a consumer legitimately does
-    #: with a verified descriptor -- read, seek, tell, fileno, close, and text or
-    #: archive wrapping -- is one of these, so a missing attribute is always a
-    #: consumer bug and raises rather than reaching the unbounded raw file.
-    _PUBLIC_API = frozenset(
-        {
-            "read", "read1", "readinto", "readinto1", "readline", "readlines", "seek", "tell",
-            "truncate", "flush", "close", "closed", "fileno", "isatty", "readable", "seekable",
-            "writable", "detach", "name", "mode", "raw",
-        }
-    )
+    __slots__ = ("_data", "_size", "_offset", "_closed", "_descriptor")
 
-    __slots__ = ("_handle", "_size")
-
-    def __init__(self, handle: Any, size: int):
-        self._handle = handle
-        self._size = size
+    def __init__(self, data: bytes, descriptor: int | None = None):
+        self._data = data
+        self._size = len(data)
+        self._offset = 0
+        self._closed = False
+        self._descriptor = descriptor
 
     def readable(self) -> bool:
         return True
 
+    def writable(self) -> bool:
+        # A verified byte image is read-only: it stands in for a file the
+        # publication contract opened read-only, and ``io.TextIOWrapper`` asks
+        # before it will wrap one, so the answer has to be the truth.
+        return False
+
     def seekable(self) -> bool:
         return True
 
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    def fileno(self) -> Any:
+        if self._descriptor is None:
+            raise io.UnsupportedOperation("a verified byte image has no descriptor")
+        return self._descriptor
+
+    def read(self, size: int = -1) -> bytes:
+        if size is None or size < 0:
+            size = self._size - self._offset
+        chunk = self._data[self._offset:self._offset + size]
+        self._offset += len(chunk)
+        return chunk
+
     def readinto(self, buffer: Any) -> int:
-        remaining = self._size - self._handle.tell()
-        if remaining <= 0:
-            return 0
         view = memoryview(buffer)
-        if view.nbytes > remaining:
-            return self._handle.readinto(view[:remaining])
-        return self._handle.readinto(view)
+        chunk = self.read(view.nbytes)
+        view[:len(chunk)] = chunk
+        return len(chunk)
+
+    def read1(self, size: int = -1) -> bytes:
+        return self.read(size)
+
+    def readline(self, size: int = -1) -> bytes:
+        end = self._data.find(b"\n", self._offset)
+        stop = self._size if end < 0 else end + 1
+        if size is not None and size >= 0:
+            stop = min(stop, self._offset + size)
+        chunk = self._data[self._offset:stop]
+        self._offset += len(chunk)
+        return chunk
+
+    def __iter__(self) -> Any:
+        while (line := self.readline()):
+            yield line
 
     def seek(self, offset: int, whence: int = 0) -> int:
-        return self._handle.seek(offset, whence)
+        target = offset if whence == 0 else self._offset + offset if whence == 1 else self._size + offset
+        self._offset = max(0, min(self._size, target))
+        return self._offset
 
     def tell(self) -> int:
-        return self._handle.tell()
+        return self._offset
 
-    def fileno(self) -> int:
-        return self._handle.fileno()
+    def flush(self) -> None:
+        return None
 
     def close(self) -> None:
-        # ``RawIOBase.close`` alone would leave the underlying file object -- and
-        # therefore the descriptor it owns -- open, because this object holds a
-        # reference rather than being that object.  Closing must release the one
-        # resource a verified descriptor is, or every consumer that closes what it
-        # was given leaks a descriptor per request.
-        self._handle.close()
+        descriptor, self._descriptor = self._descriptor, None
+        self._closed = True
+        self._offset = 0
+        if descriptor is not None:
+            # The stream owns the descriptor it was verified from, so a consumer
+            # that closes the verified file releases it exactly once.
+            os.close(descriptor)
 
-    def __getattr__(self, name: str) -> Any:
-        # ``RawIOBase`` finders look for private helpers (``_checkClosed`` and
-        # friends) as part of their own protocol; only those are forwarded.  A
-        # public read method is served by the pinned implementation above, never
-        # by the unbounded raw file.
-        if name not in _PinnedBytes._PUBLIC_API:
-            return getattr(self._handle, name)
-        raise AttributeError(f"{type(self).__name__!r} object has no attribute {name!r}")
+    def __enter__(self) -> "_SnapshotStream":
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
 
 
 @dataclass(frozen=True, slots=True)
@@ -446,16 +508,24 @@ class _ResultTreeWalker:
         name swap can outrun.  The descriptor is opened with ``SAFE_OPEN_FLAGS``,
         so the open itself cannot block on an empty FIFO and the check is always
         reachable.  The size the descriptor reports is checked against
-        *max_bytes* before any byte is read, and the hash loop is bounded by that
-        same size, so an entry that grows underneath the hasher yields a size
-        mismatch instead of an unbounded read.  With ``expected`` the bytes must
-        also match the manifest entry's ``(size, sha256)``, which is why no caller
-        needs a second open of the name.
+        *max_bytes* before any byte is read, and the read loop is bounded by that
+        same size, so an entry that grows underneath the reader yields a size
+        mismatch instead of an unbounded read.
+
+        What the caller receives is the *byte image* this call produced, not the
+        descriptor: the digest describes exactly the bytes served, and a rewrite
+        of the runner's inode -- of any length, in place -- cannot reach a
+        consumer that holds a copy.  With ``expected`` those bytes must also
+        match the manifest entry's ``(size, sha256)``, which remains the authority
+        on *which* publication they are.
         """
         descriptor = os.open(name, SAFE_OPEN_FLAGS, dir_fd=directory_fd)
-        handle = os.fdopen(descriptor, "rb")
+        # The descriptor stays open for the life of the verified file: the byte
+        # image is the content, and the descriptor is what still answers a
+        # consumer's question about the *inode* the content came from -- its
+        # modification time.  Closing the verified file closes it exactly once.
         try:
-            status = os.fstat(handle.fileno())
+            status = os.fstat(descriptor)
             if not stat.S_ISREG(status.st_mode) or status.st_nlink != 1:
                 # One rule for every kind of non-publication: a symlink, a
                 # directory, a FIFO, a socket, a device, or a file with a second
@@ -464,26 +534,28 @@ class _ResultTreeWalker:
                 raise ArtifactIdentityError(f"not a private regular file: {name}")
             if status.st_size > max_bytes:
                 raise ArtifactOversizedError(f"published file exceeds its bound: {name}")
-            size, digest = _hash_bounded(handle, status.st_size)
+            with os.fdopen(os.dup(descriptor), "rb") as reader:
+                # The bounded read runs on a duplicate, so the content pass never
+                # moves the descriptor's own offset and never closes it.
+                image, digest = _read_bounded(reader, status.st_size)
             # Growth during the read is reported by the descriptor *after* the
-            # read, not by the byte count it produced: the hash loop is bounded by
+            # read, not by the byte count it produced: the read loop is bounded by
             # the pre-read size, so an inode that grew would otherwise still yield
             # a digest of its first ``status.st_size`` bytes that matches the
             # manifest.  A file that changed length is not one version of itself,
             # so the digest describes no publication and the candidate is refused.
-            after = os.fstat(handle.fileno())
-            if after.st_size != status.st_size or size != status.st_size:
+            after = os.fstat(descriptor)
+            if after.st_size != status.st_size or len(image) != status.st_size:
                 raise ArtifactChangedError(f"published file changed while being read: {name}")
             if expected is not None:
                 declared_size, declared_digest = expected
-                if size != declared_size:
+                if len(image) != declared_size:
                     raise ArtifactIdentityError(f"published artifact does not match its declared size: {name}")
                 if digest != declared_digest:
                     raise ArtifactIdentityError(f"published artifact does not match its declared digest: {name}")
-            handle.seek(0)
-            return _VerifiedFile(_PinnedBytes(handle, size), digest, size)
+            return _VerifiedFile(_SnapshotStream(image, descriptor), digest, len(image))
         except BaseException:
-            handle.close()
+            os.close(descriptor)
             raise
 
     def open_published_file(
@@ -519,25 +591,6 @@ class _ResultTreeWalker:
         finally:
             for descriptor in descriptors:
                 os.close(descriptor)
-
-
-def _hash_bounded(handle: Any, limit: int) -> tuple[int, str]:
-    """Stream-hash at most *limit* bytes, returning ``(size, sha256)``.
-
-    The loop is bounded by the size the descriptor reported before the read
-    started, so an artifact that grows while it is being hashed cannot hold the
-    reader in an unbounded stream: the extra bytes are simply not hashed, and the
-    size mismatch that leaves is what rejects the candidate.
-    """
-    digest = hashlib.sha256()
-    size = 0
-    while size < limit:
-        chunk = handle.read(min(_HASH_CHUNK_BYTES, limit - size))
-        if not chunk:
-            break
-        digest.update(chunk)
-        size += len(chunk)
-    return size, digest.hexdigest()
 
 
 class ArtifactIdentityError(OSError):
@@ -723,6 +776,12 @@ class StorageResolver:
         come from a descriptor opened relative to the trusted result root, so an
         intermediate directory swapped for a symlink cannot point the read at a
         different manifest.
+
+        The bytes returned are the byte image the verification hashed, and that
+        image is compared against the server-owned anchor below, so the caller
+        receives exactly the bytes whose digest the anchor describes: a rewrite of
+        ``manifest.json`` in place -- of the same length, keeping the inode, the
+        link count, and the size -- cannot be handed out as the publication.
         """
         try:
             result_root = self.get_task_root(task)

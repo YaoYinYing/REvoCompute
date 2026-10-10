@@ -161,7 +161,6 @@ class ComputeConfig:
     manage_db_path: str
     docker_user: str
     port: int
-    result_download_mode: str
     runners_dir: str  # deployed runner-family root (docker/runners/)
     # Infrastructure bindings are server-owned.  Runner/task manifests may
     # provide images and commands, but cannot select these implementations.
@@ -204,7 +203,6 @@ class ComputeConfig:
             manage_db_path=env_path("MANAGE_DB_PATH", os.path.join(server_dir, "manage.sqlite")),
             docker_user=resolve_docker_user(),
             port=env_int("PORT", 8080),
-            result_download_mode=env_choice("RESULT_DOWNLOAD_MODE", "flask", {"flask", "nginx"}),
             runners_dir=os.path.abspath(os.path.expanduser(runners_dir)),
             job_executor=env_choice("REVOCOMPUTE_JOB_EXECUTOR", "slurm", {"slurm"}),
             container_runtime=env_choice("REVOCOMPUTE_CONTAINER_RUNTIME", "apptainer", {"apptainer"}),

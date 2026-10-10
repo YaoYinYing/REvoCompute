@@ -2558,14 +2558,17 @@ def _with_verified_artifact(resolved: dict[str, Any] | None, task: dict[str, Any
 
 
 def _verified_payload(stream: Any, size: int) -> Response:
-    """Stream a verified descriptor directly, never reopening its pathname.
+    """Serve one verified artifact from the byte image its digest describes.
 
     Everything — full body, HEAD, and a single bounded ``Range`` — reads from the
-    one verified descriptor, so no later pathname open can substitute different
-    bytes.  The length is the one the manifest authorized and the digest was
-    checked against, never a fresh ``fstat`` of a file that may have grown since.
-    Range support lives here rather than in ``send_from_directory`` because that
-    helper would reopen the pathname that was just verified.
+    one byte image the resolver produced while it was verifying that artifact, so
+    what a caller receives is a version of the file rather than a window onto a
+    mutable inode: no later pathname open, and no in-place rewrite of the runner's
+    file, can substitute different bytes.  The length is the one the manifest
+    authorized and the digest was computed over, never a fresh ``fstat`` of a file
+    that may have changed since.  Range support lives here rather than in
+    ``send_from_directory`` because that helper would reopen the pathname that was
+    just verified.
     """
     raw_range = request.headers.get("Range", "")
     if request.method == "HEAD":
@@ -2641,13 +2644,12 @@ def get_result_artifact(md5sum: str, relative_path: str):
     # are never rendered same-origin.  `?download=1` still forces a download
     # and `?download=0` explicitly opts back into inline rendering.
     as_attachment = request.args.get("download", "1") in {"1", "true", "yes"}
-    # Delivery always consumes the verified descriptor.  ``RESULT_DOWNLOAD_MODE``
-    # is accepted for deployment compatibility, but X-Accel-Redirect is NOT used
-    # here: the offload would have nginx reopen this mutable pathname, which
-    # could serve bytes that never satisfied the manifest identity.  Descriptor-
-    # bound delivery therefore replaces the offload on this endpoint; a redesign
-    # that could keep the offload needs an immutable publication store, which is
-    # out of scope for this change.
+    # Delivery always consumes the verified descriptor: an X-Accel-Redirect
+    # offload would have the gateway reopen this mutable pathname, which could
+    # serve bytes that never satisfied the manifest identity.  Descriptor-bound
+    # delivery therefore replaces the offload on the artifact and archive
+    # endpoints; a redesign that could keep the offload needs an immutable
+    # publication store, which is out of scope for this change.
     response = _verified_payload(stream, int(resolved["size"]))
     response.mimetype = artifact.get("media_type") or "application/octet-stream"
     response.headers.set(
@@ -2876,14 +2878,15 @@ def download_results(md5sum):
 
 
 def _deliver_published_archive(task: dict[str, Any], archive: str) -> Response:
-    """Deliver the cached archive from a descriptor verified as the publication.
+    """Serve the cached archive from the byte image its verification was computed over.
 
-    The check and the delivery are one act about one descriptor, not a check
-    followed by a pathname open: the archive is opened here, read-only and
-    without following a final symlink, its members are verified against the
-    anchored manifest, and the *rewound* descriptor is what streams.  A
-    replacement between an earlier readiness answer and this delivery therefore
-    cannot be served, and the bytes a caller receives are the bytes just checked.
+    The check and the delivery are one act about one set of bytes, not a check
+    followed by a reopen: the archive is opened here read-only and without
+    following a final symlink, its members are verified against the anchored
+    manifest, and the *image read during that verification* is what streams.  A
+    replacement between an earlier readiness answer and this delivery, and an
+    in-place rewrite of the same length, therefore both reach nothing -- what a
+    caller receives is the version of the archive the member digests describe.
     """
     from revocompute import storage as storage_module
 
@@ -2893,23 +2896,21 @@ def _deliver_published_archive(task: dict[str, Any], archive: str) -> Response:
     if manifest_bytes is None or descriptor is None:
         return _archive_unavailable()
     try:
-        size = os.fstat(descriptor).st_size
-        body = os.fdopen(descriptor, "rb")
+        # ``snapshot_regular_file`` owns the descriptor from here: it wraps it in
+        # a file object, so every failure path below has already closed it and
+        # this route must not close the number a second time.
+        image = storage_module.snapshot_regular_file(descriptor)
     except OSError:
-        os.close(descriptor)
         return _archive_unavailable()
-    try:
-        if not storage_module.verified_publication_archive(body, manifest_bytes, _declared_artifacts(resolver, task)):
-            body.close()
-            return _archive_unavailable()
-        # The verification read the whole archive, so the delivered bytes are that
-        # same descriptor rewound: what a caller receives is what was just checked.
-        body.seek(0)
-    except OSError:
-        body.close()
+    declared = _declared_artifacts(resolver, task)
+    if not storage_module.verified_publication_archive(io.BytesIO(image), manifest_bytes, declared):
         return _archive_unavailable()
-    response = Response(_BoundedStream(body, size), mimetype="application/zip", direct_passthrough=True)
-    response.headers["Content-Length"] = str(size)
+    # The bytes served are the ones just verified: a private copy, not the
+    # still-writable inode the archive lives on.
+    response = Response(
+        _BoundedStream(io.BytesIO(image), len(image)), mimetype="application/zip", direct_passthrough=True
+    )
+    response.headers["Content-Length"] = str(len(image))
     # The download name is the sanitized one, derived from the task's own
     # filename: a raw runner-controlled name would reach the header.
     response.headers["Content-Disposition"] = "attachment; filename=\"{}\"".format(

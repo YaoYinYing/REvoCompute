@@ -202,7 +202,6 @@ if CONFIG.slurm_allowed_queues:
 app.config["UPLOAD_FOLDER"] = CONFIG.upload_folder
 app.config["WORKSPACE_FOLDER"] = CONFIG.workspace_folder
 app.config["RESULTS_FOLDER"] = CONFIG.results_folder
-app.config["RESULT_DOWNLOAD_MODE"] = CONFIG.result_download_mode
 
 _ensure_directories(CONFIG.upload_folder, CONFIG.workspace_folder, CONFIG.results_folder)
 app.config["storage_resolver"] = StorageResolver(CONFIG.results_folder, CONFIG.workspace_folder, task_store)

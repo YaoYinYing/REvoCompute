@@ -743,19 +743,14 @@ def test_a_single_range_reads_from_the_verified_descriptor(monkeypatch, tmp_path
     assert unsatisfiable.headers["Content-Range"] == f"bytes */{len(content)}"
 
 
-def test_the_result_download_never_claims_verified_identity_while_offloading(monkeypatch, tmp_path) -> None:
-    """nginx offload is not used where it would reopen the mutable pathname.
+def test_the_result_download_never_offloads_to_a_front_end(monkeypatch, tmp_path) -> None:
+    """A published artifact is never handed to a gateway to reopen by name.
 
-    ``RESULT_DOWNLOAD_MODE=nginx`` is accepted for deployment compatibility, but a
-    published artifact is delivered from the verified descriptor: an
-    ``X-Accel-Redirect`` would hand the bytes to a later pathname open, which
-    could serve a file that never satisfied the manifest identity.
+    An ``X-Accel-Redirect`` would give the bytes to a later pathname open, which
+    could serve a file that never satisfied the manifest identity, so the
+    descriptor-bound read is the only delivery path.
     """
-    module = _load_pssm_module(
-        monkeypatch,
-        tmp_path,
-        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "RESULT_DOWNLOAD_MODE": "nginx"},
-    )
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     content = b"score\n1.0\n"
     task_id, _result_dir, headers = _published_task(module, tmp_path, content)
 
@@ -1512,15 +1507,15 @@ def test_an_over_capacity_artifact_is_refused_without_reading_its_bytes(monkeypa
 
     import revocompute.storage as storage_module
 
-    real_hash = storage_module._hash_bounded
+    real_read = storage_module._read_bounded
 
-    def counting_hash(handle, limit):
-        # The bounded hasher is the only reader of an artifact's bytes during
-        # publication, so counting what it is asked to read counts the work.
+    def counting_read(handle, limit, **kwargs):
+        # The one bounded read is the only reader of a candidate's bytes during
+        # publication, so counting the bound it is asked for counts the work.
         hashed.append(limit)
-        return real_hash(handle, limit)
+        return real_read(handle, limit, **kwargs)
 
-    monkeypatch.setattr(storage_module, "_hash_bounded", counting_hash)
+    monkeypatch.setattr(storage_module, "_read_bounded", counting_read)
 
     manifest = module.task_runtime._finalize_results_manifest(
         module.task_store.get_task(task_id), execution_state="completed", finished_at=1_700_000_000
@@ -1528,9 +1523,9 @@ def test_an_over_capacity_artifact_is_refused_without_reading_its_bytes(monkeypa
 
     assert manifest["artifacts"] == []
     assert any("capacity limit" in problem for problem in manifest["output_check"]["problems"])
-    # Nothing was hashed at all: the verified size was already over the budget,
-    # so the bounded hasher was never entered for this file.
-    assert hashed == []
+    # The 4 MiB candidate was never read at all: its verified size was already
+    # over the budget, so no bounded read was ever asked for those bytes.
+    assert 4 * 1024 * 1024 not in hashed
     assert target.stat().st_size == 4 * 1024 * 1024
 
 
@@ -1625,6 +1620,137 @@ def test_a_flagged_published_file_cannot_be_extended_after_verification(monkeypa
     assert b"UNVERIFIED" not in response.data
 
 
+def _rewrite_in_place(path: Path, payload: bytes) -> None:
+    """Replace *path*'s bytes without changing its inode, link count, or length.
+
+    The strongest substitution the runner's own Unix identity can make: every
+    fact a descriptor reports about the file -- inode, link count, and size --
+    is unchanged, so a consumer that holds the descriptor rather than a copy of
+    the bytes it read would serve the substituted content as verified.
+    """
+    assert len(payload) == path.stat().st_size
+    with open(path, "r+b") as handle:
+        handle.write(payload)
+
+
+def test_a_same_length_rewrite_is_not_delivered_as_the_artifact(monkeypatch, tmp_path) -> None:
+    """A rewrite that keeps every descriptor fact still cannot be served.
+
+    The published artifact is delivered from the byte image its digest was
+    computed over, so a rewrite of the same length -- new content, same inode,
+    same link count, same size -- reaches nothing.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    headers = _test_client_auth(module)
+    content = b"score\n1.0\n"
+    task_id, result_dir, _manifest = _single_artifact_task(module, tmp_path, content)
+    artifact = result_dir / "result.txt"
+    substitution = b"score\n9.9\n"
+    assert len(substitution) == len(content)
+    resolver = module.app.config["storage_resolver"]
+    resolve = resolver.resolve_artifact
+
+    def rewrite_after_verify(task, relative_path):
+        resolved = resolve(task, relative_path)
+        if resolved is not None:
+            _rewrite_in_place(artifact, substitution)
+        return resolved
+
+    monkeypatch.setattr(resolver, "resolve_artifact", rewrite_after_verify)
+
+    response = module.app.test_client().get(
+        f"/compute/api/results/{task_id}/artifacts/result.txt", headers=headers
+    )
+
+    assert artifact.read_bytes() == substitution
+    assert response.status_code == 200
+    assert response.data == content
+
+
+def test_a_same_length_rewrite_is_not_previewed_as_the_table(monkeypatch, tmp_path) -> None:
+    """The table preview parses the verified byte image, not the rewritten file."""
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    headers = _test_client_auth(module)
+    task_id = _finished_task(module, tmp_path)
+    content = b"value\n1.0\n"
+    manifest, result_dir = _finalize_dir(module, task_id, lambda root: (root / "values.csv").write_bytes(content))
+    assert "values.csv" in {item["path"] for item in manifest["artifacts"]}
+    table = result_dir / "values.csv"
+    substitution = b"value\n9.9\n"
+    resolver = module.app.config["storage_resolver"]
+    resolve = resolver.resolve_artifact
+
+    def rewrite_after_verify(task, relative_path):
+        resolved = resolve(task, relative_path)
+        if resolved is not None:
+            _rewrite_in_place(table, substitution)
+        return resolved
+
+    monkeypatch.setattr(resolver, "resolve_artifact", rewrite_after_verify)
+
+    response = module.app.test_client().get(
+        f"/compute/api/results/{task_id}/tables/values.csv", headers=headers
+    )
+
+    assert table.read_bytes() == substitution
+    assert response.status_code == 200
+    assert response.get_json()["rows"] == [["1.0"]]
+
+
+def test_a_same_length_rewrite_of_the_manifest_is_not_the_publication(monkeypatch, tmp_path) -> None:
+    """A manifest rewritten in place is refused: the anchor, not the file, decides.
+
+    The substituted bytes are the same length and still valid JSON, so nothing
+    about the file itself is wrong -- only the server-owned anchor can say they
+    are not the manifest Core published.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    headers = _test_client_auth(module)
+    task_id, result_dir, _manifest = _single_artifact_task(module, tmp_path, b"score\n1.0\n")
+    task = module.task_store.get_task(task_id)
+    manifest_path = result_dir / "manifest.json"
+    published = manifest_path.read_bytes()
+    substitution = published.replace(b'"schema_version": 3', b'"schema_version": 4')
+    assert len(substitution) == len(published) and substitution != published
+
+    _rewrite_in_place(manifest_path, substitution)
+
+    storage = module.app.config["storage_resolver"]
+    assert storage.load_manifest(task) is None
+    assert storage.publication_state(task) == "anchor_mismatch"
+    assert module.app.test_client().get(f"/compute/api/results/{task_id}", headers=headers).status_code == 404
+
+
+def test_a_same_length_rewrite_of_the_archive_is_not_delivered(monkeypatch, tmp_path) -> None:
+    """The delivered archive is the byte image its members were verified against."""
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    headers = _test_client_auth(module)
+    task_id, _result_dir, _manifest = _single_artifact_task(module, tmp_path, b"score\n1.0\n")
+    archive_path = _publish_archive(module, task_id)
+    published_bytes = archive_path.read_bytes()
+    import revocompute.storage as storage_module
+
+    real_verify = storage_module.verified_publication_archive
+    rewritten: list[int] = []
+
+    def rewrite_in_place_after_verify(source, manifest_bytes, artifacts):
+        result = real_verify(source, manifest_bytes, artifacts)
+        if not rewritten:
+            rewritten.append(1)
+            # Same length, same inode, same link count: only the content changes.
+            _rewrite_in_place(archive_path, b"Z" * len(published_bytes))
+        return result
+
+    monkeypatch.setattr(storage_module, "verified_publication_archive", rewrite_in_place_after_verify)
+
+    response = module.app.test_client().get(f"/compute/api/download/{task_id}", headers=headers)
+
+    assert rewritten, "the in-place rewrite was never exercised"
+    assert response.status_code == 200
+    assert response.data == published_bytes
+    assert archive_path.read_bytes() != published_bytes
+
+
 def test_an_artifact_that_grows_while_being_hashed_is_refused(monkeypatch, tmp_path) -> None:
     """A file that grows under the reader is rejected, never hashed to its new size."""
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
@@ -1701,11 +1827,11 @@ def test_an_artifact_that_grows_only_after_the_hash_is_refused(monkeypatch, tmp_
 
     import revocompute.storage as storage_module
 
-    real_hash = storage_module._hash_bounded
+    real_read = storage_module._read_bounded
     grew: list[int] = []
 
-    def growing_hash(handle, limit):
-        result = real_hash(handle, limit)
+    def growing_read(handle, limit, **kwargs):
+        result = real_read(handle, limit, **kwargs)
         if not grew:
             # Extend the very inode the digest was taken from, after the read.
             grew.append(1)
@@ -1713,7 +1839,7 @@ def test_an_artifact_that_grows_only_after_the_hash_is_refused(monkeypatch, tmp_
             os.lseek(handle.fileno(), 0, os.SEEK_SET)
         return result
 
-    monkeypatch.setattr(storage_module, "_hash_bounded", growing_hash)
+    monkeypatch.setattr(storage_module, "_read_bounded", growing_read)
     manifest = module.task_runtime._finalize_results_manifest(
         task, execution_state="completed", finished_at=1_700_000_000
     )

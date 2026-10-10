@@ -2761,15 +2761,11 @@ def test_download_uses_safe_fasta_prefix_filename(monkeypatch, tmp_path):
     assert "\n" not in disposition
 
 
-def test_a_download_in_nginx_mode_delivers_the_verified_archive_directly(monkeypatch, tmp_path):
+def test_a_download_never_hands_the_archive_to_a_front_end(monkeypatch, tmp_path):
     module = _load_pssm_module(
         monkeypatch,
         tmp_path,
-        extra_env={
-            "RUNNER_UID": "1234",
-            "RUNNER_GID": "5678",
-            "RESULT_DOWNLOAD_MODE": "nginx",
-        },
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
     )
     client = module.app.test_client()
     auth_header = _test_client_auth(module)
@@ -2801,8 +2797,9 @@ def test_a_download_in_nginx_mode_delivers_the_verified_archive_directly(monkeyp
 
     # The ZIP is a publication, so its bytes are delivered from the verified
     # descriptor and its members are checked against the anchored manifest: an
-    # ``X-Accel-Redirect`` would hand the mutable pathname to nginx to reopen,
-    # which is exactly the check-then-use the descriptor-bound read removes.
+    # ``X-Accel-Redirect`` would hand the mutable pathname to a gateway to
+    # reopen, which is exactly the check-then-use the descriptor-bound read
+    # removes.
     assert response.status_code == 200
     assert response.headers["Content-Type"] == "application/zip"
     assert response.headers["Cache-Control"] == "private, no-store"
