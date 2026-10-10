@@ -1721,13 +1721,12 @@ class TaskDatabase:
         return len(rows), total
 
     def storage_entitlement(self, user_id: int) -> rloan.StorageEntitlement:
-        """Logical owned bytes for one subject, with the ceiling admission applies.
+        """Logical owned bytes for one subject, with the effective soft ceiling.
 
-        The ceiling is this subject's *effective* per-user limit, resolved from
-        the storage-quota policy over the deployment default — not the deployment
-        field directly.  An admin who limits or frees one user changes what that
-        user's envelope says, which is the only ceiling any admission reader may
-        use.
+        The ceiling is this subject's :meth:`effective_storage_limit_bytes`, not
+        the deployment field: a per-user override is how an admin states that one
+        subject differs, and an admission reader that used the deployment value
+        directly would silently ignore it.
         """
         return rloan.StorageEntitlement(
             logical_owned_bytes=self.logical_owned_bytes(user_id),
