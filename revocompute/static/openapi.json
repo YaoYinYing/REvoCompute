@@ -416,6 +416,42 @@
         }
       }
     },
+    "/compute/api/auth/admin/users/{user_id}/storage-quota": {
+      "get": {
+        "tags": ["Resource entitlement"],
+        "summary": "Get one user's effective durable-storage quota",
+        "description": "The ceiling admission applies to this subject, and which of the three decisions produced it. A ceiling of 0 is a real ceiling of zero bytes; state \"inherit\" means no per-user override exists and the deployment default applies.",
+        "operationId": "adminGetUserStorageQuota",
+        "security": [{"bearerAuth": []}],
+        "parameters": [{"$ref": "#/components/parameters/UserId"}],
+        "responses": {
+          "200": {"description": "The effective durable-storage entitlement", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/StorageQuotaEntitlement"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "404": {"$ref": "#/components/responses/NotFound"}
+        }
+      },
+      "put": {
+        "tags": ["Resource entitlement"],
+        "summary": "Set one user's durable-storage quota policy",
+        "description": "A policy change, not an accounting one: it changes what the subject may retain and never what they already hold. \"limited\" names a non-negative limit_bytes, \"unlimited\" grants no ceiling, and \"inherit\" removes the override so the deployment default applies again. No resource_ledger row is appended and logical_owned_bytes is unchanged.",
+        "operationId": "adminSetUserStorageQuota",
+        "security": [{"bearerAuth": []}],
+        "parameters": [{"$ref": "#/components/parameters/UserId"}],
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/StorageQuotaUpdateRequest"}}}
+        },
+        "responses": {
+          "200": {"description": "The resulting effective durable-storage entitlement", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/StorageQuotaMutationResult"}}}},
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "409": {"description": "The idempotency key was already used for a different storage-quota change"}
+        }
+      }
+    },
     "/compute/api/gpu-credit": {
       "get": {
         "tags": ["GPU credits"],
@@ -2905,9 +2941,49 @@
       },
       "additionalProperties": false
     },
+    "StorageQuotaEntitlement": {
+      "type": "object",
+      "description": "The effective durable-storage entitlement of one subject, exactly as admission reads it. soft_limit_bytes is the effective ceiling and is null when there is no ceiling; a ceiling of 0 is a real ceiling of zero bytes and is never a spelling of unlimited.",
+      "required": ["subject_type", "subject_id", "state", "soft_limit_bytes", "logical_owned_bytes", "remaining_bytes", "over_soft_limit"],
+      "properties": {
+        "subject_type": {"type": "string", "enum": ["user"]},
+        "subject_id": {"type": "integer"},
+        "state": {
+          "type": "string",
+          "enum": ["limited", "unlimited", "inherit"],
+          "description": "Which decision is in force: an explicit ceiling, an explicit grant of no ceiling, or no per-user override (the deployment default applies)."
+        },
+        "soft_limit_bytes": {"type": ["integer", "null"], "minimum": 0},
+        "logical_owned_bytes": {"type": "integer", "minimum": 0},
+        "remaining_bytes": {"type": ["integer", "null"]},
+        "over_soft_limit": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+    "StorageQuotaUpdateRequest": {
+      "type": "object",
+      "description": "One durable-storage quota change. The three decisions must not collapse into one another: limited names limit_bytes, unlimited and inherit name none. A request that carries a number where the decision takes none, or omits one where it is required, is refused.",
+      "required": ["state", "reason", "idempotency_key"],
+      "properties": {
+        "state": {"type": "string", "enum": ["limited", "unlimited", "inherit"]},
+        "limit_bytes": {"type": ["integer", "null"], "minimum": 0},
+        "reason": {"type": "string", "minLength": 1, "maxLength": 1000},
+        "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"}
+      },
+      "additionalProperties": false
+    },
+    "StorageQuotaMutationResult": {
+      "type": "object",
+      "required": ["entry_id", "storage_quota"],
+      "properties": {
+        "entry_id": {"type": "integer"},
+        "storage_quota": {"$ref": "#/components/schemas/StorageQuotaEntitlement"}
+      },
+      "additionalProperties": false
+    },
     "AdminReportWindow": {
       "type": "object",
-      "description": "The bound applied to one report page. ``limit`` is the effective page size after clamping; an over-large request is clamped and says so rather than being refused.",
+      "description": "The bound applied to one report page. limit is the effective page size after clamping; an over-large request is clamped and says so rather than being refused.",
       "required": ["limit", "limit_ceiling"],
       "properties": {
         "limit": {"type": "integer", "minimum": 1},

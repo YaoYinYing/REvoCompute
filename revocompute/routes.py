@@ -169,12 +169,14 @@ from revocompute.schemas import (
     PreflightPhase,
     RegisterRequest,
     ResetPasswordRequest,
+    StorageQuotaRequest,
     TaskSubmissionRequest,
     TaskPreflightResult,
     UpdateCurrentUserRequest,
     UserResponse,
     VerifyEmailRequest,
 )
+from revocompute.storage_quota import parse_quota_input
 from revocompute.task_runtime import (
     _cleanup_task_workspace,
     _finalize_failed_results,
@@ -4948,6 +4950,100 @@ def admin_adjust_user_gpu_credit(user_id: int):
         reason_code=LedgerReason.ADMIN_ADJUSTMENT.value,
     )
     return jsonify({"entry_id": entry["id"], "gpu_credit": _gpu_credit_payload(user_id, admin=True)}), 201
+
+
+# ---------------------------------------------------------------------------
+# Durable-storage quota policy
+# ---------------------------------------------------------------------------
+#
+# Setting a storage quota is a *policy* act, not an accounting one: it changes
+# what a subject may retain and never what they already hold.  The handler
+# therefore owns only authorization, bounded request parsing, and the audit
+# event; ``TaskDatabase.set_storage_quota`` owns the policy write, and durable
+# ownership (``logical_owned_bytes``) is not read or written here at all.  The
+# three decisions are distinct requests — an explicit ceiling, an explicit
+# unlimited grant, and the removal of the override so the deployment default
+# applies again — and the response reports all three the same way: the effective
+# ceiling admission will apply, and the state that produced it.
+
+
+def _storage_quota_payload(user_id: int) -> dict[str, Any]:
+    """The effective durable-storage entitlement of one subject, as admission reads it.
+
+    ``soft_limit_bytes`` is the effective ceiling — ``None`` when there is no
+    ceiling — and ``state`` names which of the three decisions is in force, so an
+    operator can tell "no per-user override, the deployment default applies" from
+    "an explicit grant of no ceiling".  A ceiling of ``0`` is reported as ``0``:
+    it is a real ceiling of zero bytes, not a spelling of unlimited.
+    """
+    policy = task_store.storage_quota_policy(user_id)
+    entitlement = task_store.storage_entitlement(user_id)
+    return {
+        "subject_type": "user",
+        "subject_id": user_id,
+        "state": policy.state.value,
+        "soft_limit_bytes": entitlement.soft_limit_bytes,
+        "logical_owned_bytes": entitlement.logical_owned_bytes,
+        "remaining_bytes": entitlement.remaining_bytes,
+        "over_soft_limit": entitlement.over_soft_limit,
+    }
+
+
+@app.route("/compute/api/auth/admin/users/<int:user_id>/storage-quota", methods=["GET"])
+@login_required
+def admin_user_storage_quota(user_id: int):
+    """Return one existing user's effective durable-storage entitlement."""
+    if _blocked := require_admin():
+        return _blocked
+    user = _get_user_db().get_user(user_id)
+    if user is None or user.get("deleted"):
+        return jsonify({"error": "User not found"}), 404
+    return jsonify(_storage_quota_payload(user_id)), 200
+
+
+@app.route("/compute/api/auth/admin/users/<int:user_id>/storage-quota", methods=["PUT"])
+@login_required
+def admin_set_user_storage_quota(user_id: int):
+    """Set one existing user's durable-storage quota policy.
+
+    ``state`` is one of ``limited`` (with a non-negative ``limit_bytes``),
+    ``unlimited``, or ``inherit`` (remove the override and let the deployment
+    default apply).  A request that does not name exactly one of those decisions
+    is refused with a bounded message; an unknown ``state`` is a 400 rather than
+    a 409 because the request names no decision the server could have made.
+    """
+    if _blocked := require_admin():
+        return _blocked
+    if _blocked := require_bearer_auth():
+        return _blocked
+    user = _get_user_db().get_user(user_id)
+    if user is None or user.get("deleted"):
+        return jsonify({"error": "User not found"}), 404
+    req = _parse_body(StorageQuotaRequest)
+    if isinstance(req, tuple):
+        return req
+    try:
+        policy = parse_quota_input(req.state, req.limit_bytes)
+    except ResourceValidationError as exc:
+        return jsonify({"error": str(exc)}), 400
+    try:
+        entry = task_store.set_storage_quota(
+            user_id=user_id,
+            state=policy.state.value,
+            limit_bytes=policy.limit_bytes,
+            actor_user_id=int(g.current_user["id"]),
+            reason=req.reason,
+            idempotency_key=req.idempotency_key,
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 409
+    emit_event(
+        "resource.policy.adjusted",
+        user_id=user_id,
+        reason_code=LedgerReason.ALLOWANCE_SET.value,
+        state=policy.state.value,
+    )
+    return jsonify({"entry_id": entry["id"], "storage_quota": _storage_quota_payload(user_id)}), 200
 
 
 @app.route("/compute/api/auth/admin/users/<int:user_id>/gpu-credit/allowance", methods=["PUT"])

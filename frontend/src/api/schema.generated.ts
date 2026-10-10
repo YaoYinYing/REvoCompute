@@ -509,6 +509,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/compute/api/auth/admin/users/{user_id}/storage-quota": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get one user's effective durable-storage quota
+         * @description The ceiling admission applies to this subject, and which of the three decisions produced it. A ceiling of 0 is a real ceiling of zero bytes; state "inherit" means no per-user override exists and the deployment default applies.
+         */
+        get: operations["adminGetUserStorageQuota"];
+        /**
+         * Set one user's durable-storage quota policy
+         * @description A policy change, not an accounting one: it changes what the subject may retain and never what they already hold. "limited" names a non-negative limit_bytes, "unlimited" grants no ceiling, and "inherit" removes the override so the deployment default applies again. No resource_ledger row is appended and logical_owned_bytes is unchanged.
+         */
+        put: operations["adminSetUserStorageQuota"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/compute/api/gpu-credit": {
         parameters: {
             query?: never;
@@ -2897,7 +2921,34 @@ export interface components {
             /** @description False when an idempotent replay returned the existing job. */
             accepted: boolean;
         };
-        /** @description The bound applied to one report page. ``limit`` is the effective page size after clamping; an over-large request is clamped and says so rather than being refused. */
+        /** @description The effective durable-storage entitlement of one subject, exactly as admission reads it. soft_limit_bytes is the effective ceiling and is null when there is no ceiling; a ceiling of 0 is a real ceiling of zero bytes and is never a spelling of unlimited. */
+        StorageQuotaEntitlement: {
+            /** @enum {string} */
+            subject_type: "user";
+            subject_id: number;
+            /**
+             * @description Which decision is in force: an explicit ceiling, an explicit grant of no ceiling, or no per-user override (the deployment default applies).
+             * @enum {string}
+             */
+            state: "limited" | "unlimited" | "inherit";
+            soft_limit_bytes: number | null;
+            logical_owned_bytes: number;
+            remaining_bytes: number | null;
+            over_soft_limit: boolean;
+        };
+        /** @description One durable-storage quota change. The three decisions must not collapse into one another: limited names limit_bytes, unlimited and inherit name none. A request that carries a number where the decision takes none, or omits one where it is required, is refused. */
+        StorageQuotaUpdateRequest: {
+            /** @enum {string} */
+            state: "limited" | "unlimited" | "inherit";
+            limit_bytes?: number | null;
+            reason: string;
+            idempotency_key: string;
+        };
+        StorageQuotaMutationResult: {
+            entry_id: number;
+            storage_quota: components["schemas"]["StorageQuotaEntitlement"];
+        };
+        /** @description The bound applied to one report page. limit is the effective page size after clamping; an over-large request is clamped and says so rather than being refused. */
         AdminReportWindow: {
             limit: number;
             limit_ceiling: number;
@@ -3817,6 +3868,68 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+        };
+    };
+    adminGetUserStorageQuota: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: components["parameters"]["UserId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The effective durable-storage entitlement */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StorageQuotaEntitlement"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    adminSetUserStorageQuota: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: components["parameters"]["UserId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StorageQuotaUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description The resulting effective durable-storage entitlement */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StorageQuotaMutationResult"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            /** @description The idempotency key was already used for a different storage-quota change */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     getCurrentGpuCredit: {
