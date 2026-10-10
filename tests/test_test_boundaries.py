@@ -36,6 +36,8 @@ def test_frontend_fixture_package_is_one_source_of_the_authentic_inventory() -> 
     'import frontend_fixtures as fixtures\nfixtures.pssm_gremlin_scenario()',
     'from frontend_fixtures import gremlin_lh_runner as runner\nrunner()',
     'import frontend_fixtures\nscenario = getattr(frontend_fixtures, "pssm_gremlin_scenario")()',
+    'from frontend_fixtures.scenarios import pssm_gremlin_scenario\npssm_gremlin_scenario()',
+    'from frontend_fixtures.scenarios import pssm_gremlin_scenario as scenario\nscenario()',
 ])
 def test_a_generic_test_cannot_reach_an_authentic_scenario(use: str) -> None:
     assert checker.inspect_authentic_scenario_references(use, "tests/test_frontend_fixture_harness.py", AUTHENTIC)
@@ -61,6 +63,7 @@ def test_the_same_use_at_the_fleet_boundary_is_not_flagged(tmp_path: Path, monke
 def test_a_generic_scenario_helper_stays_usable_from_a_generic_test() -> None:
     source = (
         "from frontend_fixtures import controlled_scenario, controlled_runner, mount_scenario, structure_scenario\n"
+        "from frontend_fixtures.scenarios import controlled_scenario as reused\n"
         "mount_scenario(page, controlled_scenario())\n"
         "mount_scenario(page, structure_scenario())\n"
         "import frontend_fixtures\nfrontend_fixtures.runner_scenario(controlled_runner())\n"

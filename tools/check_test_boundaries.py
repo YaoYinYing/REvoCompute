@@ -177,9 +177,11 @@ def inspect_authentic_scenario_references(source: str, path: str, authentic: fro
 
     The helper package and the fleet boundary are the only legitimate consumers
     (both are excluded before this runs), so every other module under ``tests/``
-    that imports or names an authentic symbol is a violation. Import aliasing is
-    normalized, so ``from frontend_fixtures import pssm_gremlin_scenario as
-    scenario`` still names the authentic helper.
+    that imports or names an authentic symbol is a violation. The package and any
+    of its submodules count, so ``from frontend_fixtures.scenarios import
+    pssm_gremlin_scenario`` is caught too. Import aliasing is normalized, so
+    ``from frontend_fixtures import pssm_gremlin_scenario as scenario`` still
+    names the authentic helper.
     """
     if not authentic:
         return []
@@ -192,7 +194,9 @@ def inspect_authentic_scenario_references(source: str, path: str, authentic: fro
                 if alias.name == FIXTURE_NAMESPACE or alias.name.startswith(FIXTURE_NAMESPACE + "."):
                     bound[alias.asname or alias.name] = alias.name
         elif isinstance(node, ast.ImportFrom):
-            if node.module != FIXTURE_NAMESPACE:
+            if not node.module or not (
+                node.module == FIXTURE_NAMESPACE or node.module.startswith(FIXTURE_NAMESPACE + ".")
+            ):
                 continue
             for alias in node.names:
                 bound[alias.asname or alias.name] = alias.name
