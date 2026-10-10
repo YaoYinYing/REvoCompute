@@ -186,7 +186,7 @@ class _VerifiedFile:
     size: int
 
 
-def _open_published_regular_file(path: str) -> bool:
+def published_regular_file(path: str) -> bool:
     """Whether *path* is an ordinary private regular file, opened and closed here.
 
     The cached-artifact check: a byte on disk at a canonical name is not evidence

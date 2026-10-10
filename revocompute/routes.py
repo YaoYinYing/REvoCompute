@@ -2457,13 +2457,18 @@ def _cached_archive_path(task: dict[str, Any]) -> str | None:
     rather than handed to a later pathname open -- the archive cache is inside the
     runner-writable results tree, so "the bytes are there" is not evidence.
     """
-    from revocompute.storage import _open_published_regular_file
+    from revocompute.storage import published_regular_file
 
     try:
         archive = _task_zip_path(task)
     except (OSError, ValueError):
         return None
-    return archive if _open_published_regular_file(archive) else None
+    try:
+        return archive if published_regular_file(archive) else None
+    except OSError:
+        # The archive name is derived from the task's own id, so anything the
+        # filesystem refuses there is simply "no cached archive".
+        return None
 
 
 @app.route("/compute/api/results/<md5sum>/storyboard/<path:asset>", methods=["GET"])

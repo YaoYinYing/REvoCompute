@@ -1420,7 +1420,15 @@ def _finalize_results_manifest(
     # directory replaced by a symlink cannot redirect publication outside the
     # tree, and a logical name the manifest records is one the canonical reader
     # resolves the same way.
-    walker = _ResultTreeWalker(result_dir)
+    # The tree may have been replaced by a purge while this worker was finishing
+    # (the lifecycle guard above raced it, which that check is written to admit).
+    # The walker refuses a result root that is not there rather than raising out
+    # of publication, so the publishing worker settles the Task instead of
+    # leaving it for orphan recovery to re-run a finished computation.
+    try:
+        walker = _ResultTreeWalker(result_dir)
+    except FileNotFoundError:
+        raise DataPurgedError(str(task["md5sum"])) from None
     try:
         for relative_parts, directory_fd, filename in walker.walk():
             if publication_capacity_guard:
