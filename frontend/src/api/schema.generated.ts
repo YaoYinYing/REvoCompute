@@ -1513,6 +1513,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/compute/api/auth/admin/placement/explain/{task_type}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Explain where a task type's stages would be placed
+         * @description A read-only dry run over the canonical planning path: for each profile of a task type, the execution class it would resolve to today, the bounded reason, and the policy revision the resolution read. It never submits and never mutates state, and an impossible request is reported as its bounded reason rather than as an exception.
+         */
+        get: operations["adminExplainPlacement"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/compute/api/auth/admin/reports/tasks": {
         parameters: {
             query?: never;
@@ -2159,11 +2179,13 @@ export interface components {
             usage_complete: boolean;
             evidence_sources: string[];
         };
-        /** @description Logical user-owned durable bytes, tracked separately from physical filesystem capacity. A successful computation that crosses soft_limit_bytes keeps its result; only later admission is restricted. */
+        /** @description Logical user-owned durable bytes, tracked separately from physical filesystem capacity. A successful computation that crosses soft_limit_bytes keeps its result; only later admission is restricted. soft_limit_bytes is null when no ceiling applies, which is not the same fact as a ceiling of zero bytes. */
         StorageEntitlement: {
             logical_owned_bytes: number;
+            /** @description The effective ceiling in bytes, or null when there is no ceiling. */
             soft_limit_bytes: number | null;
             remaining_bytes: number | null;
+            /** @description False when no ceiling applies, because over is undefined without one. */
             over_soft_limit: boolean;
         };
         /** @description The canonical per-subject resource position that downstream consumers project. */
@@ -2977,6 +2999,53 @@ export interface components {
             reason: string | null;
             policy_revision: string | null;
         };
+        /** @description The semantic accelerator a stage declares: a hardware-class token plus an optional device count. A null class means any accelerator class this deployment offers, and an absent count means the declaration does not constrain how many devices are allocated. */
+        AcceleratorRequirement: {
+            /** @description Device-class token such as a100, never a queue or host name; null means any accelerator class. */
+            class: string | null;
+            count?: number;
+        };
+        /** @description The frozen resource snapshot a submission records and the worker validates. It is the scheduler request itself, reported verbatim beside the decision derived from it rather than duplicated inside the decision. */
+        ResolvedResources: {
+            cpus: number;
+            memory: string;
+            max_runtime_seconds: number;
+            /** @description The scheduler spelling of max_runtime_seconds. */
+            slurm_time: string;
+            partition: string | null;
+            gres: string | null;
+            nodes: number;
+            ntasks: number;
+            qos: string | null;
+            account: string | null;
+            constraint: string | null;
+            exclusive: boolean;
+            requires_gpu: boolean;
+        };
+        /** @description One chosen placement: what was requested, against which policy revision, and the bounded reason. The resolved snapshot is reported beside the decision rather than recomputed into it. */
+        PlacementDecision: {
+            /** @description Workflow stage name; null for the primary profile. */
+            stage: string | null;
+            requires_accelerator: boolean;
+            accelerator_requirement: null | components["schemas"]["AcceleratorRequirement"];
+            execution_class: components["schemas"]["ExecutionClass"];
+            policy_revision: string;
+            /** @description Bounded, machine-readable reason for the choice. */
+            reason_code: string;
+            reason: string;
+            resources: components["schemas"]["ResolvedResources"];
+            resource_sources: {
+                [key: string]: string;
+            };
+        };
+        /** @description The placement a task type's profiles would receive today, or the bounded reason the request cannot be placed. placeable false always carries a bounded reason_code and an empty decisions list. */
+        AdminPlacementExplanation: {
+            task_type: string;
+            placeable: boolean;
+            reason_code: string | null;
+            reason: string | null;
+            decisions: components["schemas"]["PlacementDecision"][];
+        };
         AdminTaskEntry: {
             task_id: string;
             task_type: string | null;
@@ -3010,33 +3079,55 @@ export interface components {
             queue_latency: components["schemas"]["AdminMeasurementSummary"];
             generated_at: number;
         };
+        /** @description One subject in the bounded deployment roll, summed with the canonical ledger arithmetic so the roll reports the same facts the per-subject view does. */
         AdminSubjectResourceEntry: {
-            user_id: number;
-            username?: string | null;
-            cpu: {
+            subject_id: number;
+            used_gpu_seconds: number;
+            used_cpu_core_seconds: number;
+            logical_owned_bytes: number;
+            units_measured: string[];
+        };
+        /** @description One subject's complete resource position, projected from canonical reads: the canonical envelope, the append-only ledger window behind it, per-class usage, durable storage, and unresolved allocations. A unit with no measured facts reports unknown rather than zero. */
+        AdminResourceSubjectReport: {
+            subject: {
                 [key: string]: unknown;
             };
-            gpu: {
+            period: string;
+            canonical_envelope: components["schemas"]["ResourceEntitlement"];
+            units: {
+                [key: string]: unknown;
+            }[];
+            allocation_facts: {
+                [key: string]: unknown;
+            };
+            class_breakdown: {
                 [key: string]: unknown;
             };
             storage: {
                 [key: string]: unknown;
             };
-        } & {
-            [key: string]: unknown;
+            ledger: {
+                [key: string]: unknown;
+            };
+            durable_data: {
+                [key: string]: unknown;
+            };
         };
-        AdminResourceReport: {
-            /** @enum {string} */
-            scope: "deployment" | "subject";
+        /** @description A bounded roll over the subjects this deployment has recorded facts for, each summed with the canonical ledger arithmetic. */
+        AdminResourceDeploymentReport: {
             subjects: components["schemas"]["AdminSubjectResourceEntry"][];
             window: {
                 [key: string]: unknown;
             };
-            limit_ceiling: number;
             generated_at: number;
-        } & {
-            [key: string]: unknown;
         };
+        /** @description Per-subject resource operations. With a subject in scope the body is that subject's full position; without one it is a bounded deployment roll. The limit ceiling is reported at the top level beside the scope, not inside a nested window. */
+        AdminResourceReport: {
+            /** @enum {string} */
+            scope: "deployment" | "subject";
+            limit_ceiling: number;
+            limit?: number;
+        } & (components["schemas"]["AdminResourceSubjectReport"] | components["schemas"]["AdminResourceDeploymentReport"]);
         /** @description Detected drift, unresolved evidence, Runner readiness, and Operator Job state. There is deliberately no aggregate health score. */
         AdminIntegrityReport: {
             state: string;
@@ -5718,6 +5809,32 @@ export interface operations {
                 };
                 content?: never;
             };
+        };
+    };
+    adminExplainPlacement: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @example gremlin */
+                name: components["parameters"]["TaskTypeName"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The placement each profile would receive, and why */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminPlacementExplanation"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
         };
     };
     adminReportTasks: {

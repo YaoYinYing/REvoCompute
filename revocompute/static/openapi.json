@@ -19,7 +19,8 @@
     {"name": "Task types"},
     {"name": "Tasks"},
     {"name": "Results"},
-    {"name": "Runner fleet", "description": "Admin-only Runner fleet readiness, typed operator planning, and Operator Jobs."}
+    {"name": "Runner fleet", "description": "Admin-only Runner fleet readiness, typed operator planning, and Operator Jobs."},
+    {"name": "Administration reports", "description": "Bounded, read-only Admin reports over facts the canonical stores already own, and the placement dry run. Every unknown is reported as unknown rather than as zero."}
   ],
   "paths": {
     "/openapi.json": {
@@ -1266,6 +1267,25 @@
         }
       }
     },
+    "/compute/api/auth/admin/placement/explain/{task_type}": {
+      "get": {
+        "tags": ["Administration reports"],
+        "summary": "Explain where a task type's stages would be placed",
+        "description": "A read-only dry run over the canonical planning path: for each profile of a task type, the execution class it would resolve to today, the bounded reason, and the policy revision the resolution read. It never submits and never mutates state, and an impossible request is reported as its bounded reason rather than as an exception.",
+        "operationId": "adminExplainPlacement",
+        "security": [{"bearerAuth": []}],
+        "parameters": [{"$ref": "#/components/parameters/TaskTypeName"}],
+        "responses": {
+          "200": {
+            "description": "The placement each profile would receive, and why",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AdminPlacementExplanation"}}}
+          },
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"}
+        }
+      }
+    },
     "/compute/api/auth/admin/reports/tasks": {
       "get": {
         "tags": ["Administration reports"],
@@ -1864,13 +1884,13 @@
       },
       "StorageEntitlement": {
         "type": "object",
-        "description": "Logical user-owned durable bytes, tracked separately from physical filesystem capacity. A successful computation that crosses soft_limit_bytes keeps its result; only later admission is restricted.",
+        "description": "Logical user-owned durable bytes, tracked separately from physical filesystem capacity. A successful computation that crosses soft_limit_bytes keeps its result; only later admission is restricted. soft_limit_bytes is null when no ceiling applies, which is not the same fact as a ceiling of zero bytes.",
         "required": ["logical_owned_bytes", "soft_limit_bytes", "remaining_bytes", "over_soft_limit"],
         "properties": {
           "logical_owned_bytes": {"type": "integer", "minimum": 0},
-          "soft_limit_bytes": {"type": ["integer", "null"]},
+          "soft_limit_bytes": {"type": ["integer", "null"], "minimum": 0, "description": "The effective ceiling in bytes, or null when there is no ceiling."},
           "remaining_bytes": {"type": ["integer", "null"]},
-          "over_soft_limit": {"type": "boolean"}
+          "over_soft_limit": {"type": "boolean", "description": "False when no ceiling applies, because over is undefined without one."}
         },
         "additionalProperties": false
       },
@@ -3018,6 +3038,67 @@
       },
       "additionalProperties": false
     },
+    "AcceleratorRequirement": {
+      "type": "object",
+      "description": "The semantic accelerator a stage declares: a hardware-class token plus an optional device count. A null class means any accelerator class this deployment offers, and an absent count means the declaration does not constrain how many devices are allocated.",
+      "required": ["class"],
+      "properties": {
+        "class": {"type": ["string", "null"], "description": "Device-class token such as a100, never a queue or host name; null means any accelerator class."},
+        "count": {"type": "integer", "minimum": 1}
+      },
+      "additionalProperties": false
+    },
+    "ResolvedResources": {
+      "type": "object",
+      "description": "The frozen resource snapshot a submission records and the worker validates. It is the scheduler request itself, reported verbatim beside the decision derived from it rather than duplicated inside the decision.",
+      "required": ["cpus", "memory", "max_runtime_seconds", "slurm_time", "partition", "gres", "nodes", "ntasks", "qos", "account", "constraint", "exclusive", "requires_gpu"],
+      "properties": {
+        "cpus": {"type": "integer", "minimum": 1},
+        "memory": {"type": "string"},
+        "max_runtime_seconds": {"type": "integer", "minimum": 1},
+        "slurm_time": {"type": "string", "description": "The scheduler spelling of max_runtime_seconds."},
+        "partition": {"type": ["string", "null"]},
+        "gres": {"type": ["string", "null"]},
+        "nodes": {"type": "integer", "minimum": 1},
+        "ntasks": {"type": "integer", "minimum": 1},
+        "qos": {"type": ["string", "null"]},
+        "account": {"type": ["string", "null"]},
+        "constraint": {"type": ["string", "null"]},
+        "exclusive": {"type": "boolean"},
+        "requires_gpu": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+    "PlacementDecision": {
+      "type": "object",
+      "description": "One chosen placement: what was requested, against which policy revision, and the bounded reason. The resolved snapshot is reported beside the decision rather than recomputed into it.",
+      "required": ["stage", "requires_accelerator", "accelerator_requirement", "execution_class", "policy_revision", "reason_code", "reason", "resources", "resource_sources"],
+      "properties": {
+        "stage": {"type": ["string", "null"], "description": "Workflow stage name; null for the primary profile."},
+        "requires_accelerator": {"type": "boolean"},
+        "accelerator_requirement": {"oneOf": [{"type": "null"}, {"$ref": "#/components/schemas/AcceleratorRequirement"}]},
+        "execution_class": {"$ref": "#/components/schemas/ExecutionClass"},
+        "policy_revision": {"type": "string"},
+        "reason_code": {"type": "string", "description": "Bounded, machine-readable reason for the choice."},
+        "reason": {"type": "string"},
+        "resources": {"$ref": "#/components/schemas/ResolvedResources"},
+        "resource_sources": {"type": "object", "additionalProperties": {"type": "string"}}
+      },
+      "additionalProperties": false
+    },
+    "AdminPlacementExplanation": {
+      "type": "object",
+      "description": "The placement a task type's profiles would receive today, or the bounded reason the request cannot be placed. placeable false always carries a bounded reason_code and an empty decisions list.",
+      "required": ["task_type", "placeable", "reason_code", "reason", "decisions"],
+      "properties": {
+        "task_type": {"type": "string"},
+        "placeable": {"type": "boolean"},
+        "reason_code": {"type": ["string", "null"]},
+        "reason": {"type": ["string", "null"]},
+        "decisions": {"type": "array", "items": {"$ref": "#/components/schemas/PlacementDecision"}}
+      },
+      "additionalProperties": false
+    },
     "AdminTaskEntry": {
       "type": "object",
       "required": ["task_id", "task_type", "status", "terminal", "owner", "submitted_at", "placement", "placements"],
@@ -3057,27 +3138,58 @@
     },
     "AdminSubjectResourceEntry": {
       "type": "object",
-      "required": ["user_id", "cpu", "gpu", "storage"],
+      "description": "One subject in the bounded deployment roll, summed with the canonical ledger arithmetic so the roll reports the same facts the per-subject view does.",
+      "required": ["subject_id", "used_gpu_seconds", "used_cpu_core_seconds", "logical_owned_bytes", "units_measured"],
       "properties": {
-        "user_id": {"type": "integer"},
-        "username": {"type": ["string", "null"]},
-        "cpu": {"type": "object", "additionalProperties": true},
-        "gpu": {"type": "object", "additionalProperties": true},
-        "storage": {"type": "object", "additionalProperties": true}
+        "subject_id": {"type": "integer", "minimum": 1},
+        "used_gpu_seconds": {"type": "integer"},
+        "used_cpu_core_seconds": {"type": "integer"},
+        "logical_owned_bytes": {"type": "integer", "minimum": 0},
+        "units_measured": {"type": "array", "items": {"type": "string"}}
       },
-      "additionalProperties": true
+      "additionalProperties": false
+    },
+    "AdminResourceSubjectReport": {
+      "type": "object",
+      "description": "One subject's complete resource position, projected from canonical reads: the canonical envelope, the append-only ledger window behind it, per-class usage, durable storage, and unresolved allocations. A unit with no measured facts reports unknown rather than zero.",
+      "required": ["subject", "period", "canonical_envelope", "units", "allocation_facts", "class_breakdown", "storage", "ledger", "durable_data"],
+      "properties": {
+        "subject": {"type": "object", "additionalProperties": true},
+        "period": {"type": "string"},
+        "canonical_envelope": {"$ref": "#/components/schemas/ResourceEntitlement"},
+        "units": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
+        "allocation_facts": {"type": "object", "additionalProperties": true},
+        "class_breakdown": {"type": "object", "additionalProperties": true},
+        "storage": {"type": "object", "additionalProperties": true},
+        "ledger": {"type": "object", "additionalProperties": true},
+        "durable_data": {"type": "object", "additionalProperties": true}
+      },
+      "additionalProperties": false
+    },
+    "AdminResourceDeploymentReport": {
+      "type": "object",
+      "description": "A bounded roll over the subjects this deployment has recorded facts for, each summed with the canonical ledger arithmetic.",
+      "required": ["subjects", "window", "generated_at"],
+      "properties": {
+        "subjects": {"type": "array", "items": {"$ref": "#/components/schemas/AdminSubjectResourceEntry"}},
+        "window": {"type": "object", "additionalProperties": true},
+        "generated_at": {"type": "number"}
+      },
+      "additionalProperties": false
     },
     "AdminResourceReport": {
       "type": "object",
-      "required": ["scope", "subjects", "window", "limit_ceiling", "generated_at"],
+      "description": "Per-subject resource operations. With a subject in scope the body is that subject's full position; without one it is a bounded deployment roll. The limit ceiling is reported at the top level beside the scope, not inside a nested window.",
+      "required": ["scope", "limit_ceiling"],
       "properties": {
         "scope": {"type": "string", "enum": ["deployment", "subject"]},
-        "subjects": {"type": "array", "items": {"$ref": "#/components/schemas/AdminSubjectResourceEntry"}},
-        "window": {"type": "object", "additionalProperties": true},
         "limit_ceiling": {"type": "integer", "minimum": 1},
-        "generated_at": {"type": "number"}
+        "limit": {"type": "integer", "minimum": 1}
       },
-      "additionalProperties": true
+      "oneOf": [
+        {"$ref": "#/components/schemas/AdminResourceSubjectReport"},
+        {"$ref": "#/components/schemas/AdminResourceDeploymentReport"}
+      ]
     },
     "AdminIntegrityReport": {
       "type": "object",

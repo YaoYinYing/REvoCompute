@@ -136,6 +136,7 @@ def test_public_openapi_exposes_the_client_contract(monkeypatch, tmp_path):
         "/compute/api/auth/admin/reports/resources": {"get"},
         "/compute/api/auth/admin/reports/integrity": {"get"},
         "/compute/api/auth/admin/reports/activity": {"get"},
+        "/compute/api/auth/admin/placement/explain/{task_type}": {"get"},
         "/compute/api/tools": {"get"},
         "/compute/api/tools/{name}": {"get"},
         "/compute/api/tool-parameters/{tool_type}": {"get"},
