@@ -13,9 +13,12 @@ served unbounded.
 
 from __future__ import annotations
 
+import io
 import json
+from types import SimpleNamespace
 
 from conftest import _admin_client_auth, _load_pssm_module, _test_client_auth
+from jsonschema import Draft202012Validator
 
 REPORT_PATHS = (
     "/compute/api/auth/admin/reports/tasks",
@@ -23,6 +26,21 @@ REPORT_PATHS = (
     "/compute/api/auth/admin/reports/integrity",
     "/compute/api/auth/admin/reports/activity",
 )
+
+
+def _assert_matches_openapi(spec, schema_name, payload):
+    """The published contract must accept the body the handler actually served.
+
+    The generated TypeScript types are lenient about pre-existing differences, so
+    they cannot catch a schema that rejects every real response.  Validating the
+    served body against the server's own component is what keeps the single
+    server-owned contract true of what goes on the wire.
+    """
+    validator = Draft202012Validator(
+        {"$ref": f"#/components/schemas/{schema_name}", "components": spec["components"]}
+    )
+    errors = list(validator.iter_errors(payload))
+    assert not errors, [error.message for error in errors]
 
 
 def _module(monkeypatch, tmp_path):
@@ -74,6 +92,15 @@ def test_an_over_large_report_limit_is_clamped_to_the_ceiling_and_labelled(monke
     assert not_a_number.status_code == 400
     assert "limit" in not_a_number.get_json()["error"]
 
+    # ``str.isdigit()`` accepts digits outside ASCII that ``int()`` rejects: the
+    # page-size contract must answer those with its own bounded refusal rather
+    # than letting the conversion raise.
+    for raw in ("²", "①", "٥", "0" * 4000):
+        lookalike = client.get(f"{REPORT_PATHS[0]}?limit={raw}", headers=admin)
+        assert lookalike.status_code in (400, 200), raw
+        if lookalike.status_code == 400:
+            assert "limit" in lookalike.get_json()["error"], raw
+
 
 def test_a_malformed_report_filter_is_refused_with_a_bounded_error(monkeypatch, tmp_path):
     module = _module(monkeypatch, tmp_path)
@@ -85,6 +112,12 @@ def test_a_malformed_report_filter_is_refused_with_a_bounded_error(monkeypatch, 
 
     bad_since = client.get(f"{REPORT_PATHS[3]}?since=whenever", headers=admin)
     assert bad_since.status_code == 400
+
+    # A non-finite timestamp cannot be serialized as standard JSON, so a body that
+    # carried it would be a 200 no client could parse.
+    for raw in ("NaN", "Infinity", "1e400"):
+        nonfinite = client.get(f"{REPORT_PATHS[3]}?since={raw}", headers=admin)
+        assert nonfinite.status_code == 400, raw
 
 
 def test_a_non_admin_cannot_read_another_subjects_canonical_projection(monkeypatch, tmp_path):
@@ -109,10 +142,6 @@ def test_the_task_report_reads_the_recorded_decision_rather_than_a_recomputation
     recorded, which is the property an operator relies on when asking why a Task
     is on a queue.
     """
-    import io
-
-    from types import SimpleNamespace
-
     module = _module(monkeypatch, tmp_path)
     monkeypatch.setattr(
         module.run_compute_task,
@@ -147,3 +176,34 @@ def test_the_task_report_reads_the_recorded_decision_rather_than_a_recomputation
     )
     assert entry["placement"]["execution_class_id"] == expected_id
     assert entry["placement"]["policy_revision"] == recorded["policy_revision"]
+
+
+def test_every_report_body_matches_the_server_owned_schema(monkeypatch, tmp_path):
+    """Each report the server serves validates against its own published schema.
+
+    The Admin read model is projected through the API, and the API's single source
+    of truth for a response shape is ``openapi.json`` — which the frontend also
+    generates its types from.  A schema that rejects the body the handler actually
+    serves is a contract defect whether or not a lenient type generator hides it,
+    so the served bodies are validated against the components verbatim, in both
+    the deployment-scope and subject-scope shapes the resource report can take.
+    """
+    module = _module(monkeypatch, tmp_path)
+    client = module.app.test_client()
+    admin = _admin_client_auth(module)
+    spec = client.get("/openapi.json").get_json()
+
+    roll = client.get(REPORT_PATHS[1], headers=admin).get_json()
+    _assert_matches_openapi(spec, "AdminResourceReport", roll)
+    assert roll["scope"] == "deployment"
+
+    subject = client.get(f"{REPORT_PATHS[1]}?subject=1", headers=admin).get_json()
+    _assert_matches_openapi(spec, "AdminResourceReport", subject)
+    assert subject["scope"] == "subject"
+
+    for path, schema in (
+        (REPORT_PATHS[0], "AdminTaskReport"),
+        (REPORT_PATHS[2], "AdminIntegrityReport"),
+        (REPORT_PATHS[3], "AdminActivityReport"),
+    ):
+        _assert_matches_openapi(spec, schema, client.get(path, headers=admin).get_json())

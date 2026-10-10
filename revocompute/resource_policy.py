@@ -179,7 +179,16 @@ def normalize_resource_value(field: str, value: Any) -> Any:
         entries = value if isinstance(value, (list, tuple)) else str(value).split(";")
         declared = []
         for item in entries:
-            entry = item.strip() if isinstance(item, str) else None
+            # Only a string spells ``key=queue``.  A non-string here is a shape
+            # this field does not accept — a nested list, a number, an object —
+            # and skipping it would silently normalize the malformed value to the
+            # *empty* map, erasing a configured class map rather than refusing it.
+            if not isinstance(item, str):
+                raise ResourceValidationError(
+                    "slurm_execution_classes entries must be strings like cpu=normal, "
+                    "or a sequence of (key, queue) pairs"
+                )
+            entry = item.strip()
             if not entry:
                 continue
             match = _CLASS_ENTRY_RE.fullmatch(entry)

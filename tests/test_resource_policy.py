@@ -89,6 +89,27 @@ def test_invalid_resource_values_fail_closed(field, value):
         normalize_resource_value(field, value)
 
 
+@pytest.mark.parametrize(
+    "value",
+    [
+        [["cpu", "normal"], ["a100"]],
+        [1, 2],
+        [["a", "b", "c"]],
+        ["cpu=normal", 5],
+    ],
+)
+def test_a_malformed_execution_class_map_is_refused_rather_than_emptied(value):
+    """A shape this field does not accept must fail, not normalize to empty.
+
+    The normalizer is shared by the reader and the writer, and an entry it cannot
+    read is a mistake in the caller's value: silently dropping the unreadable
+    entries would normalize the whole map to the empty string, which -- persisted --
+    erases a configured class map and strands every accelerator type.
+    """
+    with pytest.raises(ResourceValidationError):
+        normalize_resource_value("slurm_execution_classes", value)
+
+
 def test_slurm_constraint_expressions_are_preserved_without_whitespace_or_options():
     assert normalize_resource_value("slurm_constraint", "[a100|h100]&nvlink") == "[a100|h100]&nvlink"
     with pytest.raises(ResourceValidationError):

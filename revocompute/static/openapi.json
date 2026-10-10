@@ -3151,9 +3151,12 @@
     },
     "AdminResourceSubjectReport": {
       "type": "object",
-      "description": "One subject's complete resource position, projected from canonical reads: the canonical envelope, the append-only ledger window behind it, per-class usage, durable storage, and unresolved allocations. A unit with no measured facts reports unknown rather than zero.",
-      "required": ["subject", "period", "canonical_envelope", "units", "allocation_facts", "class_breakdown", "storage", "ledger", "durable_data"],
+      "description": "One subject's complete resource position, projected from canonical reads: the canonical envelope, the append-only ledger window behind it, per-class usage, durable storage, and unresolved allocations. A unit with no measured facts reports unknown rather than zero. The scope, the limit ceiling, and the requested page size are served beside the position, so one body fully describes which subject it is and how far its window reaches.",
+      "required": ["scope", "limit_ceiling", "limit", "subject", "period", "canonical_envelope", "units", "allocation_facts", "class_breakdown", "storage", "ledger", "durable_data"],
       "properties": {
+        "scope": {"type": "string", "enum": ["subject"]},
+        "limit_ceiling": {"type": "integer", "minimum": 1},
+        "limit": {"type": "integer", "minimum": 1},
         "subject": {"type": "object", "additionalProperties": true},
         "period": {"type": "string"},
         "canonical_envelope": {"$ref": "#/components/schemas/ResourceEntitlement"},
@@ -3168,9 +3171,11 @@
     },
     "AdminResourceDeploymentReport": {
       "type": "object",
-      "description": "A bounded roll over the subjects this deployment has recorded facts for, each summed with the canonical ledger arithmetic.",
-      "required": ["subjects", "window", "generated_at"],
+      "description": "A bounded roll over the subjects this deployment has recorded facts for, each summed with the canonical ledger arithmetic. The scope and the limit ceiling are served beside the roll; the per-subject window and the count it was cut at are reported in `window`, since the roll never carries a single page size of its own.",
+      "required": ["scope", "limit_ceiling", "subjects", "window", "generated_at"],
       "properties": {
+        "scope": {"type": "string", "enum": ["deployment"]},
+        "limit_ceiling": {"type": "integer", "minimum": 1},
         "subjects": {"type": "array", "items": {"$ref": "#/components/schemas/AdminSubjectResourceEntry"}},
         "window": {"type": "object", "additionalProperties": true},
         "generated_at": {"type": "number"}
@@ -3180,12 +3185,6 @@
     "AdminResourceReport": {
       "type": "object",
       "description": "Per-subject resource operations. With a subject in scope the body is that subject's full position; without one it is a bounded deployment roll. The limit ceiling is reported at the top level beside the scope, not inside a nested window.",
-      "required": ["scope", "limit_ceiling"],
-      "properties": {
-        "scope": {"type": "string", "enum": ["deployment", "subject"]},
-        "limit_ceiling": {"type": "integer", "minimum": 1},
-        "limit": {"type": "integer", "minimum": 1}
-      },
       "oneOf": [
         {"$ref": "#/components/schemas/AdminResourceSubjectReport"},
         {"$ref": "#/components/schemas/AdminResourceDeploymentReport"}

@@ -3087,8 +3087,12 @@ export interface components {
             logical_owned_bytes: number;
             units_measured: string[];
         };
-        /** @description One subject's complete resource position, projected from canonical reads: the canonical envelope, the append-only ledger window behind it, per-class usage, durable storage, and unresolved allocations. A unit with no measured facts reports unknown rather than zero. */
+        /** @description One subject's complete resource position, projected from canonical reads: the canonical envelope, the append-only ledger window behind it, per-class usage, durable storage, and unresolved allocations. A unit with no measured facts reports unknown rather than zero. The scope, the limit ceiling, and the requested page size are served beside the position, so one body fully describes which subject it is and how far its window reaches. */
         AdminResourceSubjectReport: {
+            /** @enum {string} */
+            scope: "subject";
+            limit_ceiling: number;
+            limit: number;
             subject: {
                 [key: string]: unknown;
             };
@@ -3113,8 +3117,11 @@ export interface components {
                 [key: string]: unknown;
             };
         };
-        /** @description A bounded roll over the subjects this deployment has recorded facts for, each summed with the canonical ledger arithmetic. */
+        /** @description A bounded roll over the subjects this deployment has recorded facts for, each summed with the canonical ledger arithmetic. The scope and the limit ceiling are served beside the roll; the per-subject window and the count it was cut at are reported in `window`, since the roll never carries a single page size of its own. */
         AdminResourceDeploymentReport: {
+            /** @enum {string} */
+            scope: "deployment";
+            limit_ceiling: number;
             subjects: components["schemas"]["AdminSubjectResourceEntry"][];
             window: {
                 [key: string]: unknown;
@@ -3122,12 +3129,7 @@ export interface components {
             generated_at: number;
         };
         /** @description Per-subject resource operations. With a subject in scope the body is that subject's full position; without one it is a bounded deployment roll. The limit ceiling is reported at the top level beside the scope, not inside a nested window. */
-        AdminResourceReport: {
-            /** @enum {string} */
-            scope: "deployment" | "subject";
-            limit_ceiling: number;
-            limit?: number;
-        } & (components["schemas"]["AdminResourceSubjectReport"] | components["schemas"]["AdminResourceDeploymentReport"]);
+        AdminResourceReport: components["schemas"]["AdminResourceSubjectReport"] | components["schemas"]["AdminResourceDeploymentReport"];
         /** @description Detected drift, unresolved evidence, Runner readiness, and Operator Job state. There is deliberately no aggregate health score. */
         AdminIntegrityReport: {
             state: string;

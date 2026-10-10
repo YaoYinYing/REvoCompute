@@ -565,6 +565,40 @@ def test_the_deployment_roll_reports_only_subjects_with_measured_facts(store):
     assert report["subjects"][0]["units_measured"]
 
 
+def test_the_deployment_roll_reports_each_subject_the_same_total_its_own_view_does(store):
+    """The roll and the per-subject view cannot disagree about one subject.
+
+    A roll summed over a page of a subject's newest ledger rows would report a
+    *window* of its facts as its total: a heavy month whose usage spills past the
+    page is understated, at whatever period the rows happened to fall in.  Both
+    readers must answer from the same canonical position, so a subject's own view
+    and the deployment roll are one number.
+    """
+    at = time.time()
+    for index in range(14):
+        job = f"{9700 + index}"
+        store.record_allocation_start(
+            user_id=7, task_id=("a" * 31 + str(index % 10)), stage_id="model", slurm_job_id=job,
+            gpu_count=1, cpu_cores=1, started_at=at, gres="gpu:1",
+        )
+        store.settle_allocation_elapsed(job, elapsed_seconds=100, finished_at=at + 100)
+    store.upsert_task(
+        "e" * 31 + "f", filename="input.fasta", file_path="/x", uploaded_at=1_000.0, status="running",
+        is_binary=0, username="user-7", submitted_by_user_id=7, storage_key="user-7", task_type="cpu_runner",
+    )
+
+    own = ar.resource_operations(store, 7)
+    roll = ar.resource_operations(store)
+
+    subject = next(item for item in roll["subjects"] if item["subject_id"] == 7)
+    canonical = next(item for item in own["units"] if item["unit"] == "gpu_second")["canonical"]["used"]
+
+    # 14 settled allocations of one GPU for 100s each: a total well past one page
+    # of ledger rows, which is exactly the case a windowed roll would understate.
+    assert canonical == 1400
+    assert subject["used_gpu_seconds"] == canonical
+
+
 # --------------------------------------------------------------------------- #
 # Platform integrity
 # --------------------------------------------------------------------------- #

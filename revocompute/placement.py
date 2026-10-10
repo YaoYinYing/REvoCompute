@@ -344,12 +344,24 @@ class PlacementDecision:
             raise ResourceValidationError(f"Recorded placement decision is unreadable: {exc}") from exc
         if decision.reason_code not in _PLACEMENT_CODES:
             raise ResourceValidationError(f"Recorded placement reason {decision.reason_code!r} is not bounded")
-        if ExecutionClass.from_resolved(resources).identifier != decision.execution_class.identifier:
+        derived = ExecutionClass.from_resolved(resources)
+        if derived.identifier != decision.execution_class.identifier:
             # The record and the snapshot are two halves of one decision; a
             # disagreement means one of them was edited, and neither is then
             # trustworthy as evidence of what was requested.
             raise ResourceValidationError(
                 "Recorded placement decision does not describe its frozen resource snapshot"
+            )
+        if derived != decision.execution_class:
+            # ``identifier`` names the class an operator reads, and it deliberately
+            # does not carry every scheduler field: QoS, account, constraint, and
+            # exclusivity are real parts of the submitted request, so a record that
+            # edited one of them while leaving the identity intact describes a
+            # request the snapshot did not make.  Compare the whole class, not just
+            # the identity, or a report would serve the edited value as the fact.
+            raise ResourceValidationError(
+                "Recorded placement decision disagrees with its frozen resource snapshot off the "
+                "class identity (qos, account, constraint, or exclusivity)"
             )
         return decision
 

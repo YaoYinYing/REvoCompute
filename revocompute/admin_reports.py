@@ -56,6 +56,7 @@ Three rules hold everywhere below:
 from __future__ import annotations
 
 import json
+import math
 import time
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
@@ -142,13 +143,38 @@ def _bounded_limit(limit: Any) -> int:
 
 
 def parse_limit(raw: Any) -> int:
-    """One requested ``limit`` query value as a page size, or a typed refusal."""
+    """One requested ``limit`` query value as a page size, or a typed refusal.
+
+    ``str.isdigit`` is deliberately not the whole test: it accepts digit
+    characters outside ASCII — including ones ``int()`` then rejects — so a value
+    that satisfied it could reach ``int()`` and raise where this contract promises
+    a typed refusal.  A page size is a run of ASCII digits, and that is the whole
+    test.
+    """
     if raw is None or raw == "":
         return DEFAULT_LIMIT
     text = str(raw).strip()
-    if not text.isdigit():
+    if not text.isascii() or not text.isdigit():
         raise AdminReportError("limit must be a positive integer")
     return _bounded_limit(int(text))
+
+
+def parse_since(raw: Any) -> float | None:
+    """One requested ``since`` query value as a Unix timestamp, or a typed refusal.
+
+    A non-finite value (``NaN``, ``Infinity``, a float that overflowed) is refused
+    rather than accepted: it cannot be serialized as standard JSON, so answering
+    with it would return a 200 whose body no client can parse.
+    """
+    if raw is None:
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        raise AdminReportError("since must be a Unix timestamp") from None
+    if not math.isfinite(value):
+        raise AdminReportError("since must be a finite Unix timestamp")
+    return value
 
 
 def _optional_seconds(value: Any) -> float | None:
@@ -809,25 +835,31 @@ def _canonical_subject_ids(task_store: Any, *, limit: int) -> tuple[list[int], b
 def _resource_operations_fleet(task_store: Any, *, limit: int) -> dict[str, Any]:
     """A bounded roll over the subjects this deployment has real facts for.
 
-    Each subject's usage is summed with the canonical ledger arithmetic over its
-    own rows, so the roll reports the same facts the per-subject view does rather
-    than an average of them.
+    Each subject is summed with the canonical entitlement reader itself — the same
+    one :func:`_resource_operations_for_user` projects — rather than over a page of
+    its ledger rows.  That matters because a subject's newest rows are a *window*
+    of its facts: a roll summed over the ten newest rows would report a fraction
+    of a heavy subject's month as that subject's total, at whichever period the
+    rows happened to fall in, and publish it as the canonical fact.  Reading the
+    canonical position gives every subject the same number its own view reports.
     """
     subject_ids, truncated = _canonical_subject_ids(task_store, limit=limit)
     subjects: list[dict[str, Any]] = []
     for subject_id in subject_ids[:limit]:
-        window = task_store.list_ledger(subject_id, limit=10)
-        measured = _measured_units(window)
+        gpu = task_store.compute_entitlement(subject_id, unit=rloan.UNIT_GPU_SECOND)
+        cpu = task_store.compute_entitlement(subject_id, unit=rloan.UNIT_CPU_CORE_SECOND)
+        storage = task_store.storage_entitlement(subject_id)
+        measured = {entitlement.unit for entitlement in (gpu, cpu) if _entitlement_is_measured(entitlement)}
+        if storage.logical_owned_bytes:
+            measured.add(rloan.UNIT_STORAGE_BYTE)
         if not measured:
             continue
-        gpu = rloan.summarize_ledger(window, unit=rloan.UNIT_GPU_SECOND)
-        cpu = rloan.summarize_ledger(window, unit=rloan.UNIT_CPU_CORE_SECOND)
         subjects.append(
             {
                 "subject_id": subject_id,
-                "used_gpu_seconds": gpu["used"],
-                "used_cpu_core_seconds": cpu["used"],
-                "logical_owned_bytes": task_store.logical_owned_bytes(subject_id),
+                "used_gpu_seconds": gpu.used,
+                "used_cpu_core_seconds": cpu.used,
+                "logical_owned_bytes": storage.logical_owned_bytes,
                 "units_measured": sorted(measured),
             }
         )
@@ -842,6 +874,15 @@ def _resource_operations_fleet(task_store: Any, *, limit: int) -> dict[str, Any]
         },
         "generated_at": time.time(),
     }
+
+
+def _entitlement_is_measured(entitlement: rloan.ComputeEntitlement) -> bool:
+    """Whether one canonical unit entry holds a *measured* fact, not only policy.
+
+    A freshly configured subject has an allowance fact and no usage fact at all:
+    reporting it as measured would name a unit nobody observed anything in.
+    """
+    return bool(entitlement.used or entitlement.reserved or entitlement.unsettled)
 
 
 def resource_operations(

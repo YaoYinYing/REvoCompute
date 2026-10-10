@@ -3720,14 +3720,9 @@ def admin_report_activity():
     context = _admin_reports_context()
     try:
         limit = _bounded_query_limit()
+        since = admin_reports.parse_since(request.args.get("since"))
     except admin_reports.AdminReportError as exc:
         return jsonify({"error": str(exc)}), 400
-    since = request.args.get("since")
-    if since is not None:
-        try:
-            since = float(since)
-        except (TypeError, ValueError):
-            return jsonify({"error": "since must be a Unix timestamp"}), 400
     return jsonify(
         admin_reports.admin_activity(
             context["task_store"],
@@ -5639,26 +5634,41 @@ def _validate_proposed_placement(
     so this check cannot approve a policy the submission path would then reject,
     and it cannot disagree with the decision a Task will record.
 
-    Only the keys the caller actually changed are re-checked, each against its own
-    profile's declared GPU requirement: a value that is valid for an accelerator
-    type can be exactly the one that breaks a CPU type.  An unchanged profile was
-    already placeable, and re-resolving all of them on every edit would make a
-    configuration save fail for a reason the operator did not cause.
+    Which profiles are re-checked is decided by what the *resolver* actually
+    reads, not by which request field happened to name them.  A global edit and a
+    per-Task edit resolve through the same global values, so a change to a global
+    key — most of all ``slurm_execution_classes``, the map most able to leave an
+    accelerator type with nowhere to go — is checked against every configured
+    profile, exactly as a per-Task edit is checked against its own.  A profile the
+    edit cannot reach (a per-Task-only edit re-checked against its own profile,
+    while the global values it also reads are unchanged) was already placeable, so
+    it is left alone rather than failing a save for a reason the operator did not
+    cause.
     """
     from revocompute.task_types import get as get_task_type
 
     effective = dict(manage_db.resource_all())
     effective.update({key: serialize_resource_value(key, value) for key, value in proposed_globals.items()})
-    task_values = {
-        name: {**dict(manage_db.task_type_get(name) or {}), **fields} for name, fields in proposed_tasks.items()
-    }
-    policy = ResourcePolicyValues(effective, task_values)
-    for tool, fields in proposed_tasks.items():
+    # The config rows are the deployment's own profile vocabulary; the registry
+    # says which of them this deployment actually enables and what each requires.
+    # A global edit touches every enabled profile, so every enabled profile is
+    # re-checked; a per-Task edit touches only the named ones.
+    tools = set(proposed_tasks) if proposed_tasks else set()
+    if proposed_globals:
+        tools.update(
+            config["tool"] for config in manage_db.task_type_all() if config.get("enabled", 1)
+        )
+    for tool in sorted(tools):
         try:
             task_type, runner = get_task_type(tool)
         except KeyError:
             continue
-        requires_gpu = bool(fields.get("slurm_gres")) or task_type.gpus
+        # ``task_type_get`` is the persisted per-Task layer the resolver reads;
+        # a per-Task edit overrides it for this check only.
+        task_row = dict(manage_db.task_type_get(tool) or {})
+        task_row.update(proposed_tasks.get(tool, {}))
+        policy = ResourcePolicyValues(effective, {tool: task_row})
+        requires_gpu = bool(task_row.get("slurm_gres")) or task_type.gpus
         try:
             place_stage(
                 policy.resolve_task_resources,
