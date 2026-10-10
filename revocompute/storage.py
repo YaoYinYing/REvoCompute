@@ -221,11 +221,15 @@ class _ResultTreeWalker:
                 raise ArtifactIdentityError(f"not a private regular file: {name}")
             if max_bytes is None:
                 return _VerifiedFile(handle, "", status.st_size, status.st_mtime)
-            size, digest = _hash_bounded(handle, min(max_bytes, status.st_size))
+            if status.st_size > max_bytes:
+                # Over the bound the caller is allowed to hold: refused from the
+                # descriptor's own size, before a byte is hashed.
+                raise ArtifactOversizedError(f"published file exceeds its bound: {name}")
+            size, digest = _hash_bounded(handle, status.st_size)
             if size != status.st_size:
                 # The bytes ran out before the size the descriptor reported: the
                 # file shrank while it was being read.
-                raise ArtifactIdentityError(f"published file changed while being read: {name}")
+                raise ArtifactChangedError(f"published file changed while being read: {name}")
             if expected is not None:
                 declared_size, declared_digest = expected
                 if size != declared_size:
@@ -300,6 +304,22 @@ class ArtifactIdentityError(OSError):
     It is an ``OSError`` because it is a failure to obtain the published file at
     all, so every caller that already fails closed on an unreadable file fails
     closed on a symlinked, linked, or substituted one with no extra branch.
+    """
+
+
+class ArtifactOversizedError(ArtifactIdentityError):
+    """The candidate is larger than the bound its reader is allowed to hold.
+
+    Distinct because it is answered with the capacity vocabulary: the size was
+    refused from the descriptor before the file was hashed.
+    """
+
+
+class ArtifactChangedError(ArtifactIdentityError):
+    """The candidate changed length between its size report and the bounded read.
+
+    Raised only after a bounded hash produced fewer bytes than the descriptor
+    reported, so the digest describes no single version of the file.
     """
 
 

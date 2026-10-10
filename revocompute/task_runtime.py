@@ -74,7 +74,9 @@ from revocompute.storage import (
     manifest_byte_limit,
     PUBLICATION_AVAILABLE,
     PUBLICATION_QUARANTINE_STATES,
+    ArtifactChangedError,
     ArtifactIdentityError,
+    ArtifactOversizedError,
     PublicationAnchor,
     ResultPublicationError,
     StorageResolver,
@@ -1020,18 +1022,20 @@ def _publishable_artifact(
     symlink atomically and the ``fstat`` runs on the opened descriptor, so the
     bytes hashed are the bytes the manifest names.
 
-    The entry is classified from a no-follow stat *before* the open (a FIFO
-    opened for reading would block forever) and re-verified from the descriptor
-    after it, and the size the descriptor reports is checked against the
-    *remaining* publication budget before any byte is hashed.  The hash loop is
-    bounded by that same size, so an artifact that is already over capacity is
-    refused without being read and one that changes length while it is being
-    hashed is refused rather than hashed to an unbounded length.
+    The entry is classified from a no-follow stat *before* the open -- a FIFO
+    opened for reading would block this worker forever -- and the bytes are then
+    hashed by the same ``open_verified`` the reader uses, bounded by the
+    remaining publication budget: the size the descriptor reports is checked
+    before a byte is read, so an over-capacity entry is refused unread, and the
+    hash loop cannot outrun a file that grows underneath it.
     """
     try:
         info = os.stat(filename, dir_fd=directory_fd, follow_symlinks=False)
     except OSError as exc:
         return None, f"unreadable ({exc.__class__.__name__})"
+    # The entry is classified without following a link and *before* the open: a
+    # FIFO opened for reading would block this worker forever, and a symlink or a
+    # second link is never a published artifact.
     if stat.S_ISLNK(info.st_mode):
         return None, "symbolic link"
     if stat.S_ISDIR(info.st_mode):
@@ -1040,47 +1044,27 @@ def _publishable_artifact(
         return None, "special file"
     if info.st_nlink != 1:
         return None, "hard link"
-    if info.st_size > remaining_bytes:
-        # Bounded work, not a bounded result: an artifact that cannot fit in the
+    try:
+        verified = _ResultTreeWalker.open_verified(directory_fd, filename, max_bytes=remaining_bytes)
+    except ArtifactChangedError:
+        # The entry changed length while it was being read, so its digest
+        # describes no single file.
+        return None, "changed while being read"
+    except ArtifactOversizedError:
+        # Bounded work, not a bounded result: an artifact that cannot fit the
         # remaining publication budget is refused from its verified size alone,
         # before a single byte is read into the hasher.
         return None, "over capacity"
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
-    try:
-        descriptor = os.open(filename, flags, dir_fd=directory_fd)
+    except ArtifactIdentityError:
+        return None, "not a private regular file"
     except OSError as exc:
         return None, "symbolic link" if exc.errno == errno.ELOOP else f"unreadable ({exc.__class__.__name__})"
-    try:
-        opened = os.fstat(descriptor)
-        if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1:
-            return None, "not a private regular file"
-        if opened.st_size > remaining_bytes:
-            return None, "over capacity"
-        digest = hashlib.sha256()
-        size = 0
-        with os.fdopen(descriptor, "rb") as handle:
-            descriptor = -1
-            while size < opened.st_size:
-                chunk = handle.read(min(1024 * 1024, opened.st_size - size))
-                if not chunk:
-                    break
-                digest.update(chunk)
-                size += len(chunk)
-    except OSError as exc:
-        return None, f"unreadable ({exc.__class__.__name__})"
-    finally:
-        if descriptor >= 0:
-            os.close(descriptor)
-    if size != opened.st_size:
-        # The bytes ran out before the size the descriptor reported: the entry
-        # changed while it was being read, so its digest describes no single file.
-        return None, "changed while being read"
     preview = _preview_kind(relative_path)
     return (
         {
             "path": relative_path,
-            "size": opened.st_size,
-            "sha256": digest.hexdigest(),
+            "size": verified.size,
+            "sha256": verified.digest,
             "media_type": mimetypes.guess_type(relative_path)[0] or "application/octet-stream",
             "preview": preview,
             "capability": artifact_capability(preview),
