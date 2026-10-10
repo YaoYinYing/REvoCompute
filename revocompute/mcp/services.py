@@ -450,11 +450,11 @@ def retrieve_artifact(
 
     Authorization still runs through the canonical artifact route (so ownership
     and role visibility are the canonical rules), but the bytes are read from the
-    resolver's already-verified physical file rather than the route's response
+    descriptor the resolver already verified rather than the route's response
     body.  The route answers an *empty* body plus ``X-Accel-Redirect`` in the
     shipped ``nginx`` download mode and content-negotiates otherwise, so a
     response-body read silently returned empty content for every non-text
-    artifact; the verified file is the same content in every mode.
+    artifact; the verified descriptor is the same content in every mode.
     """
     from urllib.parse import quote
 
@@ -495,15 +495,19 @@ def retrieve_artifact(
     # content-negotiates otherwise, so a response-body read silently returned
     # empty content; the verified descriptor is the same content in every mode,
     # and a quarantined result is refused by the route before any bytes are read.
-    response = call_canonical(
-        principal,
-        "GET",
-        f"/compute/api/results/{task_id}/artifacts/{encoded}",
-        query_string="download=0",
-    )
-    if response.status >= 400:
-        raise classify(response.body, status=response.status)
-    raw = _read_verified_stream(resolved.get("verified_stream"), size)
+    try:
+        response = call_canonical(
+            principal,
+            "GET",
+            f"/compute/api/results/{task_id}/artifacts/{encoded}",
+            query_string="download=0",
+        )
+        if response.status >= 400:
+            raise classify(response.body, status=response.status)
+    except BaseException:
+        resolved["verified_stream"].close()
+        raise
+    raw = _read_verified_stream(resolved["verified_stream"], size)
     import base64
 
     return {
