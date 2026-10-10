@@ -99,9 +99,24 @@ from .scenarios import (
     structure_scenario,
 )
 
+# The authentic-scenario inventory: the helpers whose identity or contract is a
+# real production Runner, transcribed from that family's ``task.yaml``, rather
+# than a synthetic stand-in. Exercising an authentic scenario is a fleet
+# boundary activity, so a generic Server/Core test must not reach these helpers.
+# ``tools/check_test_boundaries.py`` reads this declaration (a real consumer of
+# the fixtures, not a text scan) so the enforcement set cannot drift from the
+# helpers it guards: a helper listed here is fleet-only without a second list.
+AUTHENTIC_SCENARIOS = frozenset({
+    gremlin_lh_runner,
+    production_receipt_pointer,
+    pssm_gremlin_scenario,
+    replay_scenario,
+})
+
 __all__ = [
     "ADMIN_AUTH",
     "ANONYMOUS_AUTH",
+    "AUTHENTIC_SCENARIOS",
     "CONTROLLED_ACCESS_POLICY",
     "CONTROLLED_RUNNER_NAME",
     "DEFAULT_MAX_BUNDLE_BYTES",

@@ -4,14 +4,47 @@
 """Work-first geometry and keyboard behavior for the register and method reference."""
 from __future__ import annotations
 
+from dataclasses import replace
+
 from playwright.sync_api import Page, expect
 import pytest
 
-from frontend_fixtures import build_task_summary, controlled_scenario, mount_scenario, pssm_gremlin_scenario
+from frontend_fixtures import (
+    ParameterSpec,
+    build_task_summary,
+    controlled_runner,
+    controlled_scenario,
+    mount_scenario,
+    runner_scenario,
+)
 from frontend_fixtures.results import PDB_BODY
 
 pytestmark = pytest.mark.browser
 ORIGIN = "https://revocompute.example"
+
+
+def _parameter_reference_scenario():
+    """A generic CPU Runner whose control list is deep enough to scroll like a real method.
+
+    The keyboard-jump contract - focusing a method-index link and pressing Enter
+    lands the Task parameters region at the top of the viewport - is only
+    observable when the page is tall enough to scroll. A Runner with one control
+    renders short enough that the browser cannot scroll the section into place,
+    so this synthetic ``sequence_demo`` declares a realistic control list. It is
+    still a generic identity, never a production Runner.
+    """
+    parameters = tuple(
+        ParameterSpec.integer(
+            f"option_{index}",
+            default=index,
+            has_default=True,
+            minimum=0,
+            maximum=100,
+            description="Controls one synthetic setting for this run and its output.",
+        )
+        for index in range(6)
+    )
+    return runner_scenario(replace(controlled_runner(), parameters=parameters))
 
 
 def _mount_dashboard_with_preview(page: Page, width: int, role: str = "user") -> None:
@@ -159,7 +192,7 @@ def test_mobile_filters_keep_their_effect_when_closed_and_survive_view_changes(p
 @pytest.mark.parametrize("width", [320, 834, 1440])
 def test_method_index_keyboard_jump_reaches_the_complete_parameter_reference(page: Page, width: int) -> None:
     page.set_viewport_size({"width": width, "height": 780})
-    scenario = pssm_gremlin_scenario()
+    scenario = _parameter_reference_scenario()
     mount_scenario(page, scenario)
     page.goto(f"{ORIGIN}/runners/{scenario.runner.name}")
     index = page.get_by_role("navigation", name="On this method")
@@ -182,7 +215,7 @@ def test_method_index_keyboard_jump_reaches_the_complete_parameter_reference(pag
 
 def test_mobile_method_runtime_disclosure_returns_space_without_losing_facts(page: Page) -> None:
     page.set_viewport_size({"width": 320, "height": 780})
-    scenario = pssm_gremlin_scenario()
+    scenario = controlled_scenario()
     mount_scenario(page, scenario)
     page.goto(f"{ORIGIN}/runners/{scenario.runner.name}")
     summary = page.get_by_text("Runtime facts · CPU", exact=True)
@@ -191,6 +224,8 @@ def test_mobile_method_runtime_disclosure_returns_space_without_losing_facts(pag
     summary.focus()
     page.keyboard.press("Enter")
     expect(page.locator(".runner-facts")).to_be_visible()
+    # The disclosure's fact list states the Runner's own runtime family, not a
+    # generic label: ``controlled_runner()`` declares ``example``.
     expect(page.locator(".runner-facts")).to_contain_text(scenario.runner.runtime_family)
     opened = page.get_by_role("region", name="When to use this method").bounding_box()
     assert closed and opened and opened["y"] > closed["y"] + 100

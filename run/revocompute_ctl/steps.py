@@ -187,6 +187,27 @@ def prune_runtime_bundles(state, keep: dict[str, str]) -> None:
         print(f"[SLURM] Pruned {len(removed)} superseded runtime bundle(s).")
 
 
+def reserved_test_namespaces(source_root: Path, server_root: Path) -> tuple[Path, ...]:
+    """Test-only namespace roots that must never reach the deployed snapshot.
+
+    Reserved regardless of which families are enabled: every existing
+    ``<family>/tests`` family root under ``source_root``, ``common/tests``, and
+    the neutral ``docker/runner_testkit`` when present (a sibling of
+    ``docker/runners``, resolved through ``SERVER_ROOT``).  The reserved set is
+    deliberately independent of ``ENABLED_TASKRUNNERS`` so an enabled family
+    cannot alias into a disabled family's tests or the testkit.  Only the
+    family-root ``tests`` is reserved — nested ``tests/`` deeper in a family,
+    like ``references``, ``fixtures``, or ``goldens``, stays deployable.
+    """
+    candidates = [source_root / "common" / "tests"]
+    if source_root.is_dir():
+        candidates.extend(family / "tests" for family in source_root.iterdir() if (family / "tests").is_dir())
+    testkit = server_root / "docker" / "runner_testkit"
+    if testkit.is_dir():
+        candidates.append(testkit)
+    return tuple(dict.fromkeys(root.absolute() for root in candidates))
+
+
 def materialize_runner_families(state) -> None:
     """Atomically replace the server instance's enabled Runner snapshot."""
     from revocompute_ctl import SERVER_ROOT
@@ -200,12 +221,13 @@ def materialize_runner_families(state) -> None:
         raise FileNotFoundError(f"Runtime runner directory is missing: {source_root}")
     enabled = {value for value in state.get("ENABLED_TASKRUNNERS").split(",") if value}
     manifests = PluginManager().discover(source_root, enabled=enabled)
-    # Only family/common-root tests/ is reserved.  Names such as references, fixtures,
-    # goldens, or even nested tests/ may be legitimate runtime/build inputs.
+    # Only family/common-root tests/ and the testkit are reserved.  Names such as
+    # references, fixtures, goldens, or even nested tests/ may be legitimate
+    # runtime/build inputs.
     # Refuse conflicting declarations before touching the deployed snapshot:
     # silently pruning a declared directory would change its runtime identity.
     payload_roots = (Path(source_root) / "common", *(manifest.path for manifest in manifests))
-    test_roots = tuple(root.absolute() / "tests" for root in payload_roots)
+    test_roots = reserved_test_namespaces(Path(source_root), Path(SERVER_ROOT))
 
     def reject_test_input(path: Path, owner: str) -> None:
         for candidate in (path.absolute(), path.resolve()):

@@ -37,7 +37,6 @@ from frontend_fixtures import (
     controlled_runner,
     controlled_scenario,
     openapi_spec,
-    pssm_gremlin_scenario,
     result_fixture,
     structure_scenario,
     validate_manifest,
@@ -209,23 +208,32 @@ def test_authentication_projections_satisfy_the_current_user_schema() -> None:
     assert EXPIRED_AUTH.role == "expired"
 
 
-def test_reference_scenarios_project_real_runner_vocabulary() -> None:
-    cpu_runner = pssm_gremlin_scenario()
-    validate_payload("TaskTypeDetail", cpu_runner.detail())
-    cpu_runner_manifest = cpu_runner.result_manifest()
-    assert cpu_runner_manifest is not None
-    assert {view["id"] for view in cpu_runner_manifest["views"]} >= {
-        "raw_couplings",
-        "apc_couplings",
-        "ranked_pairs",
-        "filtered_alignment",
-    }
+def test_reference_scenarios_project_the_generic_result_contract() -> None:
+    """Synthetic scenarios satisfy the schema and carry their declared shape.
+
+    These scenarios are the generic contract a browser test drives: a CPU
+    sequence Runner with a canonical parameter schema, and a GPU multi-stage
+    Runner whose workflow marks its GPU stages. The assertion is on the generic
+    contract shape, not on any one production view-id set - an authentic Runner
+    vocabulary assertion belongs at the fleet boundary.
+    """
+    cpu_runner = controlled_scenario()
+    detail = cpu_runner.detail()
+    validate_payload("TaskTypeDetail", detail)
+    assert detail["runtime_family"] == cpu_runner.runner.runtime_family
+    assert [role["id"] for role in detail["inputs"]] == [role.id for role in cpu_runner.runner.inputs]
+    schema = cpu_runner.parameter_schema()
+    validate_payload("TaskParameterSchema", schema)
+    assert set(schema["properties"]) == {parameter.name for parameter in cpu_runner.runner.parameters}
 
     fold = structure_scenario()
     validate_payload("TaskTypeDetail", fold.detail())
     assert fold.detail()["gpus"] is True
     assert [stage["requires_gpu"] for stage in fold.detail()["workflow"]] == [False, True, True]
-    assert fold.result_manifest() is not None
+    fold_manifest = fold.result_manifest()
+    assert fold_manifest is not None
+    validate_manifest(fold_manifest)
+    assert fold_manifest["task_type"] == fold.runner.name
 
 
 

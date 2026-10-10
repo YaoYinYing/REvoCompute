@@ -10,17 +10,31 @@ CI policy tests exercise concrete path transitions. Those bounded namespaces are
 excluded; generic protocol tests are not. Comments/docstrings are not behavior.
 Logical data-format dialects and existing legacy HTTP routes have explicit,
 value-scoped exceptions below. New unexplained identities fail closed.
+
+The ``tests/frontend_fixtures`` exclusion hides authentic Runner identities from
+the identity scan, so a generic test can reach a production Runner contract
+through a scenario helper whose concrete identity lives inside that namespace.
+The fixture package therefore declares which helpers are authentic
+(``AUTHENTIC_SCENARIOS``) and this checker consumes that declaration — a real
+import, not a text copy — to keep such helpers a fleet-only boundary.
 """
 from __future__ import annotations
 
 import ast
+import importlib
 import re
+import sys
 from pathlib import Path
 
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 EXCLUDED_TEST_NAMESPACES = ("tests/fleet/", "tests/frontend_fixtures/")
+# The fleet boundary is the one namespace allowed to exercise a production
+# Runner scenario, so the authentic-scenario rule is scoped to this path.
+FLEET_BOUNDARY = "tests/fleet/"
+FIXTURE_NAMESPACE = "frontend_fixtures"
+AUTHENTIC_SCENARIO_DECLARATION = "AUTHENTIC_SCENARIOS"
 BOUNDARY_FILES = {
     "tests/test_ci_scope_classifier.py": "CI policy deliberately classifies real fleet paths",
     "tests/test_campaign_merge_candidate.py": "drift policy deliberately compares real fleet paths",
@@ -61,6 +75,35 @@ def runner_identities(root: Path) -> set[str]:
     if not identities:
         raise ValueError("production Runner manifest inventory is empty")
     return identities
+
+
+def authentic_scenario_symbols(root: Path) -> frozenset[str]:
+    """Read the fixture package's declared authentic-scenario inventory.
+
+    The declaration is imported, not copied: the fixtures remain the sole owner
+    of which helpers model a real production Runner. An empty or unavailable
+    inventory would silently disable the authentic-scenario gate, so it fails
+    closed.
+    """
+    fixture_parent = str(root / "tests")
+    already_imported = FIXTURE_NAMESPACE in sys.modules
+    added = fixture_parent not in sys.path
+    if added:
+        sys.path.insert(0, fixture_parent)
+    try:
+        module = importlib.import_module(FIXTURE_NAMESPACE)
+        declared = getattr(module, AUTHENTIC_SCENARIO_DECLARATION)
+        symbols = frozenset(getattr(helper, "__name__", str(helper)) for helper in declared)
+    except (ImportError, AttributeError) as exc:
+        raise ValueError(f"{FIXTURE_NAMESPACE} authentic-scenario declaration is unavailable: {exc}") from exc
+    finally:
+        if added:
+            sys.path.remove(fixture_parent)
+        if not already_imported:
+            sys.modules.pop(FIXTURE_NAMESPACE, None)
+    if not symbols:
+        raise ValueError(f"{FIXTURE_NAMESPACE}.{AUTHENTIC_SCENARIO_DECLARATION} authentic-scenario inventory is empty")
+    return symbols
 
 
 def inspect_source(source: str, path: str, identities: set[str]) -> list[str]:
@@ -104,15 +147,85 @@ def inspect_source(source: str, path: str, identities: set[str]) -> list[str]:
     return violations
 
 
+def _referenced_fixture_symbol(node: ast.AST, bound: dict[str, str]) -> str | None:
+    """Name of the fixture symbol a reference reaches, if any.
+
+    Covers the bounded direct forms: a bare imported name, a fixture-module
+    attribute (``frontend_fixtures.pssm_gremlin_scenario``), and a
+    ``getattr(fixtures_module, "pssm_gremlin_scenario")`` indirection.
+    """
+    if isinstance(node, ast.Name):
+        return bound.get(node.id)
+    if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id in bound:
+        return node.attr
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "getattr"
+        and len(node.args) >= 2
+        and isinstance(node.args[0], ast.Name)
+        and node.args[0].id in bound
+        and isinstance(node.args[1], ast.Constant)
+        and isinstance(node.args[1].value, str)
+    ):
+        return node.args[1].value
+    return None
+
+
+def inspect_authentic_scenario_references(source: str, path: str, authentic: frozenset[str]) -> list[str]:
+    """Flag a generic test reaching an authentic scenario helper.
+
+    The helper package and the fleet boundary are the only legitimate consumers
+    (both are excluded before this runs), so every other module under ``tests/``
+    that imports or names an authentic symbol is a violation. Import aliasing is
+    normalized, so ``from frontend_fixtures import pssm_gremlin_scenario as
+    scenario`` still names the authentic helper.
+    """
+    if not authentic:
+        return []
+    tree = ast.parse(source, filename=path)
+    bound: dict[str, str] = {}
+    violations: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == FIXTURE_NAMESPACE or alias.name.startswith(FIXTURE_NAMESPACE + "."):
+                    bound[alias.asname or alias.name] = alias.name
+        elif isinstance(node, ast.ImportFrom):
+            if node.module != FIXTURE_NAMESPACE:
+                continue
+            for alias in node.names:
+                bound[alias.asname or alias.name] = alias.name
+                if alias.name in authentic:
+                    violations.append(
+                        f"{path}:{node.lineno}: authentic production-Runner scenario {alias.name!r} is fleet-only"
+                    )
+        else:
+            symbol = _referenced_fixture_symbol(node, bound)
+            if symbol in authentic:
+                violations.append(
+                    f"{path}:{node.lineno}: authentic production-Runner scenario {symbol!r} is fleet-only"
+                )
+    return violations
+
+
 def check_repository(root: Path) -> list[str]:
     identities = runner_identities(root / "docker" / "runners")
+    authentic = authentic_scenario_symbols(root)
     violations: list[str] = []
     for namespace in ("revocompute", "tests"):
         for path in sorted((root / namespace).rglob("*.py")):
             relative = path.relative_to(root).as_posix()
-            if relative in BOUNDARY_FILES or relative.startswith(EXCLUDED_TEST_NAMESPACES):
+            if relative.startswith(EXCLUDED_TEST_NAMESPACES):
                 continue
-            violations.extend(inspect_source(path.read_text(encoding="utf-8"), relative, identities))
+            source = path.read_text(encoding="utf-8")
+            # Named boundary files hold concrete fleet paths deliberately, so they
+            # are exempt from the identity scan — but not from the authentic-scenario
+            # rule: only ``tests/fleet`` may exercise a production scenario.
+            if relative not in BOUNDARY_FILES:
+                violations.extend(inspect_source(source, relative, identities))
+            if namespace == "tests" and not relative.startswith(FLEET_BOUNDARY):
+                violations.extend(inspect_authentic_scenario_references(source, relative, authentic))
     if (root / "docker" / "runners" / "_testkit").exists():
         violations.append("docker/runners/_testkit: testkit must be outside production discovery root")
     if (root / "tests" / "runners").exists():

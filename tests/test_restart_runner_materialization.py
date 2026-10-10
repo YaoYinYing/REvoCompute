@@ -11,9 +11,26 @@ from pathlib import Path
 import pytest
 import yaml
 
+import revocompute_ctl
 from revocompute.runner_registry import load_plugin_families
 from revocompute_ctl.env import EnvState
 from revocompute_ctl.steps import materialize_runner_families
+
+
+def _add_disabled_family(source: Path, family: str = "second") -> Path:
+    """Add a valid but disabled family whose tests/ is outside the enabled set."""
+    root = source / family
+    (root / "tests").mkdir(parents=True)
+    (root / "tests" / "secret.py").write_text("raise RuntimeError('never deploy')", encoding="utf-8")
+    (root / "run.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    (root / f"{family}.def").write_text("Bootstrap: docker\nFrom: scratch\n", encoding="utf-8")
+    manifest = {
+        "id": family,
+        "version": "1",
+        "runtime": {"definition": f"{family}.def", "runtime_overlay": ["run.sh"]},
+    }
+    (root / "plugin.yaml").write_text(yaml.safe_dump(manifest), encoding="utf-8")
+    return root
 
 
 @pytest.fixture
@@ -156,6 +173,44 @@ def test_test_namespace_cannot_be_declared_as_deployment_input(runner_source, fi
 def test_symlink_alias_cannot_copy_excluded_tests(runner_source, alias, destination):
     source, state, _manifest = runner_source
     (source / alias).symlink_to(source / destination)
+    target = Path(state.server_dir()) / "docker" / "runners"
+    target.mkdir(parents=True)
+    current = target / "current.txt"
+    current.write_bytes(b"previous deployment")
+
+    with pytest.raises(ValueError, match="test-only namespace"):
+        materialize_runner_families(state)
+
+    assert current.read_bytes() == b"previous deployment"
+
+
+def test_enabled_family_cannot_alias_disabled_family_tests(runner_source):
+    """A disabled family's tests/ is reserved even though only the enabled set is discovered."""
+    source, state, _manifest = runner_source
+    disabled = _add_disabled_family(source, "second")
+    assert "second" not in state.get("ENABLED_TASKRUNNERS").split(",")
+    (source / "demo" / "assets" / "alias").symlink_to(disabled / "tests")
+    target = Path(state.server_dir()) / "docker" / "runners"
+    target.mkdir(parents=True)
+    current = target / "current.txt"
+    current.write_bytes(b"previous deployment")
+
+    with pytest.raises(ValueError, match="test-only namespace"):
+        materialize_runner_families(state)
+
+    assert current.read_bytes() == b"previous deployment"
+
+
+def test_enabled_family_cannot_alias_neutral_testkit(runner_source, monkeypatch, tmp_path):
+    """The neutral testkit is a sibling of docker/runners, resolved through SERVER_ROOT."""
+    source, state, _manifest = runner_source
+    server_root = tmp_path / "server-root"
+    testkit = server_root / "docker" / "runner_testkit"
+    (testkit / "tests").mkdir(parents=True)
+    (testkit / "runner_protocol.py").write_text("PROTOCOL = 1", encoding="utf-8")
+    (testkit / "tests" / "test_protocol.py").write_text("raise RuntimeError('never deploy')", encoding="utf-8")
+    monkeypatch.setattr(revocompute_ctl, "SERVER_ROOT", server_root)
+    (source / "demo" / "assets" / "alias").symlink_to(testkit)
     target = Path(state.server_dir()) / "docker" / "runners"
     target.mkdir(parents=True)
     current = target / "current.txt"
