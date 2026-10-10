@@ -201,6 +201,18 @@ Where the existing models already support it, make these invariants executable:
 
 Do not expand into project/lab quota hierarchy, billing, autoscaling, cross-cluster federation, or a new analytics stack.
 
+### Lane D — per-user durable-storage quota is policy, not accounting
+
+Storage accounting (#59/#66) already answers "how many bytes does this subject own?". The remaining work is the *entitlement* layered over it, and it must stay in one place:
+
+- the three decisions are distinguishable and must not collapse into one another: an explicit ceiling (`LIMITED`, where `0` is a real ceiling of zero bytes), an explicit grant of no ceiling (`UNLIMITED`), and no per-user decision at all so the deployment default applies (`INHERIT`, the absent row);
+- the deployment default keeps its pre-existing "0 means none configured" reading; only an admin request can spell a real zero ceiling;
+- changing a quota never touches an accounting fact: no `resource_ledger` row, no `storage_usage` fact, no change to `logical_owned_bytes`, and never a second `resource_ledger` or `storage_usage` table;
+- admission reads the *effective* ceiling (per-user override over the deployment default) through the one envelope it already reads, so there is no second admission path;
+- the Admin surface that sets it exposes the effective ceiling and the state that produced it, and reports all three states the same way.
+
+Out of scope: lab/project quota hierarchy, billing, and per-directory quotas.
+
 ## Failure-injection gates
 
 Add deterministic cases for:
