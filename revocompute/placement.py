@@ -51,7 +51,6 @@ from typing import Any
 
 from revocompute import resource_ledger as rloan
 from revocompute.resource_policy import (
-    CANONICAL_TASK_FIELDS,
     AcceleratorClassUnavailableError,
     ExecutionClassMismatchError,
     QueueResolutionError,
