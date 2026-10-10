@@ -241,10 +241,12 @@ def _write_manifest_entry(archive: zipfile.ZipFile, manifest_bytes: bytes) -> No
 
     The bytes are the ones read from the verified descriptor that selected the
     artifact entries, so the archived manifest and the archive contents can
-    never describe two different publications.
+    never describe two different publications.  The member is *stored*, like
+    every other member of a results archive, so an archive can be verified by
+    reading exactly the bytes a download delivers.
     """
     info = zipfile.ZipInfo("manifest.json", date_time=time.localtime()[0:6])
-    info.compress_type = zipfile.ZIP_DEFLATED
+    info.compress_type = zipfile.ZIP_STORED
     info.file_size = len(manifest_bytes)
     with archive.open(info, "w") as destination:
         destination.write(manifest_bytes)
@@ -275,7 +277,10 @@ def _write_verified_artifact(
         # a grown file would inflate.
         modified = os.fstat(handle.fileno()).st_mtime
         info = zipfile.ZipInfo(str(resolved["path"]), date_time=time.localtime(max(modified, _ZIP_EPOCH))[:6])
-        info.compress_type = zipfile.ZIP_DEFLATED
+        # The member is stored: the archive is a byte copy of the publication, so
+        # verifying it later reads exactly the bytes a download delivers and no
+        # decompressor is asked to interpret runner-controlled content.
+        info.compress_type = zipfile.ZIP_STORED
         info.file_size = int(resolved["size"])
         # ``file_size`` is the verified size, so ``ZipFile`` can decide the ZIP64
         # format up front instead of striding the artifact through memory.
