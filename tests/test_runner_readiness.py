@@ -463,6 +463,10 @@ def test_real_identity_keeps_build_and_validation_freshness_separate(tmp_path):
         ("display_name: Synthetic", "display_name: Changed Synthetic"),
         ("summary: Synthetic", "summary: Changed Synthetic"),
         ("description: Synthetic bounded", "description: Changed bounded"),
+        # x-help and title are schema annotations the execution-contract mapping
+        # drops, so editing them must not stale validation identity.
+        ("      description: Synthetic execution mode.", "      x-help: Pick a mode.\n      description: Synthetic execution mode."),
+        ("      description: Synthetic execution mode.", "      title: Mode\n      description: Synthetic execution mode."),
     )
     for old, new in presentation_edits:
         assert old in original_task

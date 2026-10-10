@@ -8,14 +8,16 @@ literal transcription of the pinned notebook's reusable cells, rather than by
 
 * the transcription is still the pinned notebook's own source;
 * the generator fails closed on a notebook that is not the pinned blob, and does
-  so before it parses or uses any cell; and
-The notebook identity and transcription retain the recorded scientific provenance.
+  so before it parses or uses any cell;
+* the generator and the transcription contain no dynamic-execution call; and
+* the notebook identity and transcription retain the recorded scientific provenance.
 """
 from __future__ import annotations
 
 import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -93,3 +95,11 @@ def test_generator_refuses_an_edited_copy_of_the_pinned_notebook(generator, tmp_
             generator.assert_pinned_identity(edited)
     finally:
         edited.unlink(missing_ok=True)
+
+
+def test_generator_and_transcription_have_no_dynamic_execution() -> None:
+    """No eval/exec/compile( call may exist in the reference path (project ban)."""
+    pattern = re.compile(r"\b(eval|exec|compile)\s*\(")
+    for path in (GENERATOR_PATH, TRANSCRIPTION_PATH):
+        offenders = [line for line in path.read_text(encoding="utf-8").splitlines() if pattern.search(line)]
+        assert not offenders, (path.name, offenders)
