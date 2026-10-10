@@ -1953,9 +1953,8 @@ class TaskDatabase:
             raise ValueError("reason must be at most 1000 characters")
         timestamp = time.time() if updated_at is None else updated_at
         # The client key is scoped by user so it may be reused for a different
-        # subject; within one subject it names exactly one administrative change,
-        # and a second, different change under it is a conflict rather than a
-        # silent second audit row.
+        # subject; within one subject, a second *different* change under the same
+        # key is a conflict rather than a silent second audit row.
         durable_key = f"storage_quota:user:{user_id}:{idempotency_key}"
         operation = (
             squota.OPERATION_CLEAR_STORAGE_QUOTA
@@ -2095,6 +2094,9 @@ class TaskDatabase:
         deployment value can never disagree about which one is in force.
         """
         policy = self.storage_quota_policy(user_id)
+        # A deployment that configures no default ceiling says so with 0; an
+        # admin who wants a real ceiling of zero bytes says it with a LIMITED
+        # policy, which is a per-user decision and never this field.
         default = self._storage_soft_limit if self._storage_soft_limit > 0 else None
         return policy.effective_limit_bytes(default)
 
