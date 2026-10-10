@@ -24,6 +24,7 @@ import re
 import shutil
 import time
 import unicodedata
+from collections.abc import Mapping
 from dataclasses import asdict
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -5634,40 +5635,31 @@ def _validate_proposed_placement(
     so this check cannot approve a policy the submission path would then reject,
     and it cannot disagree with the decision a Task will record.
 
-    Which profiles are re-checked is decided by what the *resolver* actually
-    reads, not by which request field happened to name them.  A global edit and a
-    per-Task edit resolve through the same global values, so a change to a global
-    key — most of all ``slurm_execution_classes``, the map most able to leave an
-    accelerator type with nowhere to go — is checked against every configured
-    profile, exactly as a per-Task edit is checked against its own.  A profile the
-    edit cannot reach (a per-Task-only edit re-checked against its own profile,
-    while the global values it also reads are unchanged) was already placeable, so
-    it is left alone rather than failing a save for a reason the operator did not
-    cause.
+    The refusal is about what the *edit* does, not about the state it lands in.
+    Each candidate profile is resolved twice — under the values in force now and
+    under the proposed ones — and it is refused only when it was placeable before
+    and is not after.  A global edit and a per-Task edit both resolve through the
+    same global values, so a global key most able to strand a type (above all
+    ``slurm_execution_classes``) is checked against every enabled profile rather
+    than only the ones the request named.  But a profile that was *already*
+    impossible to place before the edit is not this operator's doing: failing an
+    unrelated save — changing ``cpus`` while some legacy profile's GRES names a
+    device class the deployment never declared — would report a breakage the edit
+    did not cause and could not have avoided, so it is left to the edit that fixes
+    it.  The comparison is per profile rather than per field because whether a
+    value strands a type is exactly what the resolver decides.
     """
     from revocompute.task_types import get as get_task_type
 
-    effective = dict(manage_db.resource_all())
-    effective.update({key: serialize_resource_value(key, value) for key, value in proposed_globals.items()})
-    # The config rows are the deployment's own profile vocabulary; the registry
-    # says which of them this deployment actually enables and what each requires.
-    # A global edit touches every enabled profile, so every enabled profile is
-    # re-checked; a per-Task edit touches only the named ones.
-    tools = set(proposed_tasks) if proposed_tasks else set()
-    if proposed_globals:
-        tools.update(
-            config["tool"] for config in manage_db.task_type_all() if config.get("enabled", 1)
-        )
-    for tool in sorted(tools):
-        try:
-            task_type, runner = get_task_type(tool)
-        except KeyError:
-            continue
-        # ``task_type_get`` is the persisted per-Task layer the resolver reads;
-        # a per-Task edit overrides it for this check only.
-        task_row = dict(manage_db.task_type_get(tool) or {})
-        task_row.update(proposed_tasks.get(tool, {}))
-        policy = ResourcePolicyValues(effective, {tool: task_row})
+    current_globals = dict(manage_db.resource_all())
+    proposed_effective = dict(current_globals)
+    proposed_effective.update({key: serialize_resource_value(key, value) for key, value in proposed_globals.items()})
+
+    def placement_failure(
+        tool: str, task_type: Any, runner: Any, global_values: Mapping[str, Any], task_row: Mapping[str, Any]
+    ) -> Exception | None:
+        """The resolver's own refusal for one profile under one set of values, or ``None``."""
+        policy = ResourcePolicyValues(global_values, {tool: dict(task_row)})
         requires_gpu = bool(task_row.get("slurm_gres")) or task_type.gpus
         try:
             place_stage(
@@ -5679,10 +5671,35 @@ def _validate_proposed_placement(
                 policy=placement_policy(policy, tool),
                 default_timeout_seconds=runner.max_runtime_seconds,
             )
-        except PlacementError as exc:
+        except (PlacementError, ResourceValidationError) as exc:
+            return exc
+        return None
+
+    # The config rows are the deployment's own profile vocabulary; the registry
+    # says which of them this deployment actually enables and what each requires.
+    # A global edit touches every enabled profile, so every enabled profile is
+    # re-checked; a per-Task edit touches only the named ones.
+    tools = set(proposed_tasks) if proposed_tasks else set()
+    if proposed_globals:
+        tools.update(config["tool"] for config in manage_db.task_type_all() if config.get("enabled", 1))
+    for tool in sorted(tools):
+        try:
+            task_type, runner = get_task_type(tool)
+        except KeyError:
+            continue
+        # ``task_type_get`` is the persisted per-Task layer the resolver reads;
+        # a per-Task edit overrides it for this check only.
+        current_row = dict(manage_db.task_type_get(tool) or {})
+        proposed_row = dict(current_row)
+        proposed_row.update(proposed_tasks.get(tool, {}))
+        if placement_failure(tool, task_type, runner, current_globals, current_row) is not None:
+            continue
+        failure = placement_failure(tool, task_type, runner, proposed_effective, proposed_row)
+        if failure is None:
+            continue
+        if isinstance(failure, PlacementError):
             raise ResourceValidationError(
-                f"Task type {tool!r} would be impossible to place ({exc.reason_code}): {exc}"
-            ) from exc
-        except ResourceValidationError as exc:
-            raise ResourceValidationError(f"Task type {tool!r} would be impossible to place: {exc}") from exc
+                f"Task type {tool!r} would be impossible to place ({failure.reason_code}): {failure}"
+            ) from failure
+        raise ResourceValidationError(f"Task type {tool!r} would be impossible to place: {failure}") from failure
 

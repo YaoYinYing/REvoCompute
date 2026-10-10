@@ -95,11 +95,38 @@ def test_an_over_large_report_limit_is_clamped_to_the_ceiling_and_labelled(monke
     # ``str.isdigit()`` accepts digits outside ASCII that ``int()`` rejects: the
     # page-size contract must answer those with its own bounded refusal rather
     # than letting the conversion raise.
-    for raw in ("²", "①", "٥", "0" * 4000):
+    for raw in ("²", "①", "٥"):
         lookalike = client.get(f"{REPORT_PATHS[0]}?limit={raw}", headers=admin)
-        assert lookalike.status_code in (400, 200), raw
-        if lookalike.status_code == 400:
-            assert "limit" in lookalike.get_json()["error"], raw
+        assert lookalike.status_code == 400, raw
+        assert "limit" in lookalike.get_json()["error"], raw
+
+    # A run of ASCII digits longer than the ceiling itself must never reach
+    # ``int()``: converting an arbitrarily long run would make the request
+    # *length* choose between this contract's answer and an interpreter overflow.
+    # Leading zeros carry no magnitude, so a page of zero is still refused as a
+    # page size while an over-long non-zero page is served as the ceiling page.
+    # Each report names its page size in its own field, so the ceiling is read
+    # where that report spells it rather than from a second shared shape: the
+    # Task register pages its window, the integrity report its drift, and the
+    # activity feed its merged entries.
+    for path, page_size in (
+        (REPORT_PATHS[0], lambda body: body["window"]["limit"]),
+        (REPORT_PATHS[2], lambda body: body["drift"]["limit"]),
+        (REPORT_PATHS[3], lambda body: body["limit"]),
+    ):
+        zero_page = client.get(f"{path}?limit={'0' * 4000}", headers=admin)
+        assert zero_page.status_code == 400, path
+        assert "limit" in zero_page.get_json()["error"], path
+
+        long_digits = client.get(f"{path}?limit={'9' * 4400}", headers=admin)
+        assert long_digits.status_code == 200, path
+        assert page_size(long_digits.get_json()) == 200, path
+
+    # The resource roll pages by its own ceiling without a window of its own to
+    # label, so an over-long page is read from the ceiling it reports.
+    long_roll = client.get(f"{REPORT_PATHS[1]}?limit={'9' * 4400}", headers=admin)
+    assert long_roll.status_code == 200
+    assert long_roll.get_json()["limit_ceiling"] == 200
 
 
 def test_a_malformed_report_filter_is_refused_with_a_bounded_error(monkeypatch, tmp_path):
@@ -172,12 +199,14 @@ def test_the_task_report_reads_the_recorded_decision_rather_than_a_recomputation
     execution = recorded["execution_class"]
     expected_id = (
         f"{execution['state']}|{execution['partition'] or 'scheduler-default'}|"
-        + (f"{execution['device_class'] or 'untyped'}x{execution['device_count']}" if execution["state"] == "accelerator" else "none")
+        + (
+            f"{execution['device_class'] or 'untyped'}x{execution['device_count']}"
+            if execution["state"] == "accelerator"
+            else "none"
+        )
     )
     assert entry["placement"]["execution_class_id"] == expected_id
     assert entry["placement"]["policy_revision"] == recorded["policy_revision"]
-
-
 def test_every_report_body_matches_the_server_owned_schema(monkeypatch, tmp_path):
     """Each report the server serves validates against its own published schema.
 

@@ -150,13 +150,26 @@ def parse_limit(raw: Any) -> int:
     that satisfied it could reach ``int()`` and raise where this contract promises
     a typed refusal.  A page size is a run of ASCII digits, and that is the whole
     test.
+
+    The run is also bounded before it is converted.  A page size is at most
+    :data:`MAX_LIMIT`, so a value with more digits than the ceiling itself cannot
+    be one, and the ceiling is what is served either way; converting an arbitrarily
+    long run would make the *request length* decide whether the caller gets this
+    bounded refusal or a 500 from the interpreter's integer-string limit.
     """
     if raw is None or raw == "":
         return DEFAULT_LIMIT
     text = str(raw).strip()
     if not text.isascii() or not text.isdigit():
         raise AdminReportError("limit must be a positive integer")
-    return _bounded_limit(int(text))
+    # Leading zeros carry no magnitude, so the run's length is not its value:
+    # strip them before deciding how long the value actually is.
+    digits = text.lstrip("0") or "0"
+    if len(digits) > len(str(MAX_LIMIT)):
+        # ``_bounded_limit`` would clamp this to the ceiling, so the page is the
+        # same one; skip the conversion rather than let a long run reach it.
+        return MAX_LIMIT
+    return _bounded_limit(int(digits))
 
 
 def parse_since(raw: Any) -> float | None:

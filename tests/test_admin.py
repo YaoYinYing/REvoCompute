@@ -929,6 +929,48 @@ def test_admin_resource_api_refuses_a_change_that_would_strand_a_task_type(monke
     assert accepted.status_code == 200
 
 
+def test_admin_resource_api_does_not_fail_an_unrelated_edit_over_a_stale_profile(monkeypatch, tmp_path):
+    """A profile that was already impossible does not block an edit that cannot reach it.
+
+    The refusal exists to catch a configuration change that *strands* a task type.
+    A deployment can already be carrying a profile that a pre-gate edit left
+    unplaceable — an accelerator GRES naming a class no execution-class map
+    declares — and rebuilding every profile on every save would fail an unrelated
+    ``cpus`` change for that pre-existing state, reporting a breakage the operator
+    did not cause and did not touch.  The edit that actually strands a profile is
+    still refused; only a profile whose placeability the edit did not change is
+    left to the edit that fixes it.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    client = module.app.test_client()
+    admin_header = _admin_client_auth(module)
+    manage_db = module.app.config["manage_db"]
+
+    # A stale state an older deployment could already hold: an accelerator class
+    # map with no entry for the device class gpu_runner's GRES names.
+    manage_db.resource_set("slurm_execution_classes", "cpu=normal;gpu=gpuqueue")
+    manage_db.task_type_upsert("gpu_runner", slurm_gres="gpu:h100:1")
+
+    unrelated = client.put(
+        "/compute/api/auth/admin/config",
+        headers=admin_header,
+        json={"resources": {"cpus": "16"}},
+    )
+    assert unrelated.status_code == 200, unrelated.get_json()
+
+    # The edit that genuinely strands a profile is still refused.  The class map
+    # is what every accelerator stage resolves through, so removing it strands
+    # whichever enabled profile still needs an accelerator; the refusal names the
+    # profile rather than reporting an unfixable deployment.
+    stranded = client.put(
+        "/compute/api/auth/admin/config",
+        headers=admin_header,
+        json={"resources": {"slurm_execution_classes": "cpu=normal"}},
+    )
+    assert stranded.status_code == 400
+    assert "would be impossible to place" in stranded.get_json()["error"]
+
+
 def test_admin_resource_api_hides_stale_removed_runner_rows(monkeypatch, tmp_path):
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     client = module.app.test_client()
