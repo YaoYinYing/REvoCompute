@@ -9,12 +9,12 @@ from types import SimpleNamespace
 
 import pytest
 from revocompute.manage_db import ManageDatabase, read_resource_database
+from revocompute.placement import AcceleratorRequirement, resolve_submission_placement
 from revocompute.resource_policy import (
     ResolvedResources,
     ResourceValidationError,
     normalize_resource_value,
     resolve_resources,
-    resolve_submission_resources,
 )
 
 
@@ -105,7 +105,7 @@ def test_resource_snapshot_round_trip_is_strict():
         ResolvedResources.from_snapshot(broken)
 
 
-def test_submission_resources_cover_every_cpu_and_gpu_workflow_stage():
+def test_submission_placement_covers_every_cpu_and_gpu_workflow_stage():
     calls = []
 
     class _ManageDatabase:
@@ -113,22 +113,69 @@ def test_submission_resources_cover_every_cpu_and_gpu_workflow_stage():
             calls.append((name, requires_gpu, default_timeout_seconds))
             return _resolve(gpu=requires_gpu, timeout=default_timeout_seconds)
 
+        def task_type_get(self, tool):
+            return {}
+
+        def resource_all(self):
+            return {}
+
+        def slurm_allowed_queues(self):
+            return []
+
     task_type = SimpleNamespace(
+        name="demo",
+        gpus=True,
+        accelerator_requirement=None,
         workflow=(
-            SimpleNamespace(name="demo.features", requires_gpu=False),
-            SimpleNamespace(name="demo.model", requires_gpu=True),
-        )
+            SimpleNamespace(name="demo.features", requires_gpu=False, accelerator_requirement=None),
+            SimpleNamespace(name="demo.model", requires_gpu=True, accelerator_requirement=None),
+        ),
     )
     runner = SimpleNamespace(max_runtime_seconds=86400)
 
-    single, stages = resolve_submission_resources(_ManageDatabase(), task_type, runner)
+    placement = resolve_submission_placement(_ManageDatabase(), task_type, runner)
 
-    assert single is None
-    assert set(stages) == {"demo.features", "demo.model"}
-    assert not stages["demo.features"].requires_gpu
-    assert stages["demo.model"].requires_gpu
-    assert stages["demo.model"].gres == "gpu:1"
+    assert placement.primary is None
+    assert set(placement.stage_resources) == {"demo.features", "demo.model"}
+    assert not placement.stage_resources["demo.features"].requires_gpu
+    assert placement.stage_resources["demo.model"].requires_gpu
+    assert placement.stage_resources["demo.model"].gres == "gpu:1"
+    assert placement.stage_decisions["demo.features"].reason_code == "placed_cpu"
+    assert placement.stage_decisions["demo.model"].execution_class.identifier == "accelerator|scheduler-default|untypedx1"
     assert calls == [("demo.features", False, 86400), ("demo.model", True, 86400)]
+
+
+def test_single_stage_placement_records_its_own_decision():
+    class _ManageDatabase:
+        def resolve_task_resources(self, name, *, requires_gpu, default_timeout_seconds):
+            return _resolve({"cpus": 8, "slurm_partition": "gpu"}, {"slurm_gres": "gpu:a100:2"}, gpu=requires_gpu)
+
+        def task_type_get(self, tool):
+            return {}
+
+        def resource_all(self):
+            return {}
+
+        def slurm_allowed_queues(self):
+            return ["gpu"]
+
+    task_type = SimpleNamespace(
+        name="demo",
+        gpus=True,
+        accelerator_requirement=AcceleratorRequirement("a100", 2),
+        workflow=(),
+    )
+    placement = resolve_submission_placement(_ManageDatabase(), task_type, SimpleNamespace(max_runtime_seconds=60))
+
+    assert placement.primary is not None and placement.stage_resources == {}
+    decision = placement.primary_decision
+    assert decision is not None
+    assert decision.reason_code == "placed_accelerator"
+    assert decision.execution_class.identifier == "accelerator|gpu|a100x2"
+    fields = placement.public_input_fields()
+    assert fields["resource_policy"]["partition"] == "gpu"
+    assert fields["placement_decision"]["execution_class"]["device_class"] == "a100"
+    assert "resources" not in fields["placement_decision"]
 
 
 def test_manage_database_migrates_canonical_columns_and_resolves_policy(tmp_path):

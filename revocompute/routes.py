@@ -121,11 +121,17 @@ from revocompute.resource_ledger import (
     SECONDS_PER_CREDIT,
 )
 from revocompute.resource_observations import observations_for_guidance
+from revocompute.placement import (
+    PlacementDecision,
+    PlacementError,
+    explain_placement,
+    resolve_submission_placement,
+)
 from revocompute.resource_policy import (
     GLOBAL_RESOURCE_KEYS,
+    ResolvedResources,
     ResourceValidationError,
     normalize_resource_value,
-    resolve_submission_resources,
 )
 from revocompute.result_projection import project_result_manifest
 from revocompute.storage import (
@@ -1773,13 +1779,16 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
         return jsonify({"error": "GPU access required for this task type. Contact an administrator."}), 403
     if tt.gpus:
         _project_gpu_authorization(int(g.current_user["id"]))
-    resource_policy = None
-    resource_policies: dict[str, Any] = {}
     try:
-        resource_policy, resource_policies = resolve_submission_resources(managedb, tt, runner)
+        placement = resolve_submission_placement(managedb, tt, runner)
+    except PlacementError as exc:
+        logging.warning("Placement rejected submission for %s: %s", task_type, exc.reason_code)
+        return jsonify({"error": "This task type cannot be placed on this deployment", "reason_code": exc.reason_code, "message": str(exc)}), 503
     except ResourceValidationError as exc:
         logging.error("Resource policy rejected submission for %s: %s", task_type, exc)
         return jsonify({"error": "This task type has an invalid resource policy; contact an administrator."}), 503
+    resource_policy = placement.primary
+    resource_policies = placement.stage_resources
 
     uploaded_inputs, upload_error = _validate_input_uploads(task_type)
     if upload_error is not None:
@@ -2057,8 +2066,10 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
         "snapshot_root": snapshot_root,
         "submitted_at": datetime.now(tz=timezone.utc).isoformat(),
         "entities": entities,
-        "resource_policy": resource_policy.public_dict() if resource_policy is not None else None,
-        "resource_policies": {name: policy.public_dict() for name, policy in resource_policies.items()},
+        # The frozen snapshot and the decision that produced it travel together:
+        # a later reader answers "which resources" and "why that class" from one
+        # record, and never re-derives either from the policy of the day.
+        **placement.public_input_fields(),
         "workspace": workspace_payload,
         "request_id": g.request_id,
     }
@@ -2920,6 +2931,32 @@ def _task_execution_state_payload(task: dict[str, Any]) -> dict[str, Any]:
     return {"progress": summary.get("progress"), "outcome": summary.get("outcome")}
 
 
+def _recorded_execution_class(task: dict[str, Any]) -> dict[str, Any] | None:
+    """The execution class a Task was actually placed into, or ``None``.
+
+    Read from the decision recorded beside the Task's frozen resource snapshot at
+    submission, never recomputed: an operator asking "why is this Task on that
+    queue?" is asking about the decision that was made, and today's policy is
+    free to have moved on.  A Task that predates recorded decisions, or whose
+    record does not describe its own snapshot, reports nothing rather than a
+    class derived from a policy that never ran.
+    """
+    raw_form = task.get("input_form")
+    if not raw_form:
+        return None
+    try:
+        recorded = json.loads(raw_form) if isinstance(raw_form, str) else raw_form
+        record = recorded.get("placement_decision")
+        snapshot = recorded.get("resource_policy")
+        if not record or not snapshot:
+            return None
+        decision = PlacementDecision.from_record(record, ResolvedResources.from_snapshot(snapshot))
+    except (json.JSONDecodeError, TypeError, AttributeError, ResourceValidationError):
+        logging.warning("Task %s has an unreadable recorded placement", task.get("md5sum"))
+        return None
+    return decision.execution_class.to_dict()
+
+
 def _task_list_summary(task: dict[str, Any], *, include_owner: bool) -> dict[str, Any]:
     task_id = str(task["md5sum"])
     status = str(task["status"]).strip().lower()
@@ -2949,6 +2986,7 @@ def _task_list_summary(task: dict[str, Any], *, include_owner: bool) -> dict[str
         "finished_at": _iso_timestamp(task.get("finished_at")),
         "walltime_seconds": task.get("walltime"),
         "owner": (task.get("username") or None) if include_owner else None,
+        "placement": _recorded_execution_class(task),
         **_task_execution_state_payload(task),
         "error": _sanitize_task_error(task, task.get("error")),
         "result": {
@@ -2997,6 +3035,27 @@ def task_list():
     ]
     visible.sort(key=lambda task: float(task.get("uploaded_at") or 0), reverse=True)
     return jsonify({"tasks": [_task_list_summary(task, include_owner=is_admin) for task in visible]})
+
+
+@app.route("/compute/api/auth/admin/placement/explain/<task_type>", methods=["GET"])
+@login_required
+def admin_explain_placement(task_type: str):
+    """Where every stage of a task would be placed, and why, without submitting.
+
+    Read-only and bounded: the projection reuses the canonical planning path, so
+    it can never describe a different request than the one a submission would
+    make, and an impossible placement is reported as its bounded reason.
+    """
+    if _blocked := require_admin():
+        return _blocked
+    try:
+        tt, runner = _get_task_type(task_type)
+    except KeyError:
+        return jsonify({"error": f"Unknown task type: {task_type!r}"}), 404
+    manage_db = current_app.config.get("manage_db")
+    if manage_db is None:
+        return jsonify({"error": "Configuration database not available"}), 500
+    return jsonify(explain_placement(manage_db, tt, runner)), 200
 
 
 @app.route("/compute/dashboard", methods=["GET"])

@@ -2290,6 +2290,8 @@ export interface components {
             walltime_seconds: number | null;
             /** @description Username for administrator listings; null for ordinary users. */
             owner: string | null;
+            /** @description The execution class recorded when the Task was submitted, read from its frozen decision rather than recomputed. Null when the Task predates recorded decisions. */
+            placement: null | components["schemas"]["ExecutionClass"];
             /** @description Runner-owned structured progress, when available. */
             progress: {
                 [key: string]: unknown;
@@ -2301,6 +2303,21 @@ export interface components {
             result: components["schemas"]["TaskResultCapability"];
             actions: components["schemas"]["TaskActions"];
             input_preview: null | components["schemas"]["TaskInputPreview"];
+        };
+        ExecutionClass: {
+            /** @description Stable operator-facing identity of the class, so two decisions that selected the same class compare equal. */
+            id: string;
+            /** @enum {string} */
+            state: "cpu" | "accelerator";
+            /** @description The deployment-local queue the resolved request names. */
+            partition: string | null;
+            /** @description Accelerator class the GRES request named; null when untyped. */
+            device_class: string | null;
+            device_count: number;
+            qos: string | null;
+            constraint: string | null;
+            account: string | null;
+            exclusive: boolean;
         };
         TaskResultCapability: {
             available: boolean;

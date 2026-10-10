@@ -2079,7 +2079,7 @@
       },
       "TaskSummary": {
         "type": "object",
-        "required": ["task_id", "task_type", "display_name", "status", "terminal", "submitted_at", "finished_at", "walltime_seconds", "owner", "progress", "outcome", "error", "result", "actions", "input_preview"],
+        "required": ["task_id", "task_type", "display_name", "status", "terminal", "submitted_at", "finished_at", "walltime_seconds", "owner", "placement", "progress", "outcome", "error", "result", "actions", "input_preview"],
         "properties": {
           "task_id": {"$ref": "#/components/schemas/TaskId"},
           "task_type": {"type": "string"},
@@ -2090,6 +2090,13 @@
           "finished_at": {"type": ["string", "null"], "format": "date-time"},
           "walltime_seconds": {"type": ["number", "null"], "minimum": 0},
           "owner": {"type": ["string", "null"], "description": "Username for administrator listings; null for ordinary users."},
+          "placement": {
+            "oneOf": [
+              {"type": "null"},
+              {"$ref": "#/components/schemas/ExecutionClass"}
+            ],
+            "description": "The execution class recorded when the Task was submitted, read from its frozen decision rather than recomputed. Null when the Task predates recorded decisions."
+          },
           "progress": {"type": ["object", "null"], "additionalProperties": true, "description": "Runner-owned structured progress, when available."},
           "outcome": {"type": ["string", "null"], "description": "Standardized Runner outcome, when reported."},
           "error": {"type": ["string", "null"], "description": "Sanitized terminal error, when present."},
@@ -2101,6 +2108,22 @@
               {"$ref": "#/components/schemas/TaskInputPreview"}
             ]
           }
+        },
+        "additionalProperties": false
+      },
+      "ExecutionClass": {
+        "type": "object",
+        "required": ["id", "state", "partition", "device_class", "device_count", "qos", "constraint", "account", "exclusive"],
+        "properties": {
+          "id": {"type": "string", "description": "Stable operator-facing identity of the class, so two decisions that selected the same class compare equal."},
+          "state": {"type": "string", "enum": ["cpu", "accelerator"]},
+          "partition": {"type": ["string", "null"], "description": "The deployment-local queue the resolved request names."},
+          "device_class": {"type": ["string", "null"], "description": "Accelerator class the GRES request named; null when untyped."},
+          "device_count": {"type": "integer", "minimum": 0},
+          "qos": {"type": ["string", "null"]},
+          "constraint": {"type": ["string", "null"]},
+          "account": {"type": ["string", "null"]},
+          "exclusive": {"type": "boolean"}
         },
         "additionalProperties": false
       },

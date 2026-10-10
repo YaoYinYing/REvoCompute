@@ -545,6 +545,7 @@ def build_task_summary(
     walltime_seconds: float | None = 3.0,
     progress: Mapping[str, object] | None = None,
     input_preview: Mapping[str, str] | None = None,
+    placement: Mapping[str, object] | None = None,
 ) -> dict[str, Any]:
     """Build one dashboard task summary, including its authorized action URLs."""
     terminal = _terminal(status)
@@ -559,6 +560,7 @@ def build_task_summary(
         "finished_at": finished_at if terminal else None,
         "walltime_seconds": walltime_seconds if terminal else None,
         "owner": owner,
+        "placement": dict(placement) if placement else None,
         "progress": dict(progress) if progress else None,
         "outcome": outcome if status == "finished" else None,
         "error": error,
