@@ -318,6 +318,181 @@ def test_restricted_access_state_is_reflected_without_navigation(
     assert requests.access_request() == ()
 
 
+# ── restricted Runner policy terms ────────────────────────────────────────────
+
+
+def test_restricted_runner_detail_publishes_the_owning_policys_terms(page: Page) -> None:
+    """The page that announces a restriction also states its published terms.
+
+    The policy's notice and licence are server-projected vocabulary that the
+    detail response already carries, so they are rendered verbatim on the same
+    page that says access is restricted - never re-authored by the frontend.
+    """
+    access = AccessState.requestable_policy()
+    mount_scenario(page, controlled_scenario().with_access(access))
+
+    page.goto(f"{ORIGIN}/runners/sequence_demo")
+    expect(page.get_by_role("heading", name="Sequence demo", exact=True)).to_be_visible()
+
+    expect(page.get_by_text(access.notice_title, exact=True)).to_be_visible()
+    expect(page.get_by_text(access.notice_summary, exact=True)).to_be_visible()
+    licence = page.get_by_role("link", name=access.license_name, exact=True)
+    expect(licence).to_be_visible()
+    # The licence resolves to the server-projected URL, opened away from the page.
+    expect(licence).to_have_attribute("href", access.license_url)
+    expect(licence).to_have_attribute("target", "_blank")
+
+
+def test_unrestricted_runner_detail_publishes_no_policy_terms(page: Page) -> None:
+    """An unrestricted Runner has no restriction terms to publish."""
+    mount_scenario(page, controlled_scenario())
+    terms = AccessState.requestable_policy()
+
+    page.goto(f"{ORIGIN}/runners/sequence_demo")
+    expect(page.get_by_role("heading", name="Sequence demo", exact=True)).to_be_visible()
+
+    assert page.get_by_text(terms.notice_summary).count() == 0
+    assert page.get_by_text(terms.notice_title, exact=True).count() == 0
+    assert page.locator(f"a[href='{terms.license_url}']").count() == 0
+
+
+# ── a declined access request ─────────────────────────────────────────────────
+
+DECLINED_REQUEST_COPY = "A previous access request was declined. You may request access again."
+
+
+def _request_control(page: Page):
+    return page.get_by_role("button", name="Request access", exact=True)
+
+
+def test_declined_request_is_acknowledged_before_the_control_is_offered_again(page: Page) -> None:
+    """A rejected-but-requestable policy answers the previous request first.
+
+    The reader is told the earlier request was declined before being asked to
+    submit another one, and the run stays blocked in the meantime.
+    """
+    access = AccessState.requestable_policy(request_status="rejected")
+    scenario = controlled_scenario().with_access(access)
+    requests = mount_scenario(page, scenario).requests
+
+    _mount_create_task(page)
+    panel = page.locator(".ct-access-panel")
+    expect(panel).to_be_visible()
+
+    declined = panel.get_by_text(DECLINED_REQUEST_COPY, exact=True)
+    request = _request_control(page)
+    expect(declined).to_be_visible()
+    expect(request).to_be_visible()
+    # The acknowledgement is stated before the control that asks for a new one.
+    declined_box, request_box = declined.bounding_box(), request.bounding_box()
+    assert declined_box is not None and request_box is not None
+    assert declined_box["y"] < request_box["y"], "the declined state is stated before the request control"
+    # The declined state is never silently permissive: the run stays blocked.
+    expect(page.locator(".ct-validation")).to_contain_text("access approval")
+    expect(_run_task(page)).to_be_disabled()
+    assert requests.access_request() == ()
+
+
+def test_a_requestable_policy_states_no_decline(page: Page) -> None:
+    """Only an answered request carries the declined line."""
+    mount_scenario(page, controlled_scenario().with_access(AccessState.requestable_policy()))
+
+    _mount_create_task(page)
+    expect(_request_control(page)).to_be_visible()
+    assert page.get_by_text(DECLINED_REQUEST_COPY, exact=True).count() == 0
+
+
+# ── malformed Runner contracts ────────────────────────────────────────────────
+
+# What a browser throws when the payload is not the contract the page reads.
+_ENGINE_TEXT = ("Cannot read propert", "undefined (reading", "is not a function", "TypeError", "[object Object]")
+
+
+def _assert_no_engine_text(page: Page) -> None:
+    body = page.evaluate("() => document.body.innerText")
+    leaked = [signature for signature in _ENGINE_TEXT if signature in body]
+    assert leaked == [], f"engine-internal text reached the reader: {leaked}"
+
+
+def test_malformed_detail_contract_renders_frontend_copy(page: Page) -> None:
+    """A detail body missing its contract fields is described by frontend copy."""
+    errors: list[str] = []
+    mount_scenario(page, controlled_scenario())
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    page.route(f"{ORIGIN}/compute/api/types/sequence_demo", lambda route: route.fulfill(json={"name": "sequence_demo"}))
+
+    page.goto(f"{ORIGIN}/runners/sequence_demo")
+    expect(page.get_by_role("heading", name="Runner unavailable", exact=True)).to_be_visible()
+    expect(page.get_by_text("Unable to load this runner.", exact=True)).to_be_visible()
+    _assert_no_engine_text(page)
+    assert errors == []
+
+
+def test_unknown_runner_detail_keeps_the_server_authored_message(page: Page) -> None:
+    """A 404 is genuinely informative, so its server-authored message survives."""
+    mount_scenario(page, controlled_scenario())
+
+    page.goto(f"{ORIGIN}/runners/not_a_runner")
+    expect(page.get_by_role("heading", name="Runner unavailable", exact=True)).to_be_visible()
+    # The reader is told which method was not found, in the server's own words.
+    expect(page.get_by_text("not_a_runner", exact=False).first).to_be_visible()
+    _assert_no_engine_text(page)
+
+
+def test_malformed_catalog_contract_renders_frontend_copy(page: Page) -> None:
+    """A catalog body missing its contract fields is described by frontend copy."""
+    errors: list[str] = []
+    mount_scenario(page, controlled_scenario())
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    page.route(f"{ORIGIN}/compute/api/types", lambda route: route.fulfill(json={"task_types": []}))
+
+    page.goto(f"{ORIGIN}/runners")
+    expect(page.locator(".runner-catalog")).to_contain_text("Unable to load runners.")
+    _assert_no_engine_text(page)
+    assert errors == []
+
+
+@pytest.mark.parametrize("width", [320, 375, 768])
+def test_catalog_density_switch_sizes_to_its_two_controls(page: Page, width: int) -> None:
+    """The catalog's two-control density fieldset reserves no space it cannot use.
+
+    The fieldset shares a layout rule with the Dashboard's three-control view
+    switch, so on a stretched toolbar it used to carry a third, empty track. The
+    property is measured against the render rather than against the rule: the
+    fieldset's content box is compared with the width its two controls actually
+    occupy, and both controls must still sit on one row inside it.
+    """
+    extras = [controlled_runner(name=f"method_{index}", display_name=f"Method {index}") for index in range(1, 6)]
+    mount_scenario(page, controlled_scenario().with_catalog(extras))
+    page.set_viewport_size({"width": width, "height": 900})
+
+    page.goto(f"{ORIGIN}/runners")
+    expect(page.locator(".catalog-count")).to_be_visible()
+    switch = page.locator(".runner-toolbar fieldset").first
+    expect(switch).to_be_visible()
+
+    measured = page.evaluate(
+        """
+        () => {
+            const field = document.querySelector('.runner-toolbar fieldset');
+            const buttons = [...field.querySelectorAll('button')];
+            const box = field.getBoundingClientRect();
+            const occupancy = buttons.reduce((sum, b) => sum + b.getBoundingClientRect().width, 0)
+                - (buttons.length - 1);   /* the controls share a 1px seam */
+            const rows = new Set(buttons.map(b => Math.round(b.getBoundingClientRect().top)));
+            return {
+                free: box.width - occupancy,
+                rows: rows.size,
+                pageScrolls: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+            };
+        }
+        """
+    )
+    assert measured["rows"] == 1, "the two density controls share one fieldset row"
+    assert measured["free"] < 8, f"the density fieldset reserves {measured['free']}px beyond its controls"
+    assert measured["pageScrolls"] is False, "the fieldset fits the viewport"
+
+
 # ── responsive, content-loaded surfaces ───────────────────────────────────────
 
 

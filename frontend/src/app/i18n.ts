@@ -262,6 +262,9 @@ const en: Dictionary = {
   'ct.access.restricted': 'Restricted',
   'ct.access.panelRestricted': 'Restricted access',
   'ct.access.approvalRequired': 'Approval is required before this method can run.',
+  // A declined request is a state the reader must be told about before they are
+  // asked to repeat the work; the contract carries no reason, so none is invented.
+  'ct.access.declined': 'A previous access request was declined. You may request access again.',
   'ct.access.request': 'Request access',
   'ct.access.heading': 'Request Runner access',
   'ct.access.reasonLabel': 'Research use and affiliation',
@@ -737,6 +740,7 @@ const zhCN: Dictionary = {
   'ct.access.restricted': '受限访问',
   'ct.access.panelRestricted': '受限访问',
   'ct.access.approvalRequired': '运行此方法前需要获得批准。',
+  'ct.access.declined': '此前的访问申请未获批准。你可以再次申请授权。',
   'ct.access.request': '申请授权',
   'ct.access.heading': '申请计算模块访问权限',
   'ct.access.reasonLabel': '研究用途与所属机构',

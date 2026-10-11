@@ -142,6 +142,9 @@ export class CreateTask {
     const panel = node('section', 'ct-access-panel');
     panel.append(node('h2', '', access.granted ? t('ct.access.granted') : access.request_status === 'pending' ? t('ct.access.requested') : t('ct.access.panelRestricted')), node('p', '', access.description || t('ct.access.approvalRequired')));
     if (!access.granted && access.request_status !== 'pending' && access.requestable && access.policy_id) {
+      // A declined request is answered state, not a fresh one: the reader is told
+      // the previous request was declined before being offered the control again.
+      if (access.request_status === 'rejected') panel.append(node('p', 'ct-access-declined', t('ct.access.declined')));
       const button = node('button', 'ct-secondary', t('ct.access.request')); button.type = 'button';
       button.addEventListener('click', () => void this.openAccessRequest(panel, button)); panel.append(button);
     }
