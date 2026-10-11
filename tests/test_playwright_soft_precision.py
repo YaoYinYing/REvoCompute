@@ -109,7 +109,7 @@ def test_navigation_regions_are_labelled_and_hide_the_admin_group_from_ordinary_
     expect(page.locator(".app-nav [data-nav-group='compute'] a[aria-current='page']")).to_have_attribute("href", "/compute/dashboard")
     # No second Administration launcher survives in the top bar.
     expect(page.get_by_role("link", name="User control")).to_have_count(0)
-    expect(page.get_by_label("Administration")).to_have_count(0)
+    expect(page.locator(".app-header").get_by_label("Administration")).to_have_count(0)
 
 
 def test_administrator_navigation_region_is_present_in_the_left_navigation(page: Page) -> None:
@@ -126,7 +126,7 @@ def test_administrator_navigation_region_is_present_in_the_left_navigation(page:
     # The current page is still marked inside Compute, and the top bar keeps no
     # second Administration launcher.
     expect(page.locator(".app-nav [data-nav-group='compute'] a[aria-current='page']")).to_have_attribute("href", "/compute/dashboard")
-    expect(page.get_by_label("Administration")).to_have_count(0)
+    expect(page.locator(".app-header").get_by_label("Administration")).to_have_count(0)
 
 
 def test_mobile_navigation_is_bottom_anchored_not_a_thin_rail(page: Page) -> None:
