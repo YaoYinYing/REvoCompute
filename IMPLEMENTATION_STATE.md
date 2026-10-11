@@ -174,6 +174,44 @@ head `f99cbe57`, one writer each, disjoint surfaces: `pr74-fix-dashboard-shell`
 unit / build gate (Playwright where required) under the host lease. The two
 PROPOSE-CHANGE items are held for maintainer sign-off, not dispatched.
 
+## R2 receipt — fixes (2026-10-11)
+
+Three Fixers ran in parallel in isolated PR-owned worktrees cut from the
+campaign head `f99cbe57`, one writer per disjoint surface, no shared CSS file:
+
+- `chore/pr74-fix-dashboard-shell` @ `4cdc8aca` — R1-C-02 (dashboard table Status
+  now uses the shared `statusText()` = `task.outcome || task.status`, matching the
+  card; filter/sort/class stay on the raw enum) and R1-D-02 (nav captions demoted
+  `h2` -> `span`, each group `role="group"` + `aria-labelledby`; page `h1` now
+  leads the outline, no visual change). Follow-up: four browser assertions that
+  used `get_by_label("Administration")` as a proxy for "no top-bar launcher" were
+  re-scoped to `.app-header` (top bar) so they still assert the original
+  requirement without the newly-labelled region making them ambiguous.
+- `chore/pr74-fix-ct-320` @ `7de63615` — R1-B-01. Measured the TRUE culprit: the
+  single-column reflow already existed; the residual 320px overflow was a
+  min-content floor propagated through a bare `1fr` track from the native file
+  input. Fixed with `minmax(0, 1fr)` in the existing <=560px tier and
+  `flex-wrap: wrap` on `.result-header` at <=32rem (no new breakpoint). Flipped the
+  `strict=False` xfail to a required assertion; both parametrizations pass.
+- `chore/pr74-fix-i18n` @ `99b99bf3` — R1-B-03 + R1-D-01. Catalog expanded to
+  393 en / 393 zh-CN in exact parity; Create Task, Runners and Results frontend
+  prose routed through `t()`. Sec 11 boundary held: server-owned scientific
+  vocabulary is not in the catalog and stays English verbatim; templated validation
+  localizes only the frame, not the interpolated server label.
+
+**Integration.** All three merged into `chore/visual-qa-campaign-plan` ->
+**`8c04b86dcc2c750de7b37ef930f311251a636802`** (merges `826557f4`, `6eea9467`,
+`8c04b86d`; no conflicts). Integrated gate at `8c04b86d` under the host lease:
+`npm run typecheck` clean, `npm test` 129 passed / 25 files, `npm run build` +
+`verify:build` exit 0, and the three browser modules `130 passed in 115.74s`.
+
+**Held for maintainer (PROPOSE-CHANGE, NOT implemented):** R1-B-02 (pristine
+Create Task shows `N issues to fix` on mount) and R1-B-06 (restricted runner
+detail still shows a primary `Create task` beside the Restricted banner). Both are
+design-authority `design-proposal`, not defects; the downstream gate is correct in
+each case. The design language does not settle either, so they await a maintainer
+decision rather than being changed unilaterally.
+
 ## What is confirmed from GitHub
 
 - At authorization, PR #72 and PR #73 are closed and merged.
@@ -250,8 +288,10 @@ Fixers without Design Authority and Commander ownership allocation.
 | Round | Exact SHA | Fixture/demo | Explorers | Verified new | Fixed | Regressions | Gate | Status |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | R0 | `d1874814` | fixture harness + real Flask harness | 0 | — | — | — | realness matrix captured | **complete** |
-| R1 | `d1874814` | fixture harness | 4 explorers (A–D) | 24 raw entries | — | — | not run | **discovery complete; triage in flight** |
-| R2–R10 | pending | pending | 0 | — | — | — | not run | not started |
+| R1 | `d1874814` | fixture harness | 4 explorers (A–D) | 24 raw entries | — | — | not run | **discovery complete; triaged** |
+| R2 | `8c04b86d` | fixture harness | 3 fixers (disjoint surfaces) | 0 new | 4 approved fixes | none | typecheck+unit+build+browser all green | **fixes integrated; verification in flight** |
+| R3 | `8c04b86d` | fixture harness | 1 verifier + 1 confirmation explorer | in flight | — | — | not run | **in flight** |
+| R4–R10 | pending | pending | 0 | — | — | — | not run | not started |
 
 ## Exit
 
