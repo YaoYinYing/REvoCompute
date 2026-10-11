@@ -429,6 +429,28 @@ def test_a_decision_whose_record_disagrees_with_its_snapshot_is_rejected(deploym
         PlacementDecision.from_record(record, recorded.resources)
 
 
+def test_a_recorded_requirement_that_contradicts_its_snapshot_is_rejected(deployment):
+    """The recorded half that is *not* the class is checked against the snapshot too.
+
+    A tampered record can leave the execution class describing the snapshot exactly
+    while editing the requirement beside it, so a reader comparing only the class
+    would serve an accelerator requirement over a CPU snapshot as a recorded
+    decision.  Both halves are claims about one snapshot, so both are compared.
+    """
+    store = deployment(globals_={"slurm_partition": "normal"}, allowed_queues=("normal",))
+    recorded = _place(store, _task_type(gpus=False))
+    record = recorded.record()
+    assert record["execution_class"]["state"] == "cpu" and record["requires_accelerator"] is False
+
+    for tamper in (
+        {"requires_accelerator": True, "accelerator_requirement": {"class": "a100", "count": 1}},
+        {"requires_accelerator": True, "accelerator_requirement": None},
+    ):
+        edited = {**record, **tamper}
+        with pytest.raises(ResourceValidationError, match="declared accelerator requirement"):
+            PlacementDecision.from_record(edited, recorded.resources)
+
+
 def test_the_record_carries_no_second_copy_of_the_resolved_fields(deployment):
     store = deployment(globals_={"slurm_gres": "gpu:a100:1"}, allowed_queues=("gpu",))
     record = _place(store, _task_type(gpus=True)).record()

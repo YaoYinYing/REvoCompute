@@ -96,6 +96,24 @@ The envelope contains:
   it keeps its scientific result and only later admission — of any Task, GPU or
   CPU — is refused.
 
+### A stored policy no reader can interpret fails closed
+
+`soft_limit_bytes` comes from a per-user policy stored as one integer: an absent
+row inherits the deployment default, a non-negative value is a real ceiling
+(including `0`, which is a ceiling of zero bytes and never a spelling of
+"unlimited"), and a reserved negative sentinel means an explicit grant of no
+ceiling. A stored value outside that set cannot have been produced by the admin
+API, so `GET /compute/api/resource-entitlement`,
+`GET /compute/api/auth/admin/users/{user_id}/resource-entitlement`,
+`GET /compute/api/auth/admin/users/{user_id}/storage-quota`, and
+`GET /compute/api/auth/admin/reports/resources` refuse it with `503` and a
+bounded error message rather than serving it as a limit: reading an
+uninterpretable row as a ceiling would let state outside the API decide
+admission. `POST /compute/api/post` refuses to admit new work for the same
+reason, and the storage-quota `PUT` reports the same condition as a `409`,
+because the write reads the row it is replacing. Repair the row out of band; no
+admin request can produce it.
+
 ### Accounting facts are append-only
 
 Compute and durable-ownership facts share one append-only ledger. Database

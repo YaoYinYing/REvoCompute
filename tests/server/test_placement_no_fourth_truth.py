@@ -218,6 +218,12 @@ _TAMPERED = {
     "requirement_unparseable": lambda f: f["placement_decision"].__setitem__(
         "accelerator_requirement", {"class": "a100", "count": "many"}
     ),
+    # The non-identity half edited while the class half still identifies the
+    # snapshot: a reader comparing only the class would serve this as recorded.
+    "requirement_contradicts_snapshot": lambda f: (
+        f["placement_decision"].__setitem__("requires_accelerator", True),
+        f["placement_decision"].__setitem__("accelerator_requirement", {"class": "a100", "count": 1}),
+    ),
     "decision_garbage": lambda f: f.__setitem__("placement_decision", "not-a-record"),
 }
 

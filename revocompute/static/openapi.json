@@ -398,7 +398,8 @@
         "security": [{"bearerAuth": []}, {"apiKeyAuth": []}],
         "responses": {
           "200": {"description": "Current user's resource envelope", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ResourceEntitlement"}}}},
-          "401": {"$ref": "#/components/responses/Unauthorized"}
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "503": {"$ref": "#/components/responses/Unavailable"}
         }
       }
     },
@@ -413,7 +414,8 @@
           "200": {"description": "That user's resource envelope", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ResourceEntitlement"}}}},
           "401": {"$ref": "#/components/responses/Unauthorized"},
           "403": {"$ref": "#/components/responses/Forbidden"},
-          "404": {"$ref": "#/components/responses/NotFound"}
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "503": {"$ref": "#/components/responses/Unavailable"}
         }
       }
     },
@@ -429,7 +431,8 @@
           "200": {"description": "The effective durable-storage entitlement", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/StorageQuotaEntitlement"}}}},
           "401": {"$ref": "#/components/responses/Unauthorized"},
           "403": {"$ref": "#/components/responses/Forbidden"},
-          "404": {"$ref": "#/components/responses/NotFound"}
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "503": {"$ref": "#/components/responses/Unavailable"}
         }
       },
       "put": {
@@ -449,7 +452,8 @@
           "401": {"$ref": "#/components/responses/Unauthorized"},
           "403": {"$ref": "#/components/responses/Forbidden"},
           "404": {"$ref": "#/components/responses/NotFound"},
-          "409": {"description": "The idempotency key was already used for a different storage-quota change"}
+          "409": {"description": "The idempotency key was already used for a different storage-quota change, or a stored quota policy cannot be interpreted"},
+          "503": {"$ref": "#/components/responses/Unavailable"}
         }
       }
     },
@@ -1327,7 +1331,8 @@
           },
           "400": {"$ref": "#/components/responses/BadRequest"},
           "401": {"$ref": "#/components/responses/Unauthorized"},
-          "403": {"$ref": "#/components/responses/Forbidden"}
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "503": {"$ref": "#/components/responses/Unavailable"}
         }
       }
     },

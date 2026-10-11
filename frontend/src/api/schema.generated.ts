@@ -3936,6 +3936,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthorized"];
+            503: components["responses"]["Unavailable"];
         };
     };
     adminGetUserResourceEntitlement: {
@@ -3961,6 +3962,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            503: components["responses"]["Unavailable"];
         };
     };
     adminGetUserStorageQuota: {
@@ -3986,6 +3988,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            503: components["responses"]["Unavailable"];
         };
     };
     adminSetUserStorageQuota: {
@@ -4016,13 +4019,14 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
-            /** @description The idempotency key was already used for a different storage-quota change */
+            /** @description The idempotency key was already used for a different storage-quota change, or a stored quota policy cannot be interpreted */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
+            503: components["responses"]["Unavailable"];
         };
     };
     getCurrentGpuCredit: {
@@ -5895,6 +5899,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            503: components["responses"]["Unavailable"];
         };
     };
     adminReportIntegrity: {

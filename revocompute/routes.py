@@ -1874,7 +1874,22 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
 
         gpu_credit = None
         user_id = int(g.current_user["id"])
-        envelope = task_store.resource_envelope(user_id)
+        try:
+            envelope = task_store.resource_envelope(user_id)
+        except ResourceValidationError as exc:
+            # A stored storage policy the reader refuses to interpret is a broken
+            # deployment, not a bad submission, so it is answered with a bounded
+            # refusal here rather than surfacing as a traceback on every upload.
+            logging.error("Resource policy rejected submission for %s: %s", task_type, exc)
+            return (
+                jsonify(
+                    {
+                        "error": "This deployment's stored resource policy is not interpretable; "
+                        "contact an administrator."
+                    }
+                ),
+                503,
+            )
         # Durable storage is a submission-wide admission concern, not a GPU one:
         # it is the same envelope for every Task, and a user over their soft
         # ceiling is refused a new submission of any kind.  The overrun is
@@ -3677,13 +3692,18 @@ def admin_report_resources():
     subject = request.args.get("subject")
     if subject is not None and not str(subject).isdigit():
         return jsonify({"error": "subject must be a numeric user id"}), 400
-    return jsonify(
-        admin_reports.resource_operations(
+    try:
+        report = admin_reports.resource_operations(
             context["task_store"],
             int(subject) if subject is not None else None,
             limit=limit,
         )
-    )
+    except ResourceValidationError as exc:
+        # The report is a projection of canonical reads, so a stored policy none of
+        # them can interpret makes it unanswerable: the same bounded refusal the
+        # other read surfaces give, rather than a traceback.
+        return _typed_resource_refusal(exc)
+    return jsonify(report)
 
 
 @app.route("/compute/api/auth/admin/reports/integrity", methods=["GET"])
@@ -4258,6 +4278,22 @@ def _gpu_credit_payload(user_id: int, *, admin: bool = False) -> dict[str, Any]:
     }
 
 
+def _typed_resource_refusal(exc: ResourceValidationError):
+    """The bounded refusal for a stored resource policy no reader can interpret.
+
+    ``storage_quota.policy_from_stored_allowance`` fails closed when a stored
+    allowance is outside the encodable set, because reading it as a limit would let
+    external state decide admission.  That refusal is a fact about *stored* state,
+    not about the request, so every read that meets it reports the same bounded
+    message the write path already reports instead of an HTML 500 an operator would
+    have to debug from a traceback.  The status is 503 because the deployment
+    cannot serve the read until an administrator replaces the row, and the message
+    is the reader's own fixed wording rather than a rendering of stored bytes.
+    """
+    logging.error("A stored resource policy could not be interpreted: %s", exc)
+    return jsonify({"error": str(exc)}), 503
+
+
 def _entitlement_payload(user_id: int) -> dict[str, Any]:
     """The canonical resource envelope, as the typed projection #60 consumes.
 
@@ -4265,6 +4301,10 @@ def _entitlement_payload(user_id: int) -> dict[str, Any]:
     ownership: a later placement or reporting consumer reads this rather than
     re-deriving a balance, and ``enforceable`` distinguishes a unit this
     deployment actually gates from one it only accounts.
+
+    A stored storage policy the reader refuses to interpret raises
+    :class:`ResourceValidationError`; callers that answer a client translate it
+    with :func:`_typed_resource_refusal` rather than letting it become a 500.
     """
     return task_store.resource_envelope(user_id).to_dict()
 
@@ -4273,7 +4313,11 @@ def _entitlement_payload(user_id: int) -> dict[str, Any]:
 @login_required
 def current_resource_entitlement():
     """Return only the authenticated user's canonical resource envelope."""
-    return jsonify(_entitlement_payload(int(g.current_user["id"]))), 200
+    try:
+        payload = _entitlement_payload(int(g.current_user["id"]))
+    except ResourceValidationError as exc:
+        return _typed_resource_refusal(exc)
+    return jsonify(payload), 200
 
 
 @app.route("/compute/api/gpu-credit", methods=["GET"])
@@ -4902,7 +4946,11 @@ def admin_user_resource_entitlement(user_id: int):
     user = _get_user_db().get_user(user_id)
     if user is None or user.get("deleted"):
         return jsonify({"error": "User not found"}), 404
-    return jsonify(_entitlement_payload(user_id)), 200
+    try:
+        payload = _entitlement_payload(user_id)
+    except ResourceValidationError as exc:
+        return _typed_resource_refusal(exc)
+    return jsonify(payload), 200
 
 
 @app.route("/compute/api/auth/admin/users/<int:user_id>/gpu-credit", methods=["GET"])
@@ -4973,6 +5021,10 @@ def _storage_quota_payload(user_id: int) -> dict[str, Any]:
     operator can tell "no per-user override, the deployment default applies" from
     "an explicit grant of no ceiling".  A ceiling of ``0`` is reported as ``0``:
     it is a real ceiling of zero bytes, not a spelling of unlimited.
+
+    A stored policy the reader refuses to interpret raises
+    :class:`ResourceValidationError`; callers that answer a client translate it
+    with :func:`_typed_resource_refusal` rather than letting it become a 500.
     """
     policy = task_store.storage_quota_policy(user_id)
     entitlement = task_store.storage_entitlement(user_id)
@@ -4996,7 +5048,11 @@ def admin_user_storage_quota(user_id: int):
     user = _get_user_db().get_user(user_id)
     if user is None or user.get("deleted"):
         return jsonify({"error": "User not found"}), 404
-    return jsonify(_storage_quota_payload(user_id)), 200
+    try:
+        payload = _storage_quota_payload(user_id)
+    except ResourceValidationError as exc:
+        return _typed_resource_refusal(exc)
+    return jsonify(payload), 200
 
 
 @app.route("/compute/api/auth/admin/users/<int:user_id>/storage-quota", methods=["PUT"])
@@ -5035,13 +5091,19 @@ def admin_set_user_storage_quota(user_id: int):
         )
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 409
+    try:
+        payload = _storage_quota_payload(user_id)
+    except ResourceValidationError as exc:
+        # The write landed but the row cannot be read back the same way: report
+        # the unreadable policy rather than a traceback after a successful write.
+        return _typed_resource_refusal(exc)
     emit_event(
         "resource.policy.adjusted",
         user_id=user_id,
         reason_code=LedgerReason.ALLOWANCE_SET.value,
         state=policy.state.value,
     )
-    return jsonify({"entry_id": entry["id"], "storage_quota": _storage_quota_payload(user_id)}), 200
+    return jsonify({"entry_id": entry["id"], "storage_quota": payload}), 200
 
 
 @app.route("/compute/api/auth/admin/users/<int:user_id>/gpu-credit/allowance", methods=["PUT"])

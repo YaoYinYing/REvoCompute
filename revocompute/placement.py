@@ -363,6 +363,27 @@ class PlacementDecision:
                 "Recorded placement decision disagrees with its frozen resource snapshot off the "
                 "class identity (qos, account, constraint, or exclusivity)"
             )
+        # The class is only the identity half of the decision.  Whether the stage
+        # required an accelerator at all, and which device class it named, are
+        # recorded beside it and are claims about the same snapshot, so an edit to
+        # one of them must be a mismatch rather than a fact: a record claiming an
+        # accelerator requirement over a CPU snapshot would otherwise be served as
+        # ``placed_cpu``, because its class half still describes the snapshot.  The
+        # check is the write path's own verifier, run over the recorded halves, so
+        # the reader cannot accept a combination the submission path would have
+        # refused — and it reads only the record and the snapshot, never today's
+        # configuration, so a recorded decision stays history.
+        try:
+            verify_placement(
+                resources,
+                decision.accelerator_requirement,
+                requires_accelerator=decision.requires_accelerator,
+            )
+        except PlacementError as exc:
+            raise ResourceValidationError(
+                "Recorded placement decision disagrees with its frozen resource snapshot about the "
+                f"declared accelerator requirement ({exc.reason_code})"
+            ) from exc
         return decision
 
 
