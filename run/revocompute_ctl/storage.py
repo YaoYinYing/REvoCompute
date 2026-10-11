@@ -152,26 +152,6 @@ def validate_result_storage(state, compose_cmd: tuple[str, ...]) -> None:
     if web_check.returncode != 0:
         print(f"Results directory is not writable by the web container: {results_dir}", file=sys.stderr)
         raise SystemExit(1)
-    gateway_check = run_cmd(
-        [
-            *compose_cmd,
-            "-f",
-            str(COMPOSE_FILE),
-            "--env-file",
-            state.env_file,
-            "exec",
-            "-T",
-            "gateway",
-            "sh",
-            "-c",
-            "test -r /srv/results && test -x /srv/results",
-        ],
-        env=state.exported(),
-        check=False,
-    )
-    if gateway_check.returncode != 0:
-        print(f"Results directory is not readable by the Nginx gateway: {results_dir}", file=sys.stderr)
-        raise SystemExit(1)
 
 
 _AUTH_DB_WRITE_CHECK = (

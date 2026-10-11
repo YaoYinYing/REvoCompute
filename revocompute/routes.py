@@ -529,7 +529,7 @@ def _tool_task_artifact(tool_call_id: str, role: Any, expression: str) -> dict[s
         raise ToolWorkspaceError("Task artifact reference is unavailable")
     stream = resolved.pop("verified_stream")
     try:
-        # Materialize from the verified descriptor, not from ``physical_path``:
+        # Materialize from the verified snapshot, not from the resolved name:
         # the bytes copied into the Tool workspace are exactly the bytes whose
         # manifest identity was checked, so a replacement between resolution and
         # materialization cannot enter the workspace.
@@ -2387,7 +2387,7 @@ def get_results(md5sum):
             404,
         )
 
-    archive_ready = os.path.isfile(_task_zip_path(task))
+    archive_ready = _published_archive(task) is not None
     payload = dict(manifest)
     full_results = _task_full_results_allowed(task)
     if not full_results:
@@ -2457,6 +2457,53 @@ def get_result_logical_file(md5sum: str, file_id: str):
     return get_result_artifact(md5sum, files[index]["path"])
 
 
+def _published_archive(task: dict[str, Any]) -> str | None:
+    """Return the cached archive's name when there is one to offer for this task.
+
+    The cheap half of the archive decision, for the surfaces that only *advertise*
+    an archive: the publication must be available (the anchored manifest is
+    readable) and the canonical name must be the private regular file a build
+    installs, not a symlink or a second link.  Nothing here reads the archive, so
+    a Task list can ask the question for every row.
+
+    It is deliberately not the authority on the archive's *contents*: the bytes a
+    caller receives are decided by :func:`_deliver_published_archive`, which
+    verifies the descriptor it is about to stream against the anchored manifest.
+    An advertisement can therefore be optimistic, and the delivery is what refuses.
+    """
+
+    from revocompute import storage as storage_module
+
+    if current_app.config["storage_resolver"].read_manifest_bytes(task) is None:
+        return None
+    try:
+        archive = _task_zip_path(task)
+    except (OSError, ValueError):
+        return None
+    descriptor = storage_module.open_published_regular_file(archive)
+    if descriptor is None:
+        return None
+    os.close(descriptor)
+    return archive
+
+
+def _archive_unavailable() -> tuple[Response, int]:
+    """The one refusal for an archive that is not the publication it claims."""
+    return jsonify({"error": "Results archive is not available"}), 409
+
+
+def _declared_artifacts(resolver: Any, task: dict[str, Any]) -> list[dict[str, Any]]:
+    """The artifacts a resolver's verified manifest declares, or none.
+
+    Reads through the resolver rather than a second parse of local bytes, so the
+    member identities an archive is checked against are the same ones every other
+    consumer enforces.
+    """
+    manifest = resolver.load_manifest(task)
+    artifacts = (manifest or {}).get("artifacts")
+    return [item for item in artifacts if isinstance(item, dict)] if isinstance(artifacts, list) else []
+
+
 @app.route("/compute/api/results/<md5sum>/storyboard/<path:asset>", methods=["GET"])
 @optional_user
 def get_result_storyboard_asset(md5sum: str, asset: str):
@@ -2489,31 +2536,51 @@ def get_result_storyboard_asset(md5sum: str, asset: str):
     return response
 
 
-def _result_artifact(task: dict[str, Any], relative_path: str) -> tuple[str, Any, dict[str, Any]] | None:
+def _result_artifact(task: dict[str, Any], relative_path: str) -> dict[str, Any] | None:
     """Resolve only regular files published by the task's finalized manifest.
 
-    Returns the path, the verified open descriptor, and the manifest entry.  The
-    descriptor's bytes and identity were just checked against the manifest, so a
-    consumer must consume *it* rather than reopen ``path``: after publication
-    identity has been verified, a pathname reopen would let a replaced file serve
-    bytes that never satisfied the manifest identity.
+    Returns the manifest entry plus the verified private snapshot
+    (``verified_stream``).  The snapshot's bytes and identity were just checked
+    against the manifest, so a consumer must consume *it* rather than resolve the
+    name again: after publication identity has been verified, a second resolution
+    -- of the same name, in the same request -- could serve bytes that never
+    satisfied the manifest identity, and a rewrite of the runner's own inode in
+    place could not be refused by any check the file itself can answer.  The
+    caller owns the snapshot and must close it.
     """
-    resolved = current_app.config["storage_resolver"].resolve_artifact(task, relative_path)
+    return current_app.config["storage_resolver"].resolve_artifact(task, relative_path)
+
+
+def _with_verified_artifact(resolved: dict[str, Any] | None, task: dict[str, Any]) -> dict[str, Any] | None:
+    """Apply authorization to one resolved published artifact, or refuse it.
+
+    Every artifact surface -- the artifact download, the logical-file route, the
+    ndarray and table previews -- makes the same ownership/visibility decision
+    about the *same* verified snapshot, so the decision lives here instead of
+    being restated (and possibly restated differently) at each route.  ``None``
+    means "not visible"; the snapshot is closed before the refusal.
+    """
     if resolved is None:
         return None
-    stream = resolved.pop("verified_stream")
-    return resolved.pop("physical_path"), stream, resolved
+    if not _task_artifact_access_allowed(task, resolved):
+        resolved["verified_stream"].close()
+        return None
+    return resolved
 
 
-def _verified_payload(stream: Any) -> Response:
-    """Stream a verified descriptor directly, never reopening its pathname.
+def _verified_payload(stream: Any, size: int) -> Response:
+    """Serve one verified artifact from the private snapshot its digest describes.
 
     Everything — full body, HEAD, and a single bounded ``Range`` — reads from the
-    one verified descriptor, so no later pathname open can substitute different
-    bytes.  Range support lives here rather than in ``send_from_directory``
-    because that helper would reopen the pathname that was just verified.
+    one verified snapshot the resolver produced while it was verifying that
+    artifact, so what a caller receives is a version of the file rather than a
+    window onto a mutable inode: no later pathname open, and no in-place rewrite
+    of the runner's file, can substitute different bytes.  The length is the one
+    the manifest authorized and the digest was computed over, never a fresh
+    ``fstat`` of a file that may have changed since.  Range support lives here
+    rather than in ``send_from_directory`` because that helper would reopen the
+    pathname that was just verified.
     """
-    size = os.fstat(stream.fileno()).st_size
     raw_range = request.headers.get("Range", "")
     if request.method == "HEAD":
         stream.close()
@@ -2547,10 +2614,11 @@ def _verified_payload(stream: Any) -> Response:
 
 
 class _BoundedStream:
-    """Yield at most *length* bytes from a verified descriptor, then close it.
+    """Yield at most *length* bytes from a verified snapshot, then close it.
 
     Each read is bounded by the chunk constant rather than the total length, so
-    the bytes of a large artifact move in bounded chunks.
+    the bytes of a large artifact move in bounded chunks, and the snapshot the
+    bytes came from is what the reader is closed on.
     """
 
     def __init__(self, stream: Any, length: int):
@@ -2580,30 +2648,25 @@ def get_result_artifact(md5sum: str, relative_path: str):
         return jsonify({"status": "not_found", "md5sum": md5sum}), 404
     if not _task_access_allowed(task):
         return _task_not_found(md5sum)
-    resolved = _result_artifact(task, relative_path)
+    resolved = _with_verified_artifact(_result_artifact(task, relative_path), task)
     if resolved is None:
         return jsonify({"error": "Artifact not found"}), 404
-    path, stream, artifact = resolved
-    if not _task_artifact_access_allowed(task, artifact):
-        stream.close()
-        return jsonify({"error": "Artifact not found"}), 404
+    stream, artifact = resolved["verified_stream"], resolved
     # Artifacts are untrusted runner output — default to attachment so they
     # are never rendered same-origin.  `?download=1` still forces a download
     # and `?download=0` explicitly opts back into inline rendering.
     as_attachment = request.args.get("download", "1") in {"1", "true", "yes"}
-    # Delivery always consumes the verified descriptor.  ``RESULT_DOWNLOAD_MODE``
-    # is accepted for deployment compatibility, but X-Accel-Redirect is NOT used
-    # here: the offload would have nginx reopen this mutable pathname, which
-    # could serve bytes that never satisfied the manifest identity.  Descriptor-
-    # bound delivery therefore replaces the offload on this endpoint; a redesign
-    # that could keep the offload needs an immutable publication store, which is
-    # out of scope for this change.
-    response = _verified_payload(stream)
+    # Delivery always consumes the verified snapshot: an X-Accel-Redirect
+    # offload would have the gateway reopen the mutable pathname, which could
+    # serve bytes that never satisfied the manifest identity.  Snapshot-bound
+    # delivery therefore replaces the offload on the artifact and archive
+    # endpoints.
+    response = _verified_payload(stream, int(resolved["size"]))
     response.mimetype = artifact.get("media_type") or "application/octet-stream"
     response.headers.set(
         "Content-Disposition",
         "attachment" if as_attachment else "inline",
-        filename=os.path.basename(path),
+        filename=os.path.basename(str(resolved["path"])),
     )
     response.headers["Cache-Control"] = "private, no-store"
     # Defense in depth: even an explicitly-inline artifact runs no scripts.
@@ -2623,13 +2686,10 @@ def get_result_ndarray(md5sum: str, relative_path: str):
         return jsonify({"status": "not_found", "md5sum": md5sum}), 404
     if not _task_access_allowed(task):
         return _task_not_found(md5sum)
-    resolved = _result_artifact(task, relative_path)
+    resolved = _with_verified_artifact(_result_artifact(task, relative_path), task)
     if resolved is None:
         return jsonify({"error": "Array artifact not found"}), 404
-    _path, stream, artifact = resolved
-    if not _task_artifact_access_allowed(task, artifact):
-        stream.close()
-        return jsonify({"error": "Array artifact not found"}), 404
+    stream, artifact = resolved["verified_stream"], resolved
     if set(request.args) - {"key", "kind", "max_elements"}:
         stream.close()
         return jsonify({"error": "Invalid array query"}), 400
@@ -2656,7 +2716,7 @@ def get_result_ndarray(md5sum: str, relative_path: str):
     key = keys[0] if keys else None
     kind = kinds[0] if kinds else "numeric"
     try:
-        # The projection parses from the verified descriptor itself, so a file
+        # The projection parses from the verified snapshot itself, so a file
         # replaced after publication identity was checked can never be projected:
         # after publication identity has been verified, a consumer must consume
         # the verified object, not reopen its pathname.
@@ -2683,13 +2743,10 @@ def get_result_table(md5sum: str, relative_path: str):
         return jsonify({"status": "not_found", "md5sum": md5sum}), 404
     if not _task_access_allowed(task):
         return _task_not_found(md5sum)
-    resolved = _result_artifact(task, relative_path)
+    resolved = _with_verified_artifact(_result_artifact(task, relative_path), task)
     if resolved is None:
         return jsonify({"error": "Table artifact not found"}), 404
-    _path, stream, artifact = resolved
-    if not _task_artifact_access_allowed(task, artifact):
-        stream.close()
-        return jsonify({"error": "Table artifact not found"}), 404
+    stream, artifact = resolved["verified_stream"], resolved
     declared_table = artifact.get("preview") == "table"
     if not declared_table:
         manifest = current_app.config["storage_resolver"].load_manifest(task) or {}
@@ -2724,8 +2781,8 @@ def get_result_table(md5sum: str, relative_path: str):
         return cost
 
     try:
-        # The verified descriptor stays open for the whole parse, so the page is
-        # read from the same inode whose identity the manifest approved.
+        # The verified snapshot is read for the whole parse, so the page comes
+        # from the bytes whose identity the manifest approved.
         with stream, io.TextIOWrapper(stream, encoding='utf-8', newline='') as handle:
             reader = csv.reader(handle, delimiter=delimiter)
             columns = next(reader, [])
@@ -2750,7 +2807,6 @@ def get_result_table(md5sum: str, relative_path: str):
                 page_bytes += cost
                 rows.append(row)
     except (OSError, UnicodeError, csv.Error, ValueError):
-        stream.close()
         logging.exception("Table preview failed for task %s artifact %s", md5sum, relative_path)
         return jsonify({"error": "Table could not be previewed"}), 400
     return jsonify({"columns": columns, "rows": rows, "offset": offset, "limit": limit, "has_more": has_more})
@@ -2777,7 +2833,7 @@ def request_results_archive(md5sum: str):
     publication = _result_publication_state(task)
     if publication != PUBLICATION_AVAILABLE:
         return _publication_refusal_response(md5sum, publication)
-    if os.path.isfile(_task_zip_path(task)):
+    if _published_archive(task) is not None:
         return jsonify({"status": "ready", "download_url": f"/compute/api/download/{md5sum}"}), 200
     async_result = build_results_archive.apply_async(args=[md5sum])
     return jsonify({"status": "building", "job_id": async_result.id, "md5sum": md5sum}), 202
@@ -2815,8 +2871,8 @@ def download_results(md5sum):
     if publication != PUBLICATION_AVAILABLE:
         return _publication_refusal_response(md5sum, publication)
 
-    zip_filename = _task_zip_path(task)
-    if not os.path.exists(zip_filename):
+    zip_filename = _published_archive(task)
+    if zip_filename is None:
         return (
             jsonify(
                 {
@@ -2829,20 +2885,59 @@ def download_results(md5sum):
             409,
         )
 
-    if app.config["RESULT_DOWNLOAD_MODE"] == "nginx":
-        archive_name = os.path.relpath(zip_filename, app.config["RESULTS_FOLDER"]).replace(os.sep, "/")
-        response = Response(status=200, mimetype="application/zip")
-        response.headers["X-Accel-Redirect"] = f"/_protected_results/{archive_name}"
-        response.headers.set("Content-Disposition", "attachment", filename=_task_zip_download_name(task))
-        response.headers["Cache-Control"] = "private, no-store"
-        return response
+    return _deliver_published_archive(task, zip_filename)
 
-    return send_from_directory(
-        os.path.dirname(zip_filename),
-        os.path.basename(zip_filename),
-        as_attachment=True,
-        download_name=_task_zip_download_name(task),
+
+def _deliver_published_archive(task: dict[str, Any], archive: str) -> Response:
+    """Serve the cached archive from the private snapshot its verification read.
+
+    The check and the delivery are one act about one set of bytes, not a check
+    followed by a reopen: the archive is opened here read-only and without
+    following a final symlink, it is copied once into a private unlinked snapshot
+    whose members are then verified against the anchored manifest, and the
+    *snapshot those members were verified in* is what streams.  A replacement
+    between an earlier readiness answer and this delivery, and an in-place
+    rewrite of the same length, therefore both reach nothing -- what a caller
+    receives is the version of the archive the member digests describe.
+    """
+    from revocompute import storage as storage_module
+
+    resolver = current_app.config["storage_resolver"]
+    manifest_bytes = resolver.read_manifest_bytes(task)
+    descriptor = storage_module.open_published_regular_file(archive)
+    if manifest_bytes is None or descriptor is None:
+        return _archive_unavailable()
+    declared = _declared_artifacts(resolver, task)
+    try:
+        # ``verify_regular_file`` owns the descriptor from here: it *consumes*
+        # it, so every failure path below has already closed it and this route
+        # must not close the number a second time.  The bound is the one the
+        # download advertises, so an archive is never copied past the capacity
+        # the server is willing to serve.
+        snapshot, _digest = storage_module.verify_regular_file(descriptor, CONFIG.max_published_bytes)
+    except OSError:
+        return _archive_unavailable()
+    try:
+        if not storage_module.verified_publication_archive(snapshot, manifest_bytes, declared):
+            snapshot.close()
+            return _archive_unavailable()
+    except BaseException:
+        snapshot.close()
+        raise
+    # The bytes served are the ones just verified: the private snapshot, not the
+    # still-writable inode the archive lives on.  Streaming it closes it, so the
+    # snapshot is removed when the response body is finished (or dropped).
+    size = snapshot.seek(0, os.SEEK_END)
+    snapshot.seek(0)
+    response = Response(_BoundedStream(snapshot, size), mimetype="application/zip", direct_passthrough=True)
+    response.headers["Content-Length"] = str(size)
+    # The download name is the sanitized one, derived from the task's own
+    # filename: a raw runner-controlled name would reach the header.
+    response.headers["Content-Disposition"] = "attachment; filename=\"{}\"".format(
+        _task_zip_download_name(task)
     )
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
 
 
 @app.route("/compute/api/cancel/<md5sum>", methods=["POST"])
@@ -2991,7 +3086,7 @@ def _task_list_summary(task: dict[str, Any], *, include_owner: bool) -> dict[str
     publication = _result_publication_state(task)
     result_available = publication == PUBLICATION_AVAILABLE
     try:
-        archive_ready = os.path.isfile(_task_zip_path(task)) and result_available
+        archive_ready = _published_archive(task) is not None and result_available
     except (OSError, ValueError):
         archive_ready = False
     can_cancel = _task_mutation_allowed(task) and status in {"pending", "queued", "running"}

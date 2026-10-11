@@ -64,16 +64,16 @@ def test_format_runner_identity_requires_both_parts():
 
 
 def test_env_choice_normalizes_allowed_value(monkeypatch):
-    monkeypatch.setenv("RESULT_DOWNLOAD_MODE", " NGINX ")
+    monkeypatch.setenv("REVOCOMPUTE_SCRATCH_BACKEND", " RAM ")
 
-    assert env_choice("RESULT_DOWNLOAD_MODE", "flask", {"flask", "nginx"}) == "nginx"
+    assert env_choice("REVOCOMPUTE_SCRATCH_BACKEND", "disk", {"disk", "ram"}) == "ram"
 
 
 def test_env_choice_rejects_unknown_value(monkeypatch):
-    monkeypatch.setenv("RESULT_DOWNLOAD_MODE", "object-storage")
+    monkeypatch.setenv("REVOCOMPUTE_SCRATCH_BACKEND", "object-storage")
 
-    with pytest.raises(ValueError, match="must be one of: flask, nginx"):
-        env_choice("RESULT_DOWNLOAD_MODE", "flask", {"flask", "nginx"})
+    with pytest.raises(ValueError, match="must be one of: disk, ram"):
+        env_choice("REVOCOMPUTE_SCRATCH_BACKEND", "disk", {"disk", "ram"})
 
 
 def test_pssm_config_uses_numeric_runner_identity(monkeypatch, tmp_path):
@@ -86,7 +86,6 @@ def test_pssm_config_uses_numeric_runner_identity(monkeypatch, tmp_path):
         },
     )
     assert module.CONFIG.docker_user == "1234:5678"
-    assert module.CONFIG.result_download_mode == "flask"
     assert module.CONFIG.scratch_backend == "disk"
 
 

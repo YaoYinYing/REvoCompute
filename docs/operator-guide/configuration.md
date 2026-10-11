@@ -144,8 +144,7 @@ obvious; it is a guide to the contract, not a second copy of it.
 | `MAXMEM` | Global GREMLIN HHblits memory cap in GiB. Per-task SLURM CPU/memory requests are configured in the management database, not runner YAML. |
 | `WORKER_CONCURRENCY` | Celery worker concurrency. Must be a positive integer: the value is interpolated into the container command line. |
 | `GUNICORN_WORKERS` | Gunicorn worker count. Must be a positive integer. |
-| `GUNICORN_TIMEOUT` | Gunicorn request timeout in seconds (default: `120`; must be a positive integer). Result transfers are handled by Nginx and do not require a long timeout. |
-| `RESULT_DOWNLOAD_MODE` | Result delivery backend: `nginx` in Compose production, or `flask` for direct local Flask development. |
+| `GUNICORN_TIMEOUT` | Gunicorn request timeout in seconds (default: `120`; must be a positive integer). |
 | `PORT` | Public HTTP port. Published loopback-only (`127.0.0.1`) by default — the host TLS/Basic-Auth nginx is the entry point, and it must reach the gateway at `localhost:8080`. |
 | `GATEWAY_BIND` | Interface the gateway publishes `PORT` on (default: `127.0.0.1`). Set `0.0.0.0` when the entry proxy terminates elsewhere or uses an interface IP (e.g. a Cloudflare Tunnel origin configured with the host IP); keep TLS/auth in front and restrict port access to the proxy's address. |
 | `REDIS_PASSWORD` | Redis `requirepass` secret. Generated and persisted into the env file by `restart.sh setup`; the compose stack applies it to `redis-server` and to the Celery broker/backend URIs. Set explicitly only for an external Redis. |

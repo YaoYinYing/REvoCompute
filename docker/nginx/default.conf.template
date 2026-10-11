@@ -53,20 +53,5 @@ http {
             default_type text/html;
             add_header Retry-After 120 always;
         }
-
-        location /_protected_results/ {
-            internal;
-            alias /srv/results/;
-            disable_symlinks on;
-            limit_except GET {
-                deny all;
-            }
-            sendfile on;
-            tcp_nopush on;
-            default_type application/zip;
-            add_header X-Content-Type-Options nosniff always;
-            # Runner-controlled artifacts must never execute scripts same-origin.
-            add_header Content-Security-Policy "sandbox" always;
-        }
     }
 }
