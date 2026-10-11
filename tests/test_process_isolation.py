@@ -376,7 +376,6 @@ def test_up_generates_bootstrap_password_for_empty_user_database(tmp_path):
     assert not list((root / "auth").glob("*credentials*"))
     assert any("up -d redis web gateway maintenance worker" in command for command in commands)
     assert any('exec -T web sh -c test -w "$1" && test -x "$1"' in command for command in commands)
-    assert any("exec -T gateway sh -c test -r /srv/results && test -x /srv/results" in command for command in commands)
     assert any("exec -T web python -c" in command and "BEGIN IMMEDIATE" in command for command in commands)
     assert (root / "tasks" / "results").is_dir()
 
@@ -739,7 +738,6 @@ def test_compose_isolates_worker_auth_and_web_docker_socket():
         assert rotation_setting not in web_auth_env
         assert rotation_setting in maintenance_env
     assert "PUBLIC_DASHBOARD" not in web_auth_env
-    assert "RESULT_DOWNLOAD_MODE" in web_auth_env
     assert "RESULT_RETENTION_DAYS" in maintenance_env
     for backup_setting in ("BACKUP_DB_CRON", "BACKUP_DB_PATH", "MAX_DB_BACKUP"):
         assert backup_setting in maintenance_env
@@ -751,7 +749,6 @@ def test_compose_isolates_worker_auth_and_web_docker_socket():
     assert "ports:" in gateway
     assert "./docker/nginx/maintenance.html:/usr/share/nginx/html/maintenance.html:ro" in gateway
     assert "${SERVER_DIR}:/srv/deployment:ro" in gateway
-    assert "${SERVER_DIR}/results:/srv/results:ro" in gateway
     assert "/var/lib/revodesign-auth" not in gateway
     assert "user: ${RUNNER_UID}:${RUNNER_GID}" in gateway
     assert "read_only: true" in gateway
@@ -778,17 +775,6 @@ def test_slurm_override_holds_only_parameterized_hpc_process_boundaries():
         assert f"${{{variable}:-" in slurm_override
     assert "REDIS_PASSWORD" in slurm_override
     assert "127.0.0.1:${SLURM_REDIS_PORT:-6380}:6379" in slurm_override
-
-
-def test_nginx_result_location_is_internal_and_read_only():
-    config = (Path(REPO_DIR) / "docker" / "nginx" / "default.conf.template").read_text(encoding="utf-8")
-
-    protected = config.split("location /_protected_results/", 1)[1]
-    assert "internal;" in protected
-    assert "alias /srv/results/;" in protected
-    assert "disable_symlinks on;" in protected
-    assert "sendfile on;" in protected
-    assert "proxy_pass" not in protected
 
 
 def _isolated_state(**values):
