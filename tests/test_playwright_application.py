@@ -1298,7 +1298,19 @@ def test_admin_configuration_and_logs_use_live_controls(page: Page) -> None:
 
 
 def _rgb(value: str) -> tuple[float, float, float, float]:
-    """Parse a painted colour into 0-255 channels plus its alpha."""
+    """Parse a painted colour into 0-255 channels plus its alpha.
+
+    Accepts the legacy ``rgb()``/``rgba()`` form and the modern ``color(srgb …)``
+    form a resolved ``color-mix()`` computes to, so a tinted ring is measured as
+    the colour the browser reports rather than failing to parse.
+    """
+    if value.startswith("color("):
+        inner = value[value.find("(") + 1:value.rfind(")")].replace("/", " ")
+        parts = [part for part in inner.split() if part]
+        assert parts[0] == "srgb", value
+        channels = [float(part) * 255 for part in parts[1:4]]
+        alpha = float(parts[4]) if len(parts) > 4 else 1.0
+        return channels[0], channels[1], channels[2], alpha
     inner = value[value.find("(") + 1:value.rfind(")")].replace(",", " ").replace("/", " ")
     parts = [part for part in inner.split() if part]
     channels = [float(part[:-1]) * 2.55 if part.endswith("%") else float(part) for part in parts[:3]]
