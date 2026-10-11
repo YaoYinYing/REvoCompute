@@ -19,6 +19,8 @@ export interface ParameterDefinition {
   choices: Array<string | number | boolean>;
   minimum?: number;
   maximum?: number;
+  exclusiveMinimum?: number;
+  exclusiveMaximum?: number;
   step?: number;
   advanced: boolean;
   seed?: { minimum?: number; maximum?: number };

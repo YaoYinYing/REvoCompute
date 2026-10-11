@@ -28,6 +28,8 @@ export function parametersFromSchema(schema: ParameterSchema): ParameterDefiniti
       choices: Array.isArray(property.enum) ? property.enum.filter((value): value is string | number | boolean => ['string', 'number', 'boolean'].includes(typeof value)) : [],
       minimum: typeof property.minimum === 'number' ? property.minimum : undefined,
       maximum: typeof property.maximum === 'number' ? property.maximum : undefined,
+      exclusiveMinimum: typeof property.exclusiveMinimum === 'number' ? property.exclusiveMinimum : undefined,
+      exclusiveMaximum: typeof property.exclusiveMaximum === 'number' ? property.exclusiveMaximum : undefined,
       step: typeof property.multipleOf === 'number' ? property.multipleOf : undefined,
       advanced: property['x-advanced'] === true,
       seed: ui.kind === 'seed' ? {
@@ -48,7 +50,7 @@ export function validateParameter(parameter: ParameterDefinition, control: HTMLI
   // interpolated `label` is the server's own parameter vocabulary and stays
   // verbatim in both locales.
   if (parameter.required && !value) return t('ct.param.required', { label: parameter.label });
-  if (parameter.choices.length && !parameter.choices.some(choice => String(choice) === value)) return t('ct.param.choice', { label: parameter.label.toLowerCase() });
+  if (parameter.choices.length && !parameter.choices.some(choice => String(choice) === value)) return t('ct.param.choice', { label: parameter.label });
   if ((parameter.type === 'int' || parameter.type === 'float') && value) {
     const number = Number(value);
     if (!Number.isFinite(number) || (parameter.type === 'int' && !Number.isInteger(number))) return t(parameter.type === 'int' ? 'ct.param.integer' : 'ct.param.number', { label: parameter.label });
