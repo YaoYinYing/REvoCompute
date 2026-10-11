@@ -187,6 +187,10 @@ export function mountShell(root: HTMLElement): AppShell {
     setUser(user) {
       syncAccount(user);
       logout.hidden = !user;
+      // The bar's one primary page action belongs to a session like Log out does:
+      // /compute/create_task is a protected route, so offering it to a signed-out
+      // reader would hand them an affordance whose only outcome is a redirect.
+      newTask.hidden = !user;
       // Authorization, not visual hiding: the Administration group is absent from
       // the navigation for anyone the server has not projected as an administrator,
       // so an ordinary user or an anonymous visitor never sees a forbidden link.
