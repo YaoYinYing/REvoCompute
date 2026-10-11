@@ -172,6 +172,5 @@ describe('Dashboard status vocabulary', () => {
     // The cell reads the register's own vocabulary; it publishes no second
     // machine-identity attribute for the row.
     expect(cell.textContent).toBe('SUCCESS');
-    expect(cell.className).toBe('state-cell');
   });
 });

@@ -19,100 +19,131 @@ const CAPABILITIES = new Set<PreviewCapability>([
 ]);
 const VIEW_PLUGINS = new Set<ResultView['plugin']>(['structure', 'candidate-collection', 'entity-table', 'evidence-bundle', 'alignment', 'trajectory', 'metric-series', 'matrix', 'scalar-summary']);
 const VIEW_ROLES = new Set<ResultView['role']>(['primary', 'evidence']);
-function record(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${label} is invalid.`);
+const VALIDATION_KEY = 'results.invalid.manifest';
+/*
+ * Every parse fault the Result manifest projection can raise, as a catalog key.
+ *
+ * A fault is a frontend-authored response *frame*. The only interpolated value
+ * is the server's own projected vocabulary — an artifact name or logical-file id
+ * — which is emitted verbatim (§11) and never translated. Field-shape faults
+ * share one frame rather than naming an internal field, so no developer jargon
+ * reaches a reader in either locale.
+ */
+const FAULT = {
+  role: 'results.fault.role',
+  size: 'results.fault.size',
+  view: 'results.fault.view',
+  logicalFile: 'results.fault.logicalFile',
+  logicalCardinality: 'results.fault.logicalCardinality',
+  logicalSize: 'results.fault.logicalSize',
+  resultFiles: 'results.fault.resultFiles',
+  schema: 'results.fault.schema',
+  views: 'results.fault.views',
+  totalSize: 'results.fault.totalSize',
+} as const;
+type Fault = keyof typeof FAULT;
+
+/** One localized parse fault; `value` is a server projection and stays verbatim. */
+function fault(kind: Fault, value?: string): Error {
+  return new Error(value === undefined ? t(FAULT[kind]) : t(FAULT[kind], { value }));
+}
+/** The single frame every field-shape fault shares, so no field name surfaces. */
+function malformed(): Error { return new Error(t(VALIDATION_KEY)); }
+
+function record(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw malformed();
   return value as Record<string, unknown>;
 }
-function string(value: unknown, label: string): string {
-  if (typeof value !== 'string') throw new Error(`${label} is invalid.`); return value;
+function string(value: unknown): string {
+  if (typeof value !== 'string') throw malformed(); return value;
 }
-function optionalString(value: unknown, label: string): string | undefined {
-  return value == null ? undefined : string(value, label);
+function optionalString(value: unknown): string | undefined {
+  return value == null ? undefined : string(value);
 }
-function stringArray(value: unknown, label: string): string[] {
-  if (!Array.isArray(value) || value.some((entry) => typeof entry !== 'string')) throw new Error(`${label} is invalid.`);
+function stringArray(value: unknown): string[] {
+  if (!Array.isArray(value) || value.some((entry) => typeof entry !== 'string')) throw malformed();
   return [...value];
 }
 function artifact(value: unknown): ResultArtifact {
-  const item = record(value, 'Result artifact'); const role = string(item.role, 'Artifact role') as ArtifactRole;
-  if (!ROLES.has(role)) throw new Error('Artifact role is invalid.');
+  const item = record(value); const role = string(item.role) as ArtifactRole;
+  if (!ROLES.has(role)) throw fault('role');
   const declared = item.capability ?? item.preview; let capability: PreviewCapability = 'unknown';
   if (declared != null) {
     if (typeof declared === 'string' && CAPABILITIES.has(declared as PreviewCapability)) capability = declared as PreviewCapability;
   }
-  const size = Number(item.size); if (!Number.isFinite(size) || size < 0) throw new Error('Artifact size is invalid.');
+  const size = Number(item.size); if (!Number.isFinite(size) || size < 0) throw fault('size');
   return {
-    path: string(item.path, 'Artifact path'), name: optionalString(item.name, 'Artifact name'),
-    media_type: string(item.media_type, 'Artifact media type'), size, sha256: string(item.sha256, 'Artifact hash'),
+    path: string(item.path), name: optionalString(item.name),
+    media_type: string(item.media_type), size, sha256: string(item.sha256),
     role, preview: item.preview === null ? null : capability === 'structure' || capability === 'image' || capability === 'table' || capability === 'text' ? capability : null,
     capability: capability === 'structure' ? 'molecular_structure' : capability,
     confidence_encoding: item.confidence_encoding === 'plddt_bfactor' ? 'plddt_bfactor' : undefined,
-    url: string(item.url, 'Artifact URL'), ndarray_url: optionalString(item.ndarray_url, 'Projection URL'),
-    table_url: optionalString(item.table_url, 'Table URL'), cardinality: item.cardinality === 'many' ? 'many' : 'one',
-    id: optionalString(item.id, 'Artifact id'),
+    url: string(item.url), ndarray_url: optionalString(item.ndarray_url),
+    table_url: optionalString(item.table_url), cardinality: item.cardinality === 'many' ? 'many' : 'one',
+    id: optionalString(item.id),
   };
 }
 
 function view(value: unknown): ResultView {
-  const item = record(value, 'Result view'); const rawSources = record(item.sources, 'View sources');
+  const item = record(value); const rawSources = record(item.sources);
   const sources: Record<string, string[]> = {};
-  Object.entries(rawSources).forEach(([key, paths]) => { sources[key] = stringArray(paths, `View source ${key}`); });
-  const plugin = string(item.plugin, 'View plugin') as ResultView['plugin'];
-  const role = string(item.role, 'View role') as ResultView['role'];
-  if (!VIEW_PLUGINS.has(plugin) || !VIEW_ROLES.has(role)) throw new Error('Result view vocabulary is invalid.');
-  return { id: string(item.id, 'View id'), plugin, title: string(item.title, 'View title'), role,
-    description: optionalString(item.description, 'View description') || '', sources,
-    mapping: item.mapping == null ? {} : record(item.mapping, 'View mapping') };
+  Object.entries(rawSources).forEach(([key, paths]) => { sources[key] = stringArray(paths); });
+  const plugin = string(item.plugin) as ResultView['plugin'];
+  const role = string(item.role) as ResultView['role'];
+  if (!VIEW_PLUGINS.has(plugin) || !VIEW_ROLES.has(role)) throw fault('view');
+  return { id: string(item.id), plugin, title: string(item.title), role,
+    description: optionalString(item.description) || '', sources,
+    mapping: item.mapping == null ? {} : record(item.mapping) };
 }
 
 function storyboard(value: unknown): ResultStoryboardDeclaration | null {
-  if (value == null) return null; const item = record(value, 'Storyboard');
-  return { identifier: string(item.identifier, 'Storyboard identifier'), entrypoint: string(item.entrypoint, 'Storyboard entrypoint'), entrypoint_url: string(item.entrypoint_url, 'Storyboard URL'), requires: stringArray(item.requires, 'Storyboard requirements'), optional: stringArray(item.optional, 'Storyboard optional files') };
+  if (value == null) return null; const item = record(value);
+  return { identifier: string(item.identifier), entrypoint: string(item.entrypoint), entrypoint_url: string(item.entrypoint_url), requires: stringArray(item.requires), optional: stringArray(item.optional) };
 }
 function logicalFile(value: unknown): LogicalResultFile {
-  const item = record(value, 'Logical result file'), role = string(item.role, 'Logical file role') as ArtifactRole;
-  const capability = string(item.capability, 'Logical file capability') as PreviewCapability;
-  if (!ROLES.has(role) || !CAPABILITIES.has(capability)) throw new Error('Logical result file vocabulary is invalid.');
-  const cardinality = string(item.cardinality, 'Logical file cardinality'); if (cardinality !== 'one' && cardinality !== 'many') throw new Error('Logical file cardinality is invalid.');
-  const size = Number(item.size); if (!Number.isFinite(size) || size < 0) throw new Error('Logical file size is invalid.');
-  return { id: string(item.id, 'Logical file id'), name: string(item.name, 'Logical file name'), media_type: string(item.media_type, 'Logical file media type'),
-    size, role, cardinality, viewer: string(item.viewer, 'Logical file viewer'), preview: item.preview == null ? null : string(item.preview, 'Logical file preview'),
-    capability: capability === 'structure' ? 'molecular_structure' : capability, url: string(item.url, 'Logical file URL'),
+  const item = record(value), role = string(item.role) as ArtifactRole;
+  const capability = string(item.capability) as PreviewCapability;
+  if (!ROLES.has(role) || !CAPABILITIES.has(capability)) throw fault('logicalFile');
+  const cardinality = string(item.cardinality); if (cardinality !== 'one' && cardinality !== 'many') throw fault('logicalCardinality');
+  const size = Number(item.size); if (!Number.isFinite(size) || size < 0) throw fault('logicalSize');
+  return { id: string(item.id), name: string(item.name), media_type: string(item.media_type),
+    size, role, cardinality, viewer: string(item.viewer), preview: item.preview == null ? null : string(item.preview),
+    capability: capability === 'structure' ? 'molecular_structure' : capability, url: string(item.url),
     confidence_encoding: item.confidence_encoding === 'plddt_bfactor' ? 'plddt_bfactor' : undefined,
-    table_url: optionalString(item.table_url, 'Logical table URL'), ndarray_url: optionalString(item.ndarray_url, 'Logical projection URL') };
+    table_url: optionalString(item.table_url), ndarray_url: optionalString(item.ndarray_url) };
 }
 function resultFiles(value: unknown): ResultManifest['result'] {
-  const result = record(value, 'Result file mapping'), rawFiles = record(result.files, 'Result files'), files: Record<string, LogicalResultFile[]> = {};
-  Object.entries(rawFiles).forEach(([id, entries]) => { if (!Array.isArray(entries)) throw new Error(`Result files ${id} is invalid.`); files[id] = entries.map(logicalFile); });
+  const result = record(value), rawFiles = record(result.files), files: Record<string, LogicalResultFile[]> = {};
+  Object.entries(rawFiles).forEach(([id, entries]) => { if (!Array.isArray(entries)) throw fault('resultFiles', id); files[id] = entries.map(logicalFile); });
   return { files };
 }
 
 export function parseResultManifest(value: unknown): ResultManifest | TaskStatus {
-  const payload = record(value, 'Result response');
-  const status = string(payload.status, 'Task status');
+  const payload = record(value);
+  const status = string(payload.status);
   if (!Array.isArray(payload.artifacts)) {
-    return { task_id: string(payload.task_id ?? payload.md5sum, 'Task id'), status, terminal: payload.terminal === true,
-      task_type: string(payload.task_type, 'Task type'), display_name: string(payload.display_name, 'Task display name'), status_url: string(payload.status_url, 'Status URL'),
-      results_url: string(payload.results_url, 'Results URL'), result_available: payload.result_available === true,
-      md5sum: optionalString(payload.md5sum, 'Task id'), error: optionalString(payload.error, 'Task error'),
-      message: optionalString(payload.message, 'Message') };
+    return { task_id: string(payload.task_id ?? payload.md5sum), status, terminal: payload.terminal === true,
+      task_type: string(payload.task_type), display_name: string(payload.display_name), status_url: string(payload.status_url),
+      results_url: string(payload.results_url), result_available: payload.result_available === true,
+      md5sum: optionalString(payload.md5sum), error: optionalString(payload.error),
+      message: optionalString(payload.message) };
   }
   if (payload.schema_version !== 3 || (status !== 'finished' && status !== 'failed') || payload.terminal !== true ||
       !Object.hasOwn(payload, 'error') || !Object.hasOwn(payload, 'storyboard') || !Object.hasOwn(payload, 'outcome')) {
-    throw new Error('Result schema version or status is invalid.');
+    throw fault('schema');
   }
-  if (!Array.isArray(payload.views)) throw new Error('Result views are invalid.');
-  const archive = record(payload.archive, 'Result archive');
-  const totalSize = Number(payload.total_size); if (!Number.isFinite(totalSize) || totalSize < 0) throw new Error('Result total size is invalid.');
-  return { schema_version: 3, task_id: string(payload.task_id, 'Task id'), task_type: string(payload.task_type, 'Task type'), terminal: true,
-    created_at: string(payload.created_at, 'Creation time'), status, error: payload.error == null ? null : string(payload.error, 'Result error'),
-    artifacts: payload.artifacts.map(artifact), total_size: totalSize, limitations: stringArray(payload.limitations, 'Result limitations'),
-    views: payload.views.map(view), run: record(payload.run, 'Run record') as ResultManifest['run'],
-    output_check: record(payload.output_check, 'Output check') as ResultManifest['output_check'],
-    archive: { ready: archive.ready === true, request_url: string(archive.request_url, 'Archive request URL'), download_url: archive.download_url == null ? null : string(archive.download_url, 'Archive URL') },
+  if (!Array.isArray(payload.views)) throw fault('views');
+  const archive = record(payload.archive);
+  const totalSize = Number(payload.total_size); if (!Number.isFinite(totalSize) || totalSize < 0) throw fault('totalSize');
+  return { schema_version: 3, task_id: string(payload.task_id), task_type: string(payload.task_type), terminal: true,
+    created_at: string(payload.created_at), status, error: payload.error == null ? null : string(payload.error),
+    artifacts: payload.artifacts.map(artifact), total_size: totalSize, limitations: stringArray(payload.limitations),
+    views: payload.views.map(view), run: record(payload.run) as ResultManifest['run'],
+    output_check: record(payload.output_check) as ResultManifest['output_check'],
+    archive: { ready: archive.ready === true, request_url: string(archive.request_url), download_url: archive.download_url == null ? null : string(archive.download_url) },
     storyboard: storyboard(payload.storyboard), result: resultFiles(payload.result),
-    outcome: payload.outcome == null ? null : string(payload.outcome, 'Result outcome'),
-    filename: optionalString(payload.filename, 'Filename'), message: optionalString(payload.message, 'Message') };
+    outcome: payload.outcome == null ? null : string(payload.outcome),
+    filename: optionalString(payload.filename), message: optionalString(payload.message) };
 }
 
 export function getCurrentUser(signal?: AbortSignal): Promise<components['schemas']['CurrentUser']> {

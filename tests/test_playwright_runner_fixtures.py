@@ -28,6 +28,7 @@ import pytest
 
 from frontend_fixtures import (
     AccessState,
+    build_task_summary,
     controlled_runner,
     controlled_scenario,
     mount_scenario,
@@ -239,6 +240,34 @@ def test_failed_lifecycle_surfaces_on_dashboard_and_in_result_diagnostics(page: 
     expect(page.locator(".result-file-list, .result-files").get_by_text("task_failed.txt", exact=True)).to_be_visible()
     assert requests.status_polls()
     assert requests.result_manifest()
+
+
+def test_dashboard_table_status_cell_reads_like_the_card_pill(page: Page) -> None:
+    """A finalized Task with no outcome is named the same way in both views.
+
+    The Dashboard register presents one Task two ways, and both must read the
+    same word for it. `no_outcome` is a finished Task whose server-projected
+    outcome is absent, so each view falls back to the lifecycle enum; the casing
+    a reader sees comes from CSS, which only the browser can resolve.
+    """
+    scenario = controlled_scenario()
+    no_outcome = build_task_summary(scenario.task_id, scenario.runner, outcome=None)
+    mount_scenario(page, scenario.with_task_summaries([no_outcome]))
+    page.goto(f"{ORIGIN}/compute/dashboard")
+
+    pill = page.locator(".task-card").first.locator(".status")
+    expect(pill).to_be_visible()
+    card_text = pill.inner_text().strip()
+
+    page.get_by_role("button", name="Table", exact=True).click()
+    expect(page.locator(".task-table")).to_be_visible()
+    cell = page.locator(".task-table tbody tr").first.locator("td").nth(3)
+    rendered = cell.inner_text().strip()
+
+    # The two views agree as rendered, casing included, and the word is the
+    # task's own state rather than an empty cell.
+    assert rendered == card_text
+    assert rendered.lower() == no_outcome["status"]
 
 
 # ── restricted access pending versus granted ──────────────────────────────────

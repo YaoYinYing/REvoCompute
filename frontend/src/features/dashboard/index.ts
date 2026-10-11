@@ -177,7 +177,7 @@ export class Dashboard {
       ]).then(async ([data, { MolecularViewer }]) => {
         if (!details.open || !details.isConnected) return; content.replaceChildren(); const viewer = await MolecularViewer.mount(content, { theme: document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light' });
         if (!details.open || !details.isConnected) { viewer.dispose(); return; } this.previewViewers.set(task.task_id, viewer); await viewer.loadStructure({ data, format: task.input_preview!.format, label: task.display_name });
-      }).catch(error => { if (details.isConnected) content.textContent = `Unable to load structure: ${(error as Error).message}`; });
+      }).catch(error => { if (details.isConnected) content.textContent = t('dashboard.card.structureLoadFailed', { message: (error as Error).message }); });
     }); return details;
   }
   private taskActions(task: TaskSummary): HTMLElement {

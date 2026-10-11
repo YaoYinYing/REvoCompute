@@ -483,6 +483,23 @@ const en: Dictionary = {
   'results.matrix.error.exceedsWindow': 'The matrix exceeds the bounded server page window.',
   'results.matrix.error.empty': 'The matrix is empty.',
   'results.matrix.error.missingLabel': 'The matrix is missing its declared row label column {column}.',
+
+  // Result manifest parse faults. Each is a frontend-authored frame over a value
+  // the server projected; the projected value is interpolated verbatim.
+  'results.invalid.manifest': 'The result manifest is malformed.',
+  'results.fault.role': 'The artifact role is not one this result can publish.',
+  'results.fault.size': 'The artifact size is invalid.',
+  'results.fault.view': 'This result view uses vocabulary the workspace cannot render.',
+  'results.fault.logicalFile': 'A logical result file is invalid.',
+  'results.fault.logicalCardinality': 'A logical result file has an invalid cardinality.',
+  'results.fault.logicalSize': 'A logical result file size is invalid.',
+  'results.fault.resultFiles': 'The result file group {value} is invalid.',
+  'results.fault.schema': 'The result manifest version or status is invalid.',
+  'results.fault.views': 'The result views are invalid.',
+  'results.fault.totalSize': 'The result total size is invalid.',
+
+  // Dashboard input preview
+  'dashboard.card.structureLoadFailed': 'Unable to load structure: {message}',
 };
 
 const zhCN: Dictionary = {
@@ -936,6 +953,23 @@ const zhCN: Dictionary = {
   'results.matrix.error.exceedsWindow': '矩阵超出服务端受限的分页窗口。',
   'results.matrix.error.empty': '矩阵为空。',
   'results.matrix.error.missingLabel': '矩阵缺少其声明的行标签列 {column}。',
+
+  // Result manifest parse faults. Each is a frontend-authored frame over a value
+  // the server projected; the projected value is interpolated verbatim.
+  'results.invalid.manifest': '结果清单格式不正确。',
+  'results.fault.role': '该产物的角色类型不是此结果可发布的类型。',
+  'results.fault.size': '产物大小无效。',
+  'results.fault.view': '该结果视图使用了工作区无法渲染的词汇。',
+  'results.fault.logicalFile': '某个逻辑结果文件无效。',
+  'results.fault.logicalCardinality': '某个逻辑结果文件的数量属性无效。',
+  'results.fault.logicalSize': '某个逻辑结果文件的大小无效。',
+  'results.fault.resultFiles': '结果文件分组 {value} 无效。',
+  'results.fault.schema': '结果清单的版本或状态无效。',
+  'results.fault.views': '结果视图无效。',
+  'results.fault.totalSize': '结果总大小无效。',
+
+  // Dashboard input preview
+  'dashboard.card.structureLoadFailed': '无法加载结构：{message}',
 };
 
 export const catalogs: Record<Locale, Dictionary> = { en, 'zh-CN': zhCN };
