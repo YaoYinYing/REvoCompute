@@ -212,6 +212,53 @@ design-authority `design-proposal`, not defects; the downstream gate is correct 
 each case. The design language does not settle either, so they await a maintainer
 decision rather than being changed unilaterally.
 
+## R3 receipt — independent verification + visual confirmation (2026-10-11, `8c04b86d`)
+
+Two independent agents reviewed the integrated head. Neither wrote the code under
+review.
+
+**Independent Verifier** (`verification.json` / `verification.md`), gate re-run by
+the verifier itself: typecheck PASS, unit 129/129 PASS, build PASS, browser
+`130 passed in 116.44s`, 0 xfail remaining. Per-claim verdicts:
+
+- `R1-D-02` **CONFIRMED** — page `h1` is first in the outline on every probed
+  route; each group resolves to one accessible name at 360/834/1000/1280 and both
+  rail states; no code depended on the caption being a heading.
+- `R1-B-01` **CONFIRMED** — counterfactual: re-injecting the OLD declarations
+  restores +56px (create_task) and +25px (results) at 320px; shipped CSS is 0/0.
+  No tap target shrunk.
+- `R1-C-02` **PARTIAL** — `statusText()` is shared and filter/sort still use the
+  raw enum, but card and table still do NOT render the same text for a finalized
+  task with no per-item `outcome` (`outcome` null/`""`): the card pill carries the
+  global `text-transform: capitalize` (app.css:253) and reads `Finished`, the
+  table cell has no transform and reads `finished`. The new unit test compared raw
+  `textContent`, so it could not see the case difference. Display-only.
+- `R1-B-03+R1-D-01` **PARTIAL** — boundary held (no server value routed through
+  `t()`; parity 397/397 verified independently), but frontend-authored ERROR copy
+  in the same features is still English and reaches a zh-CN user
+  (`create-task/api.ts` ~20 workspace-plugin errors via `InputWorkspace.ts:103`,
+  `submission.ts`, `results/scientific.ts`, `structure/MolecularViewer.ts`).
+  `InputWorkspace.ts:103` also matches the English substring `'unsupported
+  component'`, which couples behavior to user-facing language.
+- Incidental (pre-existing, not a regression): at 561-860px the parameter heading
+  overflows its own grid cell by ~28px, absorbed by an ancestor so the document
+  `scrollWidth` stays 0.
+
+**Visual Confirmation Explorer** (`r3/findings.json`), before/after through the
+same fixture harness (BEFORE = `d1874814` via `git archive`, driven through the
+identical harness): **4/4 fixes PASS, 0 new regressions, CONVERGED**, 0 console
+errors on every AFTER route. 320/375/768/834/1440 sweep clean; dark + zh-CN
+render clean; rail toggle and `aria-current` preserved. R1-C-02 measured
+`finished` -> `SUCCESS` in light AND dark; R1-D-02 outline `['Compute','Account',
+`Dashboard`,...]` -> `['Dashboard',...]`; R1-B-01 `376/320` -> `320/320` and
+`345/320` -> `320/320`.
+
+**Consequence.** The confirmation round proves the four fixes visually converge,
+but the verifier's two PARTIAL verdicts are real residual defects (same approved
+findings, incompletely closed). Per the campaign rule that no owner READY or
+green CI substitutes for counterexample-driven review, R4 reopens exactly those
+two residuals as fresh, isolated fixes rather than declaring the round closed.
+
 ## What is confirmed from GitHub
 
 - At authorization, PR #72 and PR #73 are closed and merged.
@@ -290,7 +337,7 @@ Fixers without Design Authority and Commander ownership allocation.
 | R0 | `d1874814` | fixture harness + real Flask harness | 0 | — | — | — | realness matrix captured | **complete** |
 | R1 | `d1874814` | fixture harness | 4 explorers (A–D) | 24 raw entries | — | — | not run | **discovery complete; triaged** |
 | R2 | `8c04b86d` | fixture harness | 3 fixers (disjoint surfaces) | 0 new | 4 approved fixes | none | typecheck+unit+build+browser all green | **fixes integrated; verification in flight** |
-| R3 | `8c04b86d` | fixture harness | 1 verifier + 1 confirmation explorer | in flight | — | — | not run | **in flight** |
+| R3 | `8c04b86d` | fixture harness | 1 verifier + 1 confirmation explorer | 4 confirmed / 2 partial | — | 0 | before/after browser + 130 browser passed | **verification complete; residuals fixed in R4** |
 | R4–R10 | pending | pending | 0 | — | — | — | not run | not started |
 
 ## Exit
