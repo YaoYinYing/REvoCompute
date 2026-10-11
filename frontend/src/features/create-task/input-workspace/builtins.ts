@@ -36,8 +36,13 @@ function renderParameter(parameter: ParameterDefinition, context: WorkspaceConte
     input.type = parameter.type === 'int' || parameter.type === 'float' ? 'number' : 'text';
     input.value = parameter.defaultValue == null ? '' : String(parameter.defaultValue);
     input.required = parameter.required;
+    // The spinner hint projects the server's own range: an inclusive bound is
+    // used directly, and a side that declares only an exclusive bound seeds the
+    // hint from it. The hint steers the spinner; the gate is the validator.
     if (parameter.minimum != null) input.min = String(parameter.minimum);
+    else if (parameter.exclusiveMinimum != null) input.min = String(parameter.exclusiveMinimum);
     if (parameter.maximum != null) input.max = String(parameter.maximum);
+    else if (parameter.exclusiveMaximum != null) input.max = String(parameter.exclusiveMaximum);
     if (parameter.step != null) input.step = String(parameter.step); else if (parameter.type === 'float') input.step = 'any';
     if (parameter.choices.length) {
       const list = element('datalist'); list.id = `${id}-choices`;
