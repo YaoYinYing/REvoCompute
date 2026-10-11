@@ -539,7 +539,7 @@ def _tool_task_artifact(tool_call_id: str, role: Any, expression: str) -> dict[s
         raise ToolWorkspaceError("Task artifact reference is unavailable")
     stream = resolved.pop("verified_stream")
     try:
-        # Materialize from the verified descriptor, not from the resolved name:
+        # Materialize from the verified snapshot, not from the resolved name:
         # the bytes copied into the Tool workspace are exactly the bytes whose
         # manifest identity was checked, so a replacement between resolution and
         # materialization cannot enter the workspace.
@@ -2529,13 +2529,14 @@ def get_result_storyboard_asset(md5sum: str, asset: str):
 def _result_artifact(task: dict[str, Any], relative_path: str) -> dict[str, Any] | None:
     """Resolve only regular files published by the task's finalized manifest.
 
-    Returns the manifest entry plus the verified open descriptor
-    (``verified_stream``).  The descriptor's bytes and identity were just checked
+    Returns the manifest entry plus the verified private snapshot
+    (``verified_stream``).  The snapshot's bytes and identity were just checked
     against the manifest, so a consumer must consume *it* rather than resolve the
     name again: after publication identity has been verified, a second resolution
     -- of the same name, in the same request -- could serve bytes that never
-    satisfied the manifest identity.  The caller owns the descriptor and must
-    close it.
+    satisfied the manifest identity, and a rewrite of the runner's own inode in
+    place could not be refused by any check the file itself can answer.  The
+    caller owns the snapshot and must close it.
     """
     return current_app.config["storage_resolver"].resolve_artifact(task, relative_path)
 
@@ -2545,9 +2546,9 @@ def _with_verified_artifact(resolved: dict[str, Any] | None, task: dict[str, Any
 
     Every artifact surface -- the artifact download, the logical-file route, the
     ndarray and table previews -- makes the same ownership/visibility decision
-    about the *same* verified descriptor, so the decision lives here instead of
+    about the *same* verified snapshot, so the decision lives here instead of
     being restated (and possibly restated differently) at each route.  ``None``
-    means "not visible"; the descriptor is closed before the refusal.
+    means "not visible"; the snapshot is closed before the refusal.
     """
     if resolved is None:
         return None
@@ -2558,17 +2559,17 @@ def _with_verified_artifact(resolved: dict[str, Any] | None, task: dict[str, Any
 
 
 def _verified_payload(stream: Any, size: int) -> Response:
-    """Serve one verified artifact from the byte image its digest describes.
+    """Serve one verified artifact from the private snapshot its digest describes.
 
     Everything — full body, HEAD, and a single bounded ``Range`` — reads from the
-    one byte image the resolver produced while it was verifying that artifact, so
-    what a caller receives is a version of the file rather than a window onto a
-    mutable inode: no later pathname open, and no in-place rewrite of the runner's
-    file, can substitute different bytes.  The length is the one the manifest
-    authorized and the digest was computed over, never a fresh ``fstat`` of a file
-    that may have changed since.  Range support lives here rather than in
-    ``send_from_directory`` because that helper would reopen the pathname that was
-    just verified.
+    one verified snapshot the resolver produced while it was verifying that
+    artifact, so what a caller receives is a version of the file rather than a
+    window onto a mutable inode: no later pathname open, and no in-place rewrite
+    of the runner's file, can substitute different bytes.  The length is the one
+    the manifest authorized and the digest was computed over, never a fresh
+    ``fstat`` of a file that may have changed since.  Range support lives here
+    rather than in ``send_from_directory`` because that helper would reopen the
+    pathname that was just verified.
     """
     raw_range = request.headers.get("Range", "")
     if request.method == "HEAD":
@@ -2603,10 +2604,11 @@ def _verified_payload(stream: Any, size: int) -> Response:
 
 
 class _BoundedStream:
-    """Yield at most *length* bytes from a verified descriptor, then close it.
+    """Yield at most *length* bytes from a verified snapshot, then close it.
 
     Each read is bounded by the chunk constant rather than the total length, so
-    the bytes of a large artifact move in bounded chunks.
+    the bytes of a large artifact move in bounded chunks, and the snapshot the
+    bytes came from is what the reader is closed on.
     """
 
     def __init__(self, stream: Any, length: int):
@@ -2644,12 +2646,11 @@ def get_result_artifact(md5sum: str, relative_path: str):
     # are never rendered same-origin.  `?download=1` still forces a download
     # and `?download=0` explicitly opts back into inline rendering.
     as_attachment = request.args.get("download", "1") in {"1", "true", "yes"}
-    # Delivery always consumes the verified descriptor: an X-Accel-Redirect
-    # offload would have the gateway reopen this mutable pathname, which could
-    # serve bytes that never satisfied the manifest identity.  Descriptor-bound
+    # Delivery always consumes the verified snapshot: an X-Accel-Redirect
+    # offload would have the gateway reopen the mutable pathname, which could
+    # serve bytes that never satisfied the manifest identity.  Snapshot-bound
     # delivery therefore replaces the offload on the artifact and archive
-    # endpoints; a redesign that could keep the offload needs an immutable
-    # publication store, which is out of scope for this change.
+    # endpoints.
     response = _verified_payload(stream, int(resolved["size"]))
     response.mimetype = artifact.get("media_type") or "application/octet-stream"
     response.headers.set(
@@ -2705,7 +2706,7 @@ def get_result_ndarray(md5sum: str, relative_path: str):
     key = keys[0] if keys else None
     kind = kinds[0] if kinds else "numeric"
     try:
-        # The projection parses from the verified descriptor itself, so a file
+        # The projection parses from the verified snapshot itself, so a file
         # replaced after publication identity was checked can never be projected:
         # after publication identity has been verified, a consumer must consume
         # the verified object, not reopen its pathname.
@@ -2770,8 +2771,8 @@ def get_result_table(md5sum: str, relative_path: str):
         return cost
 
     try:
-        # The verified descriptor stays open for the whole parse, so the page is
-        # read from the same inode whose identity the manifest approved.
+        # The verified snapshot is read for the whole parse, so the page comes
+        # from the bytes whose identity the manifest approved.
         with stream, io.TextIOWrapper(stream, encoding='utf-8', newline='') as handle:
             reader = csv.reader(handle, delimiter=delimiter)
             columns = next(reader, [])
@@ -2878,15 +2879,16 @@ def download_results(md5sum):
 
 
 def _deliver_published_archive(task: dict[str, Any], archive: str) -> Response:
-    """Serve the cached archive from the byte image its verification was computed over.
+    """Serve the cached archive from the private snapshot its verification read.
 
     The check and the delivery are one act about one set of bytes, not a check
     followed by a reopen: the archive is opened here read-only and without
-    following a final symlink, its members are verified against the anchored
-    manifest, and the *image read during that verification* is what streams.  A
-    replacement between an earlier readiness answer and this delivery, and an
-    in-place rewrite of the same length, therefore both reach nothing -- what a
-    caller receives is the version of the archive the member digests describe.
+    following a final symlink, it is copied once into a private unlinked snapshot
+    whose members are then verified against the anchored manifest, and the
+    *snapshot those members were verified in* is what streams.  A replacement
+    between an earlier readiness answer and this delivery, and an in-place
+    rewrite of the same length, therefore both reach nothing -- what a caller
+    receives is the version of the archive the member digests describe.
     """
     from revocompute import storage as storage_module
 
@@ -2895,22 +2897,30 @@ def _deliver_published_archive(task: dict[str, Any], archive: str) -> Response:
     descriptor = storage_module.open_published_regular_file(archive)
     if manifest_bytes is None or descriptor is None:
         return _archive_unavailable()
+    declared = _declared_artifacts(resolver, task)
     try:
-        # ``snapshot_regular_file`` owns the descriptor from here: it wraps it in
-        # a file object, so every failure path below has already closed it and
-        # this route must not close the number a second time.
-        image = storage_module.snapshot_regular_file(descriptor)
+        # ``verify_regular_file`` owns the descriptor from here: it *consumes*
+        # it, so every failure path below has already closed it and this route
+        # must not close the number a second time.  The bound is the one the
+        # download advertises, so an archive is never copied past the capacity
+        # the server is willing to serve.
+        snapshot, _digest = storage_module.verify_regular_file(descriptor, CONFIG.max_published_bytes)
     except OSError:
         return _archive_unavailable()
-    declared = _declared_artifacts(resolver, task)
-    if not storage_module.verified_publication_archive(io.BytesIO(image), manifest_bytes, declared):
-        return _archive_unavailable()
-    # The bytes served are the ones just verified: a private copy, not the
-    # still-writable inode the archive lives on.
-    response = Response(
-        _BoundedStream(io.BytesIO(image), len(image)), mimetype="application/zip", direct_passthrough=True
-    )
-    response.headers["Content-Length"] = str(len(image))
+    try:
+        if not storage_module.verified_publication_archive(snapshot, manifest_bytes, declared):
+            snapshot.close()
+            return _archive_unavailable()
+    except BaseException:
+        snapshot.close()
+        raise
+    # The bytes served are the ones just verified: the private snapshot, not the
+    # still-writable inode the archive lives on.  Streaming it closes it, so the
+    # snapshot is removed when the response body is finished (or dropped).
+    size = snapshot.seek(0, os.SEEK_END)
+    snapshot.seek(0)
+    response = Response(_BoundedStream(snapshot, size), mimetype="application/zip", direct_passthrough=True)
+    response.headers["Content-Length"] = str(size)
     # The download name is the sanitized one, derived from the task's own
     # filename: a raw runner-controlled name would reach the header.
     response.headers["Content-Disposition"] = "attachment; filename=\"{}\"".format(

@@ -450,11 +450,10 @@ def retrieve_artifact(
 
     Authorization still runs through the canonical artifact route (so ownership
     and role visibility are the canonical rules), but the bytes are read from the
-    descriptor the resolver already verified rather than the route's response
-    body.  The route answers an *empty* body plus ``X-Accel-Redirect`` in the
-    shipped ``nginx`` download mode and content-negotiates otherwise, so a
-    response-body read silently returned empty content for every non-text
-    artifact; the verified descriptor is the same content in every mode.
+    verified snapshot the resolver already produced rather than the route's
+    response body.  The route's body is content-negotiated, so a response-body
+    read silently returned empty content for every non-text artifact; the
+    verified snapshot is the same content every request.
     """
     from urllib.parse import quote
 
@@ -489,10 +488,9 @@ def retrieve_artifact(
         }
     # Authorize + gate on publication through the canonical artifact route (so
     # ownership, role visibility, and *publication* are its rules), but read the
-    # bytes from the resolver's already-verified descriptor rather than the
-    # route's response body: the descriptor is the verified content in every
-    # delivery mode, and a quarantined result is refused by the route before any
-    # bytes are read.
+    # bytes from the resolver's already-verified snapshot rather than the route's
+    # response body: the snapshot is the verified content, and a quarantined
+    # result is refused by the route before any bytes are read.
     try:
         response = call_canonical(
             principal,
@@ -520,12 +518,13 @@ def retrieve_artifact(
 
 
 def _read_verified_stream(stream: Any, expected_size: int) -> bytes:
-    """Read a verified published descriptor, never beyond its published size.
+    """Read a verified published snapshot, never beyond its published size.
 
-    The descriptor is the one whose size and SHA-256 the canonical resolver
-    checked against the manifest, so the bytes are read from the verified inode
-    rather than by resolving the artifact's name a second time -- a name that
-    could by then resolve to a different file.  The caller must close it.
+    The snapshot holds the bytes whose size and SHA-256 the canonical resolver
+    checked against the manifest, so the bytes are the verified content rather
+    than a second resolution of the artifact's name -- a name that could by then
+    resolve to a different file, or to the same inode rewritten in place.  The
+    caller must close it.
     """
     if stream is None:
         raise McpError(ARTIFACT_NOT_FOUND, "Artifact not found")

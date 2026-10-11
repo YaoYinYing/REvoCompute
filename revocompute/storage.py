@@ -19,10 +19,12 @@ import json
 import os
 import re
 import stat
+import tempfile
+import weakref
 import zipfile
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, BinaryIO
 
 _STORAGE_KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{2,119}\Z")
 _TASK_ID = re.compile(r"[a-fA-F0-9]{32}\Z")
@@ -58,8 +60,8 @@ def safe_join(base_dir: str, *parts: str) -> str:
     return candidate
 
 
-# Stream a published artifact in bounded chunks: artifacts are scientific files
-# that can be gigabytes wide, so nothing here ever reads one wholly into memory.
+# Hash and copy in bounded chunks: an artifact is a scientific file that can be
+# gigabytes wide, so it is never handled with one artifact-sized read or buffer.
 _HASH_CHUNK_BYTES = 1024 * 1024
 
 #: How every published path is opened: read-only (no write can be requested of a
@@ -123,77 +125,184 @@ def manifest_relative_parts(relative_path: str) -> tuple[str, ...] | None:
     return tuple(parts)
 
 
-def snapshot_regular_file(descriptor: int) -> bytes:
-    """Read an already-opened private regular file into a bounded private image.
+def verify_regular_file(descriptor: int, limit: int) -> tuple[BinaryIO, str]:
+    """Verify an already-opened private regular file into a bounded private snapshot.
 
-    The cached-archive path's half of the copy contract: the archive is verified
-    against the anchored manifest and then delivered, so the object delivered has
-    to be the object verified -- a rewrite of the same length in place would
-    otherwise keep the inode, the link count, and the length and be served as the
-    publication.  One bounded read, one copy, and the caller verifies and serves
-    the copy.
+    The one publication read, shared by every consumer.  The type, the link
+    count, and the size the copy is bounded by are all read from the *opened
+    descriptor*, never from a name that produced it: a symlink, a directory, a
+    second link, a FIFO, a socket, and a device are refused by one check no name
+    swap can outrun, and an entry over *limit* costs a stat rather than a copy.
 
-    The descriptor is consumed: the read wraps it in a file object, so it is
-    closed on every path out of this call and the caller must not close it again.
+    What comes back is a private, unlinked, server-owned image of that
+    descriptor, positioned at its start, together with the SHA-256 of exactly
+    those bytes.  A consumer therefore holds a version of the file rather than a
+    window onto a mutable inode: a same-length rewrite of the runner's file --
+    which keeps the inode, the link count, and the size, and so passes every
+    check a descriptor's metadata can make -- reaches nothing, because the bytes
+    served are no longer the file's.  The image is disk-backed rather than
+    resident, so a multi-hundred-megabyte artifact is copied in bounded chunks
+    instead of held in a worker's heap, and it is removed when the last
+    reference to it drops.
+
+    The caller owns the returned object and must close it; the input *descriptor*
+    is consumed and closed on every path out of this call.
     """
-    with os.fdopen(descriptor, "rb") as handle:
-        return _read_bounded(handle, os.fstat(handle.fileno()).st_size)[0]
+    # The type and the length are read from the raw descriptor, before it is
+    # wrapped: a directory refuses ``fdopen`` with a different error, and the one
+    # identity rule has to decide what a candidate is -- not the file-object
+    # layer underneath it.
+    snapshot: BinaryIO | None = None
+    handle: Any = None
+    try:
+        status = os.fstat(descriptor)
+        size = status.st_size
+        if not stat.S_ISREG(status.st_mode) or status.st_nlink != 1:
+            raise ArtifactIdentityError("not a private regular file")
+        if size > limit:
+            raise ArtifactOversizedError("published file exceeds its bound")
+        handle = os.fdopen(descriptor, "rb")
+        snapshot = _private_snapshot()
+        digest, copied = _copy_bounded(handle, snapshot, size)
+        # Growth is reported by the descriptor *after* the copy, not by the count
+        # that copy produced: the copy is bounded by the pre-read size, so an inode
+        # that grew would otherwise still yield a digest of its first ``size``
+        # bytes that matches the manifest.  A file that changed length is not one
+        # version of itself, so its digest describes no publication -- and the
+        # error names the length the descriptor itself reported *after* the copy,
+        # which is the fact that decided.
+        final = os.fstat(descriptor).st_size
+        if copied != size or final != size:
+            raise ArtifactChangedError(f"published file changed from {size} to {final} bytes while being read")
+        snapshot.seek(0)
+        return snapshot, digest
+    except BaseException:
+        if snapshot is not None:
+            snapshot.close()
+        raise
+    finally:
+        if handle is not None:
+            handle.close()
+        else:
+            # Not wrapped, so the caller's descriptor is this call's to close.
+            os.close(descriptor)
 
 
-def _read_bounded(handle: Any, limit: int, *, chunk_bytes: int = _HASH_CHUNK_BYTES) -> tuple[bytes, str]:
-    """Read at most *limit* bytes and return ``(bytes, sha256)``.
+def _copy_bounded(handle: Any, destination: BinaryIO, size: int) -> tuple[str, int]:
+    """Copy exactly *size* bytes from *handle* into *destination* while hashing.
 
-    One read, one digest, one byte image: the digest a caller compares against a
-    manifest entry and the bytes a consumer receives come from the same pass, so
-    no rewrite of the underlying inode between the two can be served as verified.
-    The loop is bounded by the size the descriptor reported before the read
-    started, so an artifact that grows while it is being read cannot hold the
-    reader in an unbounded stream: the extra bytes are simply not read, and the
-    size mismatch that leaves is what rejects the candidate.
+    The one digest-and-copy pass: the bytes a consumer will be served and the
+    digest that says which publication they are come from the same read.  The
+    copy is bounded by *size* -- the length the descriptor reported before it
+    started -- so a file that grows underneath the reader is never read to its
+    new length; a short copy (a file that shrank or was truncated) stops early
+    instead of blocking.  Returns ``(sha256, bytes_copied)``; the caller is what
+    decides whether the count matches what it expected.
     """
     digest = hashlib.sha256()
-    data = bytearray()
-    handle.seek(0)
-    while len(data) < limit:
-        chunk = handle.read(min(chunk_bytes, limit - len(data)))
+    copied = 0
+    while copied < size:
+        chunk = handle.read(min(_HASH_CHUNK_BYTES, size - copied))
         if not chunk:
             break
         digest.update(chunk)
-        data.extend(chunk)
-    return bytes(data), digest.hexdigest()
+        destination.write(chunk)
+        copied += len(chunk)
+    return digest.hexdigest(), copied
+
+
+def _private_snapshot() -> BinaryIO:
+    """Open a private, unlinked, disk-backed image a verified artifact is copied into.
+
+    ``O_TMPFILE`` gives a file with no directory entry at all -- nothing in any
+    namespace, the runner's or the server's, can name it, replace it, or read it,
+    so the bytes a consumer is served cannot be rewritten after they were
+    verified.  The file is anonymous by construction rather than by a predictable
+    name plus a later unlink, and it needs no runner-writable directory: the
+    service account's own scratch is enough, which is what keeps the server free
+    of a shared publication store.  ``tempfile`` falls back to a named temporary
+    it unlinks immediately when the kernel or the filesystem cannot do
+    ``O_TMPFILE``, so the same guarantee holds either way.
+    """
+    return tempfile.TemporaryFile(prefix="revocompute-verified-")
+
+
+def _release_verified(snapshot: BinaryIO | None, descriptor: int) -> None:
+    """Release the two resources one verified snapshot owns, exactly once each.
+
+    The one implementation of the release, shared by an explicit ``close`` and the
+    stream's finalizer, so a consumer that closes and a consumer that only drops
+    its reference cannot release either resource twice or leave one behind.
+    """
+    if snapshot is not None:
+        try:
+            snapshot.close()
+        except OSError:  # pragma: no cover - closing a private stream does not fail
+            pass
+    if descriptor >= 0:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+
+
+class _StreamReadError(OSError):
+    """A read failure a verified snapshot was asked to remember until it closes.
+
+    ``BufferedReader`` reports a read that failed in ``flush``/``close`` rather
+    than only at the call that raised, so a consumer that checks the terminal
+    state of its own reader still learns the stream broke.  This carries the
+    original message so nothing about the failure is lost between the read and
+    the close.
+    """
 
 
 class _SnapshotStream:
-    """A private byte image of one verified artifact, served under the file protocol.
+    """A private image of one verified artifact, served under the file protocol.
 
-    The verified bytes are copied once, and every consumer reads the copy: what a
+    The verified bytes live in an unlinked, server-owned snapshot opened by
+    :func:`verify_regular_file`, and every consumer reads that snapshot: what a
     caller is handed is a version of the file rather than a window onto a mutable
-    inode, so a same-length rewrite of the runner's file after verification reaches
-    nothing.  The size the image was copied at bounds every read, so growth,
-    shrinkage, and substitution all have no path in.
+    inode, so a same-length rewrite of the runner's file after verification
+    reaches nothing.  The size the snapshot was copied at bounds every read, so
+    growth, shrinkage, and substitution all have no path in.  The snapshot is
+    behind this object rather than handed out directly, so closing the stream
+    removes the snapshot whatever the consumer does with it -- including a
+    consumer that only drops its reference, which the finalizer covers.
 
-    The descriptor the bytes were read from is *kept*, not closed, because a
-    consumer may still ask the verified file about metadata the read does not
-    describe -- its modification time, which a ZIP member header carries.  Content
-    never comes from the descriptor again: only :meth:`fileno` reaches it, and it
-    exists so a caller can ``fstat`` the very inode the bytes were verified as.
-    Closing this stream closes that descriptor too, exactly once.
+    The descriptor the bytes were *verified as* is kept beside the snapshot,
+    because a consumer may still ask the verified file about metadata the bytes
+    do not describe -- its modification time, which a ZIP member header carries.
+    Content never comes from that descriptor again: only :meth:`fileno` reaches
+    it, and it exists so a caller can ``fstat`` the very inode the bytes were
+    verified as.  Closing this stream closes it exactly once.
+
+    A read that fails underneath is remembered until the stream is closed, so a
+    close cannot present a broken stream as a clean one: the failing exception is
+    raised from :meth:`close` the way ``BufferedReader`` raises a deferred read
+    error from ``flush``.  Information a consumer relies on is not dropped
+    between the read that raised and the close that ends the stream.
     """
 
-    __slots__ = ("_data", "_size", "_offset", "_closed", "_descriptor")
+    __slots__ = ("_snapshot", "_descriptor", "_closed", "_finalizer", "_failure", "__weakref__")
 
-    def __init__(self, data: bytes, descriptor: int | None = None):
-        self._data = data
-        self._size = len(data)
-        self._offset = 0
-        self._closed = False
+    def __init__(self, snapshot: BinaryIO, descriptor: int):
+        self._snapshot = snapshot
         self._descriptor = descriptor
+        self._closed = False
+        self._failure: BaseException | None = None
+        # Removing the snapshot and the verified descriptor is a resource
+        # concern, not a semantic one, so it must survive a consumer that never
+        # closes: a finalizer releases both exactly once even if the stream is
+        # only dropped.  ``weakref.finalize`` is used rather than ``__del__`` so
+        # the release still runs when the stream is part of a reference cycle.
+        self._finalizer = weakref.finalize(self, _release_verified, snapshot, descriptor)
 
     def readable(self) -> bool:
         return True
 
     def writable(self) -> bool:
-        # A verified byte image is read-only: it stands in for a file the
+        # A verified snapshot is read-only: it stands in for a file the
         # publication contract opened read-only, and ``io.TextIOWrapper`` asks
         # before it will wrap one, so the answer has to be the truth.
         return False
@@ -205,59 +314,76 @@ class _SnapshotStream:
     def closed(self) -> bool:
         return self._closed
 
-    def fileno(self) -> Any:
-        if self._descriptor is None:
-            raise io.UnsupportedOperation("a verified byte image has no descriptor")
+    def fileno(self) -> int:
+        """Return the descriptor whose bytes were verified.
+
+        A consumer that wants the verified file's *metadata* -- the ZIP member
+        timestamp -- reaches the inode here.  The bytes it serves are the
+        snapshot, never this descriptor.
+        """
+        if self._descriptor < 0:
+            raise io.UnsupportedOperation("the verified descriptor is closed")
         return self._descriptor
 
     def read(self, size: int = -1) -> bytes:
-        if size is None or size < 0:
-            size = self._size - self._offset
-        chunk = self._data[self._offset:self._offset + size]
-        self._offset += len(chunk)
-        return chunk
+        try:
+            return self._snapshot.read(size)
+        except OSError as exc:
+            self._note_failure(exc)
+            raise
 
     def readinto(self, buffer: Any) -> int:
-        view = memoryview(buffer)
-        chunk = self.read(view.nbytes)
-        view[:len(chunk)] = chunk
-        return len(chunk)
+        try:
+            return self._snapshot.readinto(buffer)
+        except OSError as exc:
+            self._note_failure(exc)
+            raise
 
     def read1(self, size: int = -1) -> bytes:
-        return self.read(size)
+        try:
+            return self._snapshot.read1(size) if hasattr(self._snapshot, "read1") else self._snapshot.read(size)
+        except OSError as exc:
+            self._note_failure(exc)
+            raise
 
     def readline(self, size: int = -1) -> bytes:
-        end = self._data.find(b"\n", self._offset)
-        stop = self._size if end < 0 else end + 1
-        if size is not None and size >= 0:
-            stop = min(stop, self._offset + size)
-        chunk = self._data[self._offset:stop]
-        self._offset += len(chunk)
-        return chunk
+        try:
+            return self._snapshot.readline(size)
+        except OSError as exc:
+            self._note_failure(exc)
+            raise
 
     def __iter__(self) -> Any:
-        while (line := self.readline()):
-            yield line
+        return iter(self._snapshot)
 
     def seek(self, offset: int, whence: int = 0) -> int:
-        target = offset if whence == 0 else self._offset + offset if whence == 1 else self._size + offset
-        self._offset = max(0, min(self._size, target))
-        return self._offset
+        return self._snapshot.seek(offset, whence)
 
     def tell(self) -> int:
-        return self._offset
+        return self._snapshot.tell()
 
     def flush(self) -> None:
         return None
 
+    def _note_failure(self, error: OSError) -> None:
+        """Remember the first read error, so a later ``close`` still reports it."""
+        if self._failure is None:
+            self._failure = error
+
     def close(self) -> None:
-        descriptor, self._descriptor = self._descriptor, None
+        # Detach first, so a re-entrant close -- the finalizer running while the
+        # caller is inside this call -- cannot double-close either resource.
+        snapshot, self._snapshot = self._snapshot, None
+        descriptor, self._descriptor = self._descriptor, -1
         self._closed = True
-        self._offset = 0
-        if descriptor is not None:
-            # The stream owns the descriptor it was verified from, so a consumer
-            # that closes the verified file releases it exactly once.
-            os.close(descriptor)
+        failure, self._failure = self._failure, None
+        if self._finalizer.detach() is not None:
+            _release_verified(snapshot, descriptor)
+        if failure is not None:
+            # The stream broke under a consumer and is now ended; a terminal
+            # close must not report a clean stream.  The message is carried so
+            # the reason the read failed survives to whoever inspects the close.
+            raise _StreamReadError(f"verified snapshot read failed: {failure}") from failure
 
     def __enter__(self) -> "_SnapshotStream":
         return self
@@ -268,7 +394,7 @@ class _SnapshotStream:
 
 @dataclass(frozen=True, slots=True)
 class _VerifiedFile:
-    """One verified published file: the pinned descriptor and the digest of its bytes."""
+    """One verified published file: the private snapshot and the digest of its bytes."""
 
     handle: Any
     digest: str
@@ -499,63 +625,66 @@ class _ResultTreeWalker:
     ) -> _VerifiedFile:
         """Open one enumerated entry as a verified private regular file.
 
-        The one bounded-hash implementation in the system: the reader and the
-        publication writer both consume it, so neither can drift into a second
-        idea of what "the published bytes" are.  The rule is read the type from
-        the *opened descriptor* -- never from the name -- and refuse anything
-        that is not a private regular file, so a symlink, a directory, a second
-        link, a FIFO, a socket, and a device are all rejected by one check that no
-        name swap can outrun.  The descriptor is opened with ``SAFE_OPEN_FLAGS``,
-        so the open itself cannot block on an empty FIFO and the check is always
-        reachable.  The size the descriptor reports is checked against
-        *max_bytes* before any byte is read, and the read loop is bounded by that
-        same size, so an entry that grows underneath the reader yields a size
-        mismatch instead of an unbounded read.
+        The one publication read in the system: the reader and the publication
+        writer both consume it, so neither can drift into a second idea of what
+        "the published bytes" are.  The rule is read the type from the *opened
+        descriptor* -- never from the name -- and refuse anything that is not a
+        private regular file, so a symlink, a directory, a second link, a FIFO, a
+        socket, and a device are all rejected by one check that no name swap can
+        outrun.  The descriptor is opened with ``SAFE_OPEN_FLAGS``, so the open
+        itself cannot block on an empty FIFO and the check is always reachable.
+        The size the descriptor reports is checked against *max_bytes* before any
+        byte is read, and the copy that follows is bounded by that same size, so
+        an entry that grows underneath the reader yields a size mismatch instead
+        of an unbounded read.  The verification itself is
+        :func:`verify_regular_file`, so there is one copy-and-digest pass.
 
-        What the caller receives is the *byte image* this call produced, not the
-        descriptor: the digest describes exactly the bytes served, and a rewrite
-        of the runner's inode -- of any length, in place -- cannot reach a
-        consumer that holds a copy.  With ``expected`` those bytes must also
+        What the caller receives is a private *snapshot* of the descriptor, not
+        the descriptor: the digest describes exactly the bytes served, and a
+        rewrite of the runner's inode -- of any length, in place -- cannot reach a
+        consumer that holds the snapshot.  With ``expected`` those bytes must also
         match the manifest entry's ``(size, sha256)``, which remains the authority
         on *which* publication they are.
         """
         descriptor = os.open(name, SAFE_OPEN_FLAGS, dir_fd=directory_fd)
-        # The descriptor stays open for the life of the verified file: the byte
-        # image is the content, and the descriptor is what still answers a
-        # consumer's question about the *inode* the content came from -- its
-        # modification time.  Closing the verified file closes it exactly once.
+        # The verified stream keeps a descriptor on the *inode* the bytes came
+        # from -- a consumer still asks the verified file for its modification
+        # time -- so one duplicate is taken before the verification consumes the
+        # original: ``verify_regular_file`` closes what it is handed on every
+        # path, success or failure, and nothing below may close a number again
+        # that by then could already belong to another file.
         try:
-            status = os.fstat(descriptor)
-            if not stat.S_ISREG(status.st_mode) or status.st_nlink != 1:
-                # One rule for every kind of non-publication: a symlink, a
-                # directory, a FIFO, a socket, a device, or a file with a second
-                # link is not a published artifact, and the type is read from the
-                # descriptor rather than from the name that produced it.
-                raise ArtifactIdentityError(f"not a private regular file: {name}")
-            if status.st_size > max_bytes:
-                raise ArtifactOversizedError(f"published file exceeds its bound: {name}")
-            with os.fdopen(os.dup(descriptor), "rb") as reader:
-                # The bounded read runs on a duplicate, so the content pass never
-                # moves the descriptor's own offset and never closes it.
-                image, digest = _read_bounded(reader, status.st_size)
-            # Growth during the read is reported by the descriptor *after* the
-            # read, not by the byte count it produced: the read loop is bounded by
-            # the pre-read size, so an inode that grew would otherwise still yield
-            # a digest of its first ``status.st_size`` bytes that matches the
-            # manifest.  A file that changed length is not one version of itself,
-            # so the digest describes no publication and the candidate is refused.
-            after = os.fstat(descriptor)
-            if after.st_size != status.st_size or len(image) != status.st_size:
-                raise ArtifactChangedError(f"published file changed while being read: {name}")
+            kept = os.dup(descriptor)
+        except OSError:
+            os.close(descriptor)
+            raise
+        try:
+            snapshot, digest = verify_regular_file(descriptor, max_bytes)
+        except ArtifactChangedError as error:
+            os.close(kept)
+            raise ArtifactChangedError(f"published file changed while being read: {name}") from error
+        except ArtifactOversizedError as error:
+            os.close(kept)
+            raise ArtifactOversizedError(f"published file exceeds its bound: {name}") from error
+        except ArtifactIdentityError as error:
+            os.close(kept)
+            raise ArtifactIdentityError(f"not a private regular file: {name}") from error
+        except BaseException:
+            os.close(kept)
+            raise
+        try:
+            size = snapshot.seek(0, os.SEEK_END)
+            snapshot.seek(0)
             if expected is not None:
                 declared_size, declared_digest = expected
-                if len(image) != declared_size:
+                if size != declared_size:
                     raise ArtifactIdentityError(f"published artifact does not match its declared size: {name}")
                 if digest != declared_digest:
                     raise ArtifactIdentityError(f"published artifact does not match its declared digest: {name}")
-            return _VerifiedFile(_SnapshotStream(image, descriptor), digest, len(image))
+            return _VerifiedFile(_SnapshotStream(snapshot, kept), digest, size)
         except BaseException:
-            os.close(descriptor)
+            snapshot.close()
+            os.close(kept)
             raise
 
     def open_published_file(
@@ -773,15 +902,17 @@ class StorageResolver:
         verified bytes or the state that explains the refusal, so no consumer can
         disagree with another about whether a result is published, and no
         consumer has to re-derive the reason by re-opening the file.  The bytes
-        come from a descriptor opened relative to the trusted result root, so an
-        intermediate directory swapped for a symlink cannot point the read at a
-        different manifest.
+        come from the snapshot of a descriptor opened relative to the trusted
+        result root, so an intermediate directory swapped for a symlink cannot
+        point the read at a different manifest.
 
-        The bytes returned are the byte image the verification hashed, and that
-        image is compared against the server-owned anchor below, so the caller
-        receives exactly the bytes whose digest the anchor describes: a rewrite of
+        The bytes returned are the bytes the verification hashed, and they are
+        compared against the server-owned anchor below, so the caller receives
+        exactly the bytes whose digest the anchor describes: a rewrite of
         ``manifest.json`` in place -- of the same length, keeping the inode, the
         link count, and the size -- cannot be handed out as the publication.
+        The manifest is bounded by :func:`manifest_byte_limit`, so reading it
+        whole into memory is reading a small, contract-bounded string.
         """
         try:
             result_root = self.get_task_root(task)
@@ -792,11 +923,6 @@ class StorageResolver:
                 verified = walker.open_published_file(("manifest.json",), max_bytes=manifest_byte_limit())
                 try:
                     data = verified.handle.read(manifest_byte_limit())
-                    if len(data) != verified.size:
-                        # The manifest changed between the descriptor's own size
-                        # report and the bounded read: it was replaced while it
-                        # was being read.
-                        raise ArtifactIdentityError("manifest changed while being read")
                 finally:
                     verified.handle.close()
         except (AttributeError, OSError, ValueError) as error:
@@ -931,20 +1057,21 @@ class StorageResolver:
     def open_verified_artifact(
         self, task: dict[str, Any], relative_path: str, manifest: dict[str, Any] | None = None
     ) -> dict[str, Any] | None:
-        """Resolve a manifest-declared artifact and its verified open descriptor.
+        """Resolve a manifest-declared artifact and its verified private snapshot.
 
         The one published-artifact identity contract: a private regular file (no
         symlink, single link, every intermediate component a real directory)
         whose declared size and SHA-256 match the bytes of the opened descriptor.
         Both are required -- an entry without them carries no identity evidence.
-        The returned ``verified_stream`` is the descriptor whose size and SHA-256
-        were just checked against the manifest entry, left open and rewound.  A
-        consumer must read *that* descriptor: after publication identity has been
-        verified, a reopen -- of a pathname, or of a name a second walk would
-        resolve again -- could serve bytes that never satisfied the manifest
-        identity.  The provenance digest is the one computed while verifying that
-        descriptor.  ``None`` means the artifact is refused; the caller owns the
-        descriptor of a returned result and must close it.
+        The returned ``verified_stream`` is the private snapshot whose size and
+        SHA-256 were just checked against the manifest entry, positioned at its
+        start.  A consumer must read *that* snapshot: after publication identity
+        has been verified, a reopen -- of a pathname, or of a name a second walk
+        would resolve again -- could serve bytes that never satisfied the manifest
+        identity, and a rewrite in place of the runner's own inode could not be
+        refused by any check the file itself can answer.  The provenance digest
+        is the one computed while verifying that snapshot.  ``None`` means the
+        artifact is refused; the caller owns a returned stream and must close it.
         """
         resolved = self.resolve_declared_artifact(task, relative_path, manifest)
         if resolved is None:

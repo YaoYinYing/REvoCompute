@@ -1491,10 +1491,10 @@ def test_the_writer_anchors_exactly_at_the_reader_ceiling_and_not_above(monkeypa
 
 
 def test_an_over_capacity_artifact_is_refused_without_reading_its_bytes(monkeypatch, tmp_path) -> None:
-    """Capacity is enforced from the verified size, so the bytes are never read.
+    """Capacity is enforced from the verified size, so the bytes are never copied.
 
-    The probe counts the reads the publication actually performs on the
-    over-capacity file: a reader that hashed first and compared afterwards would
+    The probe counts the copy the publication actually performs on the
+    over-capacity file: a reader that copied first and compared afterwards would
     show the whole 4 MiB here.
     """
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
@@ -1503,19 +1503,19 @@ def test_an_over_capacity_artifact_is_refused_without_reading_its_bytes(monkeypa
     result_dir = Path(module.app.config["storage_resolver"].get_task_root(module.task_store.get_task(task_id)))
     target = result_dir / "huge.bin"
     target.write_bytes(b"x" * (4 * 1024 * 1024))
-    hashed: list[int] = []
+    copied: list[int] = []
 
     import revocompute.storage as storage_module
 
-    real_read = storage_module._read_bounded
+    real_copy = storage_module._copy_bounded
 
-    def counting_read(handle, limit, **kwargs):
-        # The one bounded read is the only reader of a candidate's bytes during
-        # publication, so counting the bound it is asked for counts the work.
-        hashed.append(limit)
-        return real_read(handle, limit, **kwargs)
+    def counting_copy(handle, destination, size):
+        # The one bounded copy is the only reader of a candidate's bytes during
+        # publication, so counting the length it is asked for counts the work.
+        copied.append(size)
+        return real_copy(handle, destination, size)
 
-    monkeypatch.setattr(storage_module, "_read_bounded", counting_read)
+    monkeypatch.setattr(storage_module, "_copy_bounded", counting_copy)
 
     manifest = module.task_runtime._finalize_results_manifest(
         module.task_store.get_task(task_id), execution_state="completed", finished_at=1_700_000_000
@@ -1523,9 +1523,9 @@ def test_an_over_capacity_artifact_is_refused_without_reading_its_bytes(monkeypa
 
     assert manifest["artifacts"] == []
     assert any("capacity limit" in problem for problem in manifest["output_check"]["problems"])
-    # The 4 MiB candidate was never read at all: its verified size was already
-    # over the budget, so no bounded read was ever asked for those bytes.
-    assert 4 * 1024 * 1024 not in hashed
+    # The 4 MiB candidate was never copied at all: its verified size was already
+    # over the budget, so no bounded copy was ever asked for those bytes.
+    assert 4 * 1024 * 1024 not in copied
     assert target.stat().st_size == 4 * 1024 * 1024
 
 
@@ -1589,10 +1589,10 @@ def test_a_journaled_entry_is_never_hung_on_by_the_walk(monkeypatch, tmp_path) -
 def test_a_flagged_published_file_cannot_be_extended_after_verification(monkeypatch, tmp_path) -> None:
     """Bytes appended after identity verification do not reach the caller.
 
-    The published artifact contract is a length: the descriptor a consumer reads
-    is the one whose size and digest were checked, so bytes appended to the same
-    inode afterwards -- which keep the inode, the link count, and the manifest
-    entry's declared prefix -- must not be served.
+    The published artifact contract is a length: what a consumer is served is the
+    private snapshot of the bytes whose size and digest were checked, so bytes
+    appended to the same inode afterwards -- which keep the inode, the link count,
+    and the manifest entry's declared prefix -- must not be served.
     """
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     headers = _test_client_auth(module)
@@ -1624,9 +1624,9 @@ def _rewrite_in_place(path: Path, payload: bytes) -> None:
     """Replace *path*'s bytes without changing its inode, link count, or length.
 
     The strongest substitution the runner's own Unix identity can make: every
-    fact a descriptor reports about the file -- inode, link count, and size --
-    is unchanged, so a consumer that holds the descriptor rather than a copy of
-    the bytes it read would serve the substituted content as verified.
+    fact the filesystem reports about the file -- inode, link count, and size --
+    is unchanged, so a consumer that reads the file itself rather than the private
+    snapshot of the bytes it verified would serve the substituted content.
     """
     assert len(payload) == path.stat().st_size
     with open(path, "r+b") as handle:
@@ -1636,7 +1636,7 @@ def _rewrite_in_place(path: Path, payload: bytes) -> None:
 def test_a_same_length_rewrite_is_not_delivered_as_the_artifact(monkeypatch, tmp_path) -> None:
     """A rewrite that keeps every descriptor fact still cannot be served.
 
-    The published artifact is delivered from the byte image its digest was
+    The published artifact is delivered from the private snapshot its digest was
     computed over, so a rewrite of the same length -- new content, same inode,
     same link count, same size -- reaches nothing.
     """
@@ -1668,7 +1668,7 @@ def test_a_same_length_rewrite_is_not_delivered_as_the_artifact(monkeypatch, tmp
 
 
 def test_a_same_length_rewrite_is_not_previewed_as_the_table(monkeypatch, tmp_path) -> None:
-    """The table preview parses the verified byte image, not the rewritten file."""
+    """The table preview parses the verified snapshot, not the rewritten file."""
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     headers = _test_client_auth(module)
     task_id = _finished_task(module, tmp_path)
@@ -1722,12 +1722,20 @@ def test_a_same_length_rewrite_of_the_manifest_is_not_the_publication(monkeypatc
 
 
 def test_a_same_length_rewrite_of_the_archive_is_not_delivered(monkeypatch, tmp_path) -> None:
-    """The delivered archive is the byte image its members were verified against."""
+    """The delivered archive is the private snapshot its members were verified against.
+
+    The published artifact is large enough to exceed the read buffer a
+    verification that streamed the archive *itself* would have retained, so a
+    delivery that rewound that reader instead of serving an independent snapshot
+    would hand back the rewritten bytes rather than the verified ones.
+    """
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     headers = _test_client_auth(module)
-    task_id, _result_dir, _manifest = _single_artifact_task(module, tmp_path, b"score\n1.0\n")
+    content = b"".join(b"detail %06d\n" % line for line in range(12000))
+    task_id, _result_dir, _manifest = _single_artifact_task(module, tmp_path, content)
     archive_path = _publish_archive(module, task_id)
     published_bytes = archive_path.read_bytes()
+    assert len(published_bytes) > 128 * 1024, "the fixture must exceed a streaming reader's buffer"
     import revocompute.storage as storage_module
 
     real_verify = storage_module.verified_publication_archive
@@ -1809,13 +1817,13 @@ def test_an_artifact_truncated_while_being_hashed_is_refused(monkeypatch, tmp_pa
 
 
 def test_an_artifact_that_grows_only_after_the_hash_is_refused(monkeypatch, tmp_path) -> None:
-    """Growth that begins after the bytes were read is caught by a post-hash check.
+    """Growth that begins after the bytes were copied is caught by a post-copy check.
 
-    The hash loop is bounded by the size the descriptor reported before the read,
-    so an inode appended to during the read still yields a digest matching its
+    The copy is bounded by the size the descriptor reported before it started, so
+    an inode appended to during the copy still yields a digest matching its
     original prefix.  The bound alone is therefore not the check: the descriptor's
-    size is compared *after* the read, and a file that is no longer the length its
-    digest describes is refused.  The append is injected at the end of the read,
+    size is compared *after* the copy, and a file that is no longer the length its
+    digest describes is refused.  The append is injected at the end of the copy,
     which is exactly the window a size-only-before check would miss.
     """
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
@@ -1827,19 +1835,19 @@ def test_an_artifact_that_grows_only_after_the_hash_is_refused(monkeypatch, tmp_
 
     import revocompute.storage as storage_module
 
-    real_read = storage_module._read_bounded
+    real_copy = storage_module._copy_bounded
     grew: list[int] = []
 
-    def growing_read(handle, limit, **kwargs):
-        result = real_read(handle, limit, **kwargs)
+    def growing_copy(handle, destination, size):
+        result = real_copy(handle, destination, size)
         if not grew:
-            # Extend the very inode the digest was taken from, after the read.
+            # Extend the very inode the digest was taken from, after the copy.
             grew.append(1)
             os.write(handle.fileno(), b"b" * 8192)
             os.lseek(handle.fileno(), 0, os.SEEK_SET)
         return result
 
-    monkeypatch.setattr(storage_module, "_read_bounded", growing_read)
+    monkeypatch.setattr(storage_module, "_copy_bounded", growing_copy)
     manifest = module.task_runtime._finalize_results_manifest(
         task, execution_state="completed", finished_at=1_700_000_000
     )
@@ -1878,12 +1886,12 @@ def test_an_artifact_replaced_by_a_hardlink_while_being_hashed_is_refused(monkey
 
 
 def test_a_consumer_that_closes_its_stream_releases_the_descriptor(monkeypatch, tmp_path) -> None:
-    """The pinned stream owns the descriptor, and closing it releases it.
+    """The verified stream owns the descriptor, and closing it releases it.
 
-    A consumer is handed the verified descriptor and closes it -- every route
-    and the archive builder do.  The pin sits in front of the file object, so it
-    has to forward ``close`` to it; a wrapper that only closed itself would leak
-    one descriptor per request.
+    A consumer is handed the verified stream and closes it -- every route and the
+    archive builder do.  The stream keeps the descriptor of the inode the bytes
+    were verified as, so ``close`` has to release it; a stream that only forgot
+    its own reference would leak one descriptor per request.
     """
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     task_id, _result_dir, _manifest = _single_artifact_task(module, tmp_path, b"score\n1.0\n")
@@ -1896,6 +1904,117 @@ def test_a_consumer_that_closes_its_stream_releases_the_descriptor(monkeypatch, 
 
     with pytest.raises(OSError):
         os.fstat(descriptor)
+
+
+def test_a_consumer_that_never_closes_its_stream_still_releases_it(monkeypatch, tmp_path) -> None:
+    """A dropped verified stream releases its descriptor and its snapshot.
+
+    The production loop closes what it takes, but a consumer that only drops its
+    reference must not leak: the descriptor of the verified inode and the private
+    socket-backed snapshot are both process-scoped resources, so the release is
+    bound to the stream's lifetime rather than to a caller's discipline.
+    """
+    import gc
+
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id, _result_dir, _manifest = _single_artifact_task(module, tmp_path, b"score\n1.0\n")
+    task = module.task_store.get_task(task_id)
+    resolved = module.app.config["storage_resolver"].resolve_artifact(task, "result.txt")
+    stream = resolved["verified_stream"]
+    verified_descriptor = stream.fileno()
+    snapshot_descriptor = stream._snapshot.fileno()
+
+    del resolved, stream
+    gc.collect()
+
+    for leaked, name in ((verified_descriptor, "verified inode"), (snapshot_descriptor, "snapshot")):
+        with pytest.raises(OSError):
+            os.fstat(leaked)
+
+
+def test_a_broken_snapshot_read_is_reported_by_close_not_swallowed(monkeypatch, tmp_path) -> None:
+    """A read that failed under a consumer is still visible when the stream closes.
+
+    Closing a reader is the last act of a delivery, so it must not present a
+    stream that broke as a clean one: the read error is remembered and raised from
+    ``close`` the way ``BufferedReader`` raises a deferred read error from
+    ``flush``.  The close is still idempotent -- a second close of a stream that
+    failed does nothing further.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id, _result_dir, _manifest = _single_artifact_task(module, tmp_path, b"score\n1.0\n")
+    task = module.task_store.get_task(task_id)
+    stream = module.app.config["storage_resolver"].resolve_artifact(task, "result.txt")["verified_stream"]
+
+    class FailingSnapshot:
+        """A snapshot whose reads fail the way a torn local read would."""
+
+        def __init__(self, inner):
+            self._inner = inner
+
+        def read(self, _size: int = -1) -> bytes:
+            raise OSError(5, "Input/output error")
+
+        def close(self) -> None:
+            self._inner.close()
+
+    stream._snapshot = FailingSnapshot(stream._snapshot)
+    with pytest.raises(OSError):
+        stream.read(1)
+
+    with pytest.raises(OSError):
+        stream.close()
+    # The failure was reported once; the stream is closed and a second close is
+    # not the place to report an already-reported error again.
+    stream.close()
+
+
+def test_a_snapshot_is_an_unlinked_server_owned_file_not_a_resident_copy(monkeypatch, tmp_path) -> None:
+    """A verified artifact is served from an anonymous local file, in bounded chunks.
+
+    The publication closure is a property of *where the served bytes live*.  A
+    consumer that held a large artifact copied into server memory would trade one
+    defect for another -- the descriptor contract exists so a scientific result is
+    streamed rather than loaded -- and a snapshot with a name would be reachable by
+    the runner identity it must be closed against.  Verifying a 64 MiB artifact
+    must therefore cost bounded Python memory, and what it produces must be an
+    unlinked regular file driven by its own descriptor.
+    """
+    import tracemalloc
+
+    from revocompute import storage as storage_module
+
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id, result_dir, _manifest = _single_artifact_task(
+        module, tmp_path, os.urandom(1024) * (64 * 1024)
+    )
+    artifact = result_dir / "result.txt"
+
+    # The one verified read, driven directly: the artifact is 64 MiB and the
+    # verification is the only thing that reads it into either place.
+    descriptor = storage_module.open_published_regular_file(str(artifact))
+    assert descriptor is not None
+    tracemalloc.start()
+    snapshot, digest = storage_module.verify_regular_file(descriptor, 1024 * 1024 * 1024)
+    _current, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    try:
+        assert digest == hashlib.sha256(artifact.read_bytes()).hexdigest()
+        size = snapshot.seek(0, os.SEEK_END)
+        assert size == 64 * 1024 * 1024
+        # The bytes live in an unlinked regular file this process owns: no name
+        # for the runner identity to reach, and not a Python copy.
+        status = os.fstat(snapshot.fileno())
+        assert stat.S_ISREG(status.st_mode)
+        assert status.st_nlink == 0
+        # The kernel reports the anonymous file as already deleted: nothing on
+        # any filesystem -- the runner's or the server's -- can name these bytes.
+        assert os.readlink(f"/proc/self/fd/{snapshot.fileno()}").endswith(" (deleted)")
+        # Verifying a 64 MiB artifact copies it in 1 MiB chunks: the peak traced
+        # allocation must be a small multiple of the chunk, never the artifact.
+        assert peak < 8 * 1024 * 1024, f"verification of 64 MiB peaked at {peak / 1024 / 1024:.1f} MiB"
+    finally:
+        snapshot.close()
 
 
 def test_no_publication_consumer_reopens_a_resolved_name(monkeypatch, tmp_path) -> None:

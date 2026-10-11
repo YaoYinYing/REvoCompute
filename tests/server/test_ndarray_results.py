@@ -414,8 +414,8 @@ def test_a_same_length_rewrite_after_verification_never_reaches_a_projection(mon
     The strongest form of the runner's own access: the bytes under the declared
     name are replaced in place with a *different* array of exactly the same
     length.  Nothing about the file changes -- not the inode, not the link count,
-    not the size -- so only the fact that the consumer holds the byte image its
-    digest was computed over keeps the substituted array out of the projection.
+    not the size -- so only the fact that the consumer holds the private snapshot
+    its digest was computed over keeps the substituted array out of the projection.
     """
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     client = module.app.test_client()

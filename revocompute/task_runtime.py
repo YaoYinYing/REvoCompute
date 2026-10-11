@@ -255,13 +255,15 @@ def _write_manifest_entry(archive: zipfile.ZipFile, manifest_bytes: bytes) -> No
 def _write_verified_artifact(
     archive: zipfile.ZipFile, storage: StorageResolver, task: dict, manifest: dict, artifact: dict
 ) -> None:
-    """Add one manifest-declared artifact from its verified open descriptor.
+    """Add one manifest-declared artifact from its verified private snapshot.
 
-    The bytes reaching the ZIP are streamed from the same descriptor the
-    published-artifact identity contract was checked on, so a file swapped after
+    The bytes reaching the ZIP are streamed from the private snapshot the
+    published-artifact identity contract produced, so a file swapped after
     manifest finalization -- a new inode, a symlink, a hard-link substitute, an
     intermediate directory exchanged for a symlink -- cannot land in the
-    download: the canonical resolver refuses it before a byte is copied.
+    download, and neither can a rewrite of the same inode in place: the canonical
+    resolver refuses the first before a byte is copied, and the second cannot
+    reach a ZIP that reads the snapshot rather than the runner's file.
     """
     relative_path = artifact.get("path", "")
     resolved = storage.open_verified_artifact(task, relative_path, manifest)
@@ -273,8 +275,8 @@ def _write_verified_artifact(
     handle = resolved["verified_stream"]
     try:
         # The entry's length is the one the manifest authorized -- the size the
-        # descriptor's digest was checked against -- never a fresh ``fstat`` that
-        # a grown file would inflate.
+        # stream was verified at -- never a fresh ``fstat`` that a grown file
+        # would inflate.
         modified = os.fstat(handle.fileno()).st_mtime
         info = zipfile.ZipInfo(str(resolved["path"]), date_time=time.localtime(max(modified, _ZIP_EPOCH))[:6])
         # The member is stored: the archive is a byte copy of the publication, so
@@ -1034,8 +1036,8 @@ def _publishable_artifact(
     carries the vocabulary an operator reads -- a symlinked, linked, or special
     entry says which it was -- while ``open_verified`` remains the decision.  Its
     bound is the remaining publication budget, so an over-capacity entry is
-    refused from its verified size before a byte is read and the hash loop cannot
-    outrun a file that grows underneath it.
+    refused from its verified size before a byte is copied, and the copy loop
+    cannot outrun a file that grows underneath it.
     """
     try:
         info = os.stat(filename, dir_fd=directory_fd, follow_symlinks=False)
@@ -1058,7 +1060,7 @@ def _publishable_artifact(
     except ArtifactOversizedError:
         # Bounded work, not a bounded result: an artifact that cannot fit the
         # remaining publication budget is refused from its verified size alone,
-        # before a single byte is read into the hasher.
+        # before a single byte is copied into the snapshot.
         return None, "over capacity"
     except ArtifactIdentityError:
         # The descriptor proved it is not a private regular file: the name was
