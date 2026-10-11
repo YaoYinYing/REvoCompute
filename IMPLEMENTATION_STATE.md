@@ -259,6 +259,60 @@ findings, incompletely closed). Per the campaign rule that no owner READY or
 green CI substitutes for counterexample-driven review, R4 reopens exactly those
 two residuals as fresh, isolated fixes rather than declaring the round closed.
 
+## R4 receipt — residual closure + final integration (2026-10-11, `3c75f7f6`)
+
+Two of the R3 verifier's PARTIAL verdicts were real residual defects in already
+approved findings, so R4 reopened exactly those two (plus one re-measured
+incidental) as fresh, isolated fixes rather than declaring R3 closed.
+
+- `chore/pr74-fix2-status` (`a7d1ffcf`) — R1-C-02 residual. The card pill carries
+  the global `.status, .badge { text-transform: capitalize }` (app.css:253) while
+  the table cell had no transform; both now route through the shared
+  `statusText()` = `task.outcome || task.status` AND the table cell carries
+  `class="state-cell"` with a matching `.task-table .state-cell { text-transform:
+  capitalize }` (app.css:275), so a finalized task with no per-item `outcome`
+  reads `Finished` in both views. New unit coverage in
+  `frontend/tests/dashboard-status.test.ts`.
+- `chore/pr74-fix2-i18n` — R1-B-03 residual. The frontend-authored ERROR copy
+  that still reached a zh-CN user is now localized (create-task workspace-plugin
+  contract errors, `submission.ts`, `results/scientific.ts`,
+  `structure/MolecularViewer.ts`); the English-substring coupling at
+  `InputWorkspace.ts:103` was removed so behaviour no longer depends on
+  user-facing language. Catalog grew to 442 keys per locale in exact parity;
+  the Sec 11 boundary is unchanged — server-owned vocabulary stays English
+  verbatim and is never a `t()` key.
+- `chore/pr74-fix2-ct` (`4d3ddce7`) — the incidental parameter-heading overlap the
+  R3 verifier reported at "561-860px" was RE-MEASURED and that band is clean. The
+  real defect is ~861-960px (the workbench collapses to one column above 860px,
+  so the parameter column is NARROWER at 861 than at 860; the <=860px tier never
+  applies there), with a real glyph collision at 900px (`Reset` ink under the
+  neighbouring `precision` label). Fixed with one declaration, no new breakpoint:
+  `.ct-parameter-heading { flex-wrap: wrap }` (create-task.css), mirroring the
+  existing `.result-header { flex-wrap: wrap }` precedent. New test
+  `tests/test_playwright_runner_fixtures.py::test_parameter_headings_stay_within_their_cells`
+  pins the visible invariant; reverting the CSS fails it at 900/960 (negative
+  control confirmed by the fixer).
+
+**Integration.** All three merged into `chore/visual-qa-campaign-plan`:
+`8c04b86d` -> `3ceeebe4` (status + i18n) -> **`3c75f7f68eea60a1091360630b6b42f23a7739c5`**
+(+ `4d3ddce7`, no conflicts). Integrated gate at `3c75f7f6` under the host lease:
+`npm run typecheck` clean, `npm test` **131 passed / 25 files**, `npm run build` +
+`verify:build` exit 0, browser modules
+`tests/test_playwright_runner_fixtures.py tests/test_playwright_soft_precision.py tests/test_playwright_application.py -m browser`
+-> **134 passed in 131.43s** (up from 130: the new parametrized heading cases plus
+the previously xfail-removed cases, 0 xfail remaining). Pushed to
+`origin/chore/visual-qa-campaign-plan`.
+
+**Convergence.** No new defect was surfaced by the R4 fixes; the confirmation round
+already showed CONVERGED with 0 regressions and 0 console errors. Rounds R5-R10 are
+not run — the campaign converged before the cap, and no cosmetic change was made to
+fill rounds.
+
+**Held for maintainer (PROPOSE-CHANGE, NOT implemented):** R1-B-02 (pristine Create
+Task shows `N issues to fix` on mount) and R1-B-06 (restricted runner detail still
+shows a primary `Create task` beside the Restricted banner) remain design-proposal,
+not defects; the downstream gate is correct in each case.
+
 ## What is confirmed from GitHub
 
 - At authorization, PR #72 and PR #73 are closed and merged.
@@ -338,6 +392,8 @@ Fixers without Design Authority and Commander ownership allocation.
 | R1 | `d1874814` | fixture harness | 4 explorers (A–D) | 24 raw entries | — | — | not run | **discovery complete; triaged** |
 | R2 | `8c04b86d` | fixture harness | 3 fixers (disjoint surfaces) | 0 new | 4 approved fixes | none | typecheck+unit+build+browser all green | **fixes integrated; verification in flight** |
 | R3 | `8c04b86d` | fixture harness | 1 verifier + 1 confirmation explorer | 4 confirmed / 2 partial | — | 0 | before/after browser + 130 browser passed | **verification complete; residuals fixed in R4** |
+| R4 | `3c75f7f6` | fixture harness | 2 fixers (residuals, isolated) + 1 re-measure fixer | 0 new | 3 residual fixes | 0 | typecheck+unit+build+134 browser green | **integrated; final review in flight** |
+| R5-R10 | — | — | 0 | — | — | — | not run | **not started — converged, no further rounds needed** |
 | R4–R10 | pending | pending | 0 | — | — | — | not run | not started |
 
 ## Exit
