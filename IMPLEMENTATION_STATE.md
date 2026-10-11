@@ -1,11 +1,95 @@
 # IMPLEMENTATION_STATE — PR #74 Visual QA Campaign
 
-Status: ACTIVE / R0 PRE-FLIGHT — NO EXPLORER OR FIXER EXECUTION RECEIPTS YET
+Status: ACTIVE / R1 DISCOVERY IN FLIGHT — R0 COMPLETE
 Maintainer activation: 2026-10-11
-Owner: Campaign Commander (to be assigned in the executing Claude team)
+Owner: Campaign Commander (executing)
 PR: https://github.com/YaoYinYing/REvoCompute/pull/74
 Branch: `chore/visual-qa-campaign-plan`
 Merge: prohibited without separate maintainer instruction
+
+## R0 receipt — baseline, environment, realness (2026-10-11)
+
+### Refs and ancestry
+
+- `main` at R0: `d7aecea0e3f31639be5c692bfc1dd599b61bfde7` (unchanged since #73).
+- Campaign branch reconciled onto main by rebase (force-push authorized by the
+  maintainer mid-R0), then force-pushed with lease:
+  `87a9394b` → **`d1874814f99715416b66f035e7828621ae590ed0`**.
+- PR diff vs main is unchanged in content: `TODO.md` (+264) and
+  `IMPLEMENTATION_STATE.md` (+94) only.
+- Only one open PR (#74) exists; no competing frontend owner.
+
+### Worktree and control root
+
+- Canonical implementation worktree:
+  `/home/yinying/repo/.rc-worktrees/pr74-visual-qa` → `d1874814`.
+- Commander control root `/home/yinying/repo/REvoCompute` stays on `main`,
+  synchronized with `origin/main`, no implementation writes.
+
+### Heavy resource lease
+
+- Adopted host lock: `/mnt/hdd/revocompute-agent-scratch/host-heavy.lock`
+  (held free at R0). Every browser/build run wraps it with `flock -w 300`, reads
+  `free -m` + `/proc/pressure/memory` after acquiring, and runs inside
+  `systemd-run --user --scope -p MemoryMax=6G -p MemorySwapMax=4G`.
+- Host at R0: 31.7 GB RAM, 16 CPUs, memory pressure some/full avg10 ≈ 0.
+
+### Browser / build baseline
+
+- Chromium **153.0.8010.52** (`~/.cache/ms-playwright/chromium-1243`), software
+  GL via `--use-angle=swiftshader` (Mol* requires a non-caveat WebGL context).
+- Production bundle built from `d1874814` under the lock: `npm run build`
+  (verify:lock + verify:provenance + check:api-types + vite build + verify:build)
+  → exit 0, `frontend/dist`.
+- Shared test-only browser dists built once for the campaign and reused by every
+  explorer: `/mnt/hdd/revocompute-agent-scratch/pr74/dist/{result,scientific}`.
+
+### Demo environment (disposable, isolated)
+
+Two complementary harnesses, both served locally, no production data, no Slurm:
+
+1. **Fixture harness** (`tests/frontend_fixtures/`, repository-owned) driving the
+   built bundle against deterministic canonical API fixtures. Wrapper:
+   `/mnt/hdd/revocompute-agent-scratch/pr74/tools/browser_harness.py`.
+   Covers Home, Runners, Create Task, Dashboard, Result workspace, Profile.
+2. **Realness harness** (`.../tools/realapp_harness.py`) serving the **real Flask
+   app over real HTTP with the real built bundle**, via
+   `tests/conftest.py::_load_pssm_module` + the WSGI transport pattern from
+   `tests/fleet/browser/test_playwright_admin_pages.py`. This is what answers
+   "does the production page route exist".
+
+### Realness route matrix (real Flask + real bundle, 1440×900)
+
+| route | anon | user | admin |
+| --- | --- | --- | --- |
+| `/`, `/api-docs`, `/runners`, `/compute/dashboard`, `/compute/create_task`, `/compute/profile`, `/compute/login`, `/compute/register`, `/compute/terms` | 200 | 200 | 200 |
+| `/compute/user_control`, `/compute/runner_fleet`, `/compute/logs`, `/compute/configuration` | 200 (shell) | **403** | **200** |
+
+Browser-visible statuses confirm the documented authorization boundary: an
+anonymous visitor is handed the shell (the client redirects to sign-in), a
+signed-in non-admin receives the 403 shell, an admin receives the shell. 39
+screenshots captured at `.../r0/realapp/`.
+
+### Known coverage limitation (not a defect)
+
+The fixture harness has no admin API projections, so the four admin pages render
+their shell but their data panels show empty/error states in fixture runs. Admin
+*page-route existence and authorization* are verified by the realness harness;
+admin *data-panel states* are therefore only partially covered. This is an
+explicit R0 limitation, not a discovery.
+
+### Existing reported conditions carried in (not fresh findings)
+
+- `strict=False` xfail covering 320px content-heavy Create Task / Result
+  overflow (per the design doc).
+- `revocompute.sqlite3.startup.lock` present in the control root (untracked
+  runtime residue; not PR-owned).
+
+### R0 exit
+
+No UI fixes dispatched. R0 established the baseline, environment, realness
+matrix, and coverage limitation above; R1 exploration is in flight.
+
 
 ## What is confirmed from GitHub
 
@@ -82,8 +166,9 @@ Fixers without Design Authority and Commander ownership allocation.
 
 | Round | Exact SHA | Fixture/demo | Explorers | Verified new | Fixed | Regressions | Gate | Status |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| R0 | pending | pending | 0 confirmed | — | — | — | not run | awaiting execution environment |
-| R1–R10 | pending | pending | 0 confirmed | — | — | — | not run | not started |
+| R0 | `d1874814` | fixture harness + real Flask harness | 0 | — | — | — | realness matrix captured | **complete** |
+| R1 | `d1874814` | fixture harness | 4 explorers (A–D) | in flight | — | — | not run | **in flight** |
+| R2–R10 | pending | pending | 0 | — | — | — | not run | not started |
 
 ## Exit
 
