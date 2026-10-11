@@ -180,7 +180,7 @@ export class GuidedTour {
       if (!occupied?.height) return;
       const placed = callout.getBoundingClientRect();
       if (placed.right <= occupied.left || placed.left >= occupied.right || placed.bottom <= occupied.top) return;
-      callout.style.top = `${Math.max(16, top - (placed.bottom - occupied.top) - 8)}px`;
+      callout.style.top = `${Math.max(16, occupied.top - placed.height - 8)}px`;
     };
     document.body.append(callout);
     position();
