@@ -364,7 +364,10 @@ a { color: var(--app-accent); }
 .app-dialog { width: min(100% - 2rem, 30rem); padding: 0; border: 1px solid var(--app-line); border-radius: var(--r-surface); background: var(--app-raised); color: var(--app-ink); box-shadow: var(--shadow-dialog); }.app-dialog::backdrop { background: var(--app-scrim); backdrop-filter: blur(2px); }.app-dialog-frame > header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1rem 1.15rem; border-bottom: 1px solid var(--app-line); }.app-dialog-frame h2 { margin: 0; font: 600 1.2rem var(--font-display); }.app-dialog-body { padding: 1.15rem; }.app-dialog-body p { margin: 0; color: var(--app-muted); font-size: .85rem; line-height: 1.6; }.app-dialog-actions { display: flex; justify-content: end; gap: .5rem; padding: .9rem 1.15rem; border-top: 1px solid var(--app-line); }
 
 /* --- Public shell -------------------------------------------------------- */
-.public-header { position: relative; z-index: 30; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; min-height: 4.4rem; align-items: center; gap: 2rem; padding: 0 max(1rem, calc((100vw - 96rem) / 2)); border-bottom: 1px solid var(--app-line); background: color-mix(in srgb, var(--app-surface) 88%, transparent); backdrop-filter: blur(12px); }
+/* The header is its own query container: the collapse below is decided by the
+   inline size the header actually has, so a rem in the condition resolves against
+   the header's own (zoom-doubled) font and fires under text-only resize too. */
+.public-header { container-type: inline-size; position: relative; z-index: 30; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; min-height: 4.4rem; align-items: center; gap: 2rem; padding: 0 max(1rem, calc((100vw - 96rem) / 2)); border-bottom: 1px solid var(--app-line); background: color-mix(in srgb, var(--app-surface) 88%, transparent); backdrop-filter: blur(12px); }
 .public-brand { display: inline-flex; align-items: center; gap: .55rem; color: var(--app-ink); font: 700 1.12rem var(--font-display); text-decoration: none; }.public-brand img { width: 2.15rem; height: 2.15rem; }
 .public-navigation { min-width: 0; }.public-navigation > summary { display: none; list-style: none; }.public-navigation > summary::-webkit-details-marker { display: none; }.public-navigation nav { display: flex !important; justify-content: center; gap: clamp(.8rem, 2vw, 1.7rem); }.public-navigation a { color: var(--app-muted); font-size: .8rem; font-weight: 600; text-decoration: none; }.public-navigation a:hover, .public-navigation a[aria-current="page"] { color: var(--app-ink); }
 .public-actions { display: flex; align-items: center; gap: .5rem; }.public-account { min-width: 5.6rem; }.public-outlet { min-height: calc(100vh - 4.4rem); }
@@ -478,8 +481,15 @@ a { color: var(--app-accent); }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; } }
 
-@media (max-width: 66rem) {
-  .public-header { gap: .7rem; padding: 0 .75rem; }
+/* Public header collapse. The navigation's compact form is selected by the header's own
+   inline size, not by the viewport: a rem in a media query resolves against the initial
+   16px font, so a viewport query needs a 66rem *viewport* and stays blind to text-only
+   resize, whereas the query container inherits the zoomed root and its rem condition
+   therefore fires at 200% text resize. The header's own gap and padding deliberately stay
+   on the viewport query: an element is never matched by its own container condition, and
+   those are chrome values a text-only zoom is right to grow. */
+@media (max-width: 66rem) { .public-header { gap: .7rem; padding: 0 .75rem; } }
+@container (max-width: 66rem) {
   .public-navigation { justify-self: end; }
   .public-navigation > summary { display: grid; }
   .public-navigation nav { position: absolute; top: calc(100% + .35rem); right: .75rem; display: none !important; width: min(14rem, calc(100vw - 1.5rem)); max-height: calc(100dvh - 6rem); overflow-y: auto; flex-direction: column; gap: 0; padding: .35rem; border: 1px solid var(--app-line); border-radius: var(--r-control); background: var(--app-raised); box-shadow: var(--shadow-raised); }
