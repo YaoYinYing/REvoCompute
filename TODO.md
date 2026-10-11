@@ -1,11 +1,12 @@
 # TODO — Multi-Agent Visual QA & UI Refinement Campaign
 
-> **Status: PARKED / NOT AUTHORIZED FOR EXECUTION.**
-> This draft PR is a planning envelope, not a dispatched implementation task.
-> No agent may claim, edit, deploy, test, review for readiness, or merge this PR
-> until the maintainer explicitly releases its hold. The currently active
-> Resource Governance / publication work has priority. Retain this TODO intact
-> while parked; normal cleanup rules apply only after activation.
+> **Status: ACTIVE — MAINTAINER AUTHORIZED ON 2026-10-11.**
+> The planning hold has been lifted. #72 and #73 are merged; the Commander must
+> now refresh main/PR state, establish a PR-owned worktree, verify shared-resource
+> leases and a safe demo target, and dispatch bounded R0 work. The workflow is
+> not considered running merely because this status changed.
+> This PR remains DRAFT during implementation and must not be merged without
+> the maintainer's separate approval.
 
 ## Objective and non-goals
 
@@ -48,7 +49,7 @@ to support this exercise. Prefer subtraction and existing infrastructure.
 
 ## Activation / isolation gate
 
-- [ ] Maintainer explicitly lifts the hold in a **new** instruction.
+- [x] Maintainer explicitly lifts the hold in a **new** instruction (2026-10-11).
 - [ ] Commander fetches fresh `main` and all active PRs; records dependency,
       branch/worktree, UI ownership, and CI/deployment overlap.
 - [ ] Defer start until higher-priority active Campaign work has released the
@@ -64,6 +65,15 @@ to support this exercise. Prefer subtraction and existing infrastructure.
       No running workers or disposable screenshots are needed while parked.
 
 ## 0 — Baseline and inventory (R0; no UI fixes)
+
+**Do R0 first; do not fan out UI Fixers before issue reproduction and triage.**
+Dispatch in one six-slot budget: Commander coordinates only while necessary;
+use up to four short-lived Explorer sessions plus one Collector during discovery,
+with the sixth slot elastic/preemptible and available for authority/review.
+At the review/fix gate, reuse slots for Design Authority, 2–3 isolated Fixers,
+and an independent Verifier; avoid overlapping writers on shared CSS.
+The exact active count depends on measured host/browser capacity and lease state.
+
 
 - [ ] Inspect existing frontend/API/auth/route topology and reusable fixture
       capabilities; produce an inventory of Home, Runner catalog/detail,
