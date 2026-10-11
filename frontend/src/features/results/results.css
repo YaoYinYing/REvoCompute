@@ -3,6 +3,11 @@
   --result-ink: var(--app-ink); --result-muted: var(--app-muted); --result-line: var(--app-line);
   --result-accent: var(--app-accent); --result-accent-soft: var(--app-soft); --result-danger: var(--app-danger);
   width: min(100%, 112rem); margin: 0 auto; padding: 1.25rem clamp(.75rem, 2vw, 2rem) 3rem; color: var(--result-ink);
+  /* The workspace below chooses its column count from this box's inline size,
+     so the collapse depends on the space the content actually has rather than
+     on the window width. `container-type` cannot feed back into this width:
+     it is set by the parent and the rem cap, never by the children. */
+  container-type: inline-size;
 }
 .result-header, .result-preview-header, .result-header-actions, .result-file-tools, .structure-toolbar { display: flex; align-items: center; gap: .65rem; }
 .result-header { justify-content: space-between; min-height: 6.25rem; padding-bottom: 1.6rem; border-bottom: 1px solid var(--result-line); }
@@ -129,4 +134,21 @@
   .result-preview { min-height: 18rem; padding: 1rem; }
   .structure-viewport { grid-template-rows: auto minmax(20rem, 58vh); min-height: 24rem; }
   .structure-host { min-height: 20rem; }
+}
+
+/* Intrinsic collapse for the workspace: the column count follows the inline size
+   the workspace actually has. A `@media (max-width: …rem)` cannot do this job,
+   because `rem` in a media query is the initial 16px font size and so does not
+   move when a reader enlarges text only (WCAG 1.4.4): the window stays wide and
+   the query never fires, leaving the rail beside a preview squeezed far below
+   its content. Inside a container query `em` is the container's own font size,
+   so the same rule tracks the reader's text size. `em` here is deliberately not
+   `rem`: `rem` would resolve against the enlarged root too, but it would also
+   break the correspondence between the threshold and the text it is protecting.
+   Kept alongside the media query (which still covers a genuinely narrow window
+   and the other narrow-width adjustments). */
+@container (inline-size < 40em) {
+  .result-workspace, .result-app.is-rail-collapsed .result-workspace { grid-template-columns: minmax(0, 1fr); }
+  .result-main { padding-right: 0; }
+  .result-rail { padding: .85rem 0; border-left: 0; border-top: 1px solid var(--result-line); }
 }
