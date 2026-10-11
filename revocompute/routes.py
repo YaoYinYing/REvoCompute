@@ -5662,6 +5662,13 @@ def _validate_proposed_placement(
     The key is the name the resolver reads its per-Task layer under, which is the
     same name the configuration rows use, so a per-Task edit and its row address
     one profile.
+
+    A profile that only becomes submittable through this edit — a toggle turned
+    back on — is the exception to the two-resolve rule: it has no "before" state to
+    compare against, so it is refused outright when it cannot be placed under the
+    proposed policy.  Otherwise a disable → edit-classes → re-enable sequence
+    removes the class map while the guard is blind to the disabled profile and
+    restores a listable-but-unplaceable type on the re-enable.
     """
     current_globals = dict(manage_db.resource_all())
     proposed_effective = dict(current_globals)
@@ -5697,7 +5704,15 @@ def _validate_proposed_placement(
         return None
 
     # A global edit touches every enabled profile, so every enabled profile is
-    # re-checked; a per-Task edit touches only the named ones.
+    # re-checked; a per-Task edit touches only the named ones — plus the profiles
+    # governed by a task type this edit re-enables, because promotion to
+    # submittable is itself a placement claim and has no "before" state.
+    def is_enabling(name: str) -> bool:
+        return (
+            manage_db.task_type_is_enabled(name) is False
+            and proposed_tasks.get(name, {}).get("enabled") not in (None, False)
+        )
+
     tools = set(proposed_tasks) if proposed_tasks else set()
     if proposed_globals:
         tools.update(
@@ -5705,20 +5720,42 @@ def _validate_proposed_placement(
             for owner, (task_type_name, *_rest) in profiles.items()
             if manage_db.task_type_is_enabled(task_type_name) is not False
         )
+    # A workflow's stages are governed by their parent's toggle, so re-enabling the
+    # parent re-enables every stage it owns.  Without this the parent edit is the
+    # only name in the request and it is not a profile, so the loop below would skip
+    # exactly the profiles the edit makes submittable again.
+    tools.update(owner for owner, (task_type_name, *_rest) in profiles.items() if is_enabling(task_type_name))
     for owner in sorted(tools):
         # A named profile the resolver never addresses (a workflow's parent row) has
         # no placement to check; the edits that matter are the ones a Task resolves.
         if owner not in profiles:
             continue
+        task_type_name = profiles[owner][0]
         # ``task_type_get`` is the persisted per-Task layer the resolver reads;
         # a per-Task edit overrides it for this check only.
         current_row = dict(manage_db.task_type_get(owner) or {})
         proposed_row = dict(current_row)
         proposed_row.update(proposed_tasks.get(owner, {}))
-        if placement_failure(owner, current_globals, current_row) is not None:
-            continue
         failure = placement_failure(owner, proposed_effective, proposed_row)
         if failure is None:
+            continue
+        if is_enabling(task_type_name):
+            # Becoming submittable is a claim that the profile can be placed.  A
+            # re-enable is the one edit whose "before" state cannot vouch for it —
+            # the profile was not submittable — so an unplaceable promotion is
+            # refused here rather than left to surface as a 503 on every
+            # submission.  This is also what closes the disable → edit-classes →
+            # re-enable sequence, where the class map is removed while the guard is
+            # blind to the disabled profile and the re-enable would restore a
+            # listable-but-unplaceable type.
+            reason = failure.reason_code if isinstance(failure, PlacementError) else None
+            raise ResourceValidationError(
+                f"Task type {owner!r} cannot be enabled: it would be impossible to place"
+                + (f" ({reason}): {failure}" if reason else f": {failure}")
+            ) from failure
+        # Otherwise the refusal is about what the *edit* does: a profile already
+        # impossible to place before this edit is not this operator's doing.
+        if placement_failure(owner, current_globals, current_row) is not None:
             continue
         if isinstance(failure, PlacementError):
             raise ResourceValidationError(

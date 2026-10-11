@@ -1012,6 +1012,70 @@ def test_admin_resource_api_refuses_a_workflow_stage_edit_that_would_strand_it(m
     assert accepted.status_code == 200, accepted.get_json()
 
 
+def test_admin_resource_api_refuses_a_re_enable_that_cannot_be_placed(monkeypatch, tmp_path):
+    """A re-enable is a promotion to submittable, so it is checked as one.
+
+    Disabling every accelerator task type takes them out of the global-edit
+    candidate set, so the class map can be reduced while the guard is blind to
+    them.  The re-enable is what puts them back in front of a user, so that is
+    where the check has to run: the profile has no placeable "before" state to
+    compare against, and admitting it would restore a task type that is listed and
+    submittable but fails closed on every submission.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    client = module.app.test_client()
+    admin_header = _admin_client_auth(module)
+    manage_db = module.app.config["manage_db"]
+
+    declared = client.put(
+        "/compute/api/auth/admin/config",
+        headers=admin_header,
+        json={"resources": {"slurm_execution_classes": "cpu=normal;a100=gpuqueue"}},
+    )
+    assert declared.status_code == 200, declared.get_json()
+    for tool in ("gpu_runner", "typed_runner", "multistage_runner", "restricted_runner"):
+        disabled = client.put(
+            "/compute/api/auth/admin/config",
+            headers=admin_header,
+            json={"task_types": [{"tool": tool, "enabled": False}]},
+        )
+        assert disabled.status_code == 200, disabled.get_json()
+
+    # With every accelerator profile disabled the class map can be left declaring
+    # no accelerator class at all; nothing submittable needs one yet.
+    reduced = client.put(
+        "/compute/api/auth/admin/config",
+        headers=admin_header,
+        json={"resources": {"slurm_execution_classes": "cpu=normal"}},
+    )
+    assert reduced.status_code == 200, reduced.get_json()
+
+    # Re-enabling is what makes the profile submittable again, so it is refused
+    # while the deployment still declares no accelerator class.
+    refused = client.put(
+        "/compute/api/auth/admin/config",
+        headers=admin_header,
+        json={"task_types": [{"tool": "gpu_runner", "enabled": True}]},
+    )
+    assert refused.status_code == 400
+    assert "cannot be enabled" in refused.get_json()["error"]
+    assert manage_db.task_type_is_enabled("gpu_runner") is False
+
+    # Restoring the class map makes the same re-enable placeable, and it is allowed.
+    restored = client.put(
+        "/compute/api/auth/admin/config",
+        headers=admin_header,
+        json={"resources": {"slurm_execution_classes": "cpu=normal;a100=gpuqueue"}},
+    )
+    assert restored.status_code == 200, restored.get_json()
+    allowed = client.put(
+        "/compute/api/auth/admin/config",
+        headers=admin_header,
+        json={"task_types": [{"tool": "gpu_runner", "enabled": True}]},
+    )
+    assert allowed.status_code == 200, allowed.get_json()
+
+
 def test_admin_resource_api_hides_stale_removed_runner_rows(monkeypatch, tmp_path):
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     client = module.app.test_client()

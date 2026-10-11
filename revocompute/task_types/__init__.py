@@ -1181,6 +1181,7 @@ def _load_workflow(raw: Any, task_name: str, stage_markers: dict[str, str]) -> t
             "requires_network",
             "runner_args",
             "stage_markers",
+            "accelerator_requirement",
         }:
             raise ValueError(f"Task type {task_name!r} has an invalid workflow stage")
         name = entry.get("name")

@@ -51,7 +51,10 @@ from revocompute.placement import (
     resolve_submission_placement,
 )
 from revocompute.resource_policy import ResourceValidationError, ResolvedResources, resolve_resources
+from revocompute.task_types import get as get_task_type
+from revocompute.task_types import isolated_discovery
 
+ROOT = Path(__file__).resolve().parents[2]
 
 class _Deployment:
     """A real deployment configuration store, configured as an admin configures it.
@@ -792,3 +795,86 @@ def test_the_execution_class_map_is_configurable_through_the_admin_http_path(mon
     )
     assert rejected.status_code == 400
     assert "cpu=normal" in rejected.get_json()["error"]
+
+# --------------------------------------------------------------------------- #
+# A declared device class reaches a real manifest's stage
+# --------------------------------------------------------------------------- #
+
+
+def test_a_real_manifest_stage_binding_a_device_class_places_typed(deployment):
+    """The device-class declaration is a manifest contract, not a test double.
+
+    ``_stage`` above proves the resolver handles a declared requirement; this case
+    proves a *manifest* can declare one and that discovery carries it into the
+    workflow, so the typed reason codes are reachable from production input rather
+    than only from a fixture that builds the object by hand.
+    """
+    fixture = ROOT / "tests" / "fixtures" / "runners" / "multistage_runner"
+    task_yaml = fixture / "tasks" / "predict" / "task.yaml"
+    original = task_yaml.read_text()
+    declared = original.replace(
+        "- name: model\n  display_name: Calculation\n  requires_gpu: true\n",
+        "- name: model\n  display_name: Calculation\n  requires_gpu: true\n"
+        "  accelerator_requirement: {class: a100, count: 1}\n",
+    )
+    assert declared != original
+    store = deployment(
+        globals_={"slurm_gres": "gpu:a100:1"},
+        allowed_queues=("normal", "gpuqueue"),
+        classes="cpu=normal;a100=gpuqueue",
+    )
+    try:
+        task_yaml.write_text(declared)
+        with isolated_discovery(str(ROOT / "tests" / "fixtures" / "runners"), {"multistage_runner"}):
+            task_type, runner = get_task_type("multistage_runner")
+
+        assert [stage.accelerator_requirement for stage in task_type.workflow] == [
+            None,
+            AcceleratorRequirement("a100", 1),
+        ]
+
+        placement = resolve_submission_placement(store, task_type, SimpleNamespace(max_runtime_seconds=3600))
+
+        assert placement.stage_decisions["multistage_runner.features"].reason_code == PLACED_CPU
+        model = placement.stage_decisions["multistage_runner.model"]
+        assert model.reason_code == PLACED_ACCELERATOR
+        assert model.execution_class.identifier == "accelerator|gpuqueue|a100x1"
+        assert model.resources.gres == "gpu:a100:1"
+    finally:
+        task_yaml.write_text(original)
+
+    assert task_yaml.read_text() == original
+
+
+def test_a_real_manifest_stage_declaring_the_wrong_device_class_fails_closed(deployment):
+    fixture = ROOT / "tests" / "fixtures" / "runners" / "multistage_runner"
+    task_yaml = fixture / "tasks" / "predict" / "task.yaml"
+    original = task_yaml.read_text()
+    store = deployment(
+        globals_={"slurm_gres": "gpu:a100:1"},
+        allowed_queues=("normal", "gpuqueue"),
+        classes="cpu=normal;a100=gpuqueue",
+    )
+    try:
+        for declaration, expected in (
+            ("{class: b200, count: 1}", ACCELERATOR_CLASS_MISMATCH),
+            ("{class: a100, count: 2}", ACCELERATOR_COUNT_MISMATCH),
+        ):
+            declared = original.replace(
+                "- name: model\n  display_name: Calculation\n  requires_gpu: true\n",
+                "- name: model\n  display_name: Calculation\n  requires_gpu: true\n"
+                f"  accelerator_requirement: {declaration}\n",
+            )
+            assert declared != original, declaration
+            task_yaml.write_text(declared)
+            with isolated_discovery(str(ROOT / "tests" / "fixtures" / "runners"), {"multistage_runner"}):
+                task_type, _runner = get_task_type("multistage_runner")
+
+            with pytest.raises(PlacementError) as raised:
+                resolve_submission_placement(store, task_type, SimpleNamespace(max_runtime_seconds=3600))
+
+            assert raised.value.reason_code == expected, declaration
+    finally:
+        task_yaml.write_text(original)
+
+    assert task_yaml.read_text() == original

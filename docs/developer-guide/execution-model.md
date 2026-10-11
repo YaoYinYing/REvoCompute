@@ -29,8 +29,11 @@ a stage requests and why* — the class of scheduler resources it asks for, the
 concrete Slurm fields that request resolves to, and the reason for the choice.
 Slurm decides *when and on which eligible node the work runs*: queue order,
 fair-share, backfill, and node selection belong to the scheduler, and nothing here
-scores, ages, prioritizes, or simulates any of that. An accelerator requirement is
-expressed semantically (a device class, and optionally a device count); the
-deployment's `slurm_execution_classes` map decides which local queue that class
-resolves to. A requirement the deployment cannot honour fails closed with a
-bounded reason before the scheduler ever sees the request.
+scores, ages, prioritizes, or simulates any of that. A device class is declared per
+workflow stage: a stage's `accelerator_requirement` names the device class and,
+optionally, a device count, and the deployment's `slurm_execution_classes` map
+decides which local queue that class resolves to. A single-stage task declares only
+whether it needs an accelerator (`gpus`), so it resolves to this deployment's
+accelerator class without naming a device class. A requirement the deployment
+cannot honour fails closed with a bounded reason before the scheduler ever sees the
+request.

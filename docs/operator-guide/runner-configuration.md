@@ -90,9 +90,10 @@ cpu=normal;a100=gpu;a100-80gb=gpu-large
 
 A class key is either `cpu` or a device class — the same token a GRES names. The
 mapping is what keeps this deployment's queue names out of every task manifest: a
-manifest declares a *semantic* requirement (that a stage needs an accelerator,
-and optionally of which device class), and the deployment decides which local
-queue that resolves to.
+*workflow stage* declares a semantic requirement (`requires_gpu`, and optionally a
+device class and count via `accelerator_requirement`), and the deployment decides
+which local queue that resolves to. A single-stage task declares only `gpus`, so it
+lands on this deployment's accelerator class without naming a device class.
 
 Resolution order for the partition is: an explicit per-task `slurm_partition`
 (an operator overriding one task), then the execution class for that work, then
