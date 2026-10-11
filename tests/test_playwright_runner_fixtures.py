@@ -333,15 +333,12 @@ def test_narrow_surfaces_that_fit_do_not_overflow(page: Page) -> None:
         (f"/compute/results/{TASK_ID}", ".result-header"),
     ],
 )
-@pytest.mark.xfail(reason="Content-heavy surfaces exceed a 320px viewport", strict=False)
 def test_narrow_content_heavy_surfaces_fit_the_viewport(page: Page, path: str, selector: str) -> None:
-    """Create Task and the Result Workspace should not overflow a 320px viewport.
+    """Create Task and the Result Workspace fit the 320px viewport floor.
 
-    Known defect: at 320px the Create Task protocol column and the result
-    header actions exceed the viewport width, so these two surfaces scroll
-    horizontally. The assertion is stated positively and marked non-strict, so
-    the cases XPASS once the layout fits rather than failing on the fix; the
-    current overflow is not pinned as desired behavior. The surface's own
+    Content-heavy surfaces hold the same 320px floor the rest of the app holds,
+    so at the narrowest supported width neither the protocol column nor the
+    result header actions push the document past the viewport. The surface's own
     content node is awaited first, so the measurement is of the settled layout
     rather than of a partially-rendered shell.
     """
