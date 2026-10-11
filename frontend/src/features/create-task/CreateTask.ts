@@ -28,6 +28,10 @@ export class CreateTask {
   private readonly workspace = new InputWorkspace(this.workspaceRoot, { onChange: () => { this.revision++; this.refreshValidation(); }, onError: message => this.setStatus(message, 'error') });
   private busy = false;
   private checking = false;
+  // The last action failed. A failed preflight or submission leaves no preflight
+  // and no field error behind, so without this the panel would fall through to
+  // the success-flavoured ready row while the status line reports the failure.
+  private actionFailed = false;
   private change: HTMLButtonElement | null = null;
   private revision = 0;
 
@@ -176,19 +180,25 @@ export class CreateTask {
     if (access.restricted && !access.granted) errors.push(access.request_status === 'pending' ? t('ct.access.pending') : t('ct.access.required'));
     const preflight = this.preflight;
     this.validation.replaceChildren();
+    let blockers = 0;
+    const blocker = (message: string): void => { this.validation.append(this.validationRow('error', message)); blockers += 1; };
     if (errors.length) {
-      errors.forEach(message => this.validation.append(this.validationRow('error', message)));
+      errors.forEach(message => blocker(message));
     } else if (preflight) {
       const failed = preflight.errors;
-      if (failed.length) failed.forEach(item => this.validation.append(this.validationRow('error', item.message)));
+      // The server already names an admission refusal in a blocking finding, so
+      // the client's own row for the same condition would state one blocker
+      // twice. The match is on the stable finding code, never on its prose.
+      const codes = new Set(failed.filter(item => item.blocking).map(item => item.code));
+      if (failed.length) failed.forEach(item => blocker(item.message));
       else if (this.checking) this.validation.append(this.validationRow('info', t('ct.checking')));
       else this.validation.append(this.validationRow('ok', t('ct.checksPassed')));
       const admission = preflight.admission;
-      if (admission.runner_ready === false) this.validation.append(this.validationRow('error', t('ct.runnerUnavailable')));
-      if (admission.infrastructure_status && !admission.infrastructure_ready) this.validation.append(this.validationRow('error', t('ct.infrastructure', { status: admission.infrastructure_status.toLowerCase() })));
+      if (admission.runner_ready === false && !codes.has('admission_unavailable')) blocker(t('ct.runnerUnavailable'));
+      if (admission.infrastructure_status && !admission.infrastructure_ready && !codes.has('infrastructure_unavailable')) blocker(t('ct.infrastructure', { status: admission.infrastructure_status.toLowerCase() }));
       preflight.warnings.forEach(item => this.validation.append(this.validationRow('info', item.message)));
-    } else this.validation.append(this.validationRow('info', t('ct.ready')));
-    const counts = errors.length ? errors.length : preflight && !preflight.valid ? Math.max(preflight.errors.length, 1) : 0;
+    } else if (!this.actionFailed) this.validation.append(this.validationRow('info', t('ct.ready')));
+    const counts = blockers;
     this.validationSummary.hidden = counts === 0;
     this.validationSummary.textContent = t(counts === 1 ? 'ct.issueOne' : 'ct.issueMany', { count: counts });
     this.validationSummary.className = `ct-validation-summary ${counts ? 'blocked' : 'ready'}`;
@@ -218,6 +228,7 @@ export class CreateTask {
     const errors = this.refreshValidation(); if (errors.length) { this.setStatus(t('ct.fixIssues'), 'error'); return; }
     const generation = this.generation; const revision = this.revision;
     const data = buildSubmissionFormData(this.definition, this.workspace, this.workspace.collect());
+    this.actionFailed = false;
     this.setBusy(true); this.setStatus(t('ct.checkingTask'), 'busy');
     this.checking = true; this.refreshValidation(true);
     let preflight: TaskPreflight;
@@ -225,7 +236,7 @@ export class CreateTask {
       preflight = await preflightTask(this.definition.name, data);
     } catch (error) {
       if (generation !== this.generation) return;
-      this.checking = false; this.preflight = null; this.setStatus(t('ct.checksFailed', { message: error instanceof Error ? error.message : String(error) }), 'error'); this.setBusy(false); this.refreshValidation(); return;
+      this.checking = false; this.preflight = null; this.actionFailed = true; this.setStatus(t('ct.checksFailed', { message: error instanceof Error ? error.message : String(error) }), 'error'); this.setBusy(false); this.refreshValidation(); return;
     }
     if (generation !== this.generation) return;
     this.checking = false;
@@ -237,12 +248,12 @@ export class CreateTask {
     this.setStatus(t('ct.queueing'), 'busy');
     try {
       const task = await submitTask(data);
-      this.setStatus(t('ct.queued', { id: task.task_id }), 'ok'); window.location.assign('/compute/dashboard');
-    } catch (error) { if (generation !== this.generation) return; this.setStatus(t('ct.submissionFailed', { message: error instanceof Error ? error.message : String(error) }), 'error'); this.preflight = null; this.setBusy(false); this.refreshValidation(); }
+      this.actionFailed = false; this.setStatus(t('ct.queued', { id: task.task_id }), 'ok'); window.location.assign('/compute/dashboard');
+    } catch (error) { if (generation !== this.generation) return; this.actionFailed = true; this.setStatus(t('ct.submissionFailed', { message: error instanceof Error ? error.message : String(error) }), 'error'); this.preflight = null; this.setBusy(false); this.refreshValidation(); }
   }
 
   private async clearWorkspace(): Promise<void> {
-    if (!this.definition) return; const generation = this.generation; this.preflight = null; this.revision++; await this.workspace.mount(this.definition);
+    if (!this.definition) return; const generation = this.generation; this.preflight = null; this.actionFailed = false; this.revision++; await this.workspace.mount(this.definition);
     if (generation !== this.generation) return; this.setStatus(t('ct.cleared'), 'ok'); this.refreshValidation();
   }
 

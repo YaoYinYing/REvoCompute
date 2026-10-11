@@ -134,7 +134,11 @@ def test_runner_not_ready_preflight_blocks_with_a_distinct_message(page: Page) -
     _provide_sequence(page)
     _run_task(page).click()
 
-    expect(page.locator(".ct-validation")).to_contain_text("Runner unavailable")
+    # The server's own blocking finding is the row: wait for it to land before
+    # counting, and then the panel must not restate the same condition as a
+    # client-authored sentence, so one blocker is one row.
+    expect(page.locator(".ct-validation")).to_contain_text("Runner is currently unavailable for new submissions")
+    expect(page.locator(".ct-validation-row")).to_have_count(1)
     # The rejection is recoverable: the method and its input stay on screen.
     expect(page.get_by_role("heading", name="Sequence demo", exact=True)).to_be_visible()
     expect(page.get_by_role("button", name="Change method", exact=True)).to_be_visible()
@@ -192,7 +196,7 @@ def test_create_task_gates_on_preflight_admission_not_the_readiness_banner(page:
     _provide_sequence(page)
     _run_task(page).click()
 
-    expect(page.locator(".ct-validation")).to_contain_text("Infrastructure unavailable")
+    expect(page.locator(".ct-validation")).to_contain_text("Compute infrastructure is currently unavailable for new submissions")
     assert requests.preflight("sequence_demo")
     assert requests.submit() == ()
 

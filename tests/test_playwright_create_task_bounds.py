@@ -17,19 +17,36 @@ pinned frontend dependency) and drives it with real controls. Nothing about the
 module is re-implemented here: what it projects and what it refuses is what moves
 these assertions.
 
-Only observable outcomes are asserted - a bound is carried or it is not, and the
-server-owned parameter label appears in a message frame or it does not. No
-translated sentence, class name, or pixel is pinned.
+The same contract has a rendered half, so the last cases drive the built
+application through ``tests/frontend_fixtures/``: a value on a declared exclusive
+bound is refused at the field (the control is marked and the action is blocked),
+and the validation panel states each admission blocker once and never claims the
+form is ready while the status line reports a failure.
+
+Only observable outcomes are asserted - a bound is carried or it is not, the
+control carries its invalid state or it does not, a blocker is listed once, a
+ready-flavoured row is present or it is not - and never a translated sentence,
+class name, or pixel.
 """
 
 from __future__ import annotations
 
+from dataclasses import replace
 import shutil
 import subprocess
 from pathlib import Path
 
-from playwright.sync_api import Page
+from playwright.sync_api import Page, expect
 import pytest
+
+from frontend_fixtures import (
+    ParameterSpec,
+    PreflightAdmission,
+    PreflightSpec,
+    controlled_runner,
+    mount_scenario,
+    runner_scenario,
+)
 
 pytestmark = pytest.mark.browser
 
@@ -137,7 +154,13 @@ def test_the_definition_carries_every_declared_numeric_bound(page: Page, tmp_pat
 
 
 def test_a_value_beyond_a_declared_bound_is_refused(page: Page, tmp_path: Path) -> None:
-    """The validator refuses the values the declared bounds put out of range."""
+    """The validator refuses the values the declared bounds put out of range.
+
+    ``0`` and ``1`` are the shipped values' own exclusive bounds, so they are the
+    cases a value on the boundary produces: the server rejects a value *equal* to
+    a declared exclusive bound, so the field must refuse it too rather than admit
+    one the server will answer with a 400.
+    """
     _install_module(page, tmp_path)
     accepted = page.evaluate(
         """schema => {
@@ -153,18 +176,18 @@ def test_a_value_beyond_a_declared_bound_is_refused(page: Page, tmp_path: Path) 
         {
             **BOUNDS_SCHEMA,
             "__values": {
-                "lambda_l2": ["0.01", "10", "10.1"],
+                "lambda_l2": ["0", "0.01", "10", "10.1"],
                 "epsilon": ["-1", "-1.0001"],
-                "window": ["0.5"],
+                "window": ["0", "0.5", "1"],
                 "iterations": ["0", "1", "4", "5"],
             },
         },
     )
 
     assert accepted == {
-        "lambda_l2": {"0.01": True, "10": True, "10.1": False},
+        "lambda_l2": {"0": False, "0.01": True, "10": True, "10.1": False},
         "epsilon": {"-1": True, "-1.0001": False},
-        "window": {"0.5": True},
+        "window": {"0": False, "0.5": True, "1": False},
         "iterations": {"0": False, "1": True, "4": True, "5": False},
     }
 
@@ -200,3 +223,142 @@ def test_every_parameter_message_names_the_parameter_as_its_field_label_does(pag
         # same in its field label and in each of its messages.
         assert frame["label"] in frame["required"], (name, frame)
         assert frame["label"] in frame["choice"], (name, frame)
+
+
+# ---------------------------------------------------------------------------
+# The same contract, rendered by the built application
+# ---------------------------------------------------------------------------
+
+BOUNDED_RUNNER = replace(controlled_runner(), parameters=(
+    ParameterSpec.number("lambda_l2", default=0.01, has_default=True, exclusive_minimum=0.0, maximum=10.0),
+    ParameterSpec.integer("iterations", default=2, has_default=True, minimum=1, maximum=4),
+))
+STATUS = ".ct-status"
+ROWS = ".ct-validation-row"
+# Every row that does not state a blocker: the non-blocking flavours the panel
+# uses for a ready or in-progress form.
+NON_ERROR_ROWS = ".ct-validation-row.ok, .ct-validation-row.info"
+
+
+def _bounded_scenario(preflight: PreflightSpec | None = None):
+    """The one-Runner CPU scenario with the bounded parameter contract.
+
+    ``BOUNDED_RUNNER`` is the scenario's own Runner, so the served catalog entry,
+    the detail, the parameter schema, and the Create Task route all describe the
+    same contract.
+    """
+    scenario = runner_scenario(BOUNDED_RUNNER)
+    return scenario if preflight is None else scenario.with_preflight(preflight)
+
+
+def _open_bounded_create_task(page: Page) -> None:
+    """Open Create Task on the bounded Runner and wait for its workbench."""
+    page.goto(f"{ORIGIN}/compute/create_task?task_type={BOUNDED_RUNNER.name}")
+    expect(page.locator(".ct-workbench")).to_be_visible()
+
+
+def _field(page: Page, name: str):
+    """The one rendered control a named parameter owns, by its bound role id."""
+    return page.locator(f'[data-ct-parameter="{name}"]')
+
+
+def _provide_sequence(page: Page) -> None:
+    """Fill the Run's own local precondition, so nothing but the bound blocks."""
+    page.locator("textarea[aria-label='Protein sequence']").fill(">sample\nACDEFG")
+
+
+def _run(page: Page):
+    return page.get_by_role("button", name="Run task", exact=True)
+
+
+def test_a_value_on_a_declared_bound_is_refused_at_the_field(page: Page) -> None:
+    """The served exclusive bound is a gate at the field, not only a spinner hint.
+
+    ``lambda_l2`` declares ``exclusiveMinimum: 0``, so ``0`` is the value the
+    server answers with a 400 and the field must refuse it; ``0.01`` is strictly
+    inside the range and must be admitted.
+    """
+    mount_scenario(page, _bounded_scenario())
+    _open_bounded_create_task(page)
+    _provide_sequence(page)
+
+    control = _field(page, "lambda_l2")
+    # The declared bound is also the field's native range: the boundary the
+    # validator enforces and the hint the spinner projects are the same number.
+    expect(control).to_have_attribute("min", "0")
+    expect(control).to_have_attribute("max", "10")
+    control.fill("0")
+    expect(control).to_have_attribute("aria-invalid", "")
+    expect(_field(page, "iterations")).not_to_have_attribute("aria-invalid", "")
+    expect(_run(page)).to_be_disabled()
+
+    control.fill("0.01")
+    expect(control).not_to_have_attribute("aria-invalid", "")
+    expect(_run(page)).to_be_enabled()
+
+
+@pytest.mark.parametrize(
+    ("outcome", "refused_code", "admission"),
+    [
+        (
+            "runner_not_ready",
+            "admission_unavailable",
+            PreflightAdmission(allowed=False, runner_ready=False, infrastructure_ready=True, infrastructure_status="READY"),
+        ),
+        (
+            "infrastructure_not_ready",
+            "infrastructure_unavailable",
+            PreflightAdmission(allowed=False, runner_ready=True, infrastructure_ready=False, infrastructure_status="UNAVAILABLE"),
+        ),
+    ],
+)
+def test_an_admission_refusal_is_stated_once_and_counted_once(
+    page: Page, outcome: str, refused_code: str, admission: PreflightAdmission,
+) -> None:
+    """A blocker the server already named is not appended a second time.
+
+    This is the shape the server produces for an unavailable Runner or
+    infrastructure: the refusal is a blocking finding *and* the same admission
+    condition is clear, so the client's own row for that condition would state the
+    one blocker twice. The panel must list one row per blocker and the summary
+    count must equal the number of rows.
+    """
+    mount_scenario(page, _bounded_scenario(PreflightSpec(
+        kind=outcome, errors=((refused_code, "Refused for the fixture."),), admission=admission,
+    )))
+    _open_bounded_create_task(page)
+    _provide_sequence(page)
+    _run(page).click()
+
+    rows = page.locator(ROWS)
+    expect(rows).to_have_count(1)
+    expect(page.locator(f"{ROWS}.error")).to_have_count(1)
+    expect(page.locator(".ct-validation-summary")).to_contain_text("1 issue")
+
+
+def test_a_failed_action_never_reports_the_form_ready(page: Page) -> None:
+    """A failed Run leaves no ready-flavoured row behind the failure status.
+
+    The preflight request itself fails, so the form holds neither a preflight
+    result nor a field error: nothing but the failure explains the panel, and the
+    panel must not answer with a ready-flavoured row. Clear is the form's own next
+    state; refilling the cleared input returns the row.
+    """
+    mount_scenario(page, _bounded_scenario())
+    page.route(f"{ORIGIN}/compute/api/preflight/**", lambda route: route.fulfill(status=500, json={"error": "Refused for the fixture."}))
+    _open_bounded_create_task(page)
+    _provide_sequence(page)
+    # With nothing to report the panel holds only its own non-blocker row.
+    expect(page.locator(NON_ERROR_ROWS)).to_have_count(1)
+
+    _run(page).click()
+    # The failure is reported, the action stays available to retry...
+    expect(page.locator(STATUS)).to_contain_text("Task checks failed")
+    expect(_run(page)).to_be_enabled()
+    # ...and no non-blocker row stands behind it, so the panel does not read ready
+    # while the status line reports the failure.
+    assert page.locator(NON_ERROR_ROWS).count() == 0
+
+    page.get_by_role("button", name="Clear", exact=True).click()
+    _provide_sequence(page)
+    expect(page.locator(NON_ERROR_ROWS)).to_have_count(1)

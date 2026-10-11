@@ -56,6 +56,12 @@ export function validateParameter(parameter: ParameterDefinition, control: HTMLI
     if (!Number.isFinite(number) || (parameter.type === 'int' && !Number.isInteger(number))) return t(parameter.type === 'int' ? 'ct.param.integer' : 'ct.param.number', { label: parameter.label });
     if (parameter.minimum != null && number < parameter.minimum) return t('ct.param.minimum', { label: parameter.label, minimum: parameter.minimum });
     if (parameter.maximum != null && number > parameter.maximum) return t('ct.param.maximum', { label: parameter.label, maximum: parameter.maximum });
+    // A declared exclusive bound is enforced on the side that has no inclusive
+    // bound: a schema declaring both describes an empty range, and the inclusive
+    // check above is the one that reports it, so the value is not stated twice.
+    // The bound and the label stay the server's own, verbatim.
+    if (parameter.minimum == null && parameter.exclusiveMinimum != null && number <= parameter.exclusiveMinimum) return t('ct.param.exclusiveMinimum', { label: parameter.label, bound: parameter.exclusiveMinimum });
+    if (parameter.maximum == null && parameter.exclusiveMaximum != null && number >= parameter.exclusiveMaximum) return t('ct.param.exclusiveMaximum', { label: parameter.label, bound: parameter.exclusiveMaximum });
   }
   return control.checkValidity() ? null : (control.validationMessage || t('ct.param.invalid', { label: parameter.label }));
 }
