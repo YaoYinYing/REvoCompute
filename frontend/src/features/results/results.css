@@ -18,7 +18,10 @@
 .result-button-small { min-height: 2rem; padding: .32rem .55rem; font-size: .78rem; }
 .result-icon-button, .result-file-download { display: inline-grid; width: 2.35rem; height: 2.35rem; place-items: center; padding: 0; }
 .result-button:hover, .result-icon-button:hover, .result-tab:hover, .result-file-open:hover, .result-file-download:hover { border-color: var(--result-accent); color: var(--result-accent); background: color-mix(in srgb, var(--result-accent) 6%, var(--result-surface)); }
-:focus-visible { outline: 3px solid color-mix(in srgb, var(--result-accent) 38%, transparent); outline-offset: 2px; }
+/* Scoped to the results subtree: the app shell owns the document-level ring
+   (app.css), and this sheet loads after it, so a bare selector here would
+   replace the shell's ring everywhere on a result route. */
+.result-app :focus-visible { outline: 2px solid var(--app-focus); outline-offset: 2px; }
 .result-status { display: flex; gap: .8rem; padding: .7rem 0; align-items: baseline; border-bottom: 1px solid var(--result-line); font-size: .86rem; }
 .result-status strong { text-transform: capitalize; }
 .result-workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(19rem, 24rem); min-height: 38rem; border-bottom: 1px solid var(--result-line); }
@@ -78,6 +81,13 @@
 .structure-mode-group .result-button[aria-pressed="true"] { position: relative; border-color: var(--result-accent); background: var(--result-surface); color: var(--result-accent); border-radius: var(--r-util); box-shadow: var(--shadow-surface); }
 .structure-toolbar-actions { display: inline-flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin-left: auto; }
 .structure-host { position: relative; min-height: 32rem; overflow: hidden; }
+/* Mol* pins its selection-controls row to a hard 430px, so below ~30rem it is
+   clipped by this host. The row's own `width: inherit` copies the container's
+   computed `auto`, so the clamp must reach the row too. The cascade forces the
+   pairing: Mol*'s chunk CSS is appended after this sheet, so both selectors
+   carry the `.result-app .structure-host` prefix to outrank `.msp-plugin …`. */
+.result-app .structure-host .msp-selection-viewport-controls { max-width: 100%; }
+.result-app .structure-host .msp-selection-viewport-controls > .msp-flex-row { max-width: 100%; overflow-x: auto; overflow-y: hidden; }
 .structure-host[data-loading="true"] { visibility: hidden; }
 .structure-viewport:fullscreen { grid-template-rows: auto 1fr; width: 100vw; height: 100vh; border: 0; border-radius: 0; background: var(--result-paper); }
 .result-record { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 2.5rem; padding-top: 1.5rem; }
@@ -96,7 +106,7 @@
 .pair-matrix-readout { margin: 0; color: var(--result-muted); font-size: .8rem; }
 .pair-matrix-figure { position: relative; max-width: 100%; overflow: hidden; }
 .pair-matrix-figure canvas { display: block; max-width: 100%; }
-.pair-matrix-figure canvas:focus-visible { outline: 3px solid color-mix(in srgb, var(--result-accent) 38%, transparent); outline-offset: 3px; }
+.pair-matrix-figure canvas:focus-visible { outline: 2px solid var(--app-focus); outline-offset: 3px; }
 .pair-matrix-label { position: absolute; transform: translate(-50%, -50%); pointer-events: none; font-size: .7rem; white-space: nowrap; }
 .pair-matrix-title { font-weight: 600; }
 .pair-matrix-title-y { transform: translate(-50%, -50%) rotate(-90deg); }
