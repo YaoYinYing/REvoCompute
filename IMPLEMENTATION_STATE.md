@@ -1,6 +1,6 @@
 # IMPLEMENTATION_STATE — PR #74 Visual QA Campaign
 
-Status: ACTIVE / R1 DISCOVERY IN FLIGHT — R0 COMPLETE
+Status: ACTIVE / R1 DISCOVERY COMPLETE — TRIAGE + DESIGN AUTHORITY IN FLIGHT
 Maintainer activation: 2026-10-11
 Owner: Campaign Commander (executing)
 PR: https://github.com/YaoYinYing/REvoCompute/pull/74
@@ -115,6 +115,65 @@ No UI fixes dispatched. R0 established the baseline, environment, realness
 matrix, and coverage limitation above; R1 exploration is in flight.
 
 
+## R1 receipt — discovery (2026-10-11, revision `d1874814`)
+
+Four read-only Explorer agents ran the fixture harness at the pinned revision;
+each captured PNG evidence and wrote a structured `findings.json`. Raw output
+lives under `/mnt/hdd/revocompute-agent-scratch/pr74/r1/{a,b,c,d}/` (B also emits
+sibling `b_resp/`, `b_confirm/`; A emits sibling `a-*` dirs — sibling layout is
+not missing evidence).
+
+- **Explorer A** (shell/nav/theme/i18n/responsive): 9 entries. No shell defect
+  found; 320→1920px shows zero horizontal overflow and zero console errors.
+  Harness coverage gaps: `/compute/register` unserved by the fixture router
+  (route exists server-side); narrow-width `.runner-facts` paint timeout.
+- **Explorer B** (catalog/detail → Create Task): 6 entries. Substantive:
+  320px workbench overflow; pre-emptive "N issues to fix" on pristine mount;
+  zh-CN body-copy gap; restricted-detail ungated "Create task".
+- **Explorer C** (dashboard/lifecycle): 3 entries. Dashboard omits infra
+  readiness (present on `/runners`); table Status renders raw enum vs card
+  curated label; running-task progress affordance (reproducible: false).
+- **Explorer D** (result workspace/Mol*/a11y): 6 entries. zh-CN does not
+  localize the Result workspace; heading source order (shell `h2`s before page
+  `h1`); matrix result 16× 404 console burst (renders gracefully). Coverage
+  gaps: Profile `/user-metrics` unserved; download-only artifact selector miss.
+
+24 raw entries. These are **observed**, not yet triaged.
+
+## R1 triage + Design Authority (2026-10-11)
+
+Issue Collector deduped 24 raw entries to **7 substantive issues, 7 coverage
+gaps, 10 no-action** (`registry.json` / `registry.md`). Design Authority
+adjudicated each against Soft Precision (`design-verdicts.json` /
+`design-verdicts.md`).
+
+**APPROVE-FIX (defect, fixer worklist):**
+- `R1-B-01` 320px content-heavy overflow (Create Task + Result result-header).
+  DA corrected the explorer: single-column reflow already exists at <=860px/<=560px,
+  so the Fixer must measure the true residual offending node. The existing
+  `strict=False` xfail is a deferred fix, not an accepted limitation - flip to strict.
+- `R1-B-03+R1-D-01` zh-CN partial localization (Create Task / Runners / Results
+  body copy). Sec 11 boundary: localize frontend-authored prose; server-owned
+  scientific vocabulary stays English, never duplicated into the catalog.
+- `R1-C-02` dashboard Table Status renders raw enum vs card outcome. One-line fix.
+- `R1-D-02` shell nav-group h2s precede page h1. Semantics-only fix.
+
+**PROPOSE-CHANGE (maintainer/product decision - NOT implemented unilaterally):**
+- `R1-B-02` pristine Create Task shows many issues to fix on mount.
+- `R1-B-06` restricted runner detail still shows primary Create task beside the
+  Restricted banner (downstream gate correct; not a bypass).
+
+**NO-CHANGE (no-action):** `R1-C-01` dashboard readiness (belongs to the Sec 12.2
+notice surface, not a dashboard region), `R1-D-03` matrix 404 burst (fixture-harness
+artifact; UI degrades gracefully).
+
+**Fixer dispatch (R2).** Three isolated PR-owned worktrees cut from the campaign
+head `f99cbe57`, one writer each, disjoint surfaces: `pr74-fix-dashboard-shell`
+(R1-C-02 + R1-D-02), `pr74-fix-ct-320` (R1-B-01), `pr74-fix-i18n`
+(R1-B-03 + R1-D-01). Each owns a focused behavioral test plus the typecheck /
+unit / build gate (Playwright where required) under the host lease. The two
+PROPOSE-CHANGE items are held for maintainer sign-off, not dispatched.
+
 ## What is confirmed from GitHub
 
 - At authorization, PR #72 and PR #73 are closed and merged.
@@ -191,7 +250,7 @@ Fixers without Design Authority and Commander ownership allocation.
 | Round | Exact SHA | Fixture/demo | Explorers | Verified new | Fixed | Regressions | Gate | Status |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | R0 | `d1874814` | fixture harness + real Flask harness | 0 | — | — | — | realness matrix captured | **complete** |
-| R1 | `d1874814` | fixture harness | 4 explorers (A–D) | in flight | — | — | not run | **in flight** |
+| R1 | `d1874814` | fixture harness | 4 explorers (A–D) | 24 raw entries | — | — | not run | **discovery complete; triage in flight** |
 | R2–R10 | pending | pending | 0 | — | — | — | not run | not started |
 
 ## Exit
