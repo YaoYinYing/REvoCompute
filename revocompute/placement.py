@@ -75,11 +75,19 @@ ACCELERATOR_COUNT_MISMATCH = "accelerator_count_mismatch"
 ACCELERATOR_UNAVAILABLE = "accelerator_unavailable"
 QUEUE_UNKNOWN = "queue_unknown"
 
-_PLACEMENT_CODES = frozenset(
+#: Reason codes a *recorded decision* carries: the placement that succeeded.  Each
+#: one is derived from the resolved class (the accelerator ones differ only by
+#: whether the record declares a device class), so the snapshot decides it and a
+#: code that contradicts the snapshot is a record the writer could not have made.
+_PLACED_CODES = frozenset({PLACED_CPU, PLACED_ACCELERATOR, PLACED_ACCELERATOR_UNTYPED})
+
+#: Bounded placement reason vocabulary.  A refusal is always machine-readable, and
+#: the set is closed so a client cannot be handed a reason it does not understand.
+#: One vocabulary built from its two named parts — the codes that claim a placement
+#: and the codes that report a refusal — so the reader of a recorded decision can
+#: ask "does this code claim a placement?" without restating the three spellings.
+_PLACEMENT_CODES = _PLACED_CODES | frozenset(
     {
-        PLACED_CPU,
-        PLACED_ACCELERATOR,
-        PLACED_ACCELERATOR_UNTYPED,
         CPU_STAGE_REQUESTS_ACCELERATOR,
         ACCELERATOR_CLASS_UNVERIFIED,
         ACCELERATOR_CLASS_MISMATCH,
@@ -273,17 +281,18 @@ class PlacementDecision:
     persists the decision's own evidence, and :meth:`from_record` joins it back to
     the stored snapshot.  A recorded decision is read verbatim and is never
     recomputed from today's policy.  The join cross-checks the record *against the
-    snapshot* for the three fields whose values the snapshot determines — the
-    execution class (identity and off-identity scheduler fields), the
-    ``requires_accelerator`` flag, and the declared ``accelerator_requirement`` —
-    using the same verifier the submission path runs.  ``reason_code`` is checked
-    for membership of the bounded reason vocabulary but is not compared against the
-    snapshot, because it is this layer's own statement of *why* the class was
-    chosen rather than a restatement of the request; and ``reason`` and
-    ``policy_revision`` are served exactly as recorded, because they are the
-    decision's memory of which policy resolved the request, not facts the snapshot
-    holds.  That boundary is deliberate: a changed reason or policy revision cannot
-    make the record disagree with the resources it describes.
+    snapshot* for every field the snapshot determines — the execution class
+    (identity and off-identity scheduler fields), the ``requires_accelerator``
+    flag, and the declared ``accelerator_requirement``, through the same verifier
+    the submission path runs — and, when the code is a ``placed_*`` one, the
+    placement that code claims (``_reason_for`` derives it from the class and the
+    requirement alone, so it is not a second source of truth).  A *refusal* code
+    is checked only for membership of the bounded vocabulary, because it reports
+    why an edit could not be placed — a fact the snapshot does not hold.  ``reason``
+    and ``policy_revision`` are served exactly as recorded: they are the decision's
+    memory of which policy resolved the request and why, not restatements of the
+    request, so a changed reason text or policy revision cannot make the record
+    disagree with the resources it describes.
     """
 
     stage: str | None
@@ -397,6 +406,21 @@ class PlacementDecision:
                 "Recorded placement decision disagrees with its frozen resource snapshot about the "
                 f"declared accelerator requirement ({exc.reason_code})"
             ) from exc
+        if decision.reason_code in _PLACED_CODES:
+            # A ``placed_*`` code claims *where* the request went, and the writer
+            # derives it from the resolved class and the declared requirement alone
+            # (``_reason_for``), never from a separate decision.  So the code is not
+            # a second source of truth for the placement — it is the same fact in a
+            # word, and re-deriving it from the snapshot is exactly the check that
+            # keeps ``placed_cpu`` from sitting beside an accelerator class.  A
+            # *refusal* code is deliberately not compared: it reports why an edit
+            # could not be placed, which the snapshot does not record.
+            expected_code, _reason = _reason_for(derived, decision.accelerator_requirement)
+            if decision.reason_code != expected_code:
+                raise ResourceValidationError(
+                    f"Recorded placement reason {decision.reason_code!r} claims a placement its frozen "
+                    f"resource snapshot does not describe (the snapshot derives {expected_code!r})"
+                )
         return decision
 
 

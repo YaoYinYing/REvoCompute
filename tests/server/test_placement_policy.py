@@ -458,6 +458,39 @@ def test_a_recorded_requirement_that_contradicts_its_snapshot_is_rejected(deploy
             PlacementDecision.from_record(edited, recorded.resources)
 
 
+def test_a_recorded_placed_code_that_contradicts_its_snapshot_is_rejected(deployment):
+    """A ``placed_*`` code is the same fact as the class, in a word.
+
+    ``_reason_for`` derives the code from the resolved class and the declared
+    requirement alone, so comparing a recorded ``placed_*`` code against the
+    snapshot is not a second source of truth: it stops a record whose code claims a
+    placement its snapshot does not describe (``placed_cpu`` beside an accelerator
+    class) from being served as a decision the writer could never have produced.  A
+    *refusal* code is deliberately not compared, because it reports why an edit
+    could not be placed, which the snapshot does not record.
+    """
+    store = deployment(globals_={"slurm_gres": "gpu:a100:1"}, allowed_queues=("gpu",))
+    recorded = _place(store, _task_type(gpus=True), requirement=AcceleratorRequirement("a100", 1))
+    record = recorded.record()
+    assert record["execution_class"]["state"] == "accelerator"
+    assert record["reason_code"] == PLACED_ACCELERATOR
+
+    for wrong in (PLACED_CPU, PLACED_ACCELERATOR_UNTYPED):
+        with pytest.raises(
+            ResourceValidationError, match="claims a placement its frozen resource snapshot"
+        ):
+            PlacementDecision.from_record({**record, "reason_code": wrong}, recorded.resources)
+
+    # The vocabulary check still runs first, and a refusal code is served as
+    # recorded: the snapshot does not hold the reason an edit was refused.
+    with pytest.raises(ResourceValidationError, match="is not bounded"):
+        PlacementDecision.from_record(
+            {**record, "reason_code": "definitely_placed"}, recorded.resources
+        )
+    accepted = PlacementDecision.from_record({**record, "reason_code": QUEUE_UNKNOWN}, recorded.resources)
+    assert accepted.reason_code == QUEUE_UNKNOWN
+
+
 def test_a_legitimately_recorded_decision_still_reads_back_as_recorded(deployment):
     """The tighter join must not refuse the decisions the writer actually records.
 

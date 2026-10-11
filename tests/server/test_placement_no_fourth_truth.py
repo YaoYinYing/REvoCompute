@@ -215,6 +215,11 @@ _TAMPERED = {
     "snapshot_garbage": lambda f: f.__setitem__("resource_policy", [["cpus", 1]]),
     "snapshot_inconsistent": lambda f: f["resource_policy"].__setitem__("slurm_time", "99:00:00"),
     "reason_unbounded": lambda f: f["placement_decision"].__setitem__("reason_code", "totally_fine"),
+    # A bounded code that claims the wrong placement: the snapshot is a CPU class, so
+    # the writer would have recorded ``placed_cpu``, never ``placed_accelerator``.
+    "reason_contradicts_snapshot": lambda f: f["placement_decision"].__setitem__(
+        "reason_code", "placed_accelerator"
+    ),
     "requirement_unparseable": lambda f: f["placement_decision"].__setitem__(
         "accelerator_requirement", {"class": "a100", "count": "many"}
     ),
