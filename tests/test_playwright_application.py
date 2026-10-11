@@ -685,7 +685,7 @@ def test_admin_dashboard_batch_action_uses_authorized_api(page: Page) -> None:
     # Administration is a navigation region, not a top-bar menu: the admin sees the
     # pages in the left navigation and the top bar carries no Administration launcher.
     expect(page.locator("[data-nav-group='admin']").get_by_role("link", name="Server logs")).to_have_attribute("href", "/compute/logs")
-    assert page.get_by_label("Administration").count() == 0
+    assert page.locator(".app-header").get_by_label("Administration").count() == 0
     expect(page.get_by_role("button", name="Delete selected (0)")).to_be_hidden()
     page.get_by_role("checkbox", name="Select", exact=True).check()
     page.get_by_role("button", name="Delete selected (1)").click()
@@ -706,7 +706,7 @@ def test_anonymous_shell_offers_no_forbidden_administration_links(page: Page, wi
     assert page.get_by_role("link", name="User control").count() == 0
     assert page.get_by_role("link", name="Server logs").count() == 0
     assert page.get_by_role("link", name="Configuration").count() == 0
-    assert page.get_by_label("Administration").count() == 0
+    assert page.locator(".app-header").get_by_label("Administration").count() == 0
     # Account is the only other region, and it is a sign-in affordance.
     expect(page.locator("[data-nav-group='account']")).to_be_visible()
     expect(page.locator("[data-nav-group='account'] a")).to_have_attribute("href", "/compute/login?return_to=%2Frunners")

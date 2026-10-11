@@ -14,6 +14,10 @@ const dashboardIcons = { Archive, Ban, Download, ExternalLink, RefreshCw, Search
 // across cards and never depend on interface language.
 function formatDate(value: string | null): string { return value ? new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'UTC' }).format(new Date(value)) : '-'; }
 function formatDuration(seconds: number | null): string { if (seconds == null) return '-'; const total = Math.round(seconds); const hours = Math.floor(total / 3600), minutes = Math.floor(total % 3600 / 60), rest = total % 60; return [hours && `${hours}h`, minutes && `${minutes}m`, `${rest}s`].filter(Boolean).join(' '); }
+// One status vocabulary for the whole register: the Runner's reported outcome when
+// it exists, otherwise the lifecycle enum. Both view modes read the same task, so
+// both must name its state the same way.
+function statusText(task: TaskSummary): string { return task.outcome || task.status; }
 function button(label: string, action: string, icon: string): HTMLButtonElement { const node = document.createElement('button'); node.type = 'button'; node.className = 'task-action'; node.dataset.action = action; node.title = label; node.setAttribute('aria-label', label); node.innerHTML = `<i data-lucide="${icon}" aria-hidden="true"></i><span>${label}</span>`; return node; }
 function textNode<K extends keyof HTMLElementTagNameMap>(tag: K, value: string, className = ''): HTMLElementTagNameMap[K] { const node = document.createElement(tag); node.className = className; node.textContent = value; return node; }
 
@@ -144,7 +148,7 @@ export class Dashboard {
     const card = document.createElement('article'); card.className = 'task-card'; card.dataset.status = task.status;
     const header = document.createElement('header'); const identity = document.createElement('div');
     identity.append(textNode('h2', task.display_name), textNode('p', task.task_type, 'task-card-type'));
-    const status = document.createElement('span'); status.className = `status status-${task.status.replace(':', '-')}`; status.textContent = task.outcome || task.status; header.append(identity, status);
+    const status = document.createElement('span'); status.className = `status status-${task.status.replace(':', '-')}`; status.textContent = statusText(task); header.append(identity, status);
     const facts = document.createElement('dl');
     const factValues: Array<[string, string, boolean]> = [
       [t('dashboard.card.submitted'), formatDate(task.submitted_at), false],
@@ -186,7 +190,7 @@ export class Dashboard {
   }
   private renderTable(tasks: TaskSummary[]): void {
     const table = document.createElement('table'); table.className = 'task-table'; table.innerHTML = `<thead><tr><th>${t('dashboard.table.name')}</th><th>${t('dashboard.card.type')}</th>${this.user.role === 'admin' ? `<th>${t('dashboard.card.owner')}</th>` : ''}<th>${t('dashboard.card.submitted')}</th><th>${t('dashboard.filter.status')}</th><th><span class="sr-only">${t('dashboard.table.actions')}</span></th></tr></thead>`; const body = document.createElement('tbody');
-    tasks.forEach(task => { const row = document.createElement('tr'); const cells = [task.display_name, task.task_type, ...(this.user.role === 'admin' ? [task.owner || '-'] : []), formatDate(task.submitted_at), task.status]; cells.forEach(value => { const cell = document.createElement('td'); cell.textContent = value; row.append(cell); }); const actionCell = document.createElement('td'); actionCell.append(this.taskActions(task)); row.append(actionCell); body.append(row); }); table.append(body); this.list.append(table);
+    tasks.forEach(task => { const row = document.createElement('tr'); const cells = [task.display_name, task.task_type, ...(this.user.role === 'admin' ? [task.owner || '-'] : []), formatDate(task.submitted_at), statusText(task)]; cells.forEach(value => { const cell = document.createElement('td'); cell.textContent = value; row.append(cell); }); const actionCell = document.createElement('td'); actionCell.append(this.taskActions(task)); row.append(actionCell); body.append(row); }); table.append(body); this.list.append(table);
   }
   private async handleAction(event: Event): Promise<void> {
     const target = (event.target as Element).closest<HTMLElement>('[data-action]'); if (!target) return; const action = target.dataset.action;
