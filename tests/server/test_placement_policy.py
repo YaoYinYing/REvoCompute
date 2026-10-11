@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import io
 import json
+import shutil
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -801,7 +802,30 @@ def test_the_execution_class_map_is_configurable_through_the_admin_http_path(mon
 # --------------------------------------------------------------------------- #
 
 
-def test_a_real_manifest_stage_binding_a_device_class_places_typed(deployment):
+def _manifest_tree_with_model_requirement(tmp_path, declaration: str) -> Path:
+    """A private copy of the fixture tree whose model stage declares ``declaration``.
+
+    The shipped fixture is the tree every other test discovers, so a manifest case
+    must not edit it in place: the mutation would outlive the case and leave the
+    shared fixture changed.  Copying the tree instead keeps the assertion about
+    what discovery does with *this* manifest, and an assertion or cleanup failure
+    cannot leak into the fixture a later test reads.
+    """
+    tree = tmp_path / "runners"
+    shutil.copytree(ROOT / "tests" / "fixtures" / "runners", tree)
+    task_yaml = tree / "multistage_runner" / "tasks" / "predict" / "task.yaml"
+    original = task_yaml.read_text()
+    declared = original.replace(
+        "- name: model\n  display_name: Calculation\n  requires_gpu: true\n",
+        "- name: model\n  display_name: Calculation\n  requires_gpu: true\n"
+        f"  accelerator_requirement: {declaration}\n",
+    )
+    assert declared != original, declaration
+    task_yaml.write_text(declared)
+    return tree
+
+
+def test_a_real_manifest_stage_binding_a_device_class_places_typed(tmp_path, deployment):
     """The device-class declaration is a manifest contract, not a test double.
 
     ``_stage`` above proves the resolver handles a declared requirement; this case
@@ -809,72 +833,49 @@ def test_a_real_manifest_stage_binding_a_device_class_places_typed(deployment):
     workflow, so the typed reason codes are reachable from production input rather
     than only from a fixture that builds the object by hand.
     """
-    fixture = ROOT / "tests" / "fixtures" / "runners" / "multistage_runner"
-    task_yaml = fixture / "tasks" / "predict" / "task.yaml"
-    original = task_yaml.read_text()
-    declared = original.replace(
-        "- name: model\n  display_name: Calculation\n  requires_gpu: true\n",
-        "- name: model\n  display_name: Calculation\n  requires_gpu: true\n"
-        "  accelerator_requirement: {class: a100, count: 1}\n",
-    )
-    assert declared != original
+    tree = _manifest_tree_with_model_requirement(tmp_path, "{class: a100, count: 1}")
     store = deployment(
         globals_={"slurm_gres": "gpu:a100:1"},
         allowed_queues=("normal", "gpuqueue"),
         classes="cpu=normal;a100=gpuqueue",
     )
-    try:
-        task_yaml.write_text(declared)
-        with isolated_discovery(str(ROOT / "tests" / "fixtures" / "runners"), {"multistage_runner"}):
-            task_type, runner = get_task_type("multistage_runner")
+    with isolated_discovery(str(tree), {"multistage_runner"}):
+        task_type, runner = get_task_type("multistage_runner")
 
-        assert [stage.accelerator_requirement for stage in task_type.workflow] == [
-            None,
-            AcceleratorRequirement("a100", 1),
-        ]
+    assert [stage.accelerator_requirement for stage in task_type.workflow] == [
+        None,
+        AcceleratorRequirement("a100", 1),
+    ]
 
-        placement = resolve_submission_placement(store, task_type, SimpleNamespace(max_runtime_seconds=3600))
+    placement = resolve_submission_placement(store, task_type, SimpleNamespace(max_runtime_seconds=3600))
 
-        assert placement.stage_decisions["multistage_runner.features"].reason_code == PLACED_CPU
-        model = placement.stage_decisions["multistage_runner.model"]
-        assert model.reason_code == PLACED_ACCELERATOR
-        assert model.execution_class.identifier == "accelerator|gpuqueue|a100x1"
-        assert model.resources.gres == "gpu:a100:1"
-    finally:
-        task_yaml.write_text(original)
-
-    assert task_yaml.read_text() == original
+    assert placement.stage_decisions["multistage_runner.features"].reason_code == PLACED_CPU
+    model = placement.stage_decisions["multistage_runner.model"]
+    assert model.reason_code == PLACED_ACCELERATOR
+    assert model.execution_class.identifier == "accelerator|gpuqueue|a100x1"
+    assert model.resources.gres == "gpu:a100:1"
 
 
-def test_a_real_manifest_stage_declaring_the_wrong_device_class_fails_closed(deployment):
-    fixture = ROOT / "tests" / "fixtures" / "runners" / "multistage_runner"
-    task_yaml = fixture / "tasks" / "predict" / "task.yaml"
-    original = task_yaml.read_text()
+@pytest.mark.parametrize(
+    ("declaration", "expected"),
+    [
+        ("{class: b200, count: 1}", ACCELERATOR_CLASS_MISMATCH),
+        ("{class: a100, count: 2}", ACCELERATOR_COUNT_MISMATCH),
+    ],
+)
+def test_a_real_manifest_stage_declaring_the_wrong_device_class_fails_closed(
+    tmp_path, deployment, declaration, expected
+):
+    tree = _manifest_tree_with_model_requirement(tmp_path, declaration)
     store = deployment(
         globals_={"slurm_gres": "gpu:a100:1"},
         allowed_queues=("normal", "gpuqueue"),
         classes="cpu=normal;a100=gpuqueue",
     )
-    try:
-        for declaration, expected in (
-            ("{class: b200, count: 1}", ACCELERATOR_CLASS_MISMATCH),
-            ("{class: a100, count: 2}", ACCELERATOR_COUNT_MISMATCH),
-        ):
-            declared = original.replace(
-                "- name: model\n  display_name: Calculation\n  requires_gpu: true\n",
-                "- name: model\n  display_name: Calculation\n  requires_gpu: true\n"
-                f"  accelerator_requirement: {declaration}\n",
-            )
-            assert declared != original, declaration
-            task_yaml.write_text(declared)
-            with isolated_discovery(str(ROOT / "tests" / "fixtures" / "runners"), {"multistage_runner"}):
-                task_type, _runner = get_task_type("multistage_runner")
+    with isolated_discovery(str(tree), {"multistage_runner"}):
+        task_type, _runner = get_task_type("multistage_runner")
 
-            with pytest.raises(PlacementError) as raised:
-                resolve_submission_placement(store, task_type, SimpleNamespace(max_runtime_seconds=3600))
+    with pytest.raises(PlacementError) as raised:
+        resolve_submission_placement(store, task_type, SimpleNamespace(max_runtime_seconds=3600))
 
-            assert raised.value.reason_code == expected, declaration
-    finally:
-        task_yaml.write_text(original)
-
-    assert task_yaml.read_text() == original
+    assert raised.value.reason_code == expected
