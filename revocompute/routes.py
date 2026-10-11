@@ -124,12 +124,14 @@ from revocompute.resource_ledger import (
 )
 from revocompute.resource_observations import observations_for_guidance
 from revocompute.placement import (
+    AcceleratorRequirement,
     PlacementDecision,
     PlacementError,
     explain_placement,
     place_stage,
     placement_policy,
     resolve_submission_placement,
+    stage_requirements,
 )
 from revocompute.resource_policy import (
     GLOBAL_RESOURCE_KEYS,
@@ -5648,58 +5650,79 @@ def _validate_proposed_placement(
     did not cause and could not have avoided, so it is left to the edit that fixes
     it.  The comparison is per profile rather than per field because whether a
     value strands a type is exactly what the resolver decides.
-    """
-    from revocompute.task_types import get as get_task_type
 
+    The candidate profiles are exactly the ones a submission resolves —
+    :func:`revocompute.placement.stage_requirements` over each registered task
+    type, so a workflow contributes its stages and a single-stage task contributes
+    itself, each with the accelerator requirement it declares.  They are read from
+    the registry rather than from the configuration rows because a configuration
+    row is not always a profile: a workflow's parent row is never resolved by a
+    submission, and resolving the stages the way a submission does is what keeps
+    this check from approving a stage edit the submission path would then refuse.
+    The key is the name the resolver reads its per-Task layer under, which is the
+    same name the configuration rows use, so a per-Task edit and its row address
+    one profile.
+    """
     current_globals = dict(manage_db.resource_all())
     proposed_effective = dict(current_globals)
     proposed_effective.update({key: serialize_resource_value(key, value) for key, value in proposed_globals.items()})
 
+    # Every profile a submission resolves, keyed by the resolver's per-Task layer
+    # name, with the registered task type each belongs to (whose enable toggle is
+    # the one that governs whether the profile is ever submitted).
+    profiles: dict[str, tuple[str, bool, AcceleratorRequirement | None, Any]] = {}
+    for registered in list_types():
+        task_type, runner = get_task_type(registered.name)
+        for owner, _stage, requires_accelerator, requirement in stage_requirements(task_type):
+            profiles[owner] = (registered.name, requires_accelerator, requirement, runner)
+
     def placement_failure(
-        tool: str, task_type: Any, runner: Any, global_values: Mapping[str, Any], task_row: Mapping[str, Any]
+        owner: str, global_values: Mapping[str, Any], task_row: Mapping[str, Any]
     ) -> Exception | None:
         """The resolver's own refusal for one profile under one set of values, or ``None``."""
-        policy = ResourcePolicyValues(global_values, {tool: dict(task_row)})
-        requires_gpu = bool(task_row.get("slurm_gres")) or task_type.gpus
+        _task_type, requires_accelerator, requirement, runner = profiles[owner]
+        policy = ResourcePolicyValues(global_values, {owner: dict(task_row)})
         try:
             place_stage(
                 policy.resolve_task_resources,
-                owner=tool,
+                owner=owner,
                 stage=None,
-                requires_accelerator=requires_gpu,
-                requirement=getattr(task_type, "accelerator_requirement", None),
-                policy=placement_policy(policy, tool),
+                requires_accelerator=requires_accelerator,
+                requirement=requirement,
+                policy=placement_policy(policy, owner),
                 default_timeout_seconds=runner.max_runtime_seconds,
             )
         except (PlacementError, ResourceValidationError) as exc:
             return exc
         return None
 
-    # The config rows are the deployment's own profile vocabulary; the registry
-    # says which of them this deployment actually enables and what each requires.
     # A global edit touches every enabled profile, so every enabled profile is
     # re-checked; a per-Task edit touches only the named ones.
     tools = set(proposed_tasks) if proposed_tasks else set()
     if proposed_globals:
-        tools.update(config["tool"] for config in manage_db.task_type_all() if config.get("enabled", 1))
-    for tool in sorted(tools):
-        try:
-            task_type, runner = get_task_type(tool)
-        except KeyError:
+        tools.update(
+            owner
+            for owner, (task_type_name, *_rest) in profiles.items()
+            if manage_db.task_type_is_enabled(task_type_name) is not False
+        )
+    for owner in sorted(tools):
+        # A named profile the resolver never addresses (a workflow's parent row) has
+        # no placement to check; the edits that matter are the ones a Task resolves.
+        if owner not in profiles:
             continue
         # ``task_type_get`` is the persisted per-Task layer the resolver reads;
         # a per-Task edit overrides it for this check only.
-        current_row = dict(manage_db.task_type_get(tool) or {})
+        current_row = dict(manage_db.task_type_get(owner) or {})
         proposed_row = dict(current_row)
-        proposed_row.update(proposed_tasks.get(tool, {}))
-        if placement_failure(tool, task_type, runner, current_globals, current_row) is not None:
+        proposed_row.update(proposed_tasks.get(owner, {}))
+        if placement_failure(owner, current_globals, current_row) is not None:
             continue
-        failure = placement_failure(tool, task_type, runner, proposed_effective, proposed_row)
+        failure = placement_failure(owner, proposed_effective, proposed_row)
         if failure is None:
             continue
         if isinstance(failure, PlacementError):
             raise ResourceValidationError(
-                f"Task type {tool!r} would be impossible to place ({failure.reason_code}): {failure}"
+                f"Task type {owner!r} would be impossible to place ({failure.reason_code}): {failure}"
             ) from failure
-        raise ResourceValidationError(f"Task type {tool!r} would be impossible to place: {failure}") from failure
+        raise ResourceValidationError(f"Task type {owner!r} would be impossible to place: {failure}") from failure
 

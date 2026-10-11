@@ -971,6 +971,47 @@ def test_admin_resource_api_does_not_fail_an_unrelated_edit_over_a_stale_profile
     assert "would be impossible to place" in stranded.get_json()["error"]
 
 
+def test_admin_resource_api_refuses_a_workflow_stage_edit_that_would_strand_it(monkeypatch, tmp_path):
+    """A workflow stage is a placeable profile, so a stage edit is checked too.
+
+    A workflow's stages are resolved separately, each with the accelerator
+    requirement it declares, so a stage edit that leaves the stage nowhere to run
+    strands every submission of the workflow.  The gate resolves the stages the way
+    a submission does, so the stage profile is covered instead of being skipped as
+    an unknown task name — the refusal cannot fire unless the stage was placeable
+    before the edit, so reaching the 400 also proves the pre-edit workflow was
+    placeable.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    client = module.app.test_client()
+    admin_header = _admin_client_auth(module)
+
+    # The calculation stage requires an accelerator and names no device class, so
+    # the deployment's own accelerator class is what places it.
+    declared = client.put(
+        "/compute/api/auth/admin/config",
+        headers=admin_header,
+        json={"resources": {"slurm_execution_classes": "cpu=normal;a100=gpuqueue"}},
+    )
+    assert declared.status_code == 200, declared.get_json()
+
+    stranded = client.put(
+        "/compute/api/auth/admin/config",
+        headers=admin_header,
+        json={"task_types": [{"tool": "multistage_runner.model", "slurm_gres": "gpu:h100:1"}]},
+    )
+    assert stranded.status_code == 400
+    assert "multistage_runner.model" in stranded.get_json()["error"]
+
+    # Binding the same stage to the class the deployment declares is accepted.
+    accepted = client.put(
+        "/compute/api/auth/admin/config",
+        headers=admin_header,
+        json={"task_types": [{"tool": "multistage_runner.model", "slurm_gres": "gpu:a100:1"}]},
+    )
+    assert accepted.status_code == 200, accepted.get_json()
+
+
 def test_admin_resource_api_hides_stale_removed_runner_rows(monkeypatch, tmp_path):
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     client = module.app.test_client()
