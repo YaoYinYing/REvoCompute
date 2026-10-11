@@ -246,17 +246,6 @@ def _release_verified(snapshot: BinaryIO | None, descriptor: int) -> None:
             pass
 
 
-class _StreamReadError(OSError):
-    """A read failure a verified snapshot was asked to remember until it closes.
-
-    ``BufferedReader`` reports a read that failed in ``flush``/``close`` rather
-    than only at the call that raised, so a consumer that checks the terminal
-    state of its own reader still learns the stream broke.  This carries the
-    original message so nothing about the failure is lost between the read and
-    the close.
-    """
-
-
 class _SnapshotStream:
     """A private image of one verified artifact, served under the file protocol.
 
@@ -744,6 +733,18 @@ class ArtifactChangedError(ArtifactIdentityError):
 
     Raised only after a bounded hash produced fewer bytes than the descriptor
     reported, so the digest describes no single version of the file.
+    """
+
+
+class _StreamReadError(OSError):
+    """A read failure a verified snapshot was asked to remember until it closes.
+
+    Raised by ``_SnapshotStream.close`` when an earlier read of the snapshot had
+    failed: ``BufferedReader`` reports a read that failed in ``flush``/``close``
+    rather than only at the call that raised, so a consumer that checks the
+    terminal state of its own reader still learns the stream broke.  This carries
+    the original message so nothing about the failure is lost between the read
+    and the close.
     """
 
 

@@ -1722,12 +1722,26 @@ def test_a_same_length_rewrite_of_the_manifest_is_not_the_publication(monkeypatc
 
 
 def test_a_same_length_rewrite_of_the_archive_is_not_delivered(monkeypatch, tmp_path) -> None:
-    """The delivered archive is the private snapshot its members were verified against.
+    """A rewritten archive is not delivered, and the archive is checked at all.
 
-    The published artifact is large enough to exceed the read buffer a
-    verification that streamed the archive *itself* would have retained, so a
-    delivery that rewound that reader instead of serving an independent snapshot
-    would hand back the rewritten bytes rather than the verified ones.
+    The download route serves the private snapshot the member verification
+    produced, so the strongest rewrite the runner can make to the archive it owns
+    -- the same length, in place, keeping the inode, the link count, and the size
+    -- cannot reach the caller.  The rewrite is injected at the seam where
+    ``verified_publication_archive`` has just checked the members, so the archive
+    the response carries is the one that was verified and the archive on disk is
+    not.
+
+    This is a non-regression pin rather than a detector of a live race: the
+    immediate parent e2994fac already served the private copy of the archive it
+    had read the members through, so the test passes there.  It does fail at
+    64bc1eaa, the last head that streamed the very file it had read the archive
+    through -- observable only once the archive outgrows that reader's retained
+    bytes, which is why the fixture is a full-size result rather than a two-line
+    one.  What it protects is the single member-identity contract the archive
+    writer and this reader share: every member stored rather than compressed, the
+    member set exactly the manifest plus its declared artifacts, and every
+    artifact member matching the entry that declares it.
     """
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     headers = _test_client_auth(module)
@@ -1735,7 +1749,7 @@ def test_a_same_length_rewrite_of_the_archive_is_not_delivered(monkeypatch, tmp_
     task_id, _result_dir, _manifest = _single_artifact_task(module, tmp_path, content)
     archive_path = _publish_archive(module, task_id)
     published_bytes = archive_path.read_bytes()
-    assert len(published_bytes) > 128 * 1024, "the fixture must exceed a streaming reader's buffer"
+    assert len(published_bytes) > 128 * 1024, "the fixture must outgrow a buffered reader's retained bytes"
     import revocompute.storage as storage_module
 
     real_verify = storage_module.verified_publication_archive
