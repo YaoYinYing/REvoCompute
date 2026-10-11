@@ -16,10 +16,12 @@ export class CreateTask {
   private generation = 0;
   private readonly chooser = node('section', 'ct-chooser');
   private readonly workbench = node('section', 'ct-workbench');
+  private readonly pageHeader = node('header', 'ct-page-header');
   private readonly workspaceRoot = node('div', 'ct-workspace');
   private readonly status = node('p', 'ct-status');
   private readonly validation = node('ul', 'ct-validation');
   private readonly validationSummary = node('p', 'ct-validation-summary', t('ct.chooseMethod'));
+  private readonly feedback = node('div', 'ct-feedback');
   private readonly snapshot = node('dl', 'ct-snapshot');
   private readonly action = node('button', 'ct-primary', t('ct.run'));
   private readonly clear = node('button', 'ct-secondary', t('ct.clear'));
@@ -29,7 +31,16 @@ export class CreateTask {
   private change: HTMLButtonElement | null = null;
   private revision = 0;
 
-  constructor(private readonly root: HTMLElement) {}
+  constructor(private readonly root: HTMLElement) {
+    // The preparation surface owns exactly one visible level-1 heading per state:
+    // the chooser shows the persistent page title, and the workbench replaces it
+    // with the method's own display name. The validation summary and status live
+    // in one region that exists from mount, so a change to either is announced
+    // rather than silently repainted.
+    this.feedback.setAttribute('role', 'status');
+    this.feedback.setAttribute('aria-live', 'polite');
+    this.feedback.setAttribute('aria-labelledby', 'ct-snapshot-label');
+  }
 
   async mount(): Promise<void> {
     this.renderShell();
@@ -43,14 +54,14 @@ export class CreateTask {
 
   private renderShell(): void {
     this.root.replaceChildren(); this.root.classList.add('create-task');
-    const header = node('header', 'ct-page-header');
     const heading = node('div'); heading.append(node('h1', '', t('ct.title')), node('p', '', t('ct.subtitle')));
-    header.append(heading);
+    this.pageHeader.replaceChildren(heading);
     this.chooser.append(node('h2', '', t('ct.chooseMethod')));
     this.workbench.hidden = true;
+    this.feedback.append(this.validationSummary, this.validation, this.status); this.validationSummary.hidden = true;
     this.action.type = 'button'; this.action.addEventListener('click', () => void this.runAction());
     this.clear.type = 'button'; this.clear.addEventListener('click', () => void this.clearWorkspace());
-    this.root.append(header, this.chooser, this.workbench);
+    this.root.append(this.pageHeader, this.chooser, this.workbench);
   }
 
   private renderCatalog(): void {
@@ -98,6 +109,10 @@ export class CreateTask {
 
   private renderWorkbench(): void {
     const form = this.definition!; this.workbench.replaceChildren();
+    // The workbench is rebuilt whole; the announced group returns to it so the
+    // summary and status keep their single mount-time home.
+    this.feedback.append(this.validationSummary, this.validation, this.status);
+    this.pageHeader.hidden = true;
     const header = node('header', 'ct-method-header');
     const title = node('div'); title.append(node('p', 'ct-category', this.categoryLabel(form.category)), node('h1', '', form.display_name), node('p', 'ct-method-summary', form.summary));
     const change = node('button', 'ct-secondary', t('ct.changeMethod')); change.type = 'button'; change.addEventListener('click', () => this.showChooser(t('ct.chooseAnother'))); this.change = change;
@@ -114,10 +129,11 @@ export class CreateTask {
     const main = node('div', 'ct-workbench-grid');
     const protocol = node('div', 'ct-protocol'); protocol.append(this.workspaceRoot);
     const snapshotPanel = node('aside', 'ct-snapshot-panel');
-    snapshotPanel.append(node('p', 'ct-snapshot-label', t('ct.snapshot')));
+    const label = node('p', 'ct-snapshot-label', t('ct.snapshot')); label.id = 'ct-snapshot-label';
+    snapshotPanel.append(label);
     const identity = node('div', 'ct-snapshot-identity'); identity.append(node('p', 'ct-snapshot-method', form.display_name));
     const actions = node('div', 'ct-actions'); actions.append(this.clear, this.action);
-    snapshotPanel.append(identity, this.snapshot, this.validationSummary, this.validation, this.status, actions);
+    snapshotPanel.append(identity, this.snapshot, this.feedback, actions);
     main.append(protocol, snapshotPanel); this.workbench.append(header, facts); if (access) this.workbench.append(access); this.workbench.append(main);
   }
 
@@ -228,12 +244,16 @@ export class CreateTask {
   }
 
   private setBusy(value: boolean): void { this.busy = value; this.action.disabled = value; this.clear.disabled = value; if (this.change) this.change.disabled = value; this.action.setAttribute('aria-busy', String(value)); }
-  private setStatus(message: string, kind: 'busy' | 'ok' | 'error' | '' = ''): void { this.status.textContent = message; this.status.className = `ct-status ${kind}`; }
+  private setStatus(message: string, kind: 'busy' | 'ok' | 'error' | '' = ''): void {
+    this.status.textContent = message; this.status.className = `ct-status ${kind}`;
+    // An error is announced assertively; the region itself is the polite default.
+    if (kind === 'error') this.status.setAttribute('role', 'alert'); else this.status.removeAttribute('role');
+  }
   private categoryLabel(name: string): string { return this.catalog?.categories.find(category => category.name === name)?.label || name; }
 
   private showChooser(message: string): void {
     this.loadController?.abort(); this.generation++; this.definition = null; this.preflight = null; this.setBusy(false); this.checking = false; this.workspace.destroy();
-    this.chooser.hidden = false; this.workbench.hidden = true;
+    this.chooser.hidden = false; this.pageHeader.hidden = false; this.workbench.hidden = true;
     const status = this.chooser.querySelector('.ct-catalog-status'); if (status) status.textContent = message;
     const url = new URL(window.location.href); url.searchParams.delete('task_type'); history.replaceState(null, '', url);
     this.chooser.querySelector<HTMLInputElement>('input[type="search"]')?.focus();
