@@ -70,6 +70,9 @@ describe('Create Task workspace PluginHost', () => {
       'runner:regions: module unavailable',
       'regions: unsupported component',
     ]);
+    // The unmounted-capability signal the workbench keys on is the plugin id, not
+    // the localized message: it must not depend on the user-facing language.
+    expect(host.unknownComponents().map(item => item.plugin)).toEqual(['regions']);
   });
 
   it('discards a deferred Runner module and its styles after teardown', async () => {
@@ -93,6 +96,7 @@ describe('Create Task workspace PluginHost', () => {
     host.mount([{ plugin: 'regions', id: 'regions', title: 'Regions', options: {}, stepId: 'one' }], {} as WorkspaceContext, () => new FakeElement() as unknown as HTMLElement);
     expect(host.collect()).toEqual({});
     expect(host.validate()).toContain('regions: unsupported component');
+    expect(host.unknownComponents().map(item => item.plugin)).toEqual(['regions']);
   });
 
   it('collects a summary from every mounted capability, flattening array summaries', () => {

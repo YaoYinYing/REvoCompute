@@ -1,3 +1,4 @@
+import { t } from '../../app/i18n';
 import type { InputFile, TaskFormDefinition, WorkspaceValues } from './types';
 
 function sequenceName(value: string): string {
@@ -20,7 +21,7 @@ export function buildSubmissionFormData(form: TaskFormDefinition, source: Submis
   const inputFiles = source.inputFiles(); const sequence = source.sequence();
   if (sequence) {
     const roleId = source.sequenceRole(); const role = form.inputs.find(item => item.id === roleId);
-    if (!roleId || !role) throw new Error('Sequence input role is not available.');
+    if (!roleId || !role) throw new Error(t('ct.sequence.roleUnavailable'));
     const extension = role.extensions[0] || '.fasta'; const name = sequenceName(source.sequenceName());
     inputFiles.push({ role: roleId, file: new File([`>${name}\n${wrap(sequence)}\n`], `${name}${extension}`, { type: 'text/plain' }) });
   }
