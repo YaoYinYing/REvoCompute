@@ -1,4 +1,5 @@
 import { resultFileName, type ResultFile } from '../../../api/result-types';
+import { t } from '../../../app/i18n';
 import type { MolecularViewer, MolecularViewerFactory } from './viewer-contract';
 
 const MAX_STRUCTURE_BYTES = 64 * 1024 * 1024;
@@ -27,7 +28,7 @@ export class StructureController {
   } = {}) {}
 
   async mount(host: HTMLElement, artifact: ResultFile, theme: 'light' | 'dark'): Promise<void> {
-    if (artifact.size > MAX_STRUCTURE_BYTES) throw new Error('This structure exceeds the safe inline preview limit.');
+    if (artifact.size > MAX_STRUCTURE_BYTES) throw new Error(t('results.structure.tooLarge'));
     const generation = ++this.generation;
     const controller = new AbortController();
     this.loading = true; this.pendingFocus = null; this.pendingSelection = null;
@@ -51,7 +52,7 @@ export class StructureController {
         if (this.options.onSelectionChanged) this.selectionUnsubscribe = created.onSelectionChanged?.(this.options.onSelectionChanged) || null;
       }
       const response = await fetch(artifact.url, { credentials: 'same-origin', signal: controller.signal });
-      if (!response.ok) throw new Error(`Structure download failed (HTTP ${response.status}).`);
+      if (!response.ok) throw new Error(t('results.structure.downloadFailed', { status: response.status }));
       const data = await response.text();
       if (generation !== this.generation) return;
       const viewer = this.viewer; const name = resultFileName(artifact);
@@ -98,7 +99,7 @@ export class StructureController {
   select(selection: unknown): boolean { if (this.loading) { this.pendingSelection = selection; return true; } return this.viewer?.select?.(selection) || false; }
   focus(selection: unknown): boolean { if (this.loading) { this.pendingFocus = selection; return true; } return this.viewer?.focus?.(selection) || false; }
   captureImage(): Promise<string> {
-    if (!this.viewer) return Promise.reject(new Error('The structure viewer is not ready.'));
+    if (!this.viewer) return Promise.reject(new Error(t('results.structure.notReady')));
     return this.viewer.captureImage();
   }
 

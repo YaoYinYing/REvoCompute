@@ -1,5 +1,6 @@
 import { parameterValue, validateParameter } from '../parameter-controls';
 import type { ParameterDefinition } from '../types';
+import { t } from '../../../app/i18n';
 import type { WorkspaceContext, WorkspacePlugin, WorkspacePluginInstance } from './plugin-contract';
 import { element, filePath, formatBytes, matchesExtension, parseSequence } from './utils';
 
@@ -13,7 +14,7 @@ function renderParameter(parameter: ParameterDefinition, context: WorkspaceConte
   const label = element('label', 'ct-label', parameter.unit ? `${parameter.label} (${parameter.unit})` : parameter.label);
   const id = `ct-param-${parameter.name}`; label.htmlFor = id; heading.append(label);
   if (parameter.defaultValue != null) {
-    const reset = element('button', 'ct-reset', 'Reset'); reset.type = 'button';
+    const reset = element('button', 'ct-reset', t('ct.param.reset')); reset.type = 'button';
     reset.addEventListener('click', () => {
       if (control instanceof HTMLInputElement && control.type === 'checkbox') control.checked = parameter.defaultValue === true;
       else control.value = parameter.defaultValue == null ? '' : String(parameter.defaultValue);
@@ -27,7 +28,7 @@ function renderParameter(parameter: ParameterDefinition, context: WorkspaceConte
     control = element('input', 'ct-checkbox'); control.type = 'checkbox'; control.checked = parameter.defaultValue === true;
   } else if (parameter.choices.length && parameter.choices.length <= 20) {
     const select = element('select', 'ct-control');
-    if (!parameter.required && parameter.defaultValue == null) select.append(new Option('Use default', ''));
+    if (!parameter.required && parameter.defaultValue == null) select.append(new Option(t('ct.param.useDefault'), ''));
     parameter.choices.forEach(choice => select.append(new Option(String(choice), String(choice), false, String(choice) === String(parameter.defaultValue ?? ''))));
     control = select;
   } else {
@@ -51,7 +52,7 @@ function renderParameter(parameter: ParameterDefinition, context: WorkspaceConte
   const changed = () => { control.removeAttribute('aria-invalid'); error.hidden = true; context.changed(); };
   control.addEventListener('input', changed); control.addEventListener('change', changed); field.append(control);
   if (parameter.seed && control instanceof HTMLInputElement) {
-    const random = element('button', 'ct-seed', 'Randomize seed'); random.type = 'button';
+    const random = element('button', 'ct-seed', t('ct.param.randomize')); random.type = 'button';
     random.addEventListener('click', () => {
       const minimum = parameter.seed?.minimum ?? parameter.minimum ?? 0;
       const maximum = parameter.seed?.maximum ?? parameter.maximum ?? 2147483647;
@@ -62,7 +63,7 @@ function renderParameter(parameter: ParameterDefinition, context: WorkspaceConte
     field.append(random);
   }
   if (parameter.description) field.append(element('p', 'ct-help', parameter.description));
-  if (parameter.help) { const details = element('details', 'ct-more-help'); details.append(element('summary', '', 'Why this matters'), element('p', '', parameter.help)); field.append(details); }
+  if (parameter.help) { const details = element('details', 'ct-more-help'); details.append(element('summary', '', t('ct.param.why')), element('p', '', parameter.help)); field.append(details); }
   field.append(error); return field;
 }
 
@@ -90,18 +91,18 @@ const filesPlugin: WorkspacePlugin = {
       const group = element('div', 'ct-file-role');
       const label = element('label', 'ct-label', role.title); const id = `ct-files-${definition.id}-${role.id}`; label.htmlFor = id;
       const input = element('input'); input.id = id; input.type = 'file'; input.multiple = role.cardinality.max > 1; input.accept = role.accept || role.extensions.join(',');
-      const hint = element('p', 'ct-help', role.description || `${role.cardinality.min}-${role.cardinality.max} file(s): ${role.formats.join(', ')}`);
+      const hint = element('p', 'ct-help', role.description || t('ct.files.hint', { minimum: role.cardinality.min, maximum: role.cardinality.max, formats: role.formats.join(', ') }));
       const list = element('div', 'ct-file-list');
       const error = element('p', 'ct-field-error'); error.hidden = true; input.setAttribute('aria-describedby', `${id}-error`); error.id = `${id}-error`;
       const render = () => {
         const files = context.roleFiles(role.id); list.replaceChildren();
-        if (!files.length) list.textContent = 'No files selected';
+        if (!files.length) list.textContent = t('ct.files.none');
         files.forEach((file, index) => {
           const row = element('div', 'ct-file-row');
           const name = element('span', '', `${filePath(file)} (${formatBytes(file.size)})`); row.append(name);
           if (primaryRole === role.id && files.length > 1) {
             const radio = element('input'); radio.type = 'radio'; radio.name = `ct-primary-${role.id}`; radio.checked = context.primaryIndex(role.id) === index;
-            radio.setAttribute('aria-label', `Use ${file.name} as primary`); radio.addEventListener('change', () => { context.setPrimaryIndex(role.id, index); context.changed(); }); row.append(radio);
+            radio.setAttribute('aria-label', t('ct.files.usePrimary', { name: file.name })); radio.addEventListener('change', () => { context.setPrimaryIndex(role.id, index); context.changed(); }); row.append(radio);
           }
           list.append(row);
         });
@@ -114,20 +115,21 @@ const filesPlugin: WorkspacePlugin = {
       summarize: () => {
         const files = context.inputFiles(); if (!files.length) return null;
         const [first] = files; if (!first) return null;
-        const extra = files.length > 1 ? ` +${files.length - 1} more` : '';
-        return { label: 'Input', value: `${first.role}: ${filePath(first.file)}${extra}` };
+        const extra = files.length > 1 ? t('ct.summary.more', { count: files.length - 1 }) : '';
+        return { label: t('ct.summary.input'), value: `${first.role}: ${filePath(first.file)}${extra}` };
       },
       validate: () => {
         const errors: string[] = [];
         controls.forEach(({ role, input, error }) => {
           const files = context.roleFiles(role.id); const sequence = context.sequenceRole() === role.id && context.sequence() ? 1 : 0;
           const roleErrors: string[] = [];
-          if (files.length + sequence < role.cardinality.min || files.length + sequence > role.cardinality.max) roleErrors.push(`${role.title} requires ${role.cardinality.min}-${role.cardinality.max} input(s).`);
-          if (files.some(file => !matchesExtension(file, role.extensions))) roleErrors.push(`${role.title} contains an unsupported format.`);
+          const range = { role: role.title, minimum: role.cardinality.min, maximum: role.cardinality.max };
+          if (files.length + sequence < role.cardinality.min || files.length + sequence > role.cardinality.max) roleErrors.push(t('ct.files.range', range));
+          if (files.some(file => !matchesExtension(file, role.extensions))) roleErrors.push(t('ct.files.format', range));
           input.toggleAttribute('aria-invalid', roleErrors.length > 0); error.textContent = roleErrors[0] || ''; error.hidden = !roleErrors.length; errors.push(...roleErrors);
         });
         const bytes = context.inputFiles().reduce((sum, item) => sum + item.file.size, 0) + new Blob([context.sequence()]).size;
-        if (bytes > context.form.max_request_bytes) errors.push(`Combined inputs exceed the ${formatBytes(context.form.max_request_bytes)} request limit.`);
+        if (bytes > context.form.max_request_bytes) errors.push(t('ct.files.tooLarge', { limit: formatBytes(context.form.max_request_bytes) }));
         return errors;
       },
     };
@@ -140,20 +142,20 @@ const sequencePlugin: WorkspacePlugin = {
   id: 'sequence',
   mount(target, definition, context) {
     const role = typeof definition.options.role === 'string' ? definition.options.role : '';
-    if (!context.form.inputs.some(item => item.id === role)) throw new Error('Sequence input role binding is invalid.');
+    if (!context.form.inputs.some(item => item.id === role)) throw new Error(t('ct.sequence.roleInvalid'));
     context.setSequenceRole(role);
-    const name = element('input', 'ct-control'); name.placeholder = 'Sequence name'; name.setAttribute('aria-label', 'Sequence name');
-    const textarea = element('textarea', 'ct-sequence'); textarea.placeholder = 'Paste protein letters or one FASTA record'; textarea.setAttribute('aria-label', 'Protein sequence');
-    const preview = element('pre', 'ct-sequence-preview', 'No pasted sequence'); const error = element('p', 'ct-field-error'); error.hidden = true;
-    const refresh = () => { const parsed = parseSequence(textarea.value); if (parsed.name && !name.value) name.value = parsed.name; preview.textContent = parsed.sequence ? `${parsed.sequence.match(/.{1,10}/g)?.join(' ')}\n${parsed.sequence.length} residues` : 'No pasted sequence'; error.textContent = parsed.error; error.hidden = !parsed.error; context.changed(); };
+    const name = element('input', 'ct-control'); name.placeholder = t('ct.sequence.name'); name.setAttribute('aria-label', t('ct.sequence.name'));
+    const textarea = element('textarea', 'ct-sequence'); textarea.placeholder = t('ct.sequence.placeholder'); textarea.setAttribute('aria-label', t('ct.sequence.label'));
+    const preview = element('pre', 'ct-sequence-preview', t('ct.sequence.empty')); const error = element('p', 'ct-field-error'); error.hidden = true;
+    const refresh = () => { const parsed = parseSequence(textarea.value); if (parsed.name && !name.value) name.value = parsed.name; preview.textContent = parsed.sequence ? `${parsed.sequence.match(/.{1,10}/g)?.join(' ')}\n${t('ct.sequence.residues', { count: parsed.sequence.length })}` : t('ct.sequence.empty'); error.textContent = parsed.error; error.hidden = !parsed.error; context.changed(); };
     textarea.addEventListener('input', refresh); name.addEventListener('input', () => context.changed()); target.append(name, textarea, preview, error);
     Object.defineProperties(context, { sequence: { value: () => parseSequence(textarea.value).sequence }, sequenceName: { value: () => name.value.trim() } });
     return {
       readValue: () => ({ name: name.value.trim(), sequence: context.sequence() }),
-      summarize: () => context.sequence() ? { label: 'Sequence', value: `${context.sequence().length} residues` } : null,
+      summarize: () => context.sequence() ? { label: t('ct.summary.sequence'), value: t('ct.sequence.residues', { count: context.sequence().length }) } : null,
       validate: () => {
         const parsed = parseSequence(textarea.value); const errors = parsed.error ? [parsed.error] : [];
-        if (parsed.sequence && context.roleFiles(role).length) errors.push(`Use either pasted sequence or selected ${role} inputs, not both.`);
+        if (parsed.sequence && context.roleFiles(role).length) errors.push(t('ct.sequence.conflict', { role }));
         textarea.toggleAttribute('aria-invalid', errors.length > 0); error.textContent = errors[0] || ''; error.hidden = !errors.length; return errors;
       },
     };
@@ -164,7 +166,7 @@ const structurePlugin: WorkspacePlugin = {
   id: 'structure',
   mount(target, definition, context) {
     const selectable = definition.options.select_chains === true || definition.options.select_residues === true;
-    const prompt = 'Choose a PDB or mmCIF structure to inspect it.';
+    const prompt = t('ct.structure.prompt');
     const status = element('p', 'ct-help', prompt);
     const host = element('div', 'ct-structure-viewer'); host.hidden = true; target.append(status, host);
     let generation = 0; let viewer: Awaited<ReturnType<(typeof import('../../structure/MolecularViewer'))['MolecularViewer']['mount']>> | null = null; let removeListener: (() => void) | null = null;
@@ -173,7 +175,7 @@ const structurePlugin: WorkspacePlugin = {
       if (generation !== current) return;
       context.setStructureSelections([]);
       if (!file || !matchesExtension(file, ['.pdb', '.cif', '.mmcif'])) { host.hidden = true; status.textContent = prompt; await viewer?.clear(); return; }
-      status.textContent = `Reading ${filePath(file)}...`;
+      status.textContent = t('ct.structure.reading', { name: filePath(file) });
       try {
         const data = await file.text(); if (generation !== current) return;
         if (!viewer) {
@@ -185,8 +187,8 @@ const structurePlugin: WorkspacePlugin = {
           if (selectable) removeListener = mounted.onSelectionChanged(residues => { context.setStructureSelections(residues); context.changed(); });
         }
         await viewer.loadStructure({ data, format: file.name.toLowerCase().endsWith('.pdb') ? 'pdb' : 'mmcif', label: filePath(file) });
-        if (generation !== current) return; host.hidden = false; status.textContent = selectable ? `${filePath(file)}; select residues in the viewer.` : `${filePath(file)}; inspection only.`;
-      } catch { if (generation === current) { host.hidden = true; status.textContent = 'This structure could not be displayed locally.'; } }
+        if (generation !== current) return; host.hidden = false; status.textContent = selectable ? t('ct.structure.selectResidues', { name: filePath(file) }) : t('ct.structure.inspection', { name: filePath(file) });
+      } catch { if (generation === current) { host.hidden = true; status.textContent = t('ct.structure.failed'); } }
     };
     const refresh = (): Promise<void> => {
       const role = typeof definition.options.role === 'string' ? definition.options.role : undefined; const file = context.structureFile(role);
@@ -195,7 +197,7 @@ const structurePlugin: WorkspacePlugin = {
       queue = queue.catch(() => undefined).then(() => render(current, file));
       return queue;
     };
-    return { refresh, readValue: () => ({ selected_residues: context.structureSelections() }), summarize: () => context.structureSelections().length ? { label: 'Selection', value: `${context.structureSelections().length} residues` } : null, destroy: () => { generation++; selectedFile = null; removeListener?.(); removeListener = null; viewer?.dispose(); viewer = null; } };
+    return { refresh, readValue: () => ({ selected_residues: context.structureSelections() }), summarize: () => context.structureSelections().length ? { label: t('ct.summary.selection'), value: t('ct.sequence.residues', { count: context.structureSelections().length }) } : null, destroy: () => { generation++; selectedFile = null; removeListener?.(); removeListener = null; viewer?.dispose(); viewer = null; } };
   },
 };
 
@@ -206,8 +208,8 @@ function parameterPlugin(id: 'regions' | 'parameters'): WorkspacePlugin {
     const basic = params.filter(parameter => !parameter.advanced); const advanced = params.filter(parameter => parameter.advanced);
     const render = (items: ParameterDefinition[], parent: HTMLElement) => items.forEach(parameter => parent.append(renderParameter(parameter, context)));
     if (basic.length) { const grid = element('div', 'ct-parameter-grid'); render(basic, grid); target.append(grid); }
-    if (advanced.length) { const details = element('details', 'ct-advanced'); details.append(element('summary', '', `Advanced settings (${advanced.length})`)); const grid = element('div', 'ct-parameter-grid'); render(advanced, grid); details.append(grid); target.append(details); }
-    if (!params.length) target.append(element('p', 'ct-help', 'No parameters in this step.'));
+    if (advanced.length) { const details = element('details', 'ct-advanced'); details.append(element('summary', '', t('ct.param.advanced', { count: advanced.length }))); const grid = element('div', 'ct-parameter-grid'); render(advanced, grid); details.append(grid); target.append(details); }
+    if (!params.length) target.append(element('p', 'ct-help', t('ct.param.none')));
     return {
       readValue: () => Object.fromEntries(params.flatMap(parameter => { const control = inputByParameter(parameter.name); return control ? [[parameter.name, parameterValue(parameter, control)]] : []; })),
       summarize: () => params.flatMap(parameter => { const control = inputByParameter(parameter.name); if (!control) return []; const value = parameterValue(parameter, control); return String(value) === String(parameter.defaultValue ?? '') ? [] : [{ label: parameter.label, value: `${value}${parameter.unit ? ` ${parameter.unit}` : ''}` }]; }),

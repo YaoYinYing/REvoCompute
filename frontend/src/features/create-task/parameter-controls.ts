@@ -1,4 +1,5 @@
 import type { ParameterDefinition } from './types';
+import { t } from '../../app/i18n';
 
 interface ParameterSchema {
   properties?: Record<string, unknown>;
@@ -43,13 +44,16 @@ export function parameterValue(parameter: ParameterDefinition, control: HTMLInpu
 
 export function validateParameter(parameter: ParameterDefinition, control: HTMLInputElement | HTMLSelectElement): string | null {
   const value = parameterValue(parameter, control);
-  if (parameter.required && !value) return `${parameter.label} is required.`;
-  if (parameter.choices.length && !parameter.choices.some(choice => String(choice) === value)) return `Choose a listed ${parameter.label.toLowerCase()} value.`;
+  // The template frame is frontend-owned copy and follows the locale; the
+  // interpolated `label` is the server's own parameter vocabulary and stays
+  // verbatim in both locales.
+  if (parameter.required && !value) return t('ct.param.required', { label: parameter.label });
+  if (parameter.choices.length && !parameter.choices.some(choice => String(choice) === value)) return t('ct.param.choice', { label: parameter.label.toLowerCase() });
   if ((parameter.type === 'int' || parameter.type === 'float') && value) {
     const number = Number(value);
-    if (!Number.isFinite(number) || (parameter.type === 'int' && !Number.isInteger(number))) return `${parameter.label} must be a valid ${parameter.type === 'int' ? 'integer' : 'number'}.`;
-    if (parameter.minimum != null && number < parameter.minimum) return `${parameter.label} must be at least ${parameter.minimum}.`;
-    if (parameter.maximum != null && number > parameter.maximum) return `${parameter.label} must be at most ${parameter.maximum}.`;
+    if (!Number.isFinite(number) || (parameter.type === 'int' && !Number.isInteger(number))) return t(parameter.type === 'int' ? 'ct.param.integer' : 'ct.param.number', { label: parameter.label });
+    if (parameter.minimum != null && number < parameter.minimum) return t('ct.param.minimum', { label: parameter.label, minimum: parameter.minimum });
+    if (parameter.maximum != null && number > parameter.maximum) return t('ct.param.maximum', { label: parameter.label, maximum: parameter.maximum });
   }
-  return control.checkValidity() ? null : (control.validationMessage || `${parameter.label} is invalid.`);
+  return control.checkValidity() ? null : (control.validationMessage || t('ct.param.invalid', { label: parameter.label }));
 }

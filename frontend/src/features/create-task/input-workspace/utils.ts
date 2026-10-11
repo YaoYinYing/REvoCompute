@@ -1,3 +1,5 @@
+import { t } from '../../../app/i18n';
+
 export function element<K extends keyof HTMLElementTagNameMap>(tag: K, className = '', text?: string): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag); node.className = className;
   if (text != null) node.textContent = text;
@@ -25,11 +27,11 @@ export function parseSequence(raw: string): { name: string; sequence: string; er
   let name = '';
   if (value.startsWith('>')) {
     const records = value.split(/^>/m).filter(Boolean);
-    if (records.length !== 1) return { name: '', sequence: '', error: 'Paste exactly one FASTA record.' };
+    if (records.length !== 1) return { name: '', sequence: '', error: t('ct.sequence.oneRecord') };
     const lines = records[0]!.split(/\r?\n/); name = lines.shift()!.trim(); value = lines.join('');
   }
   const sequence = value.replace(/\s/g, '').toUpperCase();
   return /^[A-Z]+$/.test(sequence)
     ? { name, sequence, error: '' }
-    : { name, sequence: '', error: 'Paste protein letters or one FASTA record.' };
+    : { name, sequence: '', error: t('ct.sequence.placeholder') };
 }

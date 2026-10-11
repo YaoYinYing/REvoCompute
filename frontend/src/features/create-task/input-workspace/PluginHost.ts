@@ -1,4 +1,5 @@
 import type { WorkspaceCapability, WorkspaceDescriptor, WorkspaceSummary, WorkspaceValues } from '../types';
+import { t } from '../../../app/i18n';
 import type { WorkspaceContext, WorkspacePlugin, WorkspacePluginInstance, WorkspacePluginModule, WorkspacePluginServices } from './plugin-contract';
 import { isWorkspacePlugin } from './plugin-contract';
 
@@ -68,7 +69,7 @@ export class PluginHost {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         this.faults.push(`${definition.plugin}: ${message}`);
-        target.replaceChildren(Object.assign(document.createElement('p'), { className: 'ct-component-error', textContent: `This component could not load: ${message}` }));
+        target.replaceChildren(Object.assign(document.createElement('p'), { className: 'ct-component-error', textContent: t('ct.componentFailed', { message }) }));
       }
     });
   }
