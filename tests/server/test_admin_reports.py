@@ -273,18 +273,19 @@ def test_a_decision_whose_recorded_requirement_contradicts_its_snapshot_is_unrea
     """A tampered requirement is a persistence-integrity fault, not a decision.
 
     The class half and the requirement half are two readings of one snapshot.  A
-    record that names an accelerator requirement over the CPU snapshot beside it
+    record that declares an accelerator requirement over the CPU snapshot beside it
     still *identifies* the CPU class, so a reader that compared only the class would
-    serve it as a placed decision — reporting a requirement the submitted request
-    never made.  The join rejects it instead, because the write path's own verifier
-    would have refused that combination.
+    serve it as a placed decision — reporting a request the submitted work never
+    made.  The join rejects it instead, because the write path's own verifier would
+    have refused that combination.
     """
     configured = deployment(globals_={"slurm_partition": "normal"}, allowed_queues=("normal",))
     form = _submission_form(**_planned_snapshot(configured, gpus=False))
     assert form["placement_decision"]["requires_accelerator"] is False
     # The non-identity half is edited; the execution class is left describing the
-    # snapshot exactly as it was recorded.
-    form["placement_decision"]["requires_accelerator"] = True
+    # snapshot exactly as it was recorded.  A requirement left declared beside a flag
+    # turned off is the mirror shape: still served as `placed_cpu` by a class-only
+    # comparison, still a pair the submission path refuses.
     form["placement_decision"]["accelerator_requirement"] = {"class": "a100", "count": 1}
     row = _task_row(store, "9" * 32, user_id=7, input_form=form)
 

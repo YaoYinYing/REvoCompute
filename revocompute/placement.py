@@ -272,7 +272,18 @@ class PlacementDecision:
     be a second source of truth for the same request.  :meth:`record` therefore
     persists the decision's own evidence, and :meth:`from_record` joins it back to
     the stored snapshot.  A recorded decision is read verbatim and is never
-    recomputed from today's policy.
+    recomputed from today's policy.  The join cross-checks the record *against the
+    snapshot* for the three fields whose values the snapshot determines — the
+    execution class (identity and off-identity scheduler fields), the
+    ``requires_accelerator`` flag, and the declared ``accelerator_requirement`` —
+    using the same verifier the submission path runs.  ``reason_code`` is checked
+    for membership of the bounded reason vocabulary but is not compared against the
+    snapshot, because it is this layer's own statement of *why* the class was
+    chosen rather than a restatement of the request; and ``reason`` and
+    ``policy_revision`` are served exactly as recorded, because they are the
+    decision's memory of which policy resolved the request, not facts the snapshot
+    holds.  That boundary is deliberate: a changed reason or policy revision cannot
+    make the record disagree with the resources it describes.
     """
 
     stage: str | None
@@ -369,10 +380,12 @@ class PlacementDecision:
         # one of them must be a mismatch rather than a fact: a record claiming an
         # accelerator requirement over a CPU snapshot would otherwise be served as
         # ``placed_cpu``, because its class half still describes the snapshot.  The
-        # check is the write path's own verifier, run over the recorded halves, so
-        # the reader cannot accept a combination the submission path would have
-        # refused — and it reads only the record and the snapshot, never today's
-        # configuration, so a recorded decision stays history.
+        # check is the write path's own verifier, so the reader applies one rule to
+        # a (requirement, flag, snapshot) triple — including the mirror case of a
+        # flag turned off beside a still-declared requirement — instead of accepting
+        # a combination the submission path refuses.  It reads only the record and
+        # the snapshot, never today's configuration, so a recorded decision stays
+        # history.
         try:
             verify_placement(
                 resources,
@@ -432,6 +445,18 @@ def verify_placement(
     """
     class_ = ExecutionClass.from_resolved(resources)
     if not requires_accelerator:
+        if requirement is not None:
+            # A declared accelerator requirement on a stage that requires no
+            # accelerator is unrepresentable: the request would ask for a device the
+            # stage says it does not need.  The check lives here rather than only on
+            # the submission path so that *every* reader of a (requirement,
+            # requires_accelerator, snapshot) triple applies one rule — a persisted
+            # record claiming this pair is refused instead of being served as a
+            # placed CPU decision.
+            raise PlacementError(
+                CPU_STAGE_REQUESTS_ACCELERATOR,
+                "A stage declares an accelerator requirement but requires no accelerator",
+            )
         if class_.state == "accelerator":
             raise PlacementError(
                 CPU_STAGE_REQUESTS_ACCELERATOR,
@@ -490,11 +515,6 @@ def place_resolved(
     snapshot the worker will validate, so the decision is derived from the exact
     request that is submitted rather than from a re-resolution that could differ.
     """
-    if requirement is not None and not requires_accelerator:
-        raise PlacementError(
-            CPU_STAGE_REQUESTS_ACCELERATOR,
-            "A stage declares an accelerator requirement but requires no accelerator",
-        )
     class_, reason_code, reason = verify_placement(
         resources, requirement, requires_accelerator=requires_accelerator
     )

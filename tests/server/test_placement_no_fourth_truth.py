@@ -224,6 +224,11 @@ _TAMPERED = {
         f["placement_decision"].__setitem__("requires_accelerator", True),
         f["placement_decision"].__setitem__("accelerator_requirement", {"class": "a100", "count": 1}),
     ),
+    # The mirror direction: the flag is dropped while a requirement stays declared,
+    # a pair the submission path refuses outright.
+    "requirement_without_the_flag": lambda f: f["placement_decision"].__setitem__(
+        "accelerator_requirement", {"class": "a100", "count": 1}
+    ),
     "decision_garbage": lambda f: f.__setitem__("placement_decision", "not-a-record"),
 }
 

@@ -435,7 +435,9 @@ def test_a_recorded_requirement_that_contradicts_its_snapshot_is_rejected(deploy
     A tampered record can leave the execution class describing the snapshot exactly
     while editing the requirement beside it, so a reader comparing only the class
     would serve an accelerator requirement over a CPU snapshot as a recorded
-    decision.  Both halves are claims about one snapshot, so both are compared.
+    decision.  Both halves are claims about one snapshot, so both are compared —
+    in both directions: a flag turned on without a requirement, and a requirement
+    left declared beside a flag turned off, are each a pair the write path refuses.
     """
     store = deployment(globals_={"slurm_partition": "normal"}, allowed_queues=("normal",))
     recorded = _place(store, _task_type(gpus=False))
@@ -443,12 +445,57 @@ def test_a_recorded_requirement_that_contradicts_its_snapshot_is_rejected(deploy
     assert record["execution_class"]["state"] == "cpu" and record["requires_accelerator"] is False
 
     for tamper in (
+        # The flag claims an accelerator the CPU snapshot never requested.
         {"requires_accelerator": True, "accelerator_requirement": {"class": "a100", "count": 1}},
         {"requires_accelerator": True, "accelerator_requirement": None},
+        # The mirror: the flag is turned off while a requirement stays declared,
+        # which ``place_resolved`` refuses outright — so a persisted record holding
+        # it is a state the submission path cannot produce, not a decision.
+        {"requires_accelerator": False, "accelerator_requirement": {"class": "a100", "count": 1}},
     ):
         edited = {**record, **tamper}
         with pytest.raises(ResourceValidationError, match="declared accelerator requirement"):
             PlacementDecision.from_record(edited, recorded.resources)
+
+
+def test_a_legitimately_recorded_decision_still_reads_back_as_recorded(deployment):
+    """The tighter join must not refuse the decisions the writer actually records.
+
+    One positive case per shape the submission path produces: a CPU stage, an
+    untyped accelerator stage, and a typed one, each read back through the same
+    join.  ``reason`` and ``policy_revision`` are served as recorded.
+    """
+    cases = (
+        ("cpu", {"slurm_partition": "normal"}, ("normal", "gpu"), "cpu=normal;gpu=gpu", False, None, PLACED_CPU),
+        (
+            "untyped",
+            {"slurm_partition": "normal"},
+            ("normal", "gpu"),
+            "cpu=normal;gpu=gpu",
+            True,
+            None,
+            PLACED_ACCELERATOR_UNTYPED,
+        ),
+        (
+            "typed",
+            {"slurm_gres": "gpu:a100:1"},
+            ("normal", "gpu"),
+            "cpu=normal;a100=gpu",
+            True,
+            AcceleratorRequirement("a100", 1),
+            PLACED_ACCELERATOR,
+        ),
+    )
+    for label, globals_, queues, classes, gpus, requirement, reason in cases:
+        store = deployment(globals_=globals_, allowed_queues=queues, classes=classes)
+        recorded = _place(store, _task_type(gpus=gpus), requirement=requirement)
+
+        restored = PlacementDecision.from_record(recorded.record(), recorded.resources)
+
+        assert restored.reason_code == reason, label
+        assert restored.requires_accelerator is gpus, label
+        assert restored.accelerator_requirement == requirement, label
+        assert restored.reason == recorded.reason and restored.policy_revision == recorded.policy_revision
 
 
 def test_the_record_carries_no_second_copy_of_the_resolved_fields(deployment):
