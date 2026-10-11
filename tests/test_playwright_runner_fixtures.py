@@ -318,6 +318,22 @@ def test_restricted_access_state_is_reflected_without_navigation(
     assert requests.access_request() == ()
 
 
+# The cases below assert two kinds of text. A server-owned value (the policy's
+# notice, licence, or the 404's message) is asserted exactly as the fixture
+# projects it. A frontend-authored string is asserted in the English catalog's
+# wording, and the locale is pinned rather than left to the runner's default so
+# the assertion cannot silently mean "some default locale". `i18n.test.ts` owns
+# catalog parity: a key present in one catalog and not the other fails there.
+EN_LOAD_RUNNERS = 'Unable to load runners.'
+EN_DETAIL_LOAD_FAILED = 'Unable to load this runner.'
+EN_DECLINED_REQUEST = 'A previous access request was declined. You may request access again.'
+
+
+def _pin_locale(page: Page, locale: str) -> None:
+    """Pin the locale before the bundle boots; copy is baked in as the DOM builds."""
+    page.add_init_script(f"localStorage.setItem('revocompute-locale', '{locale}')")
+
+
 # ── restricted Runner policy terms ────────────────────────────────────────────
 
 
@@ -330,6 +346,7 @@ def test_restricted_runner_detail_publishes_the_owning_policys_terms(page: Page)
     """
     access = AccessState.requestable_policy()
     mount_scenario(page, controlled_scenario().with_access(access))
+    _pin_locale(page, "en")
 
     page.goto(f"{ORIGIN}/runners/sequence_demo")
     expect(page.get_by_role("heading", name="Sequence demo", exact=True)).to_be_visible()
@@ -347,6 +364,7 @@ def test_unrestricted_runner_detail_publishes_no_policy_terms(page: Page) -> Non
     """An unrestricted Runner has no restriction terms to publish."""
     mount_scenario(page, controlled_scenario())
     terms = AccessState.requestable_policy()
+    _pin_locale(page, "en")
 
     page.goto(f"{ORIGIN}/runners/sequence_demo")
     expect(page.get_by_role("heading", name="Sequence demo", exact=True)).to_be_visible()
@@ -357,8 +375,6 @@ def test_unrestricted_runner_detail_publishes_no_policy_terms(page: Page) -> Non
 
 
 # ── a declined access request ─────────────────────────────────────────────────
-
-DECLINED_REQUEST_COPY = "A previous access request was declined. You may request access again."
 
 
 def _request_control(page: Page):
@@ -374,12 +390,13 @@ def test_declined_request_is_acknowledged_before_the_control_is_offered_again(pa
     access = AccessState.requestable_policy(request_status="rejected")
     scenario = controlled_scenario().with_access(access)
     requests = mount_scenario(page, scenario).requests
+    _pin_locale(page, "en")
 
     _mount_create_task(page)
     panel = page.locator(".ct-access-panel")
     expect(panel).to_be_visible()
 
-    declined = panel.get_by_text(DECLINED_REQUEST_COPY, exact=True)
+    declined = panel.get_by_text(EN_DECLINED_REQUEST, exact=True)
     request = _request_control(page)
     expect(declined).to_be_visible()
     expect(request).to_be_visible()
@@ -396,15 +413,18 @@ def test_declined_request_is_acknowledged_before_the_control_is_offered_again(pa
 def test_a_requestable_policy_states_no_decline(page: Page) -> None:
     """Only an answered request carries the declined line."""
     mount_scenario(page, controlled_scenario().with_access(AccessState.requestable_policy()))
+    _pin_locale(page, "en")
 
     _mount_create_task(page)
     expect(_request_control(page)).to_be_visible()
-    assert page.get_by_text(DECLINED_REQUEST_COPY, exact=True).count() == 0
+    assert page.get_by_text(EN_DECLINED_REQUEST, exact=True).count() == 0
 
 
 # ── malformed Runner contracts ────────────────────────────────────────────────
 
-# What a browser throws when the payload is not the contract the page reads.
+# `_ENGINE_TEXT` is what a browser itself throws when the payload is not the
+# contract the page reads; these cases assert its absence from the rendered body,
+# alongside the presence of the frontend's own copy.
 _ENGINE_TEXT = ("Cannot read propert", "undefined (reading", "is not a function", "TypeError", "[object Object]")
 
 
@@ -418,12 +438,13 @@ def test_malformed_detail_contract_renders_frontend_copy(page: Page) -> None:
     """A detail body missing its contract fields is described by frontend copy."""
     errors: list[str] = []
     mount_scenario(page, controlled_scenario())
+    _pin_locale(page, "en")
     page.on("pageerror", lambda error: errors.append(str(error)))
     page.route(f"{ORIGIN}/compute/api/types/sequence_demo", lambda route: route.fulfill(json={"name": "sequence_demo"}))
 
     page.goto(f"{ORIGIN}/runners/sequence_demo")
     expect(page.get_by_role("heading", name="Runner unavailable", exact=True)).to_be_visible()
-    expect(page.get_by_text("Unable to load this runner.", exact=True)).to_be_visible()
+    expect(page.get_by_text(EN_DETAIL_LOAD_FAILED, exact=True)).to_be_visible()
     _assert_no_engine_text(page)
     assert errors == []
 
@@ -431,6 +452,7 @@ def test_malformed_detail_contract_renders_frontend_copy(page: Page) -> None:
 def test_unknown_runner_detail_keeps_the_server_authored_message(page: Page) -> None:
     """A 404 is genuinely informative, so its server-authored message survives."""
     mount_scenario(page, controlled_scenario())
+    _pin_locale(page, "en")
 
     page.goto(f"{ORIGIN}/runners/not_a_runner")
     expect(page.get_by_role("heading", name="Runner unavailable", exact=True)).to_be_visible()
@@ -443,11 +465,12 @@ def test_malformed_catalog_contract_renders_frontend_copy(page: Page) -> None:
     """A catalog body missing its contract fields is described by frontend copy."""
     errors: list[str] = []
     mount_scenario(page, controlled_scenario())
+    _pin_locale(page, "en")
     page.on("pageerror", lambda error: errors.append(str(error)))
     page.route(f"{ORIGIN}/compute/api/types", lambda route: route.fulfill(json={"task_types": []}))
 
     page.goto(f"{ORIGIN}/runners")
-    expect(page.locator(".runner-catalog")).to_contain_text("Unable to load runners.")
+    expect(page.locator(".runner-catalog")).to_contain_text(EN_LOAD_RUNNERS)
     _assert_no_engine_text(page)
     assert errors == []
 
