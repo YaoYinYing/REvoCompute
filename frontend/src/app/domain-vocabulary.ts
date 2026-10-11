@@ -43,9 +43,9 @@ export function metadataValue(value: unknown, key: string): string | null {
   const item = (value as Record<string, unknown>)[key]; return typeof item === 'string' && item ? item : null;
 }
 
-/** Resolve a server-supplied URL, admitting only http(s) as a real destination. */
+/** Resolve a server-supplied URL, admitting only an absolute http(s) destination. */
 export function safeExternalUrl(value: string | null): string | null {
   if (!value) return null;
-  try { const url = new URL(value, location.origin); return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : null; }
+  try { const url = new URL(value); return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : null; }
   catch { return null; }
 }

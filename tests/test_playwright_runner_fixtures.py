@@ -374,6 +374,28 @@ def test_unrestricted_runner_detail_publishes_no_policy_terms(page: Page) -> Non
     assert page.locator(f"a[href='{terms.license_url}']").count() == 0
 
 
+@pytest.mark.parametrize("licence_url", ["javascript:alert(1)", "/local/terms"])
+def test_a_licence_url_outside_http_is_not_offered_as_a_destination(page: Page, licence_url: str) -> None:
+    """The licence link admits only an absolute http/https destination.
+
+    A server-supplied URL is a destination the page hands the reader, so a scheme
+    that executes rather than navigates is dropped, and so is a value that is not
+    a destination at all - resolving against the page origin would silently turn
+    a relative path into a link on the Runner's own page. The notice text stays.
+    """
+    access = AccessState.requestable_policy(license_url=licence_url)
+    mount_scenario(page, controlled_scenario().with_access(access))
+    _pin_locale(page, "en")
+
+    page.goto(f"{ORIGIN}/runners/sequence_demo")
+    expect(page.get_by_role("heading", name="Sequence demo", exact=True)).to_be_visible()
+
+    expect(page.get_by_text(access.notice_title, exact=True)).to_be_visible()
+    assert page.get_by_role("link", name=access.license_name, exact=True).count() == 0
+    assert page.locator("a[href^='javascript:']").count() == 0
+    assert page.locator("a[href$='/local/terms']").count() == 0
+
+
 # ── a declined access request ─────────────────────────────────────────────────
 
 
