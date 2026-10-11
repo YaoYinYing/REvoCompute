@@ -24,6 +24,7 @@ import re
 import shutil
 import time
 import unicodedata
+from collections.abc import Mapping
 from dataclasses import asdict
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -46,6 +47,8 @@ from flask import (
 from pydantic import ValidationError
 from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.http import parse_range_header
+from revocompute.admin_pages import register_admin_pages
+from revocompute import admin_reports
 from revocompute.access_control import (
     authorize,
     policy_state,
@@ -120,11 +123,23 @@ from revocompute.resource_ledger import (
     SECONDS_PER_CREDIT,
 )
 from revocompute.resource_observations import observations_for_guidance
+from revocompute.placement import (
+    AcceleratorRequirement,
+    PlacementDecision,
+    PlacementError,
+    explain_placement,
+    place_stage,
+    placement_policy,
+    resolve_submission_placement,
+    stage_requirements,
+)
 from revocompute.resource_policy import (
     GLOBAL_RESOURCE_KEYS,
+    ResolvedResources,
+    ResourcePolicyValues,
     ResourceValidationError,
     normalize_resource_value,
-    resolve_submission_resources,
+    serialize_resource_value,
 )
 from revocompute.result_projection import project_result_manifest
 from revocompute.storage import (
@@ -157,12 +172,14 @@ from revocompute.schemas import (
     PreflightPhase,
     RegisterRequest,
     ResetPasswordRequest,
+    StorageQuotaRequest,
     TaskSubmissionRequest,
     TaskPreflightResult,
     UpdateCurrentUserRequest,
     UserResponse,
     VerifyEmailRequest,
 )
+from revocompute.storage_quota import parse_quota_input
 from revocompute.task_runtime import (
     _cleanup_task_workspace,
     _finalize_failed_results,
@@ -341,33 +358,6 @@ def legacy_pssm_gremlin_create_task():
 @app.route("/compute/profile", methods=["GET"])
 @login_required
 def profile_page():
-    return _serve_frontend_entry(private=True)
-
-
-@app.route("/compute/user_control", methods=["GET"])
-@login_required
-def user_control_page():
-    """Admin-only user management page."""
-    if g.current_user.get("role") != "admin":
-        return _serve_frontend_entry(private=True, status=403)
-    return _serve_frontend_entry(private=True)
-
-
-@app.route("/compute/logs", methods=["GET"])
-@login_required
-def log_viewer_page():
-    """Admin-only active-log viewer."""
-    if g.current_user.get("role") != "admin":
-        return _serve_frontend_entry(private=True, status=403)
-    return _serve_frontend_entry(private=True)
-
-
-@app.route("/compute/configuration", methods=["GET"])
-@login_required
-def configuration_page():
-    """Admin-only runtime configuration page."""
-    if g.current_user.get("role") != "admin":
-        return _serve_frontend_entry(private=True, status=403)
     return _serve_frontend_entry(private=True)
 
 
@@ -1799,13 +1789,16 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
         return jsonify({"error": "GPU access required for this task type. Contact an administrator."}), 403
     if tt.gpus:
         _project_gpu_authorization(int(g.current_user["id"]))
-    resource_policy = None
-    resource_policies: dict[str, Any] = {}
     try:
-        resource_policy, resource_policies = resolve_submission_resources(managedb, tt, runner)
+        placement = resolve_submission_placement(managedb, tt, runner)
+    except PlacementError as exc:
+        logging.warning("Placement rejected submission for %s: %s", task_type, exc.reason_code)
+        return jsonify({"error": "This task type cannot be placed on this deployment", "reason_code": exc.reason_code, "message": str(exc)}), 503
     except ResourceValidationError as exc:
         logging.error("Resource policy rejected submission for %s: %s", task_type, exc)
         return jsonify({"error": "This task type has an invalid resource policy; contact an administrator."}), 503
+    resource_policy = placement.primary
+    resource_policies = placement.stage_resources
 
     uploaded_inputs, upload_error = _validate_input_uploads(task_type)
     if upload_error is not None:
@@ -1881,7 +1874,22 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
 
         gpu_credit = None
         user_id = int(g.current_user["id"])
-        envelope = task_store.resource_envelope(user_id)
+        try:
+            envelope = task_store.resource_envelope(user_id)
+        except ResourceValidationError as exc:
+            # A stored storage policy the reader refuses to interpret is a broken
+            # deployment, not a bad submission, so it is answered with a bounded
+            # refusal here rather than surfacing as a traceback on every upload.
+            logging.error("Resource policy rejected submission for %s: %s", task_type, exc)
+            return (
+                jsonify(
+                    {
+                        "error": "This deployment's stored resource policy is not interpretable; "
+                        "contact an administrator."
+                    }
+                ),
+                503,
+            )
         # Durable storage is a submission-wide admission concern, not a GPU one:
         # it is the same envelope for every Task, and a user over their soft
         # ceiling is refused a new submission of any kind.  The overrun is
@@ -2083,8 +2091,10 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
         "snapshot_root": snapshot_root,
         "submitted_at": datetime.now(tz=timezone.utc).isoformat(),
         "entities": entities,
-        "resource_policy": resource_policy.public_dict() if resource_policy is not None else None,
-        "resource_policies": {name: policy.public_dict() for name, policy in resource_policies.items()},
+        # The frozen snapshot and the decision that produced it travel together:
+        # a later reader answers "which resources" and "why that class" from one
+        # record, and never re-derives either from the policy of the day.
+        **placement.public_input_fields(),
         "workspace": workspace_payload,
         "request_id": g.request_id,
     }
@@ -3041,6 +3051,32 @@ def _task_execution_state_payload(task: dict[str, Any]) -> dict[str, Any]:
     return {"progress": summary.get("progress"), "outcome": summary.get("outcome")}
 
 
+def _recorded_execution_class(task: dict[str, Any]) -> dict[str, Any] | None:
+    """The execution class a Task was actually placed into, or ``None``.
+
+    Read from the decision recorded beside the Task's frozen resource snapshot at
+    submission, never recomputed: an operator asking "why is this Task on that
+    queue?" is asking about the decision that was made, and today's policy is
+    free to have moved on.  A Task that predates recorded decisions, or whose
+    record does not describe its own snapshot, reports nothing rather than a
+    class derived from a policy that never ran.
+    """
+    raw_form = task.get("input_form")
+    if not raw_form:
+        return None
+    try:
+        recorded = json.loads(raw_form) if isinstance(raw_form, str) else raw_form
+        record = recorded.get("placement_decision")
+        snapshot = recorded.get("resource_policy")
+        if not record or not snapshot:
+            return None
+        decision = PlacementDecision.from_record(record, ResolvedResources.from_snapshot(snapshot))
+    except (json.JSONDecodeError, TypeError, AttributeError, ResourceValidationError):
+        logging.warning("Task %s has an unreadable recorded placement", task.get("md5sum"))
+        return None
+    return decision.execution_class.to_dict()
+
+
 def _task_list_summary(task: dict[str, Any], *, include_owner: bool) -> dict[str, Any]:
     task_id = str(task["md5sum"])
     status = str(task["status"]).strip().lower()
@@ -3070,6 +3106,7 @@ def _task_list_summary(task: dict[str, Any], *, include_owner: bool) -> dict[str
         "finished_at": _iso_timestamp(task.get("finished_at")),
         "walltime_seconds": task.get("walltime"),
         "owner": (task.get("username") or None) if include_owner else None,
+        "placement": _recorded_execution_class(task),
         **_task_execution_state_payload(task),
         "error": _sanitize_task_error(task, task.get("error")),
         "result": {
@@ -3120,6 +3157,27 @@ def task_list():
     return jsonify({"tasks": [_task_list_summary(task, include_owner=is_admin) for task in visible]})
 
 
+@app.route("/compute/api/auth/admin/placement/explain/<task_type>", methods=["GET"])
+@login_required
+def admin_explain_placement(task_type: str):
+    """Where every stage of a task would be placed, and why, without submitting.
+
+    Read-only and bounded: the projection reuses the canonical planning path, so
+    it can never describe a different request than the one a submission would
+    make, and an impossible placement is reported as its bounded reason.
+    """
+    if _blocked := require_admin():
+        return _blocked
+    try:
+        tt, runner = _get_task_type(task_type)
+    except KeyError:
+        return jsonify({"error": f"Unknown task type: {task_type!r}"}), 404
+    manage_db = current_app.config.get("manage_db")
+    if manage_db is None:
+        return jsonify({"error": "Configuration database not available"}), 500
+    return jsonify(explain_placement(manage_db, tt, runner)), 200
+
+
 @app.route("/compute/dashboard", methods=["GET"])
 @login_required
 def task_dashboard():
@@ -3136,6 +3194,12 @@ def _serve_frontend_entry(*, private: bool = False, status: int = 200):
     response.status_code = status
     response.headers["Cache-Control"] = "private, no-store" if private else "no-cache"
     return response
+
+
+# Every Administration destination the frontend shell navigates to is served
+# from the one declaration the page-route parity contract reads, immediately
+# beside the frontend-shell server it renders.
+register_admin_pages(app, _serve_frontend_entry)
 
 
 _MAX_LEGAL_DOCUMENT_BYTES = 64 * 1024
@@ -3650,6 +3714,141 @@ def require_admin():
     if g.current_user.get("role") != "admin":
         return jsonify({"error": "Admin access required"}), 403
     return None
+
+
+# ---------------------------------------------------------------------------
+# Administration read model
+# ---------------------------------------------------------------------------
+#
+# Four bounded reads over facts the system already owns: Tasks and their recorded
+# placement, per-subject resource position, platform integrity, and Admin
+# activity.  They add no state and derive no second answer — every field comes
+# from the canonical store that owns it, and a fact nobody measured is reported
+# unknown rather than as zero.  ``admin_reports`` owns the projection; these
+# handlers own only the authorization boundary and the bounded request parsing.
+
+
+def _admin_reports_context() -> dict[str, Any]:
+    """The canonical reads the report facade composes, resolved from the app.
+
+    Operator history and the deployment host view are optional by design: a
+    deployment that has no control plane supplies neither, and the report then
+    says the source was "not evaluated" instead of reporting an empty fleet or an
+    empty history as fact.
+    """
+    service = current_app.config.get("operator_service")
+    context: dict[str, Any] = {"task_store": task_store}
+    if service is not None:
+        context["operator_jobs"] = service.store
+        context["host"] = service.host
+        context["database"] = service.database
+    return context
+
+
+def _bounded_query_limit() -> int:
+    """The requested page size, clamped to the ceiling; a malformed size is refused."""
+    return admin_reports.parse_limit(request.args.get("limit"))
+
+
+@app.route("/compute/api/auth/admin/reports/tasks", methods=["GET"])
+@login_required
+def admin_report_tasks():
+    """Active, queued, running, and recently finished Tasks, with placement."""
+    if _blocked := require_admin():
+        return _blocked
+    context = _admin_reports_context()
+    try:
+        limit = _bounded_query_limit()
+    except admin_reports.AdminReportError as exc:
+        return jsonify({"error": str(exc)}), 400
+    statuses = [value for value in request.args.get("status", "").split(",") if value.strip()]
+    task_types = [value for value in request.args.get("task_type", "").split(",") if value.strip()]
+    return jsonify(
+        admin_reports.task_operations(
+            context["task_store"],
+            limit=limit,
+            statuses=statuses or None,
+            task_types=task_types or None,
+        )
+    )
+
+
+@app.route("/compute/api/auth/admin/reports/resources", methods=["GET"])
+@login_required
+def admin_report_resources():
+    """Per-subject CPU/GPU facts, quota pressure, and durable storage ownership."""
+    if _blocked := require_admin():
+        return _blocked
+    context = _admin_reports_context()
+    try:
+        limit = _bounded_query_limit()
+    except admin_reports.AdminReportError as exc:
+        return jsonify({"error": str(exc)}), 400
+    subject = request.args.get("subject")
+    if subject is not None and not str(subject).isdigit():
+        return jsonify({"error": "subject must be a numeric user id"}), 400
+    try:
+        report = admin_reports.resource_operations(
+            context["task_store"],
+            int(subject) if subject is not None else None,
+            limit=limit,
+        )
+    except ResourceValidationError as exc:
+        # The report is a projection of canonical reads, so a stored policy none of
+        # them can interpret makes it unanswerable: the same bounded refusal the
+        # other read surfaces give, rather than a traceback.
+        return _typed_resource_refusal(exc)
+    return jsonify(report)
+
+
+@app.route("/compute/api/auth/admin/reports/integrity", methods=["GET"])
+@login_required
+def admin_report_integrity():
+    """Platform integrity: detected drift, unresolved evidence, readiness, jobs.
+
+    Detection and navigation only.  There is deliberately no aggregate health
+    score, because a single number would turn an unknown source, an unrepairable
+    drift, and a stale readiness verdict into one figure that is no longer an
+    operator's next step.
+    """
+    if _blocked := require_admin():
+        return _blocked
+    context = _admin_reports_context()
+    try:
+        limit = _bounded_query_limit()
+    except admin_reports.AdminReportError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify(
+        admin_reports.platform_integrity(
+            context["task_store"],
+            host=context.get("host"),
+            database=context.get("database"),
+            operator_jobs=context.get("operator_jobs"),
+            limit=limit,
+        )
+    )
+
+
+@app.route("/compute/api/auth/admin/reports/activity", methods=["GET"])
+@login_required
+def admin_report_activity():
+    """Bounded Admin/operator audit activity: policy mutations and Operator Jobs."""
+    if _blocked := require_admin():
+        return _blocked
+    context = _admin_reports_context()
+    try:
+        limit = _bounded_query_limit()
+        since = admin_reports.parse_since(request.args.get("since"))
+    except admin_reports.AdminReportError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify(
+        admin_reports.admin_activity(
+            context["task_store"],
+            limit=limit,
+            since=since,
+            operator_jobs=context.get("operator_jobs"),
+        )
+    )
 
 
 def _audit_runner_access(db, user_id: int, policy_id: str, outcome: str, reason_code: str, tt=None) -> None:
@@ -4174,6 +4373,22 @@ def _gpu_credit_payload(user_id: int, *, admin: bool = False) -> dict[str, Any]:
     }
 
 
+def _typed_resource_refusal(exc: ResourceValidationError):
+    """The bounded refusal for a stored resource policy no reader can interpret.
+
+    ``storage_quota.policy_from_stored_allowance`` fails closed when a stored
+    allowance is outside the encodable set, because reading it as a limit would let
+    external state decide admission.  That refusal is a fact about *stored* state,
+    not about the request, so every read that meets it reports the same bounded
+    message the write path already reports instead of an HTML 500 an operator would
+    have to debug from a traceback.  The status is 503 because the deployment
+    cannot serve the read until an administrator replaces the row, and the message
+    is the reader's own fixed wording rather than a rendering of stored bytes.
+    """
+    logging.error("A stored resource policy could not be interpreted: %s", exc)
+    return jsonify({"error": str(exc)}), 503
+
+
 def _entitlement_payload(user_id: int) -> dict[str, Any]:
     """The canonical resource envelope, as the typed projection #60 consumes.
 
@@ -4181,6 +4396,10 @@ def _entitlement_payload(user_id: int) -> dict[str, Any]:
     ownership: a later placement or reporting consumer reads this rather than
     re-deriving a balance, and ``enforceable`` distinguishes a unit this
     deployment actually gates from one it only accounts.
+
+    A stored storage policy the reader refuses to interpret raises
+    :class:`ResourceValidationError`; callers that answer a client translate it
+    with :func:`_typed_resource_refusal` rather than letting it become a 500.
     """
     return task_store.resource_envelope(user_id).to_dict()
 
@@ -4189,7 +4408,11 @@ def _entitlement_payload(user_id: int) -> dict[str, Any]:
 @login_required
 def current_resource_entitlement():
     """Return only the authenticated user's canonical resource envelope."""
-    return jsonify(_entitlement_payload(int(g.current_user["id"]))), 200
+    try:
+        payload = _entitlement_payload(int(g.current_user["id"]))
+    except ResourceValidationError as exc:
+        return _typed_resource_refusal(exc)
+    return jsonify(payload), 200
 
 
 @app.route("/compute/api/gpu-credit", methods=["GET"])
@@ -4818,7 +5041,11 @@ def admin_user_resource_entitlement(user_id: int):
     user = _get_user_db().get_user(user_id)
     if user is None or user.get("deleted"):
         return jsonify({"error": "User not found"}), 404
-    return jsonify(_entitlement_payload(user_id)), 200
+    try:
+        payload = _entitlement_payload(user_id)
+    except ResourceValidationError as exc:
+        return _typed_resource_refusal(exc)
+    return jsonify(payload), 200
 
 
 @app.route("/compute/api/auth/admin/users/<int:user_id>/gpu-credit", methods=["GET"])
@@ -4864,6 +5091,114 @@ def admin_adjust_user_gpu_credit(user_id: int):
         reason_code=LedgerReason.ADMIN_ADJUSTMENT.value,
     )
     return jsonify({"entry_id": entry["id"], "gpu_credit": _gpu_credit_payload(user_id, admin=True)}), 201
+
+
+# ---------------------------------------------------------------------------
+# Durable-storage quota policy
+# ---------------------------------------------------------------------------
+#
+# Setting a storage quota is a *policy* act, not an accounting one: it changes
+# what a subject may retain and never what they already hold.  The handler
+# therefore owns only authorization, bounded request parsing, and the audit
+# event; ``TaskDatabase.set_storage_quota`` owns the policy write, and durable
+# ownership (``logical_owned_bytes``) is not read or written here at all.  The
+# three decisions are distinct requests — an explicit ceiling, an explicit
+# unlimited grant, and the removal of the override so the deployment default
+# applies again — and the response reports all three the same way: the effective
+# ceiling admission will apply, and the state that produced it.
+
+
+def _storage_quota_payload(user_id: int) -> dict[str, Any]:
+    """The effective durable-storage entitlement of one subject, as admission reads it.
+
+    ``soft_limit_bytes`` is the effective ceiling — ``None`` when there is no
+    ceiling — and ``state`` names which of the three decisions is in force, so an
+    operator can tell "no per-user override, the deployment default applies" from
+    "an explicit grant of no ceiling".  A ceiling of ``0`` is reported as ``0``:
+    it is a real ceiling of zero bytes, not a spelling of unlimited.
+
+    A stored policy the reader refuses to interpret raises
+    :class:`ResourceValidationError`; callers that answer a client translate it
+    with :func:`_typed_resource_refusal` rather than letting it become a 500.
+    """
+    policy = task_store.storage_quota_policy(user_id)
+    entitlement = task_store.storage_entitlement(user_id)
+    return {
+        "subject_type": "user",
+        "subject_id": user_id,
+        "state": policy.state.value,
+        "soft_limit_bytes": entitlement.soft_limit_bytes,
+        "logical_owned_bytes": entitlement.logical_owned_bytes,
+        "remaining_bytes": entitlement.remaining_bytes,
+        "over_soft_limit": entitlement.over_soft_limit,
+    }
+
+
+@app.route("/compute/api/auth/admin/users/<int:user_id>/storage-quota", methods=["GET"])
+@login_required
+def admin_user_storage_quota(user_id: int):
+    """Return one existing user's effective durable-storage entitlement."""
+    if _blocked := require_admin():
+        return _blocked
+    user = _get_user_db().get_user(user_id)
+    if user is None or user.get("deleted"):
+        return jsonify({"error": "User not found"}), 404
+    try:
+        payload = _storage_quota_payload(user_id)
+    except ResourceValidationError as exc:
+        return _typed_resource_refusal(exc)
+    return jsonify(payload), 200
+
+
+@app.route("/compute/api/auth/admin/users/<int:user_id>/storage-quota", methods=["PUT"])
+@login_required
+def admin_set_user_storage_quota(user_id: int):
+    """Set one existing user's durable-storage quota policy.
+
+    ``state`` is one of ``limited`` (with a non-negative ``limit_bytes``),
+    ``unlimited``, or ``inherit`` (remove the override and let the deployment
+    default apply).  A request that does not name exactly one of those decisions
+    is refused with a bounded message; an unknown ``state`` is a 400 rather than
+    a 409 because the request names no decision the server could have made.
+    """
+    if _blocked := require_admin():
+        return _blocked
+    if _blocked := require_bearer_auth():
+        return _blocked
+    user = _get_user_db().get_user(user_id)
+    if user is None or user.get("deleted"):
+        return jsonify({"error": "User not found"}), 404
+    req = _parse_body(StorageQuotaRequest)
+    if isinstance(req, tuple):
+        return req
+    try:
+        policy = parse_quota_input(req.state, req.limit_bytes)
+    except ResourceValidationError as exc:
+        return jsonify({"error": str(exc)}), 400
+    try:
+        entry = task_store.set_storage_quota(
+            user_id=user_id,
+            state=policy.state.value,
+            limit_bytes=policy.limit_bytes,
+            actor_user_id=int(g.current_user["id"]),
+            reason=req.reason,
+            idempotency_key=req.idempotency_key,
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 409
+    try:
+        payload = _storage_quota_payload(user_id)
+    except ResourceValidationError as exc:
+        # The write landed but the row cannot be read back the same way: report
+        # the unreadable policy rather than a traceback after a successful write.
+        return _typed_resource_refusal(exc)
+    emit_event(
+        "resource.policy.adjusted",
+        user_id=user_id,
+        reason_code=LedgerReason.ALLOWANCE_SET.value,
+        state=policy.state.value,
+    )
+    return jsonify({"entry_id": entry["id"], "storage_quota": payload}), 200
 
 
 @app.route("/compute/api/auth/admin/users/<int:user_id>/gpu-credit/allowance", methods=["PUT"])
@@ -5424,6 +5759,7 @@ def admin_set_config():
                 raise ResourceValidationError(
                     f"Partition {partition!r} for {config['tool']!r} is not in allowed_queues"
                 )
+        _validate_proposed_placement(manage_db, proposed_globals, proposed_tasks)
     except ResourceValidationError as exc:
         return jsonify({"error": str(exc)}), 400
 
@@ -5441,3 +5777,146 @@ def admin_set_config():
     count = manage_db.apply_resource_updates(pending_task_updates, pending_resources)
 
     return jsonify({"message": f"{count} setting(s) updated"}), 200
+
+
+def _validate_proposed_placement(
+    manage_db: Any,
+    proposed_globals: dict[str, Any],
+    proposed_tasks: dict[str, dict[str, Any]],
+) -> None:
+    """Refuse a configuration that would leave a task type impossible to place.
+
+    A resource policy that blocks every submission of a task type is a broken
+    deployment, and the operator's own configuration change is the cheapest place
+    to say so: the alternative is discovering it as a 503 at the next submission —
+    or worse, as work running on a queue nobody chose.  The proposed values are
+    resolved through the same resolver and placement verifier a submission uses,
+    so this check cannot approve a policy the submission path would then reject,
+    and it cannot disagree with the decision a Task will record.
+
+    The refusal is about what the *edit* does, not about the state it lands in.
+    Each candidate profile is resolved twice — under the values in force now and
+    under the proposed ones — and it is refused only when it was placeable before
+    and is not after.  A global edit and a per-Task edit both resolve through the
+    same global values, so a global key most able to strand a type (above all
+    ``slurm_execution_classes``) is checked against every enabled profile rather
+    than only the ones the request named.  But a profile that was *already*
+    impossible to place before the edit is not this operator's doing: failing an
+    unrelated save — changing ``cpus`` while some legacy profile's GRES names a
+    device class the deployment never declared — would report a breakage the edit
+    did not cause and could not have avoided, so it is left to the edit that fixes
+    it.  The comparison is per profile rather than per field because whether a
+    value strands a type is exactly what the resolver decides.
+
+    The candidate profiles are exactly the ones a submission resolves —
+    :func:`revocompute.placement.stage_requirements` over each registered task
+    type, so a workflow contributes its stages and a single-stage task contributes
+    itself, each with the accelerator requirement it declares.  They are read from
+    the registry rather than from the configuration rows because a configuration
+    row is not always a profile: a workflow's parent row is never resolved by a
+    submission, and resolving the stages the way a submission does is what keeps
+    this check from approving a stage edit the submission path would then refuse.
+    The key is the name the resolver reads its per-Task layer under, which is the
+    same name the configuration rows use, so a per-Task edit and its row address
+    one profile.
+
+    A profile that only becomes submittable through this edit — a toggle turned
+    back on — is the exception to the two-resolve rule: it has no "before" state to
+    compare against, so it is refused outright when it cannot be placed under the
+    proposed policy.  Otherwise a disable → edit-classes → re-enable sequence
+    removes the class map while the guard is blind to the disabled profile and
+    restores a listable-but-unplaceable type on the re-enable.
+    """
+    current_globals = dict(manage_db.resource_all())
+    proposed_effective = dict(current_globals)
+    proposed_effective.update({key: serialize_resource_value(key, value) for key, value in proposed_globals.items()})
+
+    # Every profile a submission resolves, keyed by the resolver's per-Task layer
+    # name, with the registered task type each belongs to (whose enable toggle is
+    # the one that governs whether the profile is ever submitted).
+    profiles: dict[str, tuple[str, bool, AcceleratorRequirement | None, Any]] = {}
+    for registered in list_types():
+        task_type, runner = get_task_type(registered.name)
+        for owner, _stage, requires_accelerator, requirement in stage_requirements(task_type):
+            profiles[owner] = (registered.name, requires_accelerator, requirement, runner)
+
+    def placement_failure(
+        owner: str, global_values: Mapping[str, Any], task_row: Mapping[str, Any]
+    ) -> Exception | None:
+        """The resolver's own refusal for one profile under one set of values, or ``None``."""
+        _task_type, requires_accelerator, requirement, runner = profiles[owner]
+        policy = ResourcePolicyValues(global_values, {owner: dict(task_row)})
+        try:
+            place_stage(
+                policy.resolve_task_resources,
+                owner=owner,
+                stage=None,
+                requires_accelerator=requires_accelerator,
+                requirement=requirement,
+                policy=placement_policy(policy, owner),
+                default_timeout_seconds=runner.max_runtime_seconds,
+            )
+        except (PlacementError, ResourceValidationError) as exc:
+            return exc
+        return None
+
+    # A global edit touches every enabled profile, so every enabled profile is
+    # re-checked; a per-Task edit touches only the named ones — plus the profiles
+    # governed by a task type this edit re-enables, because promotion to
+    # submittable is itself a placement claim and has no "before" state.
+    def is_enabling(name: str) -> bool:
+        return (
+            manage_db.task_type_is_enabled(name) is False
+            and proposed_tasks.get(name, {}).get("enabled") not in (None, False)
+        )
+
+    tools = set(proposed_tasks) if proposed_tasks else set()
+    if proposed_globals:
+        tools.update(
+            owner
+            for owner, (task_type_name, *_rest) in profiles.items()
+            if manage_db.task_type_is_enabled(task_type_name) is not False
+        )
+    # A workflow's stages are governed by their parent's toggle, so re-enabling the
+    # parent re-enables every stage it owns.  Without this the parent edit is the
+    # only name in the request and it is not a profile, so the loop below would skip
+    # exactly the profiles the edit makes submittable again.
+    tools.update(owner for owner, (task_type_name, *_rest) in profiles.items() if is_enabling(task_type_name))
+    for owner in sorted(tools):
+        # A named profile the resolver never addresses (a workflow's parent row) has
+        # no placement to check; the edits that matter are the ones a Task resolves.
+        if owner not in profiles:
+            continue
+        task_type_name = profiles[owner][0]
+        # ``task_type_get`` is the persisted per-Task layer the resolver reads;
+        # a per-Task edit overrides it for this check only.
+        current_row = dict(manage_db.task_type_get(owner) or {})
+        proposed_row = dict(current_row)
+        proposed_row.update(proposed_tasks.get(owner, {}))
+        failure = placement_failure(owner, proposed_effective, proposed_row)
+        if failure is None:
+            continue
+        if is_enabling(task_type_name):
+            # Becoming submittable is a claim that the profile can be placed.  A
+            # re-enable is the one edit whose "before" state cannot vouch for it —
+            # the profile was not submittable — so an unplaceable promotion is
+            # refused here rather than left to surface as a 503 on every
+            # submission.  This is also what closes the disable → edit-classes →
+            # re-enable sequence, where the class map is removed while the guard is
+            # blind to the disabled profile and the re-enable would restore a
+            # listable-but-unplaceable type.
+            reason = failure.reason_code if isinstance(failure, PlacementError) else None
+            raise ResourceValidationError(
+                f"Task type {owner!r} cannot be enabled: it would be impossible to place"
+                + (f" ({reason}): {failure}" if reason else f": {failure}")
+            ) from failure
+        # Otherwise the refusal is about what the *edit* does: a profile already
+        # impossible to place before this edit is not this operator's doing.
+        if placement_failure(owner, current_globals, current_row) is not None:
+            continue
+        if isinstance(failure, PlacementError):
+            raise ResourceValidationError(
+                f"Task type {owner!r} would be impossible to place ({failure.reason_code}): {failure}"
+            ) from failure
+        raise ResourceValidationError(f"Task type {owner!r} would be impossible to place: {failure}") from failure
+

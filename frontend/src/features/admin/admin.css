@@ -173,3 +173,43 @@ button:disabled { cursor: not-allowed; opacity: .55; }
   .admin-inline-form { grid-template-columns: 1fr; }
   .archive-group li { align-items: start; flex-direction: column; }
 }
+
+/* Recorded placement. A dense register, so the policy it was read from is a
+   ruled colophon above it rather than a second panel competing for weight. */
+.placement-policy-section { padding-bottom: 1.1rem; border-bottom: 1px solid var(--app-line); }
+.placement-policy-section h2 { margin: 0; font: 600 1.35rem/1.18 var(--font-display); letter-spacing: -.014em; }
+.placement-table td, .placement-table th { white-space: nowrap; }
+.placement-identity { display: grid; gap: .12rem; min-width: 14rem !important; }
+.placement-identity code, .placement-class code { font-family: var(--font-mono, ui-monospace, monospace); }
+.placement-identity code { color: var(--app-muted); font-size: .62rem; overflow-wrap: anywhere; }
+.placement-identity strong { font: 650 .82rem/1.2 var(--font-display); overflow-wrap: anywhere; }
+.placement-class { min-width: 12rem !important; }
+.placement-class code { display: block; font-size: .68rem; overflow-wrap: anywhere; }
+.placement-class .admin-badge { margin-top: .25rem; }
+.placement-note, .placement-unknown { display: block; margin-top: .2rem; color: var(--app-muted); font-size: .67rem; }
+.admin-badge.is-unknown { border-style: dashed; font-style: italic; }
+.placement-register-state { display: block; padding-top: .45rem; color: var(--app-muted); font-size: .72rem; }
+.placement-register-state.error-state { color: var(--app-danger); }
+.placement-pager { display: flex; align-items: center; gap: .7rem; padding-top: .7rem; }
+.placement-pager[hidden] { display: none; }
+.placement-pager span { color: var(--app-muted); font-size: .72rem; font-variant-numeric: tabular-nums; }
+@media (max-width: 48rem) {
+  .placement-policy-section h2 { font-size: 1.15rem; }
+  .placement-pager { flex-wrap: wrap; }
+  .placement-pager button { min-height: 2.4rem; }
+}
+
+/* The canonical resource envelope, read only. It reuses the credit dialog's
+   fact-strip grammar so one account's position reads the same wherever it is
+   opened, and adds no control of its own. */
+.resource-envelope h3 { margin: 1.1rem 0 .5rem; font: 600 .95rem/1.2 var(--font-display); }
+.resource-envelope h3:first-child { margin-top: 0; }
+.resource-envelope h4 { margin: 1.1rem 0 .5rem; font: 600 .85rem/1.2 var(--font-display); }
+.resource-envelope-table td:not(:first-child), .resource-envelope-table th:not(:first-child) { font-variant-numeric: tabular-nums; }
+.resource-storage-facts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .6rem; margin: 0; border-top: 1px solid var(--app-line); border-bottom: 1px solid var(--app-line); }
+.resource-storage-facts > div { min-width: 0; display: grid; gap: .15rem; padding: .65rem; border-right: 1px solid var(--app-line); }
+.resource-storage-facts > div:last-child { border-right: 0; }
+.resource-storage-facts dt { color: var(--app-muted); font-size: .62rem; }
+.resource-storage-facts dd { margin: 0; font-size: .72rem; font-weight: 700; overflow-wrap: anywhere; }
+.resource-storage-facts .is-attention dd { color: var(--app-danger); }
+@media (max-width: 48rem) { .resource-storage-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); } .resource-storage-facts > div { border-right: 0; } }

@@ -697,6 +697,18 @@ class SlurmJob(Job):
     # -- srun arguments ------------------------------------------------------
 
     def _resolve_resources(self) -> ResolvedResources:
+        """The frozen resource snapshot this allocation is submitted with.
+
+        The submission path resolves the policy once and persists it, and the
+        worker passes that snapshot here, so a queued Task is submitted with the
+        resources and the execution class it was placed into.  Re-resolving at
+        launch instead of using the snapshot would make a Task's request depend on
+        the policy of the day the worker happened to start — precisely the property
+        the snapshot exists to prevent — so the fallbacks below are only for a
+        caller that genuinely has no snapshot: the deployment's own resolver, and
+        then the safe defaults a bare runner can express.  Neither fallback is on
+        the production submission path.
+        """
         if self._resolved_resource_policy is not None:
             return self._resolved_resource_policy
         if self._db is not None and hasattr(self._db, "resolve_task_resources"):

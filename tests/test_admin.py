@@ -892,6 +892,190 @@ def test_admin_resource_api_returns_effective_policy_and_validates_updates(monke
     assert "allowed_queues" in forbidden_partition.get_json()["error"]
 
 
+def test_admin_resource_api_refuses_a_change_that_would_strand_a_task_type(monkeypatch, tmp_path):
+    """A configuration that makes an accelerator type impossible to place is refused.
+
+    The alternative is discovering it as a 503 at the next submission — or as work
+    running on a queue nobody chose — so the operator's own edit is where it is
+    reported.  The proposed values go through the same resolver and placement
+    verifier a submission uses, so the check cannot approve a policy the
+    submission path would reject.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    client = module.app.test_client()
+    admin_header = _admin_client_auth(module)
+
+    # ``cpu=normal`` says this deployment runs CPU work on ``normal`` and declares
+    # no accelerator class at all, so an accelerator profile has nowhere to go.
+    stranded = client.put(
+        "/compute/api/auth/admin/config",
+        headers=admin_header,
+        json={
+            "task_types": [{"tool": "gpu_runner", "slurm_partition": "normal"}],
+            "resources": {"slurm_execution_classes": "cpu=normal"},
+            "slurm": {"allowed_queues": ["normal"]},
+        },
+    )
+    assert stranded.status_code == 400
+    assert "gpu_runner" in stranded.get_json()["error"]
+
+    # The same partition is fine for the CPU profile, so the refusal is about the
+    # profile's own requirement rather than about the partition being unknown.
+    accepted = client.put(
+        "/compute/api/auth/admin/config",
+        headers=admin_header,
+        json={"task_types": [{"tool": "cpu_runner", "slurm_partition": "normal"}]},
+    )
+    assert accepted.status_code == 200
+
+
+def test_admin_resource_api_does_not_fail_an_unrelated_edit_over_a_stale_profile(monkeypatch, tmp_path):
+    """A profile that was already impossible does not block an edit that cannot reach it.
+
+    The refusal exists to catch a configuration change that *strands* a task type.
+    A deployment can already be carrying a profile that a pre-gate edit left
+    unplaceable — an accelerator GRES naming a class no execution-class map
+    declares — and rebuilding every profile on every save would fail an unrelated
+    ``cpus`` change for that pre-existing state, reporting a breakage the operator
+    did not cause and did not touch.  The edit that actually strands a profile is
+    still refused; only a profile whose placeability the edit did not change is
+    left to the edit that fixes it.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    client = module.app.test_client()
+    admin_header = _admin_client_auth(module)
+    manage_db = module.app.config["manage_db"]
+
+    # A stale state an older deployment could already hold: an accelerator class
+    # map with no entry for the device class gpu_runner's GRES names.
+    manage_db.resource_set("slurm_execution_classes", "cpu=normal;gpu=gpuqueue")
+    manage_db.task_type_upsert("gpu_runner", slurm_gres="gpu:h100:1")
+
+    unrelated = client.put(
+        "/compute/api/auth/admin/config",
+        headers=admin_header,
+        json={"resources": {"cpus": "16"}},
+    )
+    assert unrelated.status_code == 200, unrelated.get_json()
+
+    # The edit that genuinely strands a profile is still refused.  The class map
+    # is what every accelerator stage resolves through, so removing it strands
+    # whichever enabled profile still needs an accelerator; the refusal names the
+    # profile rather than reporting an unfixable deployment.
+    stranded = client.put(
+        "/compute/api/auth/admin/config",
+        headers=admin_header,
+        json={"resources": {"slurm_execution_classes": "cpu=normal"}},
+    )
+    assert stranded.status_code == 400
+    assert "would be impossible to place" in stranded.get_json()["error"]
+
+
+def test_admin_resource_api_refuses_a_workflow_stage_edit_that_would_strand_it(monkeypatch, tmp_path):
+    """A workflow stage is a placeable profile, so a stage edit is checked too.
+
+    A workflow's stages are resolved separately, each with the accelerator
+    requirement it declares, so a stage edit that leaves the stage nowhere to run
+    strands every submission of the workflow.  The gate resolves the stages the way
+    a submission does, so the stage profile is covered instead of being skipped as
+    an unknown task name — the refusal cannot fire unless the stage was placeable
+    before the edit, so reaching the 400 also proves the pre-edit workflow was
+    placeable.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    client = module.app.test_client()
+    admin_header = _admin_client_auth(module)
+
+    # The calculation stage requires an accelerator and names no device class, so
+    # the deployment's own accelerator class is what places it.
+    declared = client.put(
+        "/compute/api/auth/admin/config",
+        headers=admin_header,
+        json={"resources": {"slurm_execution_classes": "cpu=normal;a100=gpuqueue"}},
+    )
+    assert declared.status_code == 200, declared.get_json()
+
+    stranded = client.put(
+        "/compute/api/auth/admin/config",
+        headers=admin_header,
+        json={"task_types": [{"tool": "multistage_runner.model", "slurm_gres": "gpu:h100:1"}]},
+    )
+    assert stranded.status_code == 400
+    assert "multistage_runner.model" in stranded.get_json()["error"]
+
+    # Binding the same stage to the class the deployment declares is accepted.
+    accepted = client.put(
+        "/compute/api/auth/admin/config",
+        headers=admin_header,
+        json={"task_types": [{"tool": "multistage_runner.model", "slurm_gres": "gpu:a100:1"}]},
+    )
+    assert accepted.status_code == 200, accepted.get_json()
+
+
+def test_admin_resource_api_refuses_a_re_enable_that_cannot_be_placed(monkeypatch, tmp_path):
+    """A re-enable is a promotion to submittable, so it is checked as one.
+
+    Disabling every accelerator task type takes them out of the global-edit
+    candidate set, so the class map can be reduced while the guard is blind to
+    them.  The re-enable is what puts them back in front of a user, so that is
+    where the check has to run: the profile has no placeable "before" state to
+    compare against, and admitting it would restore a task type that is listed and
+    submittable but fails closed on every submission.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    client = module.app.test_client()
+    admin_header = _admin_client_auth(module)
+    manage_db = module.app.config["manage_db"]
+
+    declared = client.put(
+        "/compute/api/auth/admin/config",
+        headers=admin_header,
+        json={"resources": {"slurm_execution_classes": "cpu=normal;a100=gpuqueue"}},
+    )
+    assert declared.status_code == 200, declared.get_json()
+    for tool in ("gpu_runner", "typed_runner", "multistage_runner", "restricted_runner"):
+        disabled = client.put(
+            "/compute/api/auth/admin/config",
+            headers=admin_header,
+            json={"task_types": [{"tool": tool, "enabled": False}]},
+        )
+        assert disabled.status_code == 200, disabled.get_json()
+
+    # With every accelerator profile disabled the class map can be left declaring
+    # no accelerator class at all; nothing submittable needs one yet.
+    reduced = client.put(
+        "/compute/api/auth/admin/config",
+        headers=admin_header,
+        json={"resources": {"slurm_execution_classes": "cpu=normal"}},
+    )
+    assert reduced.status_code == 200, reduced.get_json()
+
+    # Re-enabling is what makes the profile submittable again, so it is refused
+    # while the deployment still declares no accelerator class.
+    refused = client.put(
+        "/compute/api/auth/admin/config",
+        headers=admin_header,
+        json={"task_types": [{"tool": "gpu_runner", "enabled": True}]},
+    )
+    assert refused.status_code == 400
+    assert "cannot be enabled" in refused.get_json()["error"]
+    assert manage_db.task_type_is_enabled("gpu_runner") is False
+
+    # Restoring the class map makes the same re-enable placeable, and it is allowed.
+    restored = client.put(
+        "/compute/api/auth/admin/config",
+        headers=admin_header,
+        json={"resources": {"slurm_execution_classes": "cpu=normal;a100=gpuqueue"}},
+    )
+    assert restored.status_code == 200, restored.get_json()
+    allowed = client.put(
+        "/compute/api/auth/admin/config",
+        headers=admin_header,
+        json={"task_types": [{"tool": "gpu_runner", "enabled": True}]},
+    )
+    assert allowed.status_code == 200, allowed.get_json()
+
+
 def test_admin_resource_api_hides_stale_removed_runner_rows(monkeypatch, tmp_path):
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     client = module.app.test_client()

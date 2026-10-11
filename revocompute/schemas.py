@@ -208,6 +208,34 @@ class GPUCreditAllowanceRequest(BaseModel):
     idempotency_key: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
 
 
+class StorageQuotaRequest(BaseModel):
+    """Administrator-owned per-user durable-storage quota policy.
+
+    The three decisions are submitted through one shape but must not collapse
+    into one another: ``limited`` names a non-negative integer ``limit_bytes``,
+    ``unlimited`` and ``inherit`` name no number at all.  A request that carries
+    a number where the decision takes none, or omits one where it is required, is
+    refused by the policy layer's own validator (``parse_quota_input``) so the
+    three states have exactly one spelling each and ``0`` keeps meaning a real
+    ceiling of zero bytes.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    state: Literal["limited", "unlimited", "inherit"]
+    limit_bytes: int | None = Field(default=None, ge=0, le=10**15)
+    reason: str = Field(min_length=1, max_length=1000)
+    idempotency_key: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
+
+    @field_validator("reason")
+    @classmethod
+    def _strip_reason(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("reason is required")
+        return value
+
+
 class GPUCreditResetRequest(BaseModel):
     """Administrator-requested reset of current-period GPU credits.
 

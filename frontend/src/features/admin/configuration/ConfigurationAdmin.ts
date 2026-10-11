@@ -1,5 +1,6 @@
 import type { AppShell } from '../../../app/shell';
 import { adminApi, type AdminConfiguration, type ConfigValue, type TaskCatalog, type TaskTypeConfig } from '../api';
+import { PlacementAdmin } from '../placement/PlacementAdmin';
 import { button, element, empty, formatDate, setBusy, text } from '../shared/dom';
 import { mountTabs } from '../shared/tabs';
 
@@ -61,6 +62,8 @@ export class ConfigurationAdmin {
   private taskPanel = element('section', 'admin-tab-panel');
   private resourcePanel = element('section', 'admin-tab-panel');
   private infrastructurePanel = element('section', 'admin-tab-panel');
+  private placementPanel = element('section', 'admin-tab-panel');
+  private readonly placement = new PlacementAdmin();
 
   constructor(private readonly shell: AppShell) {}
 
@@ -68,9 +71,10 @@ export class ConfigurationAdmin {
     mountTabs(root, [
       { id: 'task-types', label: 'Task types', panel: this.taskPanel },
       { id: 'resources', label: 'Resources', panel: this.resourcePanel },
+      { id: 'placement', label: 'Placement', panel: this.placementPanel },
       { id: 'infrastructure', label: 'Infrastructure', panel: this.infrastructurePanel },
     ]);
-    await Promise.all([this.loadConfiguration(), this.loadInfrastructure(false)]);
+    await Promise.all([this.loadConfiguration(), this.loadInfrastructure(false), this.placement.mount(this.placementPanel)]);
   }
 
   private async loadConfiguration(): Promise<void> {
@@ -79,6 +83,7 @@ export class ConfigurationAdmin {
     try {
       [this.config, this.catalog] = await Promise.all([adminApi.getConfiguration(), adminApi.getTaskCatalog()]);
       if (this.config.ignored_resource_keys.length) this.shell.notify(`Ignored obsolete resource keys: ${this.config.ignored_resource_keys.join(', ')}`);
+      this.placement.setConfiguration(this.config);
       this.renderTaskTypes(); this.renderResources();
     } catch (error) {
       const message = (error as Error).message || 'Unable to load configuration.';
