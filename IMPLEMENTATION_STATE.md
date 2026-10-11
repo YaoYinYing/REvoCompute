@@ -70,6 +70,30 @@ anonymous visitor is handed the shell (the client redirects to sign-in), a
 signed-in non-admin receives the 403 shell, an admin receives the shell. 39
 screenshots captured at `.../r0/realapp/`.
 
+Served-bundle identity was verified by asset hash: the real app served
+`app-CY-0vaDE.js`, byte-identical to the pinned build's
+`frontend/dist/.vite/manifest.json` entry from `d1874814`. (The long-lived 309
+deployment on `:8081` serves `app-DWUKs37W.js` — a different revision. The live
+site was **read-only observed, never touched**; it is not the campaign target.)
+
+### Non-2xx subresources, explained (not findings)
+
+The realness harness returns exactly two non-2xx subresources, both proven to be
+environment artifacts rather than product defects:
+
+- `/openapi.json` 404 on `/api-docs` — the harness overrides `app.static_folder`
+  with a temp root holding only the `app/` bundle symlink, so
+  `send_from_directory(static_folder, "openapi.json")` misses. The route exists
+  (`@app.route("/openapi.json")`); a real deployment serves the file. All other
+  literal-static-file checks are equally non-authoritative under this harness.
+- `/compute/api/auth/admin/logs/gunicorn-access?tail_bytes=1000000` 404 on
+  `/compute/logs` — no gunicorn access log exists under the isolated dev server;
+  the log viewer reports the absence as 404.
+
+Both were found by an explicit response probe
+(`tools/probe_bad_responses.py`), not inferred.
+
+
 ### Known coverage limitation (not a defect)
 
 The fixture harness has no admin API projections, so the four admin pages render
