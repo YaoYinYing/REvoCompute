@@ -350,6 +350,45 @@ def test_narrow_content_heavy_surfaces_fit_the_viewport(page: Page, path: str, s
     assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
 
 
+@pytest.mark.parametrize("width", [640, 768, 900, 960])
+def test_parameter_headings_stay_within_their_cells(page: Page, width: int) -> None:
+    """A parameter heading never paints past its own grid cell.
+
+    Two adjacent basic parameters put a label and a Reset button in the same
+    heading row. The heading is a space-between flex row, so if the label cannot
+    shrink the Reset is pushed into the neighbouring cell and the two sets of
+    glyphs overlap even though the document itself never scrolls. Assert the
+    visible invariant directly: every element rendered inside a parameter field
+    stays within that field's cell box.
+    """
+    mount_scenario(page, structure_scenario())
+    page.set_viewport_size({"width": width, "height": 1000})
+
+    page.goto(f"{ORIGIN}/compute/create_task?task_type=fold_demo")
+    expect(page.locator(".ct-workbench")).to_be_visible()
+    # The parameter grid is below the fold; measure only after it is on screen.
+    page.locator(".ct-parameter-grid").first.scroll_into_view_if_needed()
+    expect(page.locator(".ct-parameter-grid .ct-reset").first).to_be_visible()
+
+    offenders = page.evaluate(
+        """() => {
+        const grid = document.querySelector('.ct-parameter-grid');
+        const out = [];
+        for (const field of grid.querySelectorAll(':scope > .ct-parameter')) {
+            const bound = field.getBoundingClientRect().right;
+            const over = [];
+            for (const el of field.querySelectorAll('*')) {
+                const right = el.getBoundingClientRect().right;
+                if (right > bound + 0.5) over.push(el.className);
+            }
+            if (over.length) out.push({ cell: field.querySelector('.ct-label').textContent, over });
+        }
+        return out;
+    }"""
+    )
+    assert offenders == [], f"parameter heading paints past its cell at {width}px: {offenders}"
+
+
 # ── representative real contracts ─────────────────────────────────────────────
 
 
