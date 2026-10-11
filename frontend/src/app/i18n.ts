@@ -22,6 +22,7 @@ export type Dictionary = Record<string, string>;
 
 const en: Dictionary = {
   // Shell chrome
+  'shell.home': 'REvoCompute home',
   'shell.nav.primary': 'Primary',
   'shell.nav.compute': 'Compute',
   'shell.nav.account': 'Account',
@@ -503,6 +504,7 @@ const en: Dictionary = {
 };
 
 const zhCN: Dictionary = {
+  'shell.home': 'REvoCompute 首页',
   'shell.nav.primary': '主导航',
   'shell.nav.compute': '计算',
   'shell.nav.account': '账户',

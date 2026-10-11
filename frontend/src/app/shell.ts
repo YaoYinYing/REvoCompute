@@ -41,7 +41,10 @@ export function mountShell(root: HTMLElement): AppShell {
   shell.className = 'app-shell';
   shell.dataset.rail = storedRail();
 
-  const brand = document.createElement('a'); brand.className = 'app-brand'; brand.href = '/';
+  // The rail collapses to the logo alone (app.css hides the wordmark) and the logo
+  // is decorative, so the link needs its own accessible name rather than borrowing
+  // the hidden text. The public shell names its brand the same way.
+  const brand = document.createElement('a'); brand.className = 'app-brand'; brand.href = '/'; brand.setAttribute('aria-label', t('shell.home'));
   const logo = document.createElement('img'); logo.src = appAsset('logo.svg'); logo.alt = ''; logo.width = 30; logo.height = 30;
   const brandText = document.createElement('span'); brandText.textContent = 'REvoCompute'; brand.append(logo, brandText);
 

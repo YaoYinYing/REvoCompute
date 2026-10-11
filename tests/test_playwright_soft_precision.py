@@ -28,6 +28,20 @@ def _dashboard(page: Page):
     return router
 
 
+@pytest.mark.parametrize("width", [1280, 360])
+def test_shell_brand_link_has_an_accessible_name_in_the_collapsed_rail(page: Page, width: int) -> None:
+    # The collapsed rail hides the wordmark and the logo is decorative, so the brand
+    # link's name can only come from the link itself, at every width.
+    _dashboard(page)
+    page.set_viewport_size({"width": width, "height": 900})
+    page.reload()
+    brand = page.locator("a.app-brand")
+    expect(brand).to_be_visible()
+    label = brand.get_attribute("aria-label")
+    assert label and label.strip() == label, f"the brand link carries no accessible name at {width}px: {label!r}"
+    expect(brand).to_have_accessible_name(label)
+
+
 def _rgb(value: str) -> tuple[float, float, float]:
     """Parse a colour into its 0-255 channels.
 
