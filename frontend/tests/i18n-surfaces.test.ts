@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { applyLocale, translate } from '../src/app/i18n';
 import { mountRunnerCatalog } from '../src/features/runners/index';
+import { parseWorkspaceDescriptor, PayloadFault } from '../src/features/create-task/api';
 import { PluginHost } from '../src/features/create-task/input-workspace/PluginHost';
 import { validateParameter } from '../src/features/create-task/parameter-controls';
 import type { ParameterDefinition } from '../src/features/create-task/types';
@@ -167,6 +168,47 @@ describe('§11 boundary on the Create Task workbench', () => {
     const notice = target.children[0]!;
     expect(notice.textContent).toBe('此组件无法加载：viewer unavailable');
     expect(notice.textContent).not.toBe(translate('en', 'ct.componentFailed', { message: 'viewer unavailable' }));
+  });
+
+  it('localizes an unmounted-capability notice while the server-projected plugin id stays verbatim', () => {
+    applyLocale('zh-CN');
+    const host = new PluginHost([], { fetch });
+    const plugin = 'unavailable_fixture_plugin';
+    host.mount(
+      [{ plugin, id: 'regions', title: 'Regions', options: {}, stepId: 'inputs' }],
+      {} as never,
+      () => new FakeElement('div') as unknown as HTMLElement,
+    );
+    const [unknown] = host.unknownComponents();
+    // The sentence frame is frontend-owned and localized...
+    expect(unknown!.message).toBe('unavailable_fixture_plugin：不支持的组件');
+    expect(unknown!.message).not.toBe(translate('en', 'ct.componentUnavailable', { plugin }));
+    expect(unknown!.message).not.toContain('unsupported component');
+    // ...while the plugin id the server's workspace contract declared is emitted verbatim.
+    expect(unknown!.message).toContain(plugin);
+    // The stable internal signal the workbench keys on is the plugin id, so the
+    // workspace-failure rule never depends on the user-facing language.
+    expect(host.unknownComponents().map(item => item.plugin)).toEqual([plugin]);
+  });
+
+  it('localizes a workspace contract fault without depending on the user-facing language', () => {
+    applyLocale('zh-CN');
+    vi.stubGlobal('window', { location: { origin: 'https://compute.example' } });
+    const fault = (): PayloadFault => {
+      try {
+        parseWorkspaceDescriptor({
+          id: 'regions', owner: 'runner', global_id: 'runner:regions',
+          descriptor_url: 'https://evil.example/plugins/runner/regions',
+          module: { url: '/compute/api/workspace/assets/runner/regions/index.js', type: 'module' }, stylesheets: [],
+        });
+      } catch (error) { return error as PayloadFault; }
+      throw new Error('the descriptor was expected to be rejected');
+    };
+    // The fault frame is frontend-owned and localized.
+    expect(fault().message).toBe('工作区插件描述符地址无效。');
+    expect(fault().message).not.toBe(translate('en', 'ct.payload.fault.invalid', { field: translate('en', 'ct.payload.field.descriptorUrl') }));
+    // The stable signal a caller can match on is the fault type, not its prose.
+    expect(fault()).toBeInstanceOf(PayloadFault);
   });
 });
 
