@@ -49,12 +49,14 @@ export async function mountRunnerCatalog(root: HTMLElement): Promise<void> {
   try {
     const [payload, infrastructure] = await Promise.all([getTaskCatalog(), getReadiness().catch(() => null)]); state.remove();
     if (infrastructure) { readiness.textContent = infrastructure.status === 'READY' ? t('runners.ready') : t('runners.status', { status: infrastructure.status.toLowerCase() }); readiness.dataset.status = infrastructure.status; }
-    const select = toolbar.querySelector('select')!; payload.categories.forEach(category => { const option = document.createElement('option'); option.value = category.name; option.textContent = category.label; select.append(option); });
+    // The server-owned category label is what the group heading and the option show, so search
+    // has to match it. Indexed for matching only: never routed through t() and never displayed.
+    const select = toolbar.querySelector('select')!, labelBySlug = new Map(payload.categories.map(category => [category.name, category.label])); payload.categories.forEach(category => { const option = document.createElement('option'); option.value = category.name; option.textContent = category.label; select.append(option); });
     // Density is a scan aid for a fleet of methods; with one or a few it is ornamental.
     if (payload.task_types.length <= 3) toolbar.querySelector<HTMLElement>('.density-switch')?.setAttribute('hidden', '');
     const input = toolbar.querySelector('input')!, count = toolbar.querySelector<HTMLElement>('.catalog-count')!;
     const render = (): void => {
-      const query = input.value.trim().toLowerCase(), category = select.value; const tasks = payload.task_types.filter(task => (!category || task.category === category) && (!query || [task.display_name, task.name, task.category, task.summary].join(' ').toLowerCase().includes(query)));
+      const query = input.value.trim().toLowerCase(), category = select.value; const tasks = payload.task_types.filter(task => (!category || task.category === category) && (!query || [task.display_name, task.name, task.category, task.category.replaceAll('_', ' '), labelBySlug.get(task.category) ?? '', task.summary].join(' ').toLowerCase().includes(query)));
       const filtered = Boolean(query || category);
       // "enabled on this deployment" describes the deployment; a filter that hides
       // every method must not make that claim read as "0 methods enabled".
