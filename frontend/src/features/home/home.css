@@ -1,6 +1,6 @@
 .home-page { width: min(100% - 3rem, 96rem); margin: 0 auto; }
 .home-hero { display: grid; grid-template: "copy evidence" auto "agent evidence" auto / minmax(0, 1fr) minmax(24rem, .85fr); min-height: min(45rem, calc(100svh - 5rem)); align-content: center; gap: 1.4rem clamp(2rem, 6vw, 6rem); padding: clamp(2rem, 6vw, 5rem) 0; }
-.home-hero-copy { grid-area: copy; align-self: end; }.home-hero h1 { margin: .3rem 0 0; font: 680 clamp(2.5rem, 12vw, 6rem)/.96 var(--font-display); letter-spacing: -.03em; }
+.home-hero-copy { grid-area: copy; align-self: end; }.home-hero h1 { margin: .3rem 0 0; font: 680 clamp(2.5rem, 12vw, 6rem)/.96 var(--font-display); letter-spacing: -.03em; overflow-wrap: anywhere; }
 .home-offer { max-width: 20ch; margin: 1.4rem 0 0; font: 600 clamp(1.35rem, 2.5vw, 2.1rem)/1.2 var(--font-display); }
 .home-summary { max-width: 68ch; margin: 1.3rem 0 0; color: var(--app-muted); font-size: .95rem; line-height: 1.7; }.home-actions { display: flex; flex-wrap: wrap; gap: .6rem; margin-top: 1.7rem; }
 /* The hero's one bold gesture: an evidence plate with real depth, not a hairline figure. The 64px notch is that gesture's motif, deliberately off the radius scale. */
