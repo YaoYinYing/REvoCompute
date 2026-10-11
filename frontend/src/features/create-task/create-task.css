@@ -35,7 +35,7 @@
 .ct-file-role + .ct-file-role { margin-top: 1rem; } .ct-file-role input[type=file] { display: block; max-width: 100%; margin: .4rem 0; }
 .ct-file-list { font-size: .85rem; color: var(--ct-muted); } .ct-file-row { display: flex; justify-content: space-between; gap: 1rem; padding: .3rem 0; }
 .ct-parameter-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
-.ct-parameter-heading { display: flex; align-items: baseline; justify-content: space-between; gap: .5rem; }
+.ct-parameter-heading { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .5rem; }
 .ct-label { display: block; font-weight: 600; font-size: .88rem; } .ct-reset { border: 0; background: none; color: var(--ct-accent); cursor: pointer; font-size: .78rem; padding: .2rem; }
 .ct-checkbox { width: 1.1rem; height: 1.1rem; margin: .65rem 0; accent-color: var(--ct-accent); }
 .ct-seed { border: 0; background: none; color: var(--ct-accent); cursor: pointer; padding: .35rem 0; }
