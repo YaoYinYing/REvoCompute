@@ -36,3 +36,16 @@ export const adminLogLabels = {
 export const academicPositionOptions = entries<AcademicPosition>(academicPositionLabels);
 export const grantBasisOptions = entries<GrantBasis>(grantBasisLabels);
 export const adminLogOptions = entries<AdminLogName>(adminLogLabels);
+
+/** Read one string field of a server-projected sub-object, or nothing. */
+export function metadataValue(value: unknown, key: string): string | null {
+  if (!value || typeof value !== 'object') return null;
+  const item = (value as Record<string, unknown>)[key]; return typeof item === 'string' && item ? item : null;
+}
+
+/** Resolve a server-supplied URL, admitting only an absolute http(s) destination. */
+export function safeExternalUrl(value: string | null): string | null {
+  if (!value) return null;
+  try { const url = new URL(value); return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : null; }
+  catch { return null; }
+}
