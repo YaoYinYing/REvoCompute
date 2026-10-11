@@ -1,6 +1,7 @@
 import type { components } from './schema.generated';
 import type { ArtifactRole, LogicalResultFile, PreviewCapability, ResultArtifact, ResultFile, ResultManifest, ResultStoryboardDeclaration, ResultView, TaskStatus } from './result-types';
 import { ApiError, authorizedJson } from '../app/session';
+import { t } from '../app/i18n';
 export { ApiError } from '../app/session';
 
 async function requestJson<T>(url: string, init: RequestInit = {}): Promise<T> {
@@ -120,7 +121,7 @@ export function getCurrentUser(signal?: AbortSignal): Promise<components['schema
 
 export function taskIdFromLocation(location: Pick<Location, 'pathname'> = window.location): string {
   const match = location.pathname.match(/^\/compute\/results\/([a-fA-F0-9]{32})\/?$/);
-  if (!match) throw new Error('This Result URL does not contain a valid task identity.');
+  if (!match) throw new Error(t('results.noResultUrl'));
   return match[1]!.toLowerCase();
 }
 

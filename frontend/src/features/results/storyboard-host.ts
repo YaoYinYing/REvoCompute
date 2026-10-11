@@ -1,4 +1,5 @@
 import type { LogicalResultFile, ResultManifest, ResultStoryboardDeclaration, ResultView } from '../../api/result-types';
+import { t } from '../../app/i18n';
 import { ResultSelectionStore } from './scientific';
 
 export interface StoryboardServices {
@@ -40,10 +41,10 @@ export class StoryboardHost {
     Object.entries(manifest.result?.files || {}).forEach(([id, artifacts]) => {
       const first = artifacts[0]; files.set(id, artifacts.length === 0 ? null : artifacts.length === 1 && first?.cardinality !== 'many' ? first! : artifacts);
     });
-    if (declaration.requires.some((id) => !files.get(id))) throw new Error('Required scientific result files are unavailable.');
+    if (declaration.requires.some((id) => !files.get(id))) throw new Error(t('results.storyboardFilesMissing'));
     const module = await import(/* @vite-ignore */ declaration.entrypoint_url) as StoryboardModule;
     if (generation !== this.generation) return false;
-    if (!module.default || typeof module.default.mount !== 'function') throw new Error('Storyboard entrypoint is invalid.');
+    if (!module.default || typeof module.default.mount !== 'function') throw new Error(t('results.storyboardInvalid'));
     const views: ReadonlyArray<ResultView> = Object.freeze([...(manifest.views || [])]);
     const context = Object.freeze({
       files: Object.freeze({ get: (id: string) => files.get(id) || null }),

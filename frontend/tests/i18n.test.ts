@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { applyLocale, initialLocale, locale, locales, storedLocale, t, translate } from '../src/app/i18n';
+import { applyLocale, catalogs, initialLocale, locale, locales, storedLocale, t, translate } from '../src/app/i18n';
 
 function memoryStorage(): Storage {
   const map = new Map<string, string>();
@@ -54,6 +54,19 @@ describe('frontend localization', () => {
 
   it('offers exactly the app-owned locales', () => {
     expect(locales.map(item => item.id)).toEqual(['en', 'zh-CN']);
+  });
+
+  it('keeps the English and Simplified Chinese catalogs in exact 1:1 parity', () => {
+    const englishKeys = Object.keys(catalogs.en);
+    const chineseKeys = Object.keys(catalogs['zh-CN']);
+    // Same key set, same order, no duplicates: a partial catalog would let one
+    // surface fall back to English under zh-CN, which §11 forbids.
+    expect(chineseKeys).toEqual(englishKeys);
+    expect(new Set(chineseKeys).size).toBe(chineseKeys.length);
+    for (const key of englishKeys) {
+      expect(catalogs['zh-CN'][key], key).toBeTruthy();
+      expect(catalogs.en[key], key).toBeTruthy();
+    }
   });
 
   it('localizes every guided-tour step, not only the tour controls', () => {

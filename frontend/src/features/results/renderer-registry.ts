@@ -1,4 +1,5 @@
 import { resultFileName, type ResultArtifact, type ResultFile, type PreviewCapability, type ResultView } from '../../api/result-types';
+import { t } from '../../app/i18n';
 
 export interface RendererContext {
   signal: AbortSignal;
@@ -83,11 +84,11 @@ export function createBasicRenderers(): ArtifactRenderer[] {
     {
       id: 'text',
       async render(artifact, host, context) {
-        if (artifact.size > 262_144) throw new Error('This text is too large to preview. Download it instead.');
+        if (artifact.size > 262_144) throw new Error(t('results.textTooLarge'));
         const response = await fetch(artifact.url, {
           credentials: 'same-origin', signal: context.signal, headers: { Range: 'bytes=0-262143' },
         });
-        if (!response.ok && response.status !== 206) throw new Error('Text preview could not be loaded.');
+        if (!response.ok && response.status !== 206) throw new Error(t('results.textFailed'));
         const pre = document.createElement('pre'); pre.textContent = await response.text(); host.replaceChildren(pre);
       },
     },
@@ -98,9 +99,9 @@ export function createBasicRenderers(): ArtifactRenderer[] {
         const url = artifact.table_url || ('path' in artifact
           ? `/compute/api/results/${encodeURIComponent(context.taskId)}/tables/${encoded}?limit=100`
           : null);
-        if (!url) throw new Error('This table has no authorized preview URL.');
+        if (!url) throw new Error(t('results.tableNoUrl'));
         const response = await fetch(url, { credentials: 'same-origin', signal: context.signal });
-        if (!response.ok) throw new Error('Table preview could not be loaded.');
+        if (!response.ok) throw new Error(t('results.tableFailed'));
         const page = await response.json() as { columns: unknown[]; rows: unknown[][]; has_more?: boolean };
         const table = document.createElement('table'); table.className = 'result-table';
         const head = document.createElement('thead'); const heading = document.createElement('tr');
@@ -108,14 +109,14 @@ export function createBasicRenderers(): ArtifactRenderer[] {
         head.append(heading); const body = document.createElement('tbody');
         page.rows.forEach((row) => { const line = document.createElement('tr'); row.forEach((value) => { const cell = document.createElement('td'); cell.textContent = String(value ?? ''); line.append(cell); }); body.append(line); });
         table.append(head, body); host.replaceChildren(table);
-        if (page.has_more) { const note = document.createElement('p'); note.className = 'result-note'; note.textContent = 'Showing the first 100 rows.'; host.append(note); }
+        if (page.has_more) { const note = document.createElement('p'); note.className = 'result-note'; note.textContent = t('results.tableTruncated'); host.append(note); }
       },
     },
     {
       id: 'download_only',
       async render(_artifact, host) {
         const message = document.createElement('p'); message.className = 'result-empty';
-        message.textContent = 'No inline preview is available. The file remains available to download.'; host.replaceChildren(message);
+        message.textContent = t('results.downloadOnly'); host.replaceChildren(message);
       },
     },
   ];
