@@ -193,6 +193,12 @@ async function render(route: AppRoute, historyNavigation: boolean): Promise<void
   // of that reset.
   shell.outlet.className = 'app-outlet';
   shell.outlet.replaceChildren();
+  // The location this render is mounting is recorded when the mount starts, not
+  // when it finishes. A route's mount awaits its own data, and the entry can move
+  // while that is in flight; if the record still named the previous page, the
+  // traversal that moved it would be read as "the page already on screen" and
+  // dropped, leaving the older route's content under the newer address.
+  renderedLocation = location.pathname + location.search;
 
   if (route.id === 'not-found') { notFound(); return; }
   syncShell(route);
@@ -222,8 +228,15 @@ async function render(route: AppRoute, historyNavigation: boolean): Promise<void
       const { mountAdmin } = await import('./features/admin/index.js'); await mountAdmin(shell.outlet, route.id, shell, sessionUser!); break;
     }
   }
-  if (generation !== renderGeneration) return;
-  renderedLocation = location.pathname + location.search;
+  // A route's mount is asynchronous, and a feature's own fetch is not guaranteed to
+  // honor the route's AbortController: a mount that lost the race can resolve after
+  // a newer route has rendered and write its content into the outlet on top of it.
+  // The address bar is the authoritative record of where the reader is, so a mount
+  // that lost the race rebuilds the page the location now names.
+  if (generation !== renderGeneration) {
+    if (location.pathname + location.search !== renderedLocation) void transition(resolveRoute(location.pathname), new URL(location.href), true);
+    return;
+  }
   nameDocument(previousTitle);
   shell.syncActive();
   // The document's own first render keeps the browser's initial focus and scroll;
