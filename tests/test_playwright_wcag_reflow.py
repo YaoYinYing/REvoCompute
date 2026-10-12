@@ -146,6 +146,38 @@ def _assert_no_horizontal_page_scroll(page: Page, context: str) -> None:
     assert uncontained == [], f"{context}: content crosses the viewport unclipped: {uncontained}"
 
 
+# An element's natural one-line width: its text set on one line in its own font
+# and spacing. It is the witness that a case is not vacuous, because it shows the
+# run really is wider than the box the layout gives it.
+UNWRAPPED_RUN = """
+el => {
+  const cs = getComputedStyle(el);
+  const span = document.createElement('span');
+  span.style.cssText = 'position:absolute;visibility:hidden;white-space:nowrap;left:-9999px;';
+  span.style.setProperty('font', cs.font);
+  span.style.setProperty('letter-spacing', cs.letterSpacing, 'important');
+  span.style.setProperty('word-spacing', cs.wordSpacing, 'important');
+  span.textContent = el.textContent.trim();
+  document.body.appendChild(span);
+  const width = span.getBoundingClientRect().width;
+  span.remove();
+  return Math.round(width);
+}
+"""
+
+# The line count of the element's own text. A wrapped line sits on its own y, so
+# counting the distinct y values of the text's client rectangles counts lines;
+# counting the rectangles themselves would count the split inline boxes of one
+# line, which reads a single line as more than one.
+TEXT_LINES = """
+el => {
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  return new Set([...range.getClientRects()].map(b => Math.round(b.top))).size;
+}
+"""
+
+
 def test_home_page_does_not_scroll_horizontally_under_text_spacing(page: Page) -> None:
     """WCAG 1.4.12: at 320px with the text-spacing override the home document must
     not scroll horizontally.
@@ -298,3 +330,157 @@ def test_profile_account_form_stays_behind_its_own_edge_at_text_only_resize(page
            }"""
     )
     assert overhang <= 1, f"the account form columns overhang their section by {overhang}px"
+
+
+# --- Route mastheads: a roll-up wider than the room the row has left --------
+
+# The runner catalog's readiness badge is one label on the masthead row beside the
+# page identity. Under the criterion's own spacing that label is wider than the
+# box the row has left for it at 280px, so the run is driven further past the fit
+# by widening its tracking, which reproduces the same defect on the dev host's
+# narrow face and not only in CI's wider one. The create-task component headings
+# are the same class of run under the 1.4.4 case below: a name the layout may not
+# widen past the page it was given.
+BADGE_RUN_SPACING = TEXT_SPACING + ".readiness-state{letter-spacing:.3em !important;}"
+TITLE_RUN_ZOOM = (
+    f"html{{font-size:{TEXT_ZOOM_ROOT_PX}px !important;}}"
+    ".ct-component-title{letter-spacing:.4em !important;}"
+)
+
+
+def test_runner_catalog_masthead_keeps_its_rollup_inside_the_viewport(page: Page) -> None:
+    """WCAG 1.4.12: the runner catalog's readiness badge sits beside the page
+    identity in the masthead. Under the text-spacing override, with the badge's
+    run widened past the room the row has, the label must yield to the box it is
+    given rather than carry the document past the viewport.
+
+    The witness is that the label really is too wide for its own box, so the case
+    cannot pass merely because the host's face is narrow or the run short.
+    """
+    page.set_viewport_size({"width": 280, "height": 640})
+    mount_scenario(page, controlled_scenario())
+    _install_condition(page, BADGE_RUN_SPACING)
+    page.goto(f"{ORIGIN}/runners")
+
+    expect(page.locator(".runners-page")).to_be_visible()
+    head = page.locator(".page-heading")
+    badge = head.locator(".readiness-state")
+    expect(badge).to_be_visible()
+    page.evaluate("() => document.fonts.ready")
+
+    witness = {
+        "badge": badge.evaluate("el => Math.round(el.getBoundingClientRect().width)"),
+        "run": badge.evaluate(UNWRAPPED_RUN),
+        "lines": badge.evaluate(TEXT_LINES),
+    }
+    assert witness["run"] > witness["badge"], (
+        f"not exercised: the badge is already showing its label on one line "
+        f"(run={witness['run']}, badge={witness['badge']})"
+    )
+
+    _assert_no_horizontal_page_scroll(page, "runner catalog @280px with 1.4.12 spacing")
+
+
+def test_runner_catalog_masthead_keeps_its_label_on_one_line_when_it_fits(page: Page) -> None:
+    """The reading the fix must not change: under the same spacing, with room in
+    the row, the readiness label stays on one line on the identity's own row —
+    the two words are not broken apart and the roll-up is not sent to its own
+    row when it fits beside the identity.
+
+    The witness is the same measurement's other half: here the unwrapped label is
+    no wider than the box, so the one-line reading is the expected one.
+    """
+    page.set_viewport_size({"width": 1280, "height": 640})
+    mount_scenario(page, controlled_scenario())
+    _install_condition(page, BADGE_RUN_SPACING)
+    page.goto(f"{ORIGIN}/runners")
+
+    expect(page.locator(".runners-page")).to_be_visible()
+    head = page.locator(".page-heading")
+    badge = head.locator(".readiness-state")
+    expect(badge).to_be_visible()
+    page.evaluate("() => document.fonts.ready")
+
+    witness = {
+        "badge": badge.evaluate("el => Math.round(el.getBoundingClientRect().width)"),
+        "run": badge.evaluate(UNWRAPPED_RUN),
+    }
+    assert witness["run"] <= witness["badge"], (
+        f"not exercised: the label does not fit the box at this width "
+        f"(run={witness['run']}, badge={witness['badge']})"
+    )
+    assert badge.evaluate(TEXT_LINES) == 1, (
+        "the readiness label no longer reads on one line where it fits "
+        f"(run={witness['run']}, badge={witness['badge']})"
+    )
+    same_row = head.evaluate(
+        "el => { const identity = el.firstElementChild, rollup = el.lastElementChild;"
+        " return rollup.getBoundingClientRect().top < identity.getBoundingClientRect().bottom; }"
+    )
+    assert same_row, "the roll-up no longer sits on the identity's row where it fits"
+
+
+def test_create_task_component_headings_stay_inside_their_step(page: Page) -> None:
+    """WCAG 1.4.4: at 200% text-only resize the create-task component headings —
+    server-supplied names from the owning Runner's task manifest — must wrap
+    within the step column rather than widen it.
+
+    Each heading sits in the step's second track; the witness is that its label
+    is wider on one line than the box that box can hold, so what is asserted is
+    the heading yielding to its track, not an empty measurement.
+    """
+    page.set_viewport_size({"width": 768, "height": 900})
+    mount_scenario(page, controlled_scenario())
+    _install_condition(page, TITLE_RUN_ZOOM)
+    page.goto(f"{ORIGIN}/compute/create_task?task_type=sequence_demo")
+
+    expect(page.locator(".ct-workbench")).to_be_visible()
+    titles = page.locator(".ct-component-title")
+    titles.first.wait_for()
+    page.evaluate("() => document.fonts.ready")
+
+    measured = []
+    for index in range(titles.count()):
+        title = titles.nth(index)
+        measured.append({
+            "box": title.evaluate("el => Math.round(el.getBoundingClientRect().width)"),
+            "run": title.evaluate(UNWRAPPED_RUN),
+            "lines": title.evaluate(TEXT_LINES),
+        })
+    assert measured, "the sequence_demo workspace declares no component headings"
+    assert any(row["run"] > row["box"] for row in measured), (
+        f"not exercised: every heading's label fits its track ({measured})"
+    )
+
+    _assert_no_horizontal_page_scroll(page, "create task @768px with 200% text-only resize")
+
+
+def test_create_task_component_headings_keep_their_names_readable(page: Page) -> None:
+    """The other half of the 1.4.4 case: at the initial text size the same
+    server-supplied component names still read on one line, so the column that
+    now yields to its track has not started breaking names that fit.
+    """
+    page.set_viewport_size({"width": 768, "height": 900})
+    mount_scenario(page, controlled_scenario())
+    page.goto(f"{ORIGIN}/compute/create_task?task_type=sequence_demo")
+
+    expect(page.locator(".ct-workbench")).to_be_visible()
+    titles = page.locator(".ct-component-title")
+    titles.first.wait_for()
+    page.evaluate("() => document.fonts.ready")
+
+    measured = []
+    for index in range(titles.count()):
+        title = titles.nth(index)
+        measured.append({
+            "box": title.evaluate("el => Math.round(el.getBoundingClientRect().width)"),
+            "run": title.evaluate(UNWRAPPED_RUN),
+            "lines": title.evaluate(TEXT_LINES),
+        })
+    assert measured, "the sequence_demo workspace declares no component headings"
+    assert all(row["run"] <= row["box"] for row in measured), (
+        f"not exercised: a heading's label already exceeds its track ({measured})"
+    )
+    assert all(row["lines"] == 1 for row in measured), (
+        f"a component name that fits its track is being broken ({measured})"
+    )

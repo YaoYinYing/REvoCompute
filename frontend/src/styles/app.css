@@ -286,7 +286,10 @@ a { color: var(--app-accent); }
 /* Transient toasts: short action feedback only. */
 .app-notices { display: grid; flex: none; width: min(24rem, 100%); gap: .5rem; }
 .app-notice { padding: .75rem .9rem; border-radius: var(--r-control); background: var(--app-ink); color: var(--app-bg); box-shadow: var(--shadow-raised); font-size: .8rem; }.notice-error { background: var(--app-danger); color: #fff; }.notice-success { background: var(--app-success); color: #fff; }
-.readiness-state { padding: .4rem .7rem; border-left: 2px solid var(--app-warning); background: var(--app-surface); color: var(--app-muted); font-size: .74rem; }.readiness-state[data-status="READY"] { border-color: var(--app-success); }
+/* The status badge is one label on the masthead row; its box may never be wider
+   than the page, so the label breaks inside a word when the row cannot hold it.
+   At ordinary widths the label keeps its natural line and size. */
+.readiness-state { overflow-wrap: anywhere; padding: .4rem .7rem; border-left: 2px solid var(--app-warning); background: var(--app-surface); color: var(--app-muted); font-size: .74rem; }.readiness-state[data-status="READY"] { border-color: var(--app-success); }
 .access-banner { width: fit-content; margin: 1rem 0; padding: .35rem .8rem; border-left: 2px solid var(--app-accent); background: var(--app-surface); color: var(--app-muted); font-size: .78rem; }.access-banner.restricted { border-color: var(--app-warning); }
 /* A restricted policy's published terms. They are the owning policy's own words,
    so they sit as ruled reference under the state banner rather than as an
