@@ -1,6 +1,7 @@
 import { Check, Clipboard } from 'lucide';
 import { createIcons } from 'lucide';
 import { getMcpCapability } from '../../api/app-api';
+import { t } from '../../app/i18n';
 import type { AppShell } from '../../app/shell';
 import './home.css';
 
@@ -29,9 +30,9 @@ export function mountHome(root: HTMLElement, shell: AppShell): void {
           </div>
         </figure>
         <aside class="agent-guide" aria-labelledby="agent-guide-title">
-          <div><h2 id="agent-guide-title">Connect an AI agent</h2><p>Discover, submit, and retrieve tasks over a stable guide.</p></div>
+          <div><h2 id="agent-guide-title">${t('home.agent.title')}</h2><p>${t('home.agent.guide')}</p></div>
           <a data-agent-url href="/skills.md"><code></code></a>
-          <button class="icon-button" type="button" data-copy-guide title="Copy agent API guide URL" aria-label="Copy agent API guide URL"><i data-lucide="clipboard"></i></button>
+          <button class="icon-button" type="button" data-copy-guide title="${t('home.agent.copyUrl')}" aria-label="${t('home.agent.copyUrl')}"><i data-lucide="clipboard"></i></button>
           <span class="sr-only" data-copy-status role="status" aria-live="polite"></span>
         </aside>
       </section>
@@ -70,13 +71,13 @@ export function mountHome(root: HTMLElement, shell: AppShell): void {
       await navigator.clipboard.writeText(url);
       button.innerHTML = '<i data-lucide="check"></i>';
       createIcons({ icons: { Check }, root: button });
-      status.textContent = 'Agent API guide URL copied.';
+      status.textContent = t('home.agent.copied');
       window.setTimeout(() => {
         button.innerHTML = '<i data-lucide="clipboard"></i>';
         createIcons({ icons: { Clipboard }, root: button }); status.textContent = '';
       }, 1600);
     } catch {
-      status.textContent = 'Select the URL to copy it manually.'; link.focus(); shell.notify('Select the URL to copy it manually.');
+      status.textContent = t('home.agent.copyManually'); link.focus(); shell.notify(t('home.agent.copyManually'));
     }
   });
   void applyAgentCapability(root);
@@ -96,15 +97,16 @@ export function mountHome(root: HTMLElement, shell: AppShell): void {
  */
 async function applyAgentCapability(root: HTMLElement): Promise<void> {
   const aside = root.querySelector<HTMLElement>('.agent-guide');
+  if (!aside) return;
   const capability = await getMcpCapability().catch(() => null);
-  if (!aside || !capability?.enabled || !capability.endpoint) return;
+  if (!capability?.enabled || !capability.endpoint) return;
   const endpoint = new URL(capability.endpoint, location.origin).href;
   aside.dataset.mcpState = 'enabled';
   const copy = aside.querySelector('p');
-  if (copy) copy.textContent = 'Discover, submit, and retrieve tasks over MCP, or connect over the stable HTTP guide.';
+  if (copy) copy.textContent = t('home.agent.mcp');
   const mcpLink = document.createElement('a');
   mcpLink.className = 'agent-guide-endpoint'; mcpLink.href = capability.endpoint;
-  mcpLink.setAttribute('aria-label', `MCP endpoint: ${endpoint}`);
+  mcpLink.setAttribute('aria-label', t('home.agent.endpoint', { endpoint }));
   const code = document.createElement('code'); code.textContent = endpoint; mcpLink.append(code);
   const guide = aside.querySelector('[data-agent-url]');
   if (guide) guide.after(mcpLink); else aside.append(mcpLink);

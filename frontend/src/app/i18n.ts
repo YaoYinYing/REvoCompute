@@ -181,6 +181,15 @@ const en: Dictionary = {
   'tour.step.logs.title': 'Bounded, read-only logs',
   'tour.step.logs.body': 'Server logs are bounded and read-only here: active output and rotated archives you can read and download, never a shell.',
 
+  // Public Home — the agent entry restates what this deployment actually serves.
+  'home.agent.title': 'Connect an AI agent',
+  'home.agent.guide': 'Discover, submit, and retrieve tasks over a stable guide.',
+  'home.agent.mcp': 'Discover, submit, and retrieve tasks over MCP, or connect over the stable HTTP guide.',
+  'home.agent.endpoint': 'MCP endpoint: {endpoint}',
+  'home.agent.copyUrl': 'Copy agent API guide URL',
+  'home.agent.copied': 'Agent API guide URL copied.',
+  'home.agent.copyManually': 'Select the URL to copy it manually.',
+
   // Shared catalog controls (Runner catalog and the Create Task chooser)
   'catalog.searchMethods': 'Search methods',
   'catalog.allCategories': 'All categories',
@@ -680,6 +689,14 @@ const zhCN: Dictionary = {
   'tour.step.configuration.body': '运行时配置决定哪些任务类型可用、资源如何放置。它是运维方的控制项，与任何科学契约相互独立。',
   'tour.step.logs.title': '有界、只读的日志',
   'tour.step.logs.body': '此处的服务端日志有界且只读：可阅读与下载的当前输出和轮转归档，不提供任何 shell。',
+
+  'home.agent.title': '连接 AI 智能体',
+  'home.agent.guide': '通过稳定的指南发现、提交并获取任务。',
+  'home.agent.mcp': '通过 MCP 发现、提交并获取任务，或使用稳定的 HTTP 指南连接。',
+  'home.agent.endpoint': 'MCP 端点：{endpoint}',
+  'home.agent.copyUrl': '复制智能体 API 指南链接',
+  'home.agent.copied': '已复制智能体 API 指南链接。',
+  'home.agent.copyManually': '请选择该链接以手动复制。',
 
   'catalog.searchMethods': '搜索方法',
   'catalog.allCategories': '全部分类',
