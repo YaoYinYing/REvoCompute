@@ -3,17 +3,24 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Browser acceptance for WCAG text-spacing (1.4.12) and text-resize (1.4.4).
 
-Both cases drive the built production bundle through the deterministic fixture
+Both criteria drive the built production bundle through the deterministic fixture
 harness and assert an observable geometry invariant — the document element never
 scrolls horizontally, and no element crosses the viewport edge without an
-ancestor that scrolls or clips it. Neither case asserts a class name, a token, a
-pixel literal, or a translated string.
+ancestor that scrolls or clips it. A case names class selectors only to locate
+the element under test; it asserts no class name, token, pixel literal, or
+translated string.
 
-The two cases fail for different reasons, which is why they are separate:
+The cases fail for different reasons, which is why they are separate:
 
-* 1.4.12 text spacing widens an unbreakable run inside the home hero. The 320px
-  rem media queries *do* fire here (the root font is still 16px); the hero's
-  unbreakable heading simply outgrows its column.
+* 1.4.12 text spacing applied with the criterion's own metric values, at 320px.
+  The rem media queries *do* fire here (the root font is still 16px); an
+  unbreakable run inside the hero simply outgrows its column.
+* The same property one step narrower, 280px, where the hero column is tighter.
+* 1.4.12 text spacing raised on the home's own heading runs. The two cases above
+  widen text by the criterion's fixed margins only, so whether they observe an
+  unwrapped heading depends on which face the shipped font stack resolves to;
+  this one raises the spacing on the runs themselves and asserts that each run
+  had to break, which holds on any face.
 * 1.4.4 text-only resize to 200% doubles the root font while the layout viewport
   stays 1280px. Every profile.css collapse rule used to live in a
   `@media (max-width: Nrem)` block, and a rem in a *media* query resolves against
@@ -40,6 +47,11 @@ TEXT_SPACING = (
     "word-spacing:0.16em !important;}"
     "p{margin-bottom:2em !important;}"
 )
+# The criterion's own metric values, applied again with a stronger letter-spacing
+# on the home's heading runs. A user may raise text spacing past the criterion's
+# minimum, and doing so here makes the run that outgrows its column a property of
+# the condition rather than of whichever face the shipped stack resolves to.
+WIDER_HEADING_SPACING = "h2,blockquote{letter-spacing:0.5em !important;}"
 # 200% text-only resize of a 16px root, with the layout viewport left at 1280px.
 TEXT_ZOOM_ROOT_PX = 32
 
@@ -169,6 +181,71 @@ def test_home_page_does_not_scroll_horizontally_under_text_spacing_narrower(page
     page.evaluate("() => document.fonts.ready")
 
     _assert_no_horizontal_page_scroll(page, "home @280px with 1.4.12 spacing")
+
+
+# Home heading runs that are the widest child of a flex or grid item: an
+# unbreakable run inside one is the item's floor, so a heading that may not break
+# pushes its whole item past the page.
+HOME_HEADING_RUNS = (".home-products h2", ".home-closing blockquote")
+
+# The width a run would take unwrapped at the spacing computed on it, against the
+# page width it has to fit. The probe re-applies the computed spacing as an
+# *important* inline style: the condition stylesheet is important too, so without
+# this the probe would measure the criterion's own spacing rather than the raised
+# one the case installs.
+UNWRAPPED_RUN = """
+node => {
+  const cs = getComputedStyle(node);
+  const span = document.createElement('span');
+  span.style.cssText = 'position:absolute;visibility:hidden;white-space:nowrap;left:-9999px;';
+  span.style.setProperty('font', cs.font);
+  span.style.setProperty('letter-spacing', cs.letterSpacing, 'important');
+  span.style.setProperty('word-spacing', cs.wordSpacing, 'important');
+  span.textContent = node.textContent.trim().replace(/\\s+/g, ' ');
+  document.body.appendChild(span);
+  const unwrapped = span.getBoundingClientRect().width;
+  span.remove();
+  return {unwrapped: Math.round(unwrapped), page: document.documentElement.clientWidth};
+}
+"""
+
+
+def test_home_heading_runs_break_under_widened_text_spacing(page: Page) -> None:
+    """WCAG 1.4.12: with the text-spacing override raised on the home's heading
+    runs, the home document must not scroll horizontally.
+
+    Each named run is a heading in a flex or grid item it is the widest child of,
+    so a run that may not break becomes the item's floor and pushes the page wide.
+    The two spacing cases above widen text by the criterion's fixed margins only,
+    so whether they see an unwrapped heading depends on which face the shipped
+    stack resolves to; raising the spacing on these runs makes that independent of
+    the host's fonts.
+    """
+    page.set_viewport_size({"width": 280, "height": 640})
+    mount_scenario(page, controlled_scenario())
+    _install_condition(page, TEXT_SPACING + WIDER_HEADING_SPACING)
+    page.goto(f"{ORIGIN}/")
+
+    expect(page.locator(".home-products")).to_be_visible()
+    page.evaluate("() => document.fonts.ready")
+
+    for selector in HOME_HEADING_RUNS:
+        runs = page.locator(selector)
+        count = runs.count()
+        # Non-vacuous: the run this case names is present on the page.
+        assert count > 0, f"home heading run {selector}: the page carries no such run"
+        for index in range(count):
+            run = runs.nth(index)
+            expect(run).to_be_visible()
+            measured = run.evaluate(UNWRAPPED_RUN)
+            # Non-vacuous: the run does not fit the page on one line, so it must
+            # break, and the page can only stay inside the viewport if it does.
+            assert measured["unwrapped"] > measured["page"], (
+                f"home heading run {selector}[{index}]: {measured['unwrapped']}px unwrapped fits "
+                f"the {measured['page']}px page, so this case would pass without any wrap"
+            )
+
+    _assert_no_horizontal_page_scroll(page, "home @280px with widened 1.4.12 spacing")
 
 
 # Profile panels whose content is the widest of the page: the account form's two
