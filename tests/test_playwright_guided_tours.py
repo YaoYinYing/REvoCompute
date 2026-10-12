@@ -123,7 +123,7 @@ def _admin_api(page: Page) -> None:
     config = {
         "task_types": [{
             "tool": "sequence_demo", "display_name": "Sequence demo", "enabled": True, "requires_gpu": False,
-            "runtime_family": "example", "is_workflow_stage": False, "category": "evolution", "inputs": [],
+            "runtime_family": "generic", "is_workflow_stage": False, "category": "evolution", "inputs": [],
             "parameter_count": 1, "stage_count": 0, "effective_resources": {"cpus": 2, "memory": "4G"},
         }],
         "resources": {"cpus": 2, "memory": "4G", "max_runtime_seconds": 3600, "slurm_partition": "cpu"},
