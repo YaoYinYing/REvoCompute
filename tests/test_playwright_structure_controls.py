@@ -107,6 +107,7 @@ def _reading(page: Page) -> dict:
             region: { box: box(region), inside: inside(region) },
             host: box(host),
             toolbar: box(document.querySelector('.structure-toolbar')),
+            fullscreen: Boolean(document.fullscreenElement && document.fullscreenElement.classList.contains('structure-viewport')),
             documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
           };
         }""",
@@ -165,10 +166,12 @@ def test_advanced_controls_toggle_is_discoverable_and_operable(page: Page) -> No
     assert _reading(page)["panel"]["visible"] is False, "the panel did not close from the keyboard"
 
     # The workspace toolbar owns fullscreen, and the disclosure must survive it.
+    # The toolbar's own label flip is the product's signal that fullscreen took;
+    # the geometry is then read from the fullscreen layout.
     page.get_by_role("button", name="Enter fullscreen", exact=True).click()
-    page.wait_for_function("document.fullscreenElement && document.fullscreenElement.classList.contains('structure-viewport')")
-    page.wait_for_timeout(800)
+    expect(page.get_by_role("button", name="Exit fullscreen", exact=True)).to_be_visible()
     fullscreen = _reading(page)
+    assert fullscreen["fullscreen"] is True, fullscreen
     assert fullscreen["disclosure"]["inside"], fullscreen
     assert fullscreen["disclosure"]["hittable"], fullscreen
     assert _click_disclosure(page)["panel"]["visible"] is True, "the panel did not open in fullscreen"
