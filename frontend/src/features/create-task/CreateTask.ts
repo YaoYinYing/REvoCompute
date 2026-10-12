@@ -15,6 +15,9 @@ export class CreateTask {
   private loadController: AbortController | null = null;
   private generation = 0;
   private readonly chooser = node('section', 'ct-chooser');
+  private readonly catalogControls = node('div', 'ct-catalog-controls');
+  private readonly catalogGroups = node('div', 'ct-method-groups');
+  private readonly catalogStatus = node('p', 'ct-catalog-status');
   private readonly workbench = node('section', 'ct-workbench');
   private readonly pageHeader = node('header', 'ct-page-header');
   private readonly workspaceRoot = node('div', 'ct-workspace');
@@ -38,12 +41,15 @@ export class CreateTask {
   constructor(private readonly root: HTMLElement) {
     // The preparation surface owns exactly one visible level-1 heading per state:
     // the chooser shows the persistent page title, and the workbench replaces it
-    // with the method's own display name. The validation summary and status live
-    // in one region that exists from mount, so a change to either is announced
-    // rather than silently repainted.
+    // with the method's own display name. One feedback region carries the
+    // chooser's match count, the workbench validation summary, and the action
+    // status; it is reparented into whichever state is on screen, so it is in the
+    // document for the whole life of the view. Its accessible name is wired per
+    // state, because the snapshot label it was named from exists only in the
+    // workbench: naming a live region from a node the state does not hold leaves
+    // the region unnamed exactly where its name was relied on.
     this.feedback.setAttribute('role', 'status');
     this.feedback.setAttribute('aria-live', 'polite');
-    this.feedback.setAttribute('aria-labelledby', 'ct-snapshot-label');
   }
 
   async mount(): Promise<void> {
@@ -60,32 +66,56 @@ export class CreateTask {
     this.root.replaceChildren(); this.root.classList.add('create-task');
     const heading = node('div'); heading.append(node('h1', '', t('ct.title')), node('p', '', t('ct.subtitle')));
     this.pageHeader.replaceChildren(heading);
-    this.chooser.append(node('h2', '', t('ct.chooseMethod')));
     this.workbench.hidden = true;
-    this.feedback.append(this.validationSummary, this.validation, this.status); this.validationSummary.hidden = true;
+    this.feedback.append(this.validationSummary, this.validation, this.status);
+    this.validationSummary.hidden = true;
     this.action.type = 'button'; this.action.addEventListener('click', () => void this.runAction());
     this.clear.type = 'button'; this.clear.addEventListener('click', () => void this.clearWorkspace());
     this.root.append(this.pageHeader, this.chooser, this.workbench);
+    // The region is in the document from mount, before the catalog resolves, so a
+    // status set while the catalog is still loading is announced rather than
+    // inserted into a region no assistive technology had been told about.
+    this.renderChooserChrome();
   }
 
   private renderCatalog(): void {
     if (!this.catalog) return;
-    const controls = node('div', 'ct-catalog-controls');
+    // The chooser's heading, match count, and groups are the same nodes in every
+    // chooser state, so a mid-flow reparent reattaches them rather than rebuilding
+    // them: a catalog that failed to load never destroys the panel a method-less
+    // chooser (the offline fallback) still shows.
     const search = node('input', 'ct-control'); search.type = 'search'; search.placeholder = t('catalog.searchMethods'); search.setAttribute('aria-label', t('catalog.searchMethods'));
     const category = node('select', 'ct-control'); category.setAttribute('aria-label', t('ct.filterCategory')); category.append(new Option(t('catalog.allCategories'), ''));
     this.catalog.categories.forEach(item => category.append(new Option(item.label, item.name)));
-    const count = node('p', 'ct-catalog-status'); const groups = node('div', 'ct-method-groups');
     const render = () => {
-      const query = search.value.trim().toLowerCase(); groups.replaceChildren(); let shown = 0;
+      const query = search.value.trim().toLowerCase(); this.catalogGroups.replaceChildren(); let shown = 0;
       this.catalog!.categories.forEach(item => {
         const tasks = this.catalog!.task_types.filter(task => task.category === item.name && (!category.value || category.value === item.name) && (!query || [task.name, task.display_name, task.summary, task.category].join(' ').toLowerCase().includes(query)));
         if (!tasks.length) return;
         const section = node('section', 'ct-method-group'); section.append(node('h3', '', item.label));
-        const grid = node('div', 'ct-method-grid'); tasks.forEach(task => { grid.append(this.methodButton(task)); shown++; }); section.append(grid); groups.append(section);
+        const grid = node('div', 'ct-method-grid'); tasks.forEach(task => { grid.append(this.methodButton(task)); shown++; }); section.append(grid); this.catalogGroups.append(section);
       });
-      count.textContent = shown ? t(shown === 1 ? 'ct.availableOne' : 'ct.availableMany', { count: shown }) : t('ct.noMatch');
+      this.catalogStatus.textContent = shown ? t(shown === 1 ? 'ct.availableOne' : 'ct.availableMany', { count: shown }) : t('ct.noMatch');
     };
-    search.addEventListener('input', render); category.addEventListener('change', render); controls.append(search, category); this.chooser.append(controls, count, groups); render();
+    search.addEventListener('input', render); category.addEventListener('change', render);
+    this.catalogControls.replaceChildren(search, category);
+    this.catalogGroups.replaceChildren();
+    this.renderChooserChrome();
+    render();
+  }
+
+  // One home for the chooser's heading, catalog controls, announced region, and
+  // method groups. The initial render and a mid-flow return both reparent the
+  // same nodes, so neither state duplicates the panel or loses it, including the
+  // offline fallback where the catalog never rendered.
+  private renderChooserChrome(): void {
+    const heading = this.chooser.querySelector('h2') || node('h2', '', t('ct.chooseMethod'));
+    heading.id = 'ct-chooser-heading';
+    // The region sits with the match count above the methods it describes, so a
+    // change to the chooser's status is inside the live region in this state too.
+    this.feedback.append(this.catalogStatus);
+    this.feedback.setAttribute('aria-labelledby', heading.id);
+    this.chooser.append(heading, this.catalogControls, this.feedback, this.catalogGroups);
   }
 
   private methodButton(task: TaskSummary): HTMLButtonElement {
@@ -97,7 +127,12 @@ export class CreateTask {
 
   private async selectTask(name: string): Promise<void> {
     this.loadController?.abort(); const controller = new AbortController(); this.loadController = controller; const generation = ++this.generation;
-    this.chooser.hidden = true; this.workbench.hidden = false; this.workbench.replaceChildren(this.status); this.setStatus(t('ct.loading'), 'busy');
+    // The workbench swaps in for the chooser: the loading status that lived in the
+    // chooser's now-hidden region has to be on screen, and the region must travel
+    // with it or the loading message would be announced from a hidden panel. The
+    // chooser's match count leaves the region with the chooser it counted.
+    this.chooser.hidden = true; this.pageHeader.hidden = true; this.workbench.hidden = false;
+    this.catalogStatus.remove(); this.workbench.replaceChildren(this.feedback); this.setStatus(t('ct.loading'), 'busy');
     const url = new URL(window.location.href); url.searchParams.set('task_type', name); history.replaceState(null, '', url);
     try {
       const definition = await getTaskDefinition(name, controller.signal); if (generation !== this.generation) return;
@@ -113,9 +148,6 @@ export class CreateTask {
 
   private renderWorkbench(): void {
     const form = this.definition!; this.workbench.replaceChildren();
-    // The workbench is rebuilt whole; the announced group returns to it so the
-    // summary and status keep their single mount-time home.
-    this.feedback.append(this.validationSummary, this.validation, this.status);
     this.pageHeader.hidden = true;
     const header = node('header', 'ct-method-header');
     const title = node('div'); title.append(node('p', 'ct-category', this.categoryLabel(form.category)), node('h1', '', form.display_name), node('p', 'ct-method-summary', form.summary));
@@ -134,6 +166,7 @@ export class CreateTask {
     const protocol = node('div', 'ct-protocol'); protocol.append(this.workspaceRoot);
     const snapshotPanel = node('aside', 'ct-snapshot-panel');
     const label = node('p', 'ct-snapshot-label', t('ct.snapshot')); label.id = 'ct-snapshot-label';
+    this.feedback.setAttribute('aria-labelledby', label.id);
     snapshotPanel.append(label);
     const identity = node('div', 'ct-snapshot-identity'); identity.append(node('p', 'ct-snapshot-method', form.display_name));
     const actions = node('div', 'ct-actions'); actions.append(this.clear, this.action);
@@ -268,7 +301,11 @@ export class CreateTask {
   private showChooser(message: string): void {
     this.loadController?.abort(); this.generation++; this.definition = null; this.preflight = null; this.setBusy(false); this.checking = false; this.workspace.destroy();
     this.chooser.hidden = false; this.pageHeader.hidden = false; this.workbench.hidden = true;
-    const status = this.chooser.querySelector('.ct-catalog-status'); if (status) status.textContent = message;
+    // The region and the chooser's methods come home with the state, so the
+    // chooser's own status message is always inside the live region, whether or
+    // not the catalog rendered before this point.
+    this.renderChooserChrome();
+    this.catalogStatus.textContent = message;
     const url = new URL(window.location.href); url.searchParams.delete('task_type'); history.replaceState(null, '', url);
     this.chooser.querySelector<HTMLInputElement>('input[type="search"]')?.focus();
   }
