@@ -23,6 +23,11 @@ The sticky geometry these cases drive, read from the product sources:
   knowledge of the shell header above it, so the two layers compete for the same
   band whenever the panel actually pins. Its guard is a viewport-width media
   query, which a text-only resize never trips.
+* Below the rail breakpoint the shell floats the navigation over the outlet and
+  pays for it with bottom clearance on the outlet, so a scroller's last row is
+  reachable - but only once the page itself has moved. A case that hit-tests the
+  last row without settling the page measures the floating chrome rather than the
+  scroller, and reports an occlusion the reader never meets.
 
 This file also asserts the *absence* of the false positive it must not produce: a
 sticky surface that overlaps scrolled content while its own content is still
@@ -712,16 +717,37 @@ TABLE_PROBE = """
     const box = list.getBoundingClientRect();
     const cell = last.getBoundingClientRect();
     const hit = document.elementFromPoint(cell.left + cell.width / 2, cell.top + cell.height / 2);
+    const chain = [];
+    let node = hit;
+    while (node && chain.length < 5) {
+        chain.push(node.tagName.toLowerCase() + '.' + (typeof node.className === 'string' ? node.className.slice(0, 24) : ''));
+        node = node.parentElement;
+    }
     return {scrollLeft: Math.round(list.scrollLeft),
             maxScroll: list.scrollWidth - list.clientWidth,
             lastLeft: +cell.left.toFixed(1), lastRight: +cell.right.toFixed(1),
             boxLeft: +box.left.toFixed(1), boxRight: +box.right.toFixed(1),
             fullyVisible: cell.right <= box.right + 0.5 && cell.left >= box.left - 0.5,
+            hitChain: chain,
             centreOwned: Boolean(hit && (hit === last || last.contains(hit) || hit.contains(last)))};
 }
 """
 
 TABLE_SCROLLER = ".task-list[data-layout='table']"
+
+
+def settle_page_at_its_end(page: Page) -> None:
+    """Wheel the page to its end, with real input.
+
+    The shell fixes navigation chrome over the outlet at a narrow width and pays
+    for it with bottom clearance on the outlet, so a scroller's last row is
+    reachable - but only once the page itself has moved. One wheel past the end
+    is the same bounded action in every cell: it saturates at the document's own
+    end, so it cannot seek a passing state, and the hit test that follows stays
+    falsifiable.
+    """
+    page.mouse.wheel(0, 2000)
+    page.wait_for_timeout(200)
 
 
 def assert_table_reaches_its_last_cell(sample: Mapping[str, object], where: str) -> None:
@@ -739,7 +765,8 @@ def assert_table_reaches_its_last_cell(sample: Mapping[str, object], where: str)
     )
     assert sample["centreOwned"], (
         f"{where}: the last cell does not answer elementFromPoint at its own centre; "
-        f"scrollLeft={sample['scrollLeft']}, cell=[{sample['lastLeft']}, {sample['lastRight']}]"
+        f"scrollLeft={sample['scrollLeft']}, cell=[{sample['lastLeft']}, {sample['lastRight']}], "
+        f"hit={sample.get('hitChain')}"
     )
 
 
@@ -766,6 +793,7 @@ def test_dense_table_overflow_reaches_its_last_cell_by_wheel(page: Page) -> None
         for _ in range(8):
             fresh.mouse.wheel(300, 0)
             fresh.wait_for_timeout(60)
+        settle_page_at_its_end(fresh)
         reached = fresh.evaluate(TABLE_PROBE)
     finally:
         fresh.close()
@@ -810,6 +838,7 @@ def test_touch_drag_reaches_the_end_of_the_dense_table(page: Page) -> None:
             })
         cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
         fresh.wait_for_timeout(300)
+        settle_page_at_its_end(fresh)
         reached = fresh.evaluate(TABLE_PROBE)
     finally:
         fresh.close()
