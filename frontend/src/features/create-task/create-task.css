@@ -31,7 +31,7 @@
 .ct-protocol-step:focus-within .ct-step-number { border-color: var(--ct-accent); }
 .ct-step-title { font: 600 1.45rem/1.18 var(--font-display); margin: 0; letter-spacing: -.012em; } .ct-step-description { grid-column: 2; margin: .15rem 0 0; line-height: 1.55; }
 .ct-workspace-component + .ct-workspace-component { margin-top: 1.4rem; padding-top: 1.4rem; border-top: 1px dashed var(--ct-line); }
-.ct-component-title { font: 600 1.05rem/1.2 var(--font-display); margin: 0 0 .3rem; } .ct-component-description { margin: 0 0 .8rem; }
+.ct-component-title { overflow-wrap: anywhere; font: 600 1.05rem/1.2 var(--font-display); margin: 0 0 .3rem; } .ct-component-description { margin: 0 0 .8rem; }
 .ct-file-role + .ct-file-role { margin-top: 1rem; } .ct-file-role input[type=file] { display: block; max-width: 100%; margin: .4rem 0; }
 .ct-file-list { font-size: .85rem; color: var(--ct-muted); } .ct-file-row { display: flex; justify-content: space-between; gap: 1rem; padding: .3rem 0; }
 .ct-parameter-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
