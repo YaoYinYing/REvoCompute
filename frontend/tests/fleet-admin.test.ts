@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { clearSessionCredential } from '../src/app/session';
 import { adminApi, type RunnerFleetEntry } from '../src/features/admin/api';
-import { capacityLabel, filterFleet, jobStatusLabel, reasonText, workflowLabel } from '../src/features/admin/fleet/FleetAdmin';
+import { capacityLabel, filterFleet, jobStatusLabel, reasonText, summarizeFleet, summarySentence, weaknessLabel, weaknessOf, workflowLabel } from '../src/features/admin/fleet/FleetAdmin';
 
 type RequestRecord = { url: string; init: RequestInit };
 
@@ -38,11 +38,50 @@ const entry = (family: string, status: RunnerFleetEntry['readiness']['status'], 
 });
 
 describe('fleet view helpers', () => {
-  it('filters by readiness attention and orders deterministically', () => {
+  it('filters by readiness attention and orders by how much work each family needs', () => {
     const rows = [entry('zulu', 'READY'), entry('alpha', 'VALIDATION_STALE'), entry('mike', 'BUILD_STALE')];
     expect(filterFleet(rows, { query: '', filter: 'attention', sort: 'family' }).map(r => r.runner_family)).toEqual(['alpha', 'mike']);
     expect(filterFleet(rows, { query: '', filter: 'ready', sort: 'family' }).map(r => r.runner_family)).toEqual(['zulu']);
     expect(filterFleet(rows, { query: 'mi', filter: 'all', sort: 'family' }).map(r => r.runner_family)).toEqual(['mike']);
+    // A family that cannot accept submissions at all sorts above one that only
+    // needs validation, and a ready family sorts last: the default order is what
+    // an operator has to work on first.
+    expect(filterFleet(rows, { query: '', filter: 'all', sort: 'attention' }).map(r => r.runner_family))
+      .toEqual(['mike', 'alpha', 'zulu']);
+    expect(filterFleet([entry('b', 'NOT_CONFIGURED'), entry('a', 'READY')], { query: '', filter: 'all', sort: 'attention' })
+      .map(r => r.runner_family)).toEqual(['b', 'a']);
+  });
+
+  it('groups the server verdicts into work bands without inventing a verdict', () => {
+    // Every one of the six verdicts lands in exactly one band.
+    expect(weaknessOf('NOT_CONFIGURED')).toBe('unavailable');
+    expect(weaknessOf('NOT_BUILT')).toBe('unavailable');
+    expect(weaknessOf('BUILD_STALE')).toBe('stale_build');
+    expect(weaknessOf('NOT_VALIDATED')).toBe('needs_attention');
+    expect(weaknessOf('VALIDATION_STALE')).toBe('needs_attention');
+    expect(weaknessOf('READY')).toBe('ready');
+    expect(weaknessLabel('VALIDATION_STALE')).toBe('Needs attention');
+  });
+
+  it('counts the register into actionable bands, in order, with empty bands shown', () => {
+    const rows = [entry('a', 'READY'), entry('b', 'BUILD_STALE'), entry('c', 'NOT_BUILT')];
+    const { total, entries } = summarizeFleet(rows);
+    expect(total).toBe(3);
+    // Most work first: unavailable, then stale build, then needs attention, then ready.
+    expect(entries.map(band => band.weakness)).toEqual(['unavailable', 'stale_build', 'needs_attention', 'ready']);
+    expect(entries.map(band => band.count)).toEqual([1, 1, 0, 1]);
+    // A band with no member is still reported: "none is unavailable" is a fact.
+    expect(entries.every(band => band.reason.length > 0)).toBe(true);
+    // An empty register is its own state, never "all ready".
+    expect(summarizeFleet([]).total).toBe(0);
+  });
+
+  it('states where the register stands rather than reporting a health number', () => {
+    expect(summarySentence([])).toContain('No Runner family is enabled');
+    expect(summarySentence([entry('a', 'READY'), entry('b', 'READY')])).toBe('All 2 enabled Runner families are ready.');
+    expect(summarySentence([entry('a', 'READY'), entry('b', 'VALIDATION_STALE')]))
+      .toBe('1 of 2 enabled Runner families needs work before accepting new submissions.');
+    expect(summarySentence([entry('solo', 'READY')])).toBe('All 1 enabled Runner family is ready.');
   });
 
   it('keeps capacity a separate fact from readiness', () => {

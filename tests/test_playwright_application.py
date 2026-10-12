@@ -1159,8 +1159,8 @@ def _plan_payload(family: str) -> dict:
     }
 
 
-def test_admin_runner_fleet_plans_revalidates_and_runs_typed_actions(page: Page) -> None:
-    """The fleet surface reads real readiness and runs an action through the plan contract."""
+def test_admin_runner_management_plans_revalidates_and_runs_typed_actions(page: Page) -> None:
+    """The Runner Management surface reads real readiness and runs a planned action."""
     _install_app(page)
     page.route(f"{ORIGIN}/compute/api/auth/me", lambda route: route.fulfill(json=_current_user("admin")))
     posted: list[tuple[str, str, dict | None]] = []
@@ -1190,8 +1190,8 @@ def test_admin_runner_fleet_plans_revalidates_and_runs_typed_actions(page: Page)
     }))
 
     page.goto(f"{ORIGIN}/compute/runner_fleet")
-    expect(page.get_by_role("heading", name="Runner fleet", level=1)).to_be_visible()
-    expect(page.get_by_role("heading", name="Runner fleet", exact=True)).to_have_count(1)
+    expect(page.get_by_role("heading", name="Runner Management", level=1)).to_be_visible()
+    expect(page.get_by_role("heading", name="Runner Management", exact=True)).to_have_count(1)
     with page.expect_response(f"{ORIGIN}/compute/api/auth/admin/runners"):
         page.get_by_role("button", name="Refresh", exact=True).click()
     # Readiness and capacity are separate columns; the machine reason is human copy.
@@ -1200,6 +1200,12 @@ def test_admin_runner_fleet_plans_revalidates_and_runs_typed_actions(page: Page)
     expect(stale_row).to_contain_text("revalidation")
     ready_row = page.locator("tr[data-family='healthy_runner']")
     expect(ready_row).to_contain_text("Ready")
+    # The register is summarized by the server's own verdicts as counts, and the
+    # host executor is reported once as a capability rather than per family.
+    summary = page.locator(".fleet-summary")
+    expect(summary).to_contain_text("Runner families")
+    expect(summary).to_contain_text("1 of 2 enabled Runner famil")
+    expect(page.locator(".fleet-executor")).to_contain_text("Host executor available")
 
     stale_row.get_by_role("button", name="stale_runner").click()
     expect(page.get_by_role("heading", name="stale_runner", level=2)).to_be_visible()

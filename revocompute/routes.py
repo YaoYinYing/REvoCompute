@@ -4431,6 +4431,17 @@ def auth_me():
 
 
 def _gpu_credit_payload(user_id: int, *, admin: bool = False) -> dict[str, Any]:
+    """The one canonical projection of a subject's GPU accounting.
+
+    Every surface that shows a balance - the account's own ``/gpu-credit``, an
+    operator's per-user drill-in, and the Admin user listing's ``gpu_credit``
+    field - serves this shape, because the published ``GPUCreditSummary`` names
+    one unit (``credit_unit_gpu_seconds``) and these fields exactly.  A second
+    builder is a second answer: the listing once stored the bare
+    ``gpu_credit_summary`` dict, which carries only the ``gpu_second`` totals, so
+    every reader of the published component found ``remaining_credits`` absent
+    and rendered a balance of zero for accounts that held real allowances.
+    """
     summary = task_store.gpu_credit_summary(user_id)
     entries = task_store.list_compute_ledger(user_id, period=summary["period"])
     history = []
@@ -4516,6 +4527,41 @@ def current_gpu_credit():
     payload = _gpu_credit_payload(int(g.current_user["id"]))
     payload["allow_gpu_use"] = bool(g.current_user.get("allow_gpu_use"))
     return jsonify(payload), 200
+
+
+@app.route("/compute/api/resource-ledger", methods=["GET"])
+@login_required
+def current_resource_ledger():
+    """The authenticated user's own append-only resource ledger, bounded.
+
+    This is the canonical per-subject read - the same rows the resource envelope
+    sums, and the same reader an operator's drill-in uses through the Admin report
+    - projected by the canonical :func:`normalize_ledger_rows` so a consumer can
+    attribute consumption to the Task, stage, Slurm job, and resource class each
+    row recorded, and to the unit it was charged in.
+
+    Rows that carry no Task or stage stay in the page as *unattributed*.  They are
+    never dropped to make the page read as fully explained: a window that omitted
+    them would attribute a subject's whole balance to the rows that happened to
+    have an owner, which is a stronger claim than the ledger supports.  Durable
+    ownership rows are period-independent and are therefore always included.
+    """
+    try:
+        limit = _bounded_query_limit()
+    except admin_reports.AdminReportError as exc:
+        return jsonify({"error": str(exc)}), 400
+    user_id = int(g.current_user["id"])
+    period = task_store.gpu_credit_summary(user_id)["period"]
+    rows = task_store.list_ledger(user_id, period=period, limit=limit)
+    return jsonify(
+        {
+            "subject_id": user_id,
+            "period": period,
+            "limit": limit,
+            "limit_ceiling": admin_reports.MAX_LIMIT,
+            "entries": rloan.normalize_ledger_rows(rows),
+        }
+    ), 200
 
 
 _USER_METRICS_WINDOWS: dict[str, tuple[str, int | None]] = {
@@ -5121,7 +5167,9 @@ def admin_users():
     safe = []
     for user in users:
         item = UserResponse.model_validate(user).model_dump()
-        item["gpu_credit"] = task_store.gpu_credit_summary(int(user["id"]))
+        # The published GPUCreditSummary, projected once so the listing cannot
+        # disagree with the per-user route about the same account's balance.
+        item["gpu_credit"] = _gpu_credit_payload(int(user["id"]))
         safe.append(item)
     return jsonify({"users": safe}), 200
 

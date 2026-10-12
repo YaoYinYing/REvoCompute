@@ -150,3 +150,104 @@ def test_missing_and_deleted_users_are_not_found(monkeypatch, tmp_path):
     assert client.get(
         "/compute/api/auth/admin/users/987654/resource-entitlement", headers=headers
     ).status_code == 404
+
+
+def test_openapi_describes_the_self_scoped_ledger(monkeypatch, tmp_path):
+    """The account's own ledger is a published path with a published shape."""
+    module = _module(monkeypatch, tmp_path)
+    spec = module.app.test_client().get("/openapi.json").get_json()
+
+    operation = spec["paths"]["/compute/api/resource-ledger"]["get"]
+    assert operation["operationId"] == "getCurrentResourceLedger"
+    window = spec["components"]["schemas"]["ResourceLedger"]
+    assert window["additionalProperties"] is False
+    assert {"subject_id", "period", "limit", "limit_ceiling", "entries"} <= set(window["required"])
+    # The rows it serves are the canonical projection's own shape, asserted once
+    # in components rather than re-described at the path.
+    assert window["properties"]["entries"]["items"] == {
+        "$ref": "#/components/schemas/ResourceLedgerEntry"
+    }
+
+
+def _active_user(database, username: str, *, role: str = "user") -> dict:
+    user = database.create_user(
+        username=username,
+        email=f"{username}@test.local",
+        password="password123",
+        role=role,
+        registration_status="approved",
+        user_status="active",
+    )
+    database.verify_email(user["id"])
+    return database.get_user(user["id"])
+
+
+def test_the_self_scoped_ledger_serves_the_subjects_own_rows_bounded(monkeypatch, tmp_path):
+    """The endpoint is self-scoped, bounded, and shows the facts it was charged."""
+    module = _module(monkeypatch, tmp_path)
+    client = module.app.test_client()
+    spec = client.get("/openapi.json").get_json()
+    from revocompute.auth import generate_token
+
+    user = _active_user(module.app.config["user_db"], "ledger-owner")
+    other = _active_user(module.app.config["user_db"], "ledger-other")
+    headers = {"Authorization": f"Bearer {generate_token(user['id'])}"}
+    module.task_store.record_allocation_start(
+        user_id=user["id"], task_id="a" * 32, stage_id="model", slurm_job_id="9701",
+        gpu_count=2, cpu_cores=1, started_at=time.time(),
+    )
+    # A different subject's facts must never appear in this window.
+    module.task_store.record_allocation_start(
+        user_id=other["id"], task_id="b" * 32, stage_id="model", slurm_job_id="9702",
+        gpu_count=1, cpu_cores=1, started_at=time.time(),
+    )
+
+    response = client.get("/compute/api/resource-ledger?limit=1", headers=headers)
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    _validate(spec, "ResourceLedger", payload)
+    # A window holds at most the requested page, and the response says so.
+    assert payload["limit"] == 1
+    assert payload["limit_ceiling"] == 200
+    assert len(payload["entries"]) <= 1
+    assert payload["subject_id"] == user["id"]
+    assert all(entry["subject_id"] == user["id"] for entry in payload["entries"])
+    # The grant that materialized for this period is the one balance-affecting row
+    # and carries no Task: it is published as an unattributed fact, not dropped.
+    assert any(entry["kind"] == "monthly_grant" and entry["task_id"] is None for entry in payload["entries"])
+
+
+def test_the_self_scoped_ledger_refuses_a_malformed_page_and_requires_authentication(monkeypatch, tmp_path):
+    module = _module(monkeypatch, tmp_path)
+    client = module.app.test_client()
+    headers = _test_client_auth(module)
+
+    assert client.get("/compute/api/resource-ledger").status_code == 401
+    assert client.get("/compute/api/resource-ledger?limit=0", headers=headers).status_code == 400
+    assert client.get("/compute/api/resource-ledger?limit=nonsense", headers=headers).status_code == 400
+    # The ceiling is a bound, not a refusal: a request above it is clamped.
+    assert client.get("/compute/api/resource-ledger?limit=5000", headers=headers).get_json()["limit"] == 200
+
+
+def test_reading_the_ledger_never_appends_or_rewrites_a_row(monkeypatch, tmp_path):
+    """The endpoint is a read: the append-only ledger is byte-identical after it."""
+    module = _module(monkeypatch, tmp_path)
+    client = module.app.test_client()
+    from revocompute.auth import generate_token
+
+    user = _active_user(module.app.config["user_db"], "ledger-reader")
+    headers = {"Authorization": f"Bearer {generate_token(user['id'])}"}
+
+    # Read once first: the endpoint publishes the period's own balance, and
+    # materializing that period's grant is the one row a *first* read of a fresh
+    # account legitimately appends.  What must never happen is a read adding or
+    # rewriting a row on top of a position that already exists.
+    client.get("/compute/api/resource-ledger", headers=headers)
+    before = module.task_store.list_ledger(user["id"], limit=200)
+    assert before
+
+    client.get("/compute/api/resource-ledger", headers=headers)
+
+    after = module.task_store.list_ledger(user["id"], limit=200)
+    assert [row["id"] for row in after] == [row["id"] for row in before]

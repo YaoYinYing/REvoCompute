@@ -37,8 +37,17 @@ export function formatDate(value?: number | string | null): string {
   return Number.isNaN(date.getTime()) ? 'Not recorded' : date.toLocaleString();
 }
 
-export function formatCredits(value: number, signed = false): string {
-  const rendered = Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 2 });
+/**
+ * A credit amount, or the explicit statement that the server reported none.
+ *
+ * A missing amount is deliberately not rendered as ``0`` down the chain from a
+ * balance the server did not compute — an absent number and a granted zero are
+ * different facts, and a surface that showed a missing balance as "0 credits"
+ * would report a spend on an account whose position nobody measured.
+ */
+export function formatCredits(value: number | null | undefined, signed = false): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return 'not reported';
+  const rendered = value.toLocaleString(undefined, { maximumFractionDigits: 2 });
   return signed && value > 0 ? `+${rendered}` : rendered;
 }
 

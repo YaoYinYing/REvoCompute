@@ -7,6 +7,7 @@ import { CreditAdmin } from '../credits/CreditAdmin';
 import { button, element, empty, formatCredits, openDialog, setBusy, text } from '../shared/dom';
 import { mountTabs } from '../shared/tabs';
 import { loadEnvelope, loadStorageQuota } from './ResourceEnvelope';
+import { loadAdminQuota } from './QuotaView';
 
 export interface UserFilters { query: string; role: string; status: string }
 
@@ -42,6 +43,27 @@ function input(type: string, value = ''): HTMLInputElement {
   const control = element('input'); control.type = type; control.value = value; return control;
 }
 
+/**
+ * The GPU cell for one listed account: admission and balance, side by side.
+ *
+ * Two facts the published ``AdminUser`` carries separately are shown separately,
+ * because reading either as the other is how an operator concludes an admitted
+ * account has no allowance, or that a blocked account has spent its credits:
+ *
+ * * ``allow_gpu_use`` is whether the account may submit GPU work at all;
+ * * ``gpu_credit.remaining_credits`` is the balance the server computed, which
+ *   may be negative (overdrawn) and is never clamped for display.
+ *
+ * The balance is rendered with its unit, and a missing field is not silently
+ * rendered as a zero balance — the value comes from the published component, so
+ * an absent number is a defect to see rather than to paper over.
+ */
+export function gpuCell(user: AdminUser): HTMLTableCellElement {
+  return element('td', '', [
+    text('span', user.allow_gpu_use ? 'Admitted' : 'Blocked', `admin-badge ${user.allow_gpu_use ? 'is-good' : ''}`),
+    text('small', `${formatCredits(user.gpu_credit.remaining_credits)} credits`),
+  ]);
+}
 export class UserAdmin {
   private users: AdminUser[] = [];
   private selected = new Set<number>();
@@ -133,7 +155,7 @@ export class UserAdmin {
     checkbox.setAttribute('aria-label', `Select ${user.full_name || user.username}`);
     checkbox.addEventListener('change', () => { checkbox.checked ? this.selected.add(user.id) : this.selected.delete(user.id); this.renderBatch(); });
     const identity = element('td', 'admin-identity', [text('strong', user.full_name || user.username), text('span', user.username), text('small', user.email)]);
-    const gpu = element('td', '', [text('span', user.allow_gpu_use ? 'Admitted' : 'Blocked', `admin-badge ${user.allow_gpu_use ? 'is-good' : ''}`), text('small', `${formatCredits(user.gpu_credit.remaining_credits)} credits`)]);
+    const gpu = gpuCell(user);
     const statuses = element('td', 'admin-statuses', [text('span', user.registration_status, 'admin-badge'), text('span', user.user_status, 'admin-badge')]);
     const edit = button('Edit'); edit.addEventListener('click', () => void this.openEdit(user));
     const credit = button('Credits'); credit.addEventListener('click', () => void this.credits.open(user));
@@ -226,10 +248,19 @@ export class UserAdmin {
    * the position the server actually uses rather than a balance re-derived here,
    * and the quota control sends one of the three decisions to the endpoint that
    * owns it instead of composing an effective ceiling locally.
+   *
+   * The usage-against-allowance panel and the ledger register below it come from
+   * the Admin resource report - the identical projection the account's own Quota
+   * workspace reads - so the operator and the account are never shown two
+   * different positions for the same subject.
    */
   async openResourceEnvelope(user: AdminUser): Promise<void> {
-    const [envelope, quota] = await Promise.all([loadEnvelope(user.id), loadStorageQuota(user, this.shell)]);
-    const root = element('div', 'resource-envelope-host', [envelope, quota]);
+    const [envelope, quota, position] = await Promise.all([
+      loadEnvelope(user.id),
+      loadStorageQuota(user, this.shell),
+      loadAdminQuota(user.id),
+    ]);
+    const root = element('div', 'resource-envelope-host', [position, envelope, quota]);
     await openDialog({ title: `Resource envelope: ${user.full_name || user.username}`, content: root });
   }
 }
