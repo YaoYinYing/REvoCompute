@@ -172,15 +172,30 @@ export class GuidedTour {
       const below = rect.bottom + 12;
       const top = below + 240 < window.innerHeight ? below : Math.max(16, rect.top - 260);
       callout.style.left = `${left}px`; callout.style.top = `${top}px`;
+      // The shell owns the viewport's lower corner with its fixed feedback column
+      // (notices and toasts). A callout that would land on that column keeps its
+      // bottom edge above the column's measured top, so neither layer loses a
+      // control to the other.
+      const occupied = document.querySelector<HTMLElement>('.app-feedback')?.getBoundingClientRect();
+      if (!occupied?.height) return;
+      const placed = callout.getBoundingClientRect();
+      if (placed.right <= occupied.left || placed.left >= occupied.right || placed.bottom <= occupied.top) return;
+      callout.style.top = `${Math.max(16, occupied.top - placed.height - 8)}px`;
     };
     document.body.append(callout);
     position();
     window.addEventListener('resize', position);
+    // The column's content arrives asynchronously (a notice, a toast appended or
+    // expired, a notice opened), so placement follows the column the shell actually
+    // renders rather than the single reading taken when the tour opened.
+    const column = document.querySelector<HTMLElement>('.app-feedback');
+    const clearance = column ? new MutationObserver(() => position()) : null;
+    clearance?.observe(column!, { childList: true, subtree: true, attributes: true });
     this.callout = callout;
     createIcons({ icons: { X }, root: callout });
     callout.focus();
     anchor.scrollIntoView({ block: 'nearest', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
-    this.cleanup = () => window.removeEventListener('resize', position);
+    this.cleanup = () => { window.removeEventListener('resize', position); clearance?.disconnect(); };
   }
 
   private cleanup: (() => void) | null = null;

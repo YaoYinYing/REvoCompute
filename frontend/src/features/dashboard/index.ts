@@ -14,6 +14,10 @@ const dashboardIcons = { Archive, Ban, Download, ExternalLink, RefreshCw, Search
 // across cards and never depend on interface language.
 function formatDate(value: string | null): string { return value ? new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'UTC' }).format(new Date(value)) : '-'; }
 function formatDuration(seconds: number | null): string { if (seconds == null) return '-'; const total = Math.round(seconds); const hours = Math.floor(total / 3600), minutes = Math.floor(total % 3600 / 60), rest = total % 60; return [hours && `${hours}h`, minutes && `${minutes}m`, `${rest}s`].filter(Boolean).join(' '); }
+// One status vocabulary for the whole register: the Runner's reported outcome when
+// it exists, otherwise the lifecycle enum. Both view modes read the same task, so
+// both must name its state the same way.
+function statusText(task: TaskSummary): string { return task.outcome || task.status; }
 function button(label: string, action: string, icon: string): HTMLButtonElement { const node = document.createElement('button'); node.type = 'button'; node.className = 'task-action'; node.dataset.action = action; node.title = label; node.setAttribute('aria-label', label); node.innerHTML = `<i data-lucide="${icon}" aria-hidden="true"></i><span>${label}</span>`; return node; }
 function textNode<K extends keyof HTMLElementTagNameMap>(tag: K, value: string, className = ''): HTMLElementTagNameMap[K] { const node = document.createElement(tag); node.className = className; node.textContent = value; return node; }
 
@@ -52,7 +56,7 @@ export class Dashboard {
 
     // Filtering answers "which tasks?" and lives in one aligned tool band.
     const controls = document.createElement('section'); controls.className = 'work-toolbar'; controls.setAttribute('aria-label', t('dashboard.filters.label'));
-    controls.innerHTML = `<label class="search-control"><span>${t('dashboard.filter.search')}</span><span class="input-with-action"><i data-lucide="search" aria-hidden="true"></i><input type="search" data-filter="search" placeholder="${t('dashboard.filter.searchPlaceholder')}" autocomplete="off"></span><small data-query-error></small></label>
+    controls.innerHTML = `<div class="search-control"><label for="dashboard-search"><span>${t('dashboard.filter.search')}</span><span class="input-with-action"><i data-lucide="search" aria-hidden="true"></i><input type="search" id="dashboard-search" data-filter="search" placeholder="${t('dashboard.filter.searchPlaceholder')}" autocomplete="off"></span></label><small data-query-error role="status" aria-live="polite"></small></div>
       <label><span>${t('dashboard.filter.status')}</span><select data-filter="status"><option value="">${t('dashboard.filter.allStatuses')}</option><option value="pending">${t('dashboard.filter.status.pending')}</option><option value="running">${t('dashboard.filter.status.running')}</option><option value="finished">${t('dashboard.filter.status.finished')}</option><option value="failed">${t('dashboard.filter.status.failed')}</option><option value="cancelled">${t('dashboard.filter.status.cancelled')}</option></select></label>
       <label><span>${t('dashboard.filter.type')}</span><input type="search" data-filter="taskType" placeholder="${t('dashboard.filter.typePlaceholder')}"></label>
       ${this.user.role === 'admin' ? `<label><span>${t('dashboard.filter.owner')}</span><input type="search" data-filter="owner" placeholder="${t('dashboard.filter.ownerPlaceholder')}"></label>` : ''}
@@ -144,7 +148,7 @@ export class Dashboard {
     const card = document.createElement('article'); card.className = 'task-card'; card.dataset.status = task.status;
     const header = document.createElement('header'); const identity = document.createElement('div');
     identity.append(textNode('h2', task.display_name), textNode('p', task.task_type, 'task-card-type'));
-    const status = document.createElement('span'); status.className = `status status-${task.status.replace(':', '-')}`; status.textContent = task.outcome || task.status; header.append(identity, status);
+    const status = document.createElement('span'); status.className = `status status-${task.status.replace(':', '-')}`; status.textContent = statusText(task); header.append(identity, status);
     const facts = document.createElement('dl');
     const factValues: Array<[string, string, boolean]> = [
       [t('dashboard.card.submitted'), formatDate(task.submitted_at), false],
@@ -173,7 +177,7 @@ export class Dashboard {
       ]).then(async ([data, { MolecularViewer }]) => {
         if (!details.open || !details.isConnected) return; content.replaceChildren(); const viewer = await MolecularViewer.mount(content, { theme: document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light' });
         if (!details.open || !details.isConnected) { viewer.dispose(); return; } this.previewViewers.set(task.task_id, viewer); await viewer.loadStructure({ data, format: task.input_preview!.format, label: task.display_name });
-      }).catch(error => { if (details.isConnected) content.textContent = `Unable to load structure: ${(error as Error).message}`; });
+      }).catch(error => { if (details.isConnected) content.textContent = t('dashboard.card.structureLoadFailed', { message: (error as Error).message }); });
     }); return details;
   }
   private taskActions(task: TaskSummary): HTMLElement {
@@ -186,7 +190,7 @@ export class Dashboard {
   }
   private renderTable(tasks: TaskSummary[]): void {
     const table = document.createElement('table'); table.className = 'task-table'; table.innerHTML = `<thead><tr><th>${t('dashboard.table.name')}</th><th>${t('dashboard.card.type')}</th>${this.user.role === 'admin' ? `<th>${t('dashboard.card.owner')}</th>` : ''}<th>${t('dashboard.card.submitted')}</th><th>${t('dashboard.filter.status')}</th><th><span class="sr-only">${t('dashboard.table.actions')}</span></th></tr></thead>`; const body = document.createElement('tbody');
-    tasks.forEach(task => { const row = document.createElement('tr'); const cells = [task.display_name, task.task_type, ...(this.user.role === 'admin' ? [task.owner || '-'] : []), formatDate(task.submitted_at), task.status]; cells.forEach(value => { const cell = document.createElement('td'); cell.textContent = value; row.append(cell); }); const actionCell = document.createElement('td'); actionCell.append(this.taskActions(task)); row.append(actionCell); body.append(row); }); table.append(body); this.list.append(table);
+    tasks.forEach(task => { const row = document.createElement('tr'); const cells = [task.display_name, task.task_type, ...(this.user.role === 'admin' ? [task.owner || '-'] : []), formatDate(task.submitted_at), statusText(task)]; cells.forEach((value, index) => { const cell = document.createElement('td'); cell.textContent = value; if (index === cells.length - 1) cell.className = 'state-cell'; row.append(cell); }); const actionCell = document.createElement('td'); actionCell.append(this.taskActions(task)); row.append(actionCell); body.append(row); }); table.append(body); this.list.append(table);
   }
   private async handleAction(event: Event): Promise<void> {
     const target = (event.target as Element).closest<HTMLElement>('[data-action]'); if (!target) return; const action = target.dataset.action;

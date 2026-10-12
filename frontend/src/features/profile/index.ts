@@ -18,7 +18,7 @@ import {
 } from '../../api/app-api';
 import type { AcademicPosition } from '../../api/contracts';
 import { confirmAction } from '../../app/dialogs';
-import { academicPositionLabels, academicPositionOptions } from '../../app/domain-vocabulary';
+import { academicPositionLabels, academicPositionOptions, metadataValue, safeExternalUrl } from '../../app/domain-vocabulary';
 import type { AppShell } from '../../app/shell';
 import './profile.css';
 
@@ -213,17 +213,6 @@ export function accessState(policy: RunnerAccess): 'Granted' | 'Expired' | 'Pend
   if (policy.granted) return 'Granted'; if (policy.expired) return 'Expired';
   if (policy.request_status === 'pending') return 'Pending'; if (policy.request_status === 'rejected') return 'Rejected';
   return policy.requestable ? 'Requestable' : 'Restricted';
-}
-
-function metadataValue(value: unknown, key: string): string | null {
-  if (!value || typeof value !== 'object') return null;
-  const item = (value as Record<string, unknown>)[key]; return typeof item === 'string' && item ? item : null;
-}
-
-function safeExternalUrl(value: string | null): string | null {
-  if (!value) return null;
-  try { const url = new URL(value, location.origin); return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : null; }
-  catch { return null; }
 }
 
 async function loadAccess(root: HTMLElement, shell: AppShell): Promise<void> {

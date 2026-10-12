@@ -13,6 +13,8 @@ from urllib.parse import parse_qs, urlsplit
 from playwright.sync_api import Page, expect
 import pytest
 
+import browser_frontend_assets
+import frontend_fixtures
 from browser_frontend_assets import result_dist
 
 pytestmark = pytest.mark.browser
@@ -20,6 +22,109 @@ pytestmark = pytest.mark.browser
 ROOT = Path(__file__).resolve().parents[1]
 TASK_ID = "0123456789abcdef0123456789abcdef"
 ORIGIN = "https://revocompute.example"
+
+# Read a focus indicator the way a keyboard user meets it: the computed outline
+# of whatever already holds focus, plus the colour it is actually drawn against.
+# The ring sits outside the border box, so its neighbour is the nearest painted
+# ancestor background, not the element's own fill. Focus is driven by real Tab
+# presses (``_tab_to`` / ``_tab_walk``), because ``:focus-visible`` is only
+# defined for keyboard-initiated focus; nothing here freezes a token or a class.
+_FOCUS_JS = """
+() => {
+  const numbers = (value) => (value.match(/[0-9.]+/g) || []).map(Number);
+  const luminance = (rgb) => {
+    const channel = (c) => { c = c / 255; return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
+    return 0.2126 * channel(rgb[0]) + 0.7152 * channel(rgb[1]) + 0.0722 * channel(rgb[2]);
+  };
+  const contrast = (a, b) => { const la = luminance(a), lb = luminance(b); return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05); };
+  const backdrop = (el) => {
+    const stack = []; let node = el.parentElement;
+    while (node) {
+      const parts = numbers(getComputedStyle(node).backgroundColor);
+      const alpha = parts.length > 3 ? parts[3] : 1;
+      if (alpha > 0) { stack.push([parts.slice(0, 3), alpha]); if (alpha >= 0.999) break; }
+      node = node.parentElement;
+    }
+    const base = numbers(getComputedStyle(document.body).backgroundColor).slice(0, 3);
+    let merged = base.length === 3 ? base : [255, 255, 255];
+    for (let i = stack.length - 1; i >= 0; i -= 1) {
+      const [colour, alpha] = stack[i];
+      merged = merged.map((value, k) => Math.round(colour[k] * alpha + value * (1 - alpha)));
+    }
+    return merged;
+  };
+  const describe = (el) => {
+    if (!el) return null;
+    const style = getComputedStyle(el);
+    const rgb = numbers(style.outlineColor).slice(0, 3);
+    const solid = style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) > 0;
+    const behind = backdrop(el);
+    return { tag: el.tagName, cls: String(el.className),
+             outline_style: style.outlineStyle, outline_width: style.outlineWidth,
+             outline_colour: style.outlineColor, solid: solid,
+             focus_visible: el.matches(':focus-visible'), backdrop: behind,
+             contrast: solid ? Math.round(contrast(rgb, behind) * 100) / 100 : null };
+  };
+  return { active: describe(document.activeElement), controls: describe };
+}
+"""
+
+# The Mol* selection-controls row is fixed-width inside a clipping host. Report
+# each control's reachability as the browser lays it out, and whether the row
+# can be scrolled to anything the host still clips.
+_CONTAINMENT_JS = """
+() => {
+  const host = document.querySelector('.structure-host');
+  const controls = document.querySelector('.msp-selection-viewport-controls');
+  if (!host || !controls) return null;
+  const hostBox = host.getBoundingClientRect();
+  const reachable = (el) => {
+    const box = el.getBoundingClientRect();
+    if (box.left >= hostBox.left - 1 && box.right <= hostBox.right + 1) return true;
+    const row = el.parentElement;
+    return Boolean(row && row.scrollWidth > row.clientWidth + 1 && getComputedStyle(row).overflowX === 'auto');
+  };
+  const controlsBox = controls.getBoundingClientRect();
+  return {
+    host_width: Math.round(hostBox.width),
+    controls_width: Math.round(controlsBox.width),
+    overhang: Math.round(controlsBox.right - hostBox.right),
+    children: Array.from(controls.querySelectorAll('.msp-flex-row > *'))
+      .map((el) => ({ cls: String(el.className).slice(0, 60), reachable: reachable(el) })),
+    document_overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+  };
+}
+"""
+
+
+def _tab_to(page: Page, selector: str, *, limit: int = 25) -> None:
+    """Focus ``selector`` the way a keyboard user does, with real Tab presses.
+
+    ``:focus-visible`` only matches keyboard-initiated focus, and a programmatic
+    ``el.focus()`` on a plain button does not set it, so the walk is the only
+    faithful way to reach the ring the user actually sees.
+    """
+    for _ in range(limit):
+        page.keyboard.press("Tab")
+        if page.evaluate("(sel) => Boolean(document.activeElement && document.activeElement.matches(sel))", selector):
+            return
+    raise AssertionError(f"{selector} was not reachable by Tab")
+
+
+def _tab_walk(page: Page, *, limit: int = 60) -> list[dict]:
+    """Every focus indicator reached by pressing Tab until the cycle closes."""
+    walk, seen = [], set()
+    for _ in range(limit):
+        page.keyboard.press("Tab")
+        reading = page.evaluate(_FOCUS_JS)["active"]
+        if reading["tag"] == "BODY":
+            break
+        walk.append(reading)
+        token = (reading["tag"], reading["cls"], reading["outline_colour"])
+        if token in seen:
+            break
+        seen.add(token)
+    return walk
 
 
 def _artifact(path: str, *, role: str = "artifact", capability: str = "text", size: int = 12) -> dict:
@@ -112,6 +217,9 @@ def _serve_app(page: Page, *, status: dict | None = None, manifest: dict | None 
     html = f'<!doctype html><html><head>{styles}<script type="module" src="/static/app/{entry["file"]}"></script></head><body><div id="app"></div></body></html>'
     page.route(f"{ORIGIN}/compute/results/*", lambda route: route.fulfill(content_type="text/html", body=html))
     page.route(f"{ORIGIN}/compute/login**", lambda route: route.fulfill(content_type="text/html", body="<p>Login</p>"))
+    # The same bundle at a non-result route: the shell is identical, so a control's
+    # focus indicator can be read there as the reference the result route must match.
+    page.route(f"{ORIGIN}/compute/dashboard", lambda route: route.fulfill(content_type="text/html", body=html))
 
     def static(route):
         relative = route.request.url.split("/static/app/", 1)[1].split("?", 1)[0]
@@ -490,3 +598,78 @@ def test_preview_failure_does_not_break_other_files_or_archive(page: Page) -> No
     page.get_by_role("button", name="Create ZIP", exact=True).click()
     expect(page.get_by_text("Archive generation requested.", exact=True)).to_be_visible()
     assert archive_requests == ["Bearer ephemeral"]
+
+
+def _ring(reading: dict) -> tuple:
+    """The observable ring: what the browser paints, not a token or class."""
+    return (reading["outline_style"], reading["outline_width"], reading["outline_colour"])
+
+
+def test_shell_focus_ring_survives_a_result_route_and_every_indicator_meets_contrast(page: Page) -> None:
+    """The result sheet must not replace the shell's focus ring, and every focus
+    indicator on a result route must reach WCAG 1.4.11's 3:1 non-text contrast.
+
+    Focus is driven by real Tab presses, so each reading is the ring the browser
+    shows a keyboard user rather than the result of a script-initiated focus.
+    The same shell control's ring on a non-result route is the reference the
+    result route must match: the defect is a cascade collision, and a frozen
+    token or class name could not tell a collision from a missing style.
+    """
+    _serve_app(page, manifest=_manifest(artifacts=[_artifact("summary.txt", role="primary")]))
+    expect(page.locator(".result-app")).to_be_visible()
+
+    for theme in ("light", "dark"):
+        page.evaluate("theme => { document.documentElement.dataset.theme = theme; }", theme)
+        _tab_to(page, ".app-brand")
+        on_result = page.evaluate(_FOCUS_JS)["active"]
+        page.goto(f"{ORIGIN}/compute/dashboard")
+        expect(page.locator(".app-brand")).to_be_visible()
+        page.evaluate("theme => { document.documentElement.dataset.theme = theme; }", theme)
+        _tab_to(page, ".app-brand")
+        off_result = page.evaluate(_FOCUS_JS)["active"]
+        # The non-result route is the reference: a keyboard ring that is really shown.
+        assert off_result["focus_visible"] and off_result["solid"], off_result
+        assert (on_result["focus_visible"], _ring(on_result)) == (
+            off_result["focus_visible"], _ring(off_result),
+        ), f"a shell control lost its ring on a result route ({theme}): {on_result} vs {off_result}"
+
+        page.goto(f"{ORIGIN}/compute/results/{TASK_ID}")
+        expect(page.locator(".result-app")).to_be_visible()
+        page.evaluate("theme => { document.documentElement.dataset.theme = theme; }", theme)
+        walk = _tab_walk(page)
+        assert len(walk) >= 5, walk
+        assert any(reading["cls"].startswith("app-brand") for reading in walk), walk
+        for indicator in walk:
+            assert indicator["focus_visible"], indicator
+            assert indicator["solid"] and float(indicator["outline_width"].rstrip("px")) > 0, indicator
+            assert indicator["contrast"] is not None and indicator["contrast"] >= 3.0, indicator
+
+
+def test_molstar_selection_controls_stay_reachable_at_mobile_width(page: Page, monkeypatch) -> None:
+    """The Mol* selection-controls row must not be clipped unreachably at 320px.
+
+    Read from the browser: every control in the row is inside the structure
+    host's box, or the row overflows it as a scrollable region that can reach
+    it; and the document still does not scroll sideways.
+
+    This case needs the real production bundle, because the Mol* selection
+    controls are chunk markup the fixture-viewer double cannot lay out at all.
+    The stand-in is installed through ``monkeypatch`` so it is undone when the
+    case ends: a process-global left pinned would serve every later browser case
+    whatever bundle was last built on disk, which is not the bundle under test.
+    """
+    for width, height in ((320, 900), (768, 900), (1280, 900)):
+        page.set_viewport_size({"width": width, "height": height})
+        # The real production bundle: the Mol* selection controls are chunk
+        # markup, so the fixture-viewer double cannot lay them out at all.
+        monkeypatch.setattr(browser_frontend_assets, "_RESULT_DIST", ROOT / "frontend" / "dist")
+        frontend_fixtures.mount_scenario(page, frontend_fixtures.structure_scenario())
+        page.goto(f"{frontend_fixtures.DEFAULT_ORIGIN}/compute/results/{frontend_fixtures.DEFAULT_TASK_ID}")
+        page.locator(".msp-selection-viewport-controls").first.wait_for(timeout=90_000)
+        page.wait_for_timeout(1500)
+        reading = page.evaluate(_CONTAINMENT_JS)
+        assert reading is not None, f"no selection controls were rendered at {width}px"
+        assert reading["children"], reading
+        assert all(child["reachable"] for child in reading["children"]), reading
+        assert reading["overhang"] <= 0 or reading["controls_width"] <= reading["host_width"] + 1, reading
+        assert reading["document_overflow"] <= 0, reading

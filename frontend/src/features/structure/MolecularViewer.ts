@@ -13,6 +13,7 @@ import { loadTrajectory as loadPluginTrajectory } from 'molstar/lib/extensions/p
 import { createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import 'molstar/build/viewer/molstar.css';
+import { t } from '../../app/i18n';
 
 const REPRESENTATIONS: Record<string, string> = {
   cartoon: 'cartoon',
@@ -326,17 +327,17 @@ export class MolecularViewer {
 
   private async applyPresentation() {
     if (!this.plugin || !this.hierarchy().current.structures.length) return;
-    const target = REPRESENTATIONS[this.representation];
+    const target = REPRESENTATIONS[this.representation] ?? this.representation;
     if (this.appliedRepresentation !== this.representation) {
       if (COMPOSED_REPRESENTATIONS.has(this.representation)) {
         const provider = this.plugin.builders.structure.representation.resolveProvider(target);
-        if (!provider) throw new Error(`Unknown structure preset: ${target}`);
+        if (!provider) throw new Error(t('results.structure.presetUnavailable', { target }));
         await this.plugin.managers.structure.component.applyPreset(this.hierarchy().current.structures, provider, {
           theme: { globalName: COLORS[this.color] },
         });
       } else {
         const provider = this.plugin.representation.structure.registry.get(target);
-        if (!provider) throw new Error(`Unknown structure representation: ${target}`);
+        if (!provider) throw new Error(t('results.structure.representationUnavailable', { target }));
         await this.plugin.dataTransaction(async () => {
           const existing = this.components();
           if (existing.length) await this.plugin.managers.structure.component.removeRepresentations(existing);

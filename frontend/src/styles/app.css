@@ -31,6 +31,10 @@
   --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
   /* Navigation rail geometry: quiet product chrome, not an IDE toolbar. */
   --rail-collapsed: 4.25rem; --rail-expanded: 13rem;
+  /* The global bar's own height, in rem so it tracks a text-only resize. A
+     page-level sticky surface clears the bar through this token instead of
+     re-deriving the bar's height as a second magic number. */
+  --app-bar: 3.9rem;
   font-family: var(--font-sans);
   font-size: 16px;
   line-height: 1.5;
@@ -94,7 +98,7 @@ a { color: var(--app-accent); }
 .app-shell[data-rail="expanded"] .app-nav a { justify-content: start; padding: .7rem .8rem; }
 .app-nav svg, .app-header-actions svg { width: 1.05rem; height: 1.05rem; flex: none; }
 
-.app-header { grid-area: header; position: sticky; top: 0; z-index: 30; display: flex; min-height: 3.9rem; align-items: center; justify-content: end; gap: .5rem; padding: 0 1.25rem; border-bottom: 1px solid var(--app-line); background: color-mix(in srgb, var(--app-surface) 88%, transparent); backdrop-filter: blur(14px); }
+.app-header { grid-area: header; position: sticky; top: 0; z-index: 30; display: flex; min-height: var(--app-bar); align-items: center; justify-content: end; gap: .5rem; padding: 0 1.25rem; border-bottom: 1px solid var(--app-line); background: color-mix(in srgb, var(--app-surface) 88%, transparent); backdrop-filter: blur(14px); }
 .app-header-actions { display: flex; align-items: center; gap: .5rem; }
 .app-new-task { display: inline-flex; min-height: 2.2rem; align-items: center; gap: .4rem; padding: 0 .85rem; border: 1px solid transparent; border-radius: var(--r-control); background: var(--app-accent); color: var(--app-bg); font-size: .82rem; font-weight: 650; text-decoration: none; transition: background .15s ease; }
 .app-new-task:hover, .app-new-task:focus-visible { background: var(--app-accent-2); }
@@ -104,7 +108,7 @@ a { color: var(--app-accent); }
 .app-user span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .icon-button { display: grid; width: 2.3rem; height: 2.3rem; place-items: center; padding: 0; border: 1px solid var(--app-line); border-radius: var(--r-control); background: var(--app-surface); color: var(--app-ink); cursor: pointer; transition: border-color .15s ease, color .15s ease; }
 .icon-button:hover { border-color: var(--app-line-strong); color: var(--app-accent); }
-.app-outlet { grid-area: outlet; min-width: 0; min-height: calc(100vh - 3.9rem); }
+.app-outlet { grid-area: outlet; min-width: 0; min-height: calc(100vh - var(--app-bar)); }
 
 /* Language control: a compact menu in the top bar, quiet until used. */
 .lang-menu { position: relative; }
@@ -240,6 +244,10 @@ a { color: var(--app-accent); }
 .layout-switch button { min-height: 2.2rem; padding: .35rem .8rem; border: 1px solid var(--app-line-strong); background: var(--app-surface); color: var(--app-muted); cursor: pointer; font-size: .76rem; font-weight: 600; }
 .layout-switch button:first-of-type { border-radius: var(--r-util) 0 0 var(--r-util); }.layout-switch button:last-of-type { border-radius: 0 var(--r-util) var(--r-util) 0; }.layout-switch button + button { margin-left: -1px; }
 .layout-switch button[aria-pressed="true"] { position: relative; border-color: var(--app-accent); background: var(--app-soft); color: var(--app-accent); font-weight: 650; }
+/* The catalog's density fieldset holds two controls, so it is sized to them
+   rather than to the base rule's three-track grid; the compound selector keeps
+   it winning at the breakpoints where the shared rule goes full-width. */
+.runner-toolbar .density-switch { grid-template-columns: repeat(2, auto); justify-self: start; width: max-content; max-width: 100%; }
 /* The result count is a machine fact; it lives in the aligned toolbar. */
 .catalog-count { margin: 0; color: var(--app-muted); font-size: .76rem; font-variant-numeric: tabular-nums; }
 
@@ -268,14 +276,26 @@ a { color: var(--app-accent); }
 .input-preview-host { min-height: 18rem; margin: 0 0 .8rem; overflow: hidden; border: 1px solid var(--app-line); border-radius: var(--r-util); background: var(--app-raised); color: var(--app-muted); font-size: .74rem; }
 .task-actions { display: flex; min-height: 3rem; align-items: center; justify-content: end; gap: .3rem; margin-top: auto; padding: .6rem 1.05rem; border-top: 1px solid var(--app-line); }
 .task-select { display: inline-flex !important; grid-auto-flow: column; margin-right: auto !important; align-items: center; gap: .4rem; color: var(--app-muted); font-size: .74rem; }
-.task-list[data-layout="table"] { display: block; overflow-x: auto; border: 1px solid var(--app-line); border-radius: var(--r-surface); background: var(--app-surface); }.task-table { width: 100%; border-collapse: collapse; font-size: .8rem; }.task-table th, .task-table td { padding: .65rem .75rem; border-bottom: 1px solid var(--app-line); text-align: left; }.task-table th { color: var(--app-muted); font-size: .68rem; font-weight: 650; }.task-table td { font-variant-numeric: tabular-nums; }.task-table tbody tr:last-child td { border-bottom: 0; }.task-table .task-actions { margin: 0; padding: 0; border: 0; white-space: nowrap; }
+.task-list[data-layout="table"] { position: relative; display: block; overflow-x: auto; border: 1px solid var(--app-line); border-radius: var(--r-surface); background: var(--app-surface); }.task-table { width: 100%; border-collapse: collapse; font-size: .8rem; }.task-table th, .task-table td { padding: .65rem .75rem; border-bottom: 1px solid var(--app-line); text-align: left; }.task-table th { color: var(--app-muted); font-size: .68rem; font-weight: 650; }.task-table td { font-variant-numeric: tabular-nums; }.task-table tbody tr:last-child td { border-bottom: 0; }.task-table .task-actions { margin: 0; padding: 0; border: 0; white-space: nowrap; }
+/* §14.4 makes view mode a presentation choice over one contract, so the Table's
+   Status cell reads the state exactly as the card's pill does — the pill's own
+   text-transform. The cell stays table typography: no pill, colour, or shape mark. */
+.task-table .state-cell { text-transform: capitalize; }
 .empty-state { grid-column: 1 / -1; padding: 2.5rem; border: 1px dashed var(--app-line-strong); border-radius: var(--r-surface); color: var(--app-muted); text-align: center; }
 .loading-state { color: var(--app-muted); }.error-state { padding: .8rem; border-left: 2px solid var(--app-danger); background: var(--app-surface); color: var(--app-danger); }
 /* Transient toasts: short action feedback only. */
 .app-notices { display: grid; flex: none; width: min(24rem, 100%); gap: .5rem; }
 .app-notice { padding: .75rem .9rem; border-radius: var(--r-control); background: var(--app-ink); color: var(--app-bg); box-shadow: var(--shadow-raised); font-size: .8rem; }.notice-error { background: var(--app-danger); color: #fff; }.notice-success { background: var(--app-success); color: #fff; }
-.readiness-state { padding: .4rem .7rem; border-left: 2px solid var(--app-warning); background: var(--app-surface); color: var(--app-muted); font-size: .74rem; }.readiness-state[data-status="READY"] { border-color: var(--app-success); }
+/* The status badge is one label on the masthead row; its box may never be wider
+   than the page, so the label breaks inside a word when the row cannot hold it.
+   At ordinary widths the label keeps its natural line and size. */
+.readiness-state { overflow-wrap: anywhere; padding: .4rem .7rem; border-left: 2px solid var(--app-warning); background: var(--app-surface); color: var(--app-muted); font-size: .74rem; }.readiness-state[data-status="READY"] { border-color: var(--app-success); }
 .access-banner { width: fit-content; margin: 1rem 0; padding: .35rem .8rem; border-left: 2px solid var(--app-accent); background: var(--app-surface); color: var(--app-muted); font-size: .78rem; }.access-banner.restricted { border-color: var(--app-warning); }
+/* A restricted policy's published terms. They are the owning policy's own words,
+   so they sit as ruled reference under the state banner rather than as an
+   extension of the frontend-authored sentence in it. */
+.access-terms { display: grid; gap: .3rem; width: fit-content; max-width: min(100%, 46rem); margin: -.5rem 0 0; color: var(--app-muted); font-size: .78rem; line-height: 1.55; }
+.access-terms p { margin: 0; }.access-terms-title { color: var(--app-ink); font-weight: 650; }
 
 /* --- Runner catalog: a scientific method registry ------------------------ */
 .runner-toolbar { margin-bottom: .55rem; }
@@ -351,7 +371,10 @@ a { color: var(--app-accent); }
 .app-dialog { width: min(100% - 2rem, 30rem); padding: 0; border: 1px solid var(--app-line); border-radius: var(--r-surface); background: var(--app-raised); color: var(--app-ink); box-shadow: var(--shadow-dialog); }.app-dialog::backdrop { background: var(--app-scrim); backdrop-filter: blur(2px); }.app-dialog-frame > header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1rem 1.15rem; border-bottom: 1px solid var(--app-line); }.app-dialog-frame h2 { margin: 0; font: 600 1.2rem var(--font-display); }.app-dialog-body { padding: 1.15rem; }.app-dialog-body p { margin: 0; color: var(--app-muted); font-size: .85rem; line-height: 1.6; }.app-dialog-actions { display: flex; justify-content: end; gap: .5rem; padding: .9rem 1.15rem; border-top: 1px solid var(--app-line); }
 
 /* --- Public shell -------------------------------------------------------- */
-.public-header { position: relative; z-index: 30; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; min-height: 4.4rem; align-items: center; gap: 2rem; padding: 0 max(1rem, calc((100vw - 96rem) / 2)); border-bottom: 1px solid var(--app-line); background: color-mix(in srgb, var(--app-surface) 88%, transparent); backdrop-filter: blur(12px); }
+/* The header is its own query container: the collapse below is decided by the
+   inline size the header actually has, so a rem in the condition resolves against
+   the header's own (zoom-doubled) font and fires under text-only resize too. */
+.public-header { container-type: inline-size; position: relative; z-index: 30; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; min-height: 4.4rem; align-items: center; gap: 2rem; padding: 0 max(1rem, calc((100vw - 96rem) / 2)); border-bottom: 1px solid var(--app-line); background: color-mix(in srgb, var(--app-surface) 88%, transparent); backdrop-filter: blur(12px); }
 .public-brand { display: inline-flex; align-items: center; gap: .55rem; color: var(--app-ink); font: 700 1.12rem var(--font-display); text-decoration: none; }.public-brand img { width: 2.15rem; height: 2.15rem; }
 .public-navigation { min-width: 0; }.public-navigation > summary { display: none; list-style: none; }.public-navigation > summary::-webkit-details-marker { display: none; }.public-navigation nav { display: flex !important; justify-content: center; gap: clamp(.8rem, 2vw, 1.7rem); }.public-navigation a { color: var(--app-muted); font-size: .8rem; font-weight: 600; text-decoration: none; }.public-navigation a:hover, .public-navigation a[aria-current="page"] { color: var(--app-ink); }
 .public-actions { display: flex; align-items: center; gap: .5rem; }.public-account { min-width: 5.6rem; }.public-outlet { min-height: calc(100vh - 4.4rem); }
@@ -369,7 +392,7 @@ a { color: var(--app-accent); }
 /* Tablet and below: the rail becomes a mobile-specific bottom navigation;
    the brand and the global actions share one top bar. */
 @media (max-width: 56rem) {
-  .app-shell { --app-bottom-clearance: calc(3.5rem + var(--app-admin-height, 0px)); grid-template-columns: auto minmax(0, 1fr); grid-template-rows: auto 1fr; grid-template-areas: "brand header" "outlet outlet"; }
+  .app-shell { --app-bottom-clearance: calc(var(--app-bar) + var(--app-admin-height, 0px)); grid-template-columns: auto minmax(0, 1fr); grid-template-rows: auto 1fr; grid-template-areas: "brand header" "outlet outlet"; }
   /* Narrow chrome keeps the logo and icon-only controls so the top bar cannot
      force the document wider than the viewport. */
   .app-brand { justify-content: start; padding: 0 .75rem; }
@@ -394,7 +417,7 @@ a { color: var(--app-accent); }
   .app-shell[data-rail] .app-nav-group[data-nav-group="admin"] a > span { display: inline; }
   .app-nav a { flex: 1; flex-direction: column; gap: .15rem; justify-content: center; padding: .3rem; border-radius: 0; font-size: .66rem; }
   .app-shell[data-rail] .app-nav > .app-nav-group:not([data-nav-group="admin"]) a > span { display: inline; }
-  .app-header { grid-area: header; min-width: 0; min-height: 3.5rem; padding: 0 .6rem; background: var(--app-surface); backdrop-filter: none; }
+  .app-header { grid-area: header; min-width: 0; --app-bar: 3.5rem; padding: 0 .6rem; background: var(--app-surface); backdrop-filter: none; }
   .app-header-actions { gap: .3rem; min-width: 0; }
   .app-header .app-new-task { width: 2.15rem; min-width: 2.15rem; justify-content: center; padding: 0; }
   .app-header .app-new-task span { display: none; }
@@ -465,8 +488,15 @@ a { color: var(--app-accent); }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; } }
 
-@media (max-width: 66rem) {
-  .public-header { gap: .7rem; padding: 0 .75rem; }
+/* Public header collapse. The navigation's compact form is selected by the header's own
+   inline size, not by the viewport: a rem in a media query resolves against the initial
+   16px font, so a viewport query needs a 66rem *viewport* and stays blind to text-only
+   resize, whereas the query container inherits the zoomed root and its rem condition
+   therefore fires at 200% text resize. The header's own gap and padding deliberately stay
+   on the viewport query: an element is never matched by its own container condition, and
+   those are chrome values a text-only zoom is right to grow. */
+@media (max-width: 66rem) { .public-header { gap: .7rem; padding: 0 .75rem; } }
+@container (max-width: 66rem) {
   .public-navigation { justify-self: end; }
   .public-navigation > summary { display: grid; }
   .public-navigation nav { position: absolute; top: calc(100% + .35rem); right: .75rem; display: none !important; width: min(14rem, calc(100vw - 1.5rem)); max-height: calc(100dvh - 6rem); overflow-y: auto; flex-direction: column; gap: 0; padding: .35rem; border: 1px solid var(--app-line); border-radius: var(--r-control); background: var(--app-raised); box-shadow: var(--shadow-raised); }

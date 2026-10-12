@@ -64,6 +64,31 @@ def _mount_dashboard_with_preview(page: Page, width: int, role: str = "user") ->
     expect(page.locator(".task-card")).to_have_count(2)
 
 
+def _mount_dense_admin_dashboard(page: Page, width: int, tasks: int) -> None:
+    """Open the admin register on a wide list: thirty rows with mixed statuses.
+
+    A register holding only the canonical fixture's single short task fits even
+    the narrowest viewport, so a layout that escapes its own scroll container
+    stays invisible. Mixed lifecycle states and their action affordances give
+    the Table its real column widths.
+    """
+    page.set_viewport_size({"width": width, "height": 960})
+    scenario = controlled_scenario().with_role("admin")
+    statuses = ("finished", "running", "failed")
+    summaries = []
+    for index in range(tasks):
+        status = statuses[index % len(statuses)]
+        summary = build_task_summary(
+            f"{index:032x}", scenario.runner, status=status,
+            result_available=status == "finished", owner=scenario.session.username,
+        )
+        summary["display_name"] = f"Dense task {index:02d} with a long descriptive name"
+        summaries.append(summary)
+    mount_scenario(page, scenario.with_task_summaries(summaries))
+    page.goto(f"{ORIGIN}/compute/dashboard")
+    expect(page.locator(".task-card")).to_have_count(tasks)
+
+
 @pytest.mark.parametrize("width", [1024, 1440])
 @pytest.mark.parametrize("role", ["user", "admin"])
 def test_detailed_task_preview_uses_the_register_measure_and_keeps_actions_reachable(
@@ -256,3 +281,59 @@ def test_narrow_admin_register_tolerates_wider_font_metrics(page: Page, tour_com
         assert target and target["height"] >= 44
         assert target["x"] >= box["x"] and target["x"] + target["width"] <= box["x"] + box["width"] + 1
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+
+def _overflow(page: Page) -> int:
+    return page.evaluate(
+        "document.documentElement.scrollWidth - document.documentElement.clientWidth"
+    )
+
+
+@pytest.mark.parametrize("width", [320, 375])
+def test_dense_table_layout_keeps_the_page_within_the_viewport(page: Page, width: int) -> None:
+    _mount_dense_admin_dashboard(page, width, 30)
+    page.get_by_role("button", name="Table", exact=True).click()
+    expect(page.locator(".task-table tbody tr")).to_have_count(30)
+    # The visually hidden Actions heading is absolutely positioned, so without a
+    # positioned ancestor it escapes the Table's own horizontal scroll container
+    # and stretches the document past the viewport. The overflow is measurable,
+    # not inferred: the page must not scroll sideways at all.
+    assert _overflow(page) == 0
+    # Clipping the label must not remove it: the Actions cells still need their
+    # heading in the accessibility tree.
+    heading = page.get_by_role("columnheader", name="Actions", exact=True)
+    expect(heading).to_have_count(1)
+    assert heading.evaluate("node => !!(node.getClientRects().length)")
+
+
+@pytest.mark.parametrize("width", [320, 375, 768, 1280])
+def test_card_layouts_keep_the_page_within_the_viewport(page: Page, width: int) -> None:
+    # The Table gained a positioned ancestor; the card layouts must stay equally
+    # clean at every width they are offered.
+    _mount_dense_admin_dashboard(page, width, 30)
+    assert _overflow(page) == 0
+    page.get_by_role("button", name="Compact", exact=True).click()
+    expect(page.locator(".task-card")).to_have_count(30)
+    assert _overflow(page) == 0
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+def test_invalid_search_pattern_error_is_announced_by_a_pre_existing_live_region(page: Page, width: int) -> None:
+    page.set_viewport_size({"width": width, "height": 780})
+    mount_scenario(page, controlled_scenario())
+    page.goto(f"{ORIGIN}/compute/dashboard")
+    expect(page.locator(".task-card")).to_be_visible()
+    # The region has to exist before the message so assistive technology
+    # receives the update; a region created alongside its text is silent.
+    region = page.locator("[data-query-error]")
+    expect(region).to_have_count(1)
+    expect(region).to_have_role("status")
+    assert region.evaluate("node => node.closest('[aria-live]') !== null")
+    expect(region).to_be_empty()
+    if not page.locator("[data-filter='status']").is_visible():
+        page.locator(".dashboard-filters > summary").click()
+    if not page.locator("[data-toggle-regex]").is_visible():
+        page.locator("[data-advanced]").click()
+    page.locator("[data-toggle-regex]").click()
+    page.locator("[data-filter='search']").fill("[")
+    expect(region).to_have_text("Invalid regular expression")

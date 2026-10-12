@@ -1,5 +1,6 @@
 import type { InputFile, TaskFormDefinition, WorkspaceCapability, WorkspaceStep, WorkspaceSummary, WorkspaceValues } from '../types';
 import { authorizedFetch } from '../../../app/session';
+import { t } from '../../../app/i18n';
 import { builtinPlugins } from './builtins';
 import { PluginHost } from './PluginHost';
 import type { WorkspaceContext } from './plugin-contract';
@@ -31,9 +32,9 @@ export class InputWorkspace {
 
   private createHost(form?: TaskFormDefinition): PluginHost {
     return new PluginHost(builtinPlugins, { fetch: async (input, init) => {
-      if (!form || typeof input !== 'string') throw new Error('Workspace plugin request is outside its declared API scope.');
+      if (!form || typeof input !== 'string') throw new Error(t('ct.workspace.pluginScope'));
       const allowed = `/compute/api/types/${encodeURIComponent(form.name)}/workspace/normalize`;
-      if (input !== allowed || init?.method?.toUpperCase() !== 'POST') throw new Error('Workspace plugin request is outside its declared API scope.');
+      if (input !== allowed || init?.method?.toUpperCase() !== 'POST') throw new Error(t('ct.workspace.pluginScope'));
       return authorizedFetch(input, init);
     } });
   }
@@ -92,15 +93,17 @@ export class InputWorkspace {
     };
     this.context = context;
     host.mount(definitions, context, definition => {
-      const target = stepTargets.get(definition.stepId); if (!target) throw new Error(`Missing workspace step: ${definition.stepId}`);
+      const target = stepTargets.get(definition.stepId); if (!target) throw new Error(t('ct.workspace.missingStep', { step: definition.stepId }));
       const section = element('section', 'ct-workspace-component'); section.dataset.capabilityId = definition.id;
       if (definition.title) section.append(element('h3', 'ct-component-title', definition.title));
       if (definition.description) section.append(element('p', 'ct-component-description', definition.description));
       const body = element('div', 'ct-component-body'); section.append(body); target.append(section); return body;
     });
     host.refresh();
-    const errors = host.validate().filter(error => error.includes('unsupported component'));
-    if (errors.length) this.options.onError(errors.join(' '));
+    // A declared capability whose plugin never mounted is a workspace failure. The
+    // signal is the plugin id, not the localized message, so this holds under any locale.
+    const unknown = host.unknownComponents();
+    if (unknown.length) this.options.onError(unknown.map(item => item.message).join(' '));
   }
 
   private refreshSnapshot(): void { queueMicrotask(() => this.host.refresh()); }

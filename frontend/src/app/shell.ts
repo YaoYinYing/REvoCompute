@@ -41,15 +41,31 @@ export function mountShell(root: HTMLElement): AppShell {
   shell.className = 'app-shell';
   shell.dataset.rail = storedRail();
 
-  const brand = document.createElement('a'); brand.className = 'app-brand'; brand.href = '/';
+  // The rail collapses to the logo alone (app.css hides the wordmark) and the logo
+  // is decorative, so the link needs its own accessible name rather than borrowing
+  // the hidden text. The public shell names its brand the same way.
+  const brand = document.createElement('a'); brand.className = 'app-brand'; brand.href = '/'; brand.setAttribute('aria-label', t('shell.home'));
   const logo = document.createElement('img'); logo.src = appAsset('logo.svg'); logo.alt = ''; logo.width = 30; logo.height = 30;
   const brandText = document.createElement('span'); brandText.textContent = 'REvoCompute'; brand.append(logo, brandText);
 
   // The left navigation is the product's information architecture: Compute, the
   // current user's Account, and — for an administrator — the Administration
   // workspaces. Each region is a labelled group so the sections stay legible as
-  // more surfaces join; the grouping is a rule and a label, not a card.
+  // more surfaces join; the grouping is a rule and a label, not a card. The caption
+  // names the region; it is not a document heading, so a screen-reader user
+  // reaching the navigation never meets section headings before the page's h1.
   const nav = document.createElement('nav'); nav.className = 'app-nav'; nav.setAttribute('aria-label', t('shell.nav.primary'));
+  // The caption supplies each region's accessible name, so the divisions the rule
+  // and spacing already draw stay legible to a screen reader on either shell.
+  const navGroup = (region: string, labelKey: string): { element: HTMLElement; caption: HTMLElement; items: HTMLElement } => {
+    const element = document.createElement('div'); element.className = 'app-nav-group'; element.dataset.navGroup = region;
+    element.setAttribute('role', 'group');
+    element.setAttribute('aria-labelledby', `app-nav-group-label-${region}`);
+    const caption = document.createElement('span'); caption.id = `app-nav-group-label-${region}`; caption.className = 'app-nav-group-label'; caption.textContent = t(labelKey);
+    const items = document.createElement('div'); items.className = 'app-nav-group-items';
+    element.append(caption, items);
+    return { element, caption, items };
+  };
   const groups = {
     compute: navGroup('compute', 'shell.nav.compute'),
     account: navGroup('account', 'shell.nav.account'),
@@ -76,24 +92,15 @@ export function mountShell(root: HTMLElement): AppShell {
   // The Account region restates the current user's identity, so it follows the same
   // session state as the top-bar profile affordance — one identity, two reach points.
   const accountLink = groups.account.items.firstElementChild as HTMLAnchorElement;
-  // The group label names the region on the desktop rail. On the mobile bar the
-  // Compute and Account destinations sit directly on the bar, so their headings are
-  // removed from the tree there; the Administration heading is kept because on mobile
+  // The region caption names the region on the desktop rail. On the mobile bar the
+  // Compute and Account destinations sit directly on the bar, so their captions are
+  // removed from the tree there; the Administration caption is kept because on mobile
   // it names the bounded secondary surface above the bar (see app.css).
-  const syncGroupHeadings = (grouped: boolean): void => {
-    [groups.compute, groups.account].forEach(group => group.heading.hidden = !grouped);
+  const syncGroupCaptions = (grouped: boolean): void => {
+    [groups.compute, groups.account].forEach(group => group.caption.hidden = !grouped);
   };
-  syncGroupHeadings(navGrouped.matches);
-  navGrouped.addEventListener('change', event => syncGroupHeadings(event.matches));
-
-  function navGroup(region: string, labelKey: string): { element: HTMLElement; heading: HTMLElement; items: HTMLElement } {
-    const element = document.createElement('div'); element.className = 'app-nav-group'; element.dataset.navGroup = region;
-    // The heading names the region wherever the links are grouped into a column.
-    const heading = document.createElement('h2'); heading.className = 'app-nav-group-label'; heading.textContent = t(labelKey);
-    const items = document.createElement('div'); items.className = 'app-nav-group-items';
-    element.append(heading, items);
-    return { element, heading, items };
-  }
+  syncGroupCaptions(navGrouped.matches);
+  navGrouped.addEventListener('change', event => syncGroupCaptions(event.matches));
 
   function navLink(href: string, icon: string, label: string): HTMLElement {
     const link = document.createElement('a'); link.href = href; link.title = label; link.innerHTML = `<i data-lucide="${icon}" aria-hidden="true"></i><span>${label}</span>`;
@@ -180,6 +187,10 @@ export function mountShell(root: HTMLElement): AppShell {
     setUser(user) {
       syncAccount(user);
       logout.hidden = !user;
+      // The bar's one primary page action belongs to a session like Log out does:
+      // /compute/create_task is a protected route, so offering it to a signed-out
+      // reader would hand them an affordance whose only outcome is a redirect.
+      newTask.hidden = !user;
       // Authorization, not visual hiding: the Administration group is absent from
       // the navigation for anyone the server has not projected as an administrator,
       // so an ordinary user or an anonymous visitor never sees a forbidden link.

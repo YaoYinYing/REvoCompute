@@ -4,6 +4,7 @@
  * declared; it never infers scientific meaning from a filename.
  */
 import type { ResultFile, ResultView } from '../../api/result-types';
+import { t } from '../../app/i18n';
 import { MAX_ELEMENTS, PairMatrix } from './scientific';
 import type { ViewRenderer } from './renderer-registry';
 
@@ -42,7 +43,7 @@ function numberOrNull(cell: unknown): number | null {
   const text = String(cell ?? '').trim();
   if (text === '') return null;
   const value = Number(text);
-  if (!Number.isFinite(value)) throw new Error('The matrix contains a value that is not a number.');
+  if (!Number.isFinite(value)) throw new Error(t('results.matrix.error.notNumber'));
   return value;
 }
 
@@ -58,10 +59,10 @@ export async function loadMatrixSeries(
   mapping: MatrixMapping,
   options: { signal?: AbortSignal; maxElements?: number } = {},
 ): Promise<MatrixSeries> {
-  if (!tableUrl) throw new TypeError('The matrix view has no bounded table URL.');
+  if (!tableUrl) throw new TypeError(t('results.matrix.error.noUrl'));
   const maximum = options.maxElements ?? MAX_ELEMENTS;
   if (!Number.isInteger(maximum) || maximum < 1 || maximum > MAX_ELEMENTS) {
-    throw new RangeError('Matrix element limits are invalid.');
+    throw new RangeError(t('results.matrix.error.limits'));
   }
   const base = tableUrl.includes('?') ? `${tableUrl}&` : `${tableUrl}?`;
   let columns: string[] | null = null;
@@ -71,31 +72,31 @@ export async function loadMatrixSeries(
   for (;;) {
     const query = new URLSearchParams({ matrix: '1', offset: String(offset), limit: String(PAGE_LIMIT) });
     const response = await fetch(`${base}${query}`, { credentials: 'same-origin', signal: options.signal });
-    if (!response.ok) throw new Error('The matrix page could not be loaded.');
+    if (!response.ok) throw new Error(t('results.matrix.error.pageLoad'));
     const page = await response.json() as TablePage;
     const header = Array.isArray(page.columns) ? page.columns.map(String) : null;
     if (!header || header.length < 2 || header.length > MAX_COLUMNS || !Array.isArray(page.rows)) {
-      throw new Error('The matrix page is malformed.');
+      throw new Error(t('results.matrix.error.malformed'));
     }
     if (columns === null) columns = header;
     if (page.rows.some((row) => !Array.isArray(row) || row.length !== columns!.length)) {
-      throw new Error('The matrix page is malformed.');
+      throw new Error(t('results.matrix.error.malformed'));
     }
     valueColumns = columns.length - (mapping.row_labels_column ? 1 : 0);
     if ((rows.length + page.rows.length) * valueColumns > maximum) {
-      throw new RangeError('The matrix exceeds the browser element limit.');
+      throw new RangeError(t('results.matrix.error.exceedsElements'));
     }
     rows.push(...page.rows);
     if (!page.has_more) break;
-    if (page.rows.length === 0) throw new Error('The matrix page is malformed.');
+    if (page.rows.length === 0) throw new Error(t('results.matrix.error.malformed'));
     offset += page.rows.length;
-    if (offset > MAX_OFFSET) throw new Error('The matrix exceeds the bounded server page window.');
+    if (offset > MAX_OFFSET) throw new Error(t('results.matrix.error.exceedsWindow'));
   }
-  if (columns === null || !rows.length) throw new Error('The matrix is empty.');
+  if (columns === null || !rows.length) throw new Error(t('results.matrix.error.empty'));
 
   const declared = mapping.row_labels_column;
   const labelIndex = declared ? columns.indexOf(declared) : -1;
-  if (declared && labelIndex !== 0) throw new Error(`The matrix is missing its declared row label column ${declared}.`);
+  if (declared && labelIndex !== 0) throw new Error(t('results.matrix.error.missingLabel', { column: declared }));
   const xLabels = labelIndex === 0 ? columns.slice(1) : [...columns];
   const yLabels: string[] = [];
   const values = rows.map((row) => {
@@ -160,13 +161,13 @@ export function matrixRamp(scale: string | undefined, theme: Theme = currentThem
 }
 
 function legendTitle(mapping: MatrixMapping): string {
-  const scale = mapping.scale === 'diverging' ? ' (negative → positive)' : ' (low → high)';
-  return `${mapping.unit || 'Value'}${scale}`;
+  const scale = mapping.scale === 'diverging' ? t('results.matrix.scaleDiverging') : t('results.matrix.scaleSequential');
+  return t('results.matrix.legend', { value: mapping.unit || t('results.matrix.value'), scale });
 }
 
 function directionWording(direction: string | undefined): string {
-  if (direction === 'higher') return 'higher is stronger';
-  if (direction === 'lower') return 'lower is stronger';
+  if (direction === 'higher') return t('results.matrix.higher');
+  if (direction === 'lower') return t('results.matrix.lower');
   return '';
 }
 
@@ -185,14 +186,14 @@ export function createMatrixViewRenderer(): ViewRenderer {
       const tableUrl = source && 'table_url' in source ? source.table_url : undefined;
       const series = await loadMatrixSeries(tableUrl, mapping, { signal: context.signal });
       const range = matrixRange(series.values, mapping);
-      const xTitle = mapping.x_label || 'Position';
-      const yTitle = mapping.y_label || 'Position';
+      const xTitle = mapping.x_label || t('results.matrix.position');
+      const yTitle = mapping.y_label || t('results.matrix.position');
       const split = element('section', 'pair-matrix-view');
       const figure = element('figure', 'pair-matrix-figure');
       const canvas = element('canvas');
       canvas.tabIndex = 0;
       canvas.setAttribute('role', 'img');
-      canvas.setAttribute('aria-label', `${view.title} matrix`);
+      canvas.setAttribute('aria-label', t('results.matrix.canvas', { title: view.title }));
       const readout = element('p', 'pair-matrix-readout');
       readout.setAttribute('role', 'status');
       readout.setAttribute('aria-live', 'polite');
@@ -210,7 +211,7 @@ export function createMatrixViewRenderer(): ViewRenderer {
         formatReadout: (cell: Record<string, any>) => {
           const value = Number.isFinite(cell.value) ? cell.value.toFixed(2) : 'N/A';
           const suffix = `${value}${mapping.unit ? ` ${mapping.unit}` : ''}`;
-          return `${xTitle} ${cell.xLabel} · ${yTitle} ${cell.yLabel} · ${suffix}${direction ? ` (${direction})` : ''}`;
+          return t('results.matrix.readout', { x: xTitle, xLabel: cell.xLabel, y: yTitle, yLabel: cell.yLabel, value: suffix, direction: direction ? ` (${direction})` : '' });
         },
       });
       matrix.setData({ values: series.values, xLabels: series.xLabels, yLabels: series.yLabels });

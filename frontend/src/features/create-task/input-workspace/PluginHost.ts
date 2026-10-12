@@ -1,4 +1,5 @@
 import type { WorkspaceCapability, WorkspaceDescriptor, WorkspaceSummary, WorkspaceValues } from '../types';
+import { t } from '../../../app/i18n';
 import type { WorkspaceContext, WorkspacePlugin, WorkspacePluginInstance, WorkspacePluginModule, WorkspacePluginServices } from './plugin-contract';
 import { isWorkspacePlugin } from './plugin-contract';
 
@@ -19,6 +20,7 @@ export class PluginHost {
   private readonly styles: HTMLLinkElement[] = [];
   private loadFaults: string[] = [];
   private faults: string[] = [];
+  private unmounted: Array<{ plugin: string; message: string }> = [];
   private disposed = false;
 
   constructor(
@@ -30,7 +32,7 @@ export class PluginHost {
   }
 
   private register(plugin: WorkspacePlugin): void {
-    if (this.plugins.has(plugin.id)) throw new Error(`Duplicate workspace plugin: ${plugin.id}`);
+    if (this.plugins.has(plugin.id)) throw new Error(t('ct.workspace.duplicatePlugin', { plugin: plugin.id }));
     this.plugins.set(plugin.id, plugin);
   }
 
@@ -40,7 +42,7 @@ export class PluginHost {
         const loaded = await this.loadModule(descriptor.module.url) as Partial<WorkspacePluginModule>;
         if (this.disposed) return;
         if (!isWorkspacePlugin(loaded.default) || loaded.default.id !== descriptor.id) {
-          throw new Error('did not export its declared default module');
+          throw new Error(t('ct.workspace.pluginExportMissing'));
         }
         this.register(loaded.default);
         if (descriptor.global_id !== descriptor.id) this.plugins.set(descriptor.global_id, loaded.default);
@@ -58,19 +60,35 @@ export class PluginHost {
   }
 
   mount(definitions: WorkspaceCapability[], context: WorkspaceContext, createTarget: (definition: WorkspaceCapability) => HTMLElement): void {
-    this.faults = [...this.loadFaults];
+    this.faults = [...this.loadFaults]; this.unmounted = [];
     definitions.forEach(definition => {
       const plugin = this.plugins.get(definition.plugin);
-      if (!plugin) { this.faults.push(`${definition.plugin}: unsupported component`); return; }
+      if (!plugin) {
+        const message = t('ct.componentUnavailable', { plugin: definition.plugin });
+        this.faults.push(message); this.unmounted.push({ plugin: definition.plugin, message });
+        return;
+      }
       const target = createTarget(definition);
       try {
         this.mounted.push({ definition, plugin, target, instance: plugin.mount(target, definition, context, this.services) || {} });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         this.faults.push(`${definition.plugin}: ${message}`);
-        target.replaceChildren(Object.assign(document.createElement('p'), { className: 'ct-component-error', textContent: `This component could not load: ${message}` }));
+        target.replaceChildren(Object.assign(document.createElement('p'), { className: 'ct-component-error', textContent: t('ct.componentFailed', { message }) }));
       }
     });
+  }
+
+  /**
+   * Declared capabilities whose plugin never mounted.
+   *
+   * The plugin id is the stable internal signal; the message is frontend-owned
+   * copy that follows the locale. A caller that treats an unmounted capability as
+   * a workspace failure matches on the id (or on this list being non-empty),
+   * never on the message text.
+   */
+  unknownComponents(): ReadonlyArray<{ plugin: string; message: string }> {
+    return this.unmounted.map(item => ({ ...item }));
   }
 
   collect(): WorkspaceValues {
@@ -125,5 +143,6 @@ export class PluginHost {
     this.styles.splice(0).forEach(link => link.remove());
     this.loadFaults = [];
     this.faults = [];
+    this.unmounted = [];
   }
 }

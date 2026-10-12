@@ -685,7 +685,7 @@ def test_admin_dashboard_batch_action_uses_authorized_api(page: Page) -> None:
     # Administration is a navigation region, not a top-bar menu: the admin sees the
     # pages in the left navigation and the top bar carries no Administration launcher.
     expect(page.locator("[data-nav-group='admin']").get_by_role("link", name="Server logs")).to_have_attribute("href", "/compute/logs")
-    assert page.get_by_label("Administration").count() == 0
+    assert page.locator(".app-header").get_by_label("Administration").count() == 0
     expect(page.get_by_role("button", name="Delete selected (0)")).to_be_hidden()
     page.get_by_role("checkbox", name="Select", exact=True).check()
     page.get_by_role("button", name="Delete selected (1)").click()
@@ -706,7 +706,7 @@ def test_anonymous_shell_offers_no_forbidden_administration_links(page: Page, wi
     assert page.get_by_role("link", name="User control").count() == 0
     assert page.get_by_role("link", name="Server logs").count() == 0
     assert page.get_by_role("link", name="Configuration").count() == 0
-    assert page.get_by_label("Administration").count() == 0
+    assert page.locator(".app-header").get_by_label("Administration").count() == 0
     # Account is the only other region, and it is a sign-in affordance.
     expect(page.locator("[data-nav-group='account']")).to_be_visible()
     expect(page.locator("[data-nav-group='account'] a")).to_have_attribute("href", "/compute/login?return_to=%2Frunners")
@@ -1292,3 +1292,160 @@ def test_admin_configuration_and_logs_use_live_controls(page: Page) -> None:
     page.get_by_text("Rotated log archives").click()
     page.get_by_text("server.log", exact=True).click()
     expect(page.get_by_text("server.log.1", exact=True)).to_be_visible()
+
+
+# ── Create Task accessibility properties ──────────────────────────────────────
+
+
+def _rgb(value: str) -> tuple[float, float, float, float]:
+    """Parse a painted colour into 0-255 channels plus its alpha.
+
+    Accepts the legacy ``rgb()``/``rgba()`` form and the modern ``color(srgb …)``
+    form a resolved ``color-mix()`` computes to, so a tinted ring is measured as
+    the colour the browser reports rather than failing to parse.
+    """
+    if value.startswith("color("):
+        inner = value[value.find("(") + 1:value.rfind(")")].replace("/", " ")
+        parts = [part for part in inner.split() if part]
+        assert parts[0] == "srgb", value
+        channels = [float(part) * 255 for part in parts[1:4]]
+        alpha = float(parts[4]) if len(parts) > 4 else 1.0
+        return channels[0], channels[1], channels[2], alpha
+    inner = value[value.find("(") + 1:value.rfind(")")].replace(",", " ").replace("/", " ")
+    parts = [part for part in inner.split() if part]
+    channels = [float(part[:-1]) * 2.55 if part.endswith("%") else float(part) for part in parts[:3]]
+    alpha = float(parts[3]) if len(parts) > 3 else 1.0
+    return channels[0], channels[1], channels[2], alpha
+
+
+def _relative_luminance(value: str) -> float:
+    def linear(channel: float) -> float:
+        scaled = channel / 255
+        return scaled / 12.92 if scaled <= 0.03928 else ((scaled + 0.055) / 1.055) ** 2.4
+
+    red, green, blue, _ = _rgb(value)
+    return 0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue)
+
+
+def _contrast_ratio(foreground: str, background: str) -> float:
+    """Non-text contrast of what is actually painted.
+
+    A translucent ring is not seen as its own colour: it is composited over the
+    surface behind it, and that composite is what must separate from the surface.
+    """
+    red, green, blue, alpha = _rgb(foreground)
+    if alpha < 1:
+        base_red, base_green, base_blue, _ = _rgb(background)
+        foreground = "rgb(%f %f %f)" % (
+            alpha * red + (1 - alpha) * base_red,
+            alpha * green + (1 - alpha) * base_green,
+            alpha * blue + (1 - alpha) * base_blue,
+        )
+    lighter, darker = sorted((_relative_luminance(foreground), _relative_luminance(background)), reverse=True)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+# Read the *painted* ring and the surface it sits on. An outline is drawn outside
+# the border box and, with an offset, lands on whatever the nearest ancestor
+# paints, so the adjacent background is that ancestor's fill - not the focused
+# control's own. The probe measures the real render rather than a frozen literal.
+_FOCUS_RING_PROBE = """() => {
+    const node = document.activeElement;
+    if (!node || node === document.body || !node.closest('.create-task')) return null;
+    const ring = getComputedStyle(node).outlineColor;
+    let host = node.parentElement;
+    while (host) {
+        const fill = getComputedStyle(host).backgroundColor;
+        const match = fill.match(/rgba?\\(([^)]+)\\)/);
+        const alpha = match ? (match[1].split('/')[1] ?? match[1].split(',')[3] ?? '1') : '1';
+        if (!/transparent/.test(fill) && parseFloat(alpha) > 0) return { ring, surface: fill };
+        host = host.parentElement;
+    }
+    return null;
+}"""
+
+
+def _visible_level_one_headings(page: Page) -> list[str]:
+    return page.evaluate(
+        """() => [...document.querySelectorAll('h1')]
+            .filter(h => h.getClientRects().length > 0)
+            .map(h => h.textContent.trim())"""
+    )
+
+
+def test_create_task_renders_one_visible_level_one_heading_per_state(page: Page) -> None:
+    _install_app(page)
+
+    # The chooser state: the page title is the only level-1 heading on screen.
+    page.goto(f"{ORIGIN}/compute/create_task")
+    expect(page.get_by_role("heading", name="Choose a compute method", exact=True)).to_be_visible()
+    assert _visible_level_one_headings(page) == ["Create task"]
+
+    # The workbench state: the method's display name replaces the page title, so
+    # the two headings are never visible at the same time.
+    page.get_by_role("button", name="Sequence demo").first.click()
+    expect(page.get_by_role("heading", name="Sequence demo", exact=True)).to_be_visible()
+    expect(page.locator(".ct-workbench textarea")).to_be_visible()
+    assert _visible_level_one_headings(page) == ["Sequence demo"]
+
+
+@pytest.mark.parametrize("theme", ["light", "dark"])
+def test_create_task_focus_indicators_reach_non_text_contrast(page: Page, theme: str) -> None:
+    page.emulate_media(color_scheme=theme)
+    _install_app(page)
+    page.goto(f"{ORIGIN}/compute/create_task?task_type=sequence_demo")
+    expect(page.locator(".ct-workbench textarea")).to_be_visible()
+
+    # Walk the workspace's own focusable controls rather than one chosen element:
+    # a focus style is a workspace property, and the raised snapshot panel is the
+    # surface the previous translucent ring failed against.
+    samples = page.locator(".ct-workbench button, .ct-workbench input, .ct-workbench textarea, .ct-workbench summary")
+    assert samples.count() > 0
+    measured = 0
+    for index in range(samples.count()):
+        control = samples.nth(index)
+        control.focus()
+        probe = page.evaluate(_FOCUS_RING_PROBE)
+        assert probe, f"control {index} did not take focus inside the workspace"
+        if "0, 0, 0, 0" in probe["ring"] or "transparent" in probe["ring"]:
+            continue
+        ratio = _contrast_ratio(probe["ring"], probe["surface"])
+        assert ratio >= 3.0, f"{theme}: focus ring {probe['ring']} on {probe['surface']} is {ratio:.2f}:1"
+        measured += 1
+    assert measured > 0, f"{theme}: no focus indicator was measured"
+
+
+def test_create_task_validation_changes_land_in_a_live_region(page: Page) -> None:
+    _install_app(page)
+    page.route(f"{ORIGIN}/compute/api/preflight/sequence_demo", lambda route: route.fulfill(json={
+        "valid": False, "security": {"status": "passed"}, "contract": {"status": "failed"},
+        "admission": {"allowed": True, "runner_ready": True, "infrastructure_ready": True, "infrastructure_status": "READY"},
+        "normalized_params": {}, "inputs": [], "warnings": [],
+        "errors": [{"message": "Sequence is too short."}],
+    }))
+    _open_sequence_create(page)
+
+    # The region that carries validation exists from mount, before any change: a
+    # polite live region added only once validation fires is never announced.
+    region = page.locator('[aria-live="polite"]').filter(has=page.locator(".ct-validation"))
+    expect(region).to_have_count(1)
+    region.evaluate("node => node.dataset.mounted = 'before'")
+
+    page.get_by_role("button", name="Run task", exact=True).click()
+    expect(page.locator(".ct-validation-row.error")).to_contain_text("Sequence is too short.")
+    # The same mounted node absorbed the change, so the update is announced rather
+    # than inserted into a region a screen reader had never been told about.
+    expect(region).to_have_count(1)
+    assert region.evaluate("node => node.dataset.mounted") == "before"
+
+
+def test_create_task_status_error_is_announced_assertively(page: Page) -> None:
+    _install_app(page)
+    page.route(f"{ORIGIN}/compute/api/post", lambda route: route.fulfill(status=500, json={"error": "not exercised"}))
+    _open_sequence_create(page)
+
+    status = page.locator(".ct-status")
+    expect(status).not_to_have_attribute("role", "alert")
+    page.get_by_role("button", name="Run task", exact=True).click()
+    expect(page.locator(".ct-status.error")).to_contain_text("Submission failed")
+    expect(status).to_have_attribute("role", "alert")

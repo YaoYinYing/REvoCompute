@@ -3,6 +3,11 @@
   --result-ink: var(--app-ink); --result-muted: var(--app-muted); --result-line: var(--app-line);
   --result-accent: var(--app-accent); --result-accent-soft: var(--app-soft); --result-danger: var(--app-danger);
   width: min(100%, 112rem); margin: 0 auto; padding: 1.25rem clamp(.75rem, 2vw, 2rem) 3rem; color: var(--result-ink);
+  /* The workspace below chooses its column count from this box's inline size,
+     so the collapse depends on the space the content actually has rather than
+     on the window width. `container-type` cannot feed back into this width:
+     it is set by the parent and the rem cap, never by the children. */
+  container-type: inline-size;
 }
 .result-header, .result-preview-header, .result-header-actions, .result-file-tools, .structure-toolbar { display: flex; align-items: center; gap: .65rem; }
 .result-header { justify-content: space-between; min-height: 6.25rem; padding-bottom: 1.6rem; border-bottom: 1px solid var(--result-line); }
@@ -18,7 +23,10 @@
 .result-button-small { min-height: 2rem; padding: .32rem .55rem; font-size: .78rem; }
 .result-icon-button, .result-file-download { display: inline-grid; width: 2.35rem; height: 2.35rem; place-items: center; padding: 0; }
 .result-button:hover, .result-icon-button:hover, .result-tab:hover, .result-file-open:hover, .result-file-download:hover { border-color: var(--result-accent); color: var(--result-accent); background: color-mix(in srgb, var(--result-accent) 6%, var(--result-surface)); }
-:focus-visible { outline: 3px solid color-mix(in srgb, var(--result-accent) 38%, transparent); outline-offset: 2px; }
+/* Scoped to the results subtree: the app shell owns the document-level ring
+   (app.css), and this sheet loads after it, so a bare selector here would
+   replace the shell's ring everywhere on a result route. */
+.result-app :focus-visible { outline: 2px solid var(--app-focus); outline-offset: 2px; }
 .result-status { display: flex; gap: .8rem; padding: .7rem 0; align-items: baseline; border-bottom: 1px solid var(--result-line); font-size: .86rem; }
 .result-status strong { text-transform: capitalize; }
 .result-workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(19rem, 24rem); min-height: 38rem; border-bottom: 1px solid var(--result-line); }
@@ -78,6 +86,13 @@
 .structure-mode-group .result-button[aria-pressed="true"] { position: relative; border-color: var(--result-accent); background: var(--result-surface); color: var(--result-accent); border-radius: var(--r-util); box-shadow: var(--shadow-surface); }
 .structure-toolbar-actions { display: inline-flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin-left: auto; }
 .structure-host { position: relative; min-height: 32rem; overflow: hidden; }
+/* Mol* pins its selection-controls row to a hard 430px, so below ~30rem it is
+   clipped by this host. The row's own `width: inherit` copies the container's
+   computed `auto`, so the clamp must reach the row too. The cascade forces the
+   pairing: Mol*'s chunk CSS is appended after this sheet, so both selectors
+   carry the `.result-app .structure-host` prefix to outrank `.msp-plugin …`. */
+.result-app .structure-host .msp-selection-viewport-controls { max-width: 100%; }
+.result-app .structure-host .msp-selection-viewport-controls > .msp-flex-row { max-width: 100%; overflow-x: auto; overflow-y: hidden; }
 .structure-host[data-loading="true"] { visibility: hidden; }
 .structure-viewport:fullscreen { grid-template-rows: auto 1fr; width: 100vw; height: 100vh; border: 0; border-radius: 0; background: var(--result-paper); }
 .result-record { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 2.5rem; padding-top: 1.5rem; }
@@ -96,7 +111,7 @@
 .pair-matrix-readout { margin: 0; color: var(--result-muted); font-size: .8rem; }
 .pair-matrix-figure { position: relative; max-width: 100%; overflow: hidden; }
 .pair-matrix-figure canvas { display: block; max-width: 100%; }
-.pair-matrix-figure canvas:focus-visible { outline: 3px solid color-mix(in srgb, var(--result-accent) 38%, transparent); outline-offset: 3px; }
+.pair-matrix-figure canvas:focus-visible { outline: 2px solid var(--app-focus); outline-offset: 3px; }
 .pair-matrix-label { position: absolute; transform: translate(-50%, -50%); pointer-events: none; font-size: .7rem; white-space: nowrap; }
 .pair-matrix-title { font-weight: 600; }
 .pair-matrix-title-y { transform: translate(-50%, -50%) rotate(-90deg); }
@@ -114,9 +129,26 @@
 }
 
 @media (max-width: 32rem) {
-  .result-header { align-items: flex-start; }
+  .result-header { align-items: flex-start; flex-wrap: wrap; }
   .result-status, .result-preview-header { align-items: flex-start; flex-direction: column; }
   .result-preview { min-height: 18rem; padding: 1rem; }
   .structure-viewport { grid-template-rows: auto minmax(20rem, 58vh); min-height: 24rem; }
   .structure-host { min-height: 20rem; }
+}
+
+/* Intrinsic collapse for the workspace: the column count follows the inline size
+   the workspace actually has. A `@media (max-width: …rem)` cannot do this job,
+   because `rem` in a media query is the initial 16px font size and so does not
+   move when a reader enlarges text only (WCAG 1.4.4): the window stays wide and
+   the query never fires, leaving the rail beside a preview squeezed far below
+   its content. Inside a container query `em` is the container's own font size,
+   so the same rule tracks the reader's text size. `em` here is deliberately not
+   `rem`: `rem` would resolve against the enlarged root too, but it would also
+   break the correspondence between the threshold and the text it is protecting.
+   Kept alongside the media query (which still covers a genuinely narrow window
+   and the other narrow-width adjustments). */
+@container (inline-size < 40em) {
+  .result-workspace, .result-app.is-rail-collapsed .result-workspace { grid-template-columns: minmax(0, 1fr); }
+  .result-main { padding-right: 0; }
+  .result-rail { padding: .85rem 0; border-left: 0; border-top: 1px solid var(--result-line); }
 }
