@@ -39,6 +39,12 @@ RICH_METADATA_RUNNER = "gremlin_lh_fit"
 
 STATIC_PLUGINS = {"files", "sequence", "structure", "parameters", "review"}
 
+# Runners whose declared workspace names only `files` and `review`: the owning
+# task.yaml declares parameters, but no declared capability owns them. AlphaFold 3
+# is the reported case (its eight parameters were reachable only from the Runner
+# detail); opendde declares fifteen.
+PARAMETER_LESS_WORKSPACES = ("alphafold3", "opendde")
+
 REPRESENTATIVE_RUNNERS = (
     SEQUENCE_RUNNER,
     STRUCTURE_INPUT_RUNNER,
@@ -79,6 +85,26 @@ def _capability(step: dict, plugin: str) -> dict:
     matches = [capability for capability in step["capabilities"] if capability["plugin"] == plugin]
     assert matches, f"step {step['id']!r} has no {plugin!r} capability"
     return matches[0]
+
+
+def _parameter_owners(payload: dict) -> list[dict]:
+    """Every projected capability that renders parameters in the workbench."""
+    return [
+        capability
+        for step in payload["input_workspace"]["steps"]
+        for capability in step["capabilities"]
+        if capability["plugin"] == "parameters"
+    ]
+
+
+def _field_claiming_capabilities(payload: dict) -> list[dict]:
+    """Every projected capability that already owns named canonical fields."""
+    return [
+        capability
+        for step in payload["input_workspace"]["steps"]
+        for capability in step["capabilities"]
+        if capability["options"].get("fields")
+    ]
 
 
 def test_catalog_projects_every_discovered_runner_into_the_frontend_contract(monkeypatch, tmp_path):
@@ -187,6 +213,67 @@ def test_gpu_runner_projects_declared_gpu_and_network_metadata(monkeypatch, tmp_
     assert schema["num_diffusion_samples"]["type"] == "integer"
     assert schema["num_diffusion_samples"]["minimum"] <= schema["num_diffusion_samples"]["maximum"]
     assert schema["resolve_msa_overlaps"]["type"] == "boolean"
+
+
+def test_a_declared_parameter_schema_is_reachable_when_no_capability_owns_it(monkeypatch, tmp_path):
+    """A parameter-less workspace still exposes the canonical parameter area.
+
+    AlphaFold 3's workspace declares only `material` (files) and `review`, so the
+    whole task-owned schema was reachable from the Runner detail but not from
+    Create Task. The projection injects the canonical `parameters` capability into
+    the terminal step ahead of the `review` anchor for every such Runner, and the
+    id it injects is a capability the submission boundary already accepts.
+    """
+    module, client = _client(monkeypatch, tmp_path)
+    from revocompute.routes import _canonical_parameter_area
+
+    for name in PARAMETER_LESS_WORKSPACES:
+        detail = _detail(client, name)
+        schema = _parameters(client, name)
+        assert schema, f"{name} declares no parameters to expose"
+
+        owners = _parameter_owners(detail)
+        assert len(owners) == 1, f"{name} must expose exactly one parameter area, got {len(owners)}"
+        # The capability lands in the terminal step with the `review` anchor still
+        # last, so the workspace grammar the loader enforces still holds.
+        steps = detail["input_workspace"]["steps"]
+        assert steps[0]["capabilities"][0]["plugin"] == "files"
+        assert steps[-1]["capabilities"][-1]["plugin"] == "review"
+        assert steps[-1]["capabilities"][-2] is owners[0]
+
+        # No declared capability claims the canonical schema by field, so nothing
+        # is rendered twice.
+        assert _field_claiming_capabilities(detail) == []
+        # The id the projection publishes is the same one the submission boundary
+        # admits, and the area it renders is the task-owned schema the parameters
+        # endpoint serves.
+        task, _runner = module.task_runtime._get_task_type(name)
+        assert _canonical_parameter_area(task)["id"] == owners[0]["id"]
+        assert set(schema) <= set(task.schema["properties"])
+
+
+def test_a_workspace_that_already_owns_its_parameters_is_left_alone(monkeypatch, tmp_path):
+    """A declared parameter area is not duplicated by the canonical projection.
+
+    ``rfdiffusion`` declares both a `parameters` capability and a runner-owned
+    `regions`-style capability that owns named fields via `options.fields`. Either
+    one claims the schema, so the projection adds nothing — the declaration stays
+    the single source of the workbench's parameter area.
+    """
+    module, client = _client(monkeypatch, tmp_path)
+    from revocompute.task_types import iter_capabilities
+
+    for name in ("rfdiffusion", "colabfold_af2", "gremlin_lh_fit"):
+        detail = _detail(client, name)
+        owners = _parameter_owners(detail)
+        assert len(owners) == 1, f"{name} must keep exactly one parameter area"
+        assert owners[0]["id"] == "task_parameters"
+        task, _runner = module.task_runtime._get_task_type(name)
+        declared_argument_owners = [
+            capability for capability in iter_capabilities(task) if capability.plugin.split(":", 1)[-1] == "parameters"
+        ]
+        assert len(declared_argument_owners) == 1
+        assert declared_argument_owners[0].id == owners[0]["id"]
 
 
 def test_restricted_runner_projects_access_through_both_frontend_projections(monkeypatch, tmp_path):

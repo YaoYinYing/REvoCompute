@@ -23,6 +23,8 @@ export interface ParameterDefinition {
   exclusiveMaximum?: number;
   step?: number;
   advanced: boolean;
+  /** The owning schema declared ``format: date`` and the default can inhabit a date control. */
+  dateFormat: boolean;
   seed?: { minimum?: number; maximum?: number };
 }
 

@@ -56,6 +56,7 @@ class ParameterSpec:
     description: str = ""
     help: str = ""
     unit: str = ""
+    format: str = ""
     choices: tuple[object, ...] = ()
     minimum: float | None = None
     maximum: float | None = None
