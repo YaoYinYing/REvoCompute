@@ -21,5 +21,5 @@ export interface MolecularViewer {
 
 export type MolecularViewerFactory = (
   host: HTMLElement,
-  options: { theme: 'light' | 'dark'; selectionEnabled?: boolean },
+  options: { theme: 'light' | 'dark'; selectionEnabled?: boolean; controlsCollapsed?: boolean },
 ) => Promise<MolecularViewer>;
