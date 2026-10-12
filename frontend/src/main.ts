@@ -54,10 +54,12 @@ let firstRender = true;
 let sessionUser: CurrentUser | null = null;
 let sessionLoaded = false;
 
-/** The location the outlet currently holds. A traversal that lands on exactly
+/** The location the outlet is committed to. A traversal that lands on exactly
  *  this document is the same page: there is nothing to remount, only a fragment
  *  to honor. A traversal that lands anywhere else is a route change like any
- *  other, so no history-index bookkeeping is needed to tell back from forward. */
+ *  other, so no history-index bookkeeping is needed to tell back from forward.
+ *  It is written when a mount starts rather than when it finishes: a mount
+ *  awaits its data, and the entry can move while that is in flight. */
 let renderedLocation = '';
 
 function reportError(error: unknown): void {
