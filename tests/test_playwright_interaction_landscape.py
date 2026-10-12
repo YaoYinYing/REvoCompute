@@ -808,8 +808,18 @@ def test_touch_drag_reaches_the_end_of_the_dense_table(page: Page) -> None:
     """A touch drag reaches the end of the dense-table horizontal scroller.
 
     Playwright's mouse API does not scroll a touch-style overflow container, so
-    the case dispatches a real touch gesture through CDP, with touch emulation
+    the case dispatches real touch gestures through CDP, with touch emulation
     enabled first. It asserts the same observable contract as the wheel case.
+
+    A swipe is bounded by the viewport it starts in, so no single swipe can be
+    dispatched to any distance the reader likes; and a synthesized gesture is
+    consumed by the compositor, which under load takes fewer of the dispatched
+    moves than it is offered. The gesture is therefore the one a reader actually
+    makes: swipe, then swipe again to carry on. Each swipe re-anchors at the
+    scroller's own current right edge and ends past its left edge, so the case
+    is bounded by the scroller's geometry rather than by a step count or a step
+    size, and cannot fail on how far the dispatcher happened to get. That it
+    really moved is still witnessed, by comparing the two ends.
     """
     fresh = open_page(page.context, {"width": 320, "height": 800})
     try:
@@ -827,16 +837,25 @@ def test_touch_drag_reaches_the_end_of_the_dense_table(page: Page) -> None:
         box = fresh.locator(TABLE_SCROLLER).bounding_box()
         cdp: CDPSession = fresh.context.new_cdp_session(fresh)
         cdp.send("Emulation.setTouchEmulationEnabled", {"enabled": True, "maxTouchPoints": 1})
-        start_x, start_y = box["x"] + 250, box["y"] + 20
-        cdp.send("Input.dispatchTouchEvent", {
-            "type": "touchStart", "touchPoints": [{"x": start_x, "y": start_y}],
-        })
-        for step in range(1, 11):
+
+        def swipe() -> None:
+            start_x, start_y = box["x"] + box["width"] - 10, box["y"] + 20
+            end_x = box["x"] - 10
             cdp.send("Input.dispatchTouchEvent", {
-                "type": "touchMove",
-                "touchPoints": [{"x": start_x - step * 30, "y": start_y}],
+                "type": "touchStart", "touchPoints": [{"x": start_x, "y": start_y}],
             })
-        cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+            steps = 20
+            for step in range(1, steps + 1):
+                cdp.send("Input.dispatchTouchEvent", {
+                    "type": "touchMove",
+                    "touchPoints": [{"x": start_x - (start_x - end_x) * step / steps, "y": start_y}],
+                })
+                fresh.wait_for_timeout(10)
+            cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+            fresh.wait_for_timeout(300)
+
+        swipe()
+        swipe()
         fresh.wait_for_timeout(300)
         settle_page_at_its_end(fresh)
         reached = fresh.evaluate(TABLE_PROBE)
