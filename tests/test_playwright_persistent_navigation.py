@@ -123,6 +123,35 @@ def test_history_back_and_forward_return_to_the_real_pages(page: Page) -> None:
     assert _navigation_requests(router) == ["/compute/dashboard"]
 
 
+def test_a_traversal_during_a_slow_render_still_lands_on_the_page_it_names(page: Page) -> None:
+    router = mount_scenario(page, controlled_scenario())
+    # Hold the catalog's data so its page is reliably still mid-mount when the
+    # reader traverses. The page paints its heading synchronously but needs the
+    # response to become the catalog, which is exactly the window a real network
+    # leaves open.
+    gate = []
+    page.route(f"{ORIGIN}/compute/api/types", lambda route: gate.append(route))
+
+    page.goto(f"{ORIGIN}/compute/dashboard")
+    expect(page.locator(".task-card").first).to_be_visible()
+    page.locator(".app-nav").get_by_role("link", name="Runners", exact=True).click()
+    expect(page.get_by_role("heading", name="Runner catalog", exact=True)).to_be_visible()
+    assert gate, "the catalog request was never issued"
+
+    # The reader leaves before the catalog page finished loading. The address bar
+    # goes back; the outlet must follow it rather than showing the page they left.
+    page.go_back()
+    for held in gate:
+        held.fallback()
+    expect(page).to_have_url(f"{ORIGIN}/compute/dashboard")
+    expect(page.locator(".task-card").first).to_be_visible()
+    expect(page.get_by_role("heading", name="Dashboard", exact=True)).to_be_visible()
+    # The address bar and the outlet agree: the late response did not repaint the
+    # page the reader already left.
+    assert page.evaluate("() => document.querySelectorAll('.runner-catalog').length") == 0
+    assert _navigation_requests(router) == ["/compute/dashboard"]
+
+
 def test_crossing_between_public_and_workspace_chrome_does_not_reload(page: Page) -> None:
     router = mount_scenario(page, controlled_scenario())
     _probe(page)
