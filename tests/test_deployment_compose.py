@@ -23,6 +23,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 BASE_COMPOSE = ROOT / "docker-compose.yml"
 SLURM_COMPOSE = ROOT / "docker-compose.slurm.yml"
+MCP_COMPOSE = ROOT / "docker-compose.mcp.yml"
 
 SAFE_ENV = {
     "SERVER_DIR": str(ROOT),
@@ -176,3 +177,50 @@ def test_the_slurm_override_does_not_shadow_the_forwarded_settings() -> None:
     layered = _rendered_services({"TASK_SCRATCH_LIMIT_BYTES": "12345"})
     assert base_worker["TASK_SCRATCH_LIMIT_BYTES"] == "12345"
     assert _environment(layered, "worker")["TASK_SCRATCH_LIMIT_BYTES"] == "12345"
+
+
+def _render_mcp(extra_env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    """Render the real stack with the MCP overlay layered, as the controller does."""
+    environment = {k: v for k, v in os.environ.items() if k != "CONFIG_DIR"}
+    environment.update(SAFE_ENV)
+    environment.update(extra_env)
+    return subprocess.run(
+        [*_compose_command(), "-f", str(BASE_COMPOSE), "-f", str(MCP_COMPOSE), "config"],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_the_mcp_overlay_adds_only_the_listener_environment() -> None:
+    """The opt-in layers *environment* onto the existing web service.
+
+    "MCP is a protocol projection, not a second execution plane" has a Compose
+    consequence: the overlay must not add a service, a published port, or a
+    volume. This asserts the rendered model on both sides of the layer, so an
+    overlay that grew a second listener process fails here rather than silently
+    shipping.
+    """
+    base_run = subprocess.run(
+        [*_compose_command(), "-f", str(BASE_COMPOSE), "config"],
+        env={**SAFE_ENV},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert base_run.returncode == 0, base_run.stderr
+    base = yaml.safe_load(base_run.stdout)
+    completed = _render_mcp({"MCP_ENABLED": "true", "MCP_PORT": "8081"})
+    assert completed.returncode == 0, completed.stderr
+    layered = yaml.safe_load(completed.stdout)
+
+    assert set(layered["services"]) == set(base["services"])
+    assert _environment(layered["services"], "web")["MCP_ENABLED"] == "true"
+    assert _environment(layered["services"], "web")["MCP_PORT"] == "8081"
+    # The listener port is container-internal. Enabling MCP adds no published port
+    # and no volume to any service: the overlay only writes environment.
+    for name, service in layered["services"].items():
+        assert service.get("ports") == base["services"][name].get("ports"), name
+        assert (service.get("volumes") or []) == (base["services"][name].get("volumes") or []), name
+

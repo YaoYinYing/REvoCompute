@@ -126,6 +126,9 @@ bash run/restart.sh live-test --all --collection smoke
 REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh api-receipt \
   --task <task-id>
 
+# Report the opt-in agent MCP surface (switch, route, and process capability)
+REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh mcp-status
+
 # Validate first, then stop/start and promote receipted candidates
 REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh restart --mode=prepared
 ```
@@ -134,6 +137,60 @@ REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh restart --mode=prepare
 result store, and deploy stamp and writes one machine-readable receipt under
 `<CONFIG_DIR>/api-receipts/`. It exits non-zero on incomplete evidence. See
 [Production API Acceptance Receipts](api-receipts.md).
+
+`mcp-status` is read-only: it prints the `MCP_ENABLED` switch, whether the
+gateway route is present, the container-internal listener port, and what the
+running web process answers at the public `GET /compute/api/mcp` capability. A
+deployment whose env file sets `MCP_ENABLED=true` while the process reports the
+surface disabled is reported as a failure (exit non-zero) rather than silently as
+"disabled", so a half-applied opt-in is visible. It holds no lock and starts no
+container.
+
+## Agent MCP surface
+
+The agent [MCP interface](../user-guide/mcp-interface.md) is **opt-in and
+disabled by default**. One switch, `MCP_ENABLED`, decides the whole deployment
+fact: when it is unset, no gateway route is written, the Compose overlay is not
+layered, and the listener never starts, so the deployment serves the HTTP API and
+Web application exactly as before.
+
+Enabling it is three deliberate steps:
+
+```bash
+# 1. Build the server image with the transport stack (image dependency).
+#    In the deployment env file: REVOCOMPUTE_EXTRAS=resend,mcp
+
+# 2. In the deployment env file: MCP_ENABLED=true   (optional MCP_PORT, default 8081)
+
+# 3. Restart. The controller layers docker-compose.mcp.yml, reconciles the
+#    gateway route from MCP_ENABLED, and the listener starts in the web process.
+REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh restart
+
+# Confirm the opt-in took effect end to end
+REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh mcp-status
+```
+
+The gateway route is deployment state reconciled on every `restart` walk (and
+reported, not applied, under `--dry-run`): the controller writes
+`<SERVER_DIR>/mcp-gateway/mcp.conf`, which the nginx template picks up through an
+`include` mask that is empty when the route is absent. The gateway re-reads its
+configuration only at container start, so the walk restarts the gateway after
+`up` **only when the route state actually changed**.
+
+Boundaries that do not move:
+
+- The listener binds a container-internal port on the compose network only; it is
+  never published to the host. The sole entry point is the gateway `location /k/`.
+- There is no second service, no shadow rate limiter, and no second execution
+  plane. The listener runs in the canonical web process, so the canonical
+  authentication, entitlement, admission, readiness, quota, result
+  authorization, and per-route rate limiter all apply.
+- The surface exposes no admin, host operation, GPU-credit mutation, or
+  arbitrary command/path capability.
+
+To roll back, set `MCP_ENABLED=false` and run `restart`: the route is removed and
+the deployment returns to its pre-MCP shape. The image may keep the transport
+extra installed without consequence; only the switch governs the surface.
 
 `prepare` and `live-test` do not stop or recreate the healthy deployment. Run
 them as the deployment account, never via `sudo`; the deployment operator is

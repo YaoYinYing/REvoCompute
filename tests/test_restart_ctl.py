@@ -105,19 +105,30 @@ _DOCKER_SHIM = textwrap.dedent(
     fi
     if [[ "$1" == "run" ]]; then
       declare -a subs=()
+      declare -a script_args=()
       prev=""
+      seen_script=""
       for arg in "$@"; do
         if [[ "$prev" == "-v" ]]; then
           subs+=("-e" "s|${arg#*:}|${arg%%:*}|g")
         fi
+        # The throwaway container runs `sh -c <script> [args…]`: everything after
+        # the script is a positional parameter, not part of the program.
+        if [[ "$seen_script" == "next" ]]; then
+          script="$arg"
+          seen_script="done"
+        elif [[ -n "$seen_script" ]]; then
+          script_args+=("$arg")
+        elif [[ "$arg" == "-c" ]]; then
+          seen_script="next"
+        fi
         prev="$arg"
       done
-      script="${@: -1}"
       transformed="$script"
       for ((i=0; i<${#subs[@]}; i+=2)); do
         transformed="$(printf '%s' "$transformed" | sed "${subs[$i]}" "${subs[$((i+1))]}")"
       done
-      sh -c "$transformed"
+      sh -c "$transformed" "${script_args[@]}"
       exit $?
     fi
     if [[ "$1" == "build" && "${DOCKER_BUILD_FAIL:-0}" == "1" ]]; then exit 1; fi
@@ -1298,6 +1309,65 @@ def test_maintenance_sentinel_lifecycle(tmp_path, monkeypatch):
     assert (task_dir / ".maintenance").is_file()
     maintenance_mod.end_maintenance(state)
     assert not (task_dir / ".maintenance").exists()
+
+
+def test_mcp_gateway_route_is_written_only_when_opted_in_and_removed_on_rollback(tmp_path, monkeypatch):
+    from revocompute_ctl import mcp as mcp_mod
+
+    bin_dir = _write_shims(tmp_path)
+    task_dir, _auth_dir, _env = _deploy_env(tmp_path)
+    snippet = task_dir / "mcp-gateway" / "mcp.conf"
+
+    # Default: no switch means no route, and nothing is written to the deployment.
+    disabled, _log = _shimmed_state(monkeypatch, tmp_path, bin_dir, {}, SERVER_DIR=str(task_dir))
+    assert mcp_mod.apply_gateway(disabled) is False
+    assert not snippet.exists()
+
+    # Opt-in: the route is written through the deployment's own throwaway container,
+    # and the exact text — including the nginx variables the gateway expands — lands
+    # on disk without the host shell expanding it first.
+    enabled, _log = _shimmed_state(
+        monkeypatch, tmp_path, bin_dir, {}, SERVER_DIR=str(task_dir), MCP_ENABLED="true", MCP_PORT="8081"
+    )
+    assert mcp_mod.apply_gateway(enabled) is True
+    text = snippet.read_text(encoding="utf-8")
+    assert "location /k/ {" in text
+    assert "proxy_pass http://web:8081;" in text
+    # The route addresses the compose service on its container-internal port, and
+    # never a host port or an operator surface.
+    assert ":8081" in text and "location /compute" not in text
+    assert "$host" in text and "$remote_addr" in text
+
+    # Re-running with the route already present and unchanged is not a change, so
+    # the walk does not restart the gateway for nothing.
+    assert mcp_mod.apply_gateway(enabled) is False
+    # Changing the internal port changes the route, and that is reported.
+    moved = EnvState(str(tmp_path / "fake.env"), values={"SERVER_DIR": str(task_dir), "MCP_ENABLED": "true", "MCP_PORT": "9"})
+    assert mcp_mod.apply_gateway(moved) is True
+    assert "proxy_pass http://web:9;" in snippet.read_text(encoding="utf-8")
+    # Rollback removes the file and reports the change.
+    assert mcp_mod.apply_gateway(disabled) is True
+    assert not snippet.exists()
+    assert mcp_mod.apply_gateway(disabled) is False
+
+
+def test_mcp_gateway_route_dry_run_reports_without_writing(tmp_path, monkeypatch):
+    from revocompute_ctl import mcp as mcp_mod
+
+    bin_dir = _write_shims(tmp_path)
+    task_dir, _auth_dir, _env = _deploy_env(tmp_path)
+    state, _log = _shimmed_state(monkeypatch, tmp_path, bin_dir, {}, SERVER_DIR=str(task_dir), MCP_ENABLED="true")
+
+    assert mcp_mod.apply_gateway(state, dry_run=True) is False
+    assert not (task_dir / "mcp-gateway" / "mcp.conf").exists()
+
+
+def test_mcp_gateway_route_rejects_a_non_integer_port(tmp_path, monkeypatch):
+    from revocompute_ctl import mcp as mcp_mod
+
+    state = EnvState(str(tmp_path / "server.env"), values={"SERVER_DIR": str(tmp_path), "MCP_ENABLED": "true", "MCP_PORT": "eight-thousand"})
+    with pytest.raises(SystemExit):
+        mcp_mod.apply_gateway(state)
 
 
 def test_restart_resolves_named_service_identity_before_attestation_invalidation(tmp_path, monkeypatch):

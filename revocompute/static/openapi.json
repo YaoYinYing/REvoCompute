@@ -79,6 +79,17 @@
         }
       }
     },
+    "/compute/api/mcp": {
+      "get": {
+        "tags": ["System"],
+        "summary": "Get agent MCP capability",
+        "description": "Reports whether this deployment serves the agent Model Context Protocol surface, so a client is offered the entry only when the endpoint is really reachable. It is a deployment-capability projection, never an authorization: what a credential may do over MCP is decided per request by the canonical account, entitlement, admission, and result rules.",
+        "operationId": "getMcpCapability",
+        "responses": {
+          "200": {"description": "Current agent MCP capability", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/McpCapability"}}}}
+        }
+      }
+    },
     "/compute/api/auth/captcha": {
       "get": {
         "tags": ["Authentication"],
@@ -1429,6 +1440,15 @@
         "properties": {
           "enabled": {"type": "boolean"},
           "email_available": {"type": "boolean"}
+        },
+        "additionalProperties": false
+      },
+      "McpCapability": {
+        "type": "object",
+        "required": ["enabled", "endpoint"],
+        "properties": {
+          "enabled": {"type": "boolean"},
+          "endpoint": {"type": ["string", "null"], "description": "Same-origin path of the MCP endpoint when enabled, otherwise null."}
         },
         "additionalProperties": false
       },

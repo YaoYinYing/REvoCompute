@@ -82,6 +82,7 @@ def test_public_openapi_exposes_the_client_contract(monkeypatch, tmp_path):
     assert {
         "/compute/api/auth/login": {"post"},
         "/compute/api/auth/registration": {"get"},
+        "/compute/api/mcp": {"get"},
         "/compute/api/auth/captcha": {"get"},
         "/compute/api/auth/register": {"post"},
         "/compute/api/auth/forgot-password": {"post"},

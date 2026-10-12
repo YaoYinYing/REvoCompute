@@ -1,5 +1,6 @@
 import type { CurrentUser } from '../../api/app-api';
 import type { AppShell } from '../../app/shell';
+import { guidedTour } from '../../app/guided-tour';
 import { ConfigurationAdmin } from './configuration/ConfigurationAdmin';
 import { FleetAdmin } from './fleet/FleetAdmin';
 import { LogsAdmin } from './logs/LogsAdmin';
@@ -34,4 +35,9 @@ export async function mountAdmin(
   else if (route === 'admin-users') await new UserAdmin(shell, user).mount(workspace);
   else if (route === 'admin-configuration') await new ConfigurationAdmin(shell).mount(workspace);
   else await new LogsAdmin(shell).mount(workspace);
+  // Administration is a set of read-only surfaces a new operator has to learn. The
+  // admin tour is offered here and only here, and only to a real administrator —
+  // the 403 branch above never reaches it. It points at what each surface means and
+  // never operates one.
+  guidedTour.offer();
 }

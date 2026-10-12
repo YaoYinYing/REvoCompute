@@ -885,6 +885,21 @@ def build_restart_plan(state, compose_cmd: tuple[str, ...], flags: RestartFlags)
         }
 
     steps: list[Step] = []
+    # The gateway route is deployment state reconciled from the one MCP_ENABLED
+    # switch, and it is read by containers this walk stops and starts. Reconcile
+    # before the stop so the instance that comes back up is the one the env file
+    # describes; the walk restarts the gateway afterwards only when the route
+    # state actually changed, because the gateway reads the mask at container
+    # start. Registered first so it runs under --dry-run too, where it reports the
+    # planned change without touching the deployment.
+    from revocompute_ctl.mcp import apply_gateway
+
+    route_changed_holder: list[bool] = [False]
+
+    def reconcile_mcp_route() -> None:
+        route_changed_holder[0] = apply_gateway(state, dry_run=flags.dry_run)
+
+    steps.append(Step("mcp-route", reconcile_mcp_route))
     if flags.keep_gateway:
         steps.append(Step("maintenance", lambda: begin_maintenance(state)))
     steps.extend(
@@ -935,7 +950,11 @@ def build_restart_plan(state, compose_cmd: tuple[str, ...], flags: RestartFlags)
             ),
         )
     )
-    if flags.keep_gateway:
+    if flags.keep_gateway or route_changed_holder[0]:
+        # The gateway generated its configuration at container start, so it must
+        # re-read the mask whenever the route state changed.  When nothing changed
+        # there is no restart: the ordinary restart already recreated the gateway
+        # through `up`, and a restart here would only add downtime.
         steps.append(
             Step(
                 "refresh-gateway",

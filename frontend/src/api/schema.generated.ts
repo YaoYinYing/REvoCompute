@@ -81,6 +81,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/compute/api/mcp": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get agent MCP capability
+         * @description Reports whether this deployment serves the agent Model Context Protocol surface, so a client is offered the entry only when the endpoint is really reachable. It is a deployment-capability projection, never an authorization: what a credential may do over MCP is decided per request by the canonical account, entitlement, admission, and result rules.
+         */
+        get: operations["getMcpCapability"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/compute/api/auth/captcha": {
         parameters: {
             query?: never;
@@ -1632,6 +1652,11 @@ export interface components {
         RegistrationCapability: {
             enabled: boolean;
             email_available: boolean;
+        };
+        McpCapability: {
+            enabled: boolean;
+            /** @description Same-origin path of the MCP endpoint when enabled, otherwise null. */
+            endpoint: string | null;
         };
         CaptchaChallenge: {
             question: string;
@@ -3330,6 +3355,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RegistrationCapability"];
+                };
+            };
+        };
+    };
+    getMcpCapability: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current agent MCP capability */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpCapability"];
                 };
             };
         };

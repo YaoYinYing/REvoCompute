@@ -250,6 +250,39 @@ def test_registration_capability_is_public_and_server_authoritative(monkeypatch,
     }
 
 
+def test_mcp_capability_is_public_absent_by_default_and_present_only_when_enabled(monkeypatch, tmp_path):
+    # The capability answers the one question the Home page asks before it offers a
+    # live MCP endpoint: does *this* deployment serve it? Unset is the default and
+    # must report the surface absent — the repository shipping MCP code is never
+    # presented as deployed support.
+    disabled = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    client = disabled.app.test_client()
+    response = client.get("/compute/api/mcp")
+    assert response.status_code == 200
+    assert response.get_json() == {"enabled": False, "endpoint": None}
+
+    # MCP_PORT=0 asks uvicorn for an ephemeral port: the enabled module really does
+    # start its companion listener, and the test does not bind (or contend for) a
+    # fixed port another process on the host may hold.
+    enabled = _load_pssm_module(
+        monkeypatch,
+        tmp_path / "enabled",
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "MCP_ENABLED": "true", "MCP_PORT": "0"},
+    )
+    assert enabled.app.test_client().get("/compute/api/mcp").get_json() == {
+        "enabled": True,
+        "endpoint": "/k/mcp",
+    }
+
+
+def test_mcp_capability_declares_its_openapi_contract(monkeypatch, tmp_path):
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    client = module.app.test_client()
+    spec = client.get("/openapi.json").get_json()
+    assert "get" in spec["paths"]["/compute/api/mcp"]
+    _validate_openapi_payload(spec, "McpCapability", client.get("/compute/api/mcp").get_json())
+
+
 def test_frontend_entry_csp_allows_only_local_scripts_styles_and_fonts(monkeypatch, tmp_path):
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     _install_frontend_entry(module, tmp_path)

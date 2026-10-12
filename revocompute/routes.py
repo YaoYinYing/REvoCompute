@@ -270,6 +270,28 @@ def health():
     return "", 200
 
 
+@app.route("/compute/api/mcp", methods=["GET"])
+def mcp_capability():
+    """Whether this deployment serves the agent MCP surface.
+
+    A public read-only projection of one deployment fact, so the browser can
+    tell whether ``/k/mcp`` is really reachable before offering an "Connect an
+    AI agent" entry: GitHub code existing must never be presented as deployed
+    support.
+
+    The answer comes from the same ``MCP_ENABLED`` switch the companion listener
+    reads in *this* process — the process that would answer the endpoint — so a
+    deployment that did not opt in reports ``enabled: false`` and the endpoint is
+    absent. It is not an authentication surface: what a client may *do* is still
+    decided per request by the canonical credential, entitlement, admission, and
+    result rules. No credential, host path, or internal port is ever returned.
+    """
+    from revocompute import mcp
+
+    enabled = mcp.enabled()
+    return jsonify({"enabled": enabled, "endpoint": "/k/mcp" if enabled else None}), 200
+
+
 @app.route("/compute/api/infrastructure", methods=["GET"])
 @login_required
 def infrastructure_readiness():

@@ -1,5 +1,6 @@
 import { Check, Clipboard } from 'lucide';
 import { createIcons } from 'lucide';
+import { getMcpCapability } from '../../api/app-api';
 import type { AppShell } from '../../app/shell';
 import './home.css';
 
@@ -78,4 +79,33 @@ export function mountHome(root: HTMLElement, shell: AppShell): void {
       status.textContent = 'Select the URL to copy it manually.'; link.focus(); shell.notify('Select the URL to copy it manually.');
     }
   });
+  void applyAgentCapability(root);
+}
+
+/*
+ * The "Connect an AI agent" entry states one deployment fact: whether this
+ * deployment actually serves the MCP endpoint.
+ *
+ * A public Home page is seen before a reader has any way to tell code from a
+ * running deployment, so "the repository has MCP" must never be presented as
+ * "this server speaks MCP". The entry keeps the always-available agent API guide
+ * — /skills.md is served by every deployment — and only *adds* the MCP endpoint
+ * once the deployment's own capability read says it answers. A read that fails,
+ * is slow, or reports the surface off leaves the documentation-only state; the
+ * upgrade to the live endpoint happens only on an affirmative read.
+ */
+async function applyAgentCapability(root: HTMLElement): Promise<void> {
+  const aside = root.querySelector<HTMLElement>('.agent-guide');
+  const capability = await getMcpCapability().catch(() => null);
+  if (!aside || !capability?.enabled || !capability.endpoint) return;
+  const endpoint = new URL(capability.endpoint, location.origin).href;
+  aside.dataset.mcpState = 'enabled';
+  const copy = aside.querySelector('p');
+  if (copy) copy.textContent = 'Discover, submit, and retrieve tasks over MCP, or connect over the stable HTTP guide.';
+  const mcpLink = document.createElement('a');
+  mcpLink.className = 'agent-guide-endpoint'; mcpLink.href = capability.endpoint;
+  mcpLink.setAttribute('aria-label', `MCP endpoint: ${endpoint}`);
+  const code = document.createElement('code'); code.textContent = endpoint; mcpLink.append(code);
+  const guide = aside.querySelector('[data-agent-url]');
+  if (guide) guide.after(mcpLink); else aside.append(mcpLink);
 }

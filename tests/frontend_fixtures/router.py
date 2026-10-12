@@ -47,7 +47,7 @@ _PROFILE_FIELDS = frozenset({"full_name", "affiliation", "position", "pi_name"})
 _APP_PAGE = re.compile(
     r"/(?:api-docs|runners|runners/[^/]+|compute/terms"
     r"|compute/(?:login|register|reset_password|user_verify|profile|user_control|configuration|logs"
-    r"|create_task|dashboard|results/[0-9a-fA-F]{32}))"
+    r"|runner_fleet|create_task|dashboard|results/[0-9a-fA-F]{32}))"
 )
 
 
@@ -351,6 +351,18 @@ class FrontendFixtureRouter:
     def _system_notices(self, route: Any, query: Any) -> None:
         return route.fulfill(json={"notices": []})
 
+    def _mcp_capability(self, route: Any, query: Any) -> None:
+        """The deployment's own MCP capability projection, as the real route serves it.
+
+        The public Home page reads this to decide whether its "Connect an AI agent"
+        entry may offer a live endpoint: a scenario that declares no endpoint is the
+        default deployment and reports the surface absent, which is what keeps the
+        entry documentation-only. The route is public, so it is declared here once
+        rather than repeated in every test that loads the public shell.
+        """
+        endpoint = self.scenario.mcp_endpoint
+        return route.fulfill(json={"enabled": endpoint is not None, "endpoint": endpoint})
+
     # -- Runner discovery ---------------------------------------------------
 
     def _runner_detail(self, route: Any, query: Any, name: str = "", **_: str) -> None:
@@ -494,6 +506,7 @@ _API_ROUTES: tuple[tuple[re.Pattern[str], Any], ...] = (
     (re.compile(r"/compute/api/auth/register"), FrontendFixtureRouter._auth_register),
     (re.compile(r"/compute/api/legal/terms"), FrontendFixtureRouter._legal_terms),
     (re.compile(r"/compute/api/system/notices"), FrontendFixtureRouter._system_notices),
+    (re.compile(r"/compute/api/mcp"), FrontendFixtureRouter._mcp_capability),
     (re.compile(r"/compute/api/infrastructure"), lambda self, route, query: route.fulfill(json=builders.build_infrastructure(self.scenario.readiness()))),
     (re.compile(r"/compute/api/types"), lambda self, route, query: route.fulfill(json=self.scenario.catalog())),
     (re.compile(r"/compute/api/types/(?P<name>[^/]+)/workspace/normalize"), FrontendFixtureRouter._workspace_normalize),

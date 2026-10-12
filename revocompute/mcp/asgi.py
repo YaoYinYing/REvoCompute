@@ -80,6 +80,18 @@ def serve() -> None:
     uvicorn.run(mcp_asgi(), host="0.0.0.0", port=port, log_level=os.environ.get("MCP_LOG_LEVEL", "info"))  # nosec B104
 
 
+def mcp_enabled() -> bool:
+    """Whether this deployment opted in to serving the MCP surface.
+
+    The switch is a deployment fact, so it is read from the environment directly
+    rather than from a Flask app: the listener and any capability this process
+    reports must be decided by the same value, or the two can disagree.
+    """
+    from revocompute.config import env_bool
+
+    return env_bool("MCP_ENABLED", False)
+
+
 def start_companion_listener() -> threading.Thread | None:
     """Start the MCP ASGI listener in a daemon thread of this process.
 
@@ -87,16 +99,19 @@ def start_companion_listener() -> threading.Thread | None:
     the loaded application, and every in-process admission decision are the same
     objects the HTTP API uses.  Returns ``None`` when MCP is disabled or the
     optional ASGI stack is missing, so the HTTP API is never affected by an
-    absent extra.
+    absent extra.  The deployment starts the web process with Gunicorn
+    ``--preload``, so the listener lives in the master and its bound socket is
+    inherited by every worker: one listener, one application, one admission
+    path per container.
     """
     import os
 
-    from revocompute.config import env_bool, env_int
+    from revocompute.config import env_int
 
     # Opt-in: the listener is off unless the deployment turns it on, so an
     # ordinary import (a worker, a maintenance process, a test) never binds a
     # port or spawns a thread.
-    if not env_bool("MCP_ENABLED", False):
+    if not mcp_enabled():
         return None
     try:
         import uvicorn
@@ -114,4 +129,4 @@ def start_companion_listener() -> threading.Thread | None:
     return thread
 
 
-__all__ = ["DEFAULT_MCP_PORT", "MCP_PATH", "mcp_asgi", "serve", "start_companion_listener"]
+__all__ = ["DEFAULT_MCP_PORT", "MCP_PATH", "mcp_asgi", "mcp_enabled", "serve", "start_companion_listener"]

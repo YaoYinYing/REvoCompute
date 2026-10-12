@@ -28,22 +28,43 @@ ResultManifest, and artifact rules are the ones that apply.
 
 ### Enabling the surface
 
-Enabling MCP is a **deployment-owned change**, not a flag on the checked-in
-deployment scripts: this repository's `run/restart.sh` and Compose stack do not
-yet wire it. A deployment turns it on by all three of
+Enabling MCP is a **deployment-owned opt-in** and is disabled by default: a
+deployment that never sets `MCP_ENABLED` runs exactly as it did before this
+setting existed, with no route, no overlay, and no listener. One switch,
+`MCP_ENABLED`, decides the whole opt-in, so "is MCP deployed?" cannot be
+answered two different ways. Turn it on by all three of
 
-1. installing the optional extra in the server image
-   (`uv pip install "/app/server[resend,mcp]"`),
+1. building the server image with the transport stack —
+   `REVOCOMPUTE_EXTRAS=resend,mcp` in the deployment env file (the shipped
+   default is `resend` alone); the transport is an image dependency, so the
+   image must be rebuilt, not merely re-flagged;
 2. setting `MCP_ENABLED=true` (and, if the default is unsuitable, `MCP_PORT`,
-   default `8081`) in the `web` service environment, and
-3. adding a gateway route to the MCP listener port alongside the HTTP API.
+   default `8081`) in the deployment env file; and
+3. running `bash run/restart.sh restart`, which layers
+   `docker-compose.mcp.yml`, reconciles the gateway `location /k/` route from
+   `MCP_ENABLED`, and starts the in-process listener.
 
-Without all three, `revocompute.app` logs `MCP surface disabled` and the
-endpoint is simply absent — an ordinary deployment without the extra installs and
-runs exactly as before. A first-class `--with-mcp` deployment path is tracked as
-a follow-up; the surface is verified today through
-[interoperability testing](#interoperability-testing), which starts the real
-process with the listener enabled.
+`bash run/restart.sh mcp-status` reports the switch, whether the route is
+present, and what the running web process answers. The last is read from the
+public `GET /compute/api/mcp` capability, so an env file that says "on" while the
+process says "off" is reported as an operator problem rather than silently as
+"disabled". To roll back, set `MCP_ENABLED=false` and run
+`bash run/restart.sh restart`: the route is removed and the process returns to
+its pre-MCP shape.
+
+While `MCP_ENABLED` is unset, `revocompute.app` logs `MCP surface disabled`, the
+gateway's `include` of the route mask is empty, and the endpoint is absent rather
+than pointed at a dead port.
+
+#### Route and transport boundary
+
+- Listener: a thread in the **canonical** web process on a container-internal
+  port (`MCP_PORT`, default `8081`). That port is never published to the host, so
+  nothing outside the compose network can reach the listener directly.
+- Route: the gateway exposes exactly one location, `/k/`, over the compose
+  network. The canonical per-route rate limiter, admission path, and application
+  state are the ones that apply — there is no second service, no shadow limiter,
+  and no second execution plane.
 
 ## Authentication
 

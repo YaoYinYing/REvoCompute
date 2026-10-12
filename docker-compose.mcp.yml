@@ -1,0 +1,18 @@
+# Layered only when MCP_ENABLED is true (see revocompute_ctl.compose.compose_args).
+# It adds *only* environment to the web service: there is no new service, no new
+# volume, no published port, and no second execution plane. A stack that never
+# opts in never renders this file, so it sees exactly the model it did before.
+#
+# The listener binds the container-internal port below. That port is never
+# published and never appears in the base stack's `expose` list; the gateway
+# reaches it over the compose network, and only when the deployment also wrote
+# the gateway route (revocompute_ctl/mcp.py).
+services:
+  web:
+    environment:
+      MCP_ENABLED: ${MCP_ENABLED:-false}
+      MCP_PORT: ${MCP_PORT:-8081}
+      MCP_LOG_LEVEL: ${MCP_LOG_LEVEL:-warning}
+      # A deployment behind automatic HTTPS should set an https:// base URL here
+      # so a copied MCP endpoint is the URL a client can actually reach.
+      SERVER_BASE_URL: ${SERVER_BASE_URL:-http://localhost:8080}

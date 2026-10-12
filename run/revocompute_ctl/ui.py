@@ -10,7 +10,7 @@ messages are pinned by test_process_isolation.py and the ops guide.
 
 from __future__ import annotations
 
-USAGE = """Usage: bash run/restart.sh [setup|prepare|build|live-test|runner-status|api-receipt|up|down|reload|restart|reset-passwd]
+USAGE = """Usage: bash run/restart.sh [setup|prepare|build|live-test|runner-status|mcp-status|api-receipt|up|down|reload|restart|reset-passwd]
        bash run/restart.sh restart [--mode=dev|--mode=prod|--mode=prepared]
        bash run/restart.sh down [--keep-gateway]
        bash run/restart.sh reset-passwd <username>
@@ -28,6 +28,11 @@ USAGE = """Usage: bash run/restart.sh [setup|prepare|build|live-test|runner-stat
        Runner readiness (read-only):
            runner-status --runner <family> [--json]
            runner-status --all [--json]
+
+       Agent MCP surface (read-only):
+           mcp-status                          Report the MCP_ENABLED switch, the
+                                               gateway route, and what the running
+                                               web process reports.
 
        Production API acceptance receipt (read-only):
            api-receipt --task <task-id>        Record the observed production
@@ -68,6 +73,7 @@ Subcommands:
   build    Build server web/worker images with Docker Compose.
   live-test Build, validate, run, and receipt exact candidate SIFs on real Slurm.
   runner-status Derive active Runner readiness from current contracts and evidence.
+  mcp-status Report whether the optional agent MCP surface is enabled and reachable.
   api-receipt Record the observed production API evidence for one finished task.
   up       Start redis/web/worker with docker compose.
   down     Stop the deployment; by default remove the stack. With --keep-gateway,

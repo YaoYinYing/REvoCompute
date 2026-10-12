@@ -12,6 +12,7 @@ export type GPUCreditSummary = components['schemas']['GPUCreditSummary'];
 export type RunnerAccess = components['schemas']['RunnerAccess'];
 
 export type RegistrationCapability = components['schemas']['RegistrationCapability'];
+export type McpCapability = components['schemas']['McpCapability'];
 export type CaptchaChallenge = components['schemas']['CaptchaChallenge'];
 export type RegistrationRequest = components['schemas']['RegisterRequest'];
 export type LegalDocument = components['schemas']['LegalDocument'];
@@ -62,6 +63,10 @@ export const verifyEmail = (token: string): Promise<components['schemas']['Verif
   jsonRequest('/compute/api/auth/verify-email', { token });
 export const getTerms = (): Promise<LegalDocument> => requestJson('/compute/api/legal/terms');
 export const getSystemNotices = (): Promise<SystemNotices> => requestJson('/compute/api/system/notices');
+// Whether this deployment serves the agent MCP endpoint: a public read of one
+// deployment fact, so the Home page offers the live endpoint only when it answers.
+export const getMcpCapability = (signal?: AbortSignal): Promise<McpCapability> =>
+  requestJson('/compute/api/mcp', { signal });
 
 export const updatePassword = (currentPassword: string, newPassword: string): Promise<ApiMessage> =>
   authorizedJson('/compute/api/auth/me', {
