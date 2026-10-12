@@ -645,18 +645,24 @@ def test_shell_focus_ring_survives_a_result_route_and_every_indicator_meets_cont
             assert indicator["contrast"] is not None and indicator["contrast"] >= 3.0, indicator
 
 
-def test_molstar_selection_controls_stay_reachable_at_mobile_width(page: Page) -> None:
+def test_molstar_selection_controls_stay_reachable_at_mobile_width(page: Page, monkeypatch) -> None:
     """The Mol* selection-controls row must not be clipped unreachably at 320px.
 
     Read from the browser: every control in the row is inside the structure
     host's box, or the row overflows it as a scrollable region that can reach
     it; and the document still does not scroll sideways.
+
+    This case needs the real production bundle, because the Mol* selection
+    controls are chunk markup the fixture-viewer double cannot lay out at all.
+    The stand-in is installed through ``monkeypatch`` so it is undone when the
+    case ends: a process-global left pinned would serve every later browser case
+    whatever bundle was last built on disk, which is not the bundle under test.
     """
     for width, height in ((320, 900), (768, 900), (1280, 900)):
         page.set_viewport_size({"width": width, "height": height})
         # The real production bundle: the Mol* selection controls are chunk
         # markup, so the fixture-viewer double cannot lay them out at all.
-        browser_frontend_assets._RESULT_DIST = ROOT / "frontend" / "dist"
+        monkeypatch.setattr(browser_frontend_assets, "_RESULT_DIST", ROOT / "frontend" / "dist")
         frontend_fixtures.mount_scenario(page, frontend_fixtures.structure_scenario())
         page.goto(f"{frontend_fixtures.DEFAULT_ORIGIN}/compute/results/{frontend_fixtures.DEFAULT_TASK_ID}")
         page.locator(".msp-selection-viewport-controls").first.wait_for(timeout=90_000)
