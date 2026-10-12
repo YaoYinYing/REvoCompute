@@ -383,8 +383,15 @@ export class GuidedTour {
       const rect = anchor.getBoundingClientRect();
       const width = Math.min(384, window.innerWidth - 32);
       const left = Math.min(Math.max(16, rect.left), window.innerWidth - width - 16);
+      // Below the anchor when the callout fits there, above it when it does not,
+      // and clamped to the viewport in either case. The height is measured rather
+      // than assumed: the callout grows with its copy, so a fixed allowance put the
+      // footer past the bottom edge when the anchor sat low on a long page, leaving
+      // Next and Finish unreachable.
+      const height = callout.getBoundingClientRect().height;
       const below = rect.bottom + 12;
-      const top = below + 240 < window.innerHeight ? below : Math.max(16, rect.top - 260);
+      const above = rect.top - height - 12;
+      const top = Math.max(16, below + height + 16 <= window.innerHeight ? below : Math.min(above, window.innerHeight - height - 16));
       callout.style.left = `${left}px`; callout.style.top = `${top}px`;
       // The shell owns the viewport's lower corner with its fixed feedback column
       // (notices and toasts). A callout that would land on that column keeps its

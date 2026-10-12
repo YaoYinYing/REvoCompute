@@ -38,6 +38,10 @@ export async function mountAdmin(
   // Administration is a set of read-only surfaces a new operator has to learn. The
   // admin tour is offered here and only here, and only to a real administrator —
   // the 403 branch above never reaches it. It points at what each surface means and
-  // never operates one.
+  // never operates one. The admin flow walks from one Administration surface to the
+  // next, so an in-progress tour resumes on the destination it just navigated to
+  // rather than being restarted: the same route-lifecycle contract the result
+  // workspace follows, applied to the flow whose steps are separate pages.
+  guidedTour.resumeIfActive();
   guidedTour.offer();
 }
