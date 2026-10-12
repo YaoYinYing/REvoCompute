@@ -53,7 +53,7 @@ _PANEL = ".msp-layout-right .msp-scrollable-container"
 _REGION = ".msp-layout-region.msp-layout-right"
 
 
-def _open_result(page: Page, *, width: int, height: int) -> list[str]:
+def _open_result(page: Page, monkeypatch: pytest.MonkeyPatch, *, width: int, height: int) -> list[str]:
     """Serve the production bundle against the canonical structure fixture.
 
     The bundle is the built ``frontend/dist``: the advanced controls are Mol*
@@ -64,7 +64,11 @@ def _open_result(page: Page, *, width: int, height: int) -> list[str]:
     errors: list[str] = []
     page.on("pageerror", lambda error: errors.append(str(error)))
     page.set_viewport_size({"width": width, "height": height})
-    browser_frontend_assets._RESULT_DIST = RESULT_DIST
+    # The dist the harness serves is process-global, so it is installed through
+    # `monkeypatch`: a bare assignment would leak the production bundle into every
+    # later browser case in the same session, whatever bundle that case meant to
+    # exercise.
+    monkeypatch.setattr(browser_frontend_assets, "_RESULT_DIST", RESULT_DIST)
     frontend_fixtures.mount_scenario(page, frontend_fixtures.structure_scenario())
     page.goto(f"{frontend_fixtures.DEFAULT_ORIGIN}/compute/results/{frontend_fixtures.DEFAULT_TASK_ID}")
     expect(page.locator(f".structure-host canvas, .structure-host {_DISCLOSURE}").first).to_be_visible(timeout=180_000)
@@ -121,9 +125,9 @@ def _click_disclosure(page: Page) -> dict:
     return _reading(page)
 
 
-def test_advanced_controls_toggle_is_discoverable_and_operable(page: Page) -> None:
+def test_advanced_controls_toggle_is_discoverable_and_operable(page: Page, monkeypatch: pytest.MonkeyPatch) -> None:
     """At 1440x900 the disclosure is on screen, named, and opens the native panel."""
-    errors = _open_result(page, width=1440, height=900)
+    errors = _open_result(page, monkeypatch, width=1440, height=900)
     closed = _reading(page)
 
     # At rest the science owns the stage: the native panel is genuinely closed.
@@ -143,6 +147,9 @@ def test_advanced_controls_toggle_is_discoverable_and_operable(page: Page) -> No
     assert opened["panel"]["controls"] > 0, "the advanced controls panel rendered no controls"
     assert opened["panel"]["inside"], opened
     assert opened["region"]["inside"], opened
+    # The opened layout is the one that must keep the controls reachable: the
+    # panel takes a column, so this is where the disclosure could be pushed out.
+    assert opened["disclosure"]["inside"] and opened["disclosure"]["hittable"], opened
     # Opening the panel must not push the toolbar or the page off the reader.
     assert opened["toolbar"] is not None and opened["toolbar"]["width"] > 0, opened
     assert opened["documentOverflow"] <= 0, opened
@@ -161,6 +168,7 @@ def test_advanced_controls_toggle_is_discoverable_and_operable(page: Page) -> No
     pressed = _reading(page)
     assert pressed["disclosure"]["on"] is True, pressed
     assert pressed["panel"]["visible"] is True, "the panel did not open from the keyboard"
+    assert pressed["disclosure"]["hittable"] and pressed["region"]["inside"], pressed
     page.keyboard.press("Enter")
     page.wait_for_timeout(600)
     assert _reading(page)["panel"]["visible"] is False, "the panel did not close from the keyboard"
@@ -174,7 +182,10 @@ def test_advanced_controls_toggle_is_discoverable_and_operable(page: Page) -> No
     assert fullscreen["fullscreen"] is True, fullscreen
     assert fullscreen["disclosure"]["inside"], fullscreen
     assert fullscreen["disclosure"]["hittable"], fullscreen
-    assert _click_disclosure(page)["panel"]["visible"] is True, "the panel did not open in fullscreen"
+    in_fullscreen = _click_disclosure(page)
+    assert in_fullscreen["panel"]["visible"] is True, "the panel did not open in fullscreen"
+    assert in_fullscreen["disclosure"]["hittable"], in_fullscreen
+    assert in_fullscreen["region"]["inside"], in_fullscreen
 
     assert errors == [], errors
     # Leaving fullscreen is teardown, not part of the contract: the page is
@@ -183,9 +194,9 @@ def test_advanced_controls_toggle_is_discoverable_and_operable(page: Page) -> No
 
 
 @pytest.mark.parametrize(("width", "height"), [(768, 900), (320, 900)])
-def test_advanced_controls_reach_every_reader_at_narrow_widths(page: Page, width: int, height: int) -> None:
+def test_advanced_controls_reach_every_reader_at_narrow_widths(page: Page, monkeypatch: pytest.MonkeyPatch, width: int, height: int) -> None:
     """No width strands the disclosure, covers the science, or traps a scroll."""
-    errors = _open_result(page, width=width, height=height)
+    errors = _open_result(page, monkeypatch, width=width, height=height)
     closed = _reading(page)
     assert closed["disclosure"]["inside"], closed
     assert closed["disclosure"]["hittable"], closed

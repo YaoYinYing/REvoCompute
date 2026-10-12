@@ -113,13 +113,15 @@ function viewerSpec(options: MolecularViewerOptions) {
   };
   spec.config = [
     ...(spec.config || []),
-    // One disclosure, one owner. Mol*'s overlay button stays the affordance
-    // wherever a native panel exists and is absent where it would be a dead
-    // end. Mol*'s own floating fullscreen/XR buttons are dropped: the Result
-    // workspace already provides both from its own toolbar.
+    // One disclosure, one control surface. Mol*'s overlay button stays the
+    // affordance wherever a native panel exists and is absent where it would be
+    // a dead end. The floating buttons that would duplicate a capability the
+    // Result workspace already owns are dropped: fullscreen and expand from the
+    // workspace toolbar, and screenshot/state from `captureImage`.
     [PluginConfig.Viewport.ShowControls, showControls],
     [PluginConfig.Viewport.ShowSelectionMode, Boolean(options.selectionEnabled)],
     [PluginConfig.Viewport.ShowSettings, false],
+    [PluginConfig.Viewport.ShowScreenshotControls, false],
     [PluginConfig.Viewport.ShowXR, 'never'],
     [PluginConfig.Viewport.ShowExpand, false],
     [PluginConfig.Viewport.ShowToggleFullscreen, false],
