@@ -70,7 +70,6 @@ const steps: TourStep[] = [
 
 export class GuidedTour {
   private callout: HTMLElement | null = null;
-  private anchor: HTMLElement | null = null;
   private index = 0;
 
   private get done(): boolean { return localStorage.getItem(doneKey) === 'true'; }
@@ -141,7 +140,6 @@ export class GuidedTour {
   private render(anchor: HTMLElement, step: TourStep, index: number): void {
     const title = t(step.titleKey), body = t(step.bodyKey);
     anchor.classList.add('tour-anchor');
-    this.anchor = anchor;
     const callout = document.createElement('section');
     callout.className = 'tour-callout'; callout.setAttribute('role', 'dialog'); callout.setAttribute('aria-modal', 'false');
     callout.setAttribute('aria-label', title);
@@ -204,7 +202,7 @@ export class GuidedTour {
 
   private close(): void {
     this.cleanup?.(); this.cleanup = null;
-    this.anchor?.classList.remove('tour-anchor'); this.anchor = null;
+    document.querySelectorAll('.tour-anchor').forEach(node => node.classList.remove('tour-anchor'));
     this.callout?.remove(); this.callout = null;
   }
 
