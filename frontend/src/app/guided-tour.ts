@@ -42,7 +42,6 @@ const activeKey = 'revocompute-tour-flow';
  */
 export const GUIDED_TOUR_ABORT_EVENT = 'revocompute:tour-abort';
 
-
 export type TourFlowId = 'create' | 'results' | 'admin';
 
 interface TourStep {
