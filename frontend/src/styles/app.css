@@ -31,6 +31,10 @@
   --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
   /* Navigation rail geometry: quiet product chrome, not an IDE toolbar. */
   --rail-collapsed: 4.25rem; --rail-expanded: 13rem;
+  /* The global bar's own height, in rem so it tracks a text-only resize. A
+     page-level sticky surface clears the bar through this token instead of
+     re-deriving the bar's height as a second magic number. */
+  --app-bar: 3.9rem;
   font-family: var(--font-sans);
   font-size: 16px;
   line-height: 1.5;
@@ -94,7 +98,7 @@ a { color: var(--app-accent); }
 .app-shell[data-rail="expanded"] .app-nav a { justify-content: start; padding: .7rem .8rem; }
 .app-nav svg, .app-header-actions svg { width: 1.05rem; height: 1.05rem; flex: none; }
 
-.app-header { grid-area: header; position: sticky; top: 0; z-index: 30; display: flex; min-height: 3.9rem; align-items: center; justify-content: end; gap: .5rem; padding: 0 1.25rem; border-bottom: 1px solid var(--app-line); background: color-mix(in srgb, var(--app-surface) 88%, transparent); backdrop-filter: blur(14px); }
+.app-header { grid-area: header; position: sticky; top: 0; z-index: 30; display: flex; min-height: var(--app-bar); align-items: center; justify-content: end; gap: .5rem; padding: 0 1.25rem; border-bottom: 1px solid var(--app-line); background: color-mix(in srgb, var(--app-surface) 88%, transparent); backdrop-filter: blur(14px); }
 .app-header-actions { display: flex; align-items: center; gap: .5rem; }
 .app-new-task { display: inline-flex; min-height: 2.2rem; align-items: center; gap: .4rem; padding: 0 .85rem; border: 1px solid transparent; border-radius: var(--r-control); background: var(--app-accent); color: var(--app-bg); font-size: .82rem; font-weight: 650; text-decoration: none; transition: background .15s ease; }
 .app-new-task:hover, .app-new-task:focus-visible { background: var(--app-accent-2); }
@@ -104,7 +108,7 @@ a { color: var(--app-accent); }
 .app-user span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .icon-button { display: grid; width: 2.3rem; height: 2.3rem; place-items: center; padding: 0; border: 1px solid var(--app-line); border-radius: var(--r-control); background: var(--app-surface); color: var(--app-ink); cursor: pointer; transition: border-color .15s ease, color .15s ease; }
 .icon-button:hover { border-color: var(--app-line-strong); color: var(--app-accent); }
-.app-outlet { grid-area: outlet; min-width: 0; min-height: calc(100vh - 3.9rem); }
+.app-outlet { grid-area: outlet; min-width: 0; min-height: calc(100vh - var(--app-bar)); }
 
 /* Language control: a compact menu in the top bar, quiet until used. */
 .lang-menu { position: relative; }
@@ -385,7 +389,7 @@ a { color: var(--app-accent); }
 /* Tablet and below: the rail becomes a mobile-specific bottom navigation;
    the brand and the global actions share one top bar. */
 @media (max-width: 56rem) {
-  .app-shell { --app-bottom-clearance: calc(3.5rem + var(--app-admin-height, 0px)); grid-template-columns: auto minmax(0, 1fr); grid-template-rows: auto 1fr; grid-template-areas: "brand header" "outlet outlet"; }
+  .app-shell { --app-bottom-clearance: calc(var(--app-bar) + var(--app-admin-height, 0px)); grid-template-columns: auto minmax(0, 1fr); grid-template-rows: auto 1fr; grid-template-areas: "brand header" "outlet outlet"; }
   /* Narrow chrome keeps the logo and icon-only controls so the top bar cannot
      force the document wider than the viewport. */
   .app-brand { justify-content: start; padding: 0 .75rem; }
@@ -410,7 +414,7 @@ a { color: var(--app-accent); }
   .app-shell[data-rail] .app-nav-group[data-nav-group="admin"] a > span { display: inline; }
   .app-nav a { flex: 1; flex-direction: column; gap: .15rem; justify-content: center; padding: .3rem; border-radius: 0; font-size: .66rem; }
   .app-shell[data-rail] .app-nav > .app-nav-group:not([data-nav-group="admin"]) a > span { display: inline; }
-  .app-header { grid-area: header; min-width: 0; min-height: 3.5rem; padding: 0 .6rem; background: var(--app-surface); backdrop-filter: none; }
+  .app-header { grid-area: header; min-width: 0; --app-bar: 3.5rem; padding: 0 .6rem; background: var(--app-surface); backdrop-filter: none; }
   .app-header-actions { gap: .3rem; min-width: 0; }
   .app-header .app-new-task { width: 2.15rem; min-width: 2.15rem; justify-content: center; padding: 0; }
   .app-header .app-new-task span { display: none; }
