@@ -2890,8 +2890,12 @@
     "OperatorExecutorState": {
       "type": "object",
       "description": "Host executor availability, a capability separate from Runner readiness.",
-      "required": ["available", "reason"],
-      "properties": {"available": {"type": "boolean"}, "reason": {"type": "string"}},
+      "required": ["available", "reason", "unavailable_reason"],
+      "properties": {
+        "available": {"type": "boolean"},
+        "reason": {"type": "string"},
+        "unavailable_reason": {"type": ["string", "null"]}
+      },
       "additionalProperties": false
     },
     "RunnerFleetEntry": {

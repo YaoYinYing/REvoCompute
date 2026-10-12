@@ -2903,6 +2903,7 @@ export interface components {
         OperatorExecutorState: {
             available: boolean;
             reason: string;
+            unavailable_reason: string | null;
         };
         RunnerFleetEntry: {
             runner_family: string;

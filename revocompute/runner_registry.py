@@ -307,11 +307,29 @@ def _docker_tag(image: str, suffix: str = "latest") -> str:
 
 
 def _apptainer_version(state) -> str:
+    """The Apptainer builder version this deployment records for a build.
+
+    A build identity includes the builder, and the definition, build inputs, and
+    builder together are what make an image current (PR #28's change-impact
+    contract).  Every surface that re-derives build freshness must therefore
+    observe the *same* builder the build did.  The process that actually builds
+    -- the deployment controller, on the Slurm host -- observes Apptainer and
+    shares the observation as ``REVODESIGN_APPTAINER_VERSION``; a server process
+    that cannot run Apptainer (a container, or a host without it on PATH) then
+    reports the shared value instead of an empty string.  An empty string is not
+    "unknown here, so current": it is a *different* builder, which marks every
+    already-built SIF stale and sends an operator to rebuild current artifacts.
+    """
+    declared = (state.get("REVODESIGN_APPTAINER_VERSION") or "").strip()
+    if declared:
+        return declared
     try:
         result = run_cmd(["apptainer", "--version"], env=state.exported(), check=False, capture=True)
     except FileNotFoundError:
-        # Non-HPC validation and Compose smoke tests may inspect existing
-        # provenance without having the target-host runtime installed.
+        # No shared observation and no local Apptainer: build freshness cannot
+        # be proven from this process, so the caller reports stale rather than
+        # guessing a builder.  Non-HPC validation and Compose smoke tests may
+        # inspect existing provenance in this state.
         return ""
     return (result.stdout or result.stderr or "").strip()
 
@@ -320,6 +338,26 @@ def _definition_path(family: RuntimeFamily) -> Path:
     if family.root is None:
         raise RegistryError(f"Runtime family {family.name} has no source root")
     return family.root / family.definition
+
+
+def record_apptainer_builder_version(state) -> str:
+    """Observe the Apptainer builder once and share it with every read surface.
+
+    The deployment controller runs on the host that actually builds SIFs, so it
+    is the authoritative observer of the builder version.  Recording that
+    observation in the deployment environment (``REVODESIGN_APPTAINER_VERSION``)
+    is what keeps a build recorded by the CLI and a freshness query answered by
+    a containerized server process the same identity: without it a server
+    process that cannot run Apptainer reports the empty string, which is a
+    *different* builder, and every current SIF reads as BUILD_STALE.
+
+    Returns the observed version, or ``""`` when this host has no Apptainer
+    (nothing is recorded, and build freshness stays honestly unprovable here).
+    """
+    observed = _apptainer_version(state)
+    if observed:
+        os.environ["REVODESIGN_APPTAINER_VERSION"] = observed
+    return observed
 
 
 def _build_provenance(state, family: RuntimeFamily) -> dict[str, object]:

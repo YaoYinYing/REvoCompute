@@ -13,6 +13,7 @@ refused rather than approximated.
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -125,6 +126,66 @@ def test_an_unavailable_controller_fails_closed_before_any_side_effect(tmp_path)
     missing = ServerHostPaths(server=str(tmp_path), config=str(tmp_path), root=str(tmp_path / "absent"))
     with pytest.raises(ExecutorUnavailable):
         execute(missing, action_id="runner.status", runner_family="demo")
+
+
+def test_the_resolved_invocation_stays_inside_the_deployment_root(host):
+    """Every resolved field is derived from the deployment root, never a request.
+
+    The executor's argv, working directory, and env file are the only inputs a
+    request could hope to influence, so each is pinned to the resolved checkout:
+    the controller is a file inside it and nothing a caller sends can move either.
+    """
+    config = resolve_executor(host)
+    root = Path(host.server_root()).resolve()
+    assert Path(config.command[1]).resolve() == (root / "run" / "restart.sh")
+    assert Path(config.working_directory).resolve() == root
+    assert Path(config.env_file).resolve().parent == root
+
+
+def test_an_unreadable_deployment_env_file_fails_closed_and_says_so(host):
+    """A present-but-unreadable env file is unavailable, with a corrective reason.
+
+    Falling through to it would start the controller with a deployment it cannot
+    read; the boundary refuses instead, and the reason names the file by role
+    rather than a host path so an operator can act on it.
+    """
+    env_file = Path(host.server_root()) / ".env.production"
+    env_file.chmod(0o000)
+    try:
+        if os.access(env_file, os.R_OK):  # a privileged runner can read anything
+            pytest.skip("this process can read a mode-000 file")
+        state = availability(host)
+        assert state.available is False
+        assert state.reason == "operator_executor_unavailable"
+        assert "unreadable" in state.unavailable_reason
+        assert str(host.server_root()) not in state.unavailable_reason
+        with pytest.raises(ExecutorUnavailable):
+            execute(host, action_id="runner.status", runner_family="demo")
+    finally:
+        env_file.chmod(0o600)
+
+
+def test_every_unavailable_reason_is_actionable_without_leaking_the_layout(tmp_path):
+    """Each degraded state names the artifact by role and its corrective step.
+
+    The Admin surface shows this text and an operator pastes it into a report, so
+    it must be specific enough to act on and must never carry an absolute host
+    path.
+    """
+    absent = ServerHostPaths(server=str(tmp_path), config=str(tmp_path), root=str(tmp_path / "absent"))
+    no_env = tmp_path / "checkout"
+    (no_env / "run").mkdir(parents=True)
+    (no_env / "run" / "restart.sh").write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    host_without_env = ServerHostPaths(server=str(tmp_path), config=str(tmp_path), root=str(no_env))
+
+    for host, expected in (
+        (absent, "run/restart.sh"),
+        (host_without_env, "REVODESIGN_SERVER_ENV"),
+    ):
+        state = availability(host)
+        assert state.available is False
+        assert expected in state.unavailable_reason
+        assert str(tmp_path) not in state.unavailable_reason
 
 
 def test_a_missing_interpreter_is_reported_as_unavailable(host, monkeypatch):

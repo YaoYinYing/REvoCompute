@@ -29,6 +29,23 @@ and timestamp. Build freshness uses only actual image inputs; changing
 and has no Docker image ID. See the canonical
 [Runner change-impact model](../runner-guide/adding-a-runner.md#runner-change-impact-model).
 
+### The recorded Apptainer builder
+
+The Apptainer version is one of the three inputs to a build identity, and the
+host that runs `prepare --build-sif` is the only process that can observe it. On
+every `up`, the controller observes it once and shares it with the service
+containers through the Compose process environment
+(`REVODESIGN_APPTAINER_VERSION`), so a server process that ships no Apptainer
+still derives the identity the build recorded instead of an empty-builder one.
+
+The value is passed in the process environment, never written into the
+deployment env file, which remains the operator's to pin (set
+`REVODESIGN_APPTAINER_VERSION` there to record a specific build host's builder).
+A deployment that builds no SIFs, or a host with no Apptainer on `PATH`, shares
+nothing and says so; build freshness stays unprovable in that process rather
+than being reported as current. See
+[Runner Readiness](runner-readiness.md#why-the-admin-view-can-report-build_stale-while-the-cli-says-otherwise).
+
 ## Runner readiness
 
 Runner readiness is a deterministic view over the active SIF and existing

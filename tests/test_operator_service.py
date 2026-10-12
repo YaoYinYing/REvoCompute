@@ -76,8 +76,13 @@ def _service(monkeypatch, host, *, status=RunnerReadinessStatus.VALIDATION_STALE
     from revocompute.operator_executor import ExecutorAvailability
 
     monkeypatch.setattr(
-        service_module, "availability",
-        lambda _host: ExecutorAvailability(executor_available, "operator_executor_" + ("available" if executor_available else "unavailable")),
+        service_module,
+        "availability",
+        lambda _host: ExecutorAvailability(
+            executor_available,
+            "operator_executor_" + ("available" if executor_available else "unavailable"),
+            None if executor_available else "The deployment controller is not reachable from this process.",
+        ),
     )
     queue = list(results or [True])
 
@@ -166,10 +171,21 @@ def test_an_operation_the_host_cannot_run_is_refused_not_approximated(monkeypatc
 
 def test_an_unavailable_executor_fails_closed_without_a_job(monkeypatch, host):
     service, _state, calls = _service(monkeypatch, host, executor_available=False)
-    with pytest.raises(ExecutorUnavailable):
+    with pytest.raises(ExecutorUnavailable) as refusal:
         _submit(service)
+    # The refusal carries the actionable reason, not a bare "unavailable".
+    assert "not reachable" in str(refusal.value)
     assert calls == []
     assert service.jobs() == []
+
+
+def test_the_availability_the_admin_surface_serves_carries_the_reason(monkeypatch, host):
+    """The fleet's executor block must say *why* mutations are disabled."""
+    service, _state, _calls = _service(monkeypatch, host, executor_available=False)
+    executor = service.fleet(user_id=None)["executor"]
+    assert executor["available"] is False
+    assert executor["reason"] == "operator_executor_unavailable"
+    assert "not reachable" in executor["unavailable_reason"]
 
 
 def test_executor_loss_during_execution_marks_the_job_failed(monkeypatch, host):

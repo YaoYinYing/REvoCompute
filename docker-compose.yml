@@ -14,6 +14,14 @@ x-task-env: &task-env
   TASK_SCRATCH_GUARD_SECONDS: ${TASK_SCRATCH_GUARD_SECONDS:-}
   RUNNER_HOST_ROOT: ${RUNNER_HOST_ROOT:-}
   REVOCOMPUTE_IMAGE_DIR: ${REVOCOMPUTE_IMAGE_DIR:-}
+  # The Apptainer builder version the deployment records in build provenance.
+  # Build freshness includes the builder, and only the deployment controller's
+  # host can observe it, so the controller shares its observation here (see
+  # run/revocompute_ctl/steps.py); a containerized server process that cannot run
+  # Apptainer then derives the same build identity the build did instead of
+  # reporting every current SIF as BUILD_STALE.  Set it in the env file only to
+  # pin a specific build host's builder.
+  REVODESIGN_APPTAINER_VERSION: ${REVODESIGN_APPTAINER_VERSION:-}
   # Immutable Runtime Bundle store: a sibling of the image store, so it is never
   # deleted by the atomic replacement of the Runner tree.  The worker resolves a
   # queued task's pinned digest here; the compute node binds the same host path.

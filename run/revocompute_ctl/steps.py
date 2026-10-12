@@ -661,6 +661,33 @@ def cmd_reload(state, compose_cmd: tuple[str, ...]) -> None:
     )
 
 
+def share_apptainer_builder(state) -> None:
+    """Observe the host Apptainer builder and forward it to the server containers.
+
+    Build freshness includes the Apptainer builder version, and this host — the
+    one that actually builds SIFs — is its authoritative observer.  A
+    containerized server process cannot run Apptainer, so without this shared
+    observation its build identity differs from the recorded one by the builder
+    field alone and every current SIF reads as BUILD_STALE in the Admin API while
+    the CLI reports it current.  The observation rides in the Compose process
+    environment (``REVODESIGN_APPTAINER_VERSION``), so it reaches the running
+    containers without being written into the deployment env file, and an
+    operator who pins the variable there keeps control of it.
+    """
+    from revocompute.runner_registry import record_apptainer_builder_version
+
+    if not state.use_slurm():
+        return
+    observed = record_apptainer_builder_version(state)
+    if observed:
+        print("[SLURM] Apptainer builder shared with the server containers.")
+    else:
+        print(
+            "[SLURM] Apptainer is not on PATH; build freshness cannot be shared with the server.",
+            file=sys.stderr,
+        )
+
+
 def cmd_up(
     state, compose_cmd: tuple[str, ...], extra: list[str] | None = None, *, prevalidated: bool = False
 ) -> None:
@@ -673,6 +700,7 @@ def cmd_up(
         if state.use_slurm():
             validate_slurm_images(state, families)
         validate_auth_storage(state)
+    share_apptainer_builder(state)
     prepare_admin_bootstrap(state)
     # Print the generated credential before anything that can exit: the web
     # container creates the account with this password as soon as it starts, and

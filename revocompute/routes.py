@@ -3535,7 +3535,10 @@ def _operator_error(exc: Exception) -> tuple[Any, int]:
     if isinstance(exc, OperatorConflictError):
         return jsonify({"error": str(exc), "code": "operation_in_progress"}), 409
     if isinstance(exc, ExecutorUnavailable):
-        return jsonify({"error": "Operator executor unavailable", "code": "executor_unavailable"}), 503
+        # A bare "unavailable" is not actionable: the message names the missing
+        # artifact by role so an operator can correct it without the server
+        # leaking absolute host paths.
+        return jsonify({"error": str(exc) or "Operator executor unavailable", "code": "executor_unavailable"}), 503
     if isinstance(exc, (UnsupportedOperation, OperatorActionError)):
         return jsonify({"error": str(exc)}), 400
     from revocompute.operator_jobs import OperatorJobError
