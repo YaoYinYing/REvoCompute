@@ -200,6 +200,28 @@ def test_skipping_the_create_tour_leaves_the_register_entry_for_next_time(page: 
     assert _stored(page, RESULT_DONE) is None and _stored(page, ADMIN_DONE) is None
 
 
+def test_the_abort_signal_takes_the_callout_down_without_ending_the_flow(page: Page) -> None:
+    # A persistent shell changes the route without reloading the document, so the
+    # tour cannot rely on `pagehide` alone: an in-document navigation must also
+    # remove the overlay, or it decorates a page the reader has left. The signal is
+    # the tour's public teardown surface, so this asserts the contract a navigation
+    # layer depends on rather than the tour's internals.
+    mount_scenario(page, controlled_scenario())
+    page.goto(f"{ORIGIN}/compute/dashboard")
+    expect(page.locator(".task-card").first).to_be_visible()
+    page.get_by_role("button", name="Guided tour").click()
+    expect(page.locator(".tour-callout")).to_contain_text("Step 1 of 5")
+
+    page.evaluate("() => document.dispatchEvent(new Event('revocompute:tour-abort'))")
+
+    expect(page.locator(".tour-callout")).to_have_count(0)
+    expect(page.locator(".tour-anchor")).to_have_count(0)
+    # Tearing the overlay down is not leaving the flow: the reader is still at the
+    # same place in it, and nothing was marked complete.
+    assert _stored(page, CREATE_STEP) == "0"
+    assert _stored(page, CREATE_DONE) is None
+
+
 # ── result flow: conditional on a result that really exists ───────────────────
 
 

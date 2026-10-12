@@ -28,6 +28,21 @@ const DOCS_HREF = 'https://yaoyinying.github.io/REvoCompute/';
 /** Which flow is in progress. Written when a flow starts, cleared when it ends. */
 const activeKey = 'revocompute-tour-flow';
 
+/**
+ * The event a route change dispatches to tear the tour down.
+ *
+ * A guided tour decorates the page it belongs to, so it must not survive leaving
+ * that page. A document navigation fires `pagehide` and the tour removes itself;
+ * an in-document route change does not, so the navigation layer announces it
+ * instead: dispatch `new Event(GUIDED_TOUR_ABORT_EVENT)` when the outlet is
+ * replaced. The tour listens for it once for its own lifetime, so a page that
+ * never opened a tour pays nothing, and no navigation layer has to import the
+ * tour module to abort one. It is a plain cancelable Event rather than a
+ * callback registry: one signal, no shared mutable navigation state.
+ */
+export const GUIDED_TOUR_ABORT_EVENT = 'revocompute:tour-abort';
+
+
 export type TourFlowId = 'create' | 'results' | 'admin';
 
 interface TourStep {
@@ -217,21 +232,26 @@ function offersEntry(flow: TourFlow, pathname: string): boolean {
 
 export class GuidedTour {
   private callout: HTMLElement | null = null;
+  private anchored: HTMLElement | null = null;
   private cleanup: (() => void) | null = null;
-  private flow: TourFlow | null = null;
-  private index = 0;
   private disposal: ((event: Event) => void) | null = null;
 
   // The callout is appended under body, where a route render cannot reach it: it
   // lives outside the outlet the next route replaces, so a route change would
   // otherwise leave a stale overlay and its listeners attached to the new page.
-  // One pagehide listener, installed once for the tour's lifetime, disposes the
-  // overlay as this document is navigated away from. A bfcache restore keeps the
-  // document, so it is left alone.
+  // Two signals remove it: a document navigation fires `pagehide`, and an
+  // in-document route change dispatches the abort event named above. One listener
+  // each, installed once for the tour's lifetime, so a page that only changes its
+  // view really does lose the overlay. A bfcache restore keeps the document, so
+  // `pagehide` with `persisted` is left alone.
   constructor() {
     if (typeof document === 'undefined' || !document.addEventListener) return;
-    this.disposal = event => { if (!(event as PageTransitionEvent).persisted) this.close(); };
+    this.disposal = event => {
+      if (event.type === 'pagehide' && (event as PageTransitionEvent).persisted) return;
+      this.close();
+    };
     document.addEventListener('pagehide', this.disposal);
+    document.addEventListener(GUIDED_TOUR_ABORT_EVENT, this.disposal);
   }
 
   /** A flow is done when its completion matches the object it is bound to. */
@@ -339,11 +359,8 @@ export class GuidedTour {
       return this.show(flow, index + 1);
     }
     localStorage.setItem(flow.stepKey, String(index));
-    this.flow = flow;
-    this.index = index;
     this.render(flow, anchor, step, index);
   }
-
   /** The concrete result page recorded at create-tour entry, gated to a real id. */
   private target(flow: TourFlow): string | null {
     if (!flow.targetKey) return null;
@@ -354,6 +371,7 @@ export class GuidedTour {
   private render(flow: TourFlow, anchor: HTMLElement, step: TourStep, index: number): void {
     const title = t(step.titleKey), body = t(step.bodyKey);
     anchor.classList.add('tour-anchor');
+    this.anchored = anchor;
     const callout = document.createElement('section');
     callout.className = 'tour-callout'; callout.setAttribute('role', 'dialog'); callout.setAttribute('aria-modal', 'false');
     callout.setAttribute('aria-label', title);
@@ -419,10 +437,20 @@ export class GuidedTour {
     this.cleanup = () => { window.removeEventListener('resize', position); clearance?.disconnect(); };
   }
 
-  /** Remove every overlay and listener this tour created. Safe to call twice. */
-  private close(): void {
+  /**
+   * Remove every overlay and listener this tour created. Safe to call twice.
+   *
+   * Called when a flow ends, when the document is navigated away from, and when
+   * a route change announces itself — the three ways the page that owns the
+   * anchor stops being the page the reader is on.
+   */
+  close(): void {
     this.cleanup?.(); this.cleanup = null;
-    document.querySelectorAll('.tour-anchor').forEach(node => node.classList.remove('tour-anchor'));
+    // Only the node this callout decorated: a route change may already have
+    // replaced the page, and clearing another surface's anchor would strip a
+    // mark this tour never made.
+    this.anchored?.classList.remove('tour-anchor');
+    this.anchored = null;
     this.callout?.remove(); this.callout = null;
   }
 
