@@ -46,14 +46,6 @@ export function mountPublicShell(root: HTMLElement): AppShell {
   });
   actions.append(languageMenu(), account, theme);
   header.append(actions);
-  const navigation = header.querySelector<HTMLDetailsElement>('.public-navigation')!;
-  const desktopNavigation = matchMedia('(min-width: 66.01rem)');
-  const syncNavigation = (desktop: boolean): void => {
-    if (desktop) navigation.open = true;
-    else if (!navigation.matches(':focus-within')) navigation.open = false;
-  };
-  syncNavigation(desktopNavigation.matches);
-  desktopNavigation.addEventListener('change', event => syncNavigation(event.matches));
   const outlet = document.createElement('div');
   outlet.className = 'public-outlet';
   outlet.id = 'main-content';
