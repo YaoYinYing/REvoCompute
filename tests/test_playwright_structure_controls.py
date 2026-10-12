@@ -16,7 +16,9 @@ Two halves of one contract, both read from a browser driving the shipped bundle:
   viewer mounted on the contract's own page with and without native panels, so
   the absence is asserted as intent rather than inferred from the Result page.
 
-Run with a real software-GL display::
+The browser fixtures launch Chromium with `--use-angle=swiftshader`, so the
+Mol* viewer mounts without a display and the contract runs in the default
+browser job. Locally, run under a display for a visible session::
 
     xvfb-run -a --server-args="-screen 0 1400x1000x24" \
       .venv/bin/python -m pytest tests/test_playwright_structure_controls.py --headed -v
@@ -32,7 +34,7 @@ import pytest
 import browser_frontend_assets
 import frontend_fixtures
 
-pytestmark = [pytest.mark.browser, pytest.mark.molstar_csp]
+pytestmark = [pytest.mark.browser]
 
 ROOT = Path(__file__).resolve().parents[1]
 RESULT_DIST = ROOT / "frontend" / "dist"
@@ -49,12 +51,6 @@ _PANEL = ".msp-layout-right .msp-scrollable-container"
 # region means a region outside the structure host is geometry the reader can
 # never reach.
 _REGION = ".msp-layout-region.msp-layout-right"
-
-
-@pytest.fixture(scope="module")
-def _requires_a_display(request: pytest.FixtureRequest) -> None:
-    if not request.config.getoption("--headed"):
-        pytest.skip("Mol* needs a headed browser under a display; run with --headed under xvfb-run")
 
 
 def _open_result(page: Page, *, width: int, height: int) -> list[str]:
@@ -124,7 +120,7 @@ def _click_disclosure(page: Page) -> dict:
     return _reading(page)
 
 
-def test_advanced_controls_toggle_is_discoverable_and_operable(page: Page, _requires_a_display: None) -> None:
+def test_advanced_controls_toggle_is_discoverable_and_operable(page: Page) -> None:
     """At 1440x900 the disclosure is on screen, named, and opens the native panel."""
     errors = _open_result(page, width=1440, height=900)
     closed = _reading(page)
@@ -184,7 +180,7 @@ def test_advanced_controls_toggle_is_discoverable_and_operable(page: Page, _requ
 
 
 @pytest.mark.parametrize(("width", "height"), [(768, 900), (320, 900)])
-def test_advanced_controls_reach_every_reader_at_narrow_widths(page: Page, _requires_a_display: None, width: int, height: int) -> None:
+def test_advanced_controls_reach_every_reader_at_narrow_widths(page: Page, width: int, height: int) -> None:
     """No width strands the disclosure, covers the science, or traps a scroll."""
     errors = _open_result(page, width=width, height=height)
     closed = _reading(page)
@@ -205,7 +201,7 @@ def test_advanced_controls_reach_every_reader_at_narrow_widths(page: Page, _requ
     ({}, 1),
     ({"showControls": False}, 0),
 ])
-def test_native_panel_presence_follows_the_mode(page: Page, _requires_a_display: None, options: dict, expected: int) -> None:
+def test_native_panel_presence_follows_the_mode(page: Page, options: dict, expected: int) -> None:
     """A mode that offers no native panel must not offer its disclosure either.
 
     This is the "intended-hidden, not broken" half of the contract: the viewer is
