@@ -146,25 +146,6 @@ def _assert_no_horizontal_page_scroll(page: Page, context: str) -> None:
     assert uncontained == [], f"{context}: content crosses the viewport unclipped: {uncontained}"
 
 
-# An element's natural one-line width: its text set on one line in its own font
-# and spacing. It is the witness that a case is not vacuous, because it shows the
-# run really is wider than the box the layout gives it.
-UNWRAPPED_RUN = """
-el => {
-  const cs = getComputedStyle(el);
-  const span = document.createElement('span');
-  span.style.cssText = 'position:absolute;visibility:hidden;white-space:nowrap;left:-9999px;';
-  span.style.setProperty('font', cs.font);
-  span.style.setProperty('letter-spacing', cs.letterSpacing, 'important');
-  span.style.setProperty('word-spacing', cs.wordSpacing, 'important');
-  span.textContent = el.textContent.trim();
-  document.body.appendChild(span);
-  const width = span.getBoundingClientRect().width;
-  span.remove();
-  return Math.round(width);
-}
-"""
-
 # The line count of the element's own text. A wrapped line sits on its own y, so
 # counting the distinct y values of the text's client rectangles counts lines;
 # counting the rectangles themselves would count the split inline boxes of one
@@ -174,6 +155,29 @@ el => {
   const range = document.createRange();
   range.selectNodeContents(el);
   return new Set([...range.getClientRects()].map(b => Math.round(b.top))).size;
+}
+"""
+
+
+# The natural one-line width of an element's text, against the page width it has
+# to fit: the witness a case is not vacuous, because it shows the run really is
+# wider than the box the layout gives it. The probe re-applies the computed
+# spacing as an *important* inline style, because the condition stylesheets are
+# important too and the probe would otherwise measure the criterion's own spacing
+# rather than the raised one a case installs.
+UNWRAPPED_RUN = """
+node => {
+  const cs = getComputedStyle(node);
+  const span = document.createElement('span');
+  span.style.cssText = 'position:absolute;visibility:hidden;white-space:nowrap;left:-9999px;';
+  span.style.setProperty('font', cs.font);
+  span.style.setProperty('letter-spacing', cs.letterSpacing, 'important');
+  span.style.setProperty('word-spacing', cs.wordSpacing, 'important');
+  span.textContent = node.textContent.trim().replace(/\\s+/g, ' ');
+  document.body.appendChild(span);
+  const unwrapped = span.getBoundingClientRect().width;
+  span.remove();
+  return {unwrapped: Math.round(unwrapped), page: document.documentElement.clientWidth};
 }
 """
 
@@ -219,27 +223,6 @@ def test_home_page_does_not_scroll_horizontally_under_text_spacing_narrower(page
 # unbreakable run inside one is the item's floor, so a heading that may not break
 # pushes its whole item past the page.
 HOME_HEADING_RUNS = (".home-products h2", ".home-closing blockquote")
-
-# The width a run would take unwrapped at the spacing computed on it, against the
-# page width it has to fit. The probe re-applies the computed spacing as an
-# *important* inline style: the condition stylesheet is important too, so without
-# this the probe would measure the criterion's own spacing rather than the raised
-# one the case installs.
-UNWRAPPED_RUN = """
-node => {
-  const cs = getComputedStyle(node);
-  const span = document.createElement('span');
-  span.style.cssText = 'position:absolute;visibility:hidden;white-space:nowrap;left:-9999px;';
-  span.style.setProperty('font', cs.font);
-  span.style.setProperty('letter-spacing', cs.letterSpacing, 'important');
-  span.style.setProperty('word-spacing', cs.wordSpacing, 'important');
-  span.textContent = node.textContent.trim().replace(/\\s+/g, ' ');
-  document.body.appendChild(span);
-  const unwrapped = span.getBoundingClientRect().width;
-  span.remove();
-  return {unwrapped: Math.round(unwrapped), page: document.documentElement.clientWidth};
-}
-"""
 
 
 def test_home_heading_runs_break_under_widened_text_spacing(page: Page) -> None:
@@ -370,7 +353,7 @@ def test_runner_catalog_masthead_keeps_its_rollup_inside_the_viewport(page: Page
 
     witness = {
         "badge": badge.evaluate("el => Math.round(el.getBoundingClientRect().width)"),
-        "run": badge.evaluate(UNWRAPPED_RUN),
+        "run": badge.evaluate(UNWRAPPED_RUN)["unwrapped"],
         "lines": badge.evaluate(TEXT_LINES),
     }
     assert witness["run"] > witness["badge"], (
@@ -403,7 +386,7 @@ def test_runner_catalog_masthead_keeps_its_label_on_one_line_when_it_fits(page: 
 
     witness = {
         "badge": badge.evaluate("el => Math.round(el.getBoundingClientRect().width)"),
-        "run": badge.evaluate(UNWRAPPED_RUN),
+        "run": badge.evaluate(UNWRAPPED_RUN)["unwrapped"],
     }
     assert witness["run"] <= witness["badge"], (
         f"not exercised: the label does not fit the box at this width "
@@ -444,7 +427,7 @@ def test_create_task_component_headings_stay_inside_their_step(page: Page) -> No
         title = titles.nth(index)
         measured.append({
             "box": title.evaluate("el => Math.round(el.getBoundingClientRect().width)"),
-            "run": title.evaluate(UNWRAPPED_RUN),
+            "run": title.evaluate(UNWRAPPED_RUN)["unwrapped"],
             "lines": title.evaluate(TEXT_LINES),
         })
     assert measured, "the sequence_demo workspace declares no component headings"
@@ -474,7 +457,7 @@ def test_create_task_component_headings_keep_their_names_readable(page: Page) ->
         title = titles.nth(index)
         measured.append({
             "box": title.evaluate("el => Math.round(el.getBoundingClientRect().width)"),
-            "run": title.evaluate(UNWRAPPED_RUN),
+            "run": title.evaluate(UNWRAPPED_RUN)["unwrapped"],
             "lines": title.evaluate(TEXT_LINES),
         })
     assert measured, "the sequence_demo workspace declares no component headings"
