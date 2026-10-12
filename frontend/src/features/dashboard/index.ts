@@ -2,6 +2,7 @@ import { Archive, Ban, Download, ExternalLink, RefreshCw, Search, Trash2 } from 
 import { createIcons } from 'lucide';
 import { deleteTaskBatch, getTasks, prepareArchive, runTaskAction, type CurrentUser, type TaskSummary } from '../../api/app-api';
 import { ApiError } from '../../app/session';
+import { confirmAction } from '../../app/dialogs';
 import { t } from '../../app/i18n';
 import { guidedTour, recordTourResult } from '../../app/guided-tour';
 import type { AppShell } from '../../app/shell';
@@ -31,6 +32,9 @@ export class Dashboard {
   private list!: HTMLElement; private stats!: HTMLElement; private count!: HTMLElement; private error!: HTMLElement; private batch!: HTMLButtonElement;
   private filterDisclosure!: HTMLDetailsElement; private filterSummary!: HTMLElement;
   private advancedToggle!: HTMLButtonElement; private advancedPanel!: HTMLElement;
+  private selectAll!: HTMLInputElement; private selectAllLabel!: HTMLElement;
+  private selectionBoxes = new Map<string, HTMLInputElement>();
+  private page!: HTMLElement;
 
   constructor(private root: HTMLElement, private shell: AppShell, private user: CurrentUser) { this.build(); }
   async load(): Promise<void> {
@@ -44,7 +48,11 @@ export class Dashboard {
   destroy(): void { this.controller.abort(); if (this.poll != null) clearTimeout(this.poll); this.disposePreviews(); }
 
   private build(): void {
-    this.root.replaceChildren(); this.root.className = 'app-outlet dashboard-page';
+    // The Dashboard's own layout belongs on its own page root, not on the shared
+    // outlet: the outlet is chrome the whole application shares.
+    this.root.replaceChildren();
+    const page = document.createElement('main'); page.className = 'dashboard-page'; this.root.append(page);
+    this.page = page;
     const head = document.createElement('header'); head.className = 'page-heading';
     head.innerHTML = `<div><p class="page-kicker">${t('dashboard.register')}</p><h1>${t('dashboard.title')}</h1></div>`;
     const actions = document.createElement('div'); actions.className = 'page-actions';
@@ -87,19 +95,45 @@ export class Dashboard {
     this.count = textNode('p', '', 'list-count'); this.count.setAttribute('aria-live', 'polite');
     const layout = document.createElement('fieldset'); layout.className = 'layout-switch';
     layout.innerHTML = `<legend>${t('dashboard.view.label')}</legend><button type="button" data-layout="detailed" aria-pressed="true">${t('dashboard.view.detailed')}</button><button type="button" data-layout="compact" aria-pressed="false">${t('dashboard.view.compact')}</button><button type="button" data-layout="table" aria-pressed="false">${t('dashboard.view.table')}</button>`;
-    this.batch = button(t('dashboard.card.deleteSelected'), 'batch-delete', 'trash-2'); this.batch.hidden = true;
+    this.batch = button(t('dashboard.card.deleteSelected'), 'batch-delete', 'trash-2');
+    this.batch.hidden = true;
     viewToolbar.append(this.count, this.batch, layout);
 
+    // Selection is a state of the register, independent of how the register is
+    // presented. The select-all control lives in the view toolbar rather than in
+    // the table's own header, so it survives a switch between the card layouts and
+    // the table, and its checked state is derived from what is currently shown.
+    this.selectAll = document.createElement('input');
+    this.selectAll.type = 'checkbox'; this.selectAll.dataset.action = 'select-all';
+    this.selectAll.setAttribute('aria-label', t('dashboard.select.all'));
+    const selectAllLabel = document.createElement('label'); selectAllLabel.className = 'task-select-all';
+    const selectAllText = document.createElement('span'); selectAllText.textContent = t('dashboard.card.select');
+    selectAllLabel.append(this.selectAll, selectAllText);
+    selectAllLabel.hidden = true;
+    viewToolbar.prepend(selectAllLabel);
+    this.selectAllLabel = selectAllLabel;
+    this.selectAll.addEventListener('change', () => {
+      const shown = queryTasks(this.tasks, this.query).tasks;
+      if (this.selectAll.checked) shown.forEach(task => this.selected.add(task.task_id));
+      else shown.forEach(task => this.selected.delete(task.task_id));
+      this.syncSelectionState();
+    });
+
     this.list = document.createElement('section'); this.list.className = 'task-list'; this.list.setAttribute('aria-live', 'polite');
-    this.root.append(head, this.stats, controls, viewToolbar, this.list);
+    this.page.append(head, this.stats, controls, viewToolbar, this.list);
     controls.addEventListener('input', event => { const target = event.target as HTMLInputElement | HTMLSelectElement; const key = target.dataset.filter as keyof TaskQuery | undefined; if (key) { (this.query as unknown as Record<string, unknown>)[key] = target.value; this.renderList(); } });
     controls.querySelector('[data-toggle-regex]')?.addEventListener('click', event => { this.query.regex = !this.query.regex; const target = event.currentTarget as HTMLButtonElement; target.setAttribute('aria-pressed', String(this.query.regex)); target.classList.toggle('active', this.query.regex); this.renderList(); });
     this.advancedToggle.addEventListener('click', () => this.toggleAdvanced());
     controls.addEventListener('change', () => this.updateAdvancedState());
     viewToolbar.querySelectorAll<HTMLButtonElement>('[data-layout]').forEach(item => item.addEventListener('click', () => { this.query.layout = item.dataset.layout as TaskQuery['layout']; viewToolbar.querySelectorAll('[data-layout]').forEach(button => button.setAttribute('aria-pressed', String(button === item))); this.renderList(); }));
-    this.root.addEventListener('click', event => void this.handleAction(event));
-    createIcons({ icons: dashboardIcons, root: this.root });
+    this.page.addEventListener('click', event => void this.handleAction(event));
+    createIcons({ icons: dashboardIcons, root: this.page });
     guidedTour.resumeIfActive();
+    // The reader may leave this route at any moment. The narrow-behavior listener
+    // fires on a media query, which outlives the node, so it is registered with the
+    // route's own signal and the router's abort removes it. Nothing else here is
+    // dereferenced after destroy(): a handler that fires is inert once the view's
+    // nodes are gone.
   }
 
   private toggleAdvanced(force?: boolean): void {
@@ -129,6 +163,7 @@ export class Dashboard {
   }
   private renderList(): void {
     this.disposePreviews();
+    this.selectionBoxes.clear();
     const result = queryTasks(this.tasks, this.query); this.error.textContent = result.error || '';
     this.count.textContent = t('dashboard.list.count', { shown: result.tasks.length, total: this.tasks.length });
     const batchLabel = `${t('dashboard.card.deleteSelected')} (${this.selected.size})`;
@@ -136,6 +171,7 @@ export class Dashboard {
     this.batch.title = batchLabel;
     this.batch.setAttribute('aria-label', batchLabel);
     this.batch.querySelector('span')!.textContent = batchLabel;
+    this.syncSelectionState(result.tasks);
     this.updateAdvancedState();
     const active = Boolean(this.query.status || this.query.taskType || this.query.owner || this.query.submittedFrom || this.query.submittedTo || this.query.finishedFrom || this.query.finishedTo || this.query.regex || this.query.sort !== 'submitted');
     this.filterSummary.textContent = t(active ? 'dashboard.filters.active' : 'dashboard.filters.summary');
@@ -149,6 +185,10 @@ export class Dashboard {
     const header = document.createElement('header'); const identity = document.createElement('div');
     identity.append(textNode('h2', task.display_name), textNode('p', task.task_type, 'task-card-type'));
     const status = document.createElement('span'); status.className = `status status-${task.status.replace(':', '-')}`; status.textContent = statusText(task); header.append(identity, status);
+    // Selection is part of the task's identity, not an action of it: the box opens
+    // the card, beside the name, ahead of anything a reader would press. Only an
+    // administrator can select for a batch, so only an administrator sees it.
+    if (this.user.role === 'admin' && task.actions.delete.allowed) header.prepend(this.selectControl(task, ''));
     const facts = document.createElement('dl');
     const factValues: Array<[string, string, boolean]> = [
       [t('dashboard.card.submitted'), formatDate(task.submitted_at), false],
@@ -180,26 +220,72 @@ export class Dashboard {
       }).catch(error => { if (details.isConnected) content.textContent = t('dashboard.card.structureLoadFailed', { message: (error as Error).message }); });
     }); return details;
   }
+  /** The selection control for one task: the card's identity start, or a cell. */
+  private selectControl(task: TaskSummary, label: string): HTMLElement {
+    const input = document.createElement('input');
+    input.type = 'checkbox'; input.dataset.action = 'select'; input.checked = this.selected.has(task.task_id);
+    input.setAttribute('aria-label', label || t('dashboard.select.task', { name: task.display_name }));
+    // The box carries the task it selects: the card sets it at the task's identity
+    // start, where no action row encloses it, so the control names its own subject.
+    input.dataset.task = task.task_id;
+    this.selectionBoxes.set(task.task_id, input);
+    return input;
+  }
+  /**
+   * Update the selection chrome in place after a selection changes.
+   *
+   * Selection is one state over the whole register, so toggling one box must not
+   * rebuild the list: a rebuild would replace the checkbox the reader just moved,
+   * drop focus, and make the batch action flicker. Only the boxes' own state, the
+   * select-all control, and the batch action's count change here.
+   */
+  private syncSelectionState(tasks = queryTasks(this.tasks, this.query).tasks): void {
+    const batchLabel = `${t('dashboard.card.deleteSelected')} (${this.selected.size})`;
+    this.batch.hidden = this.user.role !== 'admin' || this.selected.size === 0;
+    this.batch.title = batchLabel; this.batch.setAttribute('aria-label', batchLabel);
+    this.batch.querySelector('span')!.textContent = batchLabel;
+    this.selectAllLabel.hidden = this.user.role !== 'admin' || !tasks.length;
+    this.selectAll.checked = this.user.role === 'admin' && tasks.length > 0 && tasks.every(task => this.selected.has(task.task_id));
+    this.selectAll.indeterminate = this.user.role === 'admin' && !this.selectAll.checked && tasks.some(task => this.selected.has(task.task_id));
+    this.selectionBoxes.forEach((input, taskId) => { input.checked = this.selected.has(taskId); });
+  }
   private taskActions(task: TaskSummary): HTMLElement {
     const actions = document.createElement('footer'); actions.className = 'task-actions'; actions.dataset.taskId = task.task_id;
     if (task.result.available) { const open = document.createElement('a'); open.href = task.result.page_url; open.className = 'task-action primary-action'; open.innerHTML = `<i data-lucide="external-link" aria-hidden="true"></i><span>${t('dashboard.card.results')}</span>`; actions.append(open); if (task.result.download_url) { const download = document.createElement('a'); download.href = task.result.download_url; download.className = 'task-action'; download.innerHTML = `<i data-lucide="download" aria-hidden="true"></i><span>${t('dashboard.card.download')}</span>`; actions.append(download); } else if (task.result.archive_request_allowed && task.result.archive_request_url) actions.append(button(t('dashboard.card.prepareZip'), 'archive', 'archive')); }
     if (task.actions.cancel.allowed) actions.append(button(t('dashboard.card.cancel'), 'cancel', 'ban'));
     if (task.actions.delete.allowed) actions.append(button(t('dashboard.card.delete'), 'delete', 'trash-2'));
-    if (this.user.role === 'admin' && task.actions.delete.allowed) { const label = document.createElement('label'); label.className = 'task-select'; const input = document.createElement('input'); input.type = 'checkbox'; input.dataset.action = 'select'; input.checked = this.selected.has(task.task_id); const text = document.createElement('span'); text.textContent = t('dashboard.card.select'); label.append(input, text); actions.prepend(label); }
     return actions;
   }
   private renderTable(tasks: TaskSummary[]): void {
-    const table = document.createElement('table'); table.className = 'task-table'; table.innerHTML = `<thead><tr><th>${t('dashboard.table.name')}</th><th>${t('dashboard.card.type')}</th>${this.user.role === 'admin' ? `<th>${t('dashboard.card.owner')}</th>` : ''}<th>${t('dashboard.card.submitted')}</th><th>${t('dashboard.filter.status')}</th><th><span class="sr-only">${t('dashboard.table.actions')}</span></th></tr></thead>`; const body = document.createElement('tbody');
-    tasks.forEach(task => { const row = document.createElement('tr'); const cells = [task.display_name, task.task_type, ...(this.user.role === 'admin' ? [task.owner || '-'] : []), formatDate(task.submitted_at), statusText(task)]; cells.forEach((value, index) => { const cell = document.createElement('td'); cell.textContent = value; if (index === cells.length - 1) cell.className = 'state-cell'; row.append(cell); }); const actionCell = document.createElement('td'); actionCell.append(this.taskActions(task)); row.append(actionCell); body.append(row); }); table.append(body); this.list.append(table);
+    const table = document.createElement('table'); table.className = 'task-table';
+    // The first column is dedicated to selection; the last is dedicated to the
+    // task's own independent actions. The two never mix: a selection box is a
+    // state, an action is a verb, and the table keeps one column for each.
+    const selectionHeading = this.user.role === 'admin' ? `<th><span class="sr-only">${t('dashboard.table.selection')}</span></th>` : '';
+    table.innerHTML = `<thead><tr>${selectionHeading}<th>${t('dashboard.table.name')}</th><th>${t('dashboard.card.type')}</th>${this.user.role === 'admin' ? `<th>${t('dashboard.card.owner')}</th>` : ''}<th>${t('dashboard.card.submitted')}</th><th>${t('dashboard.filter.status')}</th><th><span class="sr-only">${t('dashboard.table.actions')}</span></th></tr></thead>`; const body = document.createElement('tbody');
+    tasks.forEach(task => { const row = document.createElement('tr'); if (this.user.role === 'admin') { const cell = document.createElement('td'); cell.className = 'task-select-cell'; if (task.actions.delete.allowed) cell.append(this.selectControl(task, t('dashboard.select.task', { name: task.display_name }))); row.append(cell); } const cells = [task.display_name, task.task_type, ...(this.user.role === 'admin' ? [task.owner || '-'] : []), formatDate(task.submitted_at), statusText(task)]; cells.forEach((value, index) => { const cell = document.createElement('td'); cell.textContent = value; if (index === cells.length - 1) cell.className = 'state-cell'; row.append(cell); }); const actionCell = document.createElement('td'); actionCell.append(this.taskActions(task)); row.append(actionCell); body.append(row); }); table.append(body); this.list.append(table);
   }
   private async handleAction(event: Event): Promise<void> {
     const target = (event.target as Element).closest<HTMLElement>('[data-action]'); if (!target) return; const action = target.dataset.action;
     if (action === 'refresh') { await this.load(); return; }
-    if (action === 'batch-delete') { if (!confirm(t('dashboard.confirm.batchDelete', { count: this.selected.size }))) return; const taskIds = [...this.selected]; this.selected.clear(); await this.mutate(() => deleteTaskBatch(taskIds), t('dashboard.notice.deletedSelected')); return; }
-    const footer = target.closest<HTMLElement>('[data-task-id]'); const task = this.tasks.find(item => item.task_id === footer?.dataset.taskId); if (!task) return;
-    if (action === 'select') { (target as HTMLInputElement).checked ? this.selected.add(task.task_id) : this.selected.delete(task.task_id); this.renderList(); return; }
-    if (action === 'cancel' && confirm(t('dashboard.confirm.cancel', { name: task.display_name }))) await this.mutate(() => runTaskAction(task.actions.cancel, 'POST'), t('dashboard.notice.cancelled'));
-    if (action === 'delete' && confirm(t('dashboard.confirm.delete', { name: task.display_name }))) await this.mutate(() => runTaskAction(task.actions.delete, 'DELETE'), t('dashboard.notice.deleted'));
+    if (action === 'select-all') return; // handled by the control's own change listener
+    // Every destructive operation asks first, through the application's own dialog
+    // rather than the browser's confirm(): the confirmation states what is about to
+    // be removed and never fires before the reader has answered it.
+    if (action === 'batch-delete') {
+      const count = this.selected.size;
+      if (!await confirmAction({ title: t('dashboard.confirm.batchTitle', { count }), message: t('dashboard.confirm.batchDelete', { count }), confirmLabel: t('dashboard.card.deleteSelected') })) return;
+      const taskIds = [...this.selected]; this.selected.clear(); await this.mutate(() => deleteTaskBatch(taskIds), t('dashboard.notice.deletedSelected')); return;
+    }
+    // The row carries the task, not only its action footer: selection lives in its
+    // own leading cell, outside the footer, and still has to name its subject.
+    const owner = target.closest<HTMLElement>('[data-task-id], [data-task]');
+    const taskId = owner?.dataset.taskId ?? owner?.dataset.task;
+    const task = this.tasks.find(item => item.task_id === taskId);
+    if (!task) return;
+    if (action === 'select') { (target as HTMLInputElement).checked ? this.selected.add(task.task_id) : this.selected.delete(task.task_id); this.syncSelectionState(); return; }
+    if (action === 'cancel' && await confirmAction({ title: t('dashboard.confirm.cancelTitle', { name: task.display_name }), message: t('dashboard.confirm.cancel', { name: task.display_name }), confirmLabel: t('dashboard.card.cancel') })) await this.mutate(() => runTaskAction(task.actions.cancel, 'POST'), t('dashboard.notice.cancelled'));
+    if (action === 'delete' && await confirmAction({ title: t('dashboard.confirm.deleteTitle', { name: task.display_name }), message: t('dashboard.confirm.delete', { name: task.display_name }), confirmLabel: t('dashboard.card.delete') })) await this.mutate(() => runTaskAction(task.actions.delete, 'DELETE'), t('dashboard.notice.deleted'));
     if (action === 'archive' && task.result.archive_request_url) await this.mutate(() => prepareArchive(task.result.archive_request_url!), t('dashboard.notice.archive'));
   }
   private async mutate(operation: () => Promise<unknown>, message: string): Promise<void> { try { await operation(); this.shell.notify(message, 'success'); await this.load(); } catch (error) { this.shell.notify((error as Error).message, 'error'); } }

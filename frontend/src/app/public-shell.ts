@@ -1,13 +1,11 @@
-import { Check, createIcons, Languages, LogIn, Menu, MoonStar, SunMedium, UserRound } from 'lucide';
+import { createIcons, LogIn, Menu, UserRound } from 'lucide';
 import type { CurrentUser } from '../api/app-api';
 import type { AppShell } from './shell';
 import { appAsset } from './assets';
-import { locale, locales, setLocale, t, type Locale } from './i18n';
-import { cycleTheme, storedTheme, type ThemeMode } from './theme';
+import { t } from './i18n';
+import { languageMenu, themeButton } from './localize';
 
-const publicIcons = { Check, Languages, LogIn, Menu, MoonStar, SunMedium, UserRound };
-
-function themeLabel(mode: ThemeMode): string { return `${t('shell.action.theme')}: ${t(`theme.${mode}`)}`; }
+const publicIcons = { LogIn, Menu, UserRound };
 
 export function mountPublicShell(root: HTMLElement): AppShell {
   root.replaceChildren();
@@ -31,20 +29,7 @@ export function mountPublicShell(root: HTMLElement): AppShell {
   account.title = t('shell.action.signIn');
   account.setAttribute('aria-label', account.title);
   account.innerHTML = `<i data-lucide="log-in" aria-hidden="true"></i><span>${t('shell.action.signIn')}</span>`;
-  const theme = document.createElement('button');
-  theme.type = 'button';
-  theme.className = 'icon-button';
-  theme.title = themeLabel(storedTheme());
-  theme.setAttribute('aria-label', theme.title);
-  theme.innerHTML = `<i data-lucide="${document.documentElement.dataset.theme === 'dark' ? 'sun-medium' : 'moon-star'}" aria-hidden="true"></i>`;
-  theme.addEventListener('click', () => {
-    const mode = cycleTheme();
-    theme.title = themeLabel(mode);
-    theme.setAttribute('aria-label', theme.title);
-    theme.innerHTML = `<i data-lucide="${document.documentElement.dataset.theme === 'dark' ? 'sun-medium' : 'moon-star'}" aria-hidden="true"></i>`;
-    createIcons({ icons: { MoonStar, SunMedium }, root: theme });
-  });
-  actions.append(languageMenu(), account, theme);
+  actions.append(languageMenu(), account, themeButton());
   header.append(actions);
   const outlet = document.createElement('div');
   outlet.className = 'public-outlet';
@@ -72,23 +57,10 @@ export function mountPublicShell(root: HTMLElement): AppShell {
       account.innerHTML = `<i data-lucide="${user ? 'user-round' : 'log-in'}" aria-hidden="true"></i><span>${t(user ? 'shell.action.profile' : 'shell.action.signIn')}</span>`;
       createIcons({ icons: { LogIn, UserRound }, root: account });
     },
+    // The public header carries one account affordance and no navigation state to
+    // synchronize; the methods exist so the shared router can address either shell
+    // without knowing which one it mounted.
+    syncActive() {},
+    refreshNotices() {},
   };
-}
-
-function languageMenu(): HTMLElement {
-  const details = document.createElement('details'); details.className = 'lang-menu';
-  const summary = document.createElement('summary'); summary.className = 'icon-button'; summary.title = t('shell.action.language'); summary.setAttribute('aria-label', t('shell.action.language'));
-  const current = locales.find(item => item.id === locale())!;
-  summary.innerHTML = `<i data-lucide="languages" aria-hidden="true"></i><span class="lang-menu-value">${current.label}</span>`;
-  const options = document.createElement('div'); options.className = 'lang-options'; options.setAttribute('role', 'radiogroup'); options.setAttribute('aria-label', t('shell.action.language'));
-  locales.forEach(item => {
-    const button = document.createElement('button'); button.type = 'button'; button.setAttribute('role', 'radio'); button.setAttribute('aria-checked', String(item.id === locale()));
-    button.dataset.locale = item.id;
-    button.append(document.createTextNode(item.label));
-    if (item.id === locale()) { const mark = document.createElement('i'); mark.dataset.lucide = 'check'; mark.setAttribute('aria-hidden', 'true'); button.append(mark); }
-    button.addEventListener('click', () => setLocale(item.id as Locale));
-    options.append(button);
-  });
-  details.append(summary, options);
-  return details;
 }

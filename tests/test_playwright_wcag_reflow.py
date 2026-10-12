@@ -263,30 +263,33 @@ def test_home_heading_runs_break_under_widened_text_spacing(page: Page) -> None:
     _assert_no_horizontal_page_scroll(page, "home @280px with widened 1.4.12 spacing")
 
 
-# Profile panels whose content is the widest of the page: the account form's two
+# Account routes whose content is the widest of the page: the account form's two
 # columns and the metrics header's segmented control are the two that used to
-# widen the document under text-only resize.
-PROFILE_PANELS = ("account", "security", "api-key", "runner-access", "gpu-credits", "metrics")
+# widen the document under text-only resize. Each section is its own address.
+ACCOUNT_ROUTES = (
+    ("account", "/compute/profile"),
+    ("security", "/compute/account/security"),
+    ("api-key", "/compute/account/api-key"),
+    ("runner-access", "/compute/account/runner-access"),
+    ("gpu-credits", "/compute/account/gpu-credits"),
+    ("metrics", "/compute/account/metrics"),
+)
 
 
-@pytest.mark.parametrize("panel", PROFILE_PANELS)
-def test_profile_does_not_scroll_horizontally_under_text_only_resize(page: Page, panel: str) -> None:
-    """WCAG 1.4.4: at 200% text-only resize of a 1280px viewport the profile
-    document must not scroll horizontally on any of its panels."""
+@pytest.mark.parametrize("section,route", ACCOUNT_ROUTES)
+def test_account_does_not_scroll_horizontally_under_text_only_resize(page: Page, section: str, route: str) -> None:
+    """WCAG 1.4.4: at 200% text-only resize of a 1280px viewport the account
+    document must not scroll horizontally on any of its sections."""
     page.set_viewport_size({"width": 1280, "height": 900})
     mount_scenario(page, controlled_scenario())
     _install_profile_responses(page)
     _install_condition(page, f"html{{font-size:{TEXT_ZOOM_ROOT_PX}px !important;}}")
-    page.goto(f"{ORIGIN}/compute/profile")
+    page.goto(f"{ORIGIN}{route}")
 
-    expect(page.get_by_role("heading", name="Profile")).to_be_visible()
-    tab = page.locator(f'[role="tab"][data-section="{panel}"]')
-    expect(tab).to_be_visible()
-    tab.click()
-    expect(page.locator(f'[data-panel="{panel}"]')).to_be_visible()
+    expect(page.locator(f'[data-section="{section}"]')).to_be_visible()
     page.evaluate("() => document.fonts.ready")
 
-    _assert_no_horizontal_page_scroll(page, f"profile#{panel} @200% text-only resize")
+    _assert_no_horizontal_page_scroll(page, f"{route} @200% text-only resize")
 
 
 def test_profile_account_form_stays_behind_its_own_edge_at_text_only_resize(page: Page) -> None:
@@ -308,7 +311,7 @@ def test_profile_account_form_stays_behind_its_own_edge_at_text_only_resize(page
     page.evaluate("() => document.fonts.ready")
     overhang = columns.evaluate(
         """node => {
-             const section = node.closest('.profile-section');
+             const section = node.closest('.account-section');
              return Math.round(node.getBoundingClientRect().right - section.getBoundingClientRect().right);
            }"""
     )

@@ -40,8 +40,8 @@ Cells driven (viewport / root font / theme / locale):
   the witness that the wide cells exercise a layer that really moves.
 * runner detail anchor landing (clicking the on-page section index):
   1280x900 @16px light en, @32px light en, and @16px dark zh-CN.
-* profile deep links: 1280x900 and 1280x500 @16px, in every exposed tab; plus a
-  wheel-driven scroll into the pinned tab strip at 1280x500.
+* account deep links: 1280x900 and 1280x500 @16px, in every section; plus a
+  wheel-driven scroll that keeps the persistent rail reachable at 1280x500.
 * notice scroll memory: 1280x900 @16px.
 * dense-table horizontal scroller: 320x800 @16px, driven by wheel and by a
   dispatched touch drag.
@@ -52,14 +52,16 @@ The cases, in order:
 
 * ``test_pinned_sticky_layer_keeps_its_content_reachable`` - the runner detail's
   method index, wide, at 200% text-only resize, and in dark mode with zh-CN.
+* ``test_account_section_deep_link_lands_below_the_sticky_header`` - each Account
+  section as its own route, marked current, landing clear of the bar.
 * ``test_sticky_index_is_static_at_a_narrow_viewport`` - the same surface at a
   narrow viewport, where it must scroll away instead of pinning.
 * ``test_runner_detail_anchor_lands_below_the_sticky_header`` - clicking each
   on-page section anchor and hit-testing the heading it asked for.
-* ``test_profile_deep_link_selects_its_tab_and_lands_below_the_sticky_header`` -
-  a profile deep link selecting its tab and landing clear, full-height and short.
-* ``test_pinned_profile_tab_strip_stays_reachable_while_scrolling`` - the pinned
-  profile tab strip, scrolled into with real wheel input.
+* ``test_account_section_deep_link_lands_below_the_sticky_header`` - each Account
+  section as a direct destination, landing clear, full-height and short.
+* ``test_persistent_rail_stays_reachable_while_the_page_scrolls`` - the rail,
+  scrolled against with real wheel input.
 * ``test_notice_keeps_its_remembered_scroll_when_the_surface_is_rebuilt`` - the
   scroll memory in ``system-notices.ts``.
 * ``test_dense_table_overflow_reaches_its_last_cell_by_wheel`` - the horizontal
@@ -82,7 +84,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 
-from playwright.sync_api import CDPSession, Page
+from playwright.sync_api import CDPSession, Page, expect
 import pytest
 
 from frontend_fixtures import (
@@ -299,10 +301,10 @@ STICKY_PROBE = """
         .filter((node) => !node.children.length && (node.textContent || '').trim()).map(reach);
     return {scrollY: Math.round(window.scrollY),
             scrollable: document.documentElement.scrollHeight - window.innerHeight,
-            headerBottom: +bar.bottom.toFixed(1),
+            header: box(bar), headerBottom: +bar.bottom.toFixed(1),
             pinned: box(rect), position: style.position, offsetTop: style.top,
             pinnedAtOffset: Math.abs(rect.top - parseFloat(style.top)) < 1.5,
-            controls, text};
+            innerScroll: Math.round(pinned.scrollTop), controls, text};
 }
 """
 
@@ -453,28 +455,6 @@ LANDING_PROBE = """
 """
 
 
-# The profile selects a panel by script; the fragment never scrolls the document.
-# This probe reports which tab the projection says is selected and whether the
-# panel it controls is the visible one, plus the heading's own geometry.
-TAB_PROBE = """
-(section) => {
-    const panel = document.querySelector('[data-panel="' + section + '"]');
-    if (!panel) return {missing: section};
-    const heading = panel.querySelector('h2, h3');
-    const rect = heading.getBoundingClientRect();
-    const bar = document.querySelector('.app-header').getBoundingClientRect();
-    const hit = document.elementFromPoint(rect.left + 4, rect.top + rect.height / 2);
-    const selected = [...document.querySelectorAll('[role=tab][aria-selected=true]')]
-        .map((node) => node.getAttribute('aria-controls') || '');
-    return {scrollY: Math.round(window.scrollY),
-            scrollable: document.documentElement.scrollHeight - window.innerHeight,
-            panel: panel.dataset.panel, hidden: panel.hidden === true,
-            visible: panel.hidden !== true,
-            top: +rect.top.toFixed(1), headerBottom: +bar.bottom.toFixed(1),
-            selected: selected.length === 1 && selected[0] === panel.id ? section : selected,
-            owned: Boolean(hit && (heading === hit || heading.contains(hit) || hit.contains(heading)))};
-}
-"""
 
 
 def assert_landing_clear(sample: Mapping[str, object], where: str) -> None:
@@ -541,84 +521,133 @@ def test_runner_detail_anchor_lands_below_the_sticky_header(page: Page) -> None:
             fresh.close()
 
 
-def test_profile_deep_link_selects_its_tab_and_lands_below_the_sticky_header(page: Page) -> None:
-    """A profile deep link selects the tab it names and lands clear of the header.
+# An Account section is its own route: the section heading is the page's identity.
+# This probe reports that heading's geometry, whether it owns the point at its own
+# centre clear of the sticky header, and the destination the shell marks current.
+SECTION_PROBE = """
+(section) => {
+    const root = document.querySelector('[data-section="' + section + '"]');
+    if (!root) return {missing: section};
+    const heading = root.querySelector('h1, h2, h3');
+    if (!heading) return {missing: 'heading'};
+    const rect = heading.getBoundingClientRect();
+    const bar = document.querySelector('.app-header').getBoundingClientRect();
+    const hit = document.elementFromPoint(rect.left + 4, rect.top + rect.height / 2);
+    const current = document.querySelector('.app-nav a[aria-current="page"]');
+    return {scrollY: Math.round(window.scrollY),
+            scrollable: document.documentElement.scrollHeight - window.innerHeight,
+            top: +rect.top.toFixed(1), bottom: +rect.bottom.toFixed(1),
+            headerBottom: +bar.bottom.toFixed(1),
+            current: current ? current.getAttribute('href') : null,
+            owned: Boolean(hit && (heading === hit || heading.contains(hit) || hit.contains(heading)))};
+}
+"""
 
-    The profile has no element ids matching the tab names - the panels carry
-    ``profile-panel-*`` ids the script assigns - so a URL fragment cannot scroll
-    to one, and the fragment's job on this surface is selection, not scrolling.
-    The case is therefore honest about what a landing is here: the named tab must
-    be the selected one, and the panel heading it controls must be hit-testable at
-    its own centre and sit below the header band.
 
-    Driven at a full-height viewport and at a short one, in every tab the
-    projection exposes.
+def test_account_section_deep_link_lands_below_the_sticky_header(page: Page) -> None:
+    """An Account section is a direct destination: its deep link lands clear.
+
+    Each section is its own route with its own address, so a deep link, a refresh,
+    and a shared URL all resolve to a real page. The section's own heading must be
+    the page identity: hit-testable at its own centre and clear of the sticky bar,
+    with the shell marking that exact destination current in the navigation.
+
+    Driven at a full-height viewport and at a short one.
     """
+    sections = (
+        ("account", "/compute/profile"),
+        ("security", "/compute/account/security"),
+        ("api-key", "/compute/account/api-key"),
+        ("runner-access", "/compute/account/runner-access"),
+        ("gpu-credits", "/compute/account/gpu-credits"),
+        ("metrics", "/compute/account/metrics"),
+    )
     for viewport in ({"width": 1280, "height": 900}, {"width": 1280, "height": 500}):
         fresh = open_page(page.context, viewport)
         try:
             open_profile(fresh)
-            for anchor in ("metrics", "gpu-credits", "account"):
-                fresh.goto(f"{ORIGIN}/compute/profile#{anchor}")
-                fresh.wait_for_timeout(800)
-                sample = fresh.evaluate(TAB_PROBE, anchor)
-                where = f"profile #{anchor} at {viewport['width']}x{viewport['height']}"
-                assert not sample.get("missing"), f"{where}: no profile panel for that tab"
-                assert sample["visible"], (
-                    f"{where}: the panel the fragment names is not the visible one; "
-                    f"scrollY={sample['scrollY']}, hidden={sample['hidden']}"
-                )
-                assert sample["selected"] == anchor, (
-                    f"{where}: the fragment did not select its own tab; "
-                    f"selected={sample['selected']}, panel={sample['panel']}"
+            for section, route in sections:
+                fresh.goto(f"{ORIGIN}{route}")
+                fresh.wait_for_timeout(700)
+                sample = fresh.evaluate(SECTION_PROBE, section)
+                where = f"account {route} at {viewport['width']}x{viewport['height']}"
+                assert not sample.get("missing"), f"{where}: no account section for that route"
+                assert sample["top"] >= sample["headerBottom"] - 0.5, (
+                    f"{where}: the section heading landed behind the header band; "
+                    f"scrollY={sample['scrollY']}, headingTop={sample['top']}, headerBottom={sample['headerBottom']}"
                 )
                 assert sample["owned"], (
-                    f"{where}: the panel heading is not hit-testable at its own centre; "
-                    f"scrollY={sample['scrollY']}, headingTop={sample['top']}, "
-                    f"headerBottom={sample['headerBottom']}"
+                    f"{where}: the section heading is not hit-testable at its own centre; "
+                    f"scrollY={sample['scrollY']}, headingTop={sample['top']}"
+                )
+                assert sample["current"] == route, (
+                    f"{where}: the shell did not mark the section's own destination current; "
+                    f"current={sample['current']}, expected={route}"
                 )
         finally:
             fresh.close()
 
 
-def test_pinned_profile_tab_strip_stays_reachable_while_scrolling(page: Page) -> None:
-    """The profile tab strip pins under the header with every tab still reachable.
+def test_persistent_rail_stays_reachable_while_the_page_scrolls(page: Page) -> None:
+    """The rail persists while the page scrolls, and scrolls inside itself.
 
-    A short viewport makes the strip pin; the scroll is driven with real wheel
-    input. The strip is meant to sit beneath the translucent bar, so the contract
-    is that despite the overlap each tab answers ``elementFromPoint`` at its own
-    centre and the strip as a whole stays below the bar.
+    The rail is chrome that outlives the route: it stays in place while a long
+    page moves under it, so its destinations are reachable at the end of a scroll
+    exactly as at the start. The scroll is driven with real wheel input, and the
+    case is only non-vacuous once the page has actually moved.
     """
-    fresh = open_page(page.context, {"width": 1280, "height": 500})
+    fresh_viewport_height = 500
+    fresh = open_page(page.context, {"width": 1280, "height": fresh_viewport_height})
     try:
         open_profile(fresh)
-        fresh.goto(f"{ORIGIN}/compute/profile#account")
-        fresh.wait_for_timeout(800)
-        reached = wheel_scroll(fresh, 640, 420, 400, 12)
-        sample = fresh.evaluate(STICKY_PROBE, ".profile-tabs")
+        fresh.goto(f"{ORIGIN}/compute/account/metrics")
+        fresh.wait_for_timeout(700)
+        before = fresh.evaluate(
+            "() => { const r = document.querySelector('.app-nav').getBoundingClientRect();"
+            " return {top: r.top, height: r.height, position: getComputedStyle(document.querySelector('.app-nav')).position}; }"
+        )
+        assert before["position"] == "sticky", before
+        reached = wheel_scroll(fresh, 640, 400, 400, 12)
+        sample = fresh.evaluate(STICKY_PROBE, ".app-nav")
     finally:
         fresh.close()
-    assert not sample.get("missing"), "the profile exposes no tab strip"
     assert reached > 0 and sample["scrollY"] > 0, (
-        f"the short profile never scrolled, so pinning was not exercised; reached={reached}, "
+        f"the account page never scrolled, so persistence was not exercised; reached={reached}, "
         f"scrollY={sample['scrollY']}"
     )
-    if sample["position"] != "sticky":
-        return  # The strip is static at this width: nothing pins, nothing can collide.
     assert sample["pinnedAtOffset"], (
-        f"the pinned tab strip is not at its sticky offset; scrollY={sample['scrollY']}, "
+        f"the rail is not at its sticky offset after scrolling; scrollY={sample['scrollY']}, "
         f"top={sample['pinned']['top']}, offsetTop={sample['offsetTop']}"
     )
-    assert sample["pinned"]["top"] >= sample["headerBottom"] - 1.5, (
-        f"the pinned tab strip is painted over by the header; scrollY={sample['scrollY']}, "
-        f"stripTop={sample['pinned']['top']}, headerBottom={sample['headerBottom']}"
+    # The bar is a band in its own grid column; the rail is the column beside it.
+    # "Not painted over" means the two rectangles do not intersect: the rail is
+    # either below the bar's bottom edge or clear of its left edge.
+    bar = sample["header"]
+    rail = sample["pinned"]
+    assert rail["top"] >= bar["bottom"] - 1.5 or rail["right"] <= bar["left"] + 1.5, (
+        f"the rail overlaps the top bar; scrollY={sample['scrollY']}, "
+        f"rail={rail}, bar={bar}"
+    )
+    rail = sample["pinned"]
+    assert rail["bottom"] <= fresh_viewport_height + 1.5, (
+        f"the rail grew past the viewport instead of scrolling inside itself; "
+        f"rail={rail}, viewportHeight={fresh_viewport_height}"
+    )
+    assert sample["innerScroll"] == 0, (
+        f"scrolling the page also scrolled the rail; innerScroll={sample['innerScroll']}"
     )
     controls = reachable_controls(sample)
-    assert controls, "the pinned tab strip holds no tabs"
-    unreachable = [node for node in controls if not node["reachable"]]
+    assert controls, "the rail holds no destinations"
+    onscreen = [
+        node
+        for node in controls
+        if node["top"] >= rail["top"] - 0.5 and node["top"] + node["height"] <= rail["bottom"] + 0.5
+    ]
+    assert onscreen, f"the rail shows none of its own destinations; rail={rail}"
+    unreachable = [node for node in onscreen if not node["reachable"]]
     assert not unreachable, (
-        f"{len(unreachable)} tab(s) do not answer elementFromPoint at their own centre; "
-        f"scrollY={sample['scrollY']}, headerBottom={sample['headerBottom']}; tabs={unreachable}"
+        f"{len(unreachable)} rail destination(s) inside the rail's box do not answer "
+        f"elementFromPoint at their own centre; scrollY={sample['scrollY']}, offenders={unreachable}"
     )
 
 

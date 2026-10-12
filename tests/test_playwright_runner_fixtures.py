@@ -265,8 +265,15 @@ def test_dashboard_table_status_cell_reads_like_the_card_pill(page: Page) -> Non
 
     page.get_by_role("button", name="Table", exact=True).click()
     expect(page.locator(".task-table")).to_be_visible()
-    cell = page.locator(".task-table tbody tr").first.locator("td").nth(3)
-    rendered = cell.inner_text().strip()
+    # The table's first column is the dedicated selection column for an
+    # administrator; the Task's own status cell is not index-fixed by column
+    # count, so name the semantic column the header declares.
+    row = page.locator(".task-table tbody tr").first
+    status_header = page.locator(".task-table thead th").filter(has_text="Status").first
+    index = status_header.evaluate(
+        "node => [...node.parentElement.children].indexOf(node)"
+    )
+    rendered = row.locator("td").nth(index).inner_text().strip()
 
     # The two views agree as rendered, casing included, and the word is the
     # task's own state rather than an empty cell.

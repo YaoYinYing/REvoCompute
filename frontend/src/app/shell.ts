@@ -1,37 +1,48 @@
-import { Bell, Check, createIcons, FileText, Languages, LayoutDashboard, LogOut, MoonStar, Plus, ServerCog, Settings, SunMedium, UserRound, UsersRound, Workflow } from 'lucide';
+import { Bell, ChartLine, FileText, Gauge, KeyRound, LayoutDashboard, LogOut, PanelLeft, PanelLeftClose, Plus, ServerCog, Settings, ShieldCheck, UserCog, UserRound, UsersRound, Workflow, createIcons } from 'lucide';
 import type { CurrentUser } from '../api/app-api';
 import { authorizedJson, clearSessionCredential } from './session';
 import { ADMIN_DESTINATIONS } from './admin-destinations';
 import { appAsset } from './assets';
-import { applyLocale, locale, locales, setLocale, t, type Locale } from './i18n';
-import { cycleTheme, storedTheme, type ThemeMode } from './theme';
+import { applyLocale, locale, t } from './i18n';
+import { languageMenu, themeButton } from './localize';
 import { mountSystemNotices } from './system-notices';
 
 export interface AppShell {
   outlet: HTMLElement;
   notify(message: string, tone?: 'info' | 'success' | 'error'): void;
   setUser(user: CurrentUser | null): void;
+  /** Mark the current destination in the navigation. Called on every route change. */
+  syncActive(): void;
+  /** Write the current notice count onto the top-bar affordance. */
+  refreshNotices(): void;
 }
 
 const railKey = 'revocompute-rail';
 type RailState = 'collapsed' | 'expanded';
-const shellIcons = { Bell, Check, FileText, Languages, LayoutDashboard, LogOut, MoonStar, Plus, ServerCog, Settings, SunMedium, UserRound, UsersRound, Workflow };
+const shellIcons = {
+  Bell, ChartLine, FileText, Gauge, KeyRound, LayoutDashboard, LogOut, PanelLeft, PanelLeftClose, Plus,
+  ServerCog, Settings, ShieldCheck, UserCog, UserRound, UsersRound, Workflow,
+};
 
 function storedRail(): RailState { return localStorage.getItem(railKey) === 'expanded' ? 'expanded' : 'collapsed'; }
-function themeLabel(mode: ThemeMode): string { return `${t('shell.action.theme')}: ${t(`theme.${mode}`)}`; }
 
-/** A destination the left navigation can reach. */
+/** A destination the navigation can reach. */
 type NavDestination = [href: string, icon: string, label: string];
 
-/** The rail exists only where the left navigation is laid out as a column. On the
- *  mobile bottom bar a repeat activation navigates like any other link. */
+/** The rail exists only where the navigation is laid out as a column. */
 const desktopRail = matchMedia('(min-width: 56.01rem)');
-/** Above this width the left navigation is grouped into labelled regions. */
+/** Above this width the navigation is grouped into labelled regions. */
 const navGrouped = matchMedia('(min-width: 62rem)');
 
-function currentDestination(href: string): boolean {
-  return location.pathname === href || (href === '/runners' && location.pathname.startsWith('/runners/'));
-}
+/** The current user's own Account sections, reached directly from the navigation. */
+const ACCOUNT_DESTINATIONS: ReadonlyArray<NavDestination> = [
+  ['/compute/profile', 'user-round', 'shell.account.account'],
+  ['/compute/account/security', 'shield-check', 'shell.account.security'],
+  ['/compute/account/api-key', 'key-round', 'shell.account.apiKey'],
+  ['/compute/account/runner-access', 'user-cog', 'shell.account.runnerAccess'],
+  ['/compute/account/gpu-credits', 'gauge', 'shell.account.gpuCredits'],
+  ['/compute/account/metrics', 'chart-line', 'shell.account.metrics'],
+];
 
 export function mountShell(root: HTMLElement): AppShell {
   root.replaceChildren();
@@ -48,15 +59,13 @@ export function mountShell(root: HTMLElement): AppShell {
   const logo = document.createElement('img'); logo.src = appAsset('logo.svg'); logo.alt = ''; logo.width = 30; logo.height = 30;
   const brandText = document.createElement('span'); brandText.textContent = 'REvoCompute'; brand.append(logo, brandText);
 
-  // The left navigation is the product's information architecture: Compute, the
-  // current user's Account, and — for an administrator — the Administration
-  // workspaces. Each region is a labelled group so the sections stay legible as
-  // more surfaces join; the grouping is a rule and a label, not a card. The caption
-  // names the region; it is not a document heading, so a screen-reader user
-  // reaching the navigation never meets section headings before the page's h1.
+  // The navigation is the product's information architecture: Compute, the current
+  // user's own Account, and — for an administrator — the Administration workspaces.
+  // Each region is a labelled group so the sections stay legible as more surfaces
+  // join; the grouping is a rule and a label, not a card. The caption names the
+  // region; it is not a document heading, so a screen-reader user reaching the
+  // navigation never meets section headings before the page's h1.
   const nav = document.createElement('nav'); nav.className = 'app-nav'; nav.setAttribute('aria-label', t('shell.nav.primary'));
-  // The caption supplies each region's accessible name, so the divisions the rule
-  // and spacing already draw stay legible to a screen reader on either shell.
   const navGroup = (region: string, labelKey: string): { element: HTMLElement; caption: HTMLElement; items: HTMLElement } => {
     const element = document.createElement('div'); element.className = 'app-nav-group'; element.dataset.navGroup = region;
     element.setAttribute('role', 'group');
@@ -72,26 +81,44 @@ export function mountShell(root: HTMLElement): AppShell {
     admin: navGroup('admin', 'shell.nav.administration'),
   };
   groups.admin.element.hidden = true;
-  const destinations: Array<[keyof typeof groups, Array<NavDestination>]> = [
-    ['compute', [
-      ['/runners', 'workflow', t('shell.nav.runners')],
-      ['/compute/dashboard', 'layout-dashboard', t('shell.nav.dashboard')],
-    ]],
-    // Account is the current user's own identity; Administration is system-level
-    // workspaces. They are different navigation levels and never merge into the
-    // Profile page's local section tabs.
-    ['account', [
-      ['/compute/profile', 'user-round', t('shell.nav.profile')],
-    ]],
-    ['admin', ADMIN_DESTINATIONS.map(destination => [destination.path, destination.icon, t(destination.label)] as NavDestination)],
+  const staticCompute: Array<NavDestination> = [
+    ['/runners', 'workflow', t('shell.nav.runners')],
+    ['/compute/dashboard', 'layout-dashboard', t('shell.nav.dashboard')],
   ];
-  for (const [region, links] of destinations) {
-    for (const [href, icon, label] of links) groups[region].items.append(navLink(href, icon, label));
+  for (const [href, icon, label] of staticCompute) groups.compute.items.append(navLink(href, icon, label));
+  // The Account region rests on the session: signed in it reaches the user's own
+  // sections directly, signed out it is a single sign-in affordance. The region's
+  // links are rebuilt when the session changes, so no link ever points a signed-out
+  // reader at a protected page.
+  const accountLinks: HTMLAnchorElement[] = [];
+  for (const [, , labelKey] of ACCOUNT_DESTINATIONS) { const link = navLink('', '', ''); link.dataset.labelKey = labelKey; groups.account.items.append(link); accountLinks.push(link); }
+  for (const destination of ADMIN_DESTINATIONS) {
+    const link = navLink(destination.path, destination.icon, t(destination.label)); groups.admin.items.append(link);
   }
   Object.values(groups).forEach(group => nav.append(group.element));
-  // The Account region restates the current user's identity, so it follows the same
-  // session state as the top-bar profile affordance — one identity, two reach points.
-  const accountLink = groups.account.items.firstElementChild as HTMLAnchorElement;
+
+  // The rail's collapse control sits at the foot of the navigation, in the same
+  // column, where it is a control rather than a destination: it never navigates,
+  // it acts, and it states its own accessible name and expanded state.
+  const railToggle = document.createElement('button');
+  railToggle.type = 'button'; railToggle.className = 'app-rail-toggle';
+  const foot = document.createElement('div'); foot.className = 'app-nav-foot'; foot.append(railToggle);
+  nav.append(foot);
+
+  const syncRailToggle = (): void => {
+    const expanded = shell.dataset.rail === 'expanded';
+    railToggle.title = t(expanded ? 'shell.nav.collapse' : 'shell.nav.expand');
+    railToggle.setAttribute('aria-label', railToggle.title);
+    railToggle.setAttribute('aria-expanded', String(expanded));
+    railToggle.innerHTML = `<i data-lucide="${expanded ? 'panel-left-close' : 'panel-left'}" aria-hidden="true"></i>`;
+    createIcons({ icons: shellIcons, root: railToggle });
+  };
+  railToggle.addEventListener('click', () => {
+    shell.dataset.rail = shell.dataset.rail === 'expanded' ? 'collapsed' : 'expanded';
+    localStorage.setItem(railKey, shell.dataset.rail);
+    syncRailToggle();
+  });
+
   // The region caption names the region on the desktop rail. On the mobile bar the
   // Compute and Account destinations sit directly on the bar, so their captions are
   // removed from the tree there; the Administration caption is kept because on mobile
@@ -102,24 +129,29 @@ export function mountShell(root: HTMLElement): AppShell {
   syncGroupCaptions(navGrouped.matches);
   navGrouped.addEventListener('change', event => syncGroupCaptions(event.matches));
 
-  function navLink(href: string, icon: string, label: string): HTMLElement {
+  function navLink(href: string, icon: string, label: string): HTMLAnchorElement {
     const link = document.createElement('a'); link.href = href; link.title = label; link.innerHTML = `<i data-lucide="${icon}" aria-hidden="true"></i><span>${label}</span>`;
-    if (currentDestination(href)) link.setAttribute('aria-current', 'page');
-    // Repeated activation of the current item toggles the desktop rail. There is
-    // no separate collapse arrow: the control that toggles the rail is the item
-    // you are already on. On the mobile bar there is no rail to toggle, so the
-    // item navigates like any other.
-    link.addEventListener('click', event => {
-      if (!desktopRail.matches || !currentDestination(link.pathname)) return;
-      event.preventDefault();
-      toggleRail();
-    });
     return link;
   }
 
-  function toggleRail(): void {
-    shell.dataset.rail = shell.dataset.rail === 'expanded' ? 'collapsed' : 'expanded';
-    localStorage.setItem(railKey, shell.dataset.rail);
+  /** Mark the destination the reader is on. The navigation owns this state; the
+   *  router only tells it when to re-read the location. */
+  function currentDestination(href: string): boolean {
+    if (!href) return false;
+    const path = new URL(href, location.origin).pathname;
+    if (location.pathname === path) return true;
+    // A method reference is a detail of the catalog: the catalog stays current.
+    return path === '/runners' && location.pathname.startsWith('/runners/');
+  }
+  const allLinks = (): HTMLAnchorElement[] => [
+    ...[...groups.compute.items.children, ...groups.account.items.children, ...groups.admin.items.children] as HTMLAnchorElement[],
+    newTask,
+  ];
+  function syncActiveToLocation(): void {
+    for (const link of allLinks()) {
+      if (currentDestination(link.getAttribute('href') || '')) link.setAttribute('aria-current', 'page');
+      else link.removeAttribute('aria-current');
+    }
   }
 
   const header = document.createElement('header'); header.className = 'app-header';
@@ -135,27 +167,31 @@ export function mountShell(root: HTMLElement): AppShell {
     try { await authorizedJson('/compute/api/auth/logout', { method: 'POST' }); }
     finally { clearSessionCredential(); location.assign('/compute/login'); }
   });
-  const theme = document.createElement('button'); theme.type = 'button'; theme.className = 'icon-button'; theme.title = themeLabel(storedTheme()); theme.setAttribute('aria-label', theme.title); theme.innerHTML = `<i data-lucide="${document.documentElement.dataset.theme === 'dark' ? 'sun-medium' : 'moon-star'}" aria-hidden="true"></i>`;
-  theme.addEventListener('click', () => {
-    const mode = cycleTheme(); theme.title = themeLabel(mode); theme.setAttribute('aria-label', theme.title);
-    theme.innerHTML = `<i data-lucide="${document.documentElement.dataset.theme === 'dark' ? 'sun-medium' : 'moon-star'}" aria-hidden="true"></i>`;
-    createIcons({ icons: { MoonStar, SunMedium }, root: theme });
-  });
-  actions.append(languageMenu(), noticesButton, userLink, logout, theme);
+  actions.append(languageMenu(), noticesButton, userLink, logout, themeButton());
   header.append(actions);
   // The top bar holds global capability plus one primary page action, so the bar is
   // usable at any width without turning the rail into an IDE toolbar.
   const newTask = document.createElement('a'); newTask.href = '/compute/create_task'; newTask.className = 'app-new-task'; newTask.title = t('shell.nav.newTask'); newTask.innerHTML = `<i data-lucide="plus" aria-hidden="true"></i><span>${t('shell.nav.newTask')}</span>`;
-  if (location.pathname === '/compute/create_task') newTask.setAttribute('aria-current', 'page');
   header.prepend(newTask);
 
-  const outlet = document.createElement('div'); outlet.className = 'app-outlet'; outlet.id = 'main-content';
+  // The outlet is the persistent content region: it outlives every route, so the
+  // skip link has a target that survives navigation. It is not itself a `main`
+  // landmark — each page owns its own single `main`, and the shell wrapping them
+  // would nest the landmark rather than replace it. The outlet is focusable so a
+  // route without a heading still lands the reader in the content.
+  const outlet = document.createElement('div'); outlet.className = 'app-outlet'; outlet.id = 'main-content'; outlet.tabIndex = -1;
   const feedback = document.createElement('div'); feedback.className = 'app-feedback';
   const notices = document.createElement('aside'); notices.className = 'app-notices'; notices.setAttribute('aria-live', 'polite');
   feedback.append(notices);
-  shell.append(brand, header, nav, outlet, feedback);
+
+  // The skip link is the first focusable thing in the document; it is only painted
+  // once focused, and its target is the persistent main region.
+  const skip = document.createElement('a'); skip.className = 'skip-link'; skip.href = '#main-content'; skip.textContent = t('shell.skipToContent');
+
+  shell.append(skip, brand, header, nav, outlet, feedback);
   root.append(shell);
   createIcons({ icons: shellIcons, root: shell });
+  syncRailToggle();
 
   // Measure the secondary surface rather than assuming its height: translated
   // labels and narrow widths can wrap. CSS applies this clearance only on mobile.
@@ -169,15 +205,22 @@ export function mountShell(root: HTMLElement): AppShell {
     const label = t(user ? 'shell.action.profile' : 'shell.action.signIn');
     const identity = user?.full_name || user?.username;
     const href = user ? '/compute/profile' : `/compute/login?return_to=${encodeURIComponent(location.pathname)}`;
-    accountLink.querySelector('span')!.textContent = label;
+    // The Account region is the user's own navigation when signed in and a single
+    // sign-in affordance when signed out.
+    accountLinks.forEach((link, index) => {
+      const destination = user ? ACCOUNT_DESTINATIONS[index] : null;
+      const linkLabel = destination ? t(destination[2]) : label;
+      link.hidden = !user && index > 0;
+      link.href = destination ? destination[0] : href;
+      link.title = linkLabel;
+      link.innerHTML = `<i data-lucide="${destination ? destination[1] : 'user-round'}" aria-hidden="true"></i><span>${linkLabel}</span>`;
+    });
     userLink.querySelector('span')!.textContent = identity || label;
-    for (const link of [accountLink, userLink]) {
-      link.href = href;
-      link.title = label;
-      link.setAttribute('aria-label', link === userLink && identity ? `${label}: ${identity}` : label);
-      if (currentDestination(link.pathname)) link.setAttribute('aria-current', 'page');
-      else link.removeAttribute('aria-current');
-    }
+    userLink.href = href; userLink.title = label;
+    userLink.setAttribute('aria-label', identity ? `${label}: ${identity}` : label);
+    createIcons({ icons: shellIcons, root: groups.account.element });
+    createIcons({ icons: shellIcons, root: userLink });
+    syncActiveToLocation();
   };
   syncAccount(null);
 
@@ -197,23 +240,7 @@ export function mountShell(root: HTMLElement): AppShell {
       groups.admin.element.hidden = user?.role !== 'admin';
       void systemNotices.refresh();
     },
+    syncActive() { syncActiveToLocation(); },
+    refreshNotices() { void systemNotices.refresh(); },
   };
-}
-
-function languageMenu(): HTMLElement {
-  const details = document.createElement('details'); details.className = 'lang-menu';
-  const summary = document.createElement('summary'); summary.className = 'icon-button'; summary.title = t('shell.action.language'); summary.setAttribute('aria-label', t('shell.action.language'));
-  const current = locales.find(item => item.id === locale())!;
-  summary.innerHTML = `<i data-lucide="languages" aria-hidden="true"></i><span class="lang-menu-value">${current.label}</span>`;
-  const options = document.createElement('div'); options.className = 'lang-options'; options.setAttribute('role', 'radiogroup'); options.setAttribute('aria-label', t('shell.action.language'));
-  locales.forEach(item => {
-    const button = document.createElement('button'); button.type = 'button'; button.setAttribute('role', 'radio'); button.setAttribute('aria-checked', String(item.id === locale()));
-    button.dataset.locale = item.id;
-    button.append(document.createTextNode(item.label));
-    if (item.id === locale()) { const mark = document.createElement('i'); mark.dataset.lucide = 'check'; mark.setAttribute('aria-hidden', 'true'); button.append(mark); }
-    button.addEventListener('click', () => setLocale(item.id as Locale));
-    options.append(button);
-  });
-  details.append(summary, options);
-  return details;
 }

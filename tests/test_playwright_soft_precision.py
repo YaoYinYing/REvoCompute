@@ -81,27 +81,37 @@ def _contrast_ratio(foreground: str, background: str) -> float:
 # ── shell / navigation rail ───────────────────────────────────────────────────
 
 
-def test_desktop_rail_collapses_and_expands_by_reactivating_the_current_item(page: Page) -> None:
+def test_desktop_rail_has_one_explicit_toggle_that_never_navigates(page: Page) -> None:
     _dashboard(page)
     page.set_viewport_size({"width": 1280, "height": 900})
     page.reload()
     shell = page.locator(".app-shell")
     expect(shell).to_have_attribute("data-rail", "collapsed")
-    # The current page's own nav item is the rail toggle: there is no separate arrow.
-    assert page.get_by_role("button", name="Collapse navigation").count() == 0
-    assert page.get_by_role("button", name="Expand navigation").count() == 0
+    # The rail's width is governed by one explicit control at its foot, not by
+    # re-activating a destination: the control exists and states its own state.
+    expand = page.get_by_role("button", name="Expand navigation", exact=True)
+    expect(expand).to_have_count(1)
+    expect(expand).to_have_attribute("aria-expanded", "false")
 
+    expand.click()
+    expect(shell).to_have_attribute("data-rail", "expanded")
+    collapse = page.get_by_role("button", name="Collapse navigation", exact=True)
+    expect(collapse).to_have_attribute("aria-expanded", "true")
+
+    # Activating a destination is navigation, never a rail toggle: the rail keeps
+    # the width the reader chose, and the destination is reached.
     page.get_by_role("link", name="Dashboard", exact=True).click()
     expect(shell).to_have_attribute("data-rail", "expanded")
-    # Repeating the activation collapses it again.
-    page.get_by_role("link", name="Dashboard", exact=True).click()
+    expect(page).to_have_url(f"{ORIGIN}/compute/dashboard")
+
+    collapse.click()
     expect(shell).to_have_attribute("data-rail", "collapsed")
 
 
 def test_rail_preference_persists_across_reload(page: Page) -> None:
     _dashboard(page)
     page.set_viewport_size({"width": 1280, "height": 900})
-    page.get_by_role("link", name="Dashboard", exact=True).click()
+    page.get_by_role("button", name="Expand navigation", exact=True).click()
     expect(page.locator(".app-shell")).to_have_attribute("data-rail", "expanded")
     assert page.evaluate("localStorage.getItem('revocompute-rail')") == "expanded"
     page.reload()
@@ -209,7 +219,7 @@ def test_desktop_rail_states_regions_with_a_visible_label(page: Page) -> None:
     # Above the bottom-bar band the rail is a column, so each region is named. The
     # collapsed icon rail keeps the rule and hides the word; expanding it reveals the
     # label as painted chrome, not the 1px sr-only form.
-    page.get_by_role("link", name="Dashboard", exact=True).click()
+    page.get_by_role("button", name="Expand navigation", exact=True).click()
     expect(page.locator(".app-shell")).to_have_attribute("data-rail", "expanded")
     labels = page.locator(".app-nav .app-nav-group-label:visible")
     assert labels.count() >= 2
@@ -269,7 +279,6 @@ def test_account_destinations_match_session_semantics(
     page.set_viewport_size({"width": width, "height": 900})
     page.add_init_script(f"localStorage.setItem('revocompute-locale', '{locale}')")
     page.goto(f"{ORIGIN}{path}")
-    account = page.locator("[data-nav-group='account'] a")
     identity = page.locator(".app-user")
     signed_in = session.role != "anonymous"
     profile, sign_in = ("Profile", "Sign in") if locale == "en" else ("个人资料", "登录")
@@ -281,17 +290,26 @@ def test_account_destinations_match_session_semantics(
         expect(account).to_have_accessible_name(label)
         expect(account).to_have_attribute("href", "/compute/profile" if signed_in else "/compute/login")
         return
+    # The Account region rests on the session. Signed in it is the reader's own
+    # section navigation; signed out the six destination slots are unreachable and
+    # the region is a single sign-in affordance, so no link ever offers a signed-out
+    # reader a protected page.
+    account = page.locator("[data-nav-group='account'] a:visible")
+    expect(account).to_have_count(6 if signed_in else 1)
+    if not signed_in:
+        expect(account.first).to_have_text(sign_in)
     destination = "/compute/profile" if signed_in else "/compute/login?return_to=%2Frunners"
-    expect(account).to_have_text(label)
-    expect(identity.locator("span")).to_have_text(session.full_name if signed_in else label)
+    expect(identity).to_have_attribute("href", destination)
+    expect(identity).to_have_attribute("title", label)
     identity_name = f"{profile}: {session.full_name}" if signed_in else label
-    for link, accessible_name in ((account, label), (identity, identity_name)):
-        expect(link).to_have_attribute("href", destination)
-        expect(link).to_have_attribute("title", label)
-        expect(link).to_have_accessible_name(accessible_name)
+    expect(identity).to_have_accessible_name(identity_name)
+    expect(identity.locator("span")).to_have_text(session.full_name if signed_in else label)
     # The anonymous destination must actually navigate, including on the mobile bar.
-    account.click()
-    expect(page).to_have_url(f"{ORIGIN}{destination}")
+    if not signed_in:
+        expect(account.first).to_have_attribute("href", destination)
+        expect(account.first).to_have_attribute("title", sign_in)
+        account.first.click()
+        expect(page).to_have_url(f"{ORIGIN}{destination}")
 
 
 @pytest.mark.parametrize("width", [320, 360, 390, 834])
