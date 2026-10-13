@@ -93,6 +93,18 @@
    carry the `.result-app .structure-host` prefix to outrank `.msp-plugin …`. */
 .result-app .structure-host .msp-selection-viewport-controls { max-width: 100%; }
 .result-app .structure-host .msp-selection-viewport-controls > .msp-flex-row { max-width: 100%; overflow-x: auto; overflow-y: hidden; }
+/* Mol*'s overlay buttons are 32px squares. The structure viewer's own toolbar
+   sets the touch targets a reader meets first; this raises the panel's
+   disclosure to the same floor so the two affordances read as one control set.
+   44px is the WCAG 2.5.8 minimum target. */
+.result-app .structure-host .msp-viewport-controls-buttons button { min-height: 2.75rem; width: 2.75rem; }
+.result-app .structure-host .msp-viewport-controls { width: 2.75rem; }
+/* The panel's own scroll container is `overflow-y: auto` with no inline axis.
+   Containing it keeps a focused row's radio inside the panel at any width, and
+   giving the control column a zero minimum lets a long label's row wrap its
+   value under the label rather than push the panel wider than the host. */
+.result-app .structure-host .msp-scrollable-container { overflow-x: hidden; }
+.result-app .structure-host .msp-control-row-ctrl { min-width: 0; }
 .structure-host[data-loading="true"] { visibility: hidden; }
 .structure-viewport:fullscreen { grid-template-rows: auto 1fr; width: 100vw; height: 100vh; border: 0; border-radius: 0; background: var(--result-paper); }
 .result-record { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 2.5rem; padding-top: 1.5rem; }

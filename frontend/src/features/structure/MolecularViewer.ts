@@ -9,6 +9,7 @@ import { StateTransforms } from 'molstar/lib/mol-plugin-state/transforms.js';
 import { PluginUIContext } from 'molstar/lib/mol-plugin-ui/context.js';
 import { Plugin } from 'molstar/lib/mol-plugin-ui/plugin.js';
 import { DefaultPluginUISpec } from 'molstar/lib/mol-plugin-ui/spec.js';
+import { PluginConfig } from 'molstar/lib/mol-plugin/config.js';
 import { loadTrajectory as loadPluginTrajectory } from 'molstar/lib/extensions/plugin/loaders.js';
 import { createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -66,12 +67,77 @@ export interface SelectedResidue {
 }
 
 export interface MolecularViewerOptions {
+  /** This mode offers Mol*'s native panels. When false the viewer also hides
+   *  Mol*'s own viewport affordance, so a reader never meets a control that
+   *  cannot act on anything. */
   showControls?: boolean;
+  /** Start with the native panel closed behind its disclosure. A mode whose task
+   *  *is* the native panel (chain/residue selection) leaves this unset so the
+   *  panel opens with the structure. */
+  controlsCollapsed?: boolean;
   selectionEnabled?: boolean;
   theme?: 'light' | 'dark';
 }
 
 type SelectionListener = (residues: SelectedResidue[]) => void;
+
+// Mol*'s native panels are a single all-or-nothing disclosure. `showControls`
+// gates every region, and the viewport-overlay button that owns that disclosure
+// lives inside the *main* region, so the geometry the main region gets decides
+// whether the button is reachable at all. A `controls.X === 'none'` entry
+// removes one region's content while still reserving its column, which strands
+// the button outside the reader's reach; leaving `controls.right` alone makes
+// the region's presence follow `showControls` exactly. So the closed state is
+// expressed by `showControls` (and, on mount, by the one update Mol*'s own
+// button performs), `regionState.right` stays 'full', and a mode that offers no
+// native panel removes the button rather than leaving a control that cannot act
+// on anything. This viewer is the only control-state owner: it never writes a
+// region state that contradicts a hidden panel.
+function viewerSpec(options: MolecularViewerOptions) {
+  const spec = DefaultPluginUISpec();
+  const showControls = options.showControls !== false;
+  spec.layout = {
+    ...spec.layout,
+    initial: {
+      ...spec.layout?.initial,
+      isExpanded: false,
+      showControls: showControls && !options.controlsCollapsed,
+      controlsDisplay: 'reactive',
+      regionState: {
+        left: 'hidden',
+        top: options.selectionEnabled ? 'full' : 'hidden',
+        right: 'full',
+        bottom: 'hidden',
+      },
+    },
+  };
+  spec.config = [
+    ...(spec.config || []),
+    // One disclosure, one control surface. Mol*'s overlay button stays the
+    // affordance wherever a native panel exists and is absent where it would be
+    // a dead end. The floating buttons that would duplicate a capability the
+    // Result workspace already owns are dropped: fullscreen and expand from the
+    // workspace toolbar, and screenshot/state from `captureImage`.
+    [PluginConfig.Viewport.ShowControls, showControls],
+    [PluginConfig.Viewport.ShowSelectionMode, Boolean(options.selectionEnabled)],
+    [PluginConfig.Viewport.ShowSettings, false],
+    [PluginConfig.Viewport.ShowScreenshotControls, false],
+    [PluginConfig.Viewport.ShowXR, 'never'],
+    [PluginConfig.Viewport.ShowExpand, false],
+    [PluginConfig.Viewport.ShowToggleFullscreen, false],
+  ];
+  spec.components = {
+    ...spec.components,
+    remoteState: 'none',
+    controls: {
+      ...spec.components?.controls,
+      top: options.selectionEnabled ? spec.components?.controls?.top : 'none',
+      left: 'none',
+      bottom: 'none',
+    },
+  };
+  return spec;
+}
 
 export class MolecularViewer {
   private plugin: any = null;
@@ -102,33 +168,7 @@ export class MolecularViewer {
       host.style.position = 'relative';
     }
     this.options = options;
-    const spec = DefaultPluginUISpec();
-    spec.layout = {
-      ...spec.layout,
-      initial: {
-        ...spec.layout?.initial,
-        isExpanded: false,
-        showControls: true,
-        controlsDisplay: 'reactive',
-        regionState: {
-          left: 'hidden',
-          top: options.selectionEnabled ? 'full' : 'hidden',
-          right: options.showControls ? 'full' : 'hidden',
-          bottom: 'hidden',
-        },
-      },
-    };
-    spec.components = {
-      ...spec.components,
-      remoteState: 'none',
-      controls: {
-        ...spec.components?.controls,
-        top: options.selectionEnabled ? spec.components?.controls?.top : 'none',
-        left: 'none',
-        right: options.showControls ? spec.components?.controls?.right : 'none',
-        bottom: 'none',
-      },
-    };
+    const spec = viewerSpec(options);
     const plugin = new PluginUIContext(spec);
     this.plugin = plugin;
     try {

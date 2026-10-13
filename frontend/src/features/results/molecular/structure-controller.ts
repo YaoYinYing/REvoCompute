@@ -24,6 +24,9 @@ export class StructureController {
 
   constructor(private readonly createViewer: MolecularViewerFactory, private readonly options: {
     selectionEnabled?: boolean;
+    //: The Result workspace names itself the scientific stage owner, so the
+    //: viewer's native panels start closed behind their own disclosure button.
+    controlsCollapsed?: boolean;
     onSelectionChanged?: (residues: Array<{ chain: string; residue: number; auth_seq_id: number; label_seq_id: number }>) => void;
   } = {}) {}
 
@@ -41,7 +44,11 @@ export class StructureController {
         this.disposeViewer();
         this.host = host;
       }
-      if (!this.viewer && !this.viewerMount) this.viewerMount = this.createViewer(host, { theme, selectionEnabled: this.options.selectionEnabled });
+      if (!this.viewer && !this.viewerMount) {
+        this.viewerMount = this.createViewer(host, {
+          theme, selectionEnabled: this.options.selectionEnabled, controlsCollapsed: this.options.controlsCollapsed,
+        });
+      }
       if (!this.viewer) {
         const pending = this.viewerMount!;
         let created: MolecularViewer;

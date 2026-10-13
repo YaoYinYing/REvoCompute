@@ -70,7 +70,8 @@ export class ResultWorkspace {
 
   constructor(private readonly root: HTMLElement, createViewer: MolecularViewerFactory) {
     installScientificPrimitives(); this.structure = new StructureController(createViewer, {
-      selectionEnabled: true, onSelectionChanged: (residues) => this.storyboard.setMolecularSelection(residues),
+      selectionEnabled: true, controlsCollapsed: true,
+      onSelectionChanged: (residues) => this.storyboard.setMolecularSelection(residues),
     });
     this.nodes = this.buildShell(); this.storyboard = new StoryboardHost(this.nodes.preview, {
       openFile: (file) => this.openLogicalFile(file), downloadFile: (file) => beginDownload(file.url),
