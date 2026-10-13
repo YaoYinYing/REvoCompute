@@ -7,6 +7,7 @@ import {
   type OperatorJob,
   type OperatorPlan,
   type RunnerDetail,
+  type RunnerFleet,
   type RunnerFleetEntry,
   type RunnerReadiness,
 } from '../api';
@@ -200,6 +201,28 @@ export function workflowLabel(stage: string): string {
 }
 
 /**
+ * What the host-executor banner says, given the server's own executor state.
+ *
+ * The server's ``unavailable_reason`` is the actionable sentence — it names the
+ * missing artifact by role and the corrective step (run the operation with
+ * ``run/restart.sh`` on the deployment host) — so it is rendered verbatim rather
+ * than replaced by a constant "unavailable". The fallback is only for an older
+ * server that reported no sentence, and it must still say what stays available.
+ */
+export function executorNotice(executor: RunnerFleet['executor']): { title: string; detail: string } {
+  if (executor.available) {
+    return {
+      title: 'Host executor available',
+      detail: ' Mutating Runner actions can be planned and run from this interface for every family below.',
+    };
+  }
+  return {
+    title: 'Host executor unavailable',
+    detail: ` ${executor.unavailable_reason || 'Readiness, capacity, access, and history stay available; mutating actions are disabled for every family until the host executor is reachable. This is a host capability, not a problem with any family below.'}`,
+  };
+}
+
+/**
  * Filter and order the register by the operator's current view.
  *
  * The default order is by how much work a family needs: a family that cannot
@@ -254,7 +277,7 @@ function field(label: string, value: string, className = ''): HTMLElement {
 
 export class FleetAdmin {
   private rows: RunnerFleetEntry[] = [];
-  private executor: { available: boolean; reason: string } | null = null;
+  private executor: RunnerFleet['executor'] | null = null;
   private filter: FleetFilter = 'all';
   private sort: FleetSort = 'attention';
   private query = '';
@@ -333,14 +356,10 @@ export class FleetAdmin {
   /** The Operator executor's own state, above the register and never folded in. */
   private renderExecutor(): void {
     if (!this.executor) return;
+    const notice = executorNotice(this.executor);
     this.executorBanner.replaceChildren();
     this.executorBanner.classList.toggle('is-warning', !this.executor.available);
-    this.executorBanner.append(
-      text('strong', this.executor.available ? 'Host executor available' : 'Host executor unavailable'),
-      text('span', this.executor.available
-        ? ' Mutating Runner actions can be planned and run from this interface for every family below.'
-        : ' Readiness, capacity, access, and history stay available; mutating actions are disabled for every family until the host executor is reachable. This is a host capability, not a problem with any family below.'),
-    );
+    this.executorBanner.append(text('strong', notice.title), text('span', notice.detail));
   }
 
   /**

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { clearSessionCredential } from '../src/app/session';
 import { adminApi, type RunnerFleetEntry } from '../src/features/admin/api';
-import { capacityLabel, filterFleet, jobStatusLabel, reasonText, summarizeFleet, summarySentence, weaknessLabel, weaknessOf, workflowLabel } from '../src/features/admin/fleet/FleetAdmin';
+import { capacityLabel, executorNotice, filterFleet, jobStatusLabel, reasonText, summarizeFleet, summarySentence, weaknessLabel, weaknessOf, workflowLabel } from '../src/features/admin/fleet/FleetAdmin';
 
 type RequestRecord = { url: string; init: RequestInit };
 
@@ -98,6 +98,25 @@ describe('fleet view helpers', () => {
     expect(reasonText({ status: 'READY', reason_code: 'UNMAPPED_CODE', message: 'server copy' } as never)).toBe('server copy');
     expect(workflowLabel('live_test')).toBe('Live validation');
     expect(workflowLabel('unknown_stage')).toBe('unknown_stage');
+  });
+
+  it('tells an operator why the host executor is unavailable, not just that it is', () => {
+    // The server owns the actionable sentence: it names the missing artifact by
+    // role and points at the host CLI. The banner renders it verbatim, so the
+    // operator is told where the operation belongs instead of reading a constant.
+    const sentence = 'The deployment controller (run/restart.sh) is not reachable from this server process.';
+    const unavailable = executorNotice({ available: false, reason: 'operator_executor_unavailable', unavailable_reason: sentence });
+    expect(unavailable.title).toBe('Host executor unavailable');
+    expect(unavailable.detail).toContain('run/restart.sh');
+    expect(unavailable.detail).toContain(sentence);
+
+    // An older server that reports no sentence still says what stays available.
+    const older = executorNotice({ available: false, reason: 'operator_executor_unavailable', unavailable_reason: null });
+    expect(older.detail).toContain('Readiness, capacity, access, and history stay available');
+
+    const available = executorNotice({ available: true, reason: 'operator_executor_available', unavailable_reason: null });
+    expect(available.title).toBe('Host executor available');
+    expect(available.detail).toContain('planned and run');
   });
 
   it('labels a job lifecycle word, never a readiness state', () => {

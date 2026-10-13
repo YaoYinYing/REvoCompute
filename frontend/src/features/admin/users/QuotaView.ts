@@ -52,11 +52,14 @@ export function quotaBar(entitlement: ResourceEntitlement['compute'][number]): Q
   const allowance = entitlement.allowance;
   if (allowance === null) return { kind: 'text', reason: 'Not gated: this unit has no allowance to draw against.' };
   if (allowance <= 0) {
+    // A granted zero is an enforced zero, not an absence of a ceiling: admission
+    // refuses a draw against this unit, so a bar (100% of nothing) would report a
+    // ratio the server never computed and the copy must not read as "ungated".
     return {
       kind: 'text',
       reason: entitlement.used || entitlement.reserved
-        ? 'No allowance is granted; usage is recorded but no ceiling applies.'
-        : 'No allowance is granted for this unit.',
+        ? 'Allowance is zero. This is an enforced zero ceiling: recorded usage is real, and new consumption against this unit is refused until an administrator grants an allowance.'
+        : 'Allowance is zero: an enforced zero ceiling that blocks new consumption against this unit until an administrator grants an allowance.',
     };
   }
   const used = Math.max(0, entitlement.used);

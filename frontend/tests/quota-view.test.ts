@@ -135,6 +135,28 @@ describe('quota usage bars', () => {
     expect(quotaBar(entry({ allowance: 0, remaining: 0 })).kind).toBe('text');
   });
 
+  it('states a zero allowance as an enforced ceiling, not as no ceiling at all', () => {
+    // Zero and "ungated" are different facts: a zero allowance refuses new
+    // consumption, while an ungated unit has no policy to enforce. Copy that
+    // called zero "no ceiling applies" would tell a reader their usage is
+    // unfettered at the moment admission is refusing it.
+    const withUsage = quotaBar(entry({ allowance: 0, used: 4_500, remaining: 0 }));
+    expect(withUsage.kind).toBe('text');
+    if (withUsage.kind === 'text') {
+      expect(withUsage.reason).toContain('enforced zero');
+      expect(withUsage.reason).toContain('refused');
+      expect(withUsage.reason).not.toContain('no ceiling');
+    }
+    const clean = quotaBar(entry({ allowance: 0, remaining: 0 }));
+    if (clean.kind === 'text') {
+      expect(clean.reason).toContain('enforced zero');
+      expect(clean.reason).not.toContain('no ceiling');
+    }
+    // The ungated unit keeps its own, distinct wording.
+    const ungated = quotaBar(entry({ enforced: false, allowance: null, remaining: null }));
+    if (ungated.kind === 'text') expect(ungated.reason).toContain('Not gated');
+  });
+
   it('shows an overdraft past the track rather than clamping it to full', () => {
     const drawn = quotaBar(entry({ used: 72_000, remaining: -12_000 }));
     expect(drawn.kind).toBe('bar');
