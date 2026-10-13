@@ -31,8 +31,6 @@ function storedRail(): RailState { return localStorage.getItem(railKey) === 'exp
 /** A destination the navigation can reach. */
 type NavDestination = [href: string, icon: string, label: string];
 
-/** The rail exists only where the navigation is laid out as a column. */
-const desktopRail = matchMedia('(min-width: 56.01rem)');
 /** Above this width the navigation is grouped into labelled regions. */
 const navGrouped = matchMedia('(min-width: 62rem)');
 

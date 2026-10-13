@@ -310,14 +310,13 @@ async function render(route: AppRoute, historyNavigation: boolean): Promise<void
 
   // The mount's own awaits are over: this is where the route becomes the page the
   // reader is on. A mount that stopped being the reader's route while it was
-  // building is disposed in full instead, and never presented as their page.
-  if (generation !== renderGeneration) { destroyMount(mount); return; }
-  // This is the moment the mount becomes the chrome region's child. A render that
-  // bumped the generation while this one built has already mounted the other
-  // chrome, or rebuilt this one's outlet; `committedMount` is re-pointed after the
-  // await, but the region's child cannot be, so a mount that is no longer current
-  // must not repaint the region under the reader. It is the last ownership check,
-  // because there is no `await` between here and the commit.
+  // building is disposed in full instead, and never presented as their page. This
+  // is the moment the mount becomes the chrome region's child: a render that bumped
+  // the generation while this one built has already mounted the other chrome, or
+  // rebuilt this one's outlet; `committedMount` is re-pointed after the await, but
+  // the region's child cannot be, so a mount that is no longer current must not
+  // repaint the region under the reader. It is the last ownership check, because
+  // there is no `await` between here and the commit.
   if (generation !== renderGeneration) { destroyMount(mount); return; }
   if (pendingMount === mount) pendingMount = null;
   committedMount = mount;
