@@ -886,27 +886,51 @@ def _input_workspace_payload(tt) -> dict:
 _CANONICAL_PARAMETERS_CAPABILITY = ("parameters", "task_parameters", "Method settings")
 
 
+#: The workspace option through which a capability owns named canonical fields.
+_FIELD_OWNING_OPTION = "fields"
+
+
+def _unclaimed_parameter_fields(tt) -> set[str]:
+    """Canonical parameter fields no declared capability has taken ownership of.
+
+    Ownership is exactly the two ways the frontend's parameter plugins render a
+    field: the generic ``parameters`` plugin, which renders every canonical field
+    no capability names in ``options.fields``, and a specialized plugin such as
+    ``regions``, which renders the fields it names. Subtracting every declared
+    ``options.fields`` entry from the task's schema properties therefore leaves the
+    fields nothing in the workspace would render.
+    """
+    claimed: set[str] = set()
+    for capability in iter_capabilities(tt):
+        fields = capability.options.get(_FIELD_OWNING_OPTION) or []
+        if isinstance(fields, (list, tuple)):
+            claimed.update(str(field) for field in fields)
+    return {str(name) for name in tt.schema.get("properties", {})} - claimed
+
+
 def _canonical_parameter_area(tt) -> dict | None:
     """The canonical parameter capability to project, or ``None`` when declared.
 
     Every executable, user-editable parameter the owning ``task.yaml`` declares
-    must be user-discoverable. A workspace declares its parameter area when one of
-    its capabilities is the ``parameters`` plugin, or names the canonical fields it
-    owns through ``options.fields`` (as a runner-owned regions capability does); a
-    workspace that declares none would otherwise silently drop the whole canonical
-    schema, whose defaults the server still applies. For that case the canonical
-    capability is returned so the workspace projection can place it and the
-    submission boundary can accept it. A manifest that already claims the
-    capability's id keeps its own declaration rather than gaining a duplicate.
+    must be user-discoverable. A workspace that declares the generic ``parameters``
+    plugin already renders the whole schema, so it keeps its own declaration. A
+    workspace whose capabilities own only *some* canonical fields — a runner-owned
+    regions capability naming the fields it draws, for instance — would otherwise
+    silently drop the remaining schema, whose defaults the server still applies; so
+    does a workspace that declares no parameter capability at all. In both cases a
+    capability is returned for the leftover fields, which the projection places and
+    the submission boundary accepts. ``None`` means nothing is unclaimed: the
+    declaration alone leaves no parameter without a renderer, and adding an area
+    would render the schema twice.
     """
     if not tt.schema.get("properties"):
         return None
     plugin, capability_id, title = _CANONICAL_PARAMETERS_CAPABILITY
     for capability in iter_capabilities(tt):
-        if capability.plugin.split(":", 1)[-1] == "parameters" or capability.options.get("fields"):
+        if capability.plugin.split(":", 1)[-1] == plugin or capability.id == capability_id:
             return None
-        if capability.id == capability_id:
-            return None
+    if not _unclaimed_parameter_fields(tt):
+        return None
     return {"plugin": plugin, "id": capability_id, "title": title, "description": "", "options": {}}
 
 

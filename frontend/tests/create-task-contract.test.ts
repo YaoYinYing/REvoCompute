@@ -113,5 +113,20 @@ describe('Create Task server contracts', () => {
     const empty = projected({ minimum: 5, maximum: 4, 'x-ui-control': { kind: 'seed' } });
     expect(seedConstant(empty, draws(0))).toBe(5);
   });
+
+  it('covers the whole declared domain a 32-bit draw spans, and refuses a wider one', () => {
+    // The widest domain a shipped task declares is ``0..4294967295`` (boltz, chai1,
+    // evosplit, pallatom): a span of exactly the 2**32 values one 32-bit draw
+    // addresses, so both ends are reachable and every draw is in band.
+    const widest = projected({ minimum: 0, maximum: 4_294_967_295, 'x-ui-control': { kind: 'seed' } });
+    expect(seedConstant(widest, draws(0))).toBe(0);
+    expect(seedConstant(widest, draws(4_294_967_295))).toBe(4_294_967_295);
+
+    // One value wider and no 32-bit draw covers the domain uniformly. Sampling
+    // only its low 2**32 values would present a biased result as the declared
+    // range the schema published, so it fails loud instead.
+    const wider = projected({ minimum: 0, maximum: 4_294_967_296, 'x-ui-control': { kind: 'seed' } });
+    expect(() => seedConstant(wider, draws(0))).toThrow(/wider than a 32-bit draw/);
+  });
 });
 

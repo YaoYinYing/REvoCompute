@@ -60,11 +60,16 @@ export function parameterValue(parameter: ParameterDefinition, control: HTMLInpu
  * The generation domain is the task's own ``x-ui-control.random`` bounds when it
  * declares them and its API-valid range otherwise, so a sentinel the schema keeps
  * manually valid is never generated. An exclusive bound is moved inside the range
- * rather than widened, and a bounded domain is drawn by rejection so every value
+ * rather than widened, and the domain is drawn by rejection so every value in it
  * is equally likely; the modulo alternative would over-represent the low end.
- * The function is pure over ``random`` so a caller owns the entropy source, and
- * it returns the domain's lower bound when the range is empty rather than
- * escaping the declared bounds.
+ *
+ * The declared domain is at most ``2**32`` values - the owning ``task.yaml``
+ * contract bounds a seed generation range to that width and the server refuses a
+ * wider one - so a single 32-bit draw covers it exactly. A domain beyond that is
+ * refused loudly rather than answered from only its low ``2**32`` values, which is
+ * not the uniform coverage the declared range promises. The function is pure over
+ * ``random`` so a caller owns the entropy source, and it returns the domain's lower
+ * bound when the range is empty rather than escaping the declared bounds.
  */
 export function seedConstant(
   parameter: ParameterDefinition,
@@ -84,15 +89,15 @@ export function seedConstant(
   if (parameter.seed?.maximum == null && parameter.exclusiveMaximum != null) maximum = Math.min(maximum, Math.ceil(parameter.exclusiveMaximum) - 1);
   if (maximum < minimum) return minimum;
   const span = maximum - minimum + 1;
-  // A domain the 32-bit draw cannot span uniformly is sampled from its low
-  // ``2**32`` values, so the result still lies inside the declared bounds.
-  const ceiling = Math.min(span, 2 ** 32);
-  const bound = 2 ** 32 - (2 ** 32 % ceiling);
+  // Fail loud on a domain no 32-bit draw spans uniformly, instead of presenting a
+  // biased or incomplete sample of the range the owning schema published.
+  if (span > 2 ** 32) throw new Error(`Seed generation domain ${minimum}..${maximum} is wider than a 32-bit draw`);
+  const bound = 2 ** 32 - (2 ** 32 % span);
   const draw = new Uint32Array(1);
   for (;;) {
     random(draw);
     const value = draw[0]!;
-    if (value < bound) return minimum + (value % ceiling);
+    if (value < bound) return minimum + (value % span);
   }
 }
 
