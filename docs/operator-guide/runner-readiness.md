@@ -42,7 +42,9 @@ controller on the Slurm host can observe the builder, so it shares its
 observation (see
 [Deployment Control](deployment-control.md#the-recorded-apptainer-builder)); a
 server process that can read the artifacts but cannot run Apptainer derives the
-recorded identity from that shared value.
+recorded identity from that shared value. Provenance marks the shared value as
+*declared* rather than observed, so a pinned builder is never reported back as a
+measurement the reading process did not take.
 
 A containerized server process ships no Apptainer. Left on its own it would
 contribute an empty builder, which is not "unknown, therefore current" but a

@@ -23,8 +23,11 @@ family `test.yaml` and fixture digest, execution-contract digest, and every requ
 smoke case. Failed builds and tests leave the active artifact untouched.
 
 Build provenance records family and release metadata for audit, plus the
-definition and declared-input hashes, Apptainer version, resulting SIF hash,
-and timestamp. Build freshness uses only actual image inputs; changing
+definition and declared-input hashes, Apptainer version, its `apptainer_version_source`
+(`observed` when this process ran the builder, `declared` when the value came from
+`REVODESIGN_APPTAINER_VERSION`), resulting SIF hash, and timestamp. Only the declared
+builder is part of the build identity. Build freshness uses only actual image inputs;
+changing
 `family.version` alone does not stale the SIF. Evidence contains no credentials
 and has no Docker image ID. See the canonical
 [Runner change-impact model](../runner-guide/adding-a-runner.md#runner-change-impact-model).
@@ -37,6 +40,9 @@ every `up`, the controller observes it once and shares it with the service
 containers through the Compose process environment
 (`REVODESIGN_APPTAINER_VERSION`), so a server process that ships no Apptainer
 still derives the identity the build recorded instead of an empty-builder one.
+The shared value is a *declared* builder, not a per-process observation, and the
+provenance record says so (`apptainer_version_source`): a mistyped pin is visible
+as a declared value rather than reported back as a fact this process measured.
 
 The value is passed in the process environment, never written into the
 deployment env file, which remains the operator's to pin (set

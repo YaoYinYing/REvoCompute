@@ -58,12 +58,13 @@ submission on the other.
 
 When the host executor is unreachable, readiness, capacity, access, and history
 stay available and mutation actions fail closed. No existing READY evidence is
-fabricated, cleared, or rewritten because the executor is offline. The UI
-reports `Operator executor unavailable`, disables mutations, and does not retry
-in a loop. A refused mutation returns `503` with a reason that names the missing
+fabricated, cleared, or rewritten because the executor is offline. The Admin
+banner shows `Operator executor unavailable` and disables mutations; it does not
+retry in a loop. The fleet API carries the actionable reason as
+`executor.unavailable_reason` and the banner renders it, naming the missing
 artifact by role -- the deployment controller (`run/restart.sh`) or the
-deployment env file -- never an absolute host path, so it is safe to paste into
-a report.
+deployment env file -- and never an absolute host path, so the same sentence is
+safe to paste into a report. A refused mutation returns it in the `503` body.
 
 **The Admin executor is unreachable by design on a containerized deployment.**
 The host executor resolves the deployment controller inside the checkout the

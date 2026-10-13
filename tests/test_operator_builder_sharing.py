@@ -181,6 +181,50 @@ def test_the_shared_observation_wins_and_an_unobservable_host_is_honest(tmp_path
     assert os.environ["REVODESIGN_APPTAINER_VERSION"] == "apptainer version 1.4.0"
 
 
+def test_the_provenance_records_whether_the_builder_was_declared_or_observed(tmp_path):
+    """A declared builder must never be recorded as this process's observation.
+
+    The identity freshness is compared against is the declared value either way --
+    that is what keeps the CLI and the container agreeing -- but the provenance
+    must not claim to have observed a builder it did not run, or a mistyped pin
+    reads back as a fact and a build on the wrong host is indistinguishable from
+    the intended one.
+    """
+    family = _family(tmp_path)
+    (Path(family.slurm_image).parent).mkdir(parents=True, exist_ok=True)
+    Path(family.slurm_image).write_bytes(b"sif")
+
+    observed = _Process(tmp_path, path=str(_builder_binary(tmp_path, "apptainer version 1.4.0")))
+    declared = _Process(tmp_path, path=str(_builder_binary(tmp_path, "apptainer version 1.4.0")), declared="1.5.4-typo")
+    blind = _Process(tmp_path, path=str(_no_tools(tmp_path)))
+
+    assert registry._build_provenance(observed, family)["apptainer_version_source"] == "observed"
+    assert registry._build_provenance(observed, family)["apptainer_version"] == "apptainer version 1.4.0"
+
+    # The declared pin still *is* the identity (the controller's intended builder),
+    # but the record says the value was declared rather than observed here.
+    pinned = registry._build_provenance(declared, family)
+    assert pinned["apptainer_version"] == "1.5.4-typo"
+    assert pinned["apptainer_version_source"] == "declared"
+    assert registry._build_provenance(blind, family)["apptainer_version_source"] == "observed"
+
+
+def test_a_declared_builder_is_shared_without_being_reobserved(tmp_path, monkeypatch):
+    """An already-declared builder is forwarded as-is, not re-probed on a host without one.
+
+    The controller shares before any container exists; a later ``up`` that already
+    carries the value must forward the same identity even on a host whose PATH no
+    longer resolves Apptainer, rather than dropping to an empty builder.
+    """
+    env_file = tmp_path / "server.env"
+    monkeypatch.setenv("PATH", str(_no_tools(tmp_path)))
+    monkeypatch.setenv("REVODESIGN_APPTAINER_VERSION", "apptainer version 1.5.4")
+    state = EnvState(str(env_file), values={"USE_SLURM": "1"})
+
+    assert registry.record_apptainer_builder_version(state) == "apptainer version 1.5.4"
+    assert state.exported()["REVODESIGN_APPTAINER_VERSION"] == "apptainer version 1.5.4"
+
+
 def test_the_controller_forwards_its_observation_into_the_compose_environment(tmp_path, monkeypatch):
     """The observation must reach the containers, and only through the process env.
 

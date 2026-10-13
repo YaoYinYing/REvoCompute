@@ -23,10 +23,10 @@ history stay available.
 
 Diagnose it without touching production artifacts:
 
-1. Read the reason in the UI or in the `503` response. It names the missing
-   artifact by role -- `run/restart.sh`, `REVODESIGN_SERVER_ENV`, or the
-   deployment env file -- and never an absolute host path, so it is safe to
-   paste into a report.
+1. Read the reason. The fleet banner shows it; a refused action request returns
+   the same sentence in the `503` body. It names the missing artifact by role --
+   `run/restart.sh`, `REVODESIGN_SERVER_ENV`, or the deployment env file -- and
+   never an absolute host path, so it is safe to paste into a report.
 2. Decide which deployment this is. On a Docker Compose deployment the web
    process runs in a container: it ships no Docker and no Apptainer, and the
    host checkout is not mounted, so the executor is unavailable by design. See
