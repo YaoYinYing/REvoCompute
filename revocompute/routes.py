@@ -277,19 +277,20 @@ def mcp_capability():
     A public read-only projection of one deployment fact, so the browser can
     tell whether ``/k/mcp`` is really reachable before offering an "Connect an
     AI agent" entry: GitHub code existing must never be presented as deployed
-    support.
+    support, and neither must a switch that was set without a listener behind it.
 
-    The answer comes from the same ``MCP_ENABLED`` switch the companion listener
-    reads in *this* process — the process that would answer the endpoint — so a
-    deployment that did not opt in reports ``enabled: false`` and the endpoint is
-    absent. It is not an authentication surface: what a client may *do* is still
+    The answer is the *listener's* readiness in this process — the process that
+    would answer the endpoint — not the ``MCP_ENABLED`` switch that asked for it.
+    A deployment that did not opt in reports ``enabled: false`` and the endpoint
+    is absent; a deployment whose opt-in produced no listener (a missing optional
+    extra, a port that would not bind) reports the same, with a ``detail`` saying
+    why. It is not an authentication surface: what a client may *do* is still
     decided per request by the canonical credential, entitlement, admission, and
     result rules. No credential, host path, or internal port is ever returned.
     """
     from revocompute import mcp
 
-    enabled = mcp.enabled()
-    return jsonify({"enabled": enabled, "endpoint": "/k/mcp" if enabled else None}), 200
+    return jsonify(mcp.surface()), 200
 
 
 @app.route("/compute/api/infrastructure", methods=["GET"])

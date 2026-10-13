@@ -250,20 +250,21 @@ def test_registration_capability_is_public_and_server_authoritative(monkeypatch,
     }
 
 
-def test_mcp_capability_is_public_absent_by_default_and_present_only_when_enabled(monkeypatch, tmp_path):
+def test_mcp_capability_is_public_absent_by_default_and_reachable_only_when_listening(monkeypatch, tmp_path):
     # The capability answers the one question the Home page asks before it offers a
-    # live MCP endpoint: does *this* deployment serve it? Unset is the default and
+    # live MCP endpoint: is the surface *really reachable*? Unset is the default and
     # must report the surface absent — the repository shipping MCP code is never
     # presented as deployed support.
     disabled = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     client = disabled.app.test_client()
     response = client.get("/compute/api/mcp")
     assert response.status_code == 200
-    assert response.get_json() == {"enabled": False, "endpoint": None}
+    assert response.get_json() == {"enabled": False, "endpoint": None, "detail": None}
 
     # MCP_PORT=0 asks uvicorn for an ephemeral port: the enabled module really does
     # start its companion listener, and the test does not bind (or contend for) a
-    # fixed port another process on the host may hold.
+    # fixed port another process on the host may hold. The capability is advertised
+    # only after the process proves its own listener answers a real MCP handshake.
     enabled = _load_pssm_module(
         monkeypatch,
         tmp_path / "enabled",
@@ -272,6 +273,7 @@ def test_mcp_capability_is_public_absent_by_default_and_present_only_when_enable
     assert enabled.app.test_client().get("/compute/api/mcp").get_json() == {
         "enabled": True,
         "endpoint": "/k/mcp",
+        "detail": None,
     }
 
 

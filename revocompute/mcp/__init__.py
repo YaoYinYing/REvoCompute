@@ -11,7 +11,7 @@ plane.  See :mod:`revocompute.mcp.server` for the primitive surface and
 
 from __future__ import annotations
 
-__all__ = ["MCP_PATH", "enabled"]
+__all__ = ["MCP_PATH", "surface"]
 
 
 def __getattr__(name: str) -> object:
@@ -22,15 +22,17 @@ def __getattr__(name: str) -> object:
     raise AttributeError(name)
 
 
-def enabled() -> bool:
-    """Whether this deployment opted in to serving the MCP surface.
+def surface() -> dict[str, object]:
+    """The MCP surface this process can actually answer, as a capability projection.
 
-    The canonical HTTP surface reads its capability projection through this
-    accessor, so the "deployed?" answer a browser is offered and the
-    ``MCP_ENABLED`` switch the companion listener reads are one fact.  The
-    import is local because ``revocompute.mcp.asgi`` pulls the ASGI stack the
-    HTTP-only deployment deliberately does not install.
+    The canonical HTTP surface reads its capability through this accessor, so the
+    "deployed?" answer a browser is offered is the *listener's* readiness — the
+    endpoint is advertised only when a listener really bound in this process —
+    rather than the ``MCP_ENABLED`` switch that asked for one.  The import is
+    local because ``revocompute.mcp.asgi`` pulls the ASGI stack the HTTP-only
+    deployment deliberately does not install; a deployment without the stack has
+    no listener and reports the surface absent.
     """
-    from revocompute.mcp.asgi import mcp_enabled
+    from revocompute.mcp.asgi import surface_status
 
-    return mcp_enabled()
+    return surface_status()

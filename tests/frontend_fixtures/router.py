@@ -361,7 +361,7 @@ class FrontendFixtureRouter:
         rather than repeated in every test that loads the public shell.
         """
         endpoint = self.scenario.mcp_endpoint
-        return route.fulfill(json={"enabled": endpoint is not None, "endpoint": endpoint})
+        return route.fulfill(json={"enabled": endpoint is not None, "endpoint": endpoint, "detail": None})
 
     # -- Runner discovery ---------------------------------------------------
 

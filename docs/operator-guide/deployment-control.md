@@ -138,13 +138,20 @@ result store, and deploy stamp and writes one machine-readable receipt under
 `<CONFIG_DIR>/api-receipts/`. It exits non-zero on incomplete evidence. See
 [Production API Acceptance Receipts](api-receipts.md).
 
-`mcp-status` is read-only: it prints the `MCP_ENABLED` switch, whether the
-gateway route is present, the container-internal listener port, and what the
-running web process answers at the public `GET /compute/api/mcp` capability. A
-deployment whose env file sets `MCP_ENABLED=true` while the process reports the
-surface disabled is reported as a failure (exit non-zero) rather than silently as
-"disabled", so a half-applied opt-in is visible. It holds no lock and starts no
-container.
+`mcp-status` is read-only and non-mutating, but it is not a flag read: it prints
+the `MCP_ENABLED` switch, whether the gateway route is present, the
+container-internal listener port, and then proves the surface is really reachable.
+Reachability has two parts — the running web process must report the surface
+`enabled` at the public `GET /compute/api/mcp` capability (which is itself derived
+from the listener having bound and answered a real MCP `initialize` handshake),
+and `mcp-status` must then complete that same `initialize` handshake through the
+gateway route an agent host will use. A deployment whose env file sets
+`MCP_ENABLED=true` while the process serves nothing, or whose gateway route does
+not carry a working endpoint, is reported as a failure (exit non-zero) rather
+than silently as "disabled" or cheerfully as "enabled", so a half-applied opt-in
+is visible. The handshake is unauthenticated because `initialize` is the
+pre-credential step; it carries and prints no credential. `mcp-status` holds no
+lock and starts no container.
 
 ## Agent MCP surface
 

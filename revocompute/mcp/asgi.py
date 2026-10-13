@@ -21,18 +21,49 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from typing import Any
 
 #: Public path prefix for the MCP surface.  The streamable-HTTP endpoint is at
 #: ``/k/mcp``; the prefix is short and does not collide with an existing route.
 MCP_PATH = "/k"
 
+#: The MCP streamable-HTTP endpoint the deployment exposes and a client connects to.
+MCP_ENDPOINT = f"{MCP_PATH}/mcp"
+
+#: The protocol revision the readiness handshake negotiates.  The server also
+#: accepts later/earlier revisions (the SDK negotiates); this is only what the
+#: probe asks for, so a mismatch would surface as a genuine incompatibility.
+MCP_PROTOCOL_VERSION = "2025-06-18"
+
 #: Internal port of the companion MCP listener.  Bound inside the web container
 #: and proxied by the deployment gateway, which also fronts the HTTP API port.
 #: The deployment publishes neither directly.
 DEFAULT_MCP_PORT = 8081
 
+#: How long :func:`start_companion_listener` waits for the listener to bind
+#: before it reports the surface as not started.  The wait happens once, in the
+#: process that will serve the endpoint, so a deployment knows at startup whether
+#: its opt-in produced a surface rather than discovering it on first use.
+LISTENER_STARTUP_TIMEOUT_SECONDS = 10.0
+
+#: Deadline for the in-process readiness handshake :func:`probe_surface` drives
+#: against the *bound* listener.  Short on purpose: a loopback listener in this
+#: process answers ``initialize`` in milliseconds, and the probe bounds the
+#: public capability request rather than the surface itself.
+SURFACE_PROBE_TIMEOUT_SECONDS = 5.0
+
 _LOGGER = logging.getLogger(__name__)
+
+#: The one listener this process starts, if the deployment opted in.  Readiness
+#: is a property of what the *bound socket answers*, not of the switch that asked
+#: for it: a flag-only answer is what let a deployment advertise an endpoint whose
+#: port was never bound.
+_LISTENER: dict[str, Any] = {"server": None, "thread": None, "error": None}
+
+#: Last readiness-handshake result, so the public capability is a memory read
+#: rather than an outbound call per request.  ``None`` means "not probed yet".
+_PROBE: dict[str, Any] = {"result": None}
 
 
 def mcp_asgi() -> Any:
@@ -97,9 +128,10 @@ def start_companion_listener() -> threading.Thread | None:
 
     The listener shares this process's memory, so the canonical rate limiter,
     the loaded application, and every in-process admission decision are the same
-    objects the HTTP API uses.  Returns ``None`` when MCP is disabled or the
-    optional ASGI stack is missing, so the HTTP API is never affected by an
-    absent extra.  The deployment starts the web process with Gunicorn
+    objects the HTTP API uses.  Returns ``None`` when MCP is disabled, the
+    optional ASGI stack is missing, or the listener failed to bind within
+    :data:`LISTENER_STARTUP_TIMEOUT_SECONDS`; the HTTP API is never affected by
+    any of those.  The deployment starts the web process with Gunicorn
     ``--preload``, so the listener lives in the master and its bound socket is
     inherited by every worker: one listener, one application, one admission
     path per container.
@@ -117,6 +149,7 @@ def start_companion_listener() -> threading.Thread | None:
         import uvicorn
     except ImportError:
         _LOGGER.info("MCP listener not started: the optional 'mcp' extra is not installed")
+        _LISTENER["error"] = "the optional 'mcp' extra is not installed"
         return None
 
     host = os.environ.get("MCP_HOST", "0.0.0.0")  # noqa: S104 - container-internal bind
@@ -124,9 +157,172 @@ def start_companion_listener() -> threading.Thread | None:
     config = uvicorn.Config(mcp_asgi(), host=host, port=port, log_level=os.environ.get("MCP_LOG_LEVEL", "warning"))
     server = uvicorn.Server(config)
     thread = threading.Thread(target=server.run, name="mcp-asgi", daemon=True)
+    _LISTENER.update({"server": server, "thread": thread, "error": None})
+    # A fresh listener invalidates any previous readiness answer.
+    _PROBE["result"] = None
     thread.start()
-    _LOGGER.info("MCP surface listening on %s:%s%s", host, port, MCP_PATH)
-    return thread
+    # The thread returning is not readiness: uvicorn sets ``started`` only after
+    # ``create_server`` succeeds, so waiting for it (and for the thread to still
+    # be alive, since a bind failure exits the process it runs in) is what
+    # distinguishes "the listener answers" from "the switch was set".
+    deadline = time.monotonic() + LISTENER_STARTUP_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        if getattr(server, "started", False):
+            _LOGGER.info("MCP surface listening on %s:%s%s", host, port, MCP_ENDPOINT)
+            return thread
+        if not thread.is_alive():
+            break
+        time.sleep(0.05)
+    _LISTENER["error"] = f"the listener did not bind {host}:{port} within {LISTENER_STARTUP_TIMEOUT_SECONDS:g}s"
+    _LOGGER.error("MCP surface did not start: %s", _LISTENER["error"])
+    return None
 
 
-__all__ = ["DEFAULT_MCP_PORT", "MCP_PATH", "mcp_asgi", "mcp_enabled", "serve", "start_companion_listener"]
+def surface_status() -> dict[str, Any]:
+    """What *this process* can actually answer for the MCP surface.
+
+    The canonical HTTP surface reads its capability through this, so an
+    advertised endpoint is one whose listener really bound and whose readiness
+    handshake succeeded, rather than one whose switch was merely set.  It reports
+    no host, port, or credential — only whether the surface answers in this
+    process, and, when it does not, a short reason an operator can act on.
+
+    The probe result is computed once per process (the listener's binding and its
+    fixed surface cannot change at runtime), so the public capability is a memory
+    read rather than an outbound call on every request.
+    """
+    if not mcp_enabled():
+        # The default, and not a problem: nothing was asked for.
+        return {"enabled": False, "endpoint": None, "detail": None}
+    server = _LISTENER["server"]
+    if server is None or not getattr(server, "started", False):
+        # Enabled, but this process cannot answer: a missing extra, a bind
+        # failure, or a switch set without a restart.  Never a silent "off".
+        detail = _LISTENER["error"] or "MCP is enabled but no listener is bound in this process; restart the deployment"
+        return {"enabled": False, "endpoint": None, "detail": detail}
+    if _PROBE["result"] is None:
+        _PROBE["result"] = probe_surface(server)
+    ok, detail = _PROBE["result"]
+    return {"enabled": ok, "endpoint": MCP_ENDPOINT if ok else None, "detail": None if ok else detail}
+
+
+def probe_surface(server: Any) -> tuple[bool, str]:
+    """Drive one real MCP ``initialize`` against the bound companion listener.
+
+    Binding a port is not serving the protocol: the transport may have failed to
+    start its session manager, the mount may be wrong, or the endpoint may 404.
+    So readiness is proven by the same pre-credential handshake an agent host
+    performs first — an unauthenticated ``initialize`` over streamable HTTP on
+    the listener's own loopback — and reported as ``(reachable, detail)``.
+
+    The request runs in a throwaway event loop on this thread rather than in the
+    listener's, and is not a second listener or execution plane: it speaks to the
+    one surface the deployment serves, which is also what makes it a real
+    end-to-end check rather than an assertion about a flag.  ``server`` (the bound
+    listener) is what makes the check meaningful — a caller only probes when one
+    exists.
+    """
+    import asyncio
+    import json
+
+    port = _bound_port(server)
+    if port is None:
+        return False, "the MCP listener is not bound to a port"
+    body = json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": MCP_PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": {"name": "revocompute-surface-probe", "version": "1"},
+            },
+        }
+    ).encode("utf-8")
+
+    async def _run() -> tuple[bool, str]:
+        import httpx
+
+        # A loopback client of our own surface, on the port the listener actually
+        # bound (never assumed from the environment).  The listener binds all
+        # container interfaces, so 127.0.0.1 reaches it from here; the port is
+        # deployment-internal and never leaves the capability projection.
+        # ``trust_env=False`` so a deployment's HTTP(S)_PROXY can never redirect
+        # this in-process loopback readiness check off the host.
+        async with httpx.AsyncClient(timeout=SURFACE_PROBE_TIMEOUT_SECONDS, trust_env=False) as client:
+            response = await client.post(
+                f"http://127.0.0.1:{port}{MCP_ENDPOINT}",
+                content=body,
+                headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream"},
+            )
+        return _initialize_result(response.status_code, response.headers.get("content-type", ""), response.text)
+
+    try:
+        return asyncio.run(_run())
+    except Exception as exc:  # noqa: BLE001 - readiness must never raise into a capability read
+        return False, f"the MCP endpoint did not answer an initialize handshake: {exc}"
+
+
+def _bound_port(server: Any) -> int | None:
+    """The TCP port the listener actually holds, or ``None`` if it holds none.
+
+    Read from the bound socket rather than the environment, so an ephemeral
+    ``MCP_PORT=0`` (or any port the environment overstated) is probed where the
+    surface really is.
+    """
+    servers = getattr(server, "servers", None) or []
+    for bound in servers:
+        for sock in getattr(bound, "sockets", None) or []:
+            try:
+                address = sock.getsockname()
+            except OSError:
+                continue
+            if isinstance(address, tuple) and len(address) >= 2 and isinstance(address[1], int):
+                return address[1]
+    return None
+
+
+def _initialize_result(status: int, content_type: str, text: str) -> tuple[bool, str]:
+    """Interpret one ``initialize`` response as ``(reachable, detail)``.
+
+    The transport may answer as a single ``text/event-stream`` frame or as JSON;
+    both are an MCP answer, so both are accepted.  A rejection (a 4xx with a
+    body) still proves the route is served, but it is reported as not reachable
+    because an agent host's first call would fail the same way.
+    """
+    import json
+
+    if status != 200:
+        return False, f"the MCP endpoint answered HTTP {status}"
+    payload = text.strip()
+    if "text/event-stream" in content_type.lower():
+        for line in payload.splitlines():
+            if line.startswith("data:"):
+                payload = line[len("data:") :].strip()
+                break
+    try:
+        decoded = json.loads(payload)
+    except ValueError:
+        return False, "the MCP endpoint did not answer a JSON-RPC response"
+    result = decoded.get("result") if isinstance(decoded, dict) else None
+    if not isinstance(result, dict) or "protocolVersion" not in result:
+        return False, "the MCP endpoint answered without an initialize result"
+    server = result.get("serverInfo") or {}
+    return True, f"protocol {result['protocolVersion']}, server {server.get('name', 'unknown')}"
+
+
+__all__ = [
+    "DEFAULT_MCP_PORT",
+    "LISTENER_STARTUP_TIMEOUT_SECONDS",
+    "MCP_ENDPOINT",
+    "MCP_PATH",
+    "MCP_PROTOCOL_VERSION",
+    "SURFACE_PROBE_TIMEOUT_SECONDS",
+    "mcp_asgi",
+    "mcp_enabled",
+    "probe_surface",
+    "serve",
+    "start_companion_listener",
+    "surface_status",
+]

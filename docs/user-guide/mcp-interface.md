@@ -45,12 +45,21 @@ answered two different ways. Turn it on by all three of
    `MCP_ENABLED`, and starts the in-process listener.
 
 `bash run/restart.sh mcp-status` reports the switch, whether the route is
-present, and what the running web process answers. The last is read from the
-public `GET /compute/api/mcp` capability, so an env file that says "on" while the
-process says "off" is reported as an operator problem rather than silently as
-"disabled". To roll back, set `MCP_ENABLED=false` and run
-`bash run/restart.sh restart`: the route is removed and the process returns to
-its pre-MCP shape.
+present, and whether the surface is really reachable. Reachability is not read
+from the switch: the running web process reports `GET /compute/api/mcp` as
+`enabled` only after its own listener has bound and answered a real MCP
+`initialize` handshake, and `mcp-status` then drives that same handshake through
+the gateway route an agent host will use. A switch set in the env file while the
+process serves nothing (a missing `mcp` extra, a port that would not bind, a
+`restart` that has not run) is reported as an operator problem, with the reason,
+rather than silently as "disabled" or happily as "enabled". To roll back, set
+`MCP_ENABLED=false` and run `bash run/restart.sh restart`: the route is removed
+and the process returns to its pre-MCP shape.
+
+Because the capability is a claim about reachability, the Web application shows
+the "Connect an AI agent" entry — and names the endpoint — only when the
+capability says the surface answers. The entry is never offered on the strength
+of the switch or of MCP code existing in the repository.
 
 While `MCP_ENABLED` is unset, `revocompute.app` logs `MCP surface disabled`, the
 gateway's `include` of the route mask is empty, and the endpoint is absent rather

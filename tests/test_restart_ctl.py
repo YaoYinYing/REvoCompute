@@ -1370,6 +1370,148 @@ def test_mcp_gateway_route_rejects_a_non_integer_port(tmp_path, monkeypatch):
         mcp_mod.apply_gateway(state)
 
 
+def test_mcp_health_requires_a_real_initialize_handshake_not_the_flag(tmp_path):
+    # The defect this closes: the capability said "enabled" on the env flag alone,
+    # so mcp-status exited 0 for a surface whose endpoint nothing answered. The
+    # controller must drive an MCP initialize over the route and accept only a real
+    # MCP result.
+    import http.server
+    import threading
+
+    from revocompute_ctl import mcp as mcp_mod
+
+    posts: list[dict] = []
+
+    class _Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802 - http.server's own spelling
+            # The web process reports the listener reachable...
+            payload = json.dumps({"enabled": True, "endpoint": "/k/mcp", "detail": None}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def do_POST(self) -> None:  # noqa: N802 - http.server's own spelling
+            length = int(self.headers.get("Content-Length", 0))
+            posts.append({"path": self.path, "body": json.loads(self.rfile.read(length).decode("utf-8"))})
+            # ...but the MCP route itself is not served: the gateway has no /k/.
+            self.send_error(404)
+
+        def log_message(self, *_args) -> None:  # noqa: D401 - silence the test server
+            return
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        state = EnvState(
+            str(tmp_path / "server.env"),
+            values={
+                "SERVER_DIR": str(tmp_path),
+                "MCP_ENABLED": "true",
+                "MCP_PORT": "8081",
+                "SERVER_BASE_URL": f"http://127.0.0.1:{server.server_address[1]}",
+            },
+        )
+        # The route is missing, so the handshake fails and the status is a failure
+        # even though the capability claimed the surface was enabled.
+        assert mcp_mod.mcp_health(state) == 1
+    finally:
+        server.shutdown()
+        server.server_close()
+    # It really drove the handshake at the endpoint a client uses, not a flag read.
+    assert posts and posts[0]["path"] == "/k/mcp"
+    assert posts[0]["body"]["method"] == "initialize"
+
+
+def test_mcp_health_accepts_a_real_initialize_result(tmp_path):
+    import http.server
+    import threading
+
+    from revocompute_ctl import mcp as mcp_mod
+
+    result = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {"tools": {}},
+            "serverInfo": {"name": "revocompute", "version": "1.0.0"},
+        },
+    }
+
+    class _Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802 - http.server's own spelling
+            payload = json.dumps({"enabled": True, "endpoint": "/k/mcp", "detail": None}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def do_POST(self) -> None:  # noqa: N802 - http.server's own spelling
+            length = int(self.headers.get("Content-Length", 0))
+            self.rfile.read(length)
+            payload = f"event: message\ndata: {json.dumps(result)}\n\n".encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *_args) -> None:  # noqa: D401 - silence the test server
+            return
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        state = EnvState(
+            str(tmp_path / "server.env"),
+            values={
+                "SERVER_DIR": str(tmp_path),
+                "MCP_ENABLED": "true",
+                "MCP_PORT": "8081",
+                "SERVER_BASE_URL": f"http://127.0.0.1:{server.server_address[1]}",
+            },
+        )
+        assert mcp_mod.mcp_health(state) == 0
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_mcp_health_reports_absent_without_the_switch(tmp_path):
+    # Nothing opted in: the surface is absent and that is exit 0, not a failure.
+    import http.server
+    import threading
+
+    from revocompute_ctl import mcp as mcp_mod
+
+    class _Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802 - http.server's own spelling
+            payload = json.dumps({"enabled": False, "endpoint": None, "detail": None}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *_args) -> None:  # noqa: D401 - silence the test server
+            return
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        state = EnvState(
+            str(tmp_path / "server.env"),
+            values={"SERVER_DIR": str(tmp_path), "SERVER_BASE_URL": f"http://127.0.0.1:{server.server_address[1]}"},
+        )
+        assert mcp_mod.mcp_health(state) == 0
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_restart_resolves_named_service_identity_before_attestation_invalidation(tmp_path, monkeypatch):
     import types
 

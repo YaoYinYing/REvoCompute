@@ -90,7 +90,7 @@ export interface paths {
         };
         /**
          * Get agent MCP capability
-         * @description Reports whether this deployment serves the agent Model Context Protocol surface, so a client is offered the entry only when the endpoint is really reachable. It is a deployment-capability projection, never an authorization: what a credential may do over MCP is decided per request by the canonical account, entitlement, admission, and result rules.
+         * @description Reports whether this deployment's MCP listener is really serving the agent Model Context Protocol surface, so a client is offered the entry only when the endpoint answers rather than when a switch was set. It is a deployment-capability projection, never an authorization: what a credential may do over MCP is decided per request by the canonical account, entitlement, admission, and result rules.
          */
         get: operations["getMcpCapability"];
         put?: never;
@@ -1655,8 +1655,10 @@ export interface components {
         };
         McpCapability: {
             enabled: boolean;
-            /** @description Same-origin path of the MCP endpoint when enabled, otherwise null. */
+            /** @description Same-origin path of the MCP endpoint when the listener is reachable, otherwise null. */
             endpoint: string | null;
+            /** @description Operator-facing reason the surface is not reachable, otherwise null. Never carries a credential, host path, or internal port. */
+            detail: string | null;
         };
         CaptchaChallenge: {
             question: string;

@@ -41,6 +41,11 @@ from revocompute_ctl.compose import container_fs, mcp_enabled
 #: outside the stack can reach the listener even while the route exists.
 GATEWAY_SNIPPET = "mcp-gateway/mcp.conf"
 MCP_PATH = "/k"
+#: The streamable-HTTP endpoint under the prefix, and the protocol revision the
+#: readiness handshake asks to negotiate.  These describe the wire an MCP client
+#: speaks, which is a protocol fact rather than a scientific or Runner fact.
+MCP_ENDPOINT = f"{MCP_PATH}/mcp"
+MCP_PROTOCOL_VERSION = "2025-06-18"
 MCP_UPSTREAM_PORT = 8081
 UPSTREAM_SERVICE = "web"
 
@@ -142,13 +147,22 @@ def apply_gateway(state, *, dry_run: bool = False) -> bool:
 
 
 def mcp_health(state) -> int:
-    """Ask the running web process whether the listener actually answers.
+    """Prove the MCP surface really answers, over the route a client uses.
 
-    Reads the deployment capability the web service projects, over the same
-    public route a browser uses.  A deployment whose listener is off reports so
-    (exit 0); a web service that does not answer, or answers "off" while the env
-    file says it should be on, is a real operator problem and is reported as
-    failure — never silently as "disabled".
+    "The switch is set" is not "the surface works": the listener can be missing
+    its optional transport, the port can be held, or the gateway can be serving
+    a stale config with no ``/k/`` route at all.  So an opt-in deployment is
+    accepted only after a real MCP ``initialize`` over streamable HTTP reaches
+    ``/k/mcp`` through the gateway and the server answers with an MCP result —
+    the same handshake an agent host performs first.  A deployment that never
+    opted in reports the surface absent (exit 0); an opt-in deployment whose
+    endpoint does not answer, or whose web process reports the surface absent
+    while the env file says it should be on, is a real operator problem and is
+    reported as failure — never silently as "disabled".  The probe is
+    unauthenticated on purpose: ``initialize`` is the pre-credential handshake,
+    so it proves the surface exists without carrying, printing, or storing any
+    credential.  Whether a request may *do* anything is still decided per request
+    by the canonical account and admission rules.
     """
     base = (state.get("SERVER_BASE_URL") or "").rstrip("/")
     if not base:
@@ -161,19 +175,87 @@ def mcp_health(state) -> int:
     except (urllib.error.URLError, OSError, ValueError) as exc:
         print(f"The web service did not answer the MCP capability probe at {url}: {exc}", file=sys.stderr)
         return 1
-    if payload.get("enabled"):
-        print(f"MCP surface enabled at {payload.get('endpoint')} (listener internal port {_upstream_port(state)}).")
-        print("Rollback: set MCP_ENABLED=false in the deployment env file, then run `bash run/restart.sh restart`.")
+    opted_in = mcp_enabled(state)
+    if not payload.get("enabled"):
+        if opted_in:
+            detail = payload.get("detail") or "the running web process reports no MCP listener"
+            print(f"MCP_ENABLED is set in the env file but the surface is not served: {detail}", file=sys.stderr)
+            print("Restart the deployment so the listener starts.", file=sys.stderr)
+            return 1
+        print("MCP surface disabled on this deployment.")
         return 0
-    print("MCP surface disabled on this deployment.")
-    if mcp_enabled(state):
-        print(
-            "MCP_ENABLED is set in the env file but the running web process reports the surface as disabled; "
-            "restart the deployment so the listener starts.",
-            file=sys.stderr,
-        )
+    # The capability says the listener bound, and the deployment opted in: the
+    # handshake is what turns "a listener answers" into "the surface is reachable
+    # through the route an agent host will use".
+    ok, detail = _initialize_handshake(base)
+    if not ok:
+        print(f"MCP is enabled but the endpoint did not answer an MCP handshake: {detail}", file=sys.stderr)
         return 1
+    print(f"MCP surface reachable at {base}{MCP_ENDPOINT} ({detail}).")
+    print(f"Listener internal port {_upstream_port(state)} (never published).")
+    print("Rollback: set MCP_ENABLED=false in the deployment env file, then run `bash run/restart.sh restart`.")
     return 0
+
+
+def _initialize_handshake(base: str) -> tuple[bool, str]:
+    """Drive one MCP ``initialize`` over streamable HTTP; ``(ok, detail)``.
+
+    Returns the negotiated protocol version and server name on success.  A 4xx
+    with a response means the *route* is reachable but the surface refused (a
+    proxy that stops it, a wrong path) — a real failure the operator must see,
+    distinguished in the message from "nothing answered at all".
+    """
+    body = json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": MCP_PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": {"name": "revocompute-mcp-status", "version": "1"},
+            },
+        }
+    ).encode("utf-8")
+    request = urllib.request.Request(  # noqa: S310 - operator-configured URL
+        f"{base}{MCP_ENDPOINT}",
+        data=body,
+        headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:  # noqa: S310 - operator-configured URL
+            payload = _decode_jsonrpc(response.headers.get("Content-Type", ""), response.read())
+        status = response.status
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", "replace")[:200]
+        return False, f"the route answered HTTP {exc.code}: {detail}"
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        return False, f"nothing answered a decodable MCP response at the route: {exc}"
+    if status != 200:
+        return False, f"the route answered HTTP {status}"
+    result = payload.get("result") if isinstance(payload, dict) else None
+    if not isinstance(result, dict) or "protocolVersion" not in result:
+        return False, f"the response was not an MCP initialize result: {str(payload)[:200]}"
+    server = result.get("serverInfo") or {}
+    return True, f"protocol {result['protocolVersion']}, server {server.get('name', 'unknown')}"
+
+
+def _decode_jsonrpc(content_type: str, raw: bytes) -> object:
+    """Decode a streamable-HTTP MCP response body.
+
+    The transport answers ``initialize`` as a single ``text/event-stream`` frame
+    (``data: {...}``); an implementation that negotiates JSON answers with the
+    object directly.  Both are accepted, because the check is "did the server
+    answer MCP", not "which framing did it choose".
+    """
+    text = raw.decode("utf-8", "replace").strip()
+    if "text/event-stream" in content_type.lower():
+        for line in text.splitlines():
+            if line.startswith("data:"):
+                text = line[len("data:") :].strip()
+                break
+    return json.loads(text)
 
 
 def cmd_mcp_status(state) -> int:
@@ -187,7 +269,9 @@ def cmd_mcp_status(state) -> int:
 
 __all__ = [
     "GATEWAY_SNIPPET",
+    "MCP_ENDPOINT",
     "MCP_PATH",
+    "MCP_PROTOCOL_VERSION",
     "MCP_UPSTREAM_PORT",
     "apply_gateway",
     "cmd_mcp_status",
