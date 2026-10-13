@@ -20,6 +20,8 @@ exactly as before.
 from __future__ import annotations
 
 import logging
+import os
+import re
 import threading
 import time
 from typing import Any
@@ -40,6 +42,19 @@ MCP_PROTOCOL_VERSION = "2025-06-18"
 #: and proxied by the deployment gateway, which also fronts the HTTP API port.
 #: The deployment publishes neither directly.
 DEFAULT_MCP_PORT = 8081
+
+#: Gateway route state, reconciled from ``MCP_ENABLED`` by ``run/restart.sh`` and
+#: written under ``SERVER_DIR`` — the one directory both the deployment host and
+#: the web process see.  The route is what turns the internal listener into the
+#: public endpoint, so its absence is exactly the state in which an agent host
+#: cannot reach the surface however healthy the listener is.
+GATEWAY_ROUTE_DIR = "mcp-gateway"
+GATEWAY_ROUTE_FILE = "mcp.conf"
+
+#: A route the gateway actually serves must declare the MCP location prefix.
+#: Presence alone is not the fact: a truncated, empty, or unrelated file left
+#: behind would otherwise be read as a live route.
+_GATEWAY_ROUTE_RE = re.compile(r"^\s*location\s+/k/", re.MULTILINE)
 
 #: How long :func:`start_companion_listener` waits for the listener to bind
 #: before it reports the surface as not started.  The wait happens once, in the
@@ -178,18 +193,57 @@ def start_companion_listener() -> threading.Thread | None:
     return None
 
 
+def gateway_route_served() -> tuple[bool, str]:
+    """Whether the deployment gateway serves this surface, read from its own state.
+
+    The listener answers on loopback inside the web container, but the endpoint a
+    browser or an agent host is offered reaches it only through the deployment
+    gateway.  The gateway's route is deployment state that ``run/restart.sh``
+    reconciles from ``MCP_ENABLED`` into ``SERVER_DIR`` — the directory both the
+    deployment host and this process share — so reading it here answers "does the
+    public endpoint exist" without any outbound call and without trusting a URL a
+    caller supplied.
+
+    A route that only *exists* is not a route that is *served*: an empty, truncated,
+    or unrelated file left behind would be read as live.  The check is therefore
+    that the file declares the MCP location prefix the gateway needs, and that
+    ``SERVER_DIR`` is resolvable at all.  ``(served, detail)`` — the reason is
+    operator-facing and names no host, address, or port.
+    """
+    server_dir = os.environ.get("SERVER_DIR", "").strip()
+    if not server_dir:
+        return False, "the deployment server directory is not resolvable, so the gateway route cannot be confirmed"
+    route = os.path.join(server_dir, GATEWAY_ROUTE_DIR, GATEWAY_ROUTE_FILE)
+    try:
+        with open(route, encoding="utf-8") as handle:
+            text = handle.read()
+    except FileNotFoundError:
+        return False, "the deployment gateway serves no /k/ route; run `restart.sh restart` to reconcile it from MCP_ENABLED"
+    except OSError as exc:  # noqa: BLE001 - readiness must never raise into a capability read
+        return False, f"the deployment gateway route state could not be read: {exc}"
+    if not _GATEWAY_ROUTE_RE.search(text):
+        return False, "the deployment gateway route state does not declare the /k/ location"
+    return True, ""
+
+
 def surface_status() -> dict[str, Any]:
     """What *this process* can actually answer for the MCP surface.
 
-    The canonical HTTP surface reads its capability through this, so an
-    advertised endpoint is one whose listener really bound and whose readiness
-    handshake succeeded, rather than one whose switch was merely set.  It reports
-    no host, port, or credential — only whether the surface answers in this
-    process, and, when it does not, a short reason an operator can act on.
+    The canonical HTTP surface reads its capability through this, so a browser is
+    told the surface is reachable only when *both* facts that make it reachable
+    hold: the companion listener bound and answered a real MCP ``initialize``
+    handshake in this process, and the deployment gateway serves the route that
+    turns that internal listener into the public endpoint.  A flag-only answer
+    advertised a dead endpoint; so would a listener-only answer, because an agent
+    host reaches the surface through the gateway and not through the listener's
+    loopback.
 
-    The probe result is computed once per process (the listener's binding and its
-    fixed surface cannot change at runtime), so the public capability is a memory
-    read rather than an outbound call on every request.
+    It reports no host, port, or credential — only whether the surface is
+    publicly reachable, and, when it is not, a short reason an operator can act
+    on.  The listener's readiness is probed once per process (its binding and its
+    fixed surface cannot change at runtime); the route is re-read on every call,
+    because ``restart.sh`` reconciles it without restarting this process and a
+    long-lived answer must not outlive the route it describes.
     """
     if not mcp_enabled():
         # The default, and not a problem: nothing was asked for.
@@ -203,7 +257,16 @@ def surface_status() -> dict[str, Any]:
     if _PROBE["result"] is None:
         _PROBE["result"] = probe_surface(server)
     ok, detail = _PROBE["result"]
-    return {"enabled": ok, "endpoint": MCP_ENDPOINT if ok else None, "detail": None if ok else detail}
+    if not ok:
+        return {"enabled": False, "endpoint": None, "detail": detail}
+    # The listener answers, but the public endpoint is only as real as the
+    # gateway route that fronts it.  A listener that bound while the deployment
+    # gateway serves no /k/ route is the exact case in which Home would otherwise
+    # offer an endpoint nothing external can reach.
+    served, route_detail = gateway_route_served()
+    if not served:
+        return {"enabled": False, "endpoint": None, "detail": route_detail}
+    return {"enabled": True, "endpoint": MCP_ENDPOINT, "detail": None}
 
 
 def probe_surface(server: Any) -> tuple[bool, str]:
@@ -314,11 +377,14 @@ def _initialize_result(status: int, content_type: str, text: str) -> tuple[bool,
 
 __all__ = [
     "DEFAULT_MCP_PORT",
+    "GATEWAY_ROUTE_DIR",
+    "GATEWAY_ROUTE_FILE",
     "LISTENER_STARTUP_TIMEOUT_SECONDS",
     "MCP_ENDPOINT",
     "MCP_PATH",
     "MCP_PROTOCOL_VERSION",
     "SURFACE_PROBE_TIMEOUT_SECONDS",
+    "gateway_route_served",
     "mcp_asgi",
     "mcp_enabled",
     "probe_surface",

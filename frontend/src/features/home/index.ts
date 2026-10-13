@@ -84,16 +84,20 @@ export function mountHome(root: HTMLElement, shell: AppShell): void {
 }
 
 /*
- * The "Connect an AI agent" entry states one deployment fact: whether this
- * deployment actually serves the MCP endpoint.
+ * The "Connect an AI agent" entry states one deployment fact: whether an agent
+ * host can actually reach this deployment's MCP endpoint.
  *
  * A public Home page is seen before a reader has any way to tell code from a
  * running deployment, so "the repository has MCP" must never be presented as
  * "this server speaks MCP". The entry keeps the always-available agent API guide
  * — /skills.md is served by every deployment — and only *adds* the MCP endpoint
- * once the deployment's own capability read says it answers. A read that fails,
- * is slow, or reports the surface off leaves the documentation-only state; the
- * upgrade to the live endpoint happens only on an affirmative read.
+ * once the deployment's own capability read says the endpoint is reachable. That
+ * read is the server's, not the browser's: it already requires both a healthy
+ * companion listener and the deployment gateway route that fronts it, so this
+ * page never has to decide external reachability itself and never probes a URL.
+ * A read that fails, is slow, or reports the surface off leaves the
+ * documentation-only state; the upgrade to the live endpoint happens only on an
+ * affirmative read.
  */
 async function applyAgentCapability(root: HTMLElement): Promise<void> {
   const aside = root.querySelector<HTMLElement>('.agent-guide');

@@ -234,6 +234,20 @@ export class GuidedTour {
   private anchored: HTMLElement | null = null;
   private cleanup: (() => void) | null = null;
   private disposal: ((event: Event) => void) | null = null;
+  /**
+   * A tour step's own navigation, which is not the reader leaving the page.
+   *
+   * A step whose surface is another route advances by navigating, so the route
+   * change that follows is the tour walking its own reader forward and must not
+   * tear the tour down and mark it abandoned. The flag is raised for the length of
+   * the navigation the tour itself requested and consumed by the abort signal, so
+   * exactly one route change — the tour's own — is exempt; a reader who navigates
+   * afterwards is leaving, and the tour ends there. The navigation may complete in
+   * a fresh document (`location.assign`), where this instance and its flag are
+   * gone and the far side resumes from the stored step, or in-document under a
+   * persistent router (#79), where the same instance sees the signal and stays.
+   */
+  private selfNavigating = false;
 
   // The callout is appended under body, where a route render cannot reach it: it
   // lives outside the outlet the next route replaces, so a route change would
@@ -246,7 +260,18 @@ export class GuidedTour {
   constructor() {
     if (typeof document === 'undefined' || !document.addEventListener) return;
     this.disposal = event => {
-      if (event.type === 'pagehide' && (event as PageTransitionEvent).persisted) return;
+      if (event.type === 'pagehide') {
+        if ((event as PageTransitionEvent).persisted) return;
+        // A document navigation the tour asked for itself is the tour advancing,
+        // not the reader leaving; only a reader's own navigation ends the flow.
+        if (this.selfNavigating) return;
+      } else if (this.selfNavigating) {
+        // The tour's own in-document step move: the router announced the route
+        // change, the overlay is about to be replaced by the next step's, so the
+        // flow is neither torn down nor marked abandoned by this signal.
+        this.selfNavigating = false;
+        return;
+      }
       this.close();
     };
     document.addEventListener('pagehide', this.disposal);
@@ -341,6 +366,7 @@ export class GuidedTour {
       if (!target) return this.show(flow, index + 1);
       if (location.pathname !== target) {
         localStorage.setItem(flow.stepKey, String(index));
+        this.selfNavigating = true;
         location.assign(target);
         return;
       }
@@ -349,7 +375,13 @@ export class GuidedTour {
       // Re-assigning the current address would reload the page without advancing
       // the tour, so a step that already matches its own route never navigates.
       localStorage.setItem(flow.stepKey, String(index));
-      if (location.pathname !== step.route) location.assign(step.route);
+      if (location.pathname !== step.route) {
+        // Marked before the navigation so the abort signal that follows a
+        // persistent router's route change is read as the tour advancing rather
+        // than the reader abandoning the flow.
+        this.selfNavigating = true;
+        location.assign(step.route);
+      }
       return;
     }
     const anchor = document.querySelector<HTMLElement>(step.anchor);

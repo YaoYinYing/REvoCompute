@@ -264,12 +264,17 @@ def test_mcp_capability_is_public_absent_by_default_and_reachable_only_when_list
     # MCP_PORT=0 asks uvicorn for an ephemeral port: the enabled module really does
     # start its companion listener, and the test does not bind (or contend for) a
     # fixed port another process on the host may hold. The capability is advertised
-    # only after the process proves its own listener answers a real MCP handshake.
+    # only after the process proves its own listener answers a real MCP handshake
+    # *and* the deployment gateway serves the route that fronts it, so the route the
+    # controller writes for the same opt-in is left in place here.
     enabled = _load_pssm_module(
         monkeypatch,
         tmp_path / "enabled",
         extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "MCP_ENABLED": "true", "MCP_PORT": "0"},
     )
+    route_dir = Path(enabled.CONFIG.server_dir) / "mcp-gateway"
+    route_dir.mkdir(parents=True, exist_ok=True)
+    (route_dir / "mcp.conf").write_text("location /k/ { proxy_pass http://web:8081; }", encoding="utf-8")
     assert enabled.app.test_client().get("/compute/api/mcp").get_json() == {
         "enabled": True,
         "endpoint": "/k/mcp",

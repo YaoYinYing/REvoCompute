@@ -143,15 +143,18 @@ the `MCP_ENABLED` switch, whether the gateway route is present, the
 container-internal listener port, and then proves the surface is really reachable.
 Reachability has two parts — the running web process must report the surface
 `enabled` at the public `GET /compute/api/mcp` capability (which is itself derived
-from the listener having bound and answered a real MCP `initialize` handshake),
-and `mcp-status` must then complete that same `initialize` handshake through the
-gateway route an agent host will use. A deployment whose env file sets
-`MCP_ENABLED=true` while the process serves nothing, or whose gateway route does
-not carry a working endpoint, is reported as a failure (exit non-zero) rather
-than silently as "disabled" or cheerfully as "enabled", so a half-applied opt-in
-is visible. The handshake is unauthenticated because `initialize` is the
-pre-credential step; it carries and prints no credential. `mcp-status` holds no
-lock and starts no container.
+from the listener having bound and answered a real MCP `initialize` handshake
+*and* from the gateway route being present in the deployment's own state), and
+`mcp-status` must then complete that same `initialize` handshake through the
+gateway route an agent host will use. Because the capability already reads the
+gateway route, a listener that bound while the route is missing or stale is
+reported absent to the browser rather than advertised as an endpoint nothing
+external answers. A deployment whose env file sets `MCP_ENABLED=true` while the
+process serves nothing, or whose gateway route does not carry a working endpoint,
+is a failure (exit non-zero) rather than silently "disabled" or cheerfully
+"enabled", so a half-applied opt-in is visible. The handshake is unauthenticated
+because `initialize` is the pre-credential step; it carries and prints no
+credential. `mcp-status` holds no lock and starts no container.
 
 ## Agent MCP surface
 

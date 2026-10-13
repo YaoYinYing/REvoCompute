@@ -90,7 +90,7 @@ export interface paths {
         };
         /**
          * Get agent MCP capability
-         * @description Reports whether this deployment's MCP listener is really serving the agent Model Context Protocol surface, so a client is offered the entry only when the endpoint answers rather than when a switch was set. It is a deployment-capability projection, never an authorization: what a credential may do over MCP is decided per request by the canonical account, entitlement, admission, and result rules.
+         * @description Reports whether an agent host can actually reach this deployment's agent Model Context Protocol surface, so a client is offered the entry only when the endpoint answers rather than when a switch was set. Reachability requires both the companion listener having answered a real MCP initialize handshake in this process and the deployment gateway serving the route that fronts it; a listener that bound behind a missing gateway route is reported absent. It is a deployment-capability projection, never an authorization: what a credential may do over MCP is decided per request by the canonical account, entitlement, admission, and result rules.
          */
         get: operations["getMcpCapability"];
         put?: never;
@@ -1655,9 +1655,9 @@ export interface components {
         };
         McpCapability: {
             enabled: boolean;
-            /** @description Same-origin path of the MCP endpoint when the listener is reachable, otherwise null. */
+            /** @description Same-origin path of the MCP endpoint when it is publicly reachable (the listener answers and the deployment gateway serves the route that fronts it), otherwise null. */
             endpoint: string | null;
-            /** @description Operator-facing reason the surface is not reachable, otherwise null. Never carries a credential, host path, or internal port. */
+            /** @description Operator-facing reason the surface is not publicly reachable, otherwise null. Never carries a credential, host path, or internal port. */
             detail: string | null;
         };
         CaptchaChallenge: {

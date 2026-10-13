@@ -1370,6 +1370,19 @@ def test_mcp_gateway_route_rejects_a_non_integer_port(tmp_path, monkeypatch):
         mcp_mod.apply_gateway(state)
 
 
+def test_mcp_health_reads_the_route_file_the_web_process_reads(tmp_path):
+    # The web capability refuses to advertise the endpoint while this route file is
+    # absent, so the operator's diagnostic and the browser capability must consume
+    # the same route state or they can disagree about a deployment. The test holds
+    # the two modules to the same relative path under SERVER_DIR without naming it
+    # twice: whichever module owns the layout is the one both must agree with.
+    from revocompute.mcp import asgi
+    from revocompute_ctl import mcp as mcp_mod
+
+    state = EnvState(str(tmp_path / "server.env"), values={"SERVER_DIR": str(tmp_path), "MCP_ENABLED": "true"})
+    assert Path(mcp_mod.gateway_snippet_path(state)) == Path(state.server_dir()) / asgi.GATEWAY_ROUTE_DIR / asgi.GATEWAY_ROUTE_FILE
+
+
 def test_mcp_health_requires_a_real_initialize_handshake_not_the_flag(tmp_path):
     # The defect this closes: the capability said "enabled" on the env flag alone,
     # so mcp-status exited 0 for a surface whose endpoint nothing answered. The

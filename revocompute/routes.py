@@ -272,21 +272,30 @@ def health():
 
 @app.route("/compute/api/mcp", methods=["GET"])
 def mcp_capability():
-    """Whether this deployment serves the agent MCP surface.
+    """Whether an agent host can actually reach this deployment's MCP surface.
 
     A public read-only projection of one deployment fact, so the browser can
     tell whether ``/k/mcp`` is really reachable before offering an "Connect an
     AI agent" entry: GitHub code existing must never be presented as deployed
     support, and neither must a switch that was set without a listener behind it.
 
-    The answer is the *listener's* readiness in this process — the process that
-    would answer the endpoint — not the ``MCP_ENABLED`` switch that asked for it.
+    The answer requires both facts that make the endpoint reachable, because an
+    agent host reaches the surface through the deployment gateway and not through
+    the companion listener's loopback: the listener bound and answered a real MCP
+    ``initialize`` in this process, *and* the deployment gateway serves the ``/k/``
+    route that fronts it. A listener that bound while the gateway route is
+    missing, stale, or misrouted is the exact case in which Home would otherwise
+    advertise an endpoint nothing external answers, so it is reported absent.
+    Both facts are read from state the server already owns — never from a
+    caller-supplied URL — and neither is probed over the network.
+
     A deployment that did not opt in reports ``enabled: false`` and the endpoint
     is absent; a deployment whose opt-in produced no listener (a missing optional
-    extra, a port that would not bind) reports the same, with a ``detail`` saying
-    why. It is not an authentication surface: what a client may *do* is still
-    decided per request by the canonical credential, entitlement, admission, and
-    result rules. No credential, host path, or internal port is ever returned.
+    extra, a port that would not bind) or no gateway route reports the same, with
+    a ``detail`` saying why. It is not an authentication surface: what a client
+    may *do* is still decided per request by the canonical credential,
+    entitlement, admission, and result rules. No credential, host path, or
+    internal port is ever returned.
     """
     from revocompute import mcp
 
