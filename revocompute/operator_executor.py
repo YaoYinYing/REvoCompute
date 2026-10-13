@@ -18,6 +18,16 @@ There is no daemon, no socket, no network surface, and no command text — an
 action that has no stable host command is refused rather than approximated.  The
 executor also owns the supported degraded mode: when the host controller is not
 reachable, mutation actions fail closed and observability is unaffected.
+
+The executor is therefore available only where the controller itself runs: a
+process on the deployment host with the checkout in place.  A containerized web
+process is Unavailable *by design* — Compose mounts the deployment data tree
+(``SERVER_DIR``), never the host checkout, and the web image ships neither Docker
+nor Apptainer, so the controller could not be executed there even if it were
+mounted.  Naming a deployment env file inside a container would only make
+:func:`availability` claim a capability it cannot exercise.  Host mutations on a
+containerized deployment go through the operator CLI (``run/restart.sh``), which
+is the break-glass path, and that is the state the Admin surface reports.
 """
 
 from __future__ import annotations
@@ -73,10 +83,13 @@ _CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 
 class ExecutorUnavailable(RuntimeError):
-    """The host controller is not reachable, so a mutation cannot be attempted.
+    """The host controller cannot be resolved, so no mutation is attempted.
 
     This is the supported degraded mode: the caller must fail closed (never
     fabricate, clear, or rewrite readiness) and report the state to the operator.
+    The message names the missing artifact by role -- ``run/restart.sh`` or the
+    deployment env file -- never by absolute host path, so it is actionable
+    without leaking the deployment layout.
     """
 
 
@@ -89,8 +102,9 @@ class ExecutorConfig:
     """A resolved, bounded host-controller invocation.
 
     ``command`` is a fixed argv prefix; the executor appends only table-derived
-    arguments.  ``working_directory`` and ``env_file`` are absolute paths bounded
-    to the deployment tree.
+    arguments.  ``working_directory`` is the bounded cwd and ``env_file`` the
+    deployment env file the child is started with; both come from operator
+    configuration, never from a request.
     """
 
     command: tuple[str, ...]
@@ -101,8 +115,16 @@ class ExecutorConfig:
 
 @dataclass(frozen=True, slots=True)
 class ExecutorAvailability:
+    """Whether a host operation can be planned and run, and why not when it cannot.
+
+    ``reason`` is a stable machine code; ``unavailable_reason`` is the operator
+    sentence behind it (``None`` when available), so the Admin surface can report
+    *why* mutations are disabled instead of a bare "unavailable".
+    """
+
     available: bool
     reason: str
+    unavailable_reason: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,36 +147,107 @@ def _is_relative_to(path: Path, root: Path) -> bool:
     return True
 
 
+def _server_root(host: HostPaths) -> Path:
+    """The checkout the deployment controller runs from.
+
+    The deployment env file lives in that checkout (``run/restart.sh`` is its
+    sibling) and ``SERVER_DIR`` points at the data tree beside it, so the env
+    file's directory is the authoritative answer whenever one is configured and
+    the controller is actually there.  A checkout-in-place deployment, whose data
+    tree and checkout are the same directory, resolves through ``SERVER_DIR``.
+    """
+    env_file = os.environ.get("REVODESIGN_SERVER_ENV")
+    if env_file:
+        checkout = Path(env_file).expanduser().parent
+        if (checkout / "run" / "restart.sh").is_file():
+            return checkout
+    return Path(host.server_root())
+
+
+def _resolve_env_file(root: Path) -> Path | None:
+    """The deployment env file the controller is started with.
+
+    ``REVODESIGN_SERVER_ENV`` is resolved exactly as the controller's own CLI
+    resolves it (absolute, or relative to the working directory), so the Web and
+    the CLI agree on which deployment they are operating.  Directory traversal
+    and a symlinked file are fine: this is a path operator configuration already
+    trusts, not a request field.  A path that is absent, is not a regular file,
+    or cannot be read is refused rather than followed.
+    """
+    named = os.environ.get("REVODESIGN_SERVER_ENV")
+    candidate = Path(named).expanduser() if named else root / ".env.production"
+    if not candidate.is_absolute():
+        candidate = Path.cwd() / candidate
+    if not candidate.is_file():
+        return None
+    if not os.access(candidate, os.R_OK):
+        return None
+    return candidate
+
+
+def _executor_problem(host: HostPaths) -> str | None:
+    """Why host operations cannot be resolved, or ``None`` when they can.
+
+    The reasons are role-specific and secret-free: they name the missing artifact
+    by role and the corrective step, never an absolute host path or an env value,
+    so the same text can be shown in the Admin surface and pasted into a report.
+    """
+    root = _server_root(host)
+    entrypoint = root / "run" / "restart.sh"
+    if not entrypoint.is_file():
+        return (
+            "The deployment controller (run/restart.sh) is not reachable from this server "
+            "process, so host operations are disabled here. Run the action directly with "
+            "run/restart.sh on the deployment host; a server process that runs in a container "
+            "cannot reach the controller, and that is expected."
+        )
+    if not _is_relative_to(entrypoint, root):
+        return "The deployment controller resolves outside the server root; refusing to run it."
+    named = os.environ.get("REVODESIGN_SERVER_ENV")
+    if not named and not (root / ".env.production").is_file():
+        return (
+            "This server process cannot drive the deployment controller: no deployment env "
+            "file is visible to it. Host mutations for a containerized server belong to "
+            "run/restart.sh on the deployment host; a server process beside the checkout can "
+            "set REVODESIGN_SERVER_ENV to the deployment env file (or place .env.production "
+            "in the server root) to enable them."
+        )
+    if _resolve_env_file(root) is None:
+        return (
+            "The deployment env file named by REVODESIGN_SERVER_ENV is missing or unreadable "
+            "from this server process; correct the path or its permissions."
+        )
+    return None
+
+
 def resolve_executor(host: HostPaths) -> ExecutorConfig | None:
     """Resolve the bounded host controller, or ``None`` when it is unreachable.
 
-    The command, env file, and working directory must all exist inside the
-    deployment tree; a configured path outside it is treated as unavailable
+    The controller must be a real file inside the resolved server root and the
+    deployment env file must be a readable regular file; a path that does not
+    exist, or that points outside the deployment, is treated as unavailable
     rather than followed.
     """
-    root = Path(host.server_root())
+    if _executor_problem(host) is not None:
+        return None
+    root = _server_root(host)
     entrypoint = root / "run" / "restart.sh"
-    if not entrypoint.is_file() or not _is_relative_to(entrypoint, root):
-        return None
-    # The env file may sit inside the checkout or be named explicitly by an
-    # operator; either way it must be a real file the controller can read.
-    env_file = os.environ.get("REVODESIGN_SERVER_ENV") or str(root / ".env.production")
-    if not Path(env_file).is_file():
-        return None
+    env_file = _resolve_env_file(root)
+    assert env_file is not None  # guaranteed by _executor_problem
     interpreter = os.environ.get("REVODESIGN_PYTHON") or "python3"
     return ExecutorConfig(
         command=(interpreter, str(entrypoint)),
-        env_file=str(Path(env_file)),
+        env_file=str(env_file),
         working_directory=str(root),
     )
 
 
 def availability(host: HostPaths) -> ExecutorAvailability:
     """Whether host operations can be attempted, as a capability separate from readiness."""
-    config = resolve_executor(host)
-    if config is None:
-        return ExecutorAvailability(False, "operator_executor_unavailable")
-    return ExecutorAvailability(True, "operator_executor_available")
+    problem = _executor_problem(host)
+    if problem is not None:
+        return ExecutorAvailability(False, "operator_executor_unavailable", problem)
+    return ExecutorAvailability(True, "operator_executor_available", None)
 
 
 def build_host_argv(config: ExecutorConfig, action_id: str, parameters: Mapping[str, object]) -> tuple[str, ...]:
@@ -230,7 +323,7 @@ def execute(
     """
     config = resolve_executor(host)
     if config is None:
-        raise ExecutorUnavailable("Operator executor unavailable")
+        raise ExecutorUnavailable(_executor_problem(host) or "Operator executor unavailable")
     action = get_action(action_id)
     normalized = normalize_parameters(action, {**(parameters or {}), "runner_family": runner_family})
     argv = build_host_argv(config, action_id, normalized)
@@ -247,7 +340,9 @@ def execute(
             check=False,
         )
     except FileNotFoundError as exc:
-        raise ExecutorUnavailable("Operator executor unavailable") from exc
+        raise ExecutorUnavailable(
+            "The deployment controller's interpreter could not be started; check REVODESIGN_PYTHON."
+        ) from exc
     except subprocess.TimeoutExpired:
         return ExecutionResult(
             action_id=action.id,

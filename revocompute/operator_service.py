@@ -123,7 +123,11 @@ class OperatorService:
 
     def executor_availability(self) -> dict[str, Any]:
         state = availability(self.host)
-        return {"available": state.available, "reason": state.reason}
+        return {
+            "available": state.available,
+            "reason": state.reason,
+            "unavailable_reason": state.unavailable_reason,
+        }
 
     def fleet(self, user_id: int | None) -> dict[str, Any]:
         """Every enabled family's readiness, capacity, access, and in-flight job."""
@@ -263,8 +267,8 @@ class OperatorService:
             )
             return SubmitOutcome(job=_inline_outcome(plan, result), created=False, plan=plan)
 
-        if not availability(self.host).available:
-            raise ExecutorUnavailable("Operator executor unavailable")
+        if not (state := availability(self.host)).available:
+            raise ExecutorUnavailable(state.unavailable_reason or "Operator executor unavailable")
         record, created = self.store.create(
             action=action.id,
             runner_family=runner_family,

@@ -17,7 +17,9 @@ from types import SimpleNamespace
 
 import pytest
 from conftest import _admin_client_auth, _test_client_auth, _load_pssm_module
+from jsonschema import Draft202012Validator
 from revocompute.operator_actions import get_action
+from revocompute.operator_executor import ExecutorUnavailable
 
 
 class _FakeOperatorService:
@@ -28,7 +30,14 @@ class _FakeOperatorService:
 
     def fleet(self, user_id):
         self.calls.append(("fleet", user_id))
-        return {"runners": [], "executor": {"available": False, "reason": "operator_executor_unavailable"}}
+        return {
+            "runners": [],
+            "executor": {
+                "available": False,
+                "reason": "operator_executor_unavailable",
+                "unavailable_reason": "The deployment controller (run/restart.sh) is not reachable from this server process.",
+            },
+        }
 
     def detail(self, runner_family, user_id):
         self.calls.append(("detail", runner_family, user_id))
@@ -148,7 +157,14 @@ def test_an_authorized_admin_reaches_only_the_typed_operation(monkeypatch, tmp_p
 
     fleet = client.get("/compute/api/auth/admin/runners", headers=headers)
     assert fleet.status_code == 200
-    assert fleet.get_json()["executor"]["available"] is False
+    executor = fleet.get_json()["executor"]
+    # The Admin surface must be able to say why mutations are disabled, and the
+    # reason must match the published contract the frontend reads.
+    spec = client.get("/openapi.json").get_json()
+    _validate_openapi_payload(spec, "OperatorExecutorState", executor)
+    assert executor["available"] is False
+    assert executor["reason"] == "operator_executor_unavailable"
+    assert executor["unavailable_reason"]
 
     plan = client.post(
         "/compute/api/auth/admin/runners/demo/plan", headers=headers, json={"action": "runner.status"}
@@ -157,6 +173,50 @@ def test_an_authorized_admin_reaches_only_the_typed_operation(monkeypatch, tmp_p
     assert plan.get_json()["runner_family"] == "demo"
 
     assert ("plan", "runner.status", "demo") in service.calls
+
+
+def test_an_unavailable_executor_is_reported_as_an_actionable_503(monkeypatch, tmp_path):
+    """A mutation with no host executor refuses with the reason, not a bare 503.
+
+    The response body is what the operator sees in the UI and in a report, so it
+    must explain the missing artifact rather than restate "unavailable".
+    """
+    module, service = _app_with_service(monkeypatch, tmp_path)
+    client = module.app.test_client()
+    headers = _admin_client_auth(module)
+
+    plan = client.post(
+        "/compute/api/auth/admin/runners/demo/plan", headers=headers, json={"action": "runner.status"}
+    )
+    digest = plan.get_json()["plan_digest"]
+
+    def refuse(*_args, **_kwargs):
+        raise ExecutorUnavailable("The deployment controller (run/restart.sh) is not reachable from this server process.")
+
+    monkeypatch.setattr(service, "submit", refuse)
+    response = client.post(
+        "/compute/api/auth/admin/runners/demo/actions",
+        headers=headers,
+        json={"action": "runner.status", "plan_digest": digest},
+    )
+    assert response.status_code == 503
+    body = response.get_json()
+    assert body["code"] == "executor_unavailable"
+    assert "run/restart.sh" in body["error"]
+
+
+def _validate_openapi_payload(spec, component, payload):
+    """Validate a response body against its declared OpenAPI schema component.
+
+    A schema that rejects every real response is invisible to the generated
+    TypeScript types, so the served body is checked against the component the
+    server itself publishes.
+    """
+    validator = Draft202012Validator(
+        {"$ref": f"#/components/schemas/{component}", "components": spec["components"]}
+    )
+    errors = list(validator.iter_errors(payload))
+    assert not errors, [error.message for error in errors]
 
 
 def test_unknown_actions_and_extra_fields_are_rejected_before_the_service(monkeypatch, tmp_path):

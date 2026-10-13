@@ -58,9 +58,30 @@ submission on the other.
 
 When the host executor is unreachable, readiness, capacity, access, and history
 stay available and mutation actions fail closed. No existing READY evidence is
-fabricated, cleared, or rewritten because the executor is offline. The UI
-reports `Operator executor unavailable` and disables mutations; it does not
-retry in a loop.
+fabricated, cleared, or rewritten because the executor is offline. The Admin
+banner shows `Operator executor unavailable` and disables mutations; it does not
+retry in a loop. The fleet API carries the actionable reason as
+`executor.unavailable_reason` and the banner renders it, naming the missing
+artifact by role -- the deployment controller (`run/restart.sh`) or the
+deployment env file -- and never an absolute host path, so the same sentence is
+safe to paste into a report. A refused mutation returns it in the `503` body.
+
+**The Admin executor is unreachable by design on a containerized deployment.**
+The host executor resolves the deployment controller inside the checkout the
+controller runs from, and Compose mounts the deployment data tree
+(`SERVER_DIR`), never the host checkout; the web image ships neither Docker nor
+Apptainer, so the controller could not run there even if it were mounted. Making
+the executor "available" inside such a container would only advertise a
+capability it cannot exercise. Route host mutations through the operator CLI
+(`run/restart.sh`): that is the break-glass path, and this is the expected state
+rather than a fault to repair by weakening the boundary.
+
+If the executor is unavailable on a host deployment where the server process
+*does* sit beside the checkout (a systemd or bare-process web server), the
+reason text names what to correct: expose the checkout beside the deployment env
+file, or set `REVODESIGN_SERVER_ENV` for the server process. Fix that process's
+view of the deployment; never add a Docker socket, a host filesystem mount, or
+a configurable command to the Web to make the button work.
 
 ### Planned but not yet implemented
 

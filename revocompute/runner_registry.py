@@ -307,19 +307,78 @@ def _docker_tag(image: str, suffix: str = "latest") -> str:
 
 
 def _apptainer_version(state) -> str:
+    """The Apptainer builder version this deployment attributes to a build.
+
+    A build identity includes the builder, and every surface that re-derives build
+    freshness must name the *same* builder the build did.  There are two sources and
+    ``apptainer_version_source`` on the provenance record keeps them apart:
+
+    ``REVODESIGN_APPTAINER_VERSION`` is the deployment's *declared* builder.  The
+    controller observes Apptainer once on the building host and shares that
+    observation through the Compose process environment, so a server process that
+    ships no Apptainer derives the identity the build recorded instead of an
+    empty-builder one; an operator who sets the variable in the deployment env file
+    pins a specific build host's builder the same way.
+
+    With no declaration, this process runs ``apptainer --version`` itself and
+    records what it *observed*; a host with no Apptainer yields the empty string.
+    An empty string is not "unknown here, so current": it is a *different* builder,
+    which marks every already-built SIF stale and sends an operator to rebuild
+    current artifacts.
+    """
+    declared = (state.get("REVODESIGN_APPTAINER_VERSION") or "").strip()
+    if declared:
+        return declared
     try:
         result = run_cmd(["apptainer", "--version"], env=state.exported(), check=False, capture=True)
     except FileNotFoundError:
-        # Non-HPC validation and Compose smoke tests may inspect existing
-        # provenance without having the target-host runtime installed.
+        # No shared observation and no local Apptainer: build freshness cannot
+        # be proven from this process, so the caller reports stale rather than
+        # guessing a builder.  Non-HPC validation and Compose smoke tests may
+        # inspect existing provenance in this state.
         return ""
     return (result.stdout or result.stderr or "").strip()
+
+
+def apptainer_version_source(state) -> str:
+    """Whether the builder being recorded was declared here or observed by this process.
+
+    Provenance must not present a declared value as an observation: a shared or
+    pinned ``REVODESIGN_APPTAINER_VERSION`` is still *the* identity freshness is
+    compared against, but a build made on a host running a different Apptainer can
+    now be told apart from one that actually ran this process's builder.
+    """
+    return "declared" if (state.get("REVODESIGN_APPTAINER_VERSION") or "").strip() else "observed"
 
 
 def _definition_path(family: RuntimeFamily) -> Path:
     if family.root is None:
         raise RegistryError(f"Runtime family {family.name} has no source root")
     return family.root / family.definition
+
+
+def record_apptainer_builder_version(state) -> str:
+    """Observe the Apptainer builder once and share it with every read surface.
+
+    The deployment controller runs on the host that actually builds SIFs.  When a
+    builder is already declared -- an operator's pin in the deployment env file, or
+    a value this process already carried -- that declaration *is* the builder this
+    deployment builds with, so it is shared as-is rather than re-probed on a host
+    that may no longer resolve Apptainer.
+
+    Publishing the value into this process's own environment (``os.environ``) is the
+    channel the Compose subprocess inherits, so the server containers derive the
+    recorded build identity instead of the empty-builder one that marked every
+    current SIF stale.
+
+    Returns the builder version, or ``""`` when none is declared and this host has
+    no Apptainer (nothing is shared, and build freshness stays honestly unprovable
+    here).
+    """
+    observed = _apptainer_version(state)
+    if observed:
+        os.environ["REVODESIGN_APPTAINER_VERSION"] = observed
+    return observed
 
 
 def _build_provenance(state, family: RuntimeFamily) -> dict[str, object]:
@@ -340,6 +399,7 @@ def _build_provenance(state, family: RuntimeFamily) -> dict[str, object]:
         "definition_sha256": sha256_file(definition),
         "build_inputs": inputs,
         "apptainer_version": _apptainer_version(state),
+        "apptainer_version_source": apptainer_version_source(state),
     }
     identity = {
         "definition_sha256": provenance["definition_sha256"],

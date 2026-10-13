@@ -10,7 +10,7 @@ same contract and fails closed for a non-READY family.
 |---|---|---|
 | `NOT_CONFIGURED` | Doctor contract is invalid | Correct family or machine configuration |
 | `NOT_BUILT` | No active SIF exists | Build and stage a candidate |
-| `BUILD_STALE` | Definition or a declared build input no longer matches the active SIF provenance | Rebuild, live-test the candidate, and promote it |
+| `BUILD_STALE` | Definition, a declared build input, or the Apptainer builder version no longer matches the active SIF provenance | Rebuild, live-test the candidate, and promote it |
 | `NOT_VALIDATED` | No receipt exists for the active SIF | Run target-host live-test |
 | `VALIDATION_STALE` | The SIF is build-current, but its receipt no longer matches the runtime bundle, execution contract, test plan, policy, account, or coverage | Keep the SIF and re-run live-test |
 | `READY` | All current checks and required smoke cases pass | Eligible for new submissions, subject to authorization |
@@ -33,6 +33,30 @@ changes do not cancel already-running tasks; only new submissions are denied
 until evidence is restored. Runner authors should use the canonical
 [change-impact matrix](../runner-guide/adding-a-runner.md#runner-change-impact-model)
 before deciding which action to take.
+
+### Why the Admin view can report `BUILD_STALE` while the CLI says otherwise
+
+A build identity is the definition hash, the declared build-input hashes, and
+**the Apptainer version that performed the build**. Only the deployment
+controller on the Slurm host can observe the builder, so it shares its
+observation (see
+[Deployment Control](deployment-control.md#the-recorded-apptainer-builder)); a
+server process that can read the artifacts but cannot run Apptainer derives the
+recorded identity from that shared value. Provenance marks the shared value as
+*declared* rather than observed, so a pinned builder is never reported back as a
+measurement the reading process did not take.
+
+A containerized server process ships no Apptainer. Left on its own it would
+contribute an empty builder, which is not "unknown, therefore current" but a
+*different* builder, and every current SIF would read `BUILD_STALE` in the Admin
+fleet view while `runner-status` on the host reported `VALIDATION_STALE` or
+`READY` for the same artifact. If you see that split, the deployment has not
+recorded a shared builder: restart through `run/restart.sh` on the host (which
+shares it) rather than rebuilding a SIF that is already current.
+
+An empty builder is still reported as `BUILD_STALE` where no observation exists
+at all -- an inspection on a host with no Apptainer cannot prove freshness, and
+guessing would be worse than reporting stale.
 
 ## Readiness is not capacity, access, or infrastructure
 
