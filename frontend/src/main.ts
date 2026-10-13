@@ -4,6 +4,7 @@ import { adminRoute, interceptableLink, protectedRoute, publicShellRoute, resolv
 import { mountPublicShell } from './app/public-shell';
 import { mountShell, type AppShell } from './app/shell';
 import { applyLocale, initialLocale, t } from './app/i18n';
+import { GUIDED_TOUR_ABORT_EVENT } from './app/guided-tour';
 import { applyTheme, storedTheme } from './app/theme';
 import './styles/app.css';
 
@@ -43,7 +44,7 @@ interface RouteMount {
 }
 
 /** The signal a route change sends to whatever the leaving page put in the document. */
-const tourAbortEvent = 'revocompute:tour-abort';
+const tourAbortEvent = GUIDED_TOUR_ABORT_EVENT;
 
 const root = document.querySelector<HTMLElement>('#app');
 if (!root) throw new Error('Missing frontend application root');
@@ -233,11 +234,14 @@ async function render(route: AppRoute, historyNavigation: boolean): Promise<void
   // page the reader is on. A viewer, a poll or a handler gets no further moment.
   if (pendingMount) { destroyMount(pendingMount); pendingMount = null; }
   if (committedMount) { destroyMount(committedMount); committedMount = null; }
-  // A route change also invalidates what the leaving page put in the document: a
+  // A route change invalidates what the leaving page put in the document: a
   // guided tour anchors to the page it belongs to, and an in-document route change
   // fires no `pagehide`. The signal is a plain document event, so the navigation
-  // layer never has to know which surfaces listen for it.
-  document.dispatchEvent(new Event(tourAbortEvent));
+  // layer never has to know which surfaces listen for it. Only a route change
+  // dispatched it: a first render is a page arriving, and a document navigation
+  // fires `pagehide`, which the same surfaces already hear. A surface that walks
+  // its own reader across routes — the tour's own step — therefore keeps working.
+  if (generation > 1) document.dispatchEvent(new Event(tourAbortEvent));
   // The region this route renders into. It is created here, owned by this render,
   // and placed in the outlet so the page paints while it builds — but a route that
   // is superseded keeps writing into this region and nothing else, and this region
@@ -320,23 +324,22 @@ async function render(route: AppRoute, historyNavigation: boolean): Promise<void
 /**
  * Dispose a mount and everything it built, wherever it is in its life.
  *
- * The view that names its own teardown is asked to run it. A page whose work is a
- * poll or a listener on the document is still the route's to release, so the route
- * change is announced once more before its region is dropped. Safe to call twice:
- * a view that arrives after the mount was discarded — the route awaited it and
- * then learned it had been superseded — is released on arrival instead of leaking,
+ * The view that names its own teardown is asked to run it. Safe to call twice: a
+ * view that arrives after the mount was discarded — the route awaited it and then
+ * learned it had been superseded — is released on arrival instead of leaking,
  * because the mount keeps asking until there is no view left to own.
+ *
+ * It announces nothing here. Every route change announces the leaving page once,
+ * at its start; a second announcement while the mount is disposed would be heard
+ * by that page's own handlers a second time, and a handler that reads the signal
+ * as "the reader left me" would end itself on the way out of a navigation it
+ * asked for.
  */
 function destroyMount(mount: RouteMount): void {
   const view = mount.view;
   mount.view = null;
-  try {
-    if (!view) return;
-    (view as { destroy?(): void } | null)?.destroy?.();
-  }
-  finally {
-    document.dispatchEvent(new Event(tourAbortEvent));
-  }
+  if (!view) return;
+  (view as { destroy?(): void } | null)?.destroy?.();
 }
 
 /** Put the document's name back on the page the reader is actually on. */

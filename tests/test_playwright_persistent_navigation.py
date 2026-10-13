@@ -285,3 +285,144 @@ def test_repeated_navigation_leaves_no_duplicate_chrome(page: Page) -> None:
         "appShell": 1, "publicHeader": 0, "outlet": "app-outlet",
         "headings": ["Dashboard"], "mains": 1,
     }
+
+
+def test_a_route_change_during_a_slow_mount_never_shows_the_losing_page(page: Page) -> None:
+    """The overlapping-navigation contract, driven by a held response.
+
+    Dashboard A begins loading and the reader leaves for Account B before A's data
+    arrives. A's mount cannot honor the route's AbortController — a feature's own
+    fetch is its own — so the router must not let it paint once B is the page the
+    reader is on, and must not leave A's work running behind B either.
+    """
+    router = mount_scenario(page, controlled_scenario())
+    _probe(page)
+    gate: list = []
+    page.route(f"{ORIGIN}/compute/api/tasks", lambda route: gate.append(route))
+
+    page.goto(f"{ORIGIN}/compute/dashboard")
+    # A is mounted and awaiting: its own page is staged, its data is held.
+    expect(page.locator(".dashboard-page")).to_be_visible()
+    assert gate, "the Dashboard's request was never issued"
+
+    # The reader leaves for B while A is still in flight.
+    page.locator("[data-nav-group='account']").get_by_role("link", name="Account", exact=True).click()
+    expect(page.get_by_role("heading", name="Account", exact=True)).to_be_visible()
+    expect(page).to_have_title("Account | REvoCompute")
+    identity = _document_identity(page)
+
+    # A resolves after its page is gone. It must not repaint the page the reader
+    # is on, whichever way its own fetch behaves.
+    for held in gate:
+        held.fallback()
+    page.wait_for_timeout(1200)
+
+    # The DOM, the title and the address all belong to B; A left nothing behind.
+    assert page.url == f"{ORIGIN}/compute/profile"
+    expect(page).to_have_title("Account | REvoCompute")
+    expect(page.get_by_role("heading", name="Account", exact=True)).to_be_visible()
+    assert page.evaluate("() => document.querySelectorAll('.dashboard-page').length") == 0
+    assert page.evaluate("() => document.querySelectorAll('.task-card').length") == 0
+    # One route change, one page: the losing mount did not re-enter the outlet.
+    assert page.evaluate(CHROME_STATE)["headings"] == ["Account"]
+    # The traversal stayed inside the document and asked for no new entry page.
+    assert _document_identity(page) == identity
+    assert _navigation_requests(router) == ["/compute/dashboard"]
+
+
+def test_a_superseded_route_disposes_the_view_it_replaced(page: Page) -> None:
+    """The route the reader leaves releases what it built, down to its viewer.
+
+    The result page owns a molecular viewer with a real teardown. When the reader
+    navigates away, that viewer is disposed exactly once and its page leaves the
+    document, so no instance outlives the route that created it.
+    """
+    mount_scenario(page, controlled_scenario().with_result("multi_structure"))
+
+    page.goto(f"{ORIGIN}/compute/results/{RESULT_ID}")
+    expect(page.locator(".structure-host")).to_be_visible()
+    assert page.evaluate("window.__viewerMounts") == 1
+
+    # Leave for the Dashboard. The result page the reader left is disposed whole.
+    page.locator(".app-nav").get_by_role("link", name="Dashboard", exact=True).click()
+    expect(page.locator(".task-card").first).to_be_visible()
+    assert page.evaluate("window.__viewerDisposals") == 1
+
+    # The result page is gone from the document and its viewer stayed disposed.
+    assert page.locator(".structure-host").count() == 0
+    assert page.evaluate(CHROME_STATE)["headings"] == ["Dashboard"]
+    assert page.url == f"{ORIGIN}/compute/dashboard"
+
+
+def test_a_late_mount_cannot_become_the_live_view_and_strand_its_successor(page: Page) -> None:
+    """A mount that resolves after its page is gone must not displace the live one.
+
+    The reader opens the Dashboard while a result page is re-mounted beneath them,
+    then the held Dashboard response arrives. If the late mount is taken as the
+    live view, the page the reader is actually on stops being tracked and its
+    viewer is never disposed — the leak the route's own teardown exists to prevent.
+    """
+    mount_scenario(page, controlled_scenario().with_result("multi_structure"))
+    gate: list = []
+    page.route(f"{ORIGIN}/compute/api/tasks", lambda route: gate.append(route))
+
+    page.goto(f"{ORIGIN}/compute/results/{RESULT_ID}")
+    expect(page.locator(".structure-host")).to_be_visible()
+    assert page.evaluate("window.__viewerMounts") == 1
+
+    # Dashboard A starts loading and its data is held.
+    page.locator(".app-nav").get_by_role("link", name="Dashboard", exact=True).click()
+    page.wait_for_function("() => document.querySelectorAll('.dashboard-page').length === 1")
+    expect(page.locator(".dashboard-page")).to_be_visible()
+    page.wait_for_timeout(400)
+    assert gate, "the Dashboard's request was never issued"
+
+    # The reader traverses back to the result page while A is still in flight.
+    page.go_back()
+    expect(page.locator(".structure-host")).to_be_visible()
+    assert page.evaluate("window.__viewerMounts") == 2
+
+    # A resolves now, after its own page is gone.
+    for held in gate:
+        held.fallback()
+    page.wait_for_timeout(1000)
+    expect(page).to_have_url(f"{ORIGIN}/compute/results/{RESULT_ID}")
+    assert page.evaluate("() => document.querySelectorAll('.dashboard-page').length") == 0
+
+    # Leaving the result page disposes the viewer the reader was actually on. A
+    # late mount that had displaced it would have left this one running unseen.
+    page.locator(".app-nav").get_by_role("link", name="Runners", exact=True).click()
+    expect(page.get_by_role("heading", name="Runner catalog", exact=True)).to_be_visible()
+    assert page.evaluate("window.__viewerMounts") == page.evaluate("window.__viewerDisposals")
+    assert page.locator(".structure-host").count() == 0
+
+
+def test_a_route_change_tears_down_the_guided_tour_it_was_decorating(page: Page) -> None:
+    """A tour outlives its page unless the route change that left it says so.
+
+    The tour decorates the page it anchors to: it marks the anchor element and
+    floats a callout over the document. A route change that replaces the page
+    leaves both behind, because an in-document navigation fires no `pagehide`.
+    This case holds the navigation layer to the observable outcome - the overlay
+    is gone the moment the reader leaves, and a later route change does not bring
+    it back - without asserting on how the signal is spelled.
+    """
+    mount_scenario(page, controlled_scenario())
+    page.goto(f"{ORIGIN}/compute/dashboard")
+    expect(page.locator(".task-card").first).to_be_visible()
+    page.get_by_role("button", name="Guided tour").click()
+    expect(page.locator(".tour-callout")).to_be_visible()
+    assert page.evaluate("() => document.querySelectorAll('.tour-anchor').length") >= 1
+
+    # Leaving the Dashboard for another workspace ends the tour with the page.
+    page.locator("[data-nav-group='account']").get_by_role("link", name="Account", exact=True).click()
+    expect(page.get_by_role("heading", name="Account", exact=True)).to_be_visible()
+    expect(page.locator(".tour-callout")).to_have_count(0)
+    assert page.evaluate("() => document.querySelectorAll('.tour-anchor').length") == 0
+
+    # A second route change does not resurrect it, and it is gone from the DOM
+    # rather than merely hidden.
+    page.locator(".app-nav").get_by_role("link", name="Runners", exact=True).click()
+    expect(page.get_by_role("heading", name="Runner catalog", exact=True)).to_be_visible()
+    page.wait_for_timeout(600)
+    expect(page.locator(".tour-callout")).to_have_count(0)
