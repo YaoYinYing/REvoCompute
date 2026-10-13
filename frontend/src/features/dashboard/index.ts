@@ -293,4 +293,13 @@ export class Dashboard {
   private fail(error: unknown): void { if (error instanceof ApiError && error.status === 401) { location.assign(`/compute/login?return_to=${encodeURIComponent(location.pathname)}`); return; } this.list.replaceChildren(); const state = document.createElement('p'); state.className = 'empty-state error-state'; state.textContent = (error as Error).message || t('dashboard.error.load'); this.list.append(state); }
 }
 
-export async function mountDashboard(root: HTMLElement, shell: AppShell, user: CurrentUser): Promise<Dashboard> { const view = new Dashboard(root, shell, user); await view.load(); return view; }
+/**
+ * Build the register and hand it back before its data arrives.
+ *
+ * The view exists as soon as it is built, so a route whose load is superseded can
+ * still dispose it: the caller owns the returned instance, and the first load is
+ * a separate step it awaits. A register that returned only once loaded would be
+ * unreachable — and so undisposable — for exactly the window in which a route
+ * change can strand it.
+ */
+export function mountDashboard(root: HTMLElement, shell: AppShell, user: CurrentUser): Dashboard { return new Dashboard(root, shell, user); }

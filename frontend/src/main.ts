@@ -27,6 +27,24 @@ import './styles/app.css';
 
 type RouteView = { destroy?(): void } | void | null;
 
+/**
+ * A route owns the region it renders into, so it renders into its own node.
+ *
+ * The router opens a fresh region for every route and hands it to that route's
+ * mount, so two mounts never share a node: a mount that is superseded while it is
+ * still awaiting its data writes into a region that is no longer in the document
+ * rather than over the page the reader is on. Only a mount that is still the
+ * reader's route when it settles is kept; one that lost the race is disposed in
+ * full, so no viewer, poll or handler outlives the page that created it.
+ */
+interface RouteMount {
+  readonly holder: HTMLElement;
+  view: RouteView;
+}
+
+/** The signal a route change sends to whatever the leaving page put in the document. */
+const tourAbortEvent = 'revocompute:tour-abort';
+
 const root = document.querySelector<HTMLElement>('#app');
 if (!root) throw new Error('Missing frontend application root');
 
@@ -43,9 +61,16 @@ const firstRoute = resolveRoute(location.pathname);
 // inside the public header.
 let mountedPublic = publicShellRoute(firstRoute);
 let shell: AppShell = mountedPublic ? mountPublicShell(root) : mountShell(root);
+/** The content region's own class, owned by the chrome that mounted it. */
+let outletBase = shell.outlet.className;
 
 let currentRoute: AppRoute = firstRoute;
-let currentView: RouteView = null;
+// The mount the reader is on, and the mount a route change has begun. A route is
+// committed into the outlet only once its own awaits are over, so the two are
+// different for exactly as long as a page is being built.
+let committedMount: RouteMount | null = null;
+let pendingMount: RouteMount | null = null;
+let committedTitle = document.title;
 let currentController = new AbortController();
 let renderGeneration = 0;
 let firstRender = true;
@@ -65,6 +90,7 @@ let renderedLocation = '';
 function reportError(error: unknown): void {
   console.error('REvoCompute route failed', error);
   document.title = `${t('page.error.title')} | REvoCompute`;
+  shell.outlet.className = outletBase;
   shell.outlet.replaceChildren(errorSection(t('page.error.title'), t('page.error.body')));
   shell.notify((error as Error)?.message || t('page.error.notice'), 'error');
 }
@@ -84,12 +110,14 @@ function errorSection(title: string, body: string, code = ''): HTMLElement {
 
 function accessDenied(): void {
   document.title = `${t('page.denied.title')} | REvoCompute`;
+  shell.outlet.className = outletBase;
   shell.outlet.replaceChildren(errorSection(t('page.denied.title'), t('page.denied.body'), '403'));
   focusHeading();
 }
 
 function notFound(): void {
   document.title = `${t('page.notFound.title')} | REvoCompute`;
+  shell.outlet.className = outletBase;
   shell.outlet.replaceChildren(errorSection(t('page.notFound.title'), t('page.notFound.body'), '404'));
   focusHeading();
 }
@@ -127,11 +155,10 @@ function focusHeading(historyNavigation = false): void {
  * — keeps that name; every other page is named here from its own level-one
  * heading, so no route ever leaves the previous page's name behind.
  */
-function nameDocument(previousTitle: string): void {
-  if (document.title !== previousTitle) return;
+function nameDocument(): void {
   const heading = shell.outlet.querySelector<HTMLElement>('h1, [role="heading"][aria-level="1"]');
   const name = heading?.textContent?.trim();
-  document.title = name ? `${name} | REvoCompute` : 'REvoCompute';
+  if (name) document.title = `${name} | REvoCompute`;
 }
 
 function announceHistoryNavigation(): void {
@@ -174,6 +201,9 @@ const syncShell = (route: AppRoute): void => {
   if (wantsPublic === mountedPublic) return;
   mountedPublic = wantsPublic;
   shell = wantsPublic ? mountPublicShell(root) : mountShell(root);
+  // The region's class is the chrome's, not the router's: the public chrome names
+  // its own region, and the router must not repaint the workspace's class onto it.
+  outletBase = shell.outlet.className;
   // The fresh chrome starts from the session the document already resolved rather
   // than from an empty one, so it never briefly paints another reader's
   // affordances; if the session has not resolved yet the chrome reads it itself.
@@ -181,20 +211,41 @@ const syncShell = (route: AppRoute): void => {
   else void session().catch(() => shell.setUser(null));
 };
 
-/** Mount the route's own content into the persistent outlet, replacing the last. */
+/**
+ * Render the route the reader is on into a region only that route can write to.
+ *
+ * A route's mount is asynchronous — it awaits its own module and its own data —
+ * and the outlet is one region every route shares. The router therefore opens a
+ * fresh region for every mount and keeps it out of the outlet until the mount has
+ * settled: whatever a superseded mount does with the route's AbortController, it
+ * can only ever write into the region the router gave it, never over the page the
+ * reader is on. The region the reader is on stays painted and alive until the new
+ * page is complete, and a mount that is no longer the reader's route when it
+ * settles is disposed in full — its view, its poll, its region — rather than
+ * committed.
+ */
 async function render(route: AppRoute, historyNavigation: boolean): Promise<void> {
   const generation = ++renderGeneration;
-  const previousTitle = document.title;
   currentController.abort();
   currentController = new AbortController();
-  currentView?.destroy?.();
-  currentView = null;
-  // The outlet is shared by every route, so each mount must start from the shell's
-  // own class and an empty region: a page that styles the outlet (the Dashboard
-  // grid) must not leave its layout on the next page. The router is the one owner
-  // of that reset.
-  shell.outlet.className = 'app-outlet';
-  shell.outlet.replaceChildren();
+  // Both ends of the route change stop here: the mount a previous render left in
+  // flight (it never finished, so it never owned anything the reader saw) and the
+  // page the reader is on. A viewer, a poll or a handler gets no further moment.
+  if (pendingMount) { destroyMount(pendingMount); pendingMount = null; }
+  if (committedMount) { destroyMount(committedMount); committedMount = null; }
+  // A route change also invalidates what the leaving page put in the document: a
+  // guided tour anchors to the page it belongs to, and an in-document route change
+  // fires no `pagehide`. The signal is a plain document event, so the navigation
+  // layer never has to know which surfaces listen for it.
+  document.dispatchEvent(new Event(tourAbortEvent));
+  // The region this route renders into. It is created here, owned by this render,
+  // and placed in the outlet so the page paints while it builds — but a route that
+  // is superseded keeps writing into this region and nothing else, and this region
+  // is no longer in the outlet by then. A mount that loses the race therefore
+  // cannot repaint the page the reader is on, whatever its own fetch does with the
+  // route's AbortController; the same ownership check disposes it in full.
+  const mount: RouteMount = { holder: document.createElement('div'), view: null };
+  pendingMount = mount;
   // The location this render is mounting is recorded when the mount starts, not
   // when it finishes. A route's mount awaits its own data, and the entry can move
   // while that is in flight; if the record still named the previous page, the
@@ -202,50 +253,95 @@ async function render(route: AppRoute, historyNavigation: boolean): Promise<void
   // dropped, leaving the older route's content under the newer address.
   renderedLocation = location.pathname + location.search;
 
-  if (route.id === 'not-found') { notFound(); return; }
-  syncShell(route);
-  const needsSession = protectedRoute(route) || !mountedPublic;
-  if (needsSession) {
-    const user = await session();
-    if (generation !== renderGeneration) return;
-    if (protectedRoute(route) && !user) { redirectToLogin(); return; }
-    if (adminRoute(route) && user?.role !== 'admin') { accessDenied(); return; }
+  try {
+    if (route.id === 'not-found') { notFound(); return; }
+    // Crossing between the public pages and the workspaces remounts the chrome,
+    // and a fresh chrome opens with a fresh region, so the mount is staged into
+    // the outlet only once the chrome that will carry it is the one mounted.
+    syncShell(route);
+    shell.outlet.className = outletBase;
+    shell.outlet.replaceChildren(mount.holder);
+    const needsSession = protectedRoute(route) || !mountedPublic;
+    if (needsSession) {
+      const user = await session();
+      if (generation !== renderGeneration) { destroyMount(mount); restoreTitle(); return; }
+      if (protectedRoute(route) && !user) { redirectToLogin(); return; }
+      if (adminRoute(route) && user?.role !== 'admin') { accessDenied(); return; }
+    }
+
+    switch (route.id) {
+      case 'home': { const { mountHome } = await import('./features/home/index.js'); mountHome(mount.holder, shell); break; }
+      case 'api-docs': { const { mountApiDocs } = await import('./features/api-docs/index.js'); mountApiDocs(mount.holder); break; }
+      case 'login': { const { mountLogin } = await import('./features/auth/index.js'); mountLogin(mount.holder, shell); break; }
+      case 'register': { const { mountRegister } = await import('./features/auth/index.js'); await mountRegister(mount.holder); break; }
+      case 'reset-password': { const { mountResetPassword } = await import('./features/auth/index.js'); mountResetPassword(mount.holder); break; }
+      case 'verify-email': { const { mountVerifyEmail } = await import('./features/auth/index.js'); await mountVerifyEmail(mount.holder); break; }
+      case 'terms': { const { mountTerms } = await import('./features/legal/index.js'); await mountTerms(mount.holder); break; }
+      case 'runners': { const { mountRunnerCatalog } = await import('./features/runners/index.js'); await mountRunnerCatalog(mount.holder); break; }
+      case 'runner-detail': { const { mountRunnerDetail } = await import('./features/runners/index.js'); await mountRunnerDetail(mount.holder, route.name, shell); break; }
+      case 'dashboard': { const { mountDashboard } = await import('./features/dashboard/index.js'); const view = mountDashboard(mount.holder, shell, sessionUser!); mount.view = view; await view.load(); break; }
+      case 'create-task': { const { mountCreateTask } = await import('./features/create-task/index.js'); await mountCreateTask(mount.holder); break; }
+      case 'result': { const { mountResultWorkspace } = await import('./features/results/index.js'); mount.view = await mountResultWorkspace(mount.holder); break; }
+      case 'account': { const { mountAccount } = await import('./features/profile/index.js'); await mountAccount(mount.holder, shell, sessionUser!, route.section); break; }
+      case 'admin-fleet': case 'admin-users': case 'admin-configuration': case 'admin-logs': {
+        const { mountAdmin } = await import('./features/admin/index.js'); await mountAdmin(mount.holder, route.id, shell, sessionUser!); break;
+      }
+    }
+  } catch (error) {
+    destroyMount(mount);
+    restoreTitle();
+    throw error;
   }
 
-  switch (route.id) {
-    case 'home': { const { mountHome } = await import('./features/home/index.js'); mountHome(shell.outlet, shell); break; }
-    case 'api-docs': { const { mountApiDocs } = await import('./features/api-docs/index.js'); mountApiDocs(shell.outlet); break; }
-    case 'login': { const { mountLogin } = await import('./features/auth/index.js'); mountLogin(shell.outlet, shell); break; }
-    case 'register': { const { mountRegister } = await import('./features/auth/index.js'); await mountRegister(shell.outlet); break; }
-    case 'reset-password': { const { mountResetPassword } = await import('./features/auth/index.js'); mountResetPassword(shell.outlet); break; }
-    case 'verify-email': { const { mountVerifyEmail } = await import('./features/auth/index.js'); await mountVerifyEmail(shell.outlet); break; }
-    case 'terms': { const { mountTerms } = await import('./features/legal/index.js'); await mountTerms(shell.outlet); break; }
-    case 'runners': { const { mountRunnerCatalog } = await import('./features/runners/index.js'); await mountRunnerCatalog(shell.outlet); break; }
-    case 'runner-detail': { const { mountRunnerDetail } = await import('./features/runners/index.js'); await mountRunnerDetail(shell.outlet, route.name, shell); break; }
-    case 'dashboard': { const { mountDashboard } = await import('./features/dashboard/index.js'); currentView = await mountDashboard(shell.outlet, shell, sessionUser!); break; }
-    case 'create-task': { const { mountCreateTask } = await import('./features/create-task/index.js'); await mountCreateTask(shell.outlet); break; }
-    case 'result': { const { mountResultWorkspace } = await import('./features/results/index.js'); currentView = await mountResultWorkspace(shell.outlet); break; }
-    case 'account': { const { mountAccount } = await import('./features/profile/index.js'); await mountAccount(shell.outlet, shell, sessionUser!, route.section); break; }
-    case 'admin-fleet': case 'admin-users': case 'admin-configuration': case 'admin-logs': {
-      const { mountAdmin } = await import('./features/admin/index.js'); await mountAdmin(shell.outlet, route.id, shell, sessionUser!); break;
-    }
-  }
-  // A route's mount is asynchronous, and a feature's own fetch is not guaranteed to
-  // honor the route's AbortController: a mount that lost the race can resolve after
-  // a newer route has rendered and write its content into the outlet on top of it.
-  // The address bar is the authoritative record of where the reader is, so a mount
-  // that lost the race rebuilds the page the location now names.
-  if (generation !== renderGeneration) {
-    if (location.pathname + location.search !== renderedLocation) void transition(resolveRoute(location.pathname), new URL(location.href), true);
-    return;
-  }
-  nameDocument(previousTitle);
+  // The mount's own awaits are over: this is where the route becomes the page the
+  // reader is on. A mount that stopped being the reader's route while it was
+  // building is disposed in full instead, and never presented as their page.
+  if (generation !== renderGeneration) { destroyMount(mount); restoreTitle(); return; }
+  if (pendingMount === mount) pendingMount = null;
+  committedMount = mount;
+  // A page that styles the outlet (the Dashboard grid, the catalog's own padding)
+  // brings that class with it; the router restates the chrome's own class first.
+  const own = mount.holder.className.replace(/(^|\s)app-outlet(\s|$)/g, ' ').trim();
+  mount.holder.className = '';
+  shell.outlet.className = own ? `${outletBase} ${own}` : outletBase;
+  // A page that named itself while mounting keeps that name; every other page is
+  // named from its own level-one heading, so no route leaves the last page's name
+  // behind on the tab, the history entry or the screen reader's announcement.
+  nameDocument();
+  committedTitle = document.title;
   shell.syncActive();
   // The document's own first render keeps the browser's initial focus and scroll;
   // a later route change moves the reader to the new page's heading.
   if (!firstRender) focusHeading(historyNavigation);
   firstRender = false;
   if (historyNavigation) announceHistoryNavigation();
+}
+
+/**
+ * Dispose a mount and everything it built, wherever it is in its life.
+ *
+ * The view that names its own teardown is asked to run it. A page whose work is a
+ * poll or a listener on the document is still the route's to release, so the route
+ * change is announced once more before its region is dropped. Safe to call twice:
+ * a view that arrives after the mount was discarded — the route awaited it and
+ * then learned it had been superseded — is released on arrival instead of leaking,
+ * because the mount keeps asking until there is no view left to own.
+ */
+function destroyMount(mount: RouteMount): void {
+  const view = mount.view;
+  mount.view = null;
+  try {
+    if (!view) return;
+    (view as { destroy?(): void } | null)?.destroy?.();
+  }
+  finally {
+    document.dispatchEvent(new Event(tourAbortEvent));
+  }
+}
+
+/** Put the document's name back on the page the reader is actually on. */
+function restoreTitle(): void {
+  if (document.title !== committedTitle) document.title = committedTitle;
 }
 
 /** Route to a new location: the one place a URL change enters the application. */
@@ -302,9 +398,12 @@ window.addEventListener('popstate', () => {
 window.addEventListener('pagehide', event => { if (!(event as PageTransitionEvent).persisted) disposeCurrent(); });
 
 function disposeCurrent(): void {
-  currentView?.destroy?.();
-  currentView = null;
+  if (pendingMount) destroyMount(pendingMount);
+  pendingMount = null;
+  if (committedMount) destroyMount(committedMount);
+  committedMount = null;
   currentController.abort();
+  shell.outlet.className = outletBase;
   shell.outlet.replaceChildren();
 }
 

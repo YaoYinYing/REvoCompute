@@ -21,6 +21,17 @@ const doneKey = 'revocompute-tour-done';
 const stepKey = 'revocompute-tour-step';
 const resultKey = 'revocompute-tour-result';
 
+/**
+ * The event a route change dispatches so a tour does not outlive its page.
+ *
+ * A tour decorates the page it belongs to, so it must not survive leaving that
+ * page. A document navigation fires `pagehide`; an in-document route change fires
+ * no such event, so the navigation layer announces it instead. The signal is a
+ * plain document event rather than a callback registry: the navigation layer never
+ * imports the tour, and a page that never opened one pays nothing.
+ */
+const abortEvent = 'revocompute:tour-abort';
+
 interface TourStep {
   /** Route prefix that identifies the step's surface. */
   route: string;
@@ -71,6 +82,17 @@ const steps: TourStep[] = [
 export class GuidedTour {
   private callout: HTMLElement | null = null;
   private index = 0;
+
+  constructor() {
+    if (typeof document === 'undefined' || !document.addEventListener) return;
+    // Two signals remove the overlay: a document navigation fires `pagehide`, and
+    // an in-document route change dispatches the abort event. One listener each,
+    // installed for the tour's lifetime, so the page that owns the anchor stops
+    // being decorated the moment the reader leaves it. A bfcache restore keeps the
+    // document and brings the page back, so a persisted `pagehide` is left alone.
+    document.addEventListener('pagehide', event => { if (!(event as PageTransitionEvent).persisted) this.close(); });
+    document.addEventListener(abortEvent, () => this.close());
+  }
 
   private get done(): boolean { return localStorage.getItem(doneKey) === 'true'; }
 
