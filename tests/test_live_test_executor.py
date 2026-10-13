@@ -13,7 +13,6 @@ import pytest
 
 from revocompute import live_test_executor
 from revocompute.db import TaskDatabase
-from revocompute.runner_live_test import RunnerLiveTestWorker
 
 
 def test_worker_executor_rejects_removed_legacy_request(tmp_path):
@@ -233,6 +232,15 @@ def test_wrapper_resource_observation_rejects_oversized_or_unknown_content(tmp_p
 
 
 def test_gpu_live_case_seeds_isolated_authorization_and_reports_exact_settlement(monkeypatch, tmp_path):
+    """A GPU live case seeds its own authorization, readiness, and balance.
+
+    The projector half of the acceptance: the case must provision the isolated
+    state its own admission needs, and the settlement it reports must be the
+    canonical one.  The validator half — the projector's real output passed
+    unchanged into ``_gpu_accounting_valid``, including the CPU-only and core-unit
+    rows a GPU settlement must ignore — lives in
+    ``tests/server/test_gpu_accounting_acceptance.py``.
+    """
     database = TaskDatabase(str(tmp_path / "gpu-live.sqlite3"))
     monkeypatch.setattr(live_test_executor.task_runtime, "task_store", database)
     monkeypatch.setattr(
@@ -285,85 +293,3 @@ def test_worker_executor_rejects_invalid_request(tmp_path, payload):
     path.write_text(json.dumps(payload))
     with pytest.raises(ValueError):
         live_test_executor.execute(path)
-
-def test_gpu_live_case_evidence_passes_the_real_acceptance_validator(monkeypatch, tmp_path):
-    """The projector's real output is what the acceptance validator must accept.
-
-    The two halves of GPU live acceptance are a worker-side projector
-    (``_gpu_accounting_evidence``) and a validating-side predicate
-    (``_gpu_accounting_valid``).  They have to agree on one shape -- the shape the
-    canonical ``resource_allocations`` / ``resource_ledger`` rows actually carry --
-    and asserting the two apart is what let a legacy-key validator and a
-    canonical-shape projector drift without a single test failing.  This drives
-    the real store through both, so a projection the validator cannot read is a
-    failure here rather than a ``GPU_ACCOUNTING_FAILURE`` on a target host.
-
-    That includes the two rows the canonical model deliberately writes and a
-    GPU-only validator must not trip over: the zero-``resource_count``
-    ``gpu_second`` fact a CPU-only stage holds no GPUs for, and the
-    ``cpu_core_second`` fact every Slurm allocation carries.  Neither is a GPU
-    fact to settle credits against, and neither may be published as one.
-    """
-    database = TaskDatabase(str(tmp_path / "gpu-live.sqlite3"))
-    monkeypatch.setattr(live_test_executor.task_runtime, "task_store", database)
-    monkeypatch.setattr(
-        live_test_executor.task_runtime,
-        "CONFIG",
-        SimpleNamespace(server_dir=str(tmp_path)),
-    )
-    task_type = SimpleNamespace(
-        gpus=True,
-        runtime=SimpleNamespace(
-            name="gpu-demo",
-            access_policy=SimpleNamespace(requires=("licensed",)),
-        ),
-    )
-
-    context = live_test_executor._prepare_gpu_accounting(task_type)
-    assert context is not None
-
-    # A CPU-only stage first: the canonical model still writes a gpu_second fact
-    # for the job, with resource_count 0, and a cpu_core_second fact beside it.
-    started_at = time.time()
-    database.record_allocation_start(
-        user_id=1,
-        task_id="a" * 32,
-        stage_id="features",
-        slurm_job_id="41",
-        gpu_count=0,
-        cpu_cores=16,
-        started_at=started_at,
-        required_entitlements=("licensed",),
-    )
-    database.settle_allocation_elapsed("41", elapsed_seconds=9, finished_at=started_at + 9)
-
-    # Then the GPU stage the case is actually accepting.
-    gpu_started = time.time()
-    database.record_allocation_start(
-        user_id=1,
-        task_id="a" * 32,
-        stage_id="model",
-        slurm_job_id="42",
-        gpu_count=2,
-        cpu_cores=4,
-        started_at=gpu_started,
-        required_entitlements=("licensed",),
-    )
-    database.settle_allocation_elapsed("42", elapsed_seconds=7, finished_at=gpu_started + 7)
-
-    evidence = live_test_executor._gpu_accounting_evidence("a" * 32, context)
-    assert evidence is not None
-    # Only the GPU facts the ledger charges are published: the zero-GPU stage
-    # and every cpu_core_second fact stay out of a GPU settlement.
-    assert [allocation["unit"] for allocation in evidence["allocations"]] == ["gpu_second"]
-    assert evidence["allocations"][0]["slurm_job_id"] == "42"
-    assert evidence["usage_gpu_seconds"] == 14
-
-    execution = {"slurm_job_id": "42", "slurm_jobs": [{"stage": "model", "job_id": "42"}]}
-    assert RunnerLiveTestWorker._gpu_accounting_valid(execution, evidence)
-
-    # The GPU-only projection is exact: the CPU stage's own benefit is not
-    # credited to the GPU acceptance, and a mis-stated balance is still refused.
-    assert not RunnerLiveTestWorker._gpu_accounting_valid(
-        execution, {**evidence, "usage_gpu_seconds": evidence["usage_gpu_seconds"] + 1}
-    )
