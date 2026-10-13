@@ -254,6 +254,8 @@ def parameter_property(parameter: ParameterSpec) -> dict[str, Any]:
         prop["description"] = parameter.description
     if parameter.choices:
         prop["enum"] = list(parameter.choices)
+    if parameter.format:
+        prop["format"] = parameter.format
     if parameter.minimum is not None:
         prop["minimum"] = parameter.minimum
     if parameter.exclusive_minimum is not None:

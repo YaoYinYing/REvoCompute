@@ -876,25 +876,109 @@ def _input_workspace_payload(tt) -> dict:
     return {
         "version": 3,
         "plugins": descriptors,
-        "steps": [
-            {
-                "id": step.id,
-                "title": step.title,
-                "description": step.description,
-                "capabilities": [
-                    {
-                        "plugin": capability.plugin,
-                        "id": capability.id,
-                        "title": capability.title,
-                        "description": capability.description,
-                        "options": capability.options,
-                    }
-                    for capability in step.capabilities
-                ],
-            }
-            for step in tt.input_workspace
-        ],
+        "steps": _input_workspace_steps(tt),
     }
+
+
+#: The server-owned capability that projects the canonical parameter schema.
+#: Its id and title are part of the workspace contract, so a client never
+#: invents the parameter area it renders.
+_CANONICAL_PARAMETERS_CAPABILITY = ("parameters", "task_parameters", "Method settings")
+
+
+#: The workspace option through which a capability owns named canonical fields.
+_FIELD_OWNING_OPTION = "fields"
+
+
+def _unclaimed_parameter_fields(tt) -> set[str]:
+    """Canonical parameter fields no declared capability has taken ownership of.
+
+    Ownership is exactly the two ways the frontend's parameter plugins render a
+    field: the generic ``parameters`` plugin, which renders every canonical field
+    no capability names in ``options.fields``, and a specialized plugin such as
+    ``regions``, which renders the fields it names. Subtracting every declared
+    ``options.fields`` entry from the task's schema properties therefore leaves the
+    fields nothing in the workspace would render.
+    """
+    claimed: set[str] = set()
+    for capability in iter_capabilities(tt):
+        fields = capability.options.get(_FIELD_OWNING_OPTION) or []
+        if isinstance(fields, (list, tuple)):
+            claimed.update(str(field) for field in fields)
+    return {str(name) for name in tt.schema.get("properties", {})} - claimed
+
+
+def _canonical_parameter_area(tt) -> dict | None:
+    """The canonical parameter capability to project, or ``None`` when declared.
+
+    Every executable, user-editable parameter the owning ``task.yaml`` declares
+    must be user-discoverable. A workspace that declares the generic ``parameters``
+    plugin already renders the whole schema, so it keeps its own declaration. A
+    workspace whose capabilities own only *some* canonical fields — a runner-owned
+    regions capability naming the fields it draws, for instance — would otherwise
+    silently drop the remaining schema, whose defaults the server still applies; so
+    does a workspace that declares no parameter capability at all. In both cases a
+    capability is returned for the leftover fields, which the projection places and
+    the submission boundary accepts. ``None`` means nothing is unclaimed: the
+    declaration alone leaves no parameter without a renderer, and adding an area
+    would render the schema twice.
+    """
+    if not tt.schema.get("properties"):
+        return None
+    plugin, capability_id, title = _CANONICAL_PARAMETERS_CAPABILITY
+    for capability in iter_capabilities(tt):
+        if capability.plugin.split(":", 1)[-1] == plugin or capability.id == capability_id:
+            return None
+    if not _unclaimed_parameter_fields(tt):
+        return None
+    return {"plugin": plugin, "id": capability_id, "title": title, "description": "", "options": {}}
+
+
+def _input_workspace_steps(tt) -> list[dict]:
+    """Project the task's declared steps, with the canonical parameter area.
+
+    The canonical capability is placed in the last step ahead of the terminal
+    ``review`` anchor, so the workspace grammar (a files/sequence capability first,
+    ``review`` last) still holds and the frontend renders the same schema it would
+    have rendered had the manifest declared the capability itself.
+    """
+    steps = [
+        {
+            "id": step.id,
+            "title": step.title,
+            "description": step.description,
+            "capabilities": [
+                {
+                    "plugin": capability.plugin,
+                    "id": capability.id,
+                    "title": capability.title,
+                    "description": capability.description,
+                    "options": capability.options,
+                }
+                for capability in step.capabilities
+            ],
+        }
+        for step in tt.input_workspace
+    ]
+    capability = _canonical_parameter_area(tt)
+    if capability is None or not steps:
+        # A manifest with no declared workspace has no step to place the
+        # capability in and nothing for the workbench to render; its (empty) step
+        # list is projected unchanged.
+        return steps
+    anchor = next(
+        (step for step in reversed(steps) if any(item["plugin"] == "review" for item in step["capabilities"])),
+        None,
+    )
+    if anchor is None:
+        # ``_load_input_workspace`` requires a terminal review capability, so a
+        # step list without one is not a renderable workspace; place the area at
+        # the end of the last step rather than dropping it silently.
+        steps[-1]["capabilities"].append(capability)
+        return steps
+    position = next(index for index, item in enumerate(anchor["capabilities"]) if item["plugin"] == "review")
+    anchor["capabilities"].insert(position, capability)
+    return steps
 
 
 @app.route("/compute/api/types/<name>", methods=["GET"])
@@ -1672,6 +1756,13 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
     if not isinstance(capability_values, dict):
         return jsonify({"error": "Workspace capabilities must be an object"}), 400
     known_capability_ids = {item.id for item in iter_capabilities(tt)}
+    # The workspace projection exposes the canonical parameter area for a Task
+    # whose declaration owns none, and the frontend echoes it back with the rest
+    # of the workspace state. It is a server-owned capability, so the boundary
+    # accepts the id the same projection published.
+    canonical_parameters = _canonical_parameter_area(tt)
+    if canonical_parameters is not None:
+        known_capability_ids.add(canonical_parameters["id"])
     if set(capability_values) - known_capability_ids:
         return jsonify({"error": "Workspace contains an unknown capability"}), 400
     pending_capabilities: dict[str, tuple[Any, Any, Any]] = {}

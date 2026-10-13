@@ -1,4 +1,5 @@
-import { parameterValue, validateParameter } from '../parameter-controls';
+import { createIcons, Dice5 } from 'lucide';
+import { parameterValue, seedConstant, validateParameter } from '../parameter-controls';
 import type { ParameterDefinition } from '../types';
 import { t } from '../../../app/i18n';
 import type { WorkspaceContext, WorkspacePlugin, WorkspacePluginInstance } from './plugin-contract';
@@ -33,7 +34,10 @@ function renderParameter(parameter: ParameterDefinition, context: WorkspaceConte
     control = select;
   } else {
     const input = element('input', 'ct-control');
-    input.type = parameter.type === 'int' || parameter.type === 'float' ? 'number' : 'text';
+    // A declared ``format: date`` is drawn as the browser's own calendar-date
+    // control rather than a bare text field, so the published date contract is
+    // the one the user edits.
+    input.type = parameter.type === 'int' || parameter.type === 'float' ? 'number' : parameter.dateFormat ? 'date' : 'text';
     input.value = parameter.defaultValue == null ? '' : String(parameter.defaultValue);
     input.required = parameter.required;
     // The spinner hint projects the server's own range: an inclusive bound is
@@ -55,21 +59,33 @@ function renderParameter(parameter: ParameterDefinition, context: WorkspaceConte
   const error = element('p', 'ct-field-error'); error.hidden = true; error.id = `${id}-error`;
   control.setAttribute('aria-describedby', error.id);
   const changed = () => { control.removeAttribute('aria-invalid'); error.hidden = true; context.changed(); };
-  control.addEventListener('input', changed); control.addEventListener('change', changed); field.append(control);
-  if (parameter.seed && control instanceof HTMLInputElement) {
-    const random = element('button', 'ct-seed', t('ct.param.randomize')); random.type = 'button';
-    random.addEventListener('click', () => {
-      const minimum = parameter.seed?.minimum ?? parameter.minimum ?? 0;
-      const maximum = parameter.seed?.maximum ?? parameter.maximum ?? 2147483647;
-      const draw = new Uint32Array(1); crypto.getRandomValues(draw);
-      control.value = String(minimum + (draw[0]! % (maximum - minimum + 1)));
-      control.dispatchEvent(new Event('input', { bubbles: true }));
-    });
-    field.append(random);
-  }
+  control.addEventListener('input', changed); control.addEventListener('change', changed); if (parameter.seed && control instanceof HTMLInputElement && control.type === 'number') field.append(seedControl(parameter, control)); else field.append(control);
   if (parameter.description) field.append(element('p', 'ct-help', parameter.description));
   if (parameter.help) { const details = element('details', 'ct-more-help'); details.append(element('summary', '', t('ct.param.why')), element('p', '', parameter.help)); field.append(details); }
   field.append(error); return field;
+}
+
+/**
+ * The seed field's own control: one editable value, a dice button inside it.
+ *
+ * The value stays a normal number input - the same element the form already
+ * collects from - so drawing a seed is an ordinary edit. The dice is the
+ * field's only extra affordance; it reads one uniform integer from the task's
+ * declared generation domain and reports it through the control's own `input`
+ * event, so validation, the Task Snapshot, and submission all see one edit.
+ */
+function seedControl(parameter: ParameterDefinition, control: HTMLInputElement): HTMLElement {
+  const wrap = element('div', 'ct-seed-field');
+  const dice = element('button', 'ct-seed'); dice.type = 'button';
+  dice.setAttribute('aria-label', t('ct.param.randomize', { label: parameter.label }));
+  dice.append(element('i')); dice.firstElementChild!.setAttribute('data-lucide', 'dice-5');
+  dice.addEventListener('click', () => {
+    control.value = String(seedConstant(parameter, draw => crypto.getRandomValues(draw)));
+    control.removeAttribute('aria-invalid');
+    control.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  wrap.append(control, dice); createIcons({ icons: { Dice5 }, root: wrap });
+  return wrap;
 }
 
 function validateParameters(parameters: ParameterDefinition[]): string[] {
