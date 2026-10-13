@@ -59,8 +59,10 @@ export function mountPublicShell(root: HTMLElement): AppShell {
     },
     // The public header carries one account affordance and no navigation state to
     // synchronize; the methods exist so the shared router can address either shell
-    // without knowing which one it mounted.
+    // without knowing which one it mounted. Nothing here subscribes at the document
+    // level, so leaving the chrome has nothing of its own to release.
     syncActive() {},
     refreshNotices() {},
+    destroy() {},
   };
 }

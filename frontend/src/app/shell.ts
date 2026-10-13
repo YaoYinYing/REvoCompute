@@ -15,6 +15,8 @@ export interface AppShell {
   syncActive(): void;
   /** Write the current notice count onto the top-bar affordance. */
   refreshNotices(): void;
+  /** Release the chrome's own document-level subscriptions when it is replaced. */
+  destroy(): void;
 }
 
 const railKey = 'revocompute-rail';
@@ -113,11 +115,12 @@ export function mountShell(root: HTMLElement): AppShell {
     railToggle.innerHTML = `<i data-lucide="${expanded ? 'panel-left-close' : 'panel-left'}" aria-hidden="true"></i>`;
     createIcons({ icons: shellIcons, root: railToggle });
   };
-  railToggle.addEventListener('click', () => {
+  const onRailToggle = (): void => {
     shell.dataset.rail = shell.dataset.rail === 'expanded' ? 'collapsed' : 'expanded';
     localStorage.setItem(railKey, shell.dataset.rail);
     syncRailToggle();
-  });
+  };
+  railToggle.addEventListener('click', onRailToggle);
 
   // The region caption names the region on the desktop rail. On the mobile bar the
   // Compute and Account destinations sit directly on the bar, so their captions are
@@ -127,7 +130,8 @@ export function mountShell(root: HTMLElement): AppShell {
     [groups.compute, groups.account].forEach(group => group.caption.hidden = !grouped);
   };
   syncGroupCaptions(navGrouped.matches);
-  navGrouped.addEventListener('change', event => syncGroupCaptions(event.matches));
+  const onNavGroupedChange = (event: MediaQueryListEvent): void => syncGroupCaptions(event.matches);
+  navGrouped.addEventListener('change', onNavGroupedChange);
 
   function navLink(href: string, icon: string, label: string): HTMLAnchorElement {
     const link = document.createElement('a'); link.href = href; link.title = label; link.innerHTML = `<i data-lucide="${icon}" aria-hidden="true"></i><span>${label}</span>`;
@@ -195,9 +199,10 @@ export function mountShell(root: HTMLElement): AppShell {
 
   // Measure the secondary surface rather than assuming its height: translated
   // labels and narrow widths can wrap. CSS applies this clearance only on mobile.
-  new ResizeObserver(() => {
+  const adminResize = new ResizeObserver(() => {
     shell.style.setProperty('--app-admin-height', `${groups.admin.element.getBoundingClientRect().height}px`);
-  }).observe(groups.admin.element);
+  });
+  adminResize.observe(groups.admin.element);
 
   const systemNotices = mountSystemNotices({ button: noticesButton, host: feedback });
 
@@ -242,5 +247,15 @@ export function mountShell(root: HTMLElement): AppShell {
     },
     syncActive() { syncActiveToLocation(); },
     refreshNotices() { void systemNotices.refresh(); },
+    // The chrome is mounted once per document and replaced only when the reader
+    // crosses to the other chrome, which this document now does without a reload.
+    // Its document-level subscriptions outlive the nodes they were attached to, so
+    // each chrome releases its own before the next one mounts: an unbounded set of
+    // listeners and observers would otherwise accumulate across every crossing.
+    destroy() {
+      navGrouped.removeEventListener('change', onNavGroupedChange);
+      adminResize.disconnect();
+      railToggle.removeEventListener('click', onRailToggle);
+    },
   };
 }

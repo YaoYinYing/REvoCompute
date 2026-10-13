@@ -71,7 +71,6 @@ let currentRoute: AppRoute = firstRoute;
 // different for exactly as long as a page is being built.
 let committedMount: RouteMount | null = null;
 let pendingMount: RouteMount | null = null;
-let committedTitle = document.title;
 let currentController = new AbortController();
 let renderGeneration = 0;
 let firstRender = true;
@@ -201,6 +200,11 @@ const syncShell = (route: AppRoute): void => {
   const wantsPublic = publicShellRoute(route);
   if (wantsPublic === mountedPublic) return;
   mountedPublic = wantsPublic;
+  // The chrome being replaced releases its document-level subscriptions before the
+  // next one mounts. Crossing the boundary is in-document, so without this the
+  // listeners and observer of every chrome the reader has passed through would
+  // keep referring to nodes that are no longer on screen.
+  shell.destroy();
   shell = wantsPublic ? mountPublicShell(root) : mountShell(root);
   // The region's class is the chrome's, not the router's: the public chrome names
   // its own region, and the router must not repaint the workspace's class onto it.
@@ -222,8 +226,9 @@ const syncShell = (route: AppRoute): void => {
  * can only ever write into the region the router gave it, never over the page the
  * reader is on. The region the reader is on stays painted and alive until the new
  * page is complete, and a mount that is no longer the reader's route when it
- * settles is disposed in full — its view, its poll, its region — rather than
- * committed.
+ * settles — whether it resolved or rejected — is disposed in full: its view, its
+ * poll, its region. Only the route that is still the reader's may become their
+ * page, and only it may show the reader an error.
  */
 async function render(route: AppRoute, historyNavigation: boolean): Promise<void> {
   const generation = ++renderGeneration;
@@ -268,7 +273,7 @@ async function render(route: AppRoute, historyNavigation: boolean): Promise<void
     const needsSession = protectedRoute(route) || !mountedPublic;
     if (needsSession) {
       const user = await session();
-      if (generation !== renderGeneration) { destroyMount(mount); restoreTitle(); return; }
+      if (generation !== renderGeneration) { destroyMount(mount); return; }
       if (protectedRoute(route) && !user) { redirectToLogin(); return; }
       if (adminRoute(route) && user?.role !== 'admin') { accessDenied(); return; }
     }
@@ -292,15 +297,28 @@ async function render(route: AppRoute, historyNavigation: boolean): Promise<void
       }
     }
   } catch (error) {
+    // A failed mount disposes its own region and nothing else. A mount that had
+    // already lost the race — a later render bumped the generation while this one
+    // awaited its data — is not the reader's route, so its failure is not the
+    // reader's error: it must not report, retitle or re-region the page they are
+    // actually on. Only a failure of the route still being rendered propagates to
+    // the caller, which turns it into the page's own error state.
     destroyMount(mount);
-    restoreTitle();
+    if (generation !== renderGeneration) return;
     throw error;
   }
 
   // The mount's own awaits are over: this is where the route becomes the page the
   // reader is on. A mount that stopped being the reader's route while it was
   // building is disposed in full instead, and never presented as their page.
-  if (generation !== renderGeneration) { destroyMount(mount); restoreTitle(); return; }
+  if (generation !== renderGeneration) { destroyMount(mount); return; }
+  // This is the moment the mount becomes the chrome region's child. A render that
+  // bumped the generation while this one built has already mounted the other
+  // chrome, or rebuilt this one's outlet; `committedMount` is re-pointed after the
+  // await, but the region's child cannot be, so a mount that is no longer current
+  // must not repaint the region under the reader. It is the last ownership check,
+  // because there is no `await` between here and the commit.
+  if (generation !== renderGeneration) { destroyMount(mount); return; }
   if (pendingMount === mount) pendingMount = null;
   committedMount = mount;
   // A page that styles the outlet (the Dashboard grid, the catalog's own padding)
@@ -312,7 +330,6 @@ async function render(route: AppRoute, historyNavigation: boolean): Promise<void
   // named from its own level-one heading, so no route leaves the last page's name
   // behind on the tab, the history entry or the screen reader's announcement.
   nameDocument();
-  committedTitle = document.title;
   shell.syncActive();
   // The document's own first render keeps the browser's initial focus and scroll;
   // a later route change moves the reader to the new page's heading.
@@ -342,11 +359,6 @@ function destroyMount(mount: RouteMount): void {
   (view as { destroy?(): void } | null)?.destroy?.();
 }
 
-/** Put the document's name back on the page the reader is actually on. */
-function restoreTitle(): void {
-  if (document.title !== committedTitle) document.title = committedTitle;
-}
-
 /** Route to a new location: the one place a URL change enters the application. */
 function navigate(url: string, options: { replace?: boolean } = {}): void {
   const target = new URL(url, location.origin);
@@ -370,8 +382,15 @@ async function transition(route: AppRoute, target: URL, historyNavigation: boole
     anchor?.focus?.({ preventScroll: true });
     return;
   }
+  // The generation this transition is rendering. `render` reports a failure only
+  // for the route still being rendered; a superseded transition — the reader moved
+  // on while this route was building — must not turn its own failure into the live
+  // page's error, so the report is gated on this transition still being current.
+  const generation = renderGeneration + 1;
   try { await render(route, historyNavigation); }
-  catch (error) { if ((error as Error).name !== 'AbortError') reportError(error); }
+  catch (error) {
+    if ((error as Error).name !== 'AbortError' && generation === renderGeneration) reportError(error);
+  }
 }
 
 // A qualifying in-app link is intercepted once, at the document, so the
@@ -406,6 +425,7 @@ function disposeCurrent(): void {
   if (committedMount) destroyMount(committedMount);
   committedMount = null;
   currentController.abort();
+  shell.destroy();
   shell.outlet.className = outletBase;
   shell.outlet.replaceChildren();
 }

@@ -426,3 +426,78 @@ def test_a_route_change_tears_down_the_guided_tour_it_was_decorating(page: Page)
     expect(page.get_by_role("heading", name="Runner catalog", exact=True)).to_be_visible()
     page.wait_for_timeout(600)
     expect(page.locator(".tour-callout")).to_have_count(0)
+
+
+def test_a_superseded_route_that_fails_late_cannot_overwrite_the_current_page(page: Page) -> None:
+    """A route the reader has left must not report its own failure over their page.
+
+    The overlapping-navigation contract for the *rejected* path. The reader opens a
+    protected route A whose render awaits the session before it can mount anything;
+    the session request is held, so A's page is staged into the region while that
+    request is still in flight. The reader crosses to the public home page, which
+    settles, and only then is the held session released as a 5xx: A's render rejects
+    after the reader has moved on. That failure belongs to a route nobody is on, so
+    it releases its own region and nothing shared. The home page's address, title,
+    heading, chrome and notices are all still its own, no error page and no staged A
+    page is under it, and the crossing stayed in the document.
+    """
+    router = mount_scenario(page, controlled_scenario())
+    _probe(page)
+    held: list = []
+    page.route(f"{ORIGIN}/compute/api/auth/me", lambda route: held.append(route))
+
+    page.goto(f"{ORIGIN}/compute/dashboard")
+    assert held, "the protected route never requested its session"
+
+    # The reader crosses to the public home page while A is still waiting, and B
+    # settles with its own chrome and heading.
+    page.locator("a.app-brand").click()
+    expect(page.locator(".home-page")).to_be_visible()
+    expect(page.locator(".home-page h1")).to_have_text("REvoCompute")
+    identity = _document_identity(page)
+    title = page.title()
+    announcements = list(_announcements(page))
+
+    # A's session rejects now, after its page is gone.
+    for route in held:
+        route.fulfill(status=503, content_type="application/json", body='{"error":"session unavailable"}')
+    page.wait_for_timeout(1000)
+
+    # B is untouched: address, title, heading, chrome and notices.
+    assert page.url == f"{ORIGIN}/"
+    assert page.title() == title, "A's failure retitled the document the reader is on"
+    assert "Unable to load this view" not in page.title()
+    expect(page.locator(".home-page h1")).to_have_text("REvoCompute")
+    assert page.evaluate("() => document.querySelectorAll('.route-error').length") == 0
+    assert page.evaluate("() => document.querySelectorAll('.dashboard-page').length") == 0
+    assert page.evaluate(CHROME_STATE) == {
+        "appShell": 0, "publicHeader": 1, "outlet": "public-outlet",
+        "headings": ["REvoCompute"], "mains": 1,
+    }
+    assert page.evaluate("() => document.querySelectorAll('.app-notice.notice-error').length") == 0
+    # A's failure announced nothing: the losing mount never became a page.
+    assert _announcements(page) == announcements
+    # The crossing stayed inside the document and asked for no new entry page.
+    assert _document_identity(page) == identity
+    assert _navigation_requests(router) == ["/compute/dashboard"]
+
+
+def test_a_failure_of_the_current_route_is_reported(page: Page) -> None:
+    """The counterpart: when the route the reader is actually on fails, it is shown.
+
+    The router must not swallow a genuine failure while it ignores a superseded one.
+    The reader opens a protected route whose session the server cannot answer: the
+    route it is waiting on rejects while that route is still the reader's, so the
+    failure becomes their page - the application's own error state at the address
+    they asked for, with the document named for it.
+    """
+    router = mount_scenario(page, controlled_scenario())
+    page.route(f"{ORIGIN}/compute/api/auth/me", lambda route: route.fulfill(status=503, content_type="application/json", body='{"error":"session unavailable"}'))
+
+    page.goto(f"{ORIGIN}/compute/dashboard")
+    expect(page.locator(".route-error")).to_contain_text("Unable to load this view")
+    assert page.url == f"{ORIGIN}/compute/dashboard"
+    expect(page).to_have_title("Unable to load this view | REvoCompute")
+    assert page.evaluate("() => document.querySelectorAll('.dashboard-page').length") == 0
+    assert _navigation_requests(router) == ["/compute/dashboard"]
+    assert router.requests.matching("/compute/api/auth/me")
