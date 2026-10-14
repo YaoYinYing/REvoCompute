@@ -18,15 +18,18 @@ idempotency key per request (so a retried click cannot duplicate a mutation).
 from __future__ import annotations
 
 import json
+import logging
 import secrets
 import time
 from enum import Enum
 from typing import Any, Callable, Mapping
 
 import sqlalchemy as sa
+from sqlalchemy.exc import OperationalError
 
 from revocompute.operator_jobs_schema import operator_jobs_table
 from revocompute.serialization import canonical_digest
+from revocompute.sqlite_startup import enter_wal_mode
 
 
 class OperatorJobStatus(str, Enum):
@@ -136,8 +139,22 @@ class OperatorJobStore:
         self.table = operator_jobs_table(self.metadata)
         with self.engine.begin() as conn:
             conn.exec_driver_sql("PRAGMA busy_timeout=30000")
-            conn.exec_driver_sql("PRAGMA journal_mode=WAL")
-            self.metadata.create_all(conn, checkfirst=True)
+            # A peer process running this startup pass at the same time can hold
+            # the lock the WAL conversion needs; the shared helper retries that
+            # one case and re-raises anything else.
+            if not enter_wal_mode(conn.exec_driver_sql):
+                logging.warning(
+                    "Operator job pragma initialization is locked; proceeding with default pragmas for this process."
+                )
+            try:
+                self.metadata.create_all(conn, checkfirst=True)
+            except OperationalError as exc:
+                # Concurrent startup passes (web and MCP services) can race
+                # ``create_all``; the loser sees an "already exists" error, which
+                # is benign.  Anything else is real schema drift and still fails.
+                if "already exists" not in str(exc).lower():
+                    raise
+                logging.warning("Operator job metadata already present, skipping creation")
 
     # -- reads ---------------------------------------------------------------
 
