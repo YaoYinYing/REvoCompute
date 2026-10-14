@@ -140,18 +140,19 @@ result store, and deploy stamp and writes one machine-readable receipt under
 
 `mcp-status` is read-only and non-mutating, but it is not a flag read: it prints
 the `MCP_ENABLED` switch, whether the gateway route is present, the
-container-internal listener port, and then proves the surface is really reachable.
+container-internal port of the `mcp` service, and then proves the surface is
+really reachable.
 Reachability has two parts — the running web process must report the surface
 `enabled` at the public `GET /compute/api/mcp` capability (which is itself derived
 from the deployment's *own public endpoint* having answered a real MCP
 `initialize` handshake through the gateway, and only from that), and `mcp-status`
 must then complete that same `initialize` handshake through the gateway route an
-agent host will use. A healthy in-process listener plus a route file is not
+agent host will use. An answering MCP service plus a route file is not
 enough: the route file is a file fact, never proof the gateway serves the route,
-so a listener that bound while the route is missing or stale — or a gateway that
-never reloaded after the route was written — is reported absent to the browser
-rather than advertised as an endpoint nothing external answers. When the web
-process cannot reach the deployment's own public base URL, set
+so an MCP service that answers while the route is missing or stale -- or a gateway
+that never reloaded after the route was written -- is reported absent to the
+browser rather than advertised as an endpoint nothing external answers. When the
+web process cannot reach the deployment's own public base URL, set
 `MCP_GATEWAY_PROBE=true` so it verifies its own endpoint (one bounded request to
 a destination fixed by `SERVER_BASE_URL`, never a caller-supplied URL); with the
 probe unset, reachability is reported *unverified* and nothing is advertised.
@@ -160,8 +161,8 @@ after a healthy handshake stops being advertised, and one that is repaired
 starts being advertised again, without a `restart`; while the verdict is being
 refreshed a capability read reports the reach as unverified rather than reuse an
 expired answer. A
-deployment whose env file sets `MCP_ENABLED=true` while the
-process serves nothing, or whose gateway route does not carry a working endpoint,
+deployment whose env file sets `MCP_ENABLED=true` while nothing
+serves the surface, or whose gateway route does not carry a working endpoint,
 is a failure (exit non-zero) rather than silently "disabled" or cheerfully
 "enabled", so a half-applied opt-in is visible. The handshake is unauthenticated
 because `initialize` is the pre-credential step; it carries and prints no
@@ -172,7 +173,7 @@ credential. `mcp-status` holds no lock and starts no container.
 The agent [MCP interface](../user-guide/mcp-interface.md) is **opt-in and
 disabled by default**. One switch, `MCP_ENABLED`, decides the whole deployment
 fact: when it is unset, no gateway route is written, the Compose overlay is not
-layered, and the listener never starts, so the deployment serves the HTTP API and
+layered, and no MCP service exists, so the deployment serves the HTTP API and
 Web application exactly as before.
 
 Enabling it is three deliberate steps:
@@ -184,7 +185,7 @@ Enabling it is three deliberate steps:
 # 2. In the deployment env file: MCP_ENABLED=true   (optional MCP_PORT, default 8081)
 
 # 3. Restart. The controller layers docker-compose.mcp.yml, reconciles the
-#    gateway route from MCP_ENABLED, and the listener starts in the web process.
+#    gateway route from MCP_ENABLED, and starts the `mcp` service.
 REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh restart
 
 # Confirm the opt-in took effect end to end
@@ -200,17 +201,28 @@ configuration only at container start, so the walk restarts the gateway after
 
 Boundaries that do not move:
 
-- The listener binds a container-internal port on the compose network only; it is
-  never published to the host. The sole entry point is the gateway `location /k/`.
-- There is no second service, no shadow rate limiter, and no second execution
-  plane. The listener runs in the canonical web process, so the canonical
-  authentication, entitlement, admission, readiness, quota, result
-  authorization, and per-route rate limiter all apply.
+- The `mcp` service binds a container-internal port on the compose network only;
+  it is never published to the host. The sole entry point is the gateway
+  `location /k/`.
+- The service is a separate process from the Gunicorn web service, and that is
+  deliberate: the web service runs `--preload` with two workers, so a listener
+  started at import time would live in the pre-fork master -- unsupervised, and
+  re-forked on every worker recycle. Running the MCP surface as its own service
+  puts no fork anywhere in its path.
+- There is no shadow rate limiter and no second execution plane. The `mcp`
+  process imports the canonical application, so the canonical authentication,
+  entitlement, admission, readiness, quota, result authorization, and per-route
+  rate limiter all apply, and it shares the Redis-backed limiter and the
+  user/Task/handle databases. The limiter's in-memory fallback is per process by
+  construction and is used only while Redis is unavailable: HTTP and MCP then
+  each limit their own traffic rather than sharing one budget. That degraded mode
+  is the canonical limiter's documented behavior, not an MCP-specific one.
 - The surface exposes no admin, host operation, GPU-credit mutation, or
   arbitrary command/path capability.
 
-To roll back, set `MCP_ENABLED=false` and run `restart`: the route is removed and
-the deployment returns to its pre-MCP shape. The image may keep the transport
+To roll back, set `MCP_ENABLED=false` and run `restart`: the route is removed, the
+`mcp` service is stopped, and the deployment returns to its pre-MCP shape. The
+image may keep the transport
 extra installed without consequence; only the switch governs the surface.
 
 `prepare` and `live-test` do not stop or recreate the healthy deployment. Run
