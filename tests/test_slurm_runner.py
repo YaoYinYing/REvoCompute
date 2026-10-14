@@ -602,7 +602,16 @@ def test_render_apptainer_isolates_network_unless_declared(tmp_path):
     )
     script = networked._render_wrapper()
     assert "--net --network none" not in script
-    assert "--no-home" in script
+
+
+def test_render_apptainer_leaves_a_writable_private_home(tmp_path):
+    """--containall gives the container a private, *writable* HOME tmpfs, and
+    nothing written there reaches the host.  --no-home on top of it mounts that
+    path read-only, so any tool that resolves a cache under $HOME (torch,
+    huggingface, triton, dgl, prody) dies on mkdir instead of running."""
+    script = SlurmJob("task-1", _make_task_type(), _make_runner(), _make_entities(), str(tmp_path / "out"))._render_wrapper()
+    assert "--containall" in script
+    assert "--no-home" not in script
 
 
 def test_render_apptainer_keeps_parameters_in_typed_json_env(tmp_path):
