@@ -122,45 +122,54 @@ def _ledger_rows(subject_id: int) -> list[dict[str, Any]]:
     ]
 
 
-def build_resource_entitlement(subject_id: int) -> dict[str, Any]:
+def build_resource_entitlement(
+    subject_id: int,
+    *,
+    compute: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """The canonical envelope a subject reads from its own endpoint.
 
     One gated GPU unit with settled usage and a live reserve, and one ungated CPU
     unit: the two states the page must render differently - a bar against a finite
     denominator and the explicit "not gated" text - both appear in one payload.
+
+    ``compute`` overrides the units so a test can state a position the default does
+    not carry (an account over its allowance, a granted zero, a unit with no
+    ceiling) while every other fact stays the canonical projection.
     """
+    units = compute if compute is not None else [
+        {
+            "unit": "gpu_second",
+            "resource_class": "a100",
+            "enforced": True,
+            "allowance": DEFAULT_GPU_ALLOWANCE,
+            "used": DEFAULT_GPU_USED,
+            "reserved": DEFAULT_GPU_RESERVED,
+            "unsettled_allocations": 1,
+            "unsettled_quantity": DEFAULT_GPU_RESERVED,
+            "remaining": DEFAULT_GPU_ALLOWANCE - DEFAULT_GPU_USED - DEFAULT_GPU_RESERVED,
+            "usage_complete": False,
+            "evidence_sources": ["slurm_accounting"],
+        },
+        {
+            "unit": "cpu_core_second",
+            "resource_class": "",
+            "enforced": False,
+            "allowance": None,
+            "used": 12_000,
+            "reserved": 0,
+            "unsettled_allocations": 0,
+            "unsettled_quantity": 0,
+            "remaining": None,
+            "usage_complete": True,
+            "evidence_sources": [],
+        },
+    ]
     payload = {
         "subject_type": "user",
         "subject_id": subject_id,
         "period": "2026-10",
-        "compute": [
-            {
-                "unit": "gpu_second",
-                "resource_class": "a100",
-                "enforced": True,
-                "allowance": DEFAULT_GPU_ALLOWANCE,
-                "used": DEFAULT_GPU_USED,
-                "reserved": DEFAULT_GPU_RESERVED,
-                "unsettled_allocations": 1,
-                "unsettled_quantity": DEFAULT_GPU_RESERVED,
-                "remaining": DEFAULT_GPU_ALLOWANCE - DEFAULT_GPU_USED - DEFAULT_GPU_RESERVED,
-                "usage_complete": False,
-                "evidence_sources": ["slurm_accounting"],
-            },
-            {
-                "unit": "cpu_core_second",
-                "resource_class": "",
-                "enforced": False,
-                "allowance": None,
-                "used": 12_000,
-                "reserved": 0,
-                "unsettled_allocations": 0,
-                "unsettled_quantity": 0,
-                "remaining": None,
-                "usage_complete": True,
-                "evidence_sources": [],
-            },
-        ],
+        "compute": units,
         "storage": {
             "logical_owned_bytes": 10_737_418_240,
             "soft_limit_bytes": 21_474_836_480,

@@ -123,21 +123,35 @@ export function creditLine(summary: ResourceLedger): string {
 function barTrack(entitlement: ResourceEntitlement['compute'][number]): HTMLElement {
   const bar = quotaBar(entitlement);
   if (bar.kind === 'text') return text('p', bar.reason, 'quota-bar-note');
+  // The row holds the allowance track plus, when the account is over, the overage
+  // band that carries whatever exceeds the allowance. The track is always exactly
+  // the allowance, so its own bands are clamped to it; the overage band past it is
+  // sized by the fraction over 100% and therefore never folded back into the track.
+  const row = element('div', 'quota-bar-row');
   const track = element('div', `quota-bar${bar.over ? ' is-over' : ''}`);
+  const total = bar.usedPercent + bar.reservedPercent;
+  // The row states the whole position: the track holds the allowance's own width
+  // and the overage band takes the rest, so an overdraw is drawn past the track
+  // rather than clamped into it. ``--quota-total`` is used+reserved as a fraction
+  // of the allowance (100% -> 1), which the row's own flex sizing reads.
+  row.style.setProperty('--quota-total', String(total / 100));
   const settled = element('div', 'quota-bar-used');
   settled.style.setProperty('width', `${bar.usedPercent}%`);
   const reserved = element('div', 'quota-bar-reserved');
   reserved.style.setProperty('width', `${bar.reservedPercent}%`);
   track.append(settled, reserved);
+  row.append(track);
+  if (bar.over) row.append(element('div', 'quota-bar-overage'));
   track.setAttribute('role', 'img');
   track.setAttribute(
     'aria-label',
     t(bar.over ? 'quota.bar.ariaOver' : 'quota.bar.aria', {
       used: bar.usedPercent.toFixed(1),
       reserved: bar.reservedPercent.toFixed(1),
+      total: total.toFixed(1),
     }),
   );
-  return track;
+  return row;
 }
 
 /** The bar panel: one row per gated-or-ungated unit, each stating its own bands. */

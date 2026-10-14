@@ -6,18 +6,43 @@
  * from another route brings exactly this file with it. The bars are drawn only
  * against a finite denominator: an ungated unit or a non-positive allowance is a
  * text state, never a percentage the server did not compute.
+ *
+ * The bar is honest about the allowance. The row is the whole position: the track
+ * holds the allowance's own share of it and the overage band past the track holds
+ * whatever exceeds the allowance, so the two together state the true used+reserved
+ * ratio and the overdraw is never folded back into the track. The track itself is
+ * exactly the allowance, so its settled and reserved bands are clamped to it; when
+ * usage exceeds the allowance the track's border and fill take the danger tone and
+ * the stripe-patterned overage band states the fraction by which the account is
+ * over.
  */
 
 .quota-position h3 { margin: 1.1rem 0 .5rem; font: 600 .95rem/1.2 var(--font-display); }
 .quota-bars { display: grid; gap: .7rem; margin: 0 0 1rem; }
-.quota-bar-item { display: grid; gap: .3rem; }
+.quota-bar-item { display: grid; gap: .3rem; min-width: 0; }
 .quota-bar-item h4 { margin: 0; color: var(--app-muted); font-size: .7rem; font-weight: 650; }
-.quota-bar { display: flex; width: 100%; height: .7rem; overflow: hidden; border: 1px solid var(--app-line); border-radius: var(--r-pill); background: var(--app-raised); }
-.quota-bar-used { height: 100%; background: var(--app-accent-2); }
-.quota-bar-reserved { height: 100%; background: repeating-linear-gradient(45deg, color-mix(in srgb, var(--app-accent-2) 45%, transparent) 0 4px, transparent 4px 8px); }
-/* An overdraft is shown past the track at its real ratio, never clamped. */
+/* The row holds the allowance track and, when the account is over, the overage
+   band past it. The row's own width is the position: the track is the allowance's
+   share of it and the overage band is the excess, so together they span the true
+   used+reserved ratio. --quota-total is used+reserved as a fraction of the
+   allowance (100% -> 1), so the track is 1/total of the row and the overage is the
+   rest; at or under the allowance there is no overage and the track is the row. */
+.quota-bar-row { display: flex; align-items: stretch; width: 100%; height: .7rem; }
+/* The track is exactly the allowance. Its bands are clamped to it and never
+   shrink, so the track's own width is the full allowance regardless of the ratio.
+   At or under the allowance it takes the whole row; over it, it keeps the
+   allowance's own share and the overage band takes the rest. */
+.quota-bar { display: flex; flex: 0 0 min(100%, calc(100% / var(--quota-total, 1))); min-width: 0; height: 100%; overflow: hidden; border: 1px solid var(--app-line); border-radius: var(--r-pill); background: var(--app-raised); }
+.quota-bar-used { flex: 0 0 auto; height: 100%; background: var(--app-accent-2); }
+.quota-bar-reserved { flex: 0 0 auto; height: 100%; background: repeating-linear-gradient(45deg, color-mix(in srgb, var(--app-accent-2) 45%, transparent) 0 4px, transparent 4px 8px); }
+/* Over the allowance: the track keeps the allowance's own width and the overage
+   band takes the rest of the row, so the overdraw is drawn past the track at its
+   real over-100 share rather than clamped into it. The track's border and fill
+   take the danger tone. */
 .quota-bar.is-over { border-color: var(--app-danger); }
 .quota-bar.is-over .quota-bar-used { background: var(--app-danger); }
+.quota-bar.is-over .quota-bar-reserved { background: repeating-linear-gradient(45deg, color-mix(in srgb, var(--app-danger) 45%, transparent) 0 4px, transparent 4px 8px); }
+.quota-bar-overage { flex: 0 0 calc(100% - 100% / var(--quota-total, 1)); height: 100%; border-left: 2px solid var(--app-surface); border-radius: var(--r-pill); background: repeating-linear-gradient(-45deg, color-mix(in srgb, var(--app-danger) 70%, transparent) 0 4px, transparent 4px 8px); }
 .quota-bar-note { margin: 0; color: var(--app-muted); font-size: .68rem; line-height: 1.45; font-variant-numeric: tabular-nums; }
 .quota-window-note { margin: .5rem 0 0; color: var(--app-muted); font-size: .68rem; }
 .quota-ledger-table td:last-child { min-width: 14rem !important; }
