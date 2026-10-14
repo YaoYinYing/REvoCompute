@@ -313,7 +313,7 @@ def test_prepared_restart_validates_new_snapshot_after_down_without_build_or_pul
 
     assert result.returncode != 0
     assert "Prepared SIF has no valid live-test receipt" in result.stderr
-    assert any(command.endswith(" down") for command in commands)
+    assert any("down" in command.split() for command in commands)
     assert not any(" config --quiet" in command for command in commands)
     assert not any(" build " in command or " pull " in command for command in commands)
     assert not any("up --no-build -d redis web gateway maintenance worker" in command for command in commands)
@@ -334,7 +334,7 @@ def test_prepared_restart_rejects_missing_sif_after_down(tmp_path):
 
     assert result.returncode != 0
     assert "Missing SIF image" in result.stderr
-    assert any(command.endswith(" down") for command in commands)
+    assert any("down" in command.split() for command in commands)
     assert not any(" build " in command or " pull " in command or " up " in command for command in commands)
 
 
@@ -626,7 +626,7 @@ def test_restart_rejects_incomplete_new_runtime_snapshot_after_shutdown(tmp_path
 
     assert result.returncode != 0
     assert "runner directory is missing" in result.stderr.lower()
-    assert any(command.endswith(" down") for command in commands)
+    assert any("down" in command.split() for command in commands)
     assert not any(" pull " in command or " up " in command for command in commands)
 
 
@@ -653,7 +653,7 @@ def test_missing_global_slurm_family_image_is_rejected_before_new_instance_start
     assert result.returncode != 0
     assert "Missing SIF image" in result.stderr
     assert "gpu_runner.sif" in result.stderr
-    assert any(command.endswith(" down") for command in commands)
+    assert any("down" in command.split() for command in commands)
     assert not any(" pull " in command or " up " in command for command in commands)
 
 

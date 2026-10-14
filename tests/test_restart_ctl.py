@@ -1390,7 +1390,7 @@ def test_a_rollback_down_removes_the_orphaned_mcp_container(monkeypatch, tmp_pat
 
     assert result.returncode == 0, result.stderr
     commands = (tmp_path / "docker.log").read_text(encoding="utf-8").splitlines()
-    teardown = [command for command in commands if command.split()[-1] == "down" or "down" in command.split()]
+    teardown = [command for command in commands if "down" in command.split()]
     assert teardown, commands
     assert any("--remove-orphans" in command for command in teardown), teardown
 
