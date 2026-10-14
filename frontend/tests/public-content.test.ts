@@ -1,15 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
-import { accessState } from '../src/features/profile/index';
+import { accessState } from '../src/features/profile/sections';
 import { parseLegalMarkdown } from '../src/features/legal/index';
 
-describe('public and Profile presentation data', () => {
+describe('public and Account presentation data', () => {
   it('parses the canonical legal document without accepting HTML as markup', () => {
-    const blocks = parseLegalMarkdown('# Terms\n\n## Access {#restricted}\n\n- Keep credentials private.\n- Open **Profile**.\n\n<script>alert(1)</script>');
+    const blocks = parseLegalMarkdown('# Terms\n\n## Access {#restricted}\n\n- Keep credentials private.\n- Open **Account**.\n\n<script>alert(1)</script>');
     expect(blocks).toEqual([
       { kind: 'heading', level: 1, text: 'Terms' },
       { kind: 'heading', level: 2, text: 'Access', id: 'restricted' },
-      { kind: 'list', ordered: false, items: ['Keep credentials private.', 'Open **Profile**.'] },
+      { kind: 'list', ordered: false, items: ['Keep credentials private.', 'Open **Account**.'] },
       { kind: 'paragraph', text: '<script>alert(1)</script>' },
     ]);
   });

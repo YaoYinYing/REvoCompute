@@ -21,6 +21,28 @@ const doneKey = 'revocompute-tour-done';
 const stepKey = 'revocompute-tour-step';
 const resultKey = 'revocompute-tour-result';
 
+/**
+ * The event an in-document route change dispatches so a tour does not outlive its
+ * page.
+ *
+ * A tour decorates the page it belongs to, so it must not survive leaving that
+ * page. The two ways of leaving differ, and only one of them needs telling. A
+ * document navigation fires `pagehide`, which the tour already hears: the page is
+ * gone, but the tour itself may have asked for that navigation — a step whose
+ * surface is another route advances by navigating — so its progress is left in
+ * place for the far side to resume.
+ *
+ * An in-document route change fires no such event, so the navigation layer
+ * announces it instead. That is the reader leaving of their own accord, so the
+ * tour ends there, remembered progress included: a surface the reader walked to
+ * themselves must not reopen a tour they walked away from.
+ *
+ * The signal is a plain document event rather than a callback registry: the
+ * navigation layer never has to own a registry of live tours, and a page that
+ * never opened one pays nothing for the one listener it installs.
+ */
+export const GUIDED_TOUR_ABORT_EVENT = 'revocompute:tour-abort';
+
 interface TourStep {
   /** Route prefix that identifies the step's surface. */
   route: string;
@@ -71,6 +93,17 @@ const steps: TourStep[] = [
 export class GuidedTour {
   private callout: HTMLElement | null = null;
   private index = 0;
+
+  constructor() {
+    if (typeof document === 'undefined' || !document.addEventListener) return;
+    // Two signals remove the overlay: a document navigation fires `pagehide`, and
+    // an in-document route change dispatches the abort event. One listener each,
+    // installed for the tour's lifetime, so the page that owns the anchor stops
+    // being decorated the moment the reader leaves it. A bfcache restore keeps the
+    // document and brings the page back, so a persisted `pagehide` is left alone.
+    document.addEventListener('pagehide', event => { if (!(event as PageTransitionEvent).persisted) this.close(); });
+    document.addEventListener(GUIDED_TOUR_ABORT_EVENT, () => this.abort());
+  }
 
   private get done(): boolean { return localStorage.getItem(doneKey) === 'true'; }
 
@@ -205,6 +238,17 @@ export class GuidedTour {
     document.querySelectorAll('.tour-anchor').forEach(node => node.classList.remove('tour-anchor'));
     this.callout?.remove(); this.callout = null;
   }
+
+  /**
+   * End the tour because the reader left the page it was decorating.
+   *
+   * The abort event is dispatched only by an in-document route change, which is
+   * always the reader's own move, so the tour ends there - remembered step
+   * included, or the surface they walked to would reopen a tour they left. A
+   * step's own hop to another route is a document navigation, announced by
+   * `pagehide`, which only removes the overlay and leaves the step to resume.
+   */
+  private abort(): void { localStorage.removeItem(stepKey); this.close(); }
 
   private dismiss(): void { localStorage.setItem(doneKey, 'true'); localStorage.removeItem(stepKey); localStorage.removeItem(resultKey); this.close(); }
   private finish(): void { localStorage.removeItem(stepKey); localStorage.removeItem(resultKey); if (this.index >= steps.length - 1) localStorage.setItem(doneKey, 'true'); this.close(); }

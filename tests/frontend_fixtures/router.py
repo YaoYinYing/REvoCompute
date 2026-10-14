@@ -46,7 +46,7 @@ _PROFILE_FIELDS = frozenset({"full_name", "affiliation", "position", "pi_name"})
 
 _APP_PAGE = re.compile(
     r"/(?:api-docs|runners|runners/[^/]+|compute/terms"
-    r"|compute/(?:login|register|reset_password|user_verify|profile|user_control|configuration|logs"
+    r"|compute/(?:login|register|reset_password|user_verify|profile|account/[^/]+|user_control|configuration|logs"
     r"|create_task|dashboard|results/[0-9a-fA-F]{32}))"
 )
 

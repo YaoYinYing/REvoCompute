@@ -111,10 +111,14 @@ def test_detailed_task_preview_uses_the_register_measure_and_keeps_actions_reach
     assert host["width"] >= row["width"] - 2
     assert actions["y"] >= expanded["y"] + expanded["height"] - 1
     assert abs(actions["x"] - facts["x"]) <= 1
-    confirmations: list[str] = []
-    page.once("dialog", lambda dialog: (confirmations.append(dialog.message), dialog.dismiss()))
+    # Deletion is confirmed through the application's own dialog, which names the
+    # Task it is about to destroy. Dismissing it leaves the Task untouched.
     card.get_by_role("button", name="Delete", exact=True).click()
-    assert confirmations and "With input preview" in confirmations[0]
+    confirm = page.locator("#app-dialog")
+    expect(confirm).to_be_visible()
+    expect(confirm).to_contain_text("With input preview")
+    confirm.get_by_role("button", name="Cancel", exact=True).click()
+    expect(confirm).to_be_hidden()
     preview.locator("summary").click()
     collapsed = card.bounding_box()
     assert collapsed and collapsed["height"] < row["height"] - 250
