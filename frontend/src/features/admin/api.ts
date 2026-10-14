@@ -18,6 +18,7 @@ export type TaskPlacement = components['schemas']['TaskSummary']['placement'];
 export type TaskSummary = components['schemas']['TaskSummary'];
 export type StorageQuotaEntitlement = components['schemas']['StorageQuotaEntitlement'];
 export type StorageQuotaMutationResult = components['schemas']['StorageQuotaMutationResult'];
+export type AdminResourceSubjectReport = components['schemas']['AdminResourceSubjectReport'];
 
 export type AdminUser = components['schemas']['AdminUser'];
 export type AdminUserCreate = components['schemas']['AdminUserCreateRequest'];
@@ -100,6 +101,9 @@ export const adminApi = {
   updateConfiguration: (update: Partial<Pick<AdminConfiguration, 'task_types' | 'resources' | 'slurm'>>): Promise<{ message: string }> => json('/compute/api/auth/admin/config', 'PUT', update),
   listTasks: (): Promise<TaskSummary[]> => authorizedJson<components['schemas']['TaskList']>('/compute/api/tasks').then(data => data.tasks),
   getUserEntitlement: (userId: number): Promise<ResourceEntitlement> => authorizedJson(`/compute/api/auth/admin/users/${userId}/resource-entitlement`),
+  /** One subject's complete resource position, from the same canonical reads. */
+  getResourceReport: (userId: number, limit?: number): Promise<AdminResourceSubjectReport> =>
+    authorizedJson(`/compute/api/auth/admin/reports/resources?subject=${encodeURIComponent(String(userId))}${limit === undefined ? '' : `&limit=${encodeURIComponent(String(limit))}`}`),
   getTaskCatalog: (): Promise<TaskCatalog> => authorizedJson('/compute/api/types'),
   getInfrastructure: (): Promise<InfrastructureReadiness> => authorizedJson('/compute/api/infrastructure'),
   refreshInfrastructure: (): Promise<InfrastructureReadiness> => json('/compute/api/auth/admin/infrastructure/refresh', 'POST'),

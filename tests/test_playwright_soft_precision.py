@@ -291,11 +291,11 @@ def test_account_destinations_match_session_semantics(
         expect(account).to_have_attribute("href", "/compute/profile" if signed_in else "/compute/login")
         return
     # The Account region rests on the session. Signed in it is the reader's own
-    # section navigation; signed out the six destination slots are unreachable and
-    # the region is a single sign-in affordance, so no link ever offers a signed-out
-    # reader a protected page.
+    # section navigation plus the account's Quota destination; signed out the
+    # seven destination slots are unreachable and the region is a single sign-in
+    # affordance, so no link ever offers a signed-out reader a protected page.
     account = page.locator("[data-nav-group='account'] a:visible")
-    expect(account).to_have_count(6 if signed_in else 1)
+    expect(account).to_have_count(7 if signed_in else 1)
     if not signed_in:
         expect(account.first).to_have_text(sign_in)
     destination = "/compute/profile" if signed_in else "/compute/login?return_to=%2Frunners"

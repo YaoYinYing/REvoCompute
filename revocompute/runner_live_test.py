@@ -26,6 +26,7 @@ from revocompute.artifact_evidence import (
     write_artifact_evidence,
 )
 from revocompute.compose import detect_compose_cmd, run_cmd
+from revocompute import resource_ledger as rloan
 from revocompute.runner_registry import (
     RegistryError,
     RuntimeFamily,
@@ -747,6 +748,22 @@ class RunnerLiveTestWorker:
 
     @staticmethod
     def _gpu_accounting_valid(execution: dict[str, Any], evidence: Any) -> bool:
+        """Whether the case produced exact settled GPU-credit evidence.
+
+        The evidence is the canonical projection: one ``resource_allocations``
+        fact per accounting unit and one ``resource_ledger`` usage fact per unit
+        that held a resource.  This reads the canonical columns those rows carry
+        (``resource_count``, ``quantity``, ``subject_id``), not the legacy
+        ``gpu_allocations`` names the pre-unification table used, so a validator
+        and a projector cannot drift into agreeing on a shape neither writes.
+
+        It requires evidence of at least one GPU draw -- a GPU live case that
+        settled no GPU second has not proved the accounting -- and then demands
+        the facts reconcile exactly: each GPU allocation charged its own
+        ``resource_count * elapsed`` seconds, each is attributable to the Task
+        and subject under a Slurm job this execution reports, and the ledger's
+        own usage equals the balance the case moved and the usage it reported.
+        """
         if not isinstance(evidence, dict):
             return False
         allocations = evidence.get("allocations")
@@ -754,9 +771,9 @@ class RunnerLiveTestWorker:
         if not isinstance(allocations, list) or not allocations or not isinstance(entries, list):
             return False
         task_id = evidence.get("task_id")
-        user_id = evidence.get("user_id")
+        subject_id = evidence.get("subject_id")
         period = evidence.get("period")
-        if not isinstance(task_id, str) or not isinstance(user_id, int) or not isinstance(period, str):
+        if not isinstance(task_id, str) or not isinstance(subject_id, int) or not isinstance(period, str):
             return False
         job_ids = {
             str(job.get("job_id"))
@@ -770,19 +787,25 @@ class RunnerLiveTestWorker:
         for allocation in allocations:
             if not isinstance(allocation, dict) or allocation.get("status") != "settled":
                 return False
+            # The projection is GPU-only: a row in another unit, or one that
+            # held no GPU, is not a GPU fact and must never be credited here.
+            if allocation.get("unit") != rloan.UNIT_GPU_SECOND:
+                return False
             try:
                 elapsed = max(0, math.ceil(float(allocation["finished_at"]) - float(allocation["started_at"])))
-                expected = int(allocation["gpu_count"]) * elapsed
-                actual = int(allocation["gpu_seconds"])
+                held = int(allocation["resource_count"])
+                expected = held * elapsed
+                actual = int(allocation["quantity"])
             except (KeyError, TypeError, ValueError):
                 return False
             allocation_job_id = str(allocation.get("slurm_job_id"))
             if (
-                actual <= 0
+                held < 1
+                or actual <= 0
                 or actual != expected
                 or allocation_job_id not in job_ids
                 or allocation.get("task_id") != task_id
-                or allocation.get("user_id") != user_id
+                or allocation.get("subject_id") != subject_id
             ):
                 return False
             allocations_by_job[allocation_job_id] = allocation
@@ -792,8 +815,12 @@ class RunnerLiveTestWorker:
         for entry in entries:
             if not isinstance(entry, dict) or entry.get("kind") != "usage":
                 return False
+            # The ledger charges one usage fact per unit; a GPU case reads only
+            # the GPU second it draws, keyed by that unit's own fact.
+            if entry.get("unit") != rloan.UNIT_GPU_SECOND:
+                return False
             try:
-                usage = -int(entry["gpu_seconds"])
+                usage = -int(entry["quantity"])
             except (KeyError, TypeError, ValueError):
                 return False
             entry_job_id = str(entry.get("slurm_job_id"))
@@ -802,10 +829,10 @@ class RunnerLiveTestWorker:
                 allocation is None
                 or entry_job_id in entry_job_ids
                 or entry.get("task_id") != task_id
-                or entry.get("user_id") != user_id
+                or entry.get("subject_id") != subject_id
                 or entry.get("period") != period
                 or entry.get("stage_id") != allocation.get("stage_id")
-                or usage != allocation.get("gpu_seconds")
+                or usage != allocation.get("quantity")
             ):
                 return False
             entry_job_ids.add(entry_job_id)
@@ -817,8 +844,11 @@ class RunnerLiveTestWorker:
             reported_usage = int(evidence["usage_gpu_seconds"])
         except (KeyError, TypeError, ValueError):
             return False
+        # A GPU live case proves the accounting only if it charged GPU seconds,
+        # once per settled job, from the balance the case actually moved.
         return (
-            entry_job_ids == set(allocations_by_job)
+            total > 0
+            and entry_job_ids == set(allocations_by_job)
             and total == entry_usage == balance_delta == reported_usage
         )
 

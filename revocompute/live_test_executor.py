@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from revocompute import task_runtime
+from revocompute import resource_ledger as rloan
 from revocompute.live_tests import atomic_write_json, sha256_file
 from revocompute.resource_observations import observations_for_guidance
 
@@ -292,7 +293,19 @@ def _gpu_accounting_evidence(task_id: str, context: dict[str, Any] | None) -> di
     user_id = int(context["user_id"])
     before = context["before"]
     after = task_runtime.task_store.gpu_credit_summary(user_id)
-    allocations = task_runtime.task_store.list_task_allocations(task_id)
+    # GPU acceptance settles credits, so it publishes exactly the facts the
+    # ledger charges for GPUs and nothing else.  ``list_task_allocations``
+    # returns every unit of the Task -- including the zero-``resource_count``
+    # ``gpu_second`` row the canonical model deliberately writes for a CPU-only
+    # stage, and the ``cpu_core_second`` row every Slurm allocation carries.
+    # Those are real accounting facts, but they are not GPU credits: a
+    # CPU-only stage holds no GPU, and publishing its cores as GPU seconds
+    # would credit a GPU allowance nobody drew on.
+    allocations = [
+        allocation
+        for allocation in task_runtime.task_store.list_task_allocations(task_id)
+        if allocation["unit"] == rloan.UNIT_GPU_SECOND and int(allocation["resource_count"] or 0) >= 1
+    ]
     usage_entries = [
         entry
         for entry in task_runtime.task_store.list_compute_ledger(user_id, period=before["period"], limit=200)
@@ -300,7 +313,7 @@ def _gpu_accounting_evidence(task_id: str, context: dict[str, Any] | None) -> di
     ]
     return {
         "task_id": task_id,
-        "user_id": user_id,
+        "subject_id": user_id,
         "period": before["period"],
         "before_remaining_gpu_seconds": before["remaining_gpu_seconds"],
         "after_remaining_gpu_seconds": after["remaining_gpu_seconds"],

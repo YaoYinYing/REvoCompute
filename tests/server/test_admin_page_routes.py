@@ -52,6 +52,7 @@ _NON_ADMIN_PAGE_ROUTES = frozenset(
         "/compute/user_verify",
         "/compute/terms",
         "/compute/profile",
+        "/compute/quota",
         "/compute/create_task",
         "/compute/dashboard",
         "/compute/results/<md5sum>",

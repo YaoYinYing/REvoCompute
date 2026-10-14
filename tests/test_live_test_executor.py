@@ -232,6 +232,15 @@ def test_wrapper_resource_observation_rejects_oversized_or_unknown_content(tmp_p
 
 
 def test_gpu_live_case_seeds_isolated_authorization_and_reports_exact_settlement(monkeypatch, tmp_path):
+    """A GPU live case seeds its own authorization, readiness, and balance.
+
+    The projector half of the acceptance: the case must provision the isolated
+    state its own admission needs, and the settlement it reports must be the
+    canonical one.  The validator half — the projector's real output passed
+    unchanged into ``_gpu_accounting_valid``, including the CPU-only and core-unit
+    rows a GPU settlement must ignore — lives in
+    ``tests/server/test_gpu_accounting_acceptance.py``.
+    """
     database = TaskDatabase(str(tmp_path / "gpu-live.sqlite3"))
     monkeypatch.setattr(live_test_executor.task_runtime, "task_store", database)
     monkeypatch.setattr(

@@ -553,6 +553,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/compute/api/resource-ledger": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get the current user's own append-only resource ledger
+         * @description The immutable facts the balance is summed from, newest first and bounded. Each row names the unit it was charged in and the ledger kind, and - when the ledger recorded one - the Task, stage, Slurm job, and resource class that produced it. Rows that carry no Task are returned as unattributed rather than omitted, so a page is never read as a complete attribution.
+         */
+        get: operations["getCurrentResourceLedger"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/compute/api/user-metrics": {
         parameters: {
             query?: never;
@@ -2122,6 +2142,37 @@ export interface components {
             };
             /** @description Admin-only component evidence. */
             components?: components["schemas"]["InfrastructureComponent"][];
+        };
+        /** @description One immutable ledger fact as the canonical projection serves it. A row with no task_id is unattributed: the ledger recorded consumption without an owner, and the fact is published rather than dropped, so a bounded page is never read as a complete attribution. */
+        ResourceLedgerEntry: {
+            id: number;
+            /** @enum {string} */
+            subject_type: "user";
+            subject_id: number;
+            period: string;
+            /** @enum {string} */
+            kind: "monthly_grant" | "allowance_adjustment" | "usage" | "admin_adjustment" | "reversal" | "admin_reset" | "migration_adjustment" | "storage_usage";
+            /** @enum {string} */
+            unit: "gpu_second" | "cpu_core_second" | "storage_byte";
+            resource_class?: string;
+            quantity: number;
+            task_id?: string | null;
+            stage_id?: string | null;
+            slurm_job_id?: string | null;
+            actor_user_id?: number | null;
+            reason?: string | null;
+            reason_code?: string | null;
+            /** @enum {string} */
+            evidence_source?: "allocation_lifecycle" | "slurm_live" | "slurm_accounting" | "runner_observation" | "scheduler_log" | "reconciliation" | "policy" | "unknown";
+            created_at: number;
+        };
+        /** @description One bounded window of a subject's append-only ledger, naming the period the periodic units were filtered to and the ceiling the window was clamped to. Durable storage-ownership rows span periods and are therefore always included. */
+        ResourceLedger: {
+            subject_id: number;
+            period: string;
+            limit: number;
+            limit_ceiling: number;
+            entries: components["schemas"]["ResourceLedgerEntry"][];
         };
         GPUCreditLedgerEntry: {
             id: number;
@@ -4048,6 +4099,31 @@ export interface operations {
                     "application/json": components["schemas"]["GPUCreditSummary"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    getCurrentResourceLedger: {
+        parameters: {
+            query?: {
+                /** @description Page size, clamped to the report ceiling of 200; the response reports the effective page size. */
+                limit?: components["parameters"]["ReportLimit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The authenticated user's bounded ledger window */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceLedger"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
         };
     };

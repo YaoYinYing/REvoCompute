@@ -111,10 +111,23 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .archive-group summary { display: flex; justify-content: space-between; gap: 1rem; padding: .6rem; cursor: pointer; font-size: .72rem; }
 .archive-group ul { margin: 0; padding: 0; list-style: none; }.archive-group li { display: flex; justify-content: space-between; gap: 1rem; padding: .5rem .7rem; border-top: 1px solid var(--app-line); font-size: .68rem; }.archive-group li span { color: var(--app-muted); }
 
-/* Runner fleet: derived readiness, capacity, and access, each a separate fact. */
+/* Runner Management: derived readiness, capacity, and access, each a separate
+   fact, summarized in actionable bands rather than a computed health number. */
 .fleet-executor { margin: 0 0 .9rem; padding: .6rem .8rem; border-left: 2px solid var(--app-success); border-radius: var(--r-util); background: var(--app-soft); color: var(--app-muted); font-size: .72rem; line-height: 1.5; }
 .fleet-executor.is-warning { border-left-color: var(--app-danger); }
 .fleet-executor strong { color: var(--app-ink); }
+.fleet-summary { margin: 0 0 1rem; }
+.fleet-summary h2 { margin: 0 0 .3rem; font: 600 1.1rem/1.2 var(--font-display); }
+.fleet-summary-line { max-width: 70ch; margin: 0 0 .7rem; color: var(--app-muted); font-size: .76rem; }
+.fleet-summary-bands { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-top: 1px solid var(--app-line); border-bottom: 1px solid var(--app-line); }
+.fleet-band { display: grid; min-width: 0; gap: .2rem; padding: .75rem .8rem; border-right: 1px solid var(--app-line); }
+.fleet-band:last-child { border-right: 0; }
+.fleet-band-label { color: var(--app-muted); font-size: .66rem; font-weight: 650; }
+.fleet-band-count { font-family: var(--font-display); font-size: 1.5rem; font-variant-numeric: tabular-nums; }
+.fleet-band-copy { color: var(--app-muted); font-size: .66rem; line-height: 1.4; }
+.fleet-band.is-unavailable .fleet-band-count { color: var(--app-danger); }
+.fleet-band.is-stale_build .fleet-band-count, .fleet-band.is-needs_attention .fleet-band-count { color: var(--app-accent-2); }
+.fleet-band.is-ready .fleet-band-count { color: var(--app-success); }
 .fleet-identity { display: grid; gap: .12rem; min-width: 12rem !important; }
 .fleet-identity small, .admin-table td small { display: block; margin-top: .2rem; color: var(--app-muted); overflow-wrap: anywhere; }
 .fleet-open { padding: 0; border: 0; background: transparent; color: var(--app-accent); cursor: pointer; font: 650 .82rem/1.2 var(--font-display); text-align: left; }
@@ -142,9 +155,9 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .fleet-history-list { display: grid; gap: .35rem; }
 .fleet-history-row { padding: .5rem .6rem; border: 1px solid var(--app-line); border-radius: var(--r-util); }
 .fleet-history-row small { display: block; margin-top: .2rem; color: var(--app-muted); font-size: .67rem; }
-@media (max-width: 70rem) { .fleet-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 70rem) { .fleet-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); } .fleet-summary-bands { grid-template-columns: repeat(2, minmax(0, 1fr)); } .fleet-band:nth-child(2) { border-right: 0; } .fleet-band:nth-child(-n+2) { border-bottom: 1px solid var(--app-line); } }
 @media (max-width: 48rem) { .fleet-action { align-items: start; flex-direction: column; } }
-@media (max-width: 30rem) { .fleet-facts { grid-template-columns: 1fr; } }
+@media (max-width: 30rem) { .fleet-facts { grid-template-columns: 1fr; } .fleet-summary-bands { grid-template-columns: 1fr; } .fleet-band { border-right: 0; border-bottom: 1px solid var(--app-line); } .fleet-band:last-child { border-bottom: 0; } }
 
 @media (max-width: 70rem) {
   .config-field-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }

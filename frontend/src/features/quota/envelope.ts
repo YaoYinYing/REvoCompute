@@ -1,11 +1,7 @@
-import type { AppShell } from '../../../app/shell';
-import { adminApi, idempotencyKey, type AdminUser, type ComputeEntitlement, type ResourceEntitlement, type StorageEntitlement, type StorageQuotaEntitlement } from '../api';
-import { button, element, formatBytes, openDialog, setBusy, text } from '../shared/dom';
-
 /*
- * The canonical per-user resource envelope, read only.
+ * The canonical per-account resource envelope, read only.
  *
- * Admission decides against this projection, so an operator reads the same
+ * Admission decides against this projection, so a reader is shown the same
  * position the server does rather than a second balance derived here. Two facts
  * are deliberately not collapsed into a number:
  *
@@ -15,28 +11,42 @@ import { button, element, formatBytes, openDialog, setBusy, text } from '../shar
  *   ``usage_complete`` false with the quantity still outstanding, so a reader is
  *   never told an exact balance that the server does not yet know.
  *
- * This surface only reads. A quota or allowance change is an auditable adjustment
- * made through the endpoint that owns it, not an edit made here.
+ * This surface only reads. A quota or allowance change is an auditable
+ * adjustment made through the endpoint that owns it, not an edit made here.
  */
 
-const UNIT_LABEL: Record<ComputeEntitlement['unit'], string> = {
-  gpu_second: 'GPU seconds',
-  cpu_core_second: 'CPU core seconds',
-  storage_byte: 'Storage bytes',
+import type { AppShell } from '../../app/shell';
+import { t } from '../../app/i18n';
+import { adminApi, idempotencyKey, type AdminUser, type ComputeEntitlement, type ResourceEntitlement, type StorageEntitlement, type StorageQuotaEntitlement } from '../admin/api';
+import { button, element, formatBytes, openDialog, setBusy, text } from '../../components/dom';
+
+/*
+ * Every string below is display copy of the read-only envelope, so it goes through
+ * the frontend catalog: the user's own Quota page and an administrator's drill-in
+ * render this one section, and both must read it in the reader's own language.
+ * The English values are the exact copy this section rendered before, so the
+ * default output is unchanged. The admin mutation form further down is policy
+ * input, not display, and is deliberately not routed here.
+ */
+const UNIT_KEY: Record<ComputeEntitlement['unit'], string> = {
+  gpu_second: 'quota.unit.gpuSecond',
+  cpu_core_second: 'quota.unit.cpuCoreSecond',
+  storage_byte: 'quota.unit.storageByte',
 };
 
 export function unitLabel(unit: ComputeEntitlement['unit']): string {
-  return UNIT_LABEL[unit] ?? unit;
+  const key = UNIT_KEY[unit];
+  return key ? t(key) : unit;
 }
 
 /** A Slurm resource class, or the class-agnostic allowance it actually governs. */
 export function classLabel(entitlement: ComputeEntitlement): string {
-  return entitlement.resource_class || 'Any class';
+  return entitlement.resource_class || t('quota.class.any');
 }
 
 /** A gated amount, or the explicit statement that no policy gates this unit. */
 export function gatedAmount(value: number | null): string {
-  return value === null ? 'Not gated' : value.toLocaleString();
+  return value === null ? t('quota.gated.notGated') : value.toLocaleString();
 }
 
 export function countLabel(value: number): string {
@@ -45,36 +55,40 @@ export function countLabel(value: number): string {
 
 /** Whether the recorded usage is the whole story, and what is still outstanding. */
 export function usageState(entitlement: ComputeEntitlement): string {
-  if (entitlement.usage_complete) return 'Complete';
-  if (!entitlement.unsettled_allocations) return 'Incomplete';
-  return `Incomplete · ${entitlement.unsettled_allocations} allocation(s) unsettled`;
+  if (entitlement.usage_complete) return t('quota.usage.complete');
+  if (!entitlement.unsettled_allocations) return t('quota.usage.incomplete');
+  return t('quota.usage.unsettled', { count: entitlement.unsettled_allocations });
 }
 
 /** The configured durable-storage ceiling, or the explicit absence of one. */
 export function storageCeiling(storage: StorageEntitlement): string {
-  return storage.soft_limit_bytes === null ? 'Not configured' : formatBytes(storage.soft_limit_bytes);
+  return storage.soft_limit_bytes === null ? t('quota.storage.notConfigured') : formatBytes(storage.soft_limit_bytes);
 }
 
 /** What remains before later submissions are refused, or the fact that nothing does. */
 export function storageRemaining(storage: StorageEntitlement): string {
-  return storage.remaining_bytes === null ? 'Not limited' : formatBytes(storage.remaining_bytes);
+  return storage.remaining_bytes === null ? t('quota.storage.notLimited') : formatBytes(storage.remaining_bytes);
 }
 
 export function storageState(storage: StorageEntitlement): string {
-  return storage.over_soft_limit ? 'Over ceiling' : 'Within ceiling';
+  return storage.over_soft_limit ? t('quota.storage.over') : t('quota.storage.within');
 }
 
 function computeTable(entries: ComputeEntitlement[]): HTMLElement {
-  if (!entries.length) return text('p', 'No compute entitlement is recorded for this user.', 'admin-empty');
+  if (!entries.length) return text('p', t('quota.envelope.noCompute'), 'admin-empty');
   const table = element('table', 'admin-table resource-envelope-table');
   const head = element('thead');
-  head.append(element('tr', '', ['Unit', 'Class', 'Enforced', 'Allowance', 'Used', 'Reserved', 'Remaining', 'Usage'].map(label => text('th', label))));
+  head.append(element('tr', '', [
+    'quota.envelope.col.unit', 'quota.envelope.col.class', 'quota.envelope.col.enforced',
+    'quota.envelope.col.allowance', 'quota.envelope.col.used', 'quota.envelope.col.reserved',
+    'quota.envelope.col.remaining', 'quota.envelope.col.usage',
+  ].map(key => text('th', t(key)))));
   const body = element('tbody');
   for (const entry of entries) {
     body.append(element('tr', '', [
       text('td', unitLabel(entry.unit)),
       text('td', classLabel(entry)),
-      text('td', entry.enforced ? 'Gated' : 'Recorded only'),
+      text('td', entry.enforced ? t('quota.envelope.gated') : t('quota.envelope.recordedOnly')),
       text('td', gatedAmount(entry.allowance)),
       text('td', countLabel(entry.used)),
       text('td', countLabel(entry.reserved)),
@@ -96,10 +110,10 @@ function storageFacts(storage: StorageEntitlement): HTMLElement {
     return item;
   };
   facts.append(
-    fact('Owned bytes', formatBytes(storage.logical_owned_bytes)),
-    fact('Ceiling', storageCeiling(storage)),
-    fact('Remaining', storageRemaining(storage)),
-    fact('State', storageState(storage), storage.over_soft_limit ? 'is-attention' : ''),
+    fact(t('quota.storage.owned'), formatBytes(storage.logical_owned_bytes)),
+    fact(t('quota.storage.ceiling'), storageCeiling(storage)),
+    fact(t('quota.storage.remaining'), storageRemaining(storage)),
+    fact(t('quota.storage.state'), storageState(storage), storage.over_soft_limit ? 'is-attention' : ''),
   );
   return facts;
 }
@@ -126,10 +140,10 @@ export const QUOTA_STATES: ReadonlyArray<{ value: string; label: string }> = [
 /** The bytes to send for one decision, or a reason the request cannot be made. */
 export function quotaRequest(state: string, rawBytes: string): { limitBytes: number | null } | { error: string } {
   if (state !== 'limited') return { limitBytes: null };
-  const text = rawBytes.trim();
-  if (!text) return { error: 'A limited quota needs a byte ceiling; use 0 to allow no durable storage.' };
-  if (!/^\d+$/.test(text)) return { error: 'The byte ceiling must be a whole, non-negative number of bytes.' };
-  return { limitBytes: Number(text) };
+  const value = rawBytes.trim();
+  if (!value) return { error: 'A limited quota needs a byte ceiling; use 0 to allow no durable storage.' };
+  if (!/^\d+$/.test(value)) return { error: 'The byte ceiling must be a whole, non-negative number of bytes.' };
+  return { limitBytes: Number(value) };
 }
 
 /** What the control states about the position the server reported. */
@@ -234,10 +248,10 @@ export async function loadStorageQuota(user: AdminUser, shell: AppShell): Promis
 export function envelopeSection(period: string, envelope: ResourceEntitlement): HTMLElement {
   const section = element('section', 'resource-envelope');
   section.append(
-    text('h3', 'Resource envelope'),
-    text('p', `Compute entitlement and durable-storage ownership for ${period}, as admission reads it. Read-only.`, 'admin-dialog-copy'),
+    text('h3', t('quota.envelope.heading')),
+    text('p', t('quota.envelope.caption', { period }), 'admin-dialog-copy'),
     computeTable(envelope.compute),
-    text('h4', 'Durable storage'),
+    text('h4', t('quota.storage.heading')),
     storageFacts(envelope.storage),
   );
   return section;
@@ -250,7 +264,7 @@ export async function loadEnvelope(userId: number): Promise<HTMLElement> {
     return envelopeSection(envelope.period, envelope);
   } catch (error) {
     const section = element('section', 'resource-envelope');
-    section.append(text('h3', 'Resource envelope'), text('p', (error as Error).message || 'Unable to load the resource envelope.', 'error-state'));
+    section.append(text('h3', t('quota.envelope.heading')), text('p', (error as Error).message || t('quota.error.envelope'), 'error-state'));
     return section;
   }
 }

@@ -374,9 +374,14 @@ def test_live_worker_gpu_accounting_acceptance_requires_exact_slurm_settlement()
         "slurm_job_id": "42",
         "slurm_jobs": [{"stage": "model", "job_id": "42"}],
     }
+    # The canonical shape: ``resource_allocations`` rows carry ``resource_count``
+    # and ``quantity`` for a ``subject_id``, and the ledger's usage fact carries
+    # ``quantity``.  A validator reading the pre-unification names
+    # (``gpu_count``/``gpu_seconds``/``user_id``) can never see a row the store
+    # actually writes, which is how a broken acceptance check stayed green.
     evidence = {
         "task_id": "a" * 32,
-        "user_id": 1,
+        "subject_id": 1,
         "period": "2026-09",
         "before_remaining_gpu_seconds": 60_000,
         "after_remaining_gpu_seconds": 59_978,
@@ -385,21 +390,24 @@ def test_live_worker_gpu_accounting_acceptance_requires_exact_slurm_settlement()
             {
                 "slurm_job_id": "42",
                 "task_id": "a" * 32,
-                "user_id": 1,
+                "subject_id": 1,
                 "stage_id": "model",
-                "gpu_count": 2,
+                "unit": "gpu_second",
+                "resource_class": "a100",
+                "resource_count": 2,
                 "started_at": 100.0,
                 "finished_at": 110.2,
-                "gpu_seconds": 22,
+                "quantity": 22,
                 "status": "settled",
             }
         ],
         "usage_entries": [
             {
                 "kind": "usage",
-                "gpu_seconds": -22,
+                "unit": "gpu_second",
+                "quantity": -22,
                 "task_id": "a" * 32,
-                "user_id": 1,
+                "subject_id": 1,
                 "period": "2026-09",
                 "stage_id": "model",
                 "slurm_job_id": "42",
@@ -411,13 +419,24 @@ def test_live_worker_gpu_accounting_acceptance_requires_exact_slurm_settlement()
     for key, value in (
         ("after_remaining_gpu_seconds", 59_979),
         ("usage_gpu_seconds", 21),
-        ("usage_entries", [{**evidence["usage_entries"][0], "gpu_seconds": -21}]),
+        ("usage_entries", [{**evidence["usage_entries"][0], "quantity": -21}]),
     ):
         assert not RunnerLiveTestWorker._gpu_accounting_valid(execution, {**evidence, key: value})
     changed_allocation = {**evidence["allocations"][0], "slurm_job_id": "43"}
     assert not RunnerLiveTestWorker._gpu_accounting_valid(
         execution,
         {**evidence, "allocations": [changed_allocation]},
+    )
+    # A settled GPU-second fact that charged a CPU-only stage's cores, or a
+    # non-GPU unit at all, is not GPU credit evidence and never counts as the
+    # draw a GPU live case has to prove.
+    zero_gpu = {**evidence["allocations"][0], "resource_count": 0, "quantity": 0}
+    assert not RunnerLiveTestWorker._gpu_accounting_valid(
+        execution, {**evidence, "allocations": [zero_gpu], "usage_entries": []}
+    )
+    core_unit = {**evidence["allocations"][0], "unit": "cpu_core_second"}
+    assert not RunnerLiveTestWorker._gpu_accounting_valid(
+        execution, {**evidence, "allocations": [core_unit]}
     )
 
 

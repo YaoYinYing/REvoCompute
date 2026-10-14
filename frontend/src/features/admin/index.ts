@@ -3,14 +3,14 @@ import type { AppShell } from '../../app/shell';
 import { ConfigurationAdmin } from './configuration/ConfigurationAdmin';
 import { FleetAdmin } from './fleet/FleetAdmin';
 import { LogsAdmin } from './logs/LogsAdmin';
-import { element, text } from './shared/dom';
+import { element, text } from '../../components/dom';
 import { UserAdmin } from './users/UserAdmin';
 import './admin.css';
 
 export type AdminRoute = 'admin-fleet' | 'admin-users' | 'admin-configuration' | 'admin-logs';
 
 const headings: Record<AdminRoute, [string, string]> = {
-  'admin-fleet': ['Runner fleet', 'Derived readiness, transient capacity, access, and typed corrective actions for every enabled Runner family.'],
+  'admin-fleet': ['Runner Management', 'Every enabled Runner runtime family, its derived readiness, transient capacity, and access, with the typed corrective actions that keep it submittable.'],
   'admin-users': ['User control', 'Manage accounts, Runner access, and GPU credit operations.'],
   'admin-configuration': ['Runtime configuration', 'Manage task availability, resource policy, and infrastructure evidence.'],
   'admin-logs': ['Server logs', 'Inspect bounded active logs and managed rotated archives.'],

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { adminRoute, protectedRoute, publicShellRoute, resolveRoute } from '../src/app/router';
+import { adminRoute, protectedRoute, publicShellRoute, resolveRoute, routePath } from '../src/app/router';
 
 describe('application routes', () => {
   it('resolves every frontend-owned route', () => {
@@ -22,6 +22,8 @@ describe('application routes', () => {
     expect(resolveRoute('/compute/account/gpu-credits')).toEqual({ id: 'account', section: 'gpu-credits' });
     expect(resolveRoute('/compute/account/metrics')).toEqual({ id: 'account', section: 'metrics' });
     expect(resolveRoute('/compute/account/unknown')).toEqual({ id: 'not-found' });
+    expect(resolveRoute('/compute/quota')).toEqual({ id: 'quota' });
+    expect(routePath({ id: 'quota' })).toEqual('/compute/quota');
     expect(resolveRoute('/compute/runner_fleet')).toEqual({ id: 'admin-fleet' });
     expect(resolveRoute('/compute/user_control')).toEqual({ id: 'admin-users' });
     expect(resolveRoute('/compute/configuration')).toEqual({ id: 'admin-configuration' });
@@ -34,6 +36,7 @@ describe('application routes', () => {
     expect(protectedRoute(resolveRoute('/compute/login'))).toBe(false);
     expect(protectedRoute(resolveRoute('/compute/dashboard'))).toBe(true);
     expect(protectedRoute(resolveRoute('/compute/profile'))).toBe(true);
+    expect(protectedRoute(resolveRoute('/compute/quota'))).toBe(true);
     expect(adminRoute(resolveRoute('/compute/runner_fleet'))).toBe(true);
     expect(protectedRoute(resolveRoute('/compute/runner_fleet'))).toBe(true);
     expect(adminRoute(resolveRoute('/compute/user_control'))).toBe(true);

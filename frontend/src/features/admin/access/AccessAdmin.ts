@@ -10,7 +10,7 @@ import {
   type EntitlementGrant,
   type EntitlementGrantRequest,
 } from '../api';
-import { button, element, empty, formatDate, openDialog, reasonContent, setBusy, text } from '../shared/dom';
+import { button, element, empty, formatDate, openDialog, reasonContent, setBusy, text } from '../../../components/dom';
 
 function identity(user: Partial<AdminUser> & { user_id?: number }): string {
   return user.full_name || user.username || user.email || (user.user_id ? `User ${user.user_id}` : 'Unknown user');
