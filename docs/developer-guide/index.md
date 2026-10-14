@@ -22,6 +22,9 @@ execution boundaries, extension contracts, and the test policy.
   semantics audit.
 - [Input and Result Workspace (Design Record)](input-result-workspace.md) — the
   pluggable input/result workspace design and its status.
+- [Local Result Workspace (Future Requirement)](local-result-workspace.md) —
+  deferred browser-local preview of extracted result archives after server
+  quota reclamation.
 - [Frontend Design Language](frontend-design-language.md) — the visual
   vocabulary (colour, surface, type, radius, shadow, control and status roles)
   that frontend changes are judged against.
