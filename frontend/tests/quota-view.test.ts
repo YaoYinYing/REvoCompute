@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { clearSessionCredential } from '../src/app/session';
 import { getResourceEntitlement, getResourceLedger, type ResourceEntitlement, type ResourceLedger } from '../src/api/app-api';
 import { adminApi } from '../src/features/admin/api';
-import { formatCredits } from '../src/features/admin/shared/dom';
+import { formatCredits } from '../src/components/dom';
 import { gpuCell } from '../src/features/admin/users/UserAdmin';
 import {
   attributionLabel,
@@ -14,7 +14,7 @@ import {
   quotaBars,
   quotaLedgerSection,
   quotaPosition,
-} from '../src/features/admin/users/QuotaView';
+} from '../src/features/quota/QuotaView';
 
 /*
  * The Account Quota position's accounting facts, driven through the smallest DOM

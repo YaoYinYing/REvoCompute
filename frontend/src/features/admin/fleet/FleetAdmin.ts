@@ -11,7 +11,7 @@ import {
   type RunnerFleetEntry,
   type RunnerReadiness,
 } from '../api';
-import { button, element, empty, formatDate, openDialog, reasonContent, setBusy, text } from '../shared/dom';
+import { button, element, empty, formatDate, openDialog, reasonContent, setBusy, text } from '../../../components/dom';
 
 /*
  * Runner Management.

@@ -1,4 +1,4 @@
-import { Bell, ChartLine, FileText, Gauge, KeyRound, LayoutDashboard, LogOut, PanelLeft, PanelLeftClose, Plus, ServerCog, Settings, ShieldCheck, UserCog, UserRound, UsersRound, Workflow, createIcons } from 'lucide';
+import { Bell, ChartLine, FileText, Gauge, KeyRound, LayoutDashboard, LogOut, PanelLeft, PanelLeftClose, Plus, Scale, ServerCog, Settings, ShieldCheck, UserCog, UserRound, UsersRound, Workflow, createIcons } from 'lucide';
 import type { CurrentUser } from '../api/app-api';
 import { authorizedJson, clearSessionCredential } from './session';
 import { ADMIN_DESTINATIONS } from './admin-destinations';
@@ -23,7 +23,7 @@ const railKey = 'revocompute-rail';
 type RailState = 'collapsed' | 'expanded';
 const shellIcons = {
   Bell, ChartLine, FileText, Gauge, KeyRound, LayoutDashboard, LogOut, PanelLeft, PanelLeftClose, Plus,
-  ServerCog, Settings, ShieldCheck, UserCog, UserRound, UsersRound, Workflow,
+  Scale, ServerCog, Settings, ShieldCheck, UserCog, UserRound, UsersRound, Workflow,
 };
 
 function storedRail(): RailState { return localStorage.getItem(railKey) === 'expanded' ? 'expanded' : 'collapsed'; }
@@ -43,6 +43,18 @@ const ACCOUNT_DESTINATIONS: ReadonlyArray<NavDestination> = [
   ['/compute/account/gpu-credits', 'gauge', 'shell.account.gpuCredits'],
   ['/compute/account/metrics', 'chart-line', 'shell.account.metrics'],
 ];
+
+/**
+ * The account's own resource position, reached beside the Account sections.
+ *
+ * The Quota page is the reader's own view, read from the endpoints scoped to
+ * them, so it is a destination of the Account region rather than an Account
+ * section: it is not one of ``router.ts``'s ``accountSections`` (which are the
+ * Account's own sub-pages), it has its own protected route id, and it must not
+ * appear in the Frontend/Server section parity set. It shares the region's
+ * session semantics: signed out, the region collapses to one sign-in affordance.
+ */
+const QUOTA_DESTINATION: NavDestination = ['/compute/quota', 'scale', 'shell.account.quota'];
 
 export function mountShell(root: HTMLElement): AppShell {
   root.replaceChildren();
@@ -91,7 +103,7 @@ export function mountShell(root: HTMLElement): AppShell {
   // links are rebuilt when the session changes, so no link ever points a signed-out
   // reader at a protected page.
   const accountLinks: HTMLAnchorElement[] = [];
-  for (const [, , labelKey] of ACCOUNT_DESTINATIONS) { const link = navLink('', '', ''); link.dataset.labelKey = labelKey; groups.account.items.append(link); accountLinks.push(link); }
+  for (const [, , labelKey] of [...ACCOUNT_DESTINATIONS, QUOTA_DESTINATION]) { const link = navLink('', '', ''); link.dataset.labelKey = labelKey; groups.account.items.append(link); accountLinks.push(link); }
   for (const destination of ADMIN_DESTINATIONS) {
     const link = navLink(destination.path, destination.icon, t(destination.label)); groups.admin.items.append(link);
   }
@@ -209,9 +221,11 @@ export function mountShell(root: HTMLElement): AppShell {
     const identity = user?.full_name || user?.username;
     const href = user ? '/compute/profile' : `/compute/login?return_to=${encodeURIComponent(location.pathname)}`;
     // The Account region is the user's own navigation when signed in and a single
-    // sign-in affordance when signed out.
+    // sign-in affordance when signed out. The Quota destination is the region's
+    // last slot, so its own label follows the sections' from the same table.
+    const destinations = [...ACCOUNT_DESTINATIONS, QUOTA_DESTINATION];
     accountLinks.forEach((link, index) => {
-      const destination = user ? ACCOUNT_DESTINATIONS[index] : null;
+      const destination = user ? destinations[index] : null;
       const linkLabel = destination ? t(destination[2]) : label;
       link.hidden = !user && index > 0;
       link.href = destination ? destination[0] : href;

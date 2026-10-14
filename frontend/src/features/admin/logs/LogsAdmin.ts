@@ -2,7 +2,7 @@ import type { AdminLogName } from '../../../api/contracts';
 import type { AppShell } from '../../../app/shell';
 import { adminLogOptions } from '../../../app/domain-vocabulary';
 import { adminApi } from '../api';
-import { button, element, empty, formatBytes, formatDate, setBusy, text } from '../shared/dom';
+import { button, element, empty, formatBytes, formatDate, setBusy, text } from '../../../components/dom';
 
 const maxRenderedCharacters = 1_000_000;
 const maxRenderedLines = 5_000;

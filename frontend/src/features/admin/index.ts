@@ -3,7 +3,7 @@ import type { AppShell } from '../../app/shell';
 import { ConfigurationAdmin } from './configuration/ConfigurationAdmin';
 import { FleetAdmin } from './fleet/FleetAdmin';
 import { LogsAdmin } from './logs/LogsAdmin';
-import { element, text } from './shared/dom';
+import { element, text } from '../../components/dom';
 import { UserAdmin } from './users/UserAdmin';
 import './admin.css';
 

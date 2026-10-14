@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 from urllib.parse import quote
 
+from .auth import Session
 from .models import (
     AccessState,
     ArchiveSpec,
@@ -65,6 +66,147 @@ def validate_payload(schema_name: str, payload: object) -> None:
         first = errors[0]
         location = "/".join(str(part) for part in first.absolute_path) or "<root>"
         raise AssertionError(f"{schema_name} fixture violates the canonical contract at {location}: {first.message}")
+
+
+# ---------------------------------------------------------------------------
+# The account's own resource position
+# ---------------------------------------------------------------------------
+
+#: The stable subject ids the fixtures project: one per account role, shared
+#: by the account's own reads and an operator's drill-in for the same account.
+USER_SUBJECT_ID = 1
+ADMIN_SUBJECT_ID = 2
+
+#: The default bounded ledger window the quota fixture serves.
+DEFAULT_LEDGER_LIMIT = 25
+
+#: The GPU unit's allowance and recorded usage. The gate is a real one - the bar
+#: is drawn against a positive allowance - so a reader sees a position rather than
+#: the "not gated" text state.
+DEFAULT_GPU_ALLOWANCE = 180_000
+DEFAULT_GPU_USED = 74_250
+DEFAULT_GPU_RESERVED = 6_000
+
+
+def subject_id_for(session: Session) -> int:
+    """One stable subject id per projected account, shared by every reader.
+
+    The account's own reads and an operator's drill-in for the same account must
+    resolve to one subject, so both the fixtures and the tests that compare them
+    read the id from here rather than each composing their own.
+    """
+    return ADMIN_SUBJECT_ID if session.role == "admin" else USER_SUBJECT_ID
+
+
+def _ledger_rows(subject_id: int) -> list[dict[str, Any]]:
+    """One monthly grant and one usage row, so the ledger renders real facts.
+
+    The grant carries no Task and the usage row does, so *unattributed* is
+    exercised on a real row rather than described.
+    """
+    return [
+        {
+            "id": 1, "subject_type": "user", "subject_id": subject_id, "period": "2026-10",
+            "kind": "monthly_grant", "unit": "gpu_second", "resource_class": "",
+            "quantity": DEFAULT_GPU_ALLOWANCE, "task_id": None, "stage_id": None,
+            "slurm_job_id": None, "actor_user_id": None, "reason": None, "reason_code": None,
+            "evidence_source": "policy", "created_at": 1_790_636_400,
+        },
+        {
+            "id": 2, "subject_type": "user", "subject_id": subject_id, "period": "2026-10",
+            "kind": "usage", "unit": "gpu_second", "resource_class": "a100",
+            "quantity": DEFAULT_GPU_USED, "task_id": DEFAULT_TASK_ID, "stage_id": "model",
+            "slurm_job_id": "9711", "actor_user_id": None, "reason": None, "reason_code": None,
+            "evidence_source": "slurm_accounting", "created_at": 1_790_636_500,
+        },
+    ]
+
+
+def build_resource_entitlement(subject_id: int) -> dict[str, Any]:
+    """The canonical envelope a subject reads from its own endpoint.
+
+    One gated GPU unit with settled usage and a live reserve, and one ungated CPU
+    unit: the two states the page must render differently - a bar against a finite
+    denominator and the explicit "not gated" text - both appear in one payload.
+    """
+    payload = {
+        "subject_type": "user",
+        "subject_id": subject_id,
+        "period": "2026-10",
+        "compute": [
+            {
+                "unit": "gpu_second",
+                "resource_class": "a100",
+                "enforced": True,
+                "allowance": DEFAULT_GPU_ALLOWANCE,
+                "used": DEFAULT_GPU_USED,
+                "reserved": DEFAULT_GPU_RESERVED,
+                "unsettled_allocations": 1,
+                "unsettled_quantity": DEFAULT_GPU_RESERVED,
+                "remaining": DEFAULT_GPU_ALLOWANCE - DEFAULT_GPU_USED - DEFAULT_GPU_RESERVED,
+                "usage_complete": False,
+                "evidence_sources": ["slurm_accounting"],
+            },
+            {
+                "unit": "cpu_core_second",
+                "resource_class": "",
+                "enforced": False,
+                "allowance": None,
+                "used": 12_000,
+                "reserved": 0,
+                "unsettled_allocations": 0,
+                "unsettled_quantity": 0,
+                "remaining": None,
+                "usage_complete": True,
+                "evidence_sources": [],
+            },
+        ],
+        "storage": {
+            "logical_owned_bytes": 10_737_418_240,
+            "soft_limit_bytes": 21_474_836_480,
+            "remaining_bytes": 10_737_418_240,
+            "over_soft_limit": False,
+        },
+    }
+    validate_payload("ResourceEntitlement", payload)
+    return payload
+
+
+def build_resource_ledger(subject_id: int, *, limit: int = DEFAULT_LEDGER_LIMIT) -> dict[str, Any]:
+    """One bounded ledger window for the account's own endpoint."""
+    payload = {
+        "subject_id": subject_id,
+        "period": "2026-10",
+        "limit": limit,
+        "limit_ceiling": 200,
+        "entries": _ledger_rows(subject_id),
+    }
+    validate_payload("ResourceLedger", payload)
+    return payload
+
+
+def build_admin_resource_report(subject_id: int, *, limit: int = DEFAULT_LEDGER_LIMIT) -> dict[str, Any]:
+    """The operator's drill-in: the identical canonical position for one subject."""
+    payload = {
+        "scope": "subject",
+        "limit_ceiling": 200,
+        "limit": limit,
+        "subject": {"subject_type": "user", "subject_id": subject_id},
+        "period": "2026-10",
+        "canonical_envelope": build_resource_entitlement(subject_id),
+        "units": [],
+        "allocation_facts": {"unsettled_allocations": [], "basis": "unsettled_allocation_rows"},
+        "class_breakdown": {"classes": [], "basis": "ledger_window", "window_limit": limit},
+        "storage": {},
+        "ledger": {
+            "entries": _ledger_rows(subject_id),
+            "window_limit": limit,
+            "basis": "append_only_ledger",
+        },
+        "durable_data": {"tasks": []},
+    }
+    validate_payload("AdminResourceSubjectReport", payload)
+    return payload
 
 
 # ---------------------------------------------------------------------------
@@ -827,7 +969,12 @@ def build_categorical_projection(values: Sequence[str], *, key: str | None = Non
 
 
 __all__ = [
+    "DEFAULT_GPU_ALLOWANCE",
+    "DEFAULT_GPU_RESERVED",
+    "DEFAULT_GPU_USED",
+    "DEFAULT_LEDGER_LIMIT",
     "PREFLIGHT_FIXTURES",
+    "build_admin_resource_report",
     "build_catalog",
     "build_categorical_projection",
     "build_detail",
@@ -837,6 +984,8 @@ __all__ = [
     "build_matrix_projection",
     "build_parameter_schema",
     "build_preflight",
+    "build_resource_entitlement",
+    "build_resource_ledger",
     "build_result_manifest",
     "build_runner_summary",
     "build_submit",
@@ -848,5 +997,6 @@ __all__ = [
     "openapi_spec",
     "preflight_fixture",
     "runner_access_payload",
+    "subject_id_for",
     "validate_payload",
 ]

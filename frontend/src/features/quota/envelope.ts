@@ -1,11 +1,7 @@
-import type { AppShell } from '../../../app/shell';
-import { adminApi, idempotencyKey, type AdminUser, type ComputeEntitlement, type ResourceEntitlement, type StorageEntitlement, type StorageQuotaEntitlement } from '../api';
-import { button, element, formatBytes, openDialog, setBusy, text } from '../shared/dom';
-
 /*
- * The canonical per-user resource envelope, read only.
+ * The canonical per-account resource envelope, read only.
  *
- * Admission decides against this projection, so an operator reads the same
+ * Admission decides against this projection, so a reader is shown the same
  * position the server does rather than a second balance derived here. Two facts
  * are deliberately not collapsed into a number:
  *
@@ -15,9 +11,14 @@ import { button, element, formatBytes, openDialog, setBusy, text } from '../shar
  *   ``usage_complete`` false with the quantity still outstanding, so a reader is
  *   never told an exact balance that the server does not yet know.
  *
- * This surface only reads. A quota or allowance change is an auditable adjustment
- * made through the endpoint that owns it, not an edit made here.
+ * This surface only reads. A quota or allowance change is an auditable
+ * adjustment made through the endpoint that owns it, not an edit made here.
  */
+
+import type { AppShell } from '../../app/shell';
+import { t } from '../../app/i18n';
+import { adminApi, idempotencyKey, type AdminUser, type ComputeEntitlement, type ResourceEntitlement, type StorageEntitlement, type StorageQuotaEntitlement } from '../admin/api';
+import { button, element, formatBytes, openDialog, setBusy, text } from '../../components/dom';
 
 const UNIT_LABEL: Record<ComputeEntitlement['unit'], string> = {
   gpu_second: 'GPU seconds',
@@ -126,10 +127,10 @@ export const QUOTA_STATES: ReadonlyArray<{ value: string; label: string }> = [
 /** The bytes to send for one decision, or a reason the request cannot be made. */
 export function quotaRequest(state: string, rawBytes: string): { limitBytes: number | null } | { error: string } {
   if (state !== 'limited') return { limitBytes: null };
-  const text = rawBytes.trim();
-  if (!text) return { error: 'A limited quota needs a byte ceiling; use 0 to allow no durable storage.' };
-  if (!/^\d+$/.test(text)) return { error: 'The byte ceiling must be a whole, non-negative number of bytes.' };
-  return { limitBytes: Number(text) };
+  const value = rawBytes.trim();
+  if (!value) return { error: 'A limited quota needs a byte ceiling; use 0 to allow no durable storage.' };
+  if (!/^\d+$/.test(value)) return { error: 'The byte ceiling must be a whole, non-negative number of bytes.' };
+  return { limitBytes: Number(value) };
 }
 
 /** What the control states about the position the server reported. */

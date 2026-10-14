@@ -1,8 +1,8 @@
 import type { AppShell } from '../../../app/shell';
 import { adminApi, type AdminConfiguration, type ConfigValue, type TaskCatalog, type TaskTypeConfig } from '../api';
 import { PlacementAdmin } from '../placement/PlacementAdmin';
-import { button, element, empty, formatDate, setBusy, text } from '../shared/dom';
-import { mountTabs } from '../shared/tabs';
+import { button, element, empty, formatDate, setBusy, text } from '../../../components/dom';
+import { mountTabs } from '../../../components/tabs';
 
 type FieldDefinition = { key: keyof TaskTypeConfig; label: string; type?: 'text' | 'number' | 'boolean'; placeholder?: string };
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { QUOTA_STATES, quotaRequest, quotaStateLabel, quotaTransition } from '../src/features/admin/users/ResourceEnvelope';
+import { QUOTA_STATES, quotaRequest, quotaStateLabel, quotaTransition } from '../src/features/quota/envelope';
 import type { StorageQuotaEntitlement } from '../src/features/admin/api';
 
 /*

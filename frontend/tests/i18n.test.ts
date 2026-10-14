@@ -60,12 +60,26 @@ describe('frontend localization', () => {
     const englishKeys = Object.keys(catalogs.en);
     const chineseKeys = Object.keys(catalogs['zh-CN']);
     // Same key set, same order, no duplicates: a partial catalog would let one
-    // surface fall back to English under zh-CN, which §11 forbids.
+    // surface fall back to English under zh-CN, which 11 forbids.
     expect(chineseKeys).toEqual(englishKeys);
     expect(new Set(chineseKeys).size).toBe(chineseKeys.length);
     for (const key of englishKeys) {
       expect(catalogs['zh-CN'][key], key).toBeTruthy();
       expect(catalogs.en[key], key).toBeTruthy();
+    }
+  });
+
+  it('authors the Account Quota page and its navigation label in both locales', () => {
+    // The new destination is authored copy, not a key that falls back: the label
+    // and the page's own heading are distinct, real strings in both catalogs.
+    expect(translate('en', 'shell.account.quota')).toBe('Quota');
+    expect(translate('zh-CN', 'shell.account.quota')).toBe('资源配额');
+    expect(translate('en', 'quota.title')).toBe('Quota');
+    expect(translate('zh-CN', 'quota.title')).toBe('资源配额');
+    for (const key of ['quota.description', 'quota.loading', 'quota.usage.heading', 'quota.error.generic']) {
+      expect(translate('en', key), key).not.toBe(key);
+      expect(translate('zh-CN', key), key).not.toBe(key);
+      expect(translate('zh-CN', key)).not.toBe(translate('en', key));
     }
   });
 

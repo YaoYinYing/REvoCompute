@@ -292,6 +292,11 @@ async function render(route: AppRoute, historyNavigation: boolean): Promise<void
       case 'create-task': { const { mountCreateTask } = await import('./features/create-task/index.js'); await mountCreateTask(mount.holder); break; }
       case 'result': { const { mountResultWorkspace } = await import('./features/results/index.js'); mount.view = await mountResultWorkspace(mount.holder); break; }
       case 'account': { const { mountAccount } = await import('./features/profile/index.js'); await mountAccount(mount.holder, shell, sessionUser!, route.section); break; }
+      // The Quota page reads the reader's own position from the endpoints scoped
+      // to them and returns a view, so it takes the same disposable mount the
+      // Dashboard does: the view is recorded on the mount and its own load is
+      // awaited here, so a route change while it is in flight disposes it in full.
+      case 'quota': { const { mountQuotaView } = await import('./features/quota/index.js'); const view = await mountQuotaView(mount.holder); mount.view = view; break; }
       case 'admin-fleet': case 'admin-users': case 'admin-configuration': case 'admin-logs': {
         const { mountAdmin } = await import('./features/admin/index.js'); await mountAdmin(mount.holder, route.id, shell, sessionUser!); break;
       }

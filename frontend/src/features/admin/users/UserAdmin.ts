@@ -4,10 +4,10 @@ import type { AppShell } from '../../../app/shell';
 import { AccessAdmin } from '../access/AccessAdmin';
 import { adminApi, type AdminUser, type AdminUserCreate, type AdminUserUpdate } from '../api';
 import { CreditAdmin } from '../credits/CreditAdmin';
-import { button, element, empty, formatCredits, openDialog, setBusy, text } from '../shared/dom';
-import { mountTabs } from '../shared/tabs';
-import { loadEnvelope, loadStorageQuota } from './ResourceEnvelope';
-import { loadAdminQuota } from './QuotaView';
+import { button, element, empty, formatCredits, openDialog, setBusy, text } from '../../../components/dom';
+import { mountTabs } from '../../../components/tabs';
+import { loadEnvelope, loadStorageQuota } from '../../quota/envelope';
+import { loadAdminQuota } from '../../quota/QuotaView';
 
 export interface UserFilters { query: string; role: string; status: string }
 

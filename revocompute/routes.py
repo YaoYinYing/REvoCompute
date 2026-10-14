@@ -362,6 +362,21 @@ def profile_page():
     return _serve_frontend_entry(private=True)
 
 
+@app.route("/compute/quota", methods=["GET"])
+@login_required
+def quota_page():
+    """The reader's own resource position, an inert frontend-shell page.
+
+    The shell links to this destination from its Account region and reads the
+    position itself from ``/compute/api/resource-entitlement`` and
+    ``/compute/api/resource-ledger``, both already scoped to the signed-in user.
+    The page route therefore carries no state of its own: it serves the same
+    entry document every other page route serves, so a hard refresh or a shared
+    deep link lands on a real page instead of a 404.
+    """
+    return _serve_frontend_entry(private=True)
+
+
 @app.route("/compute/api/workspace/plugins/<owner>/<plugin_id>", methods=["GET"])
 @optional_user
 def workspace_plugin_descriptor_api(owner: str, plugin_id: str):

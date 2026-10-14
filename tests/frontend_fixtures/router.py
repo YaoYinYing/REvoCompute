@@ -46,7 +46,7 @@ _PROFILE_FIELDS = frozenset({"full_name", "affiliation", "position", "pi_name"})
 
 _APP_PAGE = re.compile(
     r"/(?:api-docs|runners|runners/[^/]+|compute/terms"
-    r"|compute/(?:login|register|reset_password|user_verify|profile|account/[^/]+|user_control|configuration|logs"
+    r"|compute/(?:login|register|reset_password|user_verify|profile|quota|account/[^/]+|user_control|configuration|logs"
     r"|create_task|dashboard|results/[0-9a-fA-F]{32}))"
 )
 
@@ -351,6 +351,26 @@ class FrontendFixtureRouter:
     def _system_notices(self, route: Any, query: Any) -> None:
         return route.fulfill(json={"notices": []})
 
+    # -- the account's own resource position --------------------------------
+
+    def _resource_entitlement(self, route: Any, query: Any) -> None:
+        if self.scenario.session.role in {"anonymous", "expired"}:
+            return route.fulfill(status=401, json={"error": "Authentication required"})
+        return route.fulfill(json=builders.build_resource_entitlement(builders.subject_id_for(self.scenario.session)))
+
+    def _resource_ledger(self, route: Any, query: Any) -> None:
+        if self.scenario.session.role in {"anonymous", "expired"}:
+            return route.fulfill(status=401, json={"error": "Authentication required"})
+        limit = int((query.get("limit", [str(builders.DEFAULT_LEDGER_LIMIT)]) or [str(builders.DEFAULT_LEDGER_LIMIT)])[0])
+        return route.fulfill(json=builders.build_resource_ledger(builders.subject_id_for(self.scenario.session), limit=limit))
+
+    def _admin_resource_report(self, route: Any, query: Any) -> None:
+        if self.scenario.session.role != "admin":
+            return route.fulfill(status=403, json={"error": "Administrator access required"})
+        subject = int((query.get("subject", ["0"]) or ["0"])[0])
+        limit = int((query.get("limit", [str(builders.DEFAULT_LEDGER_LIMIT)]) or [str(builders.DEFAULT_LEDGER_LIMIT)])[0])
+        return route.fulfill(json=builders.build_admin_resource_report(subject, limit=limit))
+
     # -- Runner discovery ---------------------------------------------------
 
     def _runner_detail(self, route: Any, query: Any, name: str = "", **_: str) -> None:
@@ -494,6 +514,9 @@ _API_ROUTES: tuple[tuple[re.Pattern[str], Any], ...] = (
     (re.compile(r"/compute/api/auth/register"), FrontendFixtureRouter._auth_register),
     (re.compile(r"/compute/api/legal/terms"), FrontendFixtureRouter._legal_terms),
     (re.compile(r"/compute/api/system/notices"), FrontendFixtureRouter._system_notices),
+    (re.compile(r"/compute/api/resource-entitlement"), FrontendFixtureRouter._resource_entitlement),
+    (re.compile(r"/compute/api/resource-ledger"), FrontendFixtureRouter._resource_ledger),
+    (re.compile(r"/compute/api/auth/admin/reports/resources"), FrontendFixtureRouter._admin_resource_report),
     (re.compile(r"/compute/api/infrastructure"), lambda self, route, query: route.fulfill(json=builders.build_infrastructure(self.scenario.readiness()))),
     (re.compile(r"/compute/api/types"), lambda self, route, query: route.fulfill(json=self.scenario.catalog())),
     (re.compile(r"/compute/api/types/(?P<name>[^/]+)/workspace/normalize"), FrontendFixtureRouter._workspace_normalize),
