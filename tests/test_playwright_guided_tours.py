@@ -261,6 +261,41 @@ def test_the_abort_signal_fires_on_a_route_change_and_not_on_a_first_render(page
     assert page.evaluate("window.__tourAborts") == 1
 
 
+def test_a_tour_survives_a_reader_leg_into_the_second_route_that_owns_an_overlay(page: Page) -> None:
+    # Two Account destinations now render their own overlays: Account (the tour
+    # anchor) and Quota (the resource position). A Quota page that put an overlay
+    # in the document must not be mistaken for the reader abandoning a flow: the
+    # flow is ended by a navigation the reader made, which the abort signal states
+    # exactly once, so the leg's own tear-down fires once and the flow's progress
+    # is cleared rather than left to resume on a page it never walked to.
+    mount_scenario(page, controlled_scenario())
+    page.add_init_script(
+        "window.__tourAborts = 0;"
+        "document.addEventListener('revocompute:tour-abort', () => { window.__tourAborts += 1; });"
+    )
+    page.goto(f"{ORIGIN}/compute/dashboard")
+    expect(page.locator(".task-card").first).to_be_visible()
+    page.get_by_role("button", name="Guided tour").click()
+    expect(page.locator(".tour-callout")).to_contain_text("Step 1 of 5")
+    assert _stored(page, CREATE_STEP) == "0"
+
+    # The reader takes the Account region's own Quota destination: an in-document
+    # navigation into the second overlay-owning route.
+    page.locator("[data-nav-group='account']").get_by_role("link", name="Quota", exact=True).click()
+    expect(page.get_by_role("heading", name="Quota", exact=True)).to_be_visible()
+    assert page.url == f"{ORIGIN}/compute/quota"
+
+    # The tour's overlay is gone from the Quota page, the abort fired exactly once
+    # for the one navigation, and the flow's progress is cleared - the reader left
+    # the job the flow was walking them through, it was not a completion.
+    expect(page.locator(".tour-callout")).to_have_count(0)
+    expect(page.locator(".tour-anchor")).to_have_count(0)
+    assert page.evaluate("window.__tourAborts") == 1
+    assert _stored(page, CREATE_STEP) is None
+    assert _stored(page, "revocompute-tour-flow") is None
+    assert _stored(page, CREATE_DONE) is None
+
+
 def test_a_tour_step_across_routes_resumes_with_its_progress_intact(page: Page) -> None:
     # A step whose surface is another route advances by navigating, and that
     # navigation is the tour walking its reader forward - not the reader leaving -

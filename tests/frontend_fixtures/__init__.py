@@ -19,7 +19,11 @@ from __future__ import annotations
 from . import builders, results, scenarios
 from .auth import ADMIN_AUTH, ANONYMOUS_AUTH, EXPIRED_AUTH, USER_AUTH, Session
 from .builders import (
+    ADMIN_SUBJECT_ID,
+    DEFAULT_LEDGER_LIMIT,
     PREFLIGHT_FIXTURES,
+    USER_SUBJECT_ID,
+    build_admin_resource_report,
     build_catalog,
     build_categorical_projection,
     build_detail,
@@ -27,6 +31,8 @@ from .builders import (
     build_matrix_projection,
     build_parameter_schema,
     build_preflight,
+    build_resource_entitlement,
+    build_resource_ledger,
     build_result_manifest,
     build_runner_summary,
     build_submit,
@@ -35,6 +41,7 @@ from .builders import (
     build_task_summary,
     openapi_spec,
     preflight_fixture,
+    subject_id_for,
     validate_payload,
     view_entry,
 )
@@ -115,10 +122,12 @@ AUTHENTIC_SCENARIOS = frozenset({
 
 __all__ = [
     "ADMIN_AUTH",
+    "ADMIN_SUBJECT_ID",
     "ANONYMOUS_AUTH",
     "AUTHENTIC_SCENARIOS",
     "CONTROLLED_ACCESS_POLICY",
     "CONTROLLED_RUNNER_NAME",
+    "DEFAULT_LEDGER_LIMIT",
     "DEFAULT_MAX_BUNDLE_BYTES",
     "DEFAULT_MAX_PAYLOAD_BYTES",
     "DEFAULT_ORIGIN",
@@ -131,6 +140,7 @@ __all__ = [
     "RESULT_FIXTURES",
     "SEQUENCE_ROLE",
     "USER_AUTH",
+    "USER_SUBJECT_ID",
     "AccessState",
     "ArchiveSpec",
     "Citation",
@@ -165,7 +175,10 @@ __all__ = [
     "build_infrastructure",
     "build_matrix_projection",
     "build_parameter_schema",
+    "build_admin_resource_report",
     "build_preflight",
+    "build_resource_entitlement",
+    "build_resource_ledger",
     "build_result_manifest",
     "build_runner_summary",
     "build_submit",
@@ -195,6 +208,7 @@ __all__ = [
     "runner_scenario",
     "scenarios",
     "structure_scenario",
+    "subject_id_for",
     "validate_manifest",
     "validate_payload",
     "view_entry",

@@ -164,6 +164,50 @@ def _metrics(window: str = "daily") -> dict:
     }
 
 
+def _resource_entitlement(subject_id: int = 2) -> dict:
+    """The account's own canonical envelope: one gated unit and one ungated unit."""
+    return {
+        "subject_type": "user", "subject_id": subject_id, "period": "2026-09",
+        "compute": [
+            {
+                "unit": "gpu_second", "resource_class": "a100", "enforced": True, "allowance": 180000,
+                "used": 74250, "reserved": 6000, "unsettled_allocations": 1, "unsettled_quantity": 6000,
+                "remaining": 99750, "usage_complete": False, "evidence_sources": ["slurm_accounting"],
+            },
+            {
+                "unit": "cpu_core_second", "resource_class": "", "enforced": False, "allowance": None,
+                "used": 12000, "reserved": 0, "unsettled_allocations": 0, "unsettled_quantity": 0,
+                "remaining": None, "usage_complete": True, "evidence_sources": [],
+            },
+        ],
+        "storage": {
+            "logical_owned_bytes": 10737418240, "soft_limit_bytes": 21474836480,
+            "remaining_bytes": 10737418240, "over_soft_limit": False,
+        },
+    }
+
+
+def _resource_ledger(subject_id: int = 2) -> dict:
+    """One bounded ledger window: an unattributed grant beside an attributed usage row."""
+    return {
+        "subject_id": subject_id, "period": "2026-09", "limit": 25, "limit_ceiling": 200,
+        "entries": [
+            {
+                "id": 1, "subject_type": "user", "subject_id": subject_id, "period": "2026-09",
+                "kind": "monthly_grant", "unit": "gpu_second", "resource_class": "", "quantity": 180000,
+                "task_id": None, "stage_id": None, "slurm_job_id": None, "actor_user_id": None,
+                "reason": None, "reason_code": None, "evidence_source": "policy", "created_at": 1790636400,
+            },
+            {
+                "id": 2, "subject_type": "user", "subject_id": subject_id, "period": "2026-09",
+                "kind": "usage", "unit": "gpu_second", "resource_class": "a100", "quantity": 74250,
+                "task_id": TASK_ID, "stage_id": "model", "slurm_job_id": "9711", "actor_user_id": None,
+                "reason": None, "reason_code": None, "evidence_source": "slurm_accounting", "created_at": 1790636500,
+            },
+        ],
+    }
+
+
 def _install_app(page: Page) -> list[str]:
     dist = result_dist()
     entry = json.loads((dist / ".vite" / "manifest.json").read_text(encoding="utf-8"))["index.html"]
@@ -182,6 +226,7 @@ def _install_app(page: Page) -> list[str]:
     for pattern in (
         "/", "/api-docs", "/runners", "/runners/*", "/compute/login**", "/compute/register",
         "/compute/reset_password**", "/compute/user_verify**", "/compute/terms", "/compute/profile**", "/compute/account/*",
+        "/compute/quota",
         "/compute/runner_fleet", "/compute/user_control", "/compute/configuration", "/compute/logs", "/compute/create_task**",
         "/compute/dashboard", "/compute/results/*",
     ):
@@ -283,6 +328,9 @@ def _install_app(page: Page) -> list[str]:
     page.route(f"{ORIGIN}/compute/api/access/requests", lambda route: route.fulfill(status=201, json={"status": "pending"}))
     page.route(f"{ORIGIN}/compute/api/gpu-credit", lambda route: route.fulfill(json=_gpu_credit()))
     page.route(f"{ORIGIN}/compute/api/user-metrics?*", lambda route: route.fulfill(json=_metrics(parse_qs(urlsplit(route.request.url).query).get("window", ["daily"])[0])))
+    subject_id = 2
+    page.route(f"{ORIGIN}/compute/api/resource-entitlement", lambda route: route.fulfill(json=_resource_entitlement(subject_id)))
+    page.route(f"{ORIGIN}/compute/api/resource-ledger**", lambda route: route.fulfill(json=_resource_ledger(subject_id)))
 
     users = [_admin_user()]
 
@@ -973,6 +1021,11 @@ def test_profile_server_state_api_key_access_credits_and_metrics(page: Page) -> 
     expect(account_nav.get_by_role("link", name="Metrics", exact=True)).to_have_attribute(
         "href", "/compute/account/metrics")
 
+    # The Quota page is the account's own resource position: a destination of the
+    # Account region with its own protected address, reached from the sidebar.
+    expect(account_nav.get_by_role("link", name="Quota", exact=True)).to_have_attribute(
+        "href", "/compute/quota")
+
     page.goto(f"{ORIGIN}/compute/account/api-key")
     expect(page.get_by_role("heading", name="API key")).to_be_visible()
     page.get_by_role("button", name="Generate API key").click()
@@ -1188,8 +1241,8 @@ def _plan_payload(family: str) -> dict:
     }
 
 
-def test_admin_runner_fleet_plans_revalidates_and_runs_typed_actions(page: Page) -> None:
-    """The fleet surface reads real readiness and runs an action through the plan contract."""
+def test_admin_runner_management_plans_revalidates_and_runs_typed_actions(page: Page) -> None:
+    """The Runner Management surface reads real readiness and runs a planned action."""
     _install_app(page)
     page.route(f"{ORIGIN}/compute/api/auth/me", lambda route: route.fulfill(json=_current_user("admin")))
     posted: list[tuple[str, str, dict | None]] = []
@@ -1219,8 +1272,8 @@ def test_admin_runner_fleet_plans_revalidates_and_runs_typed_actions(page: Page)
     }))
 
     page.goto(f"{ORIGIN}/compute/runner_fleet")
-    expect(page.get_by_role("heading", name="Runner fleet", level=1)).to_be_visible()
-    expect(page.get_by_role("heading", name="Runner fleet", exact=True)).to_have_count(1)
+    expect(page.get_by_role("heading", name="Runner Management", level=1)).to_be_visible()
+    expect(page.get_by_role("heading", name="Runner Management", exact=True)).to_have_count(1)
     with page.expect_response(f"{ORIGIN}/compute/api/auth/admin/runners"):
         page.get_by_role("button", name="Refresh", exact=True).click()
     # Readiness and capacity are separate columns; the machine reason is human copy.
@@ -1229,6 +1282,12 @@ def test_admin_runner_fleet_plans_revalidates_and_runs_typed_actions(page: Page)
     expect(stale_row).to_contain_text("revalidation")
     ready_row = page.locator("tr[data-family='healthy_runner']")
     expect(ready_row).to_contain_text("Ready")
+    # The register is summarized by the server's own verdicts as counts, and the
+    # host executor is reported once as a capability rather than per family.
+    summary = page.locator(".fleet-summary")
+    expect(summary).to_contain_text("Runner families")
+    expect(summary).to_contain_text("1 of 2 enabled Runner famil")
+    expect(page.locator(".fleet-executor")).to_contain_text("Host executor available")
 
     stale_row.get_by_role("button", name="stale_runner").click()
     expect(page.get_by_role("heading", name="stale_runner", level=2)).to_be_visible()

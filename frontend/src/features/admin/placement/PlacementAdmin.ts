@@ -1,5 +1,5 @@
 import { adminApi, type AdminConfiguration, type ExecutionClass, type TaskPlacement, type TaskSummary } from '../api';
-import { button, element, empty, formatDate, setBusy, text } from '../shared/dom';
+import { button, element, empty, formatDate, setBusy, text } from '../../../components/dom';
 
 /*
  * The Admin placement register.

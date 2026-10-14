@@ -7,13 +7,14 @@ import {
   type OperatorJob,
   type OperatorPlan,
   type RunnerDetail,
+  type RunnerFleet,
   type RunnerFleetEntry,
   type RunnerReadiness,
 } from '../api';
-import { button, element, empty, formatDate, openDialog, reasonContent, setBusy, text } from '../shared/dom';
+import { button, element, empty, formatDate, openDialog, reasonContent, setBusy, text } from '../../../components/dom';
 
 /*
- * The Admin Fleet Readiness surface.
+ * Runner Management.
  *
  * It reads the control plane's own vocabulary — readiness, capacity, access,
  * the current evidence, the plan for a corrective action, and the Operator Job
@@ -22,6 +23,19 @@ import { button, element, empty, formatDate, openDialog, reasonContent, setBusy,
  * author, or expose a host path or command: every fact shown comes from the
  * Admin API, and every action is a typed intent whose plan the operator reads
  * before confirming.
+ *
+ * Four facts stay apart, because collapsing any pair of them would state
+ * something the server did not:
+ *
+ * * a family's readiness verdict is derived evidence about its artifact;
+ * * its capacity is transient execution availability;
+ * * its access is who may submit to it;
+ * * the Operator executor is a host capability that gates every mutating action
+ *   for every family at once.
+ *
+ * The executor is therefore reported once, above the register, and never folded
+ * into a family's own state; and the summary counts the server's verdicts rather
+ * than being a readiness verdict of its own.
  */
 
 /** Human copy for the machine-readable readiness reasons the server emits. */
@@ -75,8 +89,89 @@ const WORKFLOW_LABEL: Record<string, string> = {
   rollback: 'Restore previous',
 };
 
+/**
+ * The four bands a readiness verdict is summarized into.
+ *
+ * These are groupings of the server's own six verdicts, not verdicts of their
+ * own: nothing is derived here, and a family is counted in exactly one band by
+ * its ``readiness.status``. ``unavailable`` and ``stale_build`` are separated
+ * because they need different work — a family with no usable artifact cannot be
+ * validated, while a stale build is a rebuild — so an operator reads what to do
+ * next from the order rather than from a single count.
+ */
+export const WEAKNESSES = ['unavailable', 'stale_build', 'needs_attention', 'ready'] as const;
+export type Weakness = (typeof WEAKNESSES)[number];
+
+const WEAKNESS_LABEL: Record<Weakness, string> = {
+  unavailable: 'Unavailable',
+  stale_build: 'Stale build',
+  needs_attention: 'Needs attention',
+  ready: 'Ready',
+};
+
+/** Why a family sits in its band: the ordering an operator acts on. */
+const WEAKNESS_COPY: Record<Weakness, string> = {
+  unavailable: 'No usable image is active on this deployment.',
+  stale_build: 'Rebuild the image, then validate it.',
+  needs_attention: 'The image exists and needs (re)validation.',
+  ready: 'Accepting new submissions.',
+};
+
+/** The band a readiness verdict is grouped into; never a second verdict. */
+export function weaknessOf(status: string): Weakness {
+  if (status === 'NOT_CONFIGURED' || status === 'NOT_BUILT') return 'unavailable';
+  if (status === 'BUILD_STALE') return 'stale_build';
+  if (status === 'READY') return 'ready';
+  return 'needs_attention';
+}
+
+const WEAKNESS_RANK: Record<Weakness, number> = {
+  unavailable: 0,
+  stale_build: 1,
+  needs_attention: 2,
+  ready: 3,
+};
+
+export interface FleetSummaryEntry {
+  weakness: Weakness;
+  label: string;
+  count: number;
+  reason: string;
+}
+
+/**
+ * The register summarized by the server's own verdicts, in actionable order.
+ *
+ * The total is returned beside the bands so an empty register is distinguishable
+ * from a register that is entirely healthy, and a band with no member is still
+ * shown: "no family is unavailable" is a fact worth reading, not an omission.
+ */
+export function summarizeFleet(rows: RunnerFleetEntry[]): { total: number; entries: FleetSummaryEntry[] } {
+  const counts: Record<Weakness, number> = { unavailable: 0, stale_build: 0, needs_attention: 0, ready: 0 };
+  for (const row of rows) counts[weaknessOf(row.readiness.status)] += 1;
+  return {
+    total: rows.length,
+    entries: WEAKNESSES.map(weakness => ({
+      weakness,
+      label: WEAKNESS_LABEL[weakness],
+      count: counts[weakness],
+      reason: WEAKNESS_COPY[weakness],
+    })),
+  };
+}
+
+/** One line stating where the register stands, or that it is empty. */
+export function summarySentence(rows: RunnerFleetEntry[]): string {
+  const { total, entries } = summarizeFleet(rows);
+  if (!total) return 'No Runner family is enabled on this deployment.';
+  const needing = entries.filter(entry => entry.weakness !== 'ready').reduce((sum, entry) => sum + entry.count, 0);
+  const families = total === 1 ? '1 enabled Runner family' : `${total} enabled Runner families`;
+  if (!needing) return `All ${families} ${total === 1 ? 'is' : 'are'} ready.`;
+  return `${needing} of ${families} need${needing === 1 ? 's' : ''} work before accepting new submissions.`;
+}
+
 export type FleetFilter = 'all' | 'attention' | 'ready';
-export type FleetSort = 'family' | 'status';
+export type FleetSort = 'attention' | 'family' | 'status';
 
 export function reasonText(readiness: RunnerReadiness): string {
   return REASON_COPY[readiness.reason_code] || readiness.message || 'No explanation recorded.';
@@ -84,6 +179,11 @@ export function reasonText(readiness: RunnerReadiness): string {
 
 export function statusLabel(status: string): string {
   return STATUS_LABEL[status] || status;
+}
+
+/** The human band name a readiness verdict is grouped into. */
+export function weaknessLabel(status: string): string {
+  return WEAKNESS_LABEL[weaknessOf(status)];
 }
 
 /** An Operator Job's lifecycle word; job state never shares a readiness badge. */
@@ -100,7 +200,36 @@ export function workflowLabel(stage: string): string {
   return WORKFLOW_LABEL[stage] || stage;
 }
 
-/** Filter and order the fleet by the operator's current view. */
+/**
+ * What the host-executor banner says, given the server's own executor state.
+ *
+ * The server's ``unavailable_reason`` is the actionable sentence — it names the
+ * missing artifact by role and the corrective step (run the operation with
+ * ``run/restart.sh`` on the deployment host) — so it is rendered verbatim rather
+ * than replaced by a constant "unavailable". The fallback is only for an older
+ * server that reported no sentence, and it must still say what stays available.
+ */
+export function executorNotice(executor: RunnerFleet['executor']): { title: string; detail: string } {
+  if (executor.available) {
+    return {
+      title: 'Host executor available',
+      detail: ' Mutating Runner actions can be planned and run from this interface for every family below.',
+    };
+  }
+  return {
+    title: 'Host executor unavailable',
+    detail: ` ${executor.unavailable_reason || 'Readiness, capacity, access, and history stay available; mutating actions are disabled for every family until the host executor is reachable. This is a host capability, not a problem with any family below.'}`,
+  };
+}
+
+/**
+ * Filter and order the register by the operator's current view.
+ *
+ * The default order is by how much work a family needs: a family that cannot
+ * accept submissions at all sorts above one that is merely unvalidated, and a
+ * ready family sorts last. Ordering by name or by raw status stays available —
+ * the attention order is a default, not the only reading.
+ */
 export function filterFleet(
   rows: RunnerFleetEntry[],
   { query, filter, sort }: { query: string; filter: FleetFilter; sort: FleetSort },
@@ -113,9 +242,12 @@ export function filterFleet(
       if (filter === 'attention') return row.readiness.status !== 'READY';
       return true;
     })
-    .sort((a, b) => (sort === 'family'
-      ? a.runner_family.localeCompare(b.runner_family)
-      : a.readiness.status.localeCompare(b.readiness.status) || a.runner_family.localeCompare(b.runner_family)));
+    .sort((a, b) => {
+      if (sort === 'family') return a.runner_family.localeCompare(b.runner_family);
+      if (sort === 'status') return a.readiness.status.localeCompare(b.readiness.status) || a.runner_family.localeCompare(b.runner_family);
+      return WEAKNESS_RANK[weaknessOf(a.readiness.status)] - WEAKNESS_RANK[weaknessOf(b.readiness.status)]
+        || a.runner_family.localeCompare(b.runner_family);
+    });
 }
 
 function statusBadge(status: string): HTMLElement {
@@ -145,13 +277,14 @@ function field(label: string, value: string, className = ''): HTMLElement {
 
 export class FleetAdmin {
   private rows: RunnerFleetEntry[] = [];
-  private executor: { available: boolean; reason: string } | null = null;
+  private executor: RunnerFleet['executor'] | null = null;
   private filter: FleetFilter = 'all';
-  private sort: FleetSort = 'family';
+  private sort: FleetSort = 'attention';
   private query = '';
   private table = element('tbody');
   private count = text('span', 'Loading…', 'admin-count');
-  private executorBanner = element('p', 'fleet-executor');
+  private executorBanner = element('aside', 'fleet-executor');
+  private summary = element('section', 'fleet-summary');
   private refreshButton = button('Refresh');
   private readonly detail = element('section', 'fleet-detail');
 
@@ -167,12 +300,12 @@ export class FleetAdmin {
     search.autocomplete = 'off';
     search.addEventListener('input', () => { this.query = search.value.trim().toLowerCase(); this.renderTable(); });
     const filter = element('select');
-    for (const [value, label] of [['all', 'All families'], ['attention', 'Needs attention'], ['ready', 'Ready']] as Array<[FleetFilter, string]>) {
+    for (const [value, label] of [['all', 'All families'], ['attention', 'Needs work'], ['ready', 'Ready']] as Array<[FleetFilter, string]>) {
       const option = element('option'); option.value = value; option.textContent = label; filter.append(option);
     }
     filter.addEventListener('change', () => { this.filter = filter.value as FleetFilter; this.renderTable(); });
     const sort = element('select');
-    for (const [value, label] of [['family', 'Sort: family'], ['status', 'Sort: status']] as Array<[FleetSort, string]>) {
+    for (const [value, label] of [['attention', 'Order: most work first'], ['family', 'Order: family'], ['status', 'Order: verdict']] as Array<[FleetSort, string]>) {
       const option = element('option'); option.value = value; option.textContent = label; sort.append(option);
     }
     sort.addEventListener('change', () => { this.sort = sort.value as FleetSort; this.renderTable(); });
@@ -194,7 +327,10 @@ export class FleetAdmin {
     table.append(head, this.table);
     scroll.append(table);
 
-    root.append(this.executorBanner, toolbar, scroll, this.detail);
+    // The summary sits above the register, the executor banner above the summary:
+    // a host-wide capability is read once, while a family's own work is read in
+    // the band its verdict falls in.
+    root.append(this.executorBanner, this.summary, toolbar, scroll, this.detail);
     await this.load();
   }
 
@@ -205,26 +341,57 @@ export class FleetAdmin {
       this.rows = fleet.runners;
       this.executor = fleet.executor;
       this.renderExecutor();
+      this.renderSummary();
       this.renderTable();
     } catch (error) {
       this.rows = [];
+      this.summary.replaceChildren();
       this.table.replaceChildren();
-      this.table.append(element('tr', '', [element('td', '', [empty((error as Error).message || 'Unable to load the fleet.', true)])]));
+      this.table.append(element('tr', '', [element('td', '', [empty((error as Error).message || 'Unable to load the Runner register.', true)])]));
     } finally {
       setBusy(this.refreshButton, false);
     }
   }
 
+  /** The Operator executor's own state, above the register and never folded in. */
   private renderExecutor(): void {
     if (!this.executor) return;
+    const notice = executorNotice(this.executor);
     this.executorBanner.replaceChildren();
     this.executorBanner.classList.toggle('is-warning', !this.executor.available);
-    this.executorBanner.append(
-      text('strong', this.executor.available ? 'Operator executor available' : 'Operator executor unavailable'),
-      text('span', this.executor.available
-        ? ' Host operations can be planned and run from this interface.'
-        : ' Readiness, capacity, access, and history stay available; mutating actions are disabled until the host executor is reachable.'),
-    );
+    this.executorBanner.append(text('strong', notice.title), text('span', notice.detail));
+  }
+
+  /**
+   * The register's verdicts, counted and ordered by how much work each needs.
+   *
+   * Each band is the server's own verdicts grouped, with its count and the work
+   * it implies: an operator reads what to do next from the order, not from a
+   * single health number this view would have to invent.
+   */
+  private renderSummary(): void {
+    this.summary.replaceChildren();
+    if (!this.rows.length) {
+      this.summary.append(text('h2', 'Runner families'), empty('No Runner family is enabled on this deployment. Nothing can be submitted until one is enabled by an administrator.'));
+      return;
+    }
+    const { total, entries } = summarizeFleet(this.rows);
+    this.summary.append(text('h2', 'Runner families'));
+    this.summary.append(text('p', summarySentence(this.rows), 'fleet-summary-line'));
+    const list = element('div', 'fleet-summary-bands');
+    for (const entry of entries) {
+      const band = element('div', `fleet-band is-${entry.weakness}`);
+      band.dataset.band = entry.weakness;
+      band.append(
+        text('span', entry.label, 'fleet-band-label'),
+        text('strong', String(entry.count), 'fleet-band-count'),
+        text('span', entry.reason, 'fleet-band-copy'),
+      );
+      band.setAttribute('role', 'group');
+      band.setAttribute('aria-label', `${entry.label}: ${entry.count} of ${total}`);
+      list.append(band);
+    }
+    this.summary.append(list);
   }
 
   private visible(): RunnerFleetEntry[] {
@@ -236,7 +403,12 @@ export class FleetAdmin {
     this.count.textContent = `${rows.length} of ${this.rows.length} famil${this.rows.length === 1 ? 'y' : 'ies'}`;
     this.table.replaceChildren();
     if (!rows.length) {
-      this.table.append(element('tr', '', [element('td', '', [empty('No Runner families match the current filters.')])]));
+      // An empty register and an over-filtered one are different states, and a
+      // filter that matches nothing says so rather than reading as an empty fleet.
+      const message = this.rows.length
+        ? 'No Runner family matches the current filters. Clear the search or choose All families.'
+        : 'No Runner family is enabled on this deployment.';
+      this.table.append(element('tr', '', [element('td', '', [empty(message)])]));
       return;
     }
     for (const row of rows) this.table.append(this.renderRow(row));
@@ -287,17 +459,26 @@ export class FleetAdmin {
     title.append(text('h2', detail.runner_family), text('p', reasonText(detail.readiness), 'admin-section-copy'));
     head.append(title, statusBadge(detail.readiness.status));
 
-    const facts = element('dl', 'fleet-facts');
+    // Derived evidence first: every field is a fact the server read, and each is
+    // shown as the evidence it is rather than as a second verdict.
     const evidence = detail.readiness.evidence;
+    const facts = element('dl', 'fleet-facts');
     facts.append(
+      field('Readiness verdict', statusLabel(detail.readiness.status)),
+      field('Recommended next step', detail.readiness.next_action === 'none' ? 'None' : workflowLabel(detail.readiness.next_action)),
       field('Active image', evidence.sif_exists ? 'Present' : 'Missing'),
       field('Build provenance', evidence.build_provenance_current ? 'Current' : 'Stale'),
       field('Runtime bundle', evidence.runtime_bundle_sha256 ? 'Pinned' : 'None'),
       field('Live receipt', evidence.receipt_valid ? 'Valid' : evidence.receipt_exists ? 'Stale' : 'Missing'),
       field('Last validated', evidence.receipt_tested_at ? formatDate(evidence.receipt_tested_at) : 'Never'),
-      field('Smoke coverage', `${evidence.passed_smoke_cases?.length ?? 0} of ${evidence.required_smoke_cases?.length ?? 0} cases`),
-      field('Capacity', capacityLabel(detail.capacity.reason, detail.capacity.available)),
-      field('Access', detail.access.restricted ? (detail.access.granted ? 'Granted' : 'Restricted') : 'Open'),
+      field('Smoke coverage', evidence.required_smoke_cases?.length
+        ? `${evidence.passed_smoke_cases?.length ?? 0} of ${evidence.required_smoke_cases.length} cases`
+        : 'No cases declared'),
+      // Capacity and access remain their own facts beside the verdict above them:
+      // a ready family with no free compute is not a broken family.
+      field('Capacity (transient)', capacityLabel(detail.capacity.reason, detail.capacity.available)),
+      field('Access', detail.access.restricted ? (detail.access.granted ? 'Restricted · granted to you' : 'Restricted · not granted') : 'Open to all users'),
+      field('Host executor', this.executor ? (this.executor.available ? 'Available' : 'Unavailable') : 'Unknown'),
     );
 
     const actions = element('div', 'fleet-actions');

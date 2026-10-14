@@ -29,7 +29,7 @@ import {
   storageState,
   unitLabel,
   usageState,
-} from '../src/features/admin/users/ResourceEnvelope';
+} from '../src/features/quota/envelope';
 
 /*
  * The Admin placement register.

@@ -9,6 +9,9 @@ export type TaskTypeDetail = components['schemas']['TaskTypeDetail'];
 export type InfrastructureReadiness = components['schemas']['InfrastructureReadiness'];
 export type UserMetrics = components['schemas']['UserMetrics'];
 export type GPUCreditSummary = components['schemas']['GPUCreditSummary'];
+export type ResourceEntitlement = components['schemas']['ResourceEntitlement'];
+export type ResourceLedger = components['schemas']['ResourceLedger'];
+export type ResourceLedgerEntry = components['schemas']['ResourceLedgerEntry'];
 export type RunnerAccess = components['schemas']['RunnerAccess'];
 
 export type RegistrationCapability = components['schemas']['RegistrationCapability'];
@@ -83,6 +86,12 @@ export const revokeApiKey = (): Promise<ApiMessage> => authorizedJson('/compute/
 export const getUserMetrics = (window: 'daily' | 'weekly' | 'quarterly' | 'yearly'): Promise<UserMetrics> =>
   requestJson(`/compute/api/user-metrics?window=${encodeURIComponent(window)}`);
 export const getGpuCredit = (): Promise<GPUCreditSummary> => requestJson('/compute/api/gpu-credit');
+/** The canonical resource envelope admission decides against, for this account. */
+export const getResourceEntitlement = (signal?: AbortSignal): Promise<ResourceEntitlement> =>
+  requestJson('/compute/api/resource-entitlement', { signal });
+/** This account's own append-only ledger, newest first and bounded by the server. */
+export const getResourceLedger = (limit?: number, signal?: AbortSignal): Promise<ResourceLedger> =>
+  requestJson(`/compute/api/resource-ledger${limit === undefined ? '' : `?limit=${encodeURIComponent(String(limit))}`}`, { signal });
 export const getAccess = (): Promise<AccessResponse> => requestJson('/compute/api/access');
 export const requestAccess = (policyId: string, reason: string): Promise<Record<string, unknown>> =>
   authorizedJson('/compute/api/access/requests', {

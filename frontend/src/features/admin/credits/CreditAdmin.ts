@@ -1,6 +1,6 @@
 import type { AppShell } from '../../../app/shell';
 import { adminApi, idempotencyKey, type AdminUser, type GPUCreditSummary } from '../api';
-import { button, element, empty, formatCredits, formatDate, openDialog, reasonContent, setBusy, text } from '../shared/dom';
+import { button, element, empty, formatCredits, formatDate, openDialog, reasonContent, setBusy, text } from '../../../components/dom';
 
 export const globalResetConfirmation = 'RESET ALL';
 

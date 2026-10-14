@@ -197,8 +197,8 @@ def test_administration_pages_answer_real_browser_navigation(monkeypatch, tmp_pa
         server.server_close()
 
 
-def test_runner_fleet_direct_refresh_renders_the_fleet_view(monkeypatch, tmp_path, page: Page) -> None:
-    """The reported regression: a direct load and refresh of the fleet page."""
+def test_runner_management_direct_refresh_renders_the_register_view(monkeypatch, tmp_path, page: Page) -> None:
+    """The reported regression: a direct load and refresh of the Runner Management page."""
     module = _load_pssm_module(
         monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"}
     )
@@ -211,7 +211,7 @@ def test_runner_fleet_direct_refresh_renders_the_fleet_view(monkeypatch, tmp_pat
         for _ in range(2):
             response = page.goto(f"{origin}/compute/runner_fleet")
             assert response is not None and response.status == 200
-            expect(page.get_by_role("heading", name="Runner fleet", level=1)).to_be_visible()
+            expect(page.get_by_role("heading", name="Runner Management", level=1)).to_be_visible()
     finally:
         server.shutdown()
         server.server_close()

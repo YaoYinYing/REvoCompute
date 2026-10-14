@@ -1,3 +1,18 @@
+/*
+ * The shared DOM builders more than one feature builds a surface with.
+ *
+ * These are presentation primitives, not a feature: `element`, `text` and
+ * `button` construct nodes, `empty` states an absence, and the formatters render
+ * a recorded value without inventing one. They live outside any single feature
+ * because the Account Quota page and the Administration workspaces build the
+ * same shapes from the same canonical projections.
+ *
+ * `element` classifies a child by what it *is*, not by the claim of a type: a
+ * child that is a `Node` is appended as one, a string becomes a text node, and a
+ * false/null/undefined child is dropped so a caller can write `cond && node`
+ * without a branch of its own.
+ */
+
 export type Child = Node | string | null | undefined | false;
 
 export function element<K extends keyof HTMLElementTagNameMap>(
@@ -37,8 +52,17 @@ export function formatDate(value?: number | string | null): string {
   return Number.isNaN(date.getTime()) ? 'Not recorded' : date.toLocaleString();
 }
 
-export function formatCredits(value: number, signed = false): string {
-  const rendered = Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 2 });
+/**
+ * A credit amount, or the explicit statement that the server reported none.
+ *
+ * A missing amount is deliberately not rendered as ``0`` down the chain from a
+ * balance the server did not compute — an absent number and a granted zero are
+ * different facts, and a surface that showed a missing balance as "0 credits"
+ * would report a spend on an account whose position nobody measured.
+ */
+export function formatCredits(value: number | null | undefined, signed = false): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return 'not reported';
+  const rendered = value.toLocaleString(undefined, { maximumFractionDigits: 2 });
   return signed && value > 0 ? `+${rendered}` : rendered;
 }
 
@@ -101,6 +125,13 @@ export function openDialog<T = boolean>(options: DialogOptions<T>): Promise<T | 
   });
 }
 
+export function setBusy(control: HTMLButtonElement, busy: boolean, busyLabel = 'Working...'): void {
+  if (busy) control.dataset.label = control.textContent || '';
+  control.disabled = busy;
+  control.textContent = busy ? busyLabel : control.dataset.label || control.textContent;
+}
+
+/** A reasoned confirmation body: the message, a required reason, and a type-to-confirm. */
 export function reasonContent(message: string, confirmation?: string): { root: HTMLElement; reason: HTMLTextAreaElement; confirmation?: HTMLInputElement } {
   const root = element('div', 'admin-dialog-fields');
   root.append(text('p', message, 'admin-dialog-copy'));
@@ -119,10 +150,4 @@ export function reasonContent(message: string, confirmation?: string): { root: H
   confirmationLabel.append(confirmationInput);
   root.append(confirmationLabel);
   return { root, reason, confirmation: confirmationInput };
-}
-
-export function setBusy(control: HTMLButtonElement, busy: boolean, busyLabel = 'Working...'): void {
-  if (busy) control.dataset.label = control.textContent || '';
-  control.disabled = busy;
-  control.textContent = busy ? busyLabel : control.dataset.label || control.textContent;
 }

@@ -117,6 +117,7 @@ def test_public_openapi_exposes_the_client_contract(monkeypatch, tmp_path):
         "/compute/api/auth/admin/logs/archives": {"get"},
         "/compute/api/auth/admin/logs/archives/{archive_name}": {"get"},
         "/compute/api/gpu-credit": {"get"},
+        "/compute/api/resource-ledger": {"get"},
         "/compute/api/resource-entitlement": {"get"},
         "/compute/api/auth/admin/users/{user_id}/resource-entitlement": {"get"},
         "/compute/api/auth/admin/users/{user_id}/storage-quota": {"get", "put"},
