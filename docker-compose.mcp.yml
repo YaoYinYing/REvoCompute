@@ -14,10 +14,14 @@
 # process reads exactly the canonical application, user database and Task store
 # the web process does.  That is what makes MCP one protocol projection over one
 # application rather than a second execution plane.  What the two processes share
-# is durable -- the Redis-backed rate limiter and the user/Task/handle databases;
-# what they do not share is the limiter's in-memory fallback, which is per process
-# by construction and used only while Redis is unavailable.  See
-# revocompute/mcp/asgi.py.
+# is durable -- the Redis-backed rate limiter and the SQLite stores both read
+# under the shared server directory (user, Task, admin config, Tool call, MCP
+# handle, and Operator Job records); what they do not share is the limiter's
+# in-memory fallback, which is per process by construction and used only while
+# Redis is unavailable, and the Operator Job restart pass, which is a startup
+# action the web service owns alone (the MCP entrypoint declares its role, so
+# starting or restarting `mcp` cannot fail a job the web service is running).
+# See revocompute/mcp/asgi.py.
 #
 # The port below is container-internal: it is where the gateway's `/k/` route
 # proxies (revocompute_ctl/mcp.py), never a host port.  Nothing outside the compose

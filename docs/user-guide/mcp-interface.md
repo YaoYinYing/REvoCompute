@@ -25,7 +25,8 @@ ResultManifest, and artifact rules are the ones that apply.
   canonical application. It is one deployment, not two: the MCP process reaches
   the same canonical authorization, admission, readiness, quota and result code
   the HTTP API runs, and shares the canonical Redis-backed rate limiter and the
-  user/Task/handle databases.
+  SQLite stores both processes read under the shared server directory (user,
+  Task, admin config, Tool call, MCP handle, and Operator Job records).
 - With Redis available, an HTTP request and an MCP call from one client address
   consume the same rate-limit budget, because the counter is the shared Redis one.
   They do **not** share it while Redis is unavailable: the limiter then falls back
@@ -114,8 +115,12 @@ than pointed at a dead port.
   purpose: the web service runs `gunicorn --preload`, so anything started at
   import time would live in the pre-fork master and be re-forked on every worker
   recycle. The MCP process imports the canonical application and shares the
-  canonical Redis limiter and the user/Task/handle databases; it does not share
-  the limiter's per-process in-memory fallback.
+  canonical Redis limiter and the SQLite stores both processes read under the
+  shared server directory (user, Task, admin config, Tool call, MCP handle, and
+  Operator Job records); it does not share the limiter's per-process in-memory
+  fallback, and it does not own the application's Operator Job restart pass, so
+  starting or restarting the service cannot terminalize a job the web service is
+  running.
 - Route: the gateway exposes exactly one location, `/k/`, proxying to that
   service over the compose network. That port is never published to the host, so
   nothing outside the compose network can reach the service directly. The

@@ -15,10 +15,14 @@ starting it and serving on it, and Gunicorn never hosts an ASGI event loop.
 The MCP process imports the canonical application and reaches the canonical
 handlers in process, so the authorization, admission, readiness, quota, and
 result rules are the ones the HTTP API enforces.  What it shares with the web
-service is the durable truth: the Redis-backed rate limiter and the user, Task,
-and MCP-handle databases.  The rate limiter's in-memory fallback is per process,
-by construction, and is used only while Redis is unavailable.  No in-memory
-application state is shared between the two processes.
+service is the durable truth: the Redis-backed rate limiter and the SQLite
+stores both processes read under the shared server directory (user, Task, admin
+config, Tool call, MCP handle, and Operator Job records).  The rate limiter's
+in-memory fallback is per process, by construction, and is used only while Redis
+is unavailable.  No in-memory application state is shared between the two
+processes, and this process does not repeat the canonical application's startup
+pass -- it declares its role before importing it, so starting or restarting the
+MCP service cannot terminalize an Operator Job the web service is running.
 """
 
 from __future__ import annotations

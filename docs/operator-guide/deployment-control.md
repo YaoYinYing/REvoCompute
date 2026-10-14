@@ -212,11 +212,16 @@ Boundaries that do not move:
 - There is no shadow rate limiter and no second execution plane. The `mcp`
   process imports the canonical application, so the canonical authentication,
   entitlement, admission, readiness, quota, result authorization, and per-route
-  rate limiter all apply, and it shares the Redis-backed limiter and the
-  user/Task/handle databases. The limiter's in-memory fallback is per process by
-  construction and is used only while Redis is unavailable: HTTP and MCP then
-  each limit their own traffic rather than sharing one budget. That degraded mode
-  is the canonical limiter's documented behavior, not an MCP-specific one.
+  rate limiter all apply, and it shares the Redis-backed limiter and the SQLite
+  stores both processes read under the shared server directory (user, Task,
+  admin config, Tool call, MCP handle, and Operator Job records). It does not
+  repeat that application's startup pass -- the MCP entrypoint declares its role
+  before the import, so starting or restarting the service cannot terminalize an
+  Operator Job the web service is running. The limiter's in-memory fallback is
+  per process by construction and is used only while Redis is unavailable: HTTP
+  and MCP then each limit their own traffic rather than sharing one budget. That
+  degraded mode is the canonical limiter's documented behavior, not an
+  MCP-specific one.
 - The surface exposes no admin, host operation, GPU-credit mutation, or
   arbitrary command/path capability.
 

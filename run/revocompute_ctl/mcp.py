@@ -24,9 +24,12 @@ opt-in, so "is MCP deployed?" cannot be answered two different ways:
     published port and no second execution plane: the ``mcp`` process imports the
     canonical application, so the canonical authorization, admission, and result
     rules are the ones that apply, and the canonical Redis limiter and the
-    user/Task/handle databases are the durable truth it shares.  What is *not*
-    shared is the limiter's in-memory fallback, which is per process by
-    construction and used only while Redis is unavailable.
+    SQLite stores both processes read under the shared server directory (user,
+    Task, admin config, Tool call, MCP handle, and Operator Job records) are the
+    durable truth it shares.  What is *not* shared is the limiter's in-memory
+    fallback, which is per process by construction and used only while Redis is
+    unavailable, and the Operator Job restart pass, a startup action the web
+    service owns alone.
 
 The gateway reads its configuration only at container start, so a change is
 served after the gateway is restarted; :func:`apply_gateway` reports whether the
