@@ -25,7 +25,7 @@ from pathlib import Path
 
 import yaml
 
-from revocompute_ctl.compose import compose_args, run_cmd
+from revocompute_ctl.compose import compose_args, run_cmd, stack_services
 from revocompute_ctl.attestation import clear_deployment_attestations
 from revocompute.runner_bundles import materialize_runner_bundles, runner_bundle_root
 from revocompute.runner_registry import (
@@ -614,7 +614,7 @@ def cmd_down(state, compose_cmd: tuple[str, ...], *, keep_gateway: bool = False)
             end_maintenance(state)
         raise
     print("Stopping services via docker compose...")
-    services = ["redis", "web", "maintenance", "worker", "tool-worker"]
+    services = stack_services(state, "redis", "web", "maintenance", "worker", "tool-worker")
     if keep_gateway:
         print("Refreshing gateway and keeping it running to serve the maintenance page.")
         run_cmd(
@@ -637,7 +637,19 @@ def cmd_down(state, compose_cmd: tuple[str, ...], *, keep_gateway: bool = False)
         )
         return
     run_cmd(
-        [*compose_cmd, *compose_args(state), "--env-file", state.env_file, "down"],
+        [
+            *compose_cmd,
+            *compose_args(state),
+            "--env-file",
+            state.env_file,
+            "down",
+            # A rollback turns the switch off, which drops the overlay *and* its
+            # profile from ``compose_args`` -- so a ``mcp`` container started while
+            # the switch was on is no longer a service the model declares, and a
+            # plain ``down`` would leave it running outside the stack.  Removing
+            # orphans is what actually stops it.
+            "--remove-orphans",
+        ],
         env=state.exported(),
     )
 
@@ -721,12 +733,7 @@ def cmd_up(
             "up",
             *(extra or []),
             "-d",
-            "redis",
-            "web",
-            "gateway",
-            "maintenance",
-            "worker",
-            "tool-worker",
+            *stack_services(state, "redis", "web", "gateway", "maintenance", "worker", "tool-worker"),
         ],
         env=state.exported(),
     )
@@ -739,7 +746,7 @@ def cmd_up(
 
 
 def wait_for_services(state, compose_cmd: tuple[str, ...]) -> None:
-    expected = {"redis", "web", "gateway", "maintenance", "worker", "tool-worker"}
+    expected = set(stack_services(state, "redis", "web", "gateway", "maintenance", "worker", "tool-worker"))
     for _attempt in range(30):
         running = run_cmd(
             [

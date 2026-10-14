@@ -17,28 +17,56 @@ import os
 
 from revocompute.compose import detect_compose_cmd, run_cmd
 
-__all__ = ["run_cmd", "detect_compose_cmd", "compose_args", "container_fs", "image_id", "mcp_enabled"]
+__all__ = [
+    "MCP_SERVICE",
+    "compose_args",
+    "container_fs",
+    "detect_compose_cmd",
+    "image_id",
+    "mcp_enabled",
+    "run_cmd",
+    "stack_services",
+]
 
 log = logging.getLogger("revocompute_ctl")
 
+#: The compose service ``docker-compose.mcp.yml`` declares for the MCP surface.
+#: It is profile-gated in the overlay, so naming it is what starts it and the
+#: profile below is what makes the layered model agree with that.
+MCP_SERVICE = "mcp"
+
 
 def mcp_enabled(state) -> bool:
-    """One switch for the whole opt-in: the controller, the listener, the route.
+    """One switch for the whole opt-in: the controller, the service, the route.
 
     The controller's process environment is not the container's: ``MCP_ENABLED``
-    lives in the deployment env file, which Compose interpolates into the web
-    service. The accepted spellings are the listener's (``env_bool``), so the two
-    cannot disagree about what "enabled" means.
+    lives in the deployment env file, which Compose interpolates into the ``mcp``
+    and ``web`` services. The accepted spellings are the listener's
+    (``env_bool``), so the two cannot disagree about what "enabled" means.
     """
     return (state.get("MCP_ENABLED") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def stack_services(state, *names: str) -> list[str]:
+    """``names``, plus the MCP service when this deployment opted in.
+
+    The ``mcp`` service exists only in the layered model, so it must be named
+    wherever the stack is started, stopped, or waited on -- otherwise an opt-in
+    deployment would start it and never stop it.  A deployment that never opted in
+    gets exactly the list it always had.
+    """
+    return [*names, MCP_SERVICE] if mcp_enabled(state) else [*names]
 
 
 def compose_args(state) -> list[str]:
     """Return the base Compose model plus the production Slurm and MCP overrides.
 
     The MCP overlay is layered only when the deployment opted in, so a stack that
-    never enables the surface renders exactly the model it did before: the
-    override adds the environment the web service otherwise never sees.
+    never enables the surface renders exactly the model it did before.  The
+    overlay's ``mcp`` service is profile-gated, so the same switch also enables
+    that profile: every command this controller runs then sees the model and the
+    service set the deployment actually intends, and a bare ``docker compose up``
+    over the layered model still starts nothing the operator did not ask for.
     """
     from revocompute_ctl import COMPOSE_FILE, COMPOSE_MCP_FILE, COMPOSE_SLURM_FILE
 
@@ -47,7 +75,7 @@ def compose_args(state) -> list[str]:
         if COMPOSE_SLURM_FILE.is_file():
             files += ["-f", str(COMPOSE_SLURM_FILE)]
     if mcp_enabled(state) and COMPOSE_MCP_FILE.is_file():
-        files += ["-f", str(COMPOSE_MCP_FILE)]
+        files += ["-f", str(COMPOSE_MCP_FILE), "--profile", MCP_SERVICE]
     return files
 
 

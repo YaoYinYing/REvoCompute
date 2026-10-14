@@ -14,12 +14,19 @@ opt-in, so "is MCP deployed?" cannot be answered two different ways:
     before.  This is the default.
 
 ``MCP_ENABLED=true``
-    The Compose overlay adds the listener environment to the *existing* web
-    service and the gateway gains exactly one location, ``/k/`` → the
-    container-internal listener port.  There is no second service, no published
-    port, no shadow rate limiter, and no second execution plane: the listener
-    is a thread in the canonical web process, so the canonical limiter,
-    admission path, and application state are the ones that apply.
+    The Compose overlay adds the ``mcp`` service (the existing
+    ``revocompute-mcp`` entrypoint, ``python -m revocompute.mcp``) and the
+    gateway gains exactly one location, ``/k/`` -> that service's
+    container-internal port.  The service is a *separate process* from the
+    Gunicorn web service on purpose: the web service runs ``--preload`` and forks
+    workers, so a listener started at import time would live in the master,
+    unsupervised, and be re-forked on every worker recycle.  There is still no
+    published port and no second execution plane: the ``mcp`` process imports the
+    canonical application, so the canonical authorization, admission, and result
+    rules are the ones that apply, and the canonical Redis limiter and the
+    user/Task/handle databases are the durable truth it shares.  What is *not*
+    shared is the limiter's in-memory fallback, which is per process by
+    construction and used only while Redis is unavailable.
 
 The gateway reads its configuration only at container start, so a change is
 served after the gateway is restarted; :func:`apply_gateway` reports whether the
@@ -38,7 +45,9 @@ from revocompute_ctl.compose import container_fs, mcp_enabled
 
 #: Server-owned constants.  The upstream is the *service* name and its
 #: container-internal port on the compose network, never a host port: nothing
-#: outside the stack can reach the listener even while the route exists.
+#: outside the stack can reach the listener even while the route exists.  The
+#: name matches the ``mcp`` service ``docker-compose.mcp.yml`` declares, which is
+#: what ``compose up`` starts once the overlay is layered.
 GATEWAY_SNIPPET = "mcp-gateway/mcp.conf"
 MCP_PATH = "/k"
 #: The streamable-HTTP endpoint under the prefix, and the protocol revision the
@@ -47,7 +56,10 @@ MCP_PATH = "/k"
 MCP_ENDPOINT = f"{MCP_PATH}/mcp"
 MCP_PROTOCOL_VERSION = "2025-06-18"
 MCP_UPSTREAM_PORT = 8081
-UPSTREAM_SERVICE = "web"
+#: The compose service the gateway proxies ``/k/`` to.  ``docker-compose.mcp.yml``
+#: declares exactly this name; the web process reads it from ``MCP_SERVICE`` for
+#: the readiness fact, and this controller writes the same host into the route.
+UPSTREAM_SERVICE = "mcp"
 
 
 def gateway_snippet_path(state) -> str:
@@ -55,11 +67,12 @@ def gateway_snippet_path(state) -> str:
 
 
 def _upstream_port(state) -> int:
-    """The container-internal listener port.
+    """The container-internal port of the ``mcp`` service.
 
     ``MCP_PORT`` comes from the deployment env file (Compose interpolates it into
-    the web service), so the controller reads the same value the listener binds
-    rather than the controller's own process environment.
+    the ``mcp`` service, and the web process reads the same value for its
+    readiness fact), so the controller reads the value the service binds rather
+    than the controller's own process environment.
     """
     raw = (state.get("MCP_PORT") or "").strip()
     if not raw:
@@ -149,21 +162,22 @@ def apply_gateway(state, *, dry_run: bool = False) -> bool:
 def mcp_health(state) -> int:
     """Prove the MCP surface really answers, over the route a client uses.
 
-    "The switch is set" is not "the surface works": the listener can be missing
-    its optional transport, the port can be held, or the gateway can be serving
-    a stale config with no ``/k/`` route at all.  The operator is the one side
-    that can see the whole chain, so this walks it: the web process reports each
-    fact it observed (its listener, the gateway route state it reads, and the
-    public endpoint it reached), and this then drives its *own* MCP ``initialize``
-    over the public route a client uses — the same handshake an agent host
-    performs first.  A deployment that never opted in reports the surface absent
-    (exit 0); an opt-in deployment whose endpoint does not answer, or whose web
-    process reports the surface non-operational while the env file says it should
-    be on, is a real operator problem and is reported as failure — never silently
-    as "disabled".  The probe is unauthenticated on purpose: ``initialize`` is the
-    pre-credential handshake, so it proves the surface exists without carrying,
-    printing, or storing any credential.  Whether a request may *do* anything is
-    still decided per request by the canonical account and admission rules.
+    "The switch is set" is not "the surface works": the ``mcp`` service may not be
+    running, the port can be held, or the gateway can be serving a stale config
+    with no ``/k/`` route at all.  The operator is the one side that can see the
+    whole chain, so this walks it: the web process reports each fact it observed
+    (whether the ``mcp`` service answered, the gateway route state the web process
+    reads, and the public endpoint it reached), and this then drives its *own* MCP
+    ``initialize`` over the public route a client uses -- the same handshake an
+    agent host performs first.  A deployment that never opted in reports the
+    surface absent (exit 0); an opt-in deployment whose endpoint does not answer,
+    or whose web process reports the surface non-operational while the env file
+    says it should be on, is a real operator problem and is reported as failure --
+    never silently as "disabled".  The probe is unauthenticated on purpose:
+    ``initialize`` is the pre-credential handshake, so it proves the surface
+    exists without carrying, printing, or storing any credential.  Whether a
+    request may *do* anything is still decided per request by the canonical
+    account and admission rules.
     """
     base = (state.get("SERVER_BASE_URL") or "").rstrip("/")
     if not base:
@@ -192,7 +206,7 @@ def mcp_health(state) -> int:
         print(f"MCP is enabled but the endpoint did not answer an MCP handshake: {detail}", file=sys.stderr)
         return 1
     print(f"MCP surface reachable at {base}{MCP_ENDPOINT} ({detail}).")
-    print(f"Listener internal port {_upstream_port(state)} (never published).")
+    print(f"MCP service internal port {_upstream_port(state)} (never published).")
     print("Rollback: set MCP_ENABLED=false in the deployment env file, then run `bash run/restart.sh restart`.")
     return 0
 
@@ -207,15 +221,21 @@ def _report_not_operational(state, payload: dict) -> None:
     """
     route = gateway_snippet_path(state)
     present = os.path.isfile(route)
-    reason = payload.get("detail") or "the running web process reports no MCP listener"
+    reason = payload.get("detail") or "the running web process reports the MCP service not answering"
     print(f"MCP_ENABLED is set in the env file but the surface is not operational: {reason}", file=sys.stderr)
     print(
-        f"  listener answering:  {payload.get('listener_ready')}\n"
+        f"  service answering:   {payload.get('listener_ready')}\n"
         f"  gateway route state: {payload.get('route_configured')} ({'present' if present else 'absent'} at {route})\n"
         f"  public endpoint reached: {payload.get('gateway_verified')}",
         file=sys.stderr,
     )
-    if payload.get("route_configured") is not True or not present:
+    if payload.get("listener_ready") is not True:
+        print(
+            "The `mcp` service is not answering; check that the overlay is layered and the service is running "
+            "(`docker compose ps`), then run `bash run/restart.sh restart`.",
+            file=sys.stderr,
+        )
+    elif payload.get("route_configured") is not True or not present:
         print("Write the gateway route with `bash run/restart.sh restart`.", file=sys.stderr)
     else:
         print(
@@ -291,7 +311,7 @@ def cmd_mcp_status(state) -> int:
     path = gateway_snippet_path(state)
     print(f"MCP_ENABLED: {'true' if mcp_enabled(state) else 'false'}")
     print(f"Gateway route: {path} ({'present' if os.path.isfile(path) else 'absent'})")
-    print(f"Listener internal port: {_upstream_port(state)} (never published)")
+    print(f"MCP service internal port: {_upstream_port(state)} (never published)")
     return mcp_health(state)
 
 

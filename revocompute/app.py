@@ -456,19 +456,21 @@ def _is_deleted_status(status: Any) -> bool:
 importlib.import_module("revocompute.routes")
 
 # ---------------------------------------------------------------------------
-# Optional MCP protocol surface.
+# The optional MCP protocol surface is NOT started here.
 #
-# When the deployment enables it (``MCP_ENABLED=true``) the MCP endpoint is
-# served by a companion ASGI listener inside *this* process, so the canonical
-# rate limiter, application state, and admission path are the same objects the
-# HTTP API uses.  It is off by default and absent entirely when the optional
-# ``mcp`` extra is not installed, so the HTTP API and Web application are never
-# affected by it.
+# The web service runs ``gunicorn --preload``, so this module is imported once in
+# the master before it forks: anything started at import time would live in the
+# master -- unsupervised, and re-forked on every worker recycle -- while the
+# workers would each hold a private copy of the pre-fork objects.  The MCP
+# surface is therefore its own service (``docker-compose.mcp.yml`` runs
+# ``python -m revocompute.mcp``), and the web process never binds its port.
+#
+# What the two processes share is durable: the Redis-backed rate limiter
+# (``revocompute.ratelimit``) and the user, Task, and MCP-handle SQLite
+# databases.  The limiter's in-memory fallback is per process and only used while
+# Redis is unavailable, which ``revocompute.ratelimit`` documents.  See
+# ``revocompute/mcp/asgi.py`` for what the MCP surface is allowed to claim.
 # ---------------------------------------------------------------------------
-try:
-    importlib.import_module("revocompute.mcp.asgi").start_companion_listener()
-except ModuleNotFoundError:
-    logging.getLogger(__name__).info("MCP surface disabled: the optional 'mcp' extra is not installed")
 
 if __name__ == "__main__":
     # Containerized server binds to all interfaces by design.

@@ -278,16 +278,17 @@ def mcp_capability():
     A public read-only projection of what a client can reach, so the browser can
     tell whether ``/k/mcp`` is really operational before offering an "Connect an
     AI agent" entry: GitHub code existing must never be presented as deployed
-    support, and neither must a switch that was set without a listener behind it,
-    nor a healthy listener behind a gateway that serves nothing.
+    support, and neither must a switch that was set without the MCP service
+    behind it, nor an answering MCP service behind a gateway that serves nothing.
 
     The answer reports the deployment facts *separately* rather than reducing them
-    to one boolean — whether the companion listener answered an ``initialize`` in
-    this process, whether the gateway route state declares the MCP location, and
-    whether this deployment reached its own public endpoint through the gateway —
-    and advertises the endpoint only on that last, genuinely observed fact. A
+    to one boolean -- whether the MCP service answered an ``initialize`` at the
+    fixed destination this deployment dials for it, whether the gateway route state
+    declares the MCP location, and whether this deployment reached its own public
+    endpoint through the gateway -- and advertises the endpoint only on that last,
+    genuinely observed fact. A
     route *file* is not a route *served*: a stale config, a gateway that never
-    reloaded, or an upstream that is down all leave the listener healthy and the
+    reloaded, or an upstream that is down all leave the service answering and the
     file present while nothing external answers, so neither alone advertises an
     endpoint.
 

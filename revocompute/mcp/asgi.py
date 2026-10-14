@@ -2,19 +2,34 @@
 # Distributed under the terms of the GNU General Public License v3.0.
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Mount the MCP streamable-HTTP endpoint beside the canonical HTTP API.
+"""Serve the MCP streamable-HTTP endpoint from its own supervised process.
 
-One process, one port, two protocol surfaces over one application truth.  In the
-deployed configuration the MCP endpoint is served from the *same* process as the
-Flask application, so the canonical rate limiter, admission path, and application
-state are shared rather than replicated: an MCP caller and an HTTP caller from
-one client address consume one budget, and MCP cannot become a second admission
-path.
+The MCP surface runs as the dedicated ``revocompute-mcp`` entrypoint
+(:func:`serve`), declared as the ``mcp`` service of ``docker-compose.mcp.yml``.
+That process imports the canonical application and invokes the canonical handlers
+in process, so an MCP call terminates in exactly the code the HTTP API and the
+Web application run: MCP is a protocol projection over one application, never a
+second admission path and never a second authorization rule.
 
-That is why the default deployment is a companion listener rather than a second
-service role.  The ASGI stack starts only when the optional ``mcp`` extra is
-installed; a deployment without it serves the HTTP API and Web application
-exactly as before.
+Why a dedicated process, and not a listener inside the Gunicorn web process: the
+web service is started with ``--preload`` and two workers, so anything started at
+import time happens in the master *before* it forks, and a running thread does not
+survive a fork.  A listener started there would have its event loop in the master
+(unsupervised, and re-forked on every worker recycle) while each worker held its
+own pre-fork copy of the pre-fork objects.  The dedicated service has no fork in
+its path at all, and Gunicorn never hosts an ASGI event loop.
+
+What the two processes share is the truth that was never in memory: the
+Redis-backed rate limiter (``revocompute.ratelimit``), and the user, Task, and
+MCP-handle SQLite databases.  What they do not share is the rate limiter's
+in-memory fallback, which is per process by construction and used only while
+Redis is unavailable (``revocompute.ratelimit`` documents it as not distributed).
+That is the whole list: no in-memory application state crosses the boundary, and
+nothing in this module claims otherwise.
+
+The ASGI stack is the optional ``mcp`` extra.  A deployment that never opts in
+builds no image carrying it, layers no overlay, and writes no gateway route, so
+it serves the HTTP API and Web application exactly as before.
 """
 
 from __future__ import annotations
@@ -38,16 +53,17 @@ MCP_ENDPOINT = f"{MCP_PATH}/mcp"
 #: probe asks for, so a mismatch would surface as a genuine incompatibility.
 MCP_PROTOCOL_VERSION = "2025-06-18"
 
-#: Internal port of the companion MCP listener.  Bound inside the web container
-#: and proxied by the deployment gateway, which also fronts the HTTP API port.
-#: The deployment publishes neither directly.
+#: Internal port of the MCP service.  Bound by the ``mcp`` service of
+#: ``docker-compose.mcp.yml`` inside the compose network and proxied by the
+#: deployment gateway, which also fronts the HTTP API port.  The deployment
+#: publishes neither directly.
 DEFAULT_MCP_PORT = 8081
 
 #: Gateway route state, reconciled from ``MCP_ENABLED`` by ``run/restart.sh`` and
 #: written under ``SERVER_DIR`` — the one directory both the deployment host and
-#: the web process see.  The route is what turns the internal listener into the
+#: the web process see.  The route is what turns the internal MCP service into the
 #: public endpoint, so its absence is exactly the state in which an agent host
-#: cannot reach the surface however healthy the listener is.
+#: cannot reach the surface however healthy the service is.
 GATEWAY_ROUTE_DIR = "mcp-gateway"
 GATEWAY_ROUTE_FILE = "mcp.conf"
 
@@ -57,12 +73,12 @@ GATEWAY_ROUTE_FILE = "mcp.conf"
 _GATEWAY_ROUTE_RE = re.compile(r"^\s*location\s+/k/", re.MULTILINE)
 
 #: The public endpoint every deployment serves the application on.  The gateway
-#: route proxies ``/k/`` to the companion listener, so an agent host reaches the
+#: route proxies ``/k/`` to the MCP service, so an agent host reaches the
 #: surface at this same-origin public base joined with :data:`MCP_ENDPOINT` —
-#: never at the listener's container-internal loopback.  It is *public
+#: never at the service's container-internal port.  It is *public
 #: deployment* identity: it holds no credential, no container-internal port and
-#: no host path, and the web process may hold it without owning any
-#: infrastructure secret.
+#: no host path, and a process may hold it without owning any infrastructure
+#: secret.
 PUBLIC_BASE_URL_ENV = "SERVER_BASE_URL"
 
 #: How long the surface waits when it really reaches for the public endpoint over
@@ -86,29 +102,43 @@ GATEWAY_PROBE_TTL_SECONDS = 30.0
 #: surface on a real gateway handshake and never on a route file.
 GATEWAY_PROBE_ENV = "MCP_GATEWAY_PROBE"
 
-#: How long :func:`start_companion_listener` waits for the listener to bind
-#: before it reports the surface as not started.  The wait happens once, in the
-#: process that will serve the endpoint, so a deployment knows at startup whether
-#: its opt-in produced a surface rather than discovering it on first use.
-LISTENER_STARTUP_TIMEOUT_SECONDS = 10.0
+#: How long :func:`service_reachable` waits when it really reaches the MCP
+#: service over the compose network.  Reaching out is a network call, so the
+#: deadline is bounded and a timeout is a *negative* answer rather than a hang on
+#: a capability request.
+SERVICE_PROBE_TIMEOUT_SECONDS = 3.0
 
-#: Deadline for the in-process readiness handshake :func:`probe_surface` drives
-#: against the *bound* listener.  Short on purpose: a loopback listener in this
-#: process answers ``initialize`` in milliseconds, and the probe bounds the
-#: public capability request rather than the surface itself.
-SURFACE_PROBE_TIMEOUT_SECONDS = 5.0
+#: How long one MCP-service verdict stays fresh, on the same rule as
+#: :data:`GATEWAY_PROBE_TTL_SECONDS`: a sustained capability read is mostly a
+#: memory read, while a service that stops answering (or starts again) is
+#: reported without a restart of the process that reads the capability.
+SERVICE_PROBE_TTL_SECONDS = 30.0
+
+#: The compose service the MCP surface runs as, and therefore the host the
+#: canonical web process dials for the *service* fact.  It is deployment-owned
+#: topology from the environment, never a caller-supplied destination, so no
+#: request can point the readiness probe anywhere.
+MCP_SERVICE_ENV = "MCP_SERVICE"
+
+#: The name ``docker-compose.mcp.yml`` declares for that service.  A deployment
+#: that renamed it sets :data:`MCP_SERVICE_ENV`; the default matches the shipped
+#: overlay so the ordinary opt-in needs no extra setting.
+DEFAULT_MCP_SERVICE = "mcp"
 
 _LOGGER = logging.getLogger(__name__)
 
-#: The one listener this process starts, if the deployment opted in.  Readiness
-#: is a property of what the *bound socket answers*, not of the switch that asked
-#: for it: a flag-only answer is what let a deployment advertise an endpoint whose
-#: port was never bound.
-_LISTENER: dict[str, Any] = {"server": None, "thread": None, "error": None}
+#: Result of the last MCP-*service* reach, keyed by the destination it was proven
+#: against (host and port) and stamped with the ``time.monotonic()`` of the probe
+#: that produced it, so the answer expires on :data:`SERVICE_PROBE_TTL_SECONDS`
+#: rather than lasting for the life of the process.  ``None`` means "not probed
+#: yet".
+_SERVICE_PROBE: dict[str, Any] = {"target": None, "result": None, "at": None}
 
-#: Last listener-readiness result, so the public capability is a memory read
-#: rather than an outbound call per request.  ``None`` means "not probed yet".
-_PROBE: dict[str, Any] = {"result": None}
+#: Single-flight guard for the MCP-service reach, on the same rule as
+#: :data:`_GATEWAY_PROBE_LOCK`: one capability read refreshes an expired verdict,
+#: and a concurrent read that finds it expired returns fail-closed rather than
+#: piling a second bounded request onto a service that may already be down.
+_SERVICE_PROBE_LOCK = threading.Lock()
 
 #: Last public-endpoint (gateway) result, keyed by the base URL it was proven
 #: against so a changed base re-probes instead of serving a stale answer, and
@@ -149,23 +179,83 @@ def mcp_asgi() -> Any:
     return Starlette(routes=[Mount(MCP_PATH, app=mcp_app)], lifespan=lifespan)
 
 
-def serve() -> None:
-    """Run the MCP ASGI listener (the standalone ``revocompute-mcp`` entrypoint).
+def _service_target() -> tuple[str, int] | None:
+    """The compose destination of the MCP service, or ``None`` when unset.
 
-    Used for interoperability testing and for a deployment that chooses to run
-    the listener in its own process.  The deployed default is
-    :func:`start_companion_listener` inside the web process, which keeps the
-    canonical limiter shared.
+    Deployment-owned topology read from the environment: the service name and the
+    container-internal port ``docker-compose.mcp.yml`` publishes to the compose
+    network.  No part of it comes from a request, so a caller cannot choose where
+    this process dials.
     """
-    import os
+    host = os.environ.get(MCP_SERVICE_ENV, "").strip() or DEFAULT_MCP_SERVICE
+    try:
+        port = int(os.environ.get("MCP_PORT", "").strip() or DEFAULT_MCP_PORT)
+    except ValueError:
+        port = DEFAULT_MCP_PORT
+    return host, port
 
+
+def service_reachable() -> bool | None:
+    """Whether the MCP service answers an ``initialize`` on the compose network.
+
+    The MCP surface is its own process, so "is it serving?" is a fact about
+    another process that this one can only observe by asking it.  This drives the
+    same pre-credential handshake an agent host performs first against the fixed,
+    deployment-owned destination :func:`_service_target` resolves -- never a
+    caller-supplied URL -- and reports it as ``True`` / ``False``, or ``None``
+    when no destination is known or another read is already refreshing an expired
+    verdict (fail-closed, exactly as :func:`gateway_reachable` does).
+
+    A verdict is fresh only while it is younger than
+    :data:`SERVICE_PROBE_TTL_SECONDS`, so a service that stops answering is
+    reported not-ready and one that recovers is reported ready again, both without
+    restarting the web process.  The refresh is single-flight.
+    """
+    target = _service_target()
+    if target is None:
+        return None
+    at = _SERVICE_PROBE["at"]
+    if (
+        _SERVICE_PROBE["target"] == target
+        and _SERVICE_PROBE["result"] is not None
+        and at is not None
+        and time.monotonic() - at < SERVICE_PROBE_TTL_SECONDS
+    ):
+        return bool(_SERVICE_PROBE["result"])
+    if not _SERVICE_PROBE_LOCK.acquire(blocking=False):
+        return None
+    try:
+        reachable, _ = probe_endpoint(f"http://{target[0]}:{target[1]}{MCP_ENDPOINT}")
+        _SERVICE_PROBE.update({"target": target, "result": reachable, "at": time.monotonic()})
+    finally:
+        _SERVICE_PROBE_LOCK.release()
+    if not reachable:
+        _LOGGER.warning("MCP service %s:%s did not answer an initialize handshake", target[0], target[1])
+    return reachable
+
+
+def serve() -> None:
+    """Run the MCP ASGI service (the ``revocompute-mcp`` entrypoint).
+
+    This *is* the deployed MCP process: ``docker-compose.mcp.yml`` runs
+    ``python -m revocompute.mcp`` as the ``mcp`` service, and the deployment
+    gateway proxies ``/k/`` to the port bound here.  Importing the canonical
+    application first is what makes a request that arrives over MCP terminate in
+    the same application, authorization, admission, and persistence code the HTTP
+    API runs.
+    """
     import uvicorn
 
     from revocompute.config import env_int
 
+    # Import the canonical application: this process serves the MCP protocol over
+    # it, so the canonical handlers, user database, and Task store are the ones
+    # every call reaches.  Gunicorn is not involved, so nothing here forks.
+    import revocompute.app  # noqa: F401
+
     port = env_int("MCP_PORT", DEFAULT_MCP_PORT)
-    # Binds all interfaces inside the container; the port is never published and
-    # only the deployment gateway reaches it.
+    # Binds all interfaces inside the compose network; the port is never
+    # published and only the deployment gateway reaches it.
     uvicorn.run(mcp_asgi(), host="0.0.0.0", port=port, log_level=os.environ.get("MCP_LOG_LEVEL", "info"))  # nosec B104
 
 
@@ -173,67 +263,12 @@ def mcp_enabled() -> bool:
     """Whether this deployment opted in to serving the MCP surface.
 
     The switch is a deployment fact, so it is read from the environment directly
-    rather than from a Flask app: the listener and any capability this process
+    rather than from a Flask app: the service and any capability this process
     reports must be decided by the same value, or the two can disagree.
     """
     from revocompute.config import env_bool
 
     return env_bool("MCP_ENABLED", False)
-
-
-def start_companion_listener() -> threading.Thread | None:
-    """Start the MCP ASGI listener in a daemon thread of this process.
-
-    The listener shares this process's memory, so the canonical rate limiter,
-    the loaded application, and every in-process admission decision are the same
-    objects the HTTP API uses.  Returns ``None`` when MCP is disabled, the
-    optional ASGI stack is missing, or the listener failed to bind within
-    :data:`LISTENER_STARTUP_TIMEOUT_SECONDS`; the HTTP API is never affected by
-    any of those.  The deployment starts the web process with Gunicorn
-    ``--preload``, so the listener lives in the master and its bound socket is
-    inherited by every worker: one listener, one application, one admission
-    path per container.
-    """
-    import os
-
-    from revocompute.config import env_int
-
-    # Opt-in: the listener is off unless the deployment turns it on, so an
-    # ordinary import (a worker, a maintenance process, a test) never binds a
-    # port or spawns a thread.
-    if not mcp_enabled():
-        return None
-    try:
-        import uvicorn
-    except ImportError:
-        _LOGGER.info("MCP listener not started: the optional 'mcp' extra is not installed")
-        _LISTENER["error"] = "the optional 'mcp' extra is not installed"
-        return None
-
-    host = os.environ.get("MCP_HOST", "0.0.0.0")  # noqa: S104 - container-internal bind
-    port = env_int("MCP_PORT", DEFAULT_MCP_PORT)
-    config = uvicorn.Config(mcp_asgi(), host=host, port=port, log_level=os.environ.get("MCP_LOG_LEVEL", "warning"))
-    server = uvicorn.Server(config)
-    thread = threading.Thread(target=server.run, name="mcp-asgi", daemon=True)
-    _LISTENER.update({"server": server, "thread": thread, "error": None})
-    # A fresh listener invalidates any previous readiness answer.
-    _PROBE["result"] = None
-    thread.start()
-    # The thread returning is not readiness: uvicorn sets ``started`` only after
-    # ``create_server`` succeeds, so waiting for it (and for the thread to still
-    # be alive, since a bind failure exits the process it runs in) is what
-    # distinguishes "the listener answers" from "the switch was set".
-    deadline = time.monotonic() + LISTENER_STARTUP_TIMEOUT_SECONDS
-    while time.monotonic() < deadline:
-        if getattr(server, "started", False):
-            _LOGGER.info("MCP surface listening on %s:%s%s", host, port, MCP_ENDPOINT)
-            return thread
-        if not thread.is_alive():
-            break
-        time.sleep(0.05)
-    _LISTENER["error"] = f"the listener did not bind {host}:{port} within {LISTENER_STARTUP_TIMEOUT_SECONDS:g}s"
-    _LOGGER.error("MCP surface did not start: %s", _LISTENER["error"])
-    return None
 
 
 #: Fixed, role-based reasons the public capability may carry.  They exist so a
@@ -283,7 +318,7 @@ def gateway_endpoint() -> str | None:
     """The public URL an agent host reaches the surface at, or ``None``.
 
     The same-origin public base joined with :data:`MCP_ENDPOINT`.  It is public
-    deployment identity, not infrastructure: the listener's container-internal
+    deployment identity, not infrastructure: the MCP service's container-internal
     port and host path are never part of it.
     """
     base = os.environ.get(PUBLIC_BASE_URL_ENV, "").strip().rstrip("/")
@@ -304,9 +339,8 @@ def gateway_reachable() -> bool | None:
 
     The destination is never caller-controlled: it is :func:`gateway_endpoint`,
     built from this deployment's own ``SERVER_BASE_URL`` and the fixed MCP path,
-    reachable only because the listener shares this process's admitted traffic
-    through the deployment gateway.  Nothing here forwards a caller-supplied
-    target, so no SSRF surface is introduced.
+    the same-origin public URL the gateway serves to an agent host.  Nothing here
+    forwards a caller-supplied target, so no SSRF surface is introduced.
 
     The verdict is memoized per base URL *and bounded in time*: a verdict is fresh
     only while it is younger than :data:`GATEWAY_PROBE_TTL_SECONDS`, so a read
@@ -362,14 +396,14 @@ def surface_status() -> dict[str, Any]:
     The canonical HTTP surface reads its capability through this, so a browser is
     told the surface is *operational* only when this deployment genuinely reached
     its own public MCP endpoint — a real MCP ``initialize`` handshake over the
-    deployment gateway an agent host would use.  A healthy companion listener, or
-    a route file on disk, are not that fact: a stale config, a gateway that never
+    deployment gateway an agent host would use.  An answering MCP service, or a
+    route file on disk, are not that fact: a stale config, a gateway that never
     reloaded, or an upstream that is down all leave both true while nothing
     external answers.  So the capability reports each fact separately and gates
     ``operational`` on the *reach* alone:
 
-    ``listener_ready``    the companion listener bound and answered an
-                          ``initialize`` on loopback in this process;
+    ``listener_ready``    the MCP service answered an ``initialize`` handshake at
+                          the destination this deployment dials for it;
     ``route_configured``  the deployment gateway route state declares the MCP
                           location (a route *file* is not a route *served*);
     ``gateway_verified``  ``True``/``False`` when this deployment reached its own
@@ -384,30 +418,24 @@ def surface_status() -> dict[str, Any]:
                           filesystem error string.
 
     It reports no host, port, or credential of its own, and reads no
-    caller-supplied URL.  The listener's readiness is probed once per process (its
-    binding and its fixed surface cannot change at runtime); the route is re-read
-    on every call, because ``restart.sh`` reconciles it without restarting this
-    process and a long-lived answer must not outlive the route it describes; and
-    the gateway reach is re-read once its verdict is older than
-    :data:`GATEWAY_PROBE_TTL_SECONDS`, so an outage eventually stops being
-    advertised and a recovery eventually is, on the same TTL in both directions.
-    While that refresh is in flight a concurrent read reports ``gateway_verified``
-    as ``None`` and advertises nothing (see :func:`gateway_reachable`).
+    caller-supplied URL.  The service reach is bounded in time on the same rule as
+    the gateway reach, so a service that stops answering stops being reported
+    ready, and one that recovers is reported ready again, both without restarting
+    this process; the route is re-read on every call, because ``restart.sh``
+    reconciles it without restarting this process and a long-lived answer must not
+    outlive the route it describes.  While a refresh is in flight a concurrent
+    read reports the refreshed fact as ``None``/not-ready and advertises nothing
+    (see :func:`service_reachable` and :func:`gateway_reachable`).
     """
     # The default, and not a problem: nothing was asked for.
     if not mcp_enabled():
         return _capability(False, False, None, endpoint=None, detail=None)
     route_configured = gateway_route_configured()
-    server = _LISTENER["server"]
-    if server is None or not getattr(server, "started", False):
-        # Enabled, but this process cannot answer: a missing extra, a bind
-        # failure, or a switch set without a restart.  Never a silent "off".
+    service = service_reachable()
+    if service is not True:
+        # Enabled, but nothing answers: the service is down, unbuilt, or a switch
+        # set without a restart.  Never a silent "off".
         return _capability(False, route_configured, None, endpoint=None, detail=_listener_detail())
-    if _PROBE["result"] is None:
-        _PROBE["result"] = probe_surface(server)
-    listener_ready, listener_detail = _PROBE["result"]
-    if not listener_ready:
-        return _capability(False, route_configured, None, endpoint=None, detail=listener_detail)
     gateway_verified = gateway_reachable()
     if gateway_verified is None:
         # This deployment does not reach for its public edge, so external
@@ -427,7 +455,7 @@ def _capability(
     endpoint: str | None,
     detail: str | None,
 ) -> dict[str, Any]:
-    """Assemble the capability document from the four independent facts.
+    """Assemble the capability document from the independent facts.
 
     ``operational`` is the reach alone; ``enabled`` is the reduced projection Home
     consumes, so the public UI and any other reader agree on one meaning.
@@ -445,25 +473,24 @@ def _capability(
 
 
 def _listener_detail() -> str:
-    """A fixed reason the listener is not answering.
+    """A fixed reason the MCP service is not answering.
 
-    The stored listener error is operator text and may name the bound host and
-    port, so it stays in the log; the capability carries one fixed sentence.
+    The destination and any transport error are operator detail and may name the
+    service host and port, so they stay in the log and the log-only fields; the
+    public capability carries one fixed sentence.
     """
-    if _LISTENER["error"]:
-        _LOGGER.warning("MCP listener not ready: %s", _LISTENER["error"])
-    return "the MCP listener is not answering on this deployment"
+    return "the MCP service is not answering on this deployment"
 
 
-def probe_gateway(endpoint: str) -> tuple[bool, str]:
-    """Drive one MCP ``initialize`` against the deployment's *public* endpoint.
+def probe_endpoint(endpoint: str, *, timeout: float = SERVICE_PROBE_TIMEOUT_SECONDS) -> tuple[bool, str]:
+    """Drive one MCP ``initialize`` against one fixed, deployment-owned endpoint.
 
-    The listener probe proves the surface inside the web container; this proves
-    the endpoint an agent host actually uses, through the deployment gateway.  It
-    is the same pre-credential handshake, sent to a fixed, deployment-owned URL
-    (never a caller-supplied one), and it is not a second admission path: it lands
-    in the same application the HTTP API does, so the canonical limiter and
-    account rules still decide what a subsequent request may do.
+    The same pre-credential handshake an agent host sends first, over streamable
+    HTTP, against a destination this deployment resolved itself -- the MCP
+    service on the compose network, or this deployment's own public base URL
+    through the gateway.  A caller never supplies the target, so no SSRF surface
+    is introduced, and the request lands in the same application the HTTP API
+    runs, so it is not a second admission path.
     """
     import asyncio
     import json
@@ -476,7 +503,7 @@ def probe_gateway(endpoint: str) -> tuple[bool, str]:
             "params": {
                 "protocolVersion": MCP_PROTOCOL_VERSION,
                 "capabilities": {},
-                "clientInfo": {"name": "revocompute-gateway-probe", "version": "1"},
+                "clientInfo": {"name": "revocompute-surface-probe", "version": "1"},
             },
         }
     ).encode("utf-8")
@@ -487,7 +514,7 @@ def probe_gateway(endpoint: str) -> tuple[bool, str]:
         # ``trust_env=False``: a deployment's HTTP(S)_PROXY must not silently
         # redirect this readiness check off the host, and no caller can influence
         # the destination.
-        async with httpx.AsyncClient(timeout=GATEWAY_PROBE_TIMEOUT_SECONDS, trust_env=False) as client:
+        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
             response = await client.post(
                 endpoint,
                 content=body,
@@ -498,7 +525,18 @@ def probe_gateway(endpoint: str) -> tuple[bool, str]:
     try:
         return asyncio.run(_run())
     except Exception:  # noqa: BLE001 - reachability must never raise into a capability read
-        return False, "the public MCP endpoint did not answer an initialize handshake"
+        return False, "the MCP endpoint did not answer an initialize handshake"
+
+
+def probe_gateway(endpoint: str) -> tuple[bool, str]:
+    """Drive one MCP ``initialize`` against the deployment's *public* endpoint.
+
+    The service reach proves the MCP process answers inside the compose network;
+    this proves the endpoint an agent host actually uses, through the deployment
+    gateway.  It is :func:`probe_endpoint` against the fixed, deployment-owned URL
+    :func:`gateway_endpoint` builds, on :data:`GATEWAY_PROBE_TIMEOUT_SECONDS`.
+    """
+    return probe_endpoint(endpoint, timeout=GATEWAY_PROBE_TIMEOUT_SECONDS)
 
 
 def _initialize_result(status: int, content_type: str, text: str) -> tuple[bool, str]:
@@ -532,104 +570,29 @@ def _initialize_result(status: int, content_type: str, text: str) -> tuple[bool,
 
 
 
-def probe_surface(server: Any) -> tuple[bool, str]:
-    """Drive one real MCP ``initialize`` against the bound companion listener.
-
-    Binding a port is not serving the protocol: the transport may have failed to
-    start its session manager, the mount may be wrong, or the endpoint may 404.
-    So readiness is proven by the same pre-credential handshake an agent host
-    performs first — an unauthenticated ``initialize`` over streamable HTTP on
-    the listener's own loopback — and reported as ``(reachable, detail)``.
-
-    The request runs in a throwaway event loop on this thread rather than in the
-    listener's, and is not a second listener or execution plane: it speaks to the
-    one surface the deployment serves, which is also what makes it a real
-    end-to-end check rather than an assertion about a flag.  ``server`` (the bound
-    listener) is what makes the check meaningful — a caller only probes when one
-    exists.
-    """
-    import asyncio
-    import json
-
-    port = _bound_port(server)
-    if port is None:
-        return False, "the MCP listener is not bound to a port"
-    body = json.dumps(
-        {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": {
-                "protocolVersion": MCP_PROTOCOL_VERSION,
-                "capabilities": {},
-                "clientInfo": {"name": "revocompute-surface-probe", "version": "1"},
-            },
-        }
-    ).encode("utf-8")
-
-    async def _run() -> tuple[bool, str]:
-        import httpx
-
-        # A loopback client of our own surface, on the port the listener actually
-        # bound (never assumed from the environment).  The listener binds all
-        # container interfaces, so 127.0.0.1 reaches it from here; the port is
-        # deployment-internal and never leaves the capability projection.
-        # ``trust_env=False`` so a deployment's HTTP(S)_PROXY can never redirect
-        # this in-process loopback readiness check off the host.
-        async with httpx.AsyncClient(timeout=SURFACE_PROBE_TIMEOUT_SECONDS, trust_env=False) as client:
-            response = await client.post(
-                f"http://127.0.0.1:{port}{MCP_ENDPOINT}",
-                content=body,
-                headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream"},
-            )
-        return _initialize_result(response.status_code, response.headers.get("content-type", ""), response.text)
-
-    try:
-        return asyncio.run(_run())
-    except Exception as exc:  # noqa: BLE001 - readiness must never raise into a capability read
-        return False, f"the MCP endpoint did not answer an initialize handshake: {exc}"
-
-
-def _bound_port(server: Any) -> int | None:
-    """The TCP port the listener actually holds, or ``None`` if it holds none.
-
-    Read from the bound socket rather than the environment, so an ephemeral
-    ``MCP_PORT=0`` (or any port the environment overstated) is probed where the
-    surface really is.
-    """
-    servers = getattr(server, "servers", None) or []
-    for bound in servers:
-        for sock in getattr(bound, "sockets", None) or []:
-            try:
-                address = sock.getsockname()
-            except OSError:
-                continue
-            if isinstance(address, tuple) and len(address) >= 2 and isinstance(address[1], int):
-                return address[1]
-    return None
-
-
 __all__ = [
     "DEFAULT_MCP_PORT",
+    "DEFAULT_MCP_SERVICE",
     "GATEWAY_PROBE_ENV",
     "GATEWAY_PROBE_TIMEOUT_SECONDS",
     "GATEWAY_PROBE_TTL_SECONDS",
     "GATEWAY_ROUTE_DIR",
     "GATEWAY_ROUTE_FILE",
-    "LISTENER_STARTUP_TIMEOUT_SECONDS",
     "MCP_ENDPOINT",
     "MCP_PATH",
     "MCP_PROTOCOL_VERSION",
+    "MCP_SERVICE_ENV",
     "PUBLIC_BASE_URL_ENV",
-    "SURFACE_PROBE_TIMEOUT_SECONDS",
+    "SERVICE_PROBE_TIMEOUT_SECONDS",
+    "SERVICE_PROBE_TTL_SECONDS",
     "gateway_endpoint",
     "gateway_reachable",
     "gateway_route_configured",
     "mcp_asgi",
     "mcp_enabled",
+    "probe_endpoint",
     "probe_gateway",
-    "probe_surface",
     "serve",
-    "start_companion_listener",
+    "service_reachable",
     "surface_status",
 ]
