@@ -63,6 +63,11 @@ GUNICORN_COMMAND = (
 #: The production MCP entrypoint: the ``mcp`` service runs exactly this.
 MCP_COMMAND = ("{python}", "-m", "revocompute.mcp")
 
+#: Rounds the concurrent cold-start case repeats.  The interleaving it pins is
+#: timing-dependent, so one round proves nothing about a race; each round starts
+#: both services against a database tree that did not exist a moment earlier.
+COLD_START_ROUNDS = 4
+
 
 def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
@@ -170,26 +175,67 @@ class _Deployment:
     # -- lifecycle ---------------------------------------------------------
 
     def start(self) -> "_Deployment":
+        """Start each service in turn, waiting for one before starting the next.
+
+        This is the fixture's original order, kept for the cases that observe a
+        *running* deployment rather than a starting one.  It cannot see the
+        concurrent cold start -- the second service begins only after the first
+        is already serving -- so :meth:`launch` exists for that case.
+        """
+        self.launch_web()
+        self.wait_for_http()
+        if self.mcp_enabled:
+            self.launch_mcp()
+            self.wait_for_mcp_service()
+        return self
+
+    def launch(self, *, mcp: bool) -> "_Deployment":
+        """Start every process *together*, without waiting for any of them.
+
+        The deployed topology starts the web service and the MCP service
+        together, and a fresh deployment starts them against empty databases --
+        so both processes run the canonical startup pass at once, and the loser
+        of a ``CREATE TABLE`` race must tolerate it.  Waiting for the first
+        service to bind before starting the second would hide that race
+        entirely, so the concurrent case launches both and *then* waits.
+        """
+        self.launch_web()
+        if mcp:
+            self.launch_mcp()
+        return self
+
+    def launch_web(self) -> None:
         command = [*GUNICORN_COMMAND, "-b", f"127.0.0.1:{self.http_port}", "revocompute.app:app"]
         command = [_python() if token == "{python}" else token for token in command]
         with self.web_log.open("w", encoding="utf-8") as log:
             self.web = subprocess.Popen(
                 command, env=self.environment, cwd=str(self.root), stdout=log, stderr=subprocess.STDOUT, text=True
             )
+
+    def launch_mcp(self) -> None:
+        assert self.mcp_enabled, "the MCP service is only started when the deployment opted in"
+        mcp_command = [_python() if token == "{python}" else token for token in MCP_COMMAND]
+        with self.mcp_log.open("w", encoding="utf-8") as log:
+            self.mcp = subprocess.Popen(
+                mcp_command,
+                env=self.environment,
+                cwd=str(self.root),
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+
+    def wait_until_serving(self) -> None:
+        self.wait_for_http()
+        if self.mcp is not None:
+            self.wait_for_mcp_service()
+
+    def wait_for_http(self) -> None:
         self._wait_for(self.http_port, self.web)
-        if self.mcp_enabled:
-            mcp_command = [_python() if token == "{python}" else token for token in MCP_COMMAND]
-            with self.mcp_log.open("w", encoding="utf-8") as log:
-                self.mcp = subprocess.Popen(
-                    mcp_command,
-                    env=self.environment,
-                    cwd=str(self.root),
-                    stdout=log,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                )
-            self._wait_for(self.mcp_port, self.mcp)
-        return self
+
+    def wait_for_mcp_service(self) -> None:
+        assert self.mcp is not None
+        self._wait_for(self.mcp_port, self.mcp)
 
     @property
     def mcp_enabled(self) -> bool:
@@ -596,3 +642,111 @@ def test_the_mcp_service_is_its_own_supervised_process(tmp_path):
         assert capability["detail"]
     finally:
         deployment.stop()
+
+
+def test_a_concurrent_cold_start_leaves_both_services_serving(tmp_path):
+    # The case the deployed topology actually runs: `docker compose up` starts
+    # the web service and the MCP service together, and a *fresh* deployment
+    # starts them against empty databases.  Both processes import the canonical
+    # application, so both run its startup pass -- creating tables in the same
+    # user, Task, Tool call, and Operator Job databases -- at the same time.  The
+    # loser of that race is told a table "already exists", which is benign and
+    # must not fail the process: an unhandled error would take down the web
+    # service (or the MCP service) on a first deploy.
+    #
+    # Every other case in this file starts the web service and *waits* for it
+    # before starting the MCP service, so none of them can observe the
+    # concurrency; this one launches both and only then waits.
+    _require("gunicorn")
+    _require("mcp")
+    for round_index in range(COLD_START_ROUNDS):
+        root = tmp_path / f"deployment-{round_index}"
+        root.mkdir()
+        _prepare_root(root)
+        deployment = _Deployment(root, mcp_enabled=True)
+        try:
+            deployment.launch(mcp=True)
+            deployment.wait_until_serving()
+            # Both services stayed up: neither one crashed on the other's schema.
+            assert deployment.web is not None and deployment.web.poll() is None, deployment.logs()
+            assert deployment.mcp is not None and deployment.mcp.poll() is None, deployment.logs()
+            # Both serve.  The canonical API answers its capability, and a real
+            # MCP client completes the handshake over the wire.
+            capability = deployment.capability()
+            assert capability["listener_ready"] is True, capability
+            assert capability["enabled"] is False
+            assert capability["endpoint"] is None
+            assert deployment.mcp_initialize()["result"]["protocolVersion"]
+            # And the canonical stores the two processes raced to create are the
+            # complete, usable ones: an authenticated canonical operation reaches
+            # its real answer rather than failing on a half-created schema.
+            authorized = deployment.authenticated_call("discover_tools", {})
+            assert authorized["is_error"] is False, authorized
+        finally:
+            deployment.stop()
+
+
+def test_starting_the_mcp_service_does_not_terminalize_a_running_operator_job(tmp_path):
+    # The second importer of the canonical application must not repeat the
+    # application's startup pass.  That pass terminalizes an Operator Job left
+    # RUNNING by a restart; if importing the application were enough to run it,
+    # merely *starting* the MCP service -- which `restart: unless-stopped` does
+    # again after any crash -- would fail a job the web service is legitimately
+    # running.  The job's owner is the process that owns the application, so the
+    # pass is asserted in both directions with real processes.
+    _require("gunicorn")
+    _require("mcp")
+    from revocompute.operator_jobs import OperatorJobStatus, OperatorJobStore
+
+    root = tmp_path / "deployment"
+    root.mkdir()
+    _prepare_root(root)
+    web = _Deployment(root, mcp_enabled=True)
+    # A web process that has already run its own startup pass, on an empty store.
+    web.launch_web()
+    web.wait_for_http()
+    try:
+        store = OperatorJobStore(str(root / "operator-jobs.sqlite"))
+        record, _ = store.create(
+            action="runner.build",
+            runner_family="demo",
+            actor_user_id=1,
+            actor_username="admin",
+            tier="mutate",
+            lease_scope="runner/demo",
+            requested_intent="runner.build",
+            plan_digest="sha256:" + "a" * 16,
+            evidence_digest="sha256:" + "b" * 16,
+            parameters={"runner_family": "demo"},
+            idempotency_key=None,
+        )
+        job_id = record["job_id"]
+        assert store.transition(job_id, expected=(OperatorJobStatus.QUEUED,), new_status=OperatorJobStatus.RUNNING)
+
+        # Starting the MCP service imports the canonical application.  The job
+        # the web service owns is still RUNNING afterwards.
+        web.launch_mcp()
+        web.wait_for_mcp_service()
+        assert web.mcp is not None and web.mcp.poll() is None, web.logs()
+        assert store.get(job_id)["status"] == OperatorJobStatus.RUNNING.value, (
+            "starting the MCP service terminalized a job the web service owns"
+        )
+        store.engine.dispose()
+
+        # Control: a process that *does* own the application still runs the pass.
+        # A second web master on the same tree -- what a restart of the web
+        # service is -- terminalizes the same job, which is the behavior the
+        # first half must not have performed.
+        restarted = _Deployment(root, mcp_enabled=False)
+        restarted.launch_web()
+        restarted.wait_for_http()
+        try:
+            reopened = OperatorJobStore(str(root / "operator-jobs.sqlite"))
+            row = reopened.get(job_id)
+            assert row["status"] == OperatorJobStatus.FAILED.value, row
+            assert row["failure_category"] == "orphaned_executor_restart"
+            reopened.engine.dispose()
+        finally:
+            restarted.stop()
+    finally:
+        web.stop()
