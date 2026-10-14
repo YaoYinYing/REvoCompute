@@ -6,24 +6,25 @@
 
 The Home page offers "Connect an AI agent" only when the public capability says
 the surface is operational, so the capability is a *safety* projection: a
-deployment whose switch is set but whose listener is missing, held, or broken
-must report the surface not operational rather than advertise an endpoint
-nothing answers.  And a healthy listener, or a route file on disk, is not
-reachable on its own — the endpoint Home advertises is reached through the
-deployment gateway, so a listener that bound behind a missing, stale, or
+deployment whose switch is set but whose ``mcp`` service is absent, unreachable,
+or broken must report the surface not operational rather than advertise an
+endpoint nothing answers.  And an answering MCP service, or a route file on disk,
+is not reachable on its own -- the endpoint Home advertises is reached through the
+deployment gateway, so a service that answers behind a missing, stale, or
 unreloaded gateway route is still not connectable from outside.
 
 These tests drive the capability through the real application and hold each fact
 down in turn, asserting the capability reports it and refuses to advertise the
-endpoint.  The facts are real: the listener is a real bound socket, the route is
-a real file under the deployment's own ``SERVER_DIR``, and the reach is a real
-HTTP call to the deployment's own base URL.  Nothing about the endpoint is
-inferred from a URL a caller supplied, and a failure's ``detail`` never carries a
-filesystem error string.
+endpoint.  The facts are real: the MCP service is the deployment's own
+``python -m revocompute.mcp`` entrypoint running as its own process on a real
+socket, the route is a real file under the deployment's own ``SERVER_DIR``, and
+the reach is a real HTTP call to the deployment's own base URL.  Nothing about
+the endpoint is inferred from a URL a caller supplied, and a failure's ``detail``
+never carries a filesystem error string or an internal port.
 
-The reach is *observed*, not remembered forever: a verdict is fresh only for a
-bounded TTL, so the transition tests below break or restore the real edge in one
-running process, against one unchanged base URL, and assert the capability
+Both reaches are *observed*, not remembered forever: a verdict is fresh only for
+a bounded TTL, so the transition tests below break or restore the real edge in one
+running process, against one unchanged destination, and assert the capability
 converges.  They drive the TTL rather than sleeping it out, so the assertions are
 about the freshness rule and not about the wall clock.
 """
@@ -32,7 +33,10 @@ from __future__ import annotations
 
 import http.server
 import json
+import os
 import socket
+import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -46,7 +50,7 @@ from conftest import _load_pssm_module
 #: the gateway includes, so a test route is one the gateway would really serve.
 GATEWAY_ROUTE = (
     "location /k/ {\n"
-    "    proxy_pass http://web:8081;\n"
+    "    proxy_pass http://mcp:8081;\n"
     "    proxy_http_version 1.1;\n"
     '    proxy_set_header Connection "";\n'
     "}\n"
@@ -64,13 +68,17 @@ CAPABILITY_KEYS = {
     "detail",
 }
 
+#: The fixed sentence the capability carries when the MCP service is not answering.
+#: It names no host and no port, which is what the redaction cases assert.
+SERVICE_NOT_ANSWERING = "the MCP service is not answering on this deployment"
+
 
 def _write_gateway_route(module, route_text: str | None) -> None:
     """Leave the deployment's gateway route in the state ``route_text`` describes.
 
     ``route_text`` is what the deployment host would have left under
     ``SERVER_DIR``: the controller writes it from ``MCP_ENABLED``.  ``None`` means
-    no route was written — the state in which the listener has no public one.
+    no route was written -- the state in which the MCP service has no public face.
     """
     route_dir = Path(module.CONFIG.server_dir) / "mcp-gateway"
     if route_text is None:
@@ -81,6 +89,101 @@ def _write_gateway_route(module, route_text: str | None) -> None:
         return
     route_dir.mkdir(parents=True, exist_ok=True)
     (route_dir / "mcp.conf").write_text(route_text, encoding="utf-8")
+
+
+def _free_port() -> int:
+    """A loopback port nothing is listening on at return time."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        return int(probe.getsockname()[1])
+
+
+def _initialize_body() -> bytes:
+    return json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "case", "version": "1"}},
+        }
+    ).encode("utf-8")
+
+
+def _answers_initialize(port: int, *, timeout: float = 2.0) -> bool:
+    """Whether something at ``port`` answers a real MCP ``initialize``."""
+    import httpx
+
+    try:
+        response = httpx.post(
+            f"http://127.0.0.1:{port}/k/mcp",
+            content=_initialize_body(),
+            headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream"},
+            timeout=timeout,
+            trust_env=False,
+        )
+    except Exception:  # noqa: BLE001 - any transport failure is "not answering"
+        return False
+    return response.status_code == 200 and "protocolVersion" in response.text
+
+
+class _McpService:
+    """The deployment's MCP service, started the way ``docker-compose.mcp.yml`` starts it.
+
+    ``python -m revocompute.mcp`` is the shipped entrypoint, so a reachability
+    fact measured against this process is the fact the deployment would report.
+    It is given the deployment environment the application under test was loaded
+    with -- the same mounts and variables the overlay extends from ``web`` -- so the
+    two processes read one deployment.
+    """
+
+    def __init__(self, *, port: int) -> None:
+        self.port = port
+        self.process: subprocess.Popen[str] | None = None
+
+    def start(self, root: Path) -> "_McpService":
+        environment = dict(os.environ)
+        environment.update(
+            {
+                "MCP_ENABLED": "true",
+                "MCP_PORT": str(self.port),
+                "MCP_LOG_LEVEL": "warning",
+                "PYTHONPATH": str(root),
+            }
+        )
+        self.process = subprocess.Popen(
+            [sys.executable, "-m", "revocompute.mcp"],
+            env=environment,
+            cwd=str(root),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            if self.process.poll() is not None:
+                detail = (self.process.stderr.read() if self.process.stderr else "")[-500:]
+                raise AssertionError(f"the MCP service exited before answering: {detail}")
+            if _answers_initialize(self.port):
+                return self
+            time.sleep(0.1)
+        self.stop()
+        raise AssertionError(f"the MCP service did not answer on port {self.port}")
+
+    def stop(self) -> None:
+        if self.process is None:
+            return
+        self.process.terminate()
+        try:
+            self.process.wait(timeout=10)
+        except subprocess.TimeoutExpired:  # pragma: no cover - a hung service is a bug
+            self.process.kill()
+            self.process.wait(timeout=10)
+        if self.process.stderr is not None:
+            self.process.stderr.close()
+        self.process = None
+
+    def alive(self, *, timeout: float = 1.0) -> bool:
+        return _answers_initialize(self.port, timeout=timeout)
 
 
 class _PublicEdge:
@@ -150,45 +253,39 @@ class _PublicEdge:
         self.server.server_close()
 
 
-def _reserve_port() -> tuple[socket.socket, int]:
-    """Bind a loopback port and hold it, so the listener's own bind must fail."""
-    held = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    held.bind(("127.0.0.1", 0))
-    held.listen(1)
-    return held, int(held.getsockname()[1])
+def _mcp_vars(edge: _PublicEdge, port: int) -> dict[str, str]:
+    """The opt-in environment a deployment behind ``edge`` would carry.
 
-
-def _mcp_vars(edge: _PublicEdge) -> dict[str, str]:
-    """The opt-in environment a deployment behind ``edge`` would carry."""
+    ``MCP_SERVICE``/``MCP_PORT`` are the deployment-owned destination the web
+    process dials for the service fact.  The case points them at the MCP service
+    it started, which is the topology ``docker-compose.mcp.yml`` declares.
+    """
     return {
         "RUNNER_UID": "1234",
         "RUNNER_GID": "5678",
         "MCP_ENABLED": "true",
-        "MCP_PORT": "0",
+        "MCP_SERVICE": "127.0.0.1",
+        "MCP_PORT": str(port),
         "SERVER_BASE_URL": edge.base_url,
         "MCP_GATEWAY_PROBE": "true",
     }
 
 
-# The held port makes uvicorn exit its listener thread by design; that SystemExit
-# in a non-main thread is the behavior under test, so its pytest warning is noise.
-@pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
-def test_a_listener_that_cannot_bind_is_reported_not_ready(monkeypatch, tmp_path):
-    # MCP_ENABLED=true is *intent*. Another process already holds the port the
-    # listener would bind, so no surface is served. The capability must say so
-    # rather than advertise an endpoint, even with the route and the edge present.
-    held, port = _reserve_port()
+def _deployment(monkeypatch, tmp_path, edge: _PublicEdge, *, port: int):
+    """Load the canonical application as an opt-in deployment dialing ``port``."""
+    return _load_pssm_module(monkeypatch, tmp_path, extra_env=_mcp_vars(edge, port))
+
+
+def test_a_capability_with_no_service_answering_is_reported_not_ready(monkeypatch, tmp_path):
+    # MCP_ENABLED=true is *intent*. Nothing answers at the destination this
+    # deployment dials, so no surface is served. The capability must say so rather
+    # than advertise an endpoint, even with the route and the edge present.
     edge = _PublicEdge(answer_init=True)
     try:
-        env = _mcp_vars(edge)
-        env["MCP_PORT"] = str(port)
-        module = _load_pssm_module(monkeypatch, tmp_path, extra_env=env)
-        # Even with the gateway route present and the public edge answering, no
-        # listener means nothing to reach.
+        module = _deployment(monkeypatch, tmp_path, edge, port=_free_port())
         _write_gateway_route(module, GATEWAY_ROUTE)
         payload = module.app.test_client().get("/compute/api/mcp").get_json()
     finally:
-        held.close()
         edge.close()
 
     assert payload["listener_ready"] is False
@@ -198,51 +295,53 @@ def test_a_listener_that_cannot_bind_is_reported_not_ready(monkeypatch, tmp_path
     assert payload["enabled"] is False
     assert payload["endpoint"] is None
     # The operator gets a fixed, role-based reason, never a silent "disabled".
-    assert payload["detail"]
+    assert payload["detail"] == SERVICE_NOT_ANSWERING
+    # And the reason carries no destination: the port it dialed is not in the
+    # public document.
+    assert str(payload["endpoint"]) not in json.dumps(payload)
 
 
-def test_a_healthy_listener_behind_a_missing_gateway_route_is_not_advertised(monkeypatch, tmp_path):
-    # The exact disagreement the review flagged: the companion listener really
-    # bound and answers a real MCP initialize on loopback, but the deployment
-    # gateway serves no /k/ route, so no agent host outside this container can
-    # reach the endpoint Home would advertise. A listener plus a route file is the
-    # only thing this deployment has; the capability must report that, not claim
-    # the surface is operational.
-    from revocompute.mcp.asgi import _LISTENER, probe_surface
-
+def test_an_answering_service_behind_a_missing_gateway_route_is_not_advertised(monkeypatch, tmp_path):
+    # The exact disagreement the review flagged: the MCP service really answers a
+    # real MCP initialize, but the deployment gateway serves no /k/ route, so no
+    # agent host outside this container can reach the endpoint Home would
+    # advertise. An answering service plus a route file is the only thing this
+    # deployment has; the capability must report that, not claim the surface is
+    # operational.
     edge = _PublicEdge(answer_init=False)
+    service = _McpService(port=_free_port())
     try:
-        module = _load_pssm_module(monkeypatch, tmp_path, extra_env=_mcp_vars(edge))
+        module = _deployment(monkeypatch, tmp_path, edge, port=service.port)
+        service.start(Path(module.CONFIG.server_dir).parent)
         _write_gateway_route(module, None)
 
         payload = module.app.test_client().get("/compute/api/mcp").get_json()
-        assert payload["listener_ready"] is True, "the listener is genuinely healthy"
+        assert payload["listener_ready"] is True, "the service genuinely answers"
         assert payload["route_configured"] is False
         assert payload["operational"] is False, "Home must not claim external MCP while the gateway serves no route"
         assert payload["enabled"] is False
         assert payload["endpoint"] is None
         assert payload["detail"], "the operator gets a reason, not a silent off"
 
-        # The listener really answers, so the reported facts are distinguishable:
+        # The service really answers, so the reported facts are distinguishable:
         # listener_ready True with route_configured False is the disagreement.
-        ok, detail = probe_surface(_LISTENER["server"])
-        assert ok, detail
+        assert service.alive()
 
         # The operator diagnostic agrees, over the public route a client uses.
         assert _operator_health(module) == 1
     finally:
+        service.stop()
         edge.close()
 
 
 def test_the_capability_is_advertised_only_after_a_real_public_handshake(monkeypatch, tmp_path):
-    # MCP_PORT=0 asks uvicorn for an ephemeral port, so the listener really binds.
     # The public edge answers the initialize the capability sends it, so the
     # deployment's own endpoint is verified and only then does Home offer it.
-    from revocompute.mcp.asgi import _LISTENER, probe_surface
-
     edge = _PublicEdge(answer_init=True)
+    service = _McpService(port=_free_port())
     try:
-        module = _load_pssm_module(monkeypatch, tmp_path, extra_env=_mcp_vars(edge))
+        module = _deployment(monkeypatch, tmp_path, edge, port=service.port)
+        service.start(Path(module.CONFIG.server_dir).parent)
         _write_gateway_route(module, GATEWAY_ROUTE)
         client = module.app.test_client()
         payload = client.get("/compute/api/mcp").get_json()
@@ -261,11 +360,10 @@ def test_the_capability_is_advertised_only_after_a_real_public_handshake(monkeyp
         assert edge.posts and edge.posts[0]["path"] == "/k/mcp"
         assert edge.posts[0]["body"]["method"] == "initialize"
 
-        # And the local readiness answer really came from the wire too.
-        ok, detail = probe_surface(_LISTENER["server"])
-        assert ok, detail
-        assert "protocol" in detail and "revocompute" in detail
+        # And the service fact really came from the wire too.
+        assert service.alive()
     finally:
+        service.stop()
         edge.close()
 
 
@@ -278,10 +376,12 @@ def test_a_stale_or_unrelated_route_file_is_not_configured(monkeypatch, tmp_path
     # reported faithfully and the endpoint is advertised on the observed reach
     # alone, never on the file.
     edge = _PublicEdge(answer_init=True)
+    service = _McpService(port=_free_port())
     try:
-        module = _load_pssm_module(monkeypatch, tmp_path, extra_env=_mcp_vars(edge))
+        module = _deployment(monkeypatch, tmp_path, edge, port=service.port)
+        service.start(Path(module.CONFIG.server_dir).parent)
         client = module.app.test_client()
-        for route_text in ("", "# truncated by a partial write\n", "location /other/ { proxy_pass http://web:8081; }\n"):
+        for route_text in ("", "# truncated by a partial write\n", "location /other/ { proxy_pass http://mcp:8081; }\n"):
             _write_gateway_route(module, route_text)
             payload = client.get("/compute/api/mcp").get_json()
             assert payload["route_configured"] is False, route_text
@@ -295,18 +395,21 @@ def test_a_stale_or_unrelated_route_file_is_not_configured(monkeypatch, tmp_path
         assert payload["route_configured"] is True
         assert payload["enabled"] is True
     finally:
+        service.stop()
         edge.close()
 
 
 def test_a_configured_route_whose_gateway_does_not_answer_is_not_operational(monkeypatch, tmp_path):
-    # The core P1 counterexample: the route file declares /k/ and the listener is
-    # healthy, but nothing answers MCP at the public endpoint (a gateway that never
+    # The core P1 counterexample: the route file declares /k/ and the MCP service
+    # answers, but nothing answers MCP at the public endpoint (a gateway that never
     # reloaded after the route was written, a stale config, or a down upstream).
     # A route file is not proof the external gateway serves MCP, so the surface
     # must not be advertised.
     edge = _PublicEdge(answer_init=False)
+    service = _McpService(port=_free_port())
     try:
-        module = _load_pssm_module(monkeypatch, tmp_path, extra_env=_mcp_vars(edge))
+        module = _deployment(monkeypatch, tmp_path, edge, port=service.port)
+        service.start(Path(module.CONFIG.server_dir).parent)
         _write_gateway_route(module, GATEWAY_ROUTE)
         payload = module.app.test_client().get("/compute/api/mcp").get_json()
         assert payload["listener_ready"] is True
@@ -317,28 +420,28 @@ def test_a_configured_route_whose_gateway_does_not_answer_is_not_operational(mon
         assert payload["endpoint"] is None
         assert payload["detail"], "the operator gets a reason"
     finally:
+        service.stop()
         edge.close()
 
 
-def test_a_set_switch_without_a_listener_is_not_advertised(monkeypatch, tmp_path):
+def test_a_set_switch_without_a_service_is_not_advertised(monkeypatch, tmp_path):
     # The counterexample the flag-only implementation failed: the switch is set
-    # but this process has no listener (a switch turned on without a restart).
-    # Reading the flag would say "on"; the observed facts must say "no".
+    # but nothing serves the surface (a switch turned on without a restart, or an
+    # overlay that was never layered). Reading the flag would say "on"; the
+    # observed facts must say "no".
     monkeypatch.setenv("MCP_ENABLED", "true")
+    monkeypatch.setenv("MCP_SERVICE", "127.0.0.1")
+    monkeypatch.setenv("MCP_PORT", str(_free_port()))
     import revocompute.mcp.asgi as asgi
 
-    # monkeypatch restores the process-global listener afterwards, so this case
-    # never leaks into (or depends on) the order of the tests around it.
-    monkeypatch.setitem(asgi._LISTENER, "server", None)
-    monkeypatch.setitem(asgi._LISTENER, "error", "the listener did not bind 0.0.0.0:8081 within 10s")
     status = asgi.surface_status()
     assert status["listener_ready"] is False
     assert status["operational"] is False and status["enabled"] is False
     assert status["endpoint"] is None
-    # The listener error is operator text and is not returned: the API carries one
-    # fixed sentence with no host or port.
-    assert status["detail"] == "the MCP listener is not answering on this deployment"
-    assert "8081" not in str(status["detail"]) and "0.0.0.0" not in str(status["detail"])
+    # The destination and any transport error are operator detail: the API carries
+    # one fixed sentence with no host or port.
+    assert status["detail"] == SERVICE_NOT_ANSWERING
+    assert str(os.environ["MCP_PORT"]) not in json.dumps(status)
 
     # With the switch off there is nothing to report and no reason to give.
     monkeypatch.setenv("MCP_ENABLED", "false")
@@ -359,10 +462,14 @@ def test_a_deployment_that_does_not_probe_reports_reachability_unverified(monkey
     # reachability is *unverified* (None) rather than asserted false, so nothing
     # reads the absence of a probe as evidence the surface is down.
     edge = _PublicEdge(answer_init=True)
-    env = _mcp_vars(edge)
-    env["MCP_GATEWAY_PROBE"] = "false"
+    service = _McpService(port=_free_port())
     try:
-        module = _load_pssm_module(monkeypatch, tmp_path, extra_env=env)
+        module = _load_pssm_module(
+            monkeypatch,
+            tmp_path,
+            extra_env={**_mcp_vars(edge, service.port), "MCP_GATEWAY_PROBE": "false"},
+        )
+        service.start(Path(module.CONFIG.server_dir).parent)
         _write_gateway_route(module, GATEWAY_ROUTE)
         payload = module.app.test_client().get("/compute/api/mcp").get_json()
         assert payload["listener_ready"] is True
@@ -375,6 +482,7 @@ def test_a_deployment_that_does_not_probe_reports_reachability_unverified(monkey
         # No reach was attempted, so nothing was sent to the public edge.
         assert edge.posts == []
     finally:
+        service.stop()
         edge.close()
 
 
@@ -398,13 +506,13 @@ def test_a_filesystem_error_yields_a_fixed_reason_with_no_path(monkeypatch, tmp_
     monkeypatch.setattr(asgi, "open", _explode, raising=False)
     assert asgi.gateway_route_configured() is False
 
-    # And the projection carries no path: with the switch on and a listener that
-    # reports not-ready, the detail is one fixed sentence.
+    # And the projection carries no path: with the switch on and no service
+    # answering, the detail is one fixed sentence.
     monkeypatch.setenv("MCP_ENABLED", "true")
-    monkeypatch.setitem(asgi._LISTENER, "server", None)
-    monkeypatch.setitem(asgi._LISTENER, "error", f"the listener did not bind (route {secret_path})")
+    monkeypatch.setenv("MCP_SERVICE", "127.0.0.1")
+    monkeypatch.setenv("MCP_PORT", str(_free_port()))
     status = asgi.surface_status()
-    assert status["detail"] == "the MCP listener is not answering on this deployment"
+    assert status["detail"] == SERVICE_NOT_ANSWERING
     assert secret_path not in json.dumps(status)
     assert str(tmp_path) not in json.dumps(status)
 
@@ -423,6 +531,13 @@ def _expire_gateway_verdict(monkeypatch) -> None:
     monkeypatch.setattr(asgi, "GATEWAY_PROBE_TTL_SECONDS", 0.0)
 
 
+def _expire_service_verdict(monkeypatch) -> None:
+    """The same rule for the service fact: drive the TTL, do not sleep it out."""
+    import revocompute.mcp.asgi as asgi
+
+    monkeypatch.setattr(asgi, "SERVICE_PROBE_TTL_SECONDS", 0.0)
+
+
 def test_a_live_gateway_that_goes_down_stops_being_advertised(monkeypatch, tmp_path):
     # A positive verdict must not last forever. The deployment's own endpoint
     # answers, so Home offers the surface; then nginx stops (or the upstream dies)
@@ -430,8 +545,10 @@ def test_a_live_gateway_that_goes_down_stops_being_advertised(monkeypatch, tmp_p
     # changes - the verdict simply ages out - and the capability must converge to
     # *not advertised* rather than keep claiming a connectivity that is gone.
     edge = _PublicEdge(answer_init=True)
+    service = _McpService(port=_free_port())
     try:
-        module = _load_pssm_module(monkeypatch, tmp_path, extra_env=_mcp_vars(edge))
+        module = _deployment(monkeypatch, tmp_path, edge, port=service.port)
+        service.start(Path(module.CONFIG.server_dir).parent)
         _write_gateway_route(module, GATEWAY_ROUTE)
         client = module.app.test_client()
 
@@ -461,6 +578,7 @@ def test_a_live_gateway_that_goes_down_stops_being_advertised(monkeypatch, tmp_p
         assert down["detail"], "the operator gets a reason, not a silent off"
         assert edge.attempts == 2, "the expired verdict is re-probed exactly once"
     finally:
+        service.stop()
         edge.close()
 
 
@@ -472,8 +590,10 @@ def test_a_down_gateway_that_recovers_is_advertised_again(monkeypatch, tmp_path)
     # web-process restart - rather than deny a recovery for the life of the process.
     edge = _PublicEdge(answer_init=True)
     edge.serving = False
+    service = _McpService(port=_free_port())
     try:
-        module = _load_pssm_module(monkeypatch, tmp_path, extra_env=_mcp_vars(edge))
+        module = _deployment(monkeypatch, tmp_path, edge, port=service.port)
+        service.start(Path(module.CONFIG.server_dir).parent)
         _write_gateway_route(module, GATEWAY_ROUTE)
         client = module.app.test_client()
 
@@ -494,6 +614,75 @@ def test_a_down_gateway_that_recovers_is_advertised_again(monkeypatch, tmp_path)
         assert up["endpoint"] == f"{edge.base_url}/k/mcp"
         assert up["detail"] is None
     finally:
+        service.stop()
+        edge.close()
+
+
+def test_an_mcp_service_that_goes_down_stops_being_reported_ready(monkeypatch, tmp_path):
+    # The service fact is a fact about another process, so it must age like the
+    # edge fact does: an MCP service that dies after a healthy handshake must stop
+    # being reported ready, without restarting the web process and without the
+    # switch changing.  The route file stays exactly as it was.
+    import revocompute.mcp.asgi as asgi
+
+    edge = _PublicEdge(answer_init=True)
+    service = _McpService(port=_free_port())
+    try:
+        module = _deployment(monkeypatch, tmp_path, edge, port=service.port)
+        service.start(Path(module.CONFIG.server_dir).parent)
+        _write_gateway_route(module, GATEWAY_ROUTE)
+        client = module.app.test_client()
+
+        live = client.get("/compute/api/mcp").get_json()
+        assert live["listener_ready"] is True
+        assert live["enabled"] is True
+
+        # A fresh verdict is a memory read: the same answer, no second handshake.
+        again = client.get("/compute/api/mcp").get_json()
+        assert again["listener_ready"] is True
+
+        service.stop()
+        _expire_service_verdict(monkeypatch)
+        down = client.get("/compute/api/mcp").get_json()
+        assert down["listener_ready"] is False, "a stopped service must stop being reported ready"
+        assert down["route_configured"] is True, "the route file did not change"
+        assert down["operational"] is False
+        assert down["enabled"] is False
+        assert down["endpoint"] is None
+        assert down["detail"] == SERVICE_NOT_ANSWERING
+        # The capability reports the reach as unknown, not as an observed failure:
+        # the gateway was never called, because the service fact already failed.
+        assert down["gateway_verified"] is None
+    finally:
+        service.stop()
+        edge.close()
+
+
+def test_an_mcp_service_that_recovers_is_reported_ready_again(monkeypatch, tmp_path):
+    # The mirror: the verdict must not be sticky in the other direction either.
+    # The service is down, so the surface is not operational; the operator then
+    # starts it, and the next read after the window reports it ready again and
+    # advertises the endpoint on the real public handshake.
+    edge = _PublicEdge(answer_init=True)
+    service = _McpService(port=_free_port())
+    try:
+        module = _deployment(monkeypatch, tmp_path, edge, port=service.port)
+        _write_gateway_route(module, GATEWAY_ROUTE)
+        client = module.app.test_client()
+
+        down = client.get("/compute/api/mcp").get_json()
+        assert down["listener_ready"] is False
+        assert down["enabled"] is False
+
+        service.start(Path(module.CONFIG.server_dir).parent)
+        _expire_service_verdict(monkeypatch)
+        up = client.get("/compute/api/mcp").get_json()
+        assert up["listener_ready"] is True, "a recovered service must be reported ready again"
+        assert up["operational"] is True
+        assert up["enabled"] is True
+        assert up["endpoint"] == f"{edge.base_url}/k/mcp"
+    finally:
+        service.stop()
         edge.close()
 
 
@@ -506,8 +695,10 @@ def test_a_read_that_loses_the_refresh_race_fails_closed(monkeypatch, tmp_path):
     import revocompute.mcp.asgi as asgi
 
     edge = _PublicEdge(answer_init=True)
+    service = _McpService(port=_free_port())
     try:
-        module = _load_pssm_module(monkeypatch, tmp_path, extra_env=_mcp_vars(edge))
+        module = _deployment(monkeypatch, tmp_path, edge, port=service.port)
+        service.start(Path(module.CONFIG.server_dir).parent)
         _write_gateway_route(module, GATEWAY_ROUTE)
         # A verdict that was once real and is now older than the TTL.
         monkeypatch.setitem(asgi._GATEWAY_PROBE, "base", asgi.gateway_endpoint())
@@ -544,7 +735,58 @@ def test_a_read_that_loses_the_refresh_race_fails_closed(monkeypatch, tmp_path):
         assert recovered["enabled"] is True
         assert edge.attempts == 1
     finally:
+        service.stop()
         edge.close()
+
+
+def test_a_service_read_that_loses_the_refresh_race_fails_closed(monkeypatch, tmp_path):
+    # The same fail-closed rule for the service fact: one read owns the refresh,
+    # and a read that loses the race reports not-ready rather than queueing a
+    # second bounded handshake onto a service that may already be down.
+    import revocompute.mcp.asgi as asgi
+
+    monkeypatch.setenv("MCP_ENABLED", "true")
+    monkeypatch.setenv("MCP_SERVICE", "127.0.0.1")
+    port = _free_port()
+    monkeypatch.setenv("MCP_PORT", str(port))
+    monkeypatch.setitem(asgi._SERVICE_PROBE, "target", ("127.0.0.1", port))
+    monkeypatch.setitem(asgi._SERVICE_PROBE, "result", True)
+    monkeypatch.setitem(asgi._SERVICE_PROBE, "at", time.monotonic() - 10 * asgi.SERVICE_PROBE_TTL_SECONDS)
+
+    probes: list[str] = []
+    real_probe = asgi.probe_endpoint
+
+    def _counting_probe(endpoint: str, **kwargs):
+        probes.append(endpoint)
+        return real_probe(endpoint, **kwargs)
+
+    monkeypatch.setattr(asgi, "probe_endpoint", _counting_probe)
+
+    holding = threading.Event()
+    release = threading.Event()
+
+    def _hold_refresh_lock() -> None:
+        with asgi._SERVICE_PROBE_LOCK:
+            holding.set()
+            release.wait(timeout=10)
+
+    holder = threading.Thread(target=_hold_refresh_lock, daemon=True)
+    holder.start()
+    try:
+        assert holding.wait(timeout=5), "the refresh lock was not acquired"
+        assert asgi.service_reachable() is None, "the losing read is unverified, not stale"
+        status = asgi.surface_status()
+        assert status["listener_ready"] is False, "expired evidence is not re-served"
+        assert status["enabled"] is False
+        assert probes == [], "a losing read must not launch a second probe"
+    finally:
+        release.set()
+        holder.join(timeout=5)
+
+    # Bounded by the one refresh it declined to duplicate: once the lock is free
+    # the next read converges on the real answer.
+    assert asgi.service_reachable() is False
+    assert len(probes) == 1
 
 
 def _operator_health(module) -> int:

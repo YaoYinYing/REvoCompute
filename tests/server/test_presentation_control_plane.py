@@ -269,22 +269,28 @@ def test_mcp_capability_is_public_absent_by_default_and_reachable_only_when_list
         "detail": None,
     }
 
-    # MCP_PORT=0 asks uvicorn for an ephemeral port: the enabled module really does
-    # start its companion listener, and the test does not bind (or contend for) a
-    # fixed port another process on the host may hold. The listener answering is
-    # reported as one fact, and it is not enough on its own: without a reach the
-    # surface is not advertised however healthy every other fact is (a route file
-    # is read only for the route fact, never as proof the gateway serves MCP).
+    # The switch is set and the route file is written, but nothing answers at the
+    # destination this deployment dials for the MCP service (the failure this
+    # deployment has when the overlay was never layered or the service is not
+    # running). A route file is read only for the route fact, never as proof the
+    # gateway serves MCP, so the surface must not be advertised however healthy
+    # the other facts look.
     enabled = _load_pssm_module(
         monkeypatch,
         tmp_path / "enabled",
-        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "MCP_ENABLED": "true", "MCP_PORT": "0"},
+        extra_env={
+            "RUNNER_UID": "1234",
+            "RUNNER_GID": "5678",
+            "MCP_ENABLED": "true",
+            "MCP_SERVICE": "127.0.0.1",
+            "MCP_PORT": "1",
+        },
     )
     route_dir = Path(enabled.CONFIG.server_dir) / "mcp-gateway"
     route_dir.mkdir(parents=True, exist_ok=True)
-    (route_dir / "mcp.conf").write_text("location /k/ { proxy_pass http://web:8081; }", encoding="utf-8")
+    (route_dir / "mcp.conf").write_text("location /k/ { proxy_pass http://mcp:8081; }", encoding="utf-8")
     payload = enabled.app.test_client().get("/compute/api/mcp").get_json()
-    assert payload["listener_ready"] is True
+    assert payload["listener_ready"] is False
     assert payload["route_configured"] is True
     # This deployment does not reach for its own public edge here, so reachability
     # is unverified rather than asserted, and no endpoint is advertised on a route
@@ -293,7 +299,7 @@ def test_mcp_capability_is_public_absent_by_default_and_reachable_only_when_list
     assert payload["operational"] is False
     assert payload["enabled"] is False
     assert payload["endpoint"] is None
-    assert payload["detail"]
+    assert payload["detail"] == "the MCP service is not answering on this deployment"
 
 
 def test_mcp_capability_declares_its_openapi_contract(monkeypatch, tmp_path):

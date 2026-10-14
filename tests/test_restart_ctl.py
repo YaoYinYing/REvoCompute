@@ -1332,7 +1332,7 @@ def test_mcp_gateway_route_is_written_only_when_opted_in_and_removed_on_rollback
     assert mcp_mod.apply_gateway(enabled) is True
     text = snippet.read_text(encoding="utf-8")
     assert "location /k/ {" in text
-    assert "proxy_pass http://web:8081;" in text
+    assert "proxy_pass http://mcp:8081;" in text
     # The route addresses the compose service on its container-internal port, and
     # never a host port or an operator surface.
     assert ":8081" in text and "location /compute" not in text
@@ -1344,11 +1344,55 @@ def test_mcp_gateway_route_is_written_only_when_opted_in_and_removed_on_rollback
     # Changing the internal port changes the route, and that is reported.
     moved = EnvState(str(tmp_path / "fake.env"), values={"SERVER_DIR": str(task_dir), "MCP_ENABLED": "true", "MCP_PORT": "9"})
     assert mcp_mod.apply_gateway(moved) is True
-    assert "proxy_pass http://web:9;" in snippet.read_text(encoding="utf-8")
+    assert "proxy_pass http://mcp:9;" in snippet.read_text(encoding="utf-8")
     # Rollback removes the file and reports the change.
     assert mcp_mod.apply_gateway(disabled) is True
     assert not snippet.exists()
     assert mcp_mod.apply_gateway(disabled) is False
+
+
+def test_the_mcp_service_joins_the_stack_only_while_the_switch_is_on(tmp_path):
+    # The ``mcp`` service exists only in the layered model, so the controller must
+    # name it wherever the stack is started, stopped, or waited on -- and the
+    # overlay's profile must be enabled for the same commands, or the model would
+    # not declare the service the controller names.  A deployment that never opted
+    # in gets exactly the model and the service list it always had.
+    from revocompute_ctl import compose as compose_mod
+
+    off = EnvState(str(tmp_path / "off.env"), values={"SERVER_DIR": str(tmp_path)})
+    args_off = compose_mod.compose_args(off)
+    assert not any("docker-compose.mcp.yml" in token for token in args_off)
+    assert "--profile" not in args_off
+    assert compose_mod.stack_services(off, "redis", "web", "gateway") == ["redis", "web", "gateway"]
+
+    on = EnvState(
+        str(tmp_path / "on.env"),
+        values={"SERVER_DIR": str(tmp_path), "MCP_ENABLED": "true", "MCP_PORT": "8081"},
+    )
+    args_on = compose_mod.compose_args(on)
+    assert any("docker-compose.mcp.yml" in token for token in args_on)
+    # The profile is what makes the layered model declare the ``mcp`` service, so
+    # it travels with the file rather than being left to the operator.
+    assert args_on[args_on.index("--profile") + 1] == "mcp"
+    assert compose_mod.stack_services(on, "redis", "web", "gateway") == ["redis", "web", "gateway", "mcp"]
+
+
+def test_a_rollback_down_removes_the_orphaned_mcp_container(monkeypatch, tmp_path):
+    # `down` on a model that just lost the overlay and its profile can no longer
+    # see the running ``mcp`` container, so a plain `down` would leave it running
+    # outside the stack.  Removing orphans is what actually stops it.
+    bin_dir = _write_shims(tmp_path)
+    _task_dir, _auth_dir, env_file = _deploy_env(tmp_path)
+    monkeypatch.setenv("SHIM_IDS", str(tmp_path / "ids.txt"))
+    monkeypatch.setenv("SHIM_LOG", str(tmp_path / "docker.log"))
+
+    result = _run_cli(monkeypatch, tmp_path, env_file, bin_dir, "down")
+
+    assert result.returncode == 0, result.stderr
+    commands = (tmp_path / "docker.log").read_text(encoding="utf-8").splitlines()
+    teardown = [command for command in commands if command.split()[-1] == "down" or "down" in command.split()]
+    assert teardown, commands
+    assert any("--remove-orphans" in command for command in teardown), teardown
 
 
 def test_mcp_gateway_route_dry_run_reports_without_writing(tmp_path, monkeypatch):
