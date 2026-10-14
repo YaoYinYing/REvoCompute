@@ -47,6 +47,7 @@ from flask import (
 from pydantic import ValidationError
 from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.http import parse_range_header
+from revocompute.account_pages import register_account_pages
 from revocompute.admin_pages import register_admin_pages
 from revocompute import admin_reports
 from revocompute.access_control import (
@@ -3291,6 +3292,10 @@ def _serve_frontend_entry(*, private: bool = False, status: int = 200):
 # from the one declaration the page-route parity contract reads, immediately
 # beside the frontend-shell server it renders.
 register_admin_pages(app, _serve_frontend_entry)
+
+# Likewise the user's own Account sections: each direct destination the shell
+# links to is a page the server serves at the Account's own auth boundary.
+register_account_pages(app, _serve_frontend_entry)
 
 
 _MAX_LEGAL_DOCUMENT_BYTES = 64 * 1024

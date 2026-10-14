@@ -22,6 +22,7 @@ import re
 from pathlib import Path
 
 from conftest import _admin_client_auth, _load_pssm_module, _test_client_auth
+from revocompute.account_pages import ACCOUNT_SECTION_SLUGS
 from revocompute.admin_pages import ADMIN_PAGE_ROUTES
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -135,6 +136,10 @@ def test_browser_page_route_set_is_closed(monkeypatch, tmp_path):
     module = _load_pssm_module(
         monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"}
     )
-    declared = {path for path, _ in ADMIN_PAGE_ROUTES} | _NON_ADMIN_PAGE_ROUTES
+    declared = (
+        {path for path, _ in ADMIN_PAGE_ROUTES}
+        | _NON_ADMIN_PAGE_ROUTES
+        | {f"/compute/account/{slug}" for slug in ACCOUNT_SECTION_SLUGS}
+    )
     undeclared = sorted(_browser_page_rules(module) - declared)
     assert undeclared == []

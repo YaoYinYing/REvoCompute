@@ -15,7 +15,13 @@ describe('application routes', () => {
     expect(resolveRoute('/compute/dashboard')).toEqual({ id: 'dashboard' });
     expect(resolveRoute('/compute/create_task')).toEqual({ id: 'create-task' });
     expect(resolveRoute(`/compute/results/${'A'.repeat(32)}`)).toEqual({ id: 'result', taskId: 'a'.repeat(32) });
-    expect(resolveRoute('/compute/profile')).toEqual({ id: 'profile' });
+    expect(resolveRoute('/compute/profile')).toEqual({ id: 'account', section: 'account' });
+    expect(resolveRoute('/compute/account/security')).toEqual({ id: 'account', section: 'security' });
+    expect(resolveRoute('/compute/account/api-key')).toEqual({ id: 'account', section: 'api-key' });
+    expect(resolveRoute('/compute/account/runner-access')).toEqual({ id: 'account', section: 'runner-access' });
+    expect(resolveRoute('/compute/account/gpu-credits')).toEqual({ id: 'account', section: 'gpu-credits' });
+    expect(resolveRoute('/compute/account/metrics')).toEqual({ id: 'account', section: 'metrics' });
+    expect(resolveRoute('/compute/account/unknown')).toEqual({ id: 'not-found' });
     expect(resolveRoute('/compute/runner_fleet')).toEqual({ id: 'admin-fleet' });
     expect(resolveRoute('/compute/user_control')).toEqual({ id: 'admin-users' });
     expect(resolveRoute('/compute/configuration')).toEqual({ id: 'admin-configuration' });

@@ -65,9 +65,17 @@ a { color: var(--app-accent); }
 
 /* --- Application shell ---------------------------------------------------- */
 /* One working surface: a quiet navigation rail beside a global top bar and the
-   page outlet. The rail collapses to icons; there is no separate collapse arrow. */
+   page outlet. The rail is chrome that persists: it stays in place while the
+   reader navigates and while the page scrolls, and when it is taller than the
+   viewport it scrolls inside itself rather than taking the page with it. Its
+   width is governed by one explicit control at its foot, never by reactivating a
+   destination. */
 .app-shell { display: grid; min-height: 100vh; grid-template-columns: var(--rail-collapsed) minmax(0, 1fr); grid-template-rows: auto 1fr; grid-template-areas: "brand header" "nav outlet"; }
 .app-shell[data-rail="expanded"] { grid-template-columns: var(--rail-expanded) minmax(0, 1fr); }
+/* The skip link is revealed by focus alone: it is the first control in the tab
+   order and pins to the top-left corner where the rail meets the bar. */
+.skip-link { position: fixed; top: .5rem; left: .5rem; z-index: 80; padding: .55rem .8rem; border: 1px solid var(--app-accent); border-radius: var(--r-control); background: var(--app-raised); color: var(--app-accent); font-size: .82rem; font-weight: 650; text-decoration: none; transform: translateY(calc(-100% - 1rem)); }
+.skip-link:focus-visible { transform: none; }
 .app-brand, .app-nav a, .app-user, .primary-button, .secondary-button, .task-action, .back-link, .ghost-button { display: inline-flex; align-items: center; gap: .45rem; color: inherit; text-decoration: none; }
 .app-brand { grid-area: brand; align-self: stretch; justify-content: center; padding: 0 .5rem; border-right: 1px solid var(--app-line); background: var(--app-surface); }
 .app-brand img { width: 1.9rem; height: 1.9rem; flex: none; }
@@ -75,20 +83,30 @@ a { color: var(--app-accent); }
 .app-shell[data-rail="collapsed"] .app-brand span { display: none; }
 .app-shell[data-rail="expanded"] .app-brand { justify-content: start; padding: 0 1rem; }
 
-.app-nav { grid-area: nav; display: flex; flex-direction: column; gap: 1.15rem; padding: .75rem .5rem 1rem; border-right: 1px solid var(--app-line); background: var(--app-surface); }
+/* The rail is a column that outlives every route: it is sticky for the height of
+   the document and scrolls its own overflow, so a long navigation never scrolls
+   out of reach and never drags the page with it. */
+.app-nav { grid-area: nav; position: sticky; top: 0; align-self: start; display: flex; flex-direction: column; gap: 1.15rem; max-height: 100vh; overflow-y: auto; overscroll-behavior: contain; padding: .75rem .5rem 1rem; border-right: 1px solid var(--app-line); background: var(--app-surface); }
 /* A navigation region: a quiet label over its destinations, separated by a
    hairline so the sections read as authored divisions rather than one flat list.
    The grouping is carried by rule, label and space — never by a card. */
-.app-nav-group { display: grid; gap: .3rem; }
+.app-nav-group { display: grid; gap: .3rem; flex: none; }
 .app-nav-group + .app-nav-group { padding-top: 1.05rem; border-top: 1px solid var(--app-line); }
 /* The region label is a word, so it appears only when a word fits: a collapsed
    icon rail and a tablet-width rail both keep the rule and drop the label. */
 .app-nav-group-label { margin: 0; padding: 0 .8rem .1rem; color: var(--app-muted); font-size: .62rem; font-weight: 650; letter-spacing: .06em; text-transform: uppercase; }
 .app-nav-group-items { display: grid; gap: .15rem; }
-.app-shell[data-rail="collapsed"] .app-nav { gap: .8rem; padding-top: .6rem; }
-.app-shell[data-rail="collapsed"] .app-nav-group + .app-nav-group { padding-top: .7rem; }
 .app-shell[data-rail="collapsed"] .app-nav-group-label { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 @media (max-width: 62rem) { .app-nav-group-label { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; } }
+/* The foot sits at the end of the rail, past every destination: the rail's own
+   control is a control, so it is set apart from the links it never imitates. */
+.app-nav-foot { margin-top: auto; padding-top: .8rem; border-top: 1px solid var(--app-line); }
+.app-rail-toggle { display: grid; width: 100%; min-height: 2.6rem; place-items: center; padding: 0; border: 1px solid transparent; border-radius: var(--r-control); background: transparent; color: var(--app-muted); cursor: pointer; }
+.app-rail-toggle:hover { background: color-mix(in srgb, var(--app-ink) 5%, transparent); color: var(--app-ink); }
+.app-rail-toggle svg { width: 1.05rem; height: 1.05rem; }
+.app-shell[data-rail="expanded"] .app-rail-toggle { grid-auto-flow: column; justify-content: start; gap: .45rem; padding: 0 .8rem; }
+.app-shell[data-rail="collapsed"] .app-nav { gap: .8rem; padding-top: .6rem; }
+.app-shell[data-rail="collapsed"] .app-nav-group + .app-nav-group { padding-top: .7rem; }
 .app-nav a { position: relative; justify-content: center; padding: .7rem; border-radius: var(--r-control); color: var(--app-muted); font-size: .86rem; font-weight: 600; text-decoration: none; transition: color .15s ease, background .15s ease; }
 .app-nav a:hover { color: var(--app-ink); background: color-mix(in srgb, var(--app-ink) 4%, transparent); }
 /* Active state is quiet: accent ink and a soft fill, not a heavy status stripe. */
@@ -402,9 +420,12 @@ a { color: var(--app-accent); }
      destinations sit directly on it (their wrappers dissolve; their headings are
      removed from the tree in script). Administration is a different navigation
      level, so on mobile it becomes a deliberate secondary surface just above the
-     bar rather than three more items competing inside the primary bar. */
+     bar rather than three more items competing inside the primary bar. The rail's
+     width control is a desktop column affordance: on the bar it has no column to
+     govern, so it leaves the bar entirely. */
   .app-nav-group:not([data-nav-group="admin"]),
   .app-nav-group:not([data-nav-group="admin"]) .app-nav-group-items { display: contents; }
+  .app-nav-foot { display: none; }
   .app-nav-group[data-nav-group="admin"] { position: fixed; right: 0; bottom: 3.5rem; left: 0; z-index: 34; display: grid; padding: 0; border-top: 1px solid var(--app-line); background: var(--app-surface); }
   .app-nav-group[data-nav-group="admin"][hidden] { display: none; }
   /* Only the regions whose links merge into the bar lose their heading; the

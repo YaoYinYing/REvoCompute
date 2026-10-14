@@ -101,9 +101,10 @@ def test_tour_callout_clears_the_notices_and_toast_column(page: Page, width: int
     # A real toast appends to the same fixed column while the tour is up. The column
     # itself covers the card's Delete control at this width, so the action is issued
     # through the page rather than through a pointer: the toast is the state under
-    # test, not the click path that reaches it.
-    page.on("dialog", lambda dialog: dialog.accept())
+    # test, not the click path that reaches it. The confirmation is the
+    # application's own dialog, confirmed through the page for the same reason.
     page.evaluate("() => document.querySelector('.task-card [data-action=\"delete\"]').click()")
+    page.locator("#app-dialog").get_by_role("button", name="Delete", exact=True).click()
     expect(page.locator(".app-notice")).to_be_visible()
 
     column = page.locator(".app-feedback").bounding_box()

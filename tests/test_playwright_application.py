@@ -181,7 +181,7 @@ def _install_app(page: Page) -> list[str]:
     }
     for pattern in (
         "/", "/api-docs", "/runners", "/runners/*", "/compute/login**", "/compute/register",
-        "/compute/reset_password**", "/compute/user_verify**", "/compute/terms", "/compute/profile**",
+        "/compute/reset_password**", "/compute/user_verify**", "/compute/terms", "/compute/profile**", "/compute/account/*",
         "/compute/runner_fleet", "/compute/user_control", "/compute/configuration", "/compute/logs", "/compute/create_task**",
         "/compute/dashboard", "/compute/results/*",
     ):
@@ -687,8 +687,13 @@ def test_admin_dashboard_batch_action_uses_authorized_api(page: Page) -> None:
     expect(page.locator("[data-nav-group='admin']").get_by_role("link", name="Server logs")).to_have_attribute("href", "/compute/logs")
     assert page.locator(".app-header").get_by_label("Administration").count() == 0
     expect(page.get_by_role("button", name="Delete selected (0)")).to_be_hidden()
-    page.get_by_role("checkbox", name="Select", exact=True).check()
+    page.get_by_role("checkbox", name="Select sample.fasta", exact=True).check()
     page.get_by_role("button", name="Delete selected (1)").click()
+    # The confirmation is the application's own dialog, so the destructive request
+    # is issued only after the reader confirms.
+    dialog = page.locator("#app-dialog")
+    expect(dialog).to_be_visible()
+    dialog.get_by_role("button", name="Delete selected").click()
     expect(page.get_by_text("Selected tasks deleted.")).to_be_visible()
     assert deleted and TASK_ID in deleted[0]
 
@@ -707,9 +712,12 @@ def test_anonymous_shell_offers_no_forbidden_administration_links(page: Page, wi
     assert page.get_by_role("link", name="Server logs").count() == 0
     assert page.get_by_role("link", name="Configuration").count() == 0
     assert page.locator(".app-header").get_by_label("Administration").count() == 0
-    # Account is the only other region, and it is a sign-in affordance.
+    # Account is the only other region, and it is a sign-in affordance: the
+    # region's own links are hidden behind the one visible sign-in destination.
     expect(page.locator("[data-nav-group='account']")).to_be_visible()
-    expect(page.locator("[data-nav-group='account'] a")).to_have_attribute("href", "/compute/login?return_to=%2Frunners")
+    account = page.locator("[data-nav-group='account'] a:visible")
+    expect(account).to_have_count(1)
+    expect(account.first).to_have_attribute("href", "/compute/login?return_to=%2Frunners")
 
 
 def test_mid_session_expiry_redirects_after_mutation(page: Page) -> None:
@@ -718,10 +726,12 @@ def test_mid_session_expiry_redirects_after_mutation(page: Page) -> None:
         f"{ORIGIN}/compute/api/delete/{TASK_ID}",
         lambda route: route.fulfill(status=401, json={"error": "Authentication required"}),
     )
-    page.on("dialog", lambda dialog: dialog.accept())
 
     page.goto(f"{ORIGIN}/compute/dashboard")
     page.get_by_role("button", name="Delete", exact=True).click()
+    # Confirming the application dialog issues the mutation; the expired session
+    # then redirects to sign in with the dashboard as its return target.
+    page.locator("#app-dialog").get_by_role("button", name="Delete").click()
 
     expect(page).to_have_url(f"{ORIGIN}/compute/login?return_to=%2Fcompute%2Fdashboard")
     expect(page.get_by_role("heading", name="Sign in")).to_be_visible()
@@ -764,15 +774,17 @@ def test_page_kickers_keep_their_role_inside_page_headings(page: Page, width: in
     expect(reference).to_be_visible()
     page.evaluate("() => document.fonts.ready")
     kicker_paint = reference.evaluate(paint)
-    for path in ("/compute/dashboard", "/compute/profile"):
-        page.goto(f"{ORIGIN}{path}")
-        kicker = page.locator(".page-heading .page-kicker")
-        expect(kicker).to_be_visible()
-        page.evaluate("() => document.fonts.ready")
-        # A context label keeps the same role as its sibling on the method
-        # reference; its nesting must not turn it into introductory prose.
-        assert kicker.evaluate(paint) == kicker_paint
-    introduction = page.locator("[data-profile-summary]")
+    page.goto(f"{ORIGIN}/compute/dashboard")
+    kicker = page.locator(".page-heading .page-kicker")
+    expect(kicker).to_be_visible()
+    page.evaluate("() => document.fonts.ready")
+    # A context label keeps the same role as its sibling on the method reference;
+    # its nesting must not turn it into introductory prose.
+    assert kicker.evaluate(paint) == kicker_paint
+    # Account's heading is the section's own identity, not a context label over
+    # one, so the page contrasts its heading with its introductory prose instead.
+    page.goto(f"{ORIGIN}/compute/profile")
+    introduction = page.locator("[data-account-summary]")
     expect(introduction).to_be_visible()
     body_paint = introduction.evaluate(paint)
     assert float(body_paint["fontSize"].removesuffix("px")) > float(kicker_paint["fontSize"].removesuffix("px"))
@@ -935,7 +947,7 @@ def test_profile_server_state_api_key_access_credits_and_metrics(page: Page) -> 
     ))
     page.goto(f"{ORIGIN}/compute/profile")
 
-    expect(page.get_by_role("heading", name="Profile")).to_be_visible()
+    expect(page.get_by_role("heading", name="Account", exact=True)).to_be_visible()
     expect(page.get_by_label("Full name")).to_have_value("Test Scientist")
     expect(page.get_by_label("Affiliation", exact=True)).to_have_value("Example Institute")
     page.get_by_label("Full name").fill("Updated Scientist")
@@ -947,11 +959,22 @@ def test_profile_server_state_api_key_access_credits_and_metrics(page: Page) -> 
     page.reload()
     expect(page.get_by_label("Full name")).to_have_value("Updated Scientist")
     expect(page.get_by_label("Affiliation", exact=True)).to_have_value("New Institute")
-    account_tab = page.get_by_role("tab", name="Account")
-    account_tab.focus(); account_tab.press("ArrowRight")
-    expect(page.get_by_role("tab", name="Security")).to_have_attribute("aria-selected", "true")
 
-    page.get_by_role("tab", name="API key").click()
+    # Every Account section is a direct destination in the shell's Account region.
+    account_nav = page.locator("[data-nav-group='account']")
+    expect(account_nav.get_by_role("link", name="Security", exact=True)).to_have_attribute(
+        "href", "/compute/account/security")
+    expect(account_nav.get_by_role("link", name="API key", exact=True)).to_have_attribute(
+        "href", "/compute/account/api-key")
+    expect(account_nav.get_by_role("link", name="Runner access", exact=True)).to_have_attribute(
+        "href", "/compute/account/runner-access")
+    expect(account_nav.get_by_role("link", name="GPU credits", exact=True)).to_have_attribute(
+        "href", "/compute/account/gpu-credits")
+    expect(account_nav.get_by_role("link", name="Metrics", exact=True)).to_have_attribute(
+        "href", "/compute/account/metrics")
+
+    page.goto(f"{ORIGIN}/compute/account/api-key")
+    expect(page.get_by_role("heading", name="API key")).to_be_visible()
     page.get_by_role("button", name="Generate API key").click()
     expect(page.locator("[data-api-key-value]")).to_have_value("rvk_test_secret_once")
     page.reload()
@@ -960,7 +983,8 @@ def test_profile_server_state_api_key_access_credits_and_metrics(page: Page) -> 
     page.get_by_role("dialog").get_by_role("button", name="Revoke API key").click()
     expect(page.get_by_role("alert").filter(has_text="API key revoked.")).to_be_visible()
 
-    page.get_by_role("tab", name="Runner access").click()
+    page.goto(f"{ORIGIN}/compute/account/runner-access")
+    expect(page.get_by_role("heading", name="Runner access")).to_be_visible()
     page.get_by_text("Policy details").click()
     expect(page.get_by_text("Academic use only")).to_be_visible()
     expect(page.get_by_text("The upstream licence requires verified academic eligibility.")).to_be_visible()
@@ -968,10 +992,13 @@ def test_profile_server_state_api_key_access_credits_and_metrics(page: Page) -> 
     page.get_by_role("button", name="Request access").click()
     expect(page.get_by_text("Access request submitted.")).to_be_visible()
 
-    page.get_by_role("tab", name="GPU credits").click()
+    page.goto(f"{ORIGIN}/compute/account/gpu-credits")
+    expect(page.get_by_role("heading", name="GPU credits")).to_be_visible()
     expect(page.get_by_text("September 2026")).to_be_visible()
     expect(page.get_by_text("GPU access granted")).to_be_visible()
-    page.get_by_role("tab", name="Metrics").click()
+
+    page.goto(f"{ORIGIN}/compute/account/metrics")
+    expect(page.get_by_role("heading", name="Metrics")).to_be_visible()
     expect(page.get_by_text("Tasks submitted")).to_be_visible()
     expect(page.get_by_text("80%")).to_be_visible()
     # The compute-history chart has a labelled count axis: major ticks with a
@@ -1013,13 +1040,14 @@ def test_profile_wrong_password_stays_inline_and_guest_profile_is_read_only(page
             route.fulfill(json=_current_user())
 
     page.route(f"{ORIGIN}/compute/api/auth/me", reject_password)
-    page.goto(f"{ORIGIN}/compute/profile#security")
+    page.goto(f"{ORIGIN}/compute/account/security")
+    expect(page.get_by_role("heading", name="Security")).to_be_visible()
     page.get_by_label("Current password").fill("mistyped")
     page.get_by_label("New password", exact=True).fill("replacement-password")
     page.get_by_label("Confirm new password").fill("replacement-password")
     page.get_by_role("button", name="Update password").click()
     expect(page.get_by_role("alert").filter(has_text="Current password is incorrect")).to_be_visible()
-    expect(page).to_have_url(f"{ORIGIN}/compute/profile#security")
+    expect(page).to_have_url(f"{ORIGIN}/compute/account/security")
 
     page.route(f"{ORIGIN}/compute/api/auth/me", lambda route: route.fulfill(json=_current_user("guest")))
     page.goto(f"{ORIGIN}/compute/profile")
@@ -1039,12 +1067,13 @@ def test_auth_profile_and_admin_views_are_responsive_under_production_csp(page: 
     assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
 
     page.goto(f"{ORIGIN}/compute/profile")
-    expect(page.get_by_role("heading", name="Profile")).to_be_visible()
+    expect(page.get_by_role("heading", name="Account", exact=True)).to_be_visible()
     assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
-    # Profile is its own navigation level: the local account sections stay in the
-    # page, and they are never mixed into the global Compute/Account/Administration nav.
-    expect(page.get_by_role("tab", name="GPU credits")).to_be_visible()
-    assert page.locator(".app-nav [data-section]").count() == 0
+    # The Account sections are the shell's own Account region, one page each: there
+    # is no nested tab strip inside the page, so the section controls are the
+    # navigation and never appear twice.
+    expect(page.locator("[data-nav-group='account']").get_by_role("link", name="GPU credits", exact=True)).to_be_visible()
+    expect(page.get_by_role("tab")).to_have_count(0)
 
     page.route(f"{ORIGIN}/compute/api/auth/me", lambda route: route.fulfill(json=_current_user("admin")))
     page.goto(f"{ORIGIN}/compute/user_control")
