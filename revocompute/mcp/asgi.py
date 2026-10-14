@@ -20,12 +20,17 @@ own pre-fork copy of the pre-fork objects.  The dedicated service has no fork in
 its path at all, and Gunicorn never hosts an ASGI event loop.
 
 What the two processes share is the truth that was never in memory: the
-Redis-backed rate limiter (``revocompute.ratelimit``), and the user, Task, and
-MCP-handle SQLite databases.  What they do not share is the rate limiter's
-in-memory fallback, which is per process by construction and used only while
-Redis is unavailable (``revocompute.ratelimit`` documents it as not distributed).
-That is the whole list: no in-memory application state crosses the boundary, and
-nothing in this module claims otherwise.
+Redis-backed rate limiter (``revocompute.ratelimit``), and the SQLite stores
+both read under the shared server directory -- user, Task, admin config, Tool
+call, MCP handle, and Operator Job records.  What they do not share is the rate
+limiter's in-memory fallback, which is per process by construction and used only
+while Redis is unavailable (``revocompute.ratelimit`` documents it as not
+distributed), and the canonical application's Operator Job restart pass, which
+is a startup action the web service owns alone: :func:`serve` declares this
+process's role before it imports the application, so starting or restarting the
+MCP service cannot terminalize a job the web service is running.  That is the
+whole list: no in-memory application state crosses the boundary, and nothing in
+this module claims otherwise.
 
 The ASGI stack is the optional ``mcp`` extra.  A deployment that never opts in
 builds no image carrying it, layers no overlay, and writes no gateway route, so
@@ -247,7 +252,14 @@ def serve() -> None:
     import uvicorn
 
     from revocompute.config import env_int
+    from revocompute.process_role import MCP_SERVICE, declare
 
+    # Declare what this process is *before* importing the canonical application.
+    # The application runs one startup pass that belongs to the service that owns
+    # it -- terminalizing an Operator Job left RUNNING by a restart -- and this
+    # process only projects another protocol over that application, so repeating
+    # the pass here would fail a job the web service is legitimately running.
+    declare(MCP_SERVICE)
     # Import the canonical application: this process serves the MCP protocol over
     # it, so the canonical handlers, user database, and Task store are the ones
     # every call reaches.  Gunicorn is not involved, so nothing here forks.

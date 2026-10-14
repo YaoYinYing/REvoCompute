@@ -238,18 +238,27 @@ app.config["infrastructure_readiness"] = build_default_service(
 
 # The Admin control plane's single service: readiness evaluation, typed
 # planning, the durable Operator Job store, and the bounded host executor.  A
-# job left RUNNING by a restart is terminalized here rather than re-executed.
+# job left RUNNING by a restart is terminalized here -- in the process that owns
+# this application -- rather than re-executed.
 _log = logging.getLogger(__name__)
 from revocompute.operator_service import build_operator_service  # noqa: E402
+from revocompute.process_role import serves_canonical_application as _owns_startup  # noqa: E402
 from revocompute.runner_host import build_server_host  # noqa: E402
 
 _operator_service = build_operator_service(build_server_host(CONFIG), database=_user_db)
-try:
-    _reconciled = _operator_service.reconcile()
-    if _reconciled:
-        _log.warning("Reconciled %d orphaned operator job(s) after restart", len(_reconciled))
-except Exception:  # pragma: no cover - reconciliation must never block startup
-    _log.exception("Operator job reconciliation failed")
+# Only the process that *owns* this application runs the restart pass.  The MCP
+# service imports this module too -- to project the MCP protocol over the same
+# handlers -- and a second importer must not terminalize a job the web service is
+# still legitimately running, so the MCP entrypoint declares its role before this
+# import and the pass is skipped there.  The service and its store are still
+# built, because the Admin reads them through this application.
+if _owns_startup():
+    try:
+        _reconciled = _operator_service.reconcile()
+        if _reconciled:
+            _log.warning("Reconciled %d orphaned operator job(s) after restart", len(_reconciled))
+    except Exception:  # pragma: no cover - reconciliation must never block startup
+        _log.exception("Operator job reconciliation failed")
 app.config["operator_service"] = _operator_service
 
 # Seed manage_db.task_type_config for every registered task type.
@@ -465,11 +474,19 @@ importlib.import_module("revocompute.routes")
 # surface is therefore its own service (``docker-compose.mcp.yml`` runs
 # ``python -m revocompute.mcp``), and the web process never binds its port.
 #
-# What the two processes share is durable: the Redis-backed rate limiter
-# (``revocompute.ratelimit``) and the user, Task, and MCP-handle SQLite
-# databases.  The limiter's in-memory fallback is per process and only used while
-# Redis is unavailable, which ``revocompute.ratelimit`` documents.  See
-# ``revocompute/mcp/asgi.py`` for what the MCP surface is allowed to claim.
+# The two processes share a durable truth and no in-memory state.  Durable:
+# the Redis-backed rate limiter (``revocompute.ratelimit``) and the SQLite
+# stores read from the shared server directory -- the user database, the Task
+# database (``DB_PATH``), the admin config store (``MANAGE_DB_PATH``), the Tool
+# call database, the MCP handle store, and the Operator Job store
+# (``server_dir/operator-jobs.sqlite``).  Not shared: the limiter's in-memory
+# fallback, which is per process and used only while Redis is unavailable
+# (``revocompute.ratelimit`` documents it), and the Operator Job restart pass,
+# which is a one-time startup action rather than state -- this process owns it
+# and the MCP service deliberately does not repeat it (see the role check
+# above), so starting or restarting the MCP service cannot terminalize a job
+# this process is running.  See ``revocompute/mcp/asgi.py`` for what the MCP
+# surface is allowed to claim.
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
