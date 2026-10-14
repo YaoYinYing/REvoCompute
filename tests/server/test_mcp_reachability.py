@@ -20,6 +20,12 @@ a real file under the deployment's own ``SERVER_DIR``, and the reach is a real
 HTTP call to the deployment's own base URL.  Nothing about the endpoint is
 inferred from a URL a caller supplied, and a failure's ``detail`` never carries a
 filesystem error string.
+
+The reach is *observed*, not remembered forever: a verdict is fresh only for a
+bounded TTL, so the transition tests below break or restore the real edge in one
+running process, against one unchanged base URL, and assert the capability
+converges.  They drive the TTL rather than sleeping it out, so the assertions are
+about the freshness rule and not about the wall clock.
 """
 
 from __future__ import annotations
@@ -28,6 +34,7 @@ import http.server
 import json
 import socket
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -89,6 +96,12 @@ class _PublicEdge:
     def __init__(self, *, answer_init: bool) -> None:
         self.answer_init = answer_init
         self.posts: list[dict] = []
+        #: Every request the edge saw, whether or not it answered MCP. It is how a
+        #: case tells a refresh that really reached the edge from a flag flip.
+        self.attempts = 0
+        #: A gate a case can close to simulate the public edge going down (nginx
+        #: stopped, upstream broken) while the web process stays alive.
+        self.serving = True
         handler = self._handler()
         self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
@@ -98,13 +111,14 @@ class _PublicEdge:
 
         class _Handler(http.server.BaseHTTPRequestHandler):
             def do_POST(self) -> None:  # noqa: N802 - http.server's own spelling
-                length = int(self.headers.get("Content-Length", 0))
-                edge.posts.append({"path": self.path, "body": json.loads(self.rfile.read(length).decode("utf-8"))})
-                if not edge.answer_init:
-                    # A gateway that is up but serving no /k/ route, or an upstream
-                    # that is down: the path is not MCP here.
+                edge.attempts += 1
+                if not (edge.answer_init and edge.serving):
+                    # A gateway that is up but serving no /k/ route, an upstream
+                    # that is down, or an edge that went away: not MCP here.
                     self.send_error(404)
                     return
+                length = int(self.headers.get("Content-Length", 0))
+                edge.posts.append({"path": self.path, "body": json.loads(self.rfile.read(length).decode("utf-8"))})
                 payload = json.dumps(
                     {
                         "jsonrpc": "2.0",
@@ -393,6 +407,144 @@ def test_a_filesystem_error_yields_a_fixed_reason_with_no_path(monkeypatch, tmp_
     assert status["detail"] == "the MCP listener is not answering on this deployment"
     assert secret_path not in json.dumps(status)
     assert str(tmp_path) not in json.dumps(status)
+
+
+def _expire_gateway_verdict(monkeypatch) -> None:
+    """Make any existing gateway verdict read as expired, without waiting or restarting.
+
+    Freshness is decided by one thing — the age of the verdict against the TTL — so
+    a case drives the TTL directly.  No process restart and no 30-second sleep: the
+    same running process keeps talking to the same configured base URL, which is
+    what makes the transition under test real rather than a different process
+    reading a different fact.
+    """
+    import revocompute.mcp.asgi as asgi
+
+    monkeypatch.setattr(asgi, "GATEWAY_PROBE_TTL_SECONDS", 0.0)
+
+
+def test_a_live_gateway_that_goes_down_stops_being_advertised(monkeypatch, tmp_path):
+    # A positive verdict must not last forever. The deployment's own endpoint
+    # answers, so Home offers the surface; then nginx stops (or the upstream dies)
+    # while the web process stays alive. Nothing is restarted and nothing on disk
+    # changes - the verdict simply ages out - and the capability must converge to
+    # *not advertised* rather than keep claiming a connectivity that is gone.
+    edge = _PublicEdge(answer_init=True)
+    try:
+        module = _load_pssm_module(monkeypatch, tmp_path, extra_env=_mcp_vars(edge))
+        _write_gateway_route(module, GATEWAY_ROUTE)
+        client = module.app.test_client()
+
+        live = client.get("/compute/api/mcp").get_json()
+        assert live["listener_ready"] is True
+        assert live["route_configured"] is True
+        assert live["gateway_verified"] is True
+        assert live["enabled"] is True
+        assert live["endpoint"] == f"{edge.base_url}/k/mcp"
+        assert edge.attempts == 1
+
+        # A verdict still inside its TTL is a memory read: reading the capability
+        # again reaches nothing over the network.
+        again = client.get("/compute/api/mcp").get_json()
+        assert again["enabled"] is True
+        assert edge.attempts == 1, "a fresh verdict must not re-probe the edge"
+
+        # The edge goes down. Same process, same base URL, same route file.
+        edge.serving = False
+        _expire_gateway_verdict(monkeypatch)
+        down = client.get("/compute/api/mcp").get_json()
+        assert down["listener_ready"] is True
+        assert down["route_configured"] is True, "the route file did not change"
+        assert down["gateway_verified"] is False, "an outage must stop being advertised"
+        assert down["enabled"] is False
+        assert down["endpoint"] is None
+        assert down["detail"], "the operator gets a reason, not a silent off"
+        assert edge.attempts == 2, "the expired verdict is re-probed exactly once"
+    finally:
+        edge.close()
+
+
+def test_a_down_gateway_that_recovers_is_advertised_again(monkeypatch, tmp_path):
+    # The mirror of the case above, and the second real regression: a negative
+    # verdict must not last forever either. The endpoint does not answer, so the
+    # surface is not advertised; the operator then brings the gateway back, and the
+    # capability must converge to *advertised* on the next read - without a
+    # web-process restart - rather than deny a recovery for the life of the process.
+    edge = _PublicEdge(answer_init=True)
+    edge.serving = False
+    try:
+        module = _load_pssm_module(monkeypatch, tmp_path, extra_env=_mcp_vars(edge))
+        _write_gateway_route(module, GATEWAY_ROUTE)
+        client = module.app.test_client()
+
+        down = client.get("/compute/api/mcp").get_json()
+        assert down["listener_ready"] is True
+        assert down["route_configured"] is True
+        assert down["gateway_verified"] is False
+        assert down["enabled"] is False
+        assert down["endpoint"] is None
+
+        # The edge comes back. Same process, same base URL, same route file.
+        edge.serving = True
+        _expire_gateway_verdict(monkeypatch)
+        up = client.get("/compute/api/mcp").get_json()
+        assert up["gateway_verified"] is True, "a recovery must be advertised again"
+        assert up["operational"] is True
+        assert up["enabled"] is True
+        assert up["endpoint"] == f"{edge.base_url}/k/mcp"
+        assert up["detail"] is None
+    finally:
+        edge.close()
+
+
+def test_a_read_that_loses_the_refresh_race_fails_closed(monkeypatch, tmp_path):
+    # Expired evidence must not be re-served, and a crowd of capability readers
+    # must not stampede an endpoint that may already be down. One read owns the
+    # refresh; a read that finds the verdict expired while another read holds the
+    # refresh lock returns unverified (None) and, above all, does not launch a
+    # second probe.
+    import revocompute.mcp.asgi as asgi
+
+    edge = _PublicEdge(answer_init=True)
+    try:
+        module = _load_pssm_module(monkeypatch, tmp_path, extra_env=_mcp_vars(edge))
+        _write_gateway_route(module, GATEWAY_ROUTE)
+        # A verdict that was once real and is now older than the TTL.
+        monkeypatch.setitem(asgi._GATEWAY_PROBE, "base", asgi.gateway_endpoint())
+        monkeypatch.setitem(asgi._GATEWAY_PROBE, "result", True)
+        monkeypatch.setitem(asgi._GATEWAY_PROBE, "at", time.monotonic() - 10 * asgi.GATEWAY_PROBE_TTL_SECONDS)
+
+        holding = threading.Event()
+        release = threading.Event()
+
+        def _hold_refresh_lock() -> None:
+            with asgi._GATEWAY_PROBE_LOCK:
+                holding.set()
+                release.wait(timeout=10)
+
+        holder = threading.Thread(target=_hold_refresh_lock, daemon=True)
+        holder.start()
+        try:
+            assert holding.wait(timeout=5), "the refresh lock was not acquired"
+            assert asgi.gateway_reachable() is None, "the losing read is unverified, not stale"
+            status = asgi.surface_status()
+            assert status["gateway_verified"] is None, "expired evidence is unverified, never re-served"
+            assert status["enabled"] is False
+            assert status["endpoint"] is None
+            assert status["detail"]
+            assert edge.attempts == 0, "a losing read must not launch a second probe"
+        finally:
+            release.set()
+            holder.join(timeout=5)
+
+        # The fail-closed answer is bounded by the one refresh it declined to
+        # duplicate: once the winner's lock is free, the next read converges.
+        recovered = asgi.surface_status()
+        assert recovered["gateway_verified"] is True
+        assert recovered["enabled"] is True
+        assert edge.attempts == 1
+    finally:
+        edge.close()
 
 
 def _operator_health(module) -> int:

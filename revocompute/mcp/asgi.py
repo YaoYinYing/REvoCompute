@@ -70,6 +70,13 @@ PUBLIC_BASE_URL_ENV = "SERVER_BASE_URL"
 #: timeout is a *negative* answer rather than a hang on the capability request.
 GATEWAY_PROBE_TIMEOUT_SECONDS = 3.0
 
+#: How long one public-endpoint verdict stays fresh.  Short enough that a real
+#: outage of the deployment gateway stops being advertised, and a recovered edge
+#: is advertised again, without a web-process restart; long enough that a
+#: sustained capability read stays mostly a memory read rather than one gateway
+#: round trip per Home poll.
+GATEWAY_PROBE_TTL_SECONDS = 30.0
+
 #: The switch that decides whether the surface reaches for the public endpoint at
 #: all.  Set it only in a deployment that can reach its own public address (a
 #: direct deployment, a host loopback, or a network that resolves and reaches the
@@ -104,8 +111,17 @@ _LISTENER: dict[str, Any] = {"server": None, "thread": None, "error": None}
 _PROBE: dict[str, Any] = {"result": None}
 
 #: Last public-endpoint (gateway) result, keyed by the base URL it was proven
-#: against so a changed base re-probes instead of serving a stale answer.
-_GATEWAY_PROBE: dict[str, Any] = {"base": None, "result": None}
+#: against so a changed base re-probes instead of serving a stale answer, and
+#: stamped with the ``time.monotonic()`` of the probe that produced it so the
+#: answer expires on :data:`GATEWAY_PROBE_TTL_SECONDS` rather than lasting for the
+#: life of the process.
+_GATEWAY_PROBE: dict[str, Any] = {"base": None, "result": None, "at": None}
+
+#: Single-flight guard for the outbound gateway probe.  A capability read that
+#: finds the cached verdict expired tries to become the one that refreshes it; the
+#: others return fail-closed rather than piling a second bounded request onto an
+#: endpoint that may already be down.
+_GATEWAY_PROBE_LOCK = threading.Lock()
 
 
 def mcp_asgi() -> Any:
@@ -282,15 +298,34 @@ def gateway_reachable() -> bool | None:
     ``False`` the reach was attempted and the endpoint did not answer MCP;
     ``None``  the reach was not attempted: the deployment did not opt in to
               probing, or no public base URL is known, so reachability is
-              *unverified* rather than asserted either way.
+              *unverified* rather than asserted either way — or the reach was
+              attempted while another read was already refreshing an expired
+              verdict, which is fail-closed for the same reason.
 
     The destination is never caller-controlled: it is :func:`gateway_endpoint`,
     built from this deployment's own ``SERVER_BASE_URL`` and the fixed MCP path,
     reachable only because the listener shares this process's admitted traffic
     through the deployment gateway.  Nothing here forwards a caller-supplied
-    target, so no SSRF surface is introduced.  The answer is memoized per base
-    URL, so a sustained capability read is a memory read and a deployment whose
-    public address changes re-probes.
+    target, so no SSRF surface is introduced.
+
+    The verdict is memoized per base URL *and bounded in time*: a verdict is fresh
+    only while it is younger than :data:`GATEWAY_PROBE_TTL_SECONDS`, so a read
+    served from a fresh cache is a pure memory read, and a read of an expired (or
+    absent, or changed-base) verdict refreshes it.  Freshness is deliberately
+    symmetric — a positive and a negative verdict expire on the same TTL — so a
+    gateway that goes down stops being advertised, and a gateway that recovers is
+    advertised again, both without restarting the web process; a verdict that
+    lasted forever would report connectivity that is no longer there (or deny
+    connectivity that has returned) for the life of the process.
+
+    The refresh is single-flight: one read wins ``_GATEWAY_PROBE_LOCK`` and drives
+    the existing bounded :func:`probe_gateway` (its 3-second deadline,
+    ``trust_env=False``, and fixed deployment-owned destination are unchanged);
+    every concurrent read that finds the verdict expired but the lock held returns
+    ``None`` — unverified, so the surface is not advertised — rather than start a
+    second probe, because the only evidence it holds is expired.  An expiring
+    verdict therefore degrades to *unverified* for the duration of one bounded
+    refresh, never to a stale assertion.
     """
     from revocompute.config import env_bool
 
@@ -299,10 +334,23 @@ def gateway_reachable() -> bool | None:
     endpoint = gateway_endpoint()
     if endpoint is None:
         return None
-    if _GATEWAY_PROBE["base"] == endpoint and _GATEWAY_PROBE["result"] is not None:
+    at = _GATEWAY_PROBE["at"]
+    if (
+        _GATEWAY_PROBE["base"] == endpoint
+        and _GATEWAY_PROBE["result"] is not None
+        and at is not None
+        and time.monotonic() - at < GATEWAY_PROBE_TTL_SECONDS
+    ):
         return bool(_GATEWAY_PROBE["result"])
-    reachable, _ = probe_gateway(endpoint)
-    _GATEWAY_PROBE.update({"base": endpoint, "result": reachable})
+    if not _GATEWAY_PROBE_LOCK.acquire(blocking=False):
+        # Expired evidence and another read already refreshing it: fail closed
+        # rather than stampede the endpoint or serve a verdict that has expired.
+        return None
+    try:
+        reachable, _ = probe_gateway(endpoint)
+        _GATEWAY_PROBE.update({"base": endpoint, "result": reachable, "at": time.monotonic()})
+    finally:
+        _GATEWAY_PROBE_LOCK.release()
     if not reachable:
         _LOGGER.warning("MCP public endpoint %s did not answer an initialize handshake", endpoint)
     return reachable
@@ -325,7 +373,8 @@ def surface_status() -> dict[str, Any]:
     ``route_configured``  the deployment gateway route state declares the MCP
                           location (a route *file* is not a route *served*);
     ``gateway_verified``  ``True``/``False`` when this deployment reached its own
-                          public endpoint, ``None`` when it does not probe;
+                          public endpoint, ``None`` when it does not probe (or
+                          while an expired verdict is being refreshed);
     ``operational``       ``True`` only on ``gateway_verified is True``;
     ``enabled``           the legacy projection Home consumes: ``True`` only when
                           ``operational``, ``endpoint`` set and no ``detail``;
@@ -338,7 +387,12 @@ def surface_status() -> dict[str, Any]:
     caller-supplied URL.  The listener's readiness is probed once per process (its
     binding and its fixed surface cannot change at runtime); the route is re-read
     on every call, because ``restart.sh`` reconciles it without restarting this
-    process and a long-lived answer must not outlive the route it describes.
+    process and a long-lived answer must not outlive the route it describes; and
+    the gateway reach is re-read once its verdict is older than
+    :data:`GATEWAY_PROBE_TTL_SECONDS`, so an outage eventually stops being
+    advertised and a recovery eventually is, on the same TTL in both directions.
+    While that refresh is in flight a concurrent read reports ``gateway_verified``
+    as ``None`` and advertises nothing (see :func:`gateway_reachable`).
     """
     # The default, and not a problem: nothing was asked for.
     if not mcp_enabled():
@@ -559,6 +613,7 @@ __all__ = [
     "DEFAULT_MCP_PORT",
     "GATEWAY_PROBE_ENV",
     "GATEWAY_PROBE_TIMEOUT_SECONDS",
+    "GATEWAY_PROBE_TTL_SECONDS",
     "GATEWAY_ROUTE_DIR",
     "GATEWAY_ROUTE_FILE",
     "LISTENER_STARTUP_TIMEOUT_SECONDS",

@@ -154,7 +154,12 @@ rather than advertised as an endpoint nothing external answers. When the web
 process cannot reach the deployment's own public base URL, set
 `MCP_GATEWAY_PROBE=true` so it verifies its own endpoint (one bounded request to
 a destination fixed by `SERVER_BASE_URL`, never a caller-supplied URL); with the
-probe unset, reachability is reported *unverified* and nothing is advertised. A
+probe unset, reachability is reported *unverified* and nothing is advertised.
+The web process holds that verdict only briefly, so a gateway that goes down
+after a healthy handshake stops being advertised, and one that is repaired
+starts being advertised again, without a `restart`; while the verdict is being
+refreshed a capability read reports the reach as unverified rather than reuse an
+expired answer. A
 deployment whose env file sets `MCP_ENABLED=true` while the
 process serves nothing, or whose gateway route does not carry a working endpoint,
 is a failure (exit non-zero) rather than silently "disabled" or cheerfully

@@ -69,7 +69,14 @@ process agreeing with itself.
 base URL — air-gapped, or split DNS — reports reachability *unverified* rather
 than asserting it, and advertises nothing. The destination is fixed by
 `SERVER_BASE_URL`, never a caller-supplied URL, and the probe is a single
-bounded request. A listener that bound while the gateway route is missing or
+bounded request. The verdict it returns is held only briefly: a gateway answer
+older than the freshness window is re-probed, so a gateway that goes down stops
+being advertised and a gateway that is fixed starts being advertised again —
+both without restarting the web process. The window is short enough for an
+outage to be noticed and long enough that ordinary capability reads are answered
+from memory; while one read is re-probing, another read reports the reach as
+unverified rather than reusing the expired answer or starting a second probe. A
+listener that bound while the gateway route is missing or
 stale, a gateway that never reloaded after the route was written, or an upstream
 that is down is therefore reported not operational — the endpoint a client is
 given is reached through the gateway, not through the listener directly. A switch
