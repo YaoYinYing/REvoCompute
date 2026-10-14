@@ -252,21 +252,29 @@ def test_registration_capability_is_public_and_server_authoritative(monkeypatch,
 
 def test_mcp_capability_is_public_absent_by_default_and_reachable_only_when_listening(monkeypatch, tmp_path):
     # The capability answers the one question the Home page asks before it offers a
-    # live MCP endpoint: is the surface *really reachable*? Unset is the default and
-    # must report the surface absent — the repository shipping MCP code is never
-    # presented as deployed support.
+    # live MCP endpoint: is the surface *really operational*? Unset is the default
+    # and must report the surface absent — the repository shipping MCP code is
+    # never presented as deployed support.
     disabled = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     client = disabled.app.test_client()
     response = client.get("/compute/api/mcp")
     assert response.status_code == 200
-    assert response.get_json() == {"enabled": False, "endpoint": None, "detail": None}
+    assert response.get_json() == {
+        "listener_ready": False,
+        "route_configured": False,
+        "gateway_verified": None,
+        "operational": False,
+        "enabled": False,
+        "endpoint": None,
+        "detail": None,
+    }
 
     # MCP_PORT=0 asks uvicorn for an ephemeral port: the enabled module really does
     # start its companion listener, and the test does not bind (or contend for) a
-    # fixed port another process on the host may hold. The capability is advertised
-    # only after the process proves its own listener answers a real MCP handshake
-    # *and* the deployment gateway serves the route that fronts it, so the route the
-    # controller writes for the same opt-in is left in place here.
+    # fixed port another process on the host may hold. The listener answering is
+    # reported as one fact, and it is not enough on its own: without a reach the
+    # surface is not advertised however healthy every other fact is (a route file
+    # is read only for the route fact, never as proof the gateway serves MCP).
     enabled = _load_pssm_module(
         monkeypatch,
         tmp_path / "enabled",
@@ -275,11 +283,17 @@ def test_mcp_capability_is_public_absent_by_default_and_reachable_only_when_list
     route_dir = Path(enabled.CONFIG.server_dir) / "mcp-gateway"
     route_dir.mkdir(parents=True, exist_ok=True)
     (route_dir / "mcp.conf").write_text("location /k/ { proxy_pass http://web:8081; }", encoding="utf-8")
-    assert enabled.app.test_client().get("/compute/api/mcp").get_json() == {
-        "enabled": True,
-        "endpoint": "/k/mcp",
-        "detail": None,
-    }
+    payload = enabled.app.test_client().get("/compute/api/mcp").get_json()
+    assert payload["listener_ready"] is True
+    assert payload["route_configured"] is True
+    # This deployment does not reach for its own public edge here, so reachability
+    # is unverified rather than asserted, and no endpoint is advertised on a route
+    # file alone.
+    assert payload["gateway_verified"] is None
+    assert payload["operational"] is False
+    assert payload["enabled"] is False
+    assert payload["endpoint"] is None
+    assert payload["detail"]
 
 
 def test_mcp_capability_declares_its_openapi_contract(monkeypatch, tmp_path):

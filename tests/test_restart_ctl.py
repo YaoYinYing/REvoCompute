@@ -1384,10 +1384,11 @@ def test_mcp_health_reads_the_route_file_the_web_process_reads(tmp_path):
 
 
 def test_mcp_health_requires_a_real_initialize_handshake_not_the_flag(tmp_path):
-    # The defect this closes: the capability said "enabled" on the env flag alone,
-    # so mcp-status exited 0 for a surface whose endpoint nothing answered. The
-    # controller must drive an MCP initialize over the route and accept only a real
-    # MCP result.
+    # The defect this closes: mcp-status exited 0 on a surface whose endpoint
+    # nothing answered. The controller drives an MCP initialize over the route
+    # itself and accepts only a real MCP result — it never takes the capability's
+    # word for reachability, so a web process reporting the surface enabled while
+    # the gateway serves no /k/ is still a failure.
     import http.server
     import threading
 
@@ -1397,8 +1398,18 @@ def test_mcp_health_requires_a_real_initialize_handshake_not_the_flag(tmp_path):
 
     class _Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802 - http.server's own spelling
-            # The web process reports the listener reachable...
-            payload = json.dumps({"enabled": True, "endpoint": "/k/mcp", "detail": None}).encode()
+            # The web process reports the surface enabled...
+            payload = json.dumps(
+                {
+                    "listener_ready": True,
+                    "route_configured": True,
+                    "gateway_verified": True,
+                    "operational": True,
+                    "enabled": True,
+                    "endpoint": "/k/mcp",
+                    "detail": None,
+                }
+            ).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(payload)))
@@ -1455,7 +1466,17 @@ def test_mcp_health_accepts_a_real_initialize_result(tmp_path):
 
     class _Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802 - http.server's own spelling
-            payload = json.dumps({"enabled": True, "endpoint": "/k/mcp", "detail": None}).encode()
+            payload = json.dumps(
+                {
+                    "listener_ready": True,
+                    "route_configured": True,
+                    "gateway_verified": True,
+                    "operational": True,
+                    "enabled": True,
+                    "endpoint": "/k/mcp",
+                    "detail": None,
+                }
+            ).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(payload)))
@@ -1502,7 +1523,17 @@ def test_mcp_health_reports_absent_without_the_switch(tmp_path):
 
     class _Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802 - http.server's own spelling
-            payload = json.dumps({"enabled": False, "endpoint": None, "detail": None}).encode()
+            payload = json.dumps(
+                {
+                    "listener_ready": False,
+                    "route_configured": False,
+                    "gateway_verified": None,
+                    "operational": False,
+                    "enabled": False,
+                    "endpoint": None,
+                    "detail": None,
+                }
+            ).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(payload)))

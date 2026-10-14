@@ -200,25 +200,87 @@ def test_skipping_the_create_tour_leaves_the_register_entry_for_next_time(page: 
     assert _stored(page, RESULT_DONE) is None and _stored(page, ADMIN_DONE) is None
 
 
-def test_the_abort_signal_takes_the_callout_down_without_ending_the_flow(page: Page) -> None:
-    # A persistent shell changes the route without reloading the document, so the
-    # tour cannot rely on `pagehide` alone: an in-document navigation must also
-    # remove the overlay, or it decorates a page the reader has left. The signal is
-    # the tour's public teardown surface, so this asserts the contract a navigation
-    # layer depends on rather than the tour's internals.
+def test_a_reader_navigation_ends_the_flow_and_back_leaves_no_orphan(page: Page) -> None:
+    # The persistent shell changes the route without reloading the document, so the
+    # tour cannot rely on `pagehide` alone: an in-document navigation must also tear
+    # the overlay down, or it decorates a page the reader has left. The tour ends the
+    # *flow* on that navigation - the reader left the job the flow was walking them
+    # through - and leaves no progress dangling, so coming back does not resume a
+    # step the reader never finished.
     mount_scenario(page, controlled_scenario())
     page.goto(f"{ORIGIN}/compute/dashboard")
     expect(page.locator(".task-card").first).to_be_visible()
     page.get_by_role("button", name="Guided tour").click()
     expect(page.locator(".tour-callout")).to_contain_text("Step 1 of 5")
+    assert _stored(page, CREATE_STEP) == "0"
 
-    page.evaluate("() => document.dispatchEvent(new Event('revocompute:tour-abort'))")
-
+    # A real in-app link: intercepted by the shell, rendered in-document, no pagehide.
+    page.locator("[data-nav-group='account']").get_by_role("link", name="Account", exact=True).click()
+    expect(page.get_by_role("heading", name="Account", exact=True)).to_be_visible()
     expect(page.locator(".tour-callout")).to_have_count(0)
     expect(page.locator(".tour-anchor")).to_have_count(0)
-    # Tearing the overlay down is not leaving the flow: the reader is still at the
-    # same place in it, and nothing was marked complete.
-    assert _stored(page, CREATE_STEP) == "0"
+    # The reader left the flow, so its progress is cleared rather than left to
+    # resume from a page they walked away from. It was not a completion either.
+    assert _stored(page, CREATE_STEP) is None
+    assert _stored(page, "revocompute-tour-flow") is None
+    assert _stored(page, CREATE_DONE) is None
+
+    # Back is the reader's own traversal, not the tour's: the overlay does not
+    # reappear and nothing was left orphaned on the page it returns to.
+    page.go_back()
+    expect(page.locator(".task-card").first).to_be_visible()
+    page.wait_for_timeout(300)
+    expect(page.locator(".tour-callout")).to_have_count(0)
+    expect(page.locator(".tour-anchor")).to_have_count(0)
+    assert _stored(page, CREATE_STEP) is None
+
+
+def test_the_abort_signal_fires_on_a_route_change_and_not_on_a_first_render(page: Page) -> None:
+    # The signal is the navigation layer's contract with whatever the leaving page
+    # put in the document. It must fire on a real in-document route change and never
+    # on a document's first render - a first render is a page *arriving*, with
+    # nothing behind it to tear down - or a tour would end the moment it opened.
+    mount_scenario(page, controlled_scenario())
+    page.add_init_script(
+        "window.__tourAborts = 0;"
+        "document.addEventListener('revocompute:tour-abort', () => { window.__tourAborts += 1; });"
+    )
+    page.goto(f"{ORIGIN}/compute/dashboard")
+    expect(page.locator(".task-card").first).to_be_visible()
+    assert page.evaluate("window.__tourAborts") == 0
+
+    # An in-page fragment scroll is not a route change and must not announce one.
+    page.evaluate("() => history.pushState(null, '', location.pathname + '#fragment-not-a-route')")
+    page.evaluate("() => window.dispatchEvent(new PopStateEvent('popstate'))")
+    page.wait_for_timeout(150)
+    assert page.evaluate("window.__tourAborts") == 0
+
+    # A real in-document route change announces it exactly once.
+    page.locator("[data-nav-group='account']").get_by_role("link", name="Account", exact=True).click()
+    expect(page.get_by_role("heading", name="Account", exact=True)).to_be_visible()
+    assert page.evaluate("window.__tourAborts") == 1
+
+
+def test_a_tour_step_across_routes_resumes_with_its_progress_intact(page: Page) -> None:
+    # A step whose surface is another route advances by navigating, and that
+    # navigation is the tour walking its reader forward - not the reader leaving -
+    # so the flow must resume on the far side with its step, its flow, and its
+    # unfinished status intact.
+    mount_scenario(page, controlled_scenario())
+    page.goto(f"{ORIGIN}/compute/dashboard")
+    expect(page.locator(".task-card").first).to_be_visible()
+    page.get_by_role("button", name="Guided tour").click()
+    callout = page.locator(".tour-callout")
+    expect(callout).to_contain_text("Step 1 of 5")
+    callout.get_by_role("button", name="Next").click()
+    expect(callout).to_contain_text("Step 2 of 5")
+
+    # Step 3 lives on the Runner catalog: advancing navigates there and resumes.
+    callout.get_by_role("button", name="Next").click()
+    expect(page).to_have_url(f"{ORIGIN}/runners")
+    expect(page.locator(".tour-callout")).to_contain_text("Step 3 of 5")
+    assert _stored(page, CREATE_STEP) == "2"
+    assert _stored(page, "revocompute-tour-flow") == "create"
     assert _stored(page, CREATE_DONE) is None
 
 

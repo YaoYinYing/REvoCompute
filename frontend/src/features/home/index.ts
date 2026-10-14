@@ -92,12 +92,15 @@ export function mountHome(root: HTMLElement, shell: AppShell): void {
  * "this server speaks MCP". The entry keeps the always-available agent API guide
  * — /skills.md is served by every deployment — and only *adds* the MCP endpoint
  * once the deployment's own capability read says the endpoint is reachable. That
- * read is the server's, not the browser's: it already requires both a healthy
- * companion listener and the deployment gateway route that fronts it, so this
- * page never has to decide external reachability itself and never probes a URL.
- * A read that fails, is slow, or reports the surface off leaves the
- * documentation-only state; the upgrade to the live endpoint happens only on an
- * affirmative read.
+ * read is the server's, not the browser's: the capability is `enabled` only after
+ * the deployment's own public endpoint answered a real MCP handshake through the
+ * gateway, so this page never has to decide external reachability itself and never
+ * probes a URL. A healthy internal listener plus a route file is not enough — a
+ * route file is a file fact, not proof the gateway serves the route — and a
+ * deployment that cannot verify its own edge reports reachability unverified
+ * rather than advertising an endpoint. A read that fails, is slow, or reports the
+ * surface off leaves the documentation-only state; the upgrade to the live endpoint
+ * happens only on an affirmative read.
  */
 async function applyAgentCapability(root: HTMLElement): Promise<void> {
   const aside = root.querySelector<HTMLElement>('.agent-guide');

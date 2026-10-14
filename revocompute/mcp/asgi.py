@@ -56,6 +56,29 @@ GATEWAY_ROUTE_FILE = "mcp.conf"
 #: behind would otherwise be read as a live route.
 _GATEWAY_ROUTE_RE = re.compile(r"^\s*location\s+/k/", re.MULTILINE)
 
+#: The public endpoint every deployment serves the application on.  The gateway
+#: route proxies ``/k/`` to the companion listener, so an agent host reaches the
+#: surface at this same-origin public base joined with :data:`MCP_ENDPOINT` —
+#: never at the listener's container-internal loopback.  It is *public
+#: deployment* identity: it holds no credential, no container-internal port and
+#: no host path, and the web process may hold it without owning any
+#: infrastructure secret.
+PUBLIC_BASE_URL_ENV = "SERVER_BASE_URL"
+
+#: How long the surface waits when it really reaches for the public endpoint over
+#: the gateway.  Reaching out is a network call, so the deadline is bounded and a
+#: timeout is a *negative* answer rather than a hang on the capability request.
+GATEWAY_PROBE_TIMEOUT_SECONDS = 3.0
+
+#: The switch that decides whether the surface reaches for the public endpoint at
+#: all.  Set it only in a deployment that can reach its own public address (a
+#: direct deployment, a host loopback, or a network that resolves and reaches the
+#: edge); an air-gapped or split-DNS deployment leaves it unset, and the surface
+#: then reports the endpoint as unverified rather than attempting an outbound
+#: call.  Either way a deployment that *can* reach the edge advertises the
+#: surface on a real gateway handshake and never on a route file.
+GATEWAY_PROBE_ENV = "MCP_GATEWAY_PROBE"
+
 #: How long :func:`start_companion_listener` waits for the listener to bind
 #: before it reports the surface as not started.  The wait happens once, in the
 #: process that will serve the endpoint, so a deployment knows at startup whether
@@ -76,9 +99,13 @@ _LOGGER = logging.getLogger(__name__)
 #: port was never bound.
 _LISTENER: dict[str, Any] = {"server": None, "thread": None, "error": None}
 
-#: Last readiness-handshake result, so the public capability is a memory read
+#: Last listener-readiness result, so the public capability is a memory read
 #: rather than an outbound call per request.  ``None`` means "not probed yet".
 _PROBE: dict[str, Any] = {"result": None}
+
+#: Last public-endpoint (gateway) result, keyed by the base URL it was proven
+#: against so a changed base re-probes instead of serving a stale answer.
+_GATEWAY_PROBE: dict[str, Any] = {"base": None, "result": None}
 
 
 def mcp_asgi() -> Any:
@@ -193,80 +220,262 @@ def start_companion_listener() -> threading.Thread | None:
     return None
 
 
-def gateway_route_served() -> tuple[bool, str]:
-    """Whether the deployment gateway serves this surface, read from its own state.
+#: Fixed, role-based reasons the public capability may carry.  They exist so a
+#: failure is *named* without leaking deployment specifics: an ``OSError`` string
+#: can carry the real absolute route path, so it is logged for the operator and
+#: never placed in an API response.  A public ``detail`` is one of these or
+#: ``None``.
+DETAIL_ROUTE_NOT_CONFIGURED = "the deployment gateway is not configured to serve the MCP route"
+DETAIL_GATEWAY_UNREACHABLE = "the MCP endpoint was not reached through the deployment gateway"
+DETAIL_GATEWAY_UNVERIFIED = (
+    "this deployment does not probe its public MCP endpoint, so external reachability is unverified"
+)
 
-    The listener answers on loopback inside the web container, but the endpoint a
-    browser or an agent host is offered reaches it only through the deployment
-    gateway.  The gateway's route is deployment state that ``run/restart.sh``
-    reconciles from ``MCP_ENABLED`` into ``SERVER_DIR`` — the directory both the
-    deployment host and this process share — so reading it here answers "does the
-    public endpoint exist" without any outbound call and without trusting a URL a
-    caller supplied.
 
-    A route that only *exists* is not a route that is *served*: an empty, truncated,
-    or unrelated file left behind would be read as live.  The check is therefore
-    that the file declares the MCP location prefix the gateway needs, and that
-    ``SERVER_DIR`` is resolvable at all.  ``(served, detail)`` — the reason is
-    operator-facing and names no host, address, or port.
+def gateway_route_configured() -> bool:
+    """Whether the deployment gateway is *configured* to serve this surface.
+
+    Reads the route state ``run/restart.sh`` reconciles from ``MCP_ENABLED`` into
+    ``SERVER_DIR``, the directory both the deployment host and this process share,
+    so it answers "is the public endpoint wired" with no outbound call and without
+    trusting a URL a caller supplied.  A route that only *exists* is not a route
+    that is *served*: an empty, truncated, or unrelated file left behind would
+    otherwise be read as live, so the file must declare the MCP location prefix.
+
+    Configured is *not* reachable: a stale config, a gateway that never reloaded,
+    or an upstream that is down all read as configured.  That is why the public
+    capability reports this as one fact among several and never as ``enabled``.
+    The reason an unconfigured route is unreadable is logged, never returned: an
+    ``OSError`` string can contain the absolute route path.
     """
     server_dir = os.environ.get("SERVER_DIR", "").strip()
     if not server_dir:
-        return False, "the deployment server directory is not resolvable, so the gateway route cannot be confirmed"
+        return False
     route = os.path.join(server_dir, GATEWAY_ROUTE_DIR, GATEWAY_ROUTE_FILE)
     try:
         with open(route, encoding="utf-8") as handle:
             text = handle.read()
     except FileNotFoundError:
-        return False, "the deployment gateway serves no /k/ route; run `restart.sh restart` to reconcile it from MCP_ENABLED"
-    except OSError as exc:  # noqa: BLE001 - readiness must never raise into a capability read
-        return False, f"the deployment gateway route state could not be read: {exc}"
-    if not _GATEWAY_ROUTE_RE.search(text):
-        return False, "the deployment gateway route state does not declare the /k/ location"
-    return True, ""
+        return False
+    except OSError:
+        _LOGGER.warning("MCP gateway route state at %s could not be read", route, exc_info=True)
+        return False
+    return _GATEWAY_ROUTE_RE.search(text) is not None
+
+
+def gateway_endpoint() -> str | None:
+    """The public URL an agent host reaches the surface at, or ``None``.
+
+    The same-origin public base joined with :data:`MCP_ENDPOINT`.  It is public
+    deployment identity, not infrastructure: the listener's container-internal
+    port and host path are never part of it.
+    """
+    base = os.environ.get(PUBLIC_BASE_URL_ENV, "").strip().rstrip("/")
+    return f"{base}{MCP_ENDPOINT}" if base else None
+
+
+def gateway_reachable() -> bool | None:
+    """Whether this process reached the MCP endpoint through the public gateway.
+
+    ``True``  the deployment's own public endpoint answered a real MCP
+              ``initialize`` handshake, so an agent host reaches the same surface;
+    ``False`` the reach was attempted and the endpoint did not answer MCP;
+    ``None``  the reach was not attempted: the deployment did not opt in to
+              probing, or no public base URL is known, so reachability is
+              *unverified* rather than asserted either way.
+
+    The destination is never caller-controlled: it is :func:`gateway_endpoint`,
+    built from this deployment's own ``SERVER_BASE_URL`` and the fixed MCP path,
+    reachable only because the listener shares this process's admitted traffic
+    through the deployment gateway.  Nothing here forwards a caller-supplied
+    target, so no SSRF surface is introduced.  The answer is memoized per base
+    URL, so a sustained capability read is a memory read and a deployment whose
+    public address changes re-probes.
+    """
+    from revocompute.config import env_bool
+
+    if not env_bool(GATEWAY_PROBE_ENV, False):
+        return None
+    endpoint = gateway_endpoint()
+    if endpoint is None:
+        return None
+    if _GATEWAY_PROBE["base"] == endpoint and _GATEWAY_PROBE["result"] is not None:
+        return bool(_GATEWAY_PROBE["result"])
+    reachable, _ = probe_gateway(endpoint)
+    _GATEWAY_PROBE.update({"base": endpoint, "result": reachable})
+    if not reachable:
+        _LOGGER.warning("MCP public endpoint %s did not answer an initialize handshake", endpoint)
+    return reachable
 
 
 def surface_status() -> dict[str, Any]:
     """What *this process* can actually answer for the MCP surface.
 
     The canonical HTTP surface reads its capability through this, so a browser is
-    told the surface is reachable only when *both* facts that make it reachable
-    hold: the companion listener bound and answered a real MCP ``initialize``
-    handshake in this process, and the deployment gateway serves the route that
-    turns that internal listener into the public endpoint.  A flag-only answer
-    advertised a dead endpoint; so would a listener-only answer, because an agent
-    host reaches the surface through the gateway and not through the listener's
-    loopback.
+    told the surface is *operational* only when this deployment genuinely reached
+    its own public MCP endpoint — a real MCP ``initialize`` handshake over the
+    deployment gateway an agent host would use.  A healthy companion listener, or
+    a route file on disk, are not that fact: a stale config, a gateway that never
+    reloaded, or an upstream that is down all leave both true while nothing
+    external answers.  So the capability reports each fact separately and gates
+    ``operational`` on the *reach* alone:
 
-    It reports no host, port, or credential — only whether the surface is
-    publicly reachable, and, when it is not, a short reason an operator can act
-    on.  The listener's readiness is probed once per process (its binding and its
-    fixed surface cannot change at runtime); the route is re-read on every call,
-    because ``restart.sh`` reconciles it without restarting this process and a
-    long-lived answer must not outlive the route it describes.
+    ``listener_ready``    the companion listener bound and answered an
+                          ``initialize`` on loopback in this process;
+    ``route_configured``  the deployment gateway route state declares the MCP
+                          location (a route *file* is not a route *served*);
+    ``gateway_verified``  ``True``/``False`` when this deployment reached its own
+                          public endpoint, ``None`` when it does not probe;
+    ``operational``       ``True`` only on ``gateway_verified is True``;
+    ``enabled``           the legacy projection Home consumes: ``True`` only when
+                          ``operational``, ``endpoint`` set and no ``detail``;
+    ``endpoint``          the public URL when operational, else ``None``;
+    ``detail``            a fixed role-based reason when not operational, else
+                          ``None``.  Never a credential, host path, port, or
+                          filesystem error string.
+
+    It reports no host, port, or credential of its own, and reads no
+    caller-supplied URL.  The listener's readiness is probed once per process (its
+    binding and its fixed surface cannot change at runtime); the route is re-read
+    on every call, because ``restart.sh`` reconciles it without restarting this
+    process and a long-lived answer must not outlive the route it describes.
     """
+    # The default, and not a problem: nothing was asked for.
     if not mcp_enabled():
-        # The default, and not a problem: nothing was asked for.
-        return {"enabled": False, "endpoint": None, "detail": None}
+        return _capability(False, False, None, endpoint=None, detail=None)
+    route_configured = gateway_route_configured()
     server = _LISTENER["server"]
     if server is None or not getattr(server, "started", False):
         # Enabled, but this process cannot answer: a missing extra, a bind
         # failure, or a switch set without a restart.  Never a silent "off".
-        detail = _LISTENER["error"] or "MCP is enabled but no listener is bound in this process; restart the deployment"
-        return {"enabled": False, "endpoint": None, "detail": detail}
+        return _capability(False, route_configured, None, endpoint=None, detail=_listener_detail())
     if _PROBE["result"] is None:
         _PROBE["result"] = probe_surface(server)
-    ok, detail = _PROBE["result"]
-    if not ok:
-        return {"enabled": False, "endpoint": None, "detail": detail}
-    # The listener answers, but the public endpoint is only as real as the
-    # gateway route that fronts it.  A listener that bound while the deployment
-    # gateway serves no /k/ route is the exact case in which Home would otherwise
-    # offer an endpoint nothing external can reach.
-    served, route_detail = gateway_route_served()
-    if not served:
-        return {"enabled": False, "endpoint": None, "detail": route_detail}
-    return {"enabled": True, "endpoint": MCP_ENDPOINT, "detail": None}
+    listener_ready, listener_detail = _PROBE["result"]
+    if not listener_ready:
+        return _capability(False, route_configured, None, endpoint=None, detail=listener_detail)
+    gateway_verified = gateway_reachable()
+    if gateway_verified is None:
+        # This deployment does not reach for its public edge, so external
+        # reachability is unverified: the surface is not advertised on that.
+        return _capability(True, route_configured, None, endpoint=None, detail=DETAIL_GATEWAY_UNVERIFIED)
+    if not gateway_verified:
+        detail = DETAIL_GATEWAY_UNREACHABLE if route_configured else DETAIL_ROUTE_NOT_CONFIGURED
+        return _capability(True, route_configured, False, endpoint=None, detail=detail)
+    return _capability(True, route_configured, True, endpoint=gateway_endpoint(), detail=None)
+
+
+def _capability(
+    listener_ready: bool,
+    route_configured: bool,
+    gateway_verified: bool | None,
+    *,
+    endpoint: str | None,
+    detail: str | None,
+) -> dict[str, Any]:
+    """Assemble the capability document from the four independent facts.
+
+    ``operational`` is the reach alone; ``enabled`` is the reduced projection Home
+    consumes, so the public UI and any other reader agree on one meaning.
+    """
+    operational = gateway_verified is True and endpoint is not None
+    return {
+        "listener_ready": listener_ready,
+        "route_configured": route_configured,
+        "gateway_verified": gateway_verified,
+        "operational": operational,
+        "enabled": operational,
+        "endpoint": endpoint if operational else None,
+        "detail": None if operational else detail,
+    }
+
+
+def _listener_detail() -> str:
+    """A fixed reason the listener is not answering.
+
+    The stored listener error is operator text and may name the bound host and
+    port, so it stays in the log; the capability carries one fixed sentence.
+    """
+    if _LISTENER["error"]:
+        _LOGGER.warning("MCP listener not ready: %s", _LISTENER["error"])
+    return "the MCP listener is not answering on this deployment"
+
+
+def probe_gateway(endpoint: str) -> tuple[bool, str]:
+    """Drive one MCP ``initialize`` against the deployment's *public* endpoint.
+
+    The listener probe proves the surface inside the web container; this proves
+    the endpoint an agent host actually uses, through the deployment gateway.  It
+    is the same pre-credential handshake, sent to a fixed, deployment-owned URL
+    (never a caller-supplied one), and it is not a second admission path: it lands
+    in the same application the HTTP API does, so the canonical limiter and
+    account rules still decide what a subsequent request may do.
+    """
+    import asyncio
+    import json
+
+    body = json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": MCP_PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": {"name": "revocompute-gateway-probe", "version": "1"},
+            },
+        }
+    ).encode("utf-8")
+
+    async def _run() -> tuple[bool, str]:
+        import httpx
+
+        # ``trust_env=False``: a deployment's HTTP(S)_PROXY must not silently
+        # redirect this readiness check off the host, and no caller can influence
+        # the destination.
+        async with httpx.AsyncClient(timeout=GATEWAY_PROBE_TIMEOUT_SECONDS, trust_env=False) as client:
+            response = await client.post(
+                endpoint,
+                content=body,
+                headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream"},
+            )
+        return _initialize_result(response.status_code, response.headers.get("content-type", ""), response.text)
+
+    try:
+        return asyncio.run(_run())
+    except Exception:  # noqa: BLE001 - reachability must never raise into a capability read
+        return False, "the public MCP endpoint did not answer an initialize handshake"
+
+
+def _initialize_result(status: int, content_type: str, text: str) -> tuple[bool, str]:
+    """Interpret one ``initialize`` response as ``(reachable, detail)``.
+
+    The transport may answer as a single ``text/event-stream`` frame or as JSON;
+    both are an MCP answer, so both are accepted.  A rejection (a 4xx with a
+    body) still proves the route is served, but it is reported as not reachable
+    because an agent host's first call would fail the same way.
+    """
+    import json
+
+    if status != 200:
+        return False, f"the MCP endpoint answered HTTP {status}"
+    payload = text.strip()
+    if "text/event-stream" in content_type.lower():
+        for line in payload.splitlines():
+            if line.startswith("data:"):
+                payload = line[len("data:") :].strip()
+                break
+    try:
+        decoded = json.loads(payload)
+    except ValueError:
+        return False, "the MCP endpoint did not answer a JSON-RPC response"
+    result = decoded.get("result") if isinstance(decoded, dict) else None
+    if not isinstance(result, dict) or "protocolVersion" not in result:
+        return False, "the MCP endpoint answered without an initialize result"
+    server = result.get("serverInfo") or {}
+    return True, f"protocol {result['protocolVersion']}, server {server.get('name', 'unknown')}"
+
+
 
 
 def probe_surface(server: Any) -> tuple[bool, str]:
@@ -346,47 +555,24 @@ def _bound_port(server: Any) -> int | None:
     return None
 
 
-def _initialize_result(status: int, content_type: str, text: str) -> tuple[bool, str]:
-    """Interpret one ``initialize`` response as ``(reachable, detail)``.
-
-    The transport may answer as a single ``text/event-stream`` frame or as JSON;
-    both are an MCP answer, so both are accepted.  A rejection (a 4xx with a
-    body) still proves the route is served, but it is reported as not reachable
-    because an agent host's first call would fail the same way.
-    """
-    import json
-
-    if status != 200:
-        return False, f"the MCP endpoint answered HTTP {status}"
-    payload = text.strip()
-    if "text/event-stream" in content_type.lower():
-        for line in payload.splitlines():
-            if line.startswith("data:"):
-                payload = line[len("data:") :].strip()
-                break
-    try:
-        decoded = json.loads(payload)
-    except ValueError:
-        return False, "the MCP endpoint did not answer a JSON-RPC response"
-    result = decoded.get("result") if isinstance(decoded, dict) else None
-    if not isinstance(result, dict) or "protocolVersion" not in result:
-        return False, "the MCP endpoint answered without an initialize result"
-    server = result.get("serverInfo") or {}
-    return True, f"protocol {result['protocolVersion']}, server {server.get('name', 'unknown')}"
-
-
 __all__ = [
     "DEFAULT_MCP_PORT",
+    "GATEWAY_PROBE_ENV",
+    "GATEWAY_PROBE_TIMEOUT_SECONDS",
     "GATEWAY_ROUTE_DIR",
     "GATEWAY_ROUTE_FILE",
     "LISTENER_STARTUP_TIMEOUT_SECONDS",
     "MCP_ENDPOINT",
     "MCP_PATH",
     "MCP_PROTOCOL_VERSION",
+    "PUBLIC_BASE_URL_ENV",
     "SURFACE_PROBE_TIMEOUT_SECONDS",
-    "gateway_route_served",
+    "gateway_endpoint",
+    "gateway_reachable",
+    "gateway_route_configured",
     "mcp_asgi",
     "mcp_enabled",
+    "probe_gateway",
     "probe_surface",
     "serve",
     "start_companion_listener",

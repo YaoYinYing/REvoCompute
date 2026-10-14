@@ -46,7 +46,7 @@ _PROFILE_FIELDS = frozenset({"full_name", "affiliation", "position", "pi_name"})
 
 _APP_PAGE = re.compile(
     r"/(?:api-docs|runners|runners/[^/]+|compute/terms"
-    r"|compute/(?:login|register|reset_password|user_verify|profile|user_control|configuration|logs"
+    r"|compute/(?:login|register|reset_password|user_verify|profile|account/[^/]+|user_control|configuration|logs"
     r"|runner_fleet|create_task|dashboard|results/[0-9a-fA-F]{32}))"
 )
 
@@ -361,7 +361,26 @@ class FrontendFixtureRouter:
         rather than repeated in every test that loads the public shell.
         """
         endpoint = self.scenario.mcp_endpoint
-        return route.fulfill(json={"enabled": endpoint is not None, "endpoint": endpoint, "detail": None})
+        return route.fulfill(json=self._mcp_payload(endpoint))
+
+    @staticmethod
+    def _mcp_payload(endpoint: str | None) -> dict[str, Any]:
+        """The seven facts the real capability reports, for a fixture scenario.
+
+        The Home page reads only ``enabled`` to decide whether its "Connect an AI
+        agent" entry may offer a live endpoint, and a fixture scenario that declares
+        no endpoint is the default deployment whose surface is absent. The full
+        fact set is served so a fixture is the shape the real route returns.
+        """
+        return {
+            "listener_ready": endpoint is not None,
+            "route_configured": endpoint is not None,
+            "gateway_verified": True if endpoint is not None else None,
+            "operational": endpoint is not None,
+            "enabled": endpoint is not None,
+            "endpoint": endpoint,
+            "detail": None,
+        }
 
     # -- Runner discovery ---------------------------------------------------
 

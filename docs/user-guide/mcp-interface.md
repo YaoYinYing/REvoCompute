@@ -44,14 +44,34 @@ answered two different ways. Turn it on by all three of
    `docker-compose.mcp.yml`, reconciles the gateway `location /k/` route from
    `MCP_ENABLED`, and starts the in-process listener.
 
+If the web process can reach the deployment's own public base URL, also set
+`MCP_GATEWAY_PROBE=true` so the capability verifies the endpoint through the
+gateway rather than leaving it unverified (see below).
+
 `bash run/restart.sh mcp-status` reports the switch, whether the route is
 present, and whether the surface is really reachable. Reachability is not read
-from the switch: the running web process reports `GET /compute/api/mcp` as
-`enabled` only after its own listener has bound and answered a real MCP
-`initialize` handshake **and** the deployment's gateway route that fronts the
-listener is present, and `mcp-status` then drives that same handshake through the
-gateway route an agent host will use. A listener that bound while the gateway
-route is missing or stale is therefore reported absent — the endpoint a client is
+from the switch, and it is not read from the route file either: `GET
+/compute/api/mcp` reports its facts separately — whether the companion listener
+answered a real MCP `initialize` handshake in this process (`listener_ready`),
+whether the gateway route state on disk declares a `/k/` route
+(`route_configured`), and whether the deployment's own public endpoint answered
+the same handshake through the gateway (`gateway_verified`). The surface is
+`operational` — and the endpoint is advertised, and Home offers "Connect an AI
+agent" — only when `gateway_verified` is `true`, that is, when the deployment's
+own endpoint really answered. A healthy internal listener plus a route file is
+**not** sufficient: a route file is a file fact, never proof the gateway serves
+the route. `mcp-status` separately drives the same handshake through the gateway
+route an agent host will use, so the operator's receipt does not rest on the web
+process agreeing with itself.
+
+`gateway_verified` is `null` when the deployment does not probe its own edge
+(`MCP_GATEWAY_PROBE` unset), so a deployment that cannot reach its own public
+base URL — air-gapped, or split DNS — reports reachability *unverified* rather
+than asserting it, and advertises nothing. The destination is fixed by
+`SERVER_BASE_URL`, never a caller-supplied URL, and the probe is a single
+bounded request. A listener that bound while the gateway route is missing or
+stale, a gateway that never reloaded after the route was written, or an upstream
+that is down is therefore reported not operational — the endpoint a client is
 given is reached through the gateway, not through the listener directly. A switch
 set in the env file while the process serves nothing (a missing `mcp` extra, a
 port that would not bind, a `restart` that has not run) is reported as an operator
@@ -64,7 +84,7 @@ Because the capability is a claim about *public* reachability, the Web
 application shows the "Connect an AI agent" entry — and names the endpoint — only
 when the capability says the endpoint really answers through the gateway. The
 entry is never offered on the strength of the switch, of a healthy listener alone,
-or of MCP code existing in the repository.
+of a route file, or of MCP code existing in the repository.
 
 While `MCP_ENABLED` is unset, `revocompute.app` logs `MCP surface disabled`, the
 gateway's `include` of the route mask is empty, and the endpoint is absent rather

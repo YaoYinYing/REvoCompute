@@ -29,16 +29,22 @@ const DOCS_HREF = 'https://yaoyinying.github.io/REvoCompute/';
 const activeKey = 'revocompute-tour-flow';
 
 /**
- * The event a route change dispatches to tear the tour down.
+ * The event a route change dispatches to end the tour that was on the page left.
  *
  * A guided tour decorates the page it belongs to, so it must not survive leaving
- * that page. A document navigation fires `pagehide` and the tour removes itself;
- * an in-document route change does not, so the navigation layer announces it
+ * that page. A document navigation fires `pagehide` and the tour ends itself; an
+ * in-document route change does not, so the navigation layer announces it
  * instead: dispatch `new Event(GUIDED_TOUR_ABORT_EVENT)` when the outlet is
  * replaced. The tour listens for it once for its own lifetime, so a page that
  * never opened a tour pays nothing, and no navigation layer has to import the
- * tour module to abort one. It is a plain cancelable Event rather than a
- * callback registry: one signal, no shared mutable navigation state.
+ * tour module to end one. It is a plain Event rather than a callback registry:
+ * one signal, no shared mutable navigation state.
+ *
+ * The signal ends the *flow*, not merely its overlay, and it exempts the tour's
+ * own step navigation through the `selfNavigating` flag: a step that hops to the
+ * route it belongs to is the tour walking its reader forward, while an abort the
+ * tour did not ask for is the reader leaving, which ends the flow with whatever
+ * progress it had.
  */
 export const GUIDED_TOUR_ABORT_EVENT = 'revocompute:tour-abort';
 
@@ -240,39 +246,41 @@ export class GuidedTour {
    * A step whose surface is another route advances by navigating, so the route
    * change that follows is the tour walking its own reader forward and must not
    * tear the tour down and mark it abandoned. The flag is raised for the length of
-   * the navigation the tour itself requested and consumed by the abort signal, so
-   * exactly one route change — the tour's own — is exempt; a reader who navigates
-   * afterwards is leaving, and the tour ends there. The navigation may complete in
-   * a fresh document (`location.assign`), where this instance and its flag are
-   * gone and the far side resumes from the stored step, or in-document under a
-   * persistent router (#79), where the same instance sees the signal and stays.
+   * the navigation the tour itself requested and consumed by abort, so exactly one
+   * route change — the tour's own — is exempt; a reader who navigates afterwards is
+   * leaving, and the flow ends there. The navigation normally completes in a fresh
+   * document (`location.assign`), where this instance and its flag are gone and the
+   * far side resumes from the stored step; under a persistent in-document router
+   * the same instance sees the abort signal and stays instead. Only a `pagehide`
+   * also consumes the flag: a document navigation the tour asked for is the tour
+   * advancing, so a `pagehide` carrying an already-consumed abort must not end the
+   * flow the far side is about to resume.
    */
   private selfNavigating = false;
 
   // The callout is appended under body, where a route render cannot reach it: it
   // lives outside the outlet the next route replaces, so a route change would
   // otherwise leave a stale overlay and its listeners attached to the new page.
-  // Two signals remove it: a document navigation fires `pagehide`, and an
+  // Two signals end the flow: a document navigation fires `pagehide`, and an
   // in-document route change dispatches the abort event named above. One listener
   // each, installed once for the tour's lifetime, so a page that only changes its
-  // view really does lose the overlay. A bfcache restore keeps the document, so
-  // `pagehide` with `persisted` is left alone.
+  // view really does lose the overlay and its progress. A bfcache restore keeps
+  // the document, so `pagehide` with `persisted` is left alone.
   constructor() {
     if (typeof document === 'undefined' || !document.addEventListener) return;
     this.disposal = event => {
-      if (event.type === 'pagehide') {
-        if ((event as PageTransitionEvent).persisted) return;
-        // A document navigation the tour asked for itself is the tour advancing,
-        // not the reader leaving; only a reader's own navigation ends the flow.
-        if (this.selfNavigating) return;
-      } else if (this.selfNavigating) {
-        // The tour's own in-document step move: the router announced the route
-        // change, the overlay is about to be replaced by the next step's, so the
-        // flow is neither torn down nor marked abandoned by this signal.
+      // The tour's own navigation is the tour advancing, not the reader leaving.
+      // Consumed here so exactly the one route change it asked for is exempt,
+      // whether that change is announced as an abort (a persistent router) or as
+      // a `pagehide` (a fresh document).
+      if (this.selfNavigating) {
         this.selfNavigating = false;
         return;
       }
-      this.close();
+      if (event.type === 'pagehide' && (event as PageTransitionEvent).persisted) return;
+      // A reader's own navigation ends the flow where it stands: the far side has
+      // nothing to resume unless the tour itself walked the reader forward.
+      this.endFlow();
     };
     document.addEventListener('pagehide', this.disposal);
     document.addEventListener(GUIDED_TOUR_ABORT_EVENT, this.disposal);
@@ -485,19 +493,26 @@ export class GuidedTour {
     this.callout?.remove(); this.callout = null;
   }
 
-  private endFlow(flow: TourFlow): void {
-    localStorage.removeItem(flow.stepKey);
-    if (flow.targetKey) localStorage.removeItem(flow.targetKey);
-    if (localStorage.getItem(activeKey) === flow.id) localStorage.removeItem(activeKey);
+  private endFlow(): void {
+    // Whatever flow is live, or none: the reader leaving a page ends the tour
+    // that was decorating it, and a page with no live flow has nothing to end.
+    // The in-progress step is cleared here; the completion scope is not, so a
+    // flow the reader walked away from is offered again rather than marked done.
+    const flow = flowFor(localStorage.getItem(activeKey));
+    if (flow) {
+      localStorage.removeItem(flow.stepKey);
+      if (flow.targetKey) localStorage.removeItem(flow.targetKey);
+      localStorage.removeItem(activeKey);
+    }
     this.close();
   }
 
-  private dismiss(flow: TourFlow): void { localStorage.setItem(flow.doneKey, flow.scope()); this.endFlow(flow); }
+  private dismiss(flow: TourFlow): void { localStorage.setItem(flow.doneKey, flow.scope()); this.endFlow(); }
   private finish(flow: TourFlow, index: number): void {
     // Reaching the end of the flow is a completion; leaving early (skip, close,
     // Escape) is not, so the entry stays for a reader who wants to come back.
     if (index >= flow.steps.length - 1) localStorage.setItem(flow.doneKey, flow.scope());
-    this.endFlow(flow);
+    this.endFlow();
   }
 }
 

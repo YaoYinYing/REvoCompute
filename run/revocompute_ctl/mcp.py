@@ -151,18 +151,19 @@ def mcp_health(state) -> int:
 
     "The switch is set" is not "the surface works": the listener can be missing
     its optional transport, the port can be held, or the gateway can be serving
-    a stale config with no ``/k/`` route at all.  So an opt-in deployment is
-    accepted only after a real MCP ``initialize`` over streamable HTTP reaches
-    ``/k/mcp`` through the gateway and the server answers with an MCP result —
-    the same handshake an agent host performs first.  A deployment that never
-    opted in reports the surface absent (exit 0); an opt-in deployment whose
-    endpoint does not answer, or whose web process reports the surface absent
-    while the env file says it should be on, is a real operator problem and is
-    reported as failure — never silently as "disabled".  The probe is
-    unauthenticated on purpose: ``initialize`` is the pre-credential handshake,
-    so it proves the surface exists without carrying, printing, or storing any
-    credential.  Whether a request may *do* anything is still decided per request
-    by the canonical account and admission rules.
+    a stale config with no ``/k/`` route at all.  The operator is the one side
+    that can see the whole chain, so this walks it: the web process reports each
+    fact it observed (its listener, the gateway route state it reads, and the
+    public endpoint it reached), and this then drives its *own* MCP ``initialize``
+    over the public route a client uses — the same handshake an agent host
+    performs first.  A deployment that never opted in reports the surface absent
+    (exit 0); an opt-in deployment whose endpoint does not answer, or whose web
+    process reports the surface non-operational while the env file says it should
+    be on, is a real operator problem and is reported as failure — never silently
+    as "disabled".  The probe is unauthenticated on purpose: ``initialize`` is the
+    pre-credential handshake, so it proves the surface exists without carrying,
+    printing, or storing any credential.  Whether a request may *do* anything is
+    still decided per request by the canonical account and admission rules.
     """
     base = (state.get("SERVER_BASE_URL") or "").rstrip("/")
     if not base:
@@ -178,15 +179,14 @@ def mcp_health(state) -> int:
     opted_in = mcp_enabled(state)
     if not payload.get("enabled"):
         if opted_in:
-            detail = payload.get("detail") or "the running web process reports no MCP listener"
-            print(f"MCP_ENABLED is set in the env file but the surface is not served: {detail}", file=sys.stderr)
-            print("Restart the deployment so the listener starts.", file=sys.stderr)
+            _report_not_operational(state, payload)
             return 1
         print("MCP surface disabled on this deployment.")
         return 0
-    # The capability says the listener bound, and the deployment opted in: the
-    # handshake is what turns "a listener answers" into "the surface is reachable
-    # through the route an agent host will use".
+    # The capability is operational: the deployment's own public endpoint answered
+    # a genuine MCP handshake.  The operator confirms it from this side too, over
+    # the public route an agent host will use, so the receipt is not one process
+    # agreeing with itself.
     ok, detail = _initialize_handshake(base)
     if not ok:
         print(f"MCP is enabled but the endpoint did not answer an MCP handshake: {detail}", file=sys.stderr)
@@ -195,6 +195,34 @@ def mcp_health(state) -> int:
     print(f"Listener internal port {_upstream_port(state)} (never published).")
     print("Rollback: set MCP_ENABLED=false in the deployment env file, then run `bash run/restart.sh restart`.")
     return 0
+
+
+def _report_not_operational(state, payload: dict) -> None:
+    """Name the operator's next action from the facts the web process reported.
+
+    The capability carries the deployment's own observed facts and a fixed,
+    role-based reason; the specifics an operator needs to act on — the route file
+    this host would have written, its on-disk presence, the internal port — are
+    printed here, from this host's own state, and never travel through the API.
+    """
+    route = gateway_snippet_path(state)
+    present = os.path.isfile(route)
+    reason = payload.get("detail") or "the running web process reports no MCP listener"
+    print(f"MCP_ENABLED is set in the env file but the surface is not operational: {reason}", file=sys.stderr)
+    print(
+        f"  listener answering:  {payload.get('listener_ready')}\n"
+        f"  gateway route state: {payload.get('route_configured')} ({'present' if present else 'absent'} at {route})\n"
+        f"  public endpoint reached: {payload.get('gateway_verified')}",
+        file=sys.stderr,
+    )
+    if payload.get("route_configured") is not True or not present:
+        print("Write the gateway route with `bash run/restart.sh restart`.", file=sys.stderr)
+    else:
+        print(
+            "The route exists; the gateway must be reloaded and the endpoint reachable from this host "
+            "(set MCP_GATEWAY_PROBE=true in the deployment env file to have the web process verify it).",
+            file=sys.stderr,
+        )
 
 
 def _initialize_handshake(base: str) -> tuple[bool, str]:

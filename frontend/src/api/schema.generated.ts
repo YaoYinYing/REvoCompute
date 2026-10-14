@@ -90,7 +90,7 @@ export interface paths {
         };
         /**
          * Get agent MCP capability
-         * @description Reports whether an agent host can actually reach this deployment's agent Model Context Protocol surface, so a client is offered the entry only when the endpoint answers rather than when a switch was set. Reachability requires both the companion listener having answered a real MCP initialize handshake in this process and the deployment gateway serving the route that fronts it; a listener that bound behind a missing gateway route is reported absent. It is a deployment-capability projection, never an authorization: what a credential may do over MCP is decided per request by the canonical account, entitlement, admission, and result rules.
+         * @description Reports whether an agent host can actually reach this deployment's agent Model Context Protocol surface, so a client is offered the entry only when the endpoint answers rather than when a switch was set or a route file exists. It reports the facts it observed separately: whether the companion listener answered a real MCP initialize handshake in this process (listener_ready), whether the deployment gateway route state declares a /k/ route (route_configured), and whether the deployment's own public endpoint answered the same handshake through the gateway (gateway_verified, null when this deployment does not probe its own edge). The surface is operational - and the endpoint advertised - only when the public endpoint was genuinely reached; a healthy internal listener plus a route file is not sufficient, and reachability that cannot be determined is reported unverified rather than asserted. It is a deployment-capability projection, never an authorization: what a credential may do over MCP is decided per request by the canonical account, entitlement, admission, and result rules.
          */
         get: operations["getMcpCapability"];
         put?: never;
@@ -1654,10 +1654,19 @@ export interface components {
             email_available: boolean;
         };
         McpCapability: {
+            /** @description Whether the companion listener answered a real MCP initialize handshake in this process. */
+            listener_ready: boolean;
+            /** @description Whether the deployment gateway route state on disk declares a /k/ route. This is a file fact, never proof the gateway serves the route. */
+            route_configured: boolean;
+            /** @description Whether the deployment's own public endpoint answered an MCP handshake through the gateway; null when this deployment does not probe its own edge, so external reachability is unverified rather than asserted. */
+            gateway_verified: boolean | null;
+            /** @description Whether the surface is genuinely reachable: the public endpoint answered. False whenever reachability is unverified or absent, in particular when only the listener and a route file are present. */
+            operational: boolean;
+            /** @description Whether a client is offered the endpoint. Equal to operational: never true on a route file or a healthy internal listener alone. */
             enabled: boolean;
-            /** @description Same-origin path of the MCP endpoint when it is publicly reachable (the listener answers and the deployment gateway serves the route that fronts it), otherwise null. */
+            /** @description Same-origin path of the MCP endpoint when the surface is operational, otherwise null. */
             endpoint: string | null;
-            /** @description Operator-facing reason the surface is not publicly reachable, otherwise null. Never carries a credential, host path, or internal port. */
+            /** @description Fixed, role-based reason the surface is not operational, otherwise null. Never carries a credential, filesystem error string, host path, or internal port. */
             detail: string | null;
         };
         CaptchaChallenge: {

@@ -47,6 +47,7 @@ from flask import (
 from pydantic import ValidationError
 from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.http import parse_range_header
+from revocompute.account_pages import register_account_pages
 from revocompute.admin_pages import register_admin_pages
 from revocompute import admin_reports
 from revocompute.access_control import (
@@ -274,28 +275,29 @@ def health():
 def mcp_capability():
     """Whether an agent host can actually reach this deployment's MCP surface.
 
-    A public read-only projection of one deployment fact, so the browser can
-    tell whether ``/k/mcp`` is really reachable before offering an "Connect an
+    A public read-only projection of what a client can reach, so the browser can
+    tell whether ``/k/mcp`` is really operational before offering an "Connect an
     AI agent" entry: GitHub code existing must never be presented as deployed
-    support, and neither must a switch that was set without a listener behind it.
+    support, and neither must a switch that was set without a listener behind it,
+    nor a healthy listener behind a gateway that serves nothing.
 
-    The answer requires both facts that make the endpoint reachable, because an
-    agent host reaches the surface through the deployment gateway and not through
-    the companion listener's loopback: the listener bound and answered a real MCP
-    ``initialize`` in this process, *and* the deployment gateway serves the ``/k/``
-    route that fronts it. A listener that bound while the gateway route is
-    missing, stale, or misrouted is the exact case in which Home would otherwise
-    advertise an endpoint nothing external answers, so it is reported absent.
-    Both facts are read from state the server already owns — never from a
-    caller-supplied URL — and neither is probed over the network.
+    The answer reports the deployment facts *separately* rather than reducing them
+    to one boolean — whether the companion listener answered an ``initialize`` in
+    this process, whether the gateway route state declares the MCP location, and
+    whether this deployment reached its own public endpoint through the gateway —
+    and advertises the endpoint only on that last, genuinely observed fact. A
+    route *file* is not a route *served*: a stale config, a gateway that never
+    reloaded, or an upstream that is down all leave the listener healthy and the
+    file present while nothing external answers, so neither alone advertises an
+    endpoint.
 
-    A deployment that did not opt in reports ``enabled: false`` and the endpoint
-    is absent; a deployment whose opt-in produced no listener (a missing optional
-    extra, a port that would not bind) or no gateway route reports the same, with
-    a ``detail`` saying why. It is not an authentication surface: what a client
-    may *do* is still decided per request by the canonical credential,
-    entitlement, admission, and result rules. No credential, host path, or
-    internal port is ever returned.
+    Every fact is read from state the deployment owns, and the only outbound call
+    is to this deployment's own public base URL joined with the fixed MCP path —
+    never a caller-supplied target, so no SSRF surface is added. It is not an
+    authentication surface: what a client may *do* is still decided per request by
+    the canonical credential, entitlement, admission, and result rules. ``detail``
+    carries a fixed role-based reason, never a credential, host path, internal
+    port, or filesystem error string.
     """
     from revocompute import mcp
 
@@ -3323,6 +3325,10 @@ def _serve_frontend_entry(*, private: bool = False, status: int = 200):
 # from the one declaration the page-route parity contract reads, immediately
 # beside the frontend-shell server it renders.
 register_admin_pages(app, _serve_frontend_entry)
+
+# Likewise the user's own Account sections: each direct destination the shell
+# links to is a page the server serves at the Account's own auth boundary.
+register_account_pages(app, _serve_frontend_entry)
 
 
 _MAX_LEGAL_DOCUMENT_BYTES = 64 * 1024

@@ -16,3 +16,10 @@ services:
       # A deployment behind automatic HTTPS should set an https:// base URL here
       # so a copied MCP endpoint is the URL a client can actually reach.
       SERVER_BASE_URL: ${SERVER_BASE_URL:-http://localhost:8080}
+      # Whether the web process verifies the endpoint is genuinely reachable
+      # through the gateway by driving one bounded MCP initialize against its own
+      # SERVER_BASE_URL (a fixed destination, never a caller-supplied URL). Unset
+      # means unverified: the capability reports reachability unknown and
+      # advertises nothing, so external connectivity is never claimed on a route
+      # file alone.
+      MCP_GATEWAY_PROBE: ${MCP_GATEWAY_PROBE:-false}

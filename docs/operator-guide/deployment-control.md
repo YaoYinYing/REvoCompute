@@ -143,13 +143,19 @@ the `MCP_ENABLED` switch, whether the gateway route is present, the
 container-internal listener port, and then proves the surface is really reachable.
 Reachability has two parts — the running web process must report the surface
 `enabled` at the public `GET /compute/api/mcp` capability (which is itself derived
-from the listener having bound and answered a real MCP `initialize` handshake
-*and* from the gateway route being present in the deployment's own state), and
-`mcp-status` must then complete that same `initialize` handshake through the
-gateway route an agent host will use. Because the capability already reads the
-gateway route, a listener that bound while the route is missing or stale is
-reported absent to the browser rather than advertised as an endpoint nothing
-external answers. A deployment whose env file sets `MCP_ENABLED=true` while the
+from the deployment's *own public endpoint* having answered a real MCP
+`initialize` handshake through the gateway, and only from that), and `mcp-status`
+must then complete that same `initialize` handshake through the gateway route an
+agent host will use. A healthy in-process listener plus a route file is not
+enough: the route file is a file fact, never proof the gateway serves the route,
+so a listener that bound while the route is missing or stale — or a gateway that
+never reloaded after the route was written — is reported absent to the browser
+rather than advertised as an endpoint nothing external answers. When the web
+process cannot reach the deployment's own public base URL, set
+`MCP_GATEWAY_PROBE=true` so it verifies its own endpoint (one bounded request to
+a destination fixed by `SERVER_BASE_URL`, never a caller-supplied URL); with the
+probe unset, reachability is reported *unverified* and nothing is advertised. A
+deployment whose env file sets `MCP_ENABLED=true` while the
 process serves nothing, or whose gateway route does not carry a working endpoint,
 is a failure (exit non-zero) rather than silently "disabled" or cheerfully
 "enabled", so a half-applied opt-in is visible. The handshake is unauthenticated
