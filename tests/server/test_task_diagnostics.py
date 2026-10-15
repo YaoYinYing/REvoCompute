@@ -310,3 +310,70 @@ def test_private_scheduler_context_is_redacted():
     assert "compute-[12-13]" not in text
     assert "service.internal" not in text
     assert "10.4.5.6" not in text
+
+
+def test_workflow_submission_failure_cannot_inherit_previous_stage_evidence(task_context, monkeypatch):
+    from types import SimpleNamespace
+    from test_slurm_runner import _FakeSrunProcess, _make_entities, _make_runner, _make_task_type
+    from revocompute.job.runners.slurm_runner import SlurmJob
+    from revocompute.resource_policy import resolve_resources
+    from revocompute.task_types import WorkflowStage
+
+    module, client, task_id, root, owner, *_ = task_context
+    runtime = module.task_runtime
+    stages = (
+        WorkflowStage("pipeline.first", "First", False, (), ("first",)),
+        WorkflowStage("pipeline.second", "Second", False, (), ("second",)),
+    )
+    tt = _make_task_type(workflow=stages, stage_markers={"first": "First", "second": "Second"})
+    policy = resolve_resources(
+        lambda field: None, lambda field: None, requires_gpu=False, allowed_queues=(), default_timeout_seconds=60,
+    )
+    enabled = [True]
+    jobs = []
+    (root / "result.txt").write_text("stage one scientific result")
+    module.task_store.update_task(task_id, status="queued", run_stage="first")
+
+    def create(task_id, stage_tt, runner, entities, output_dir, callback, **kwargs):
+        job = SlurmJob(
+            task_id, stage_tt, runner, entities, output_dir, callback,
+            manage_db=SimpleNamespace(slurm_enabled=lambda: enabled[0]), task_store=module.task_store,
+            resource_policy=policy,
+        )
+        original_poll = job.poll
+
+        def poll():
+            result = original_poll()
+            evidence = module.task_store.get_task_diagnostics(task_id)
+            assert evidence["exit_code"] == 0
+            assert evidence["record_sha256"]
+            enabled[0] = False
+            return result
+
+        job.poll = poll
+        jobs.append(job)
+        return job
+
+    monkeypatch.setattr(runtime, "_create_job", create)
+    monkeypatch.setattr(
+        "revocompute.job.runners.slurm_runner.subprocess.Popen",
+        lambda *args, **kwargs: _FakeSrunProcess(stdout="REVODESIGN_JOB_ID=42\nfirst stage log\n"),
+    )
+    task = module.task_store.get_task(task_id)
+    with pytest.raises(RuntimeError, match="SLURM is disabled"):
+        runtime._run_compute_workflow(
+            task_id, task, tt, _make_runner(), _make_entities(), str(root),
+            {stage.name: policy for stage in stages}, lambda stage: None,
+        )
+    # A completed adapter can be asked to capture again, e.g. by late cancellation.
+    current_attempt = module.task_store.get_task_diagnostics(task_id)
+    jobs[0]._persist_output()
+    # Also cover a capture already past its early ownership read when stage two starts.
+    jobs[0]._persist_execution_evidence()
+    assert module.task_store.get_task_diagnostics(task_id) == current_attempt
+    runtime._record_failure(task_id, task, 1.0, "first", "SLURM is disabled")
+    payload = client.get(f"/compute/api/tasks/{task_id}/diagnostics", headers=owner).json
+    assert payload["exit_code"] is None
+    assert payload["exit_code_source"] is None
+    assert payload["stage"] == "second"
+    assert payload["logs"] == []

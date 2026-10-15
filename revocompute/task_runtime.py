@@ -1957,6 +1957,7 @@ def _record_failure(
     finish_time = time.time()
     if _task_is_terminal(md5sum):
         return
+    run_stage = (task_store.get_task(md5sum) or {}).get("run_stage") or run_stage
     try:
         evidence = task_store.get_task_diagnostics(md5sum) or {}
         if reason_code is not None or not evidence.get("reason_code"):

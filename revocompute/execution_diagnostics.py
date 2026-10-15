@@ -48,11 +48,16 @@ _PRIVATE_NETWORK = re.compile(
 _LOG_PATH = re.compile(r"execution/slurm-[^/]+\.(stdout|stderr)\.log\Z")
 
 
+def diagnostic_secret_values(environment: Mapping[str, Any]) -> tuple[str, ...]:
+    """Use the same credential-key policy for host and execution environments."""
+    return tuple(str(value) for key, value in environment.items() if _SECRET_KEY.search(key) and value)
+
+
 def safe_diagnostic_text(value: Any, *, secret_values: tuple[str, ...] = ()) -> str:
     """Redact known credentials, credential syntax, URLs and private path context."""
     text = _CONTROL.sub("", str(value or ""))
     known = set(secret_values)
-    known.update(str(v) for k, v in os.environ.items() if _SECRET_KEY.search(k) and v)
+    known.update(diagnostic_secret_values(os.environ))
     for secret in sorted(known, key=len, reverse=True):
         if secret:
             text = text.replace(secret, "[redacted]")
@@ -68,7 +73,7 @@ def safe_diagnostic_text(value: Any, *, secret_values: tuple[str, ...] = ()) -> 
 
 def redacted_log_lines(lines: Iterable[str], *, secret_values: tuple[str, ...] = ()) -> Iterator[str]:
     """Retain log context while withholding credentials and private host details."""
-    known = (*secret_values, *(str(v) for k, v in os.environ.items() if _SECRET_KEY.search(k) and v))
+    known = (*secret_values, *diagnostic_secret_values(os.environ))
     pieces = tuple(piece for secret in known for piece in secret.splitlines() if piece)
     private_key = False
     for line in lines:
@@ -185,7 +190,8 @@ def diagnostic_payload(
     record = _record(storage, task, manifest, evidence) or {}
     logs = record.get("logs")
     if not isinstance(logs, Mapping):
-        logs = _legacy_logs(storage, task, manifest)
+        # Current attempts cannot borrow historical logs from an earlier workflow stage.
+        logs = {} if evidence.get("attempt_id") else _legacy_logs(storage, task, manifest)
     for stream_name in ("stderr", "stdout"):
         value = logs.get(stream_name)
         if not isinstance(value, str) or not value:

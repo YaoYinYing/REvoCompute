@@ -2609,7 +2609,9 @@ class TaskDatabase:
         record["progress"] = json.loads(record.pop("progress_json") or "{}")
         return record
 
-    def record_task_diagnostics(self, task_id: str, evidence: dict[str, Any]) -> None:
+    def record_task_diagnostics(
+        self, task_id: str, evidence: dict[str, Any], *, attempt_id: str | None = None,
+    ) -> None:
         """Retain bounded adapter facts independently of result publication."""
         encoded = json.dumps(evidence, sort_keys=True)
         if len(encoded.encode("utf-8")) > 8192:
@@ -2625,8 +2627,11 @@ class TaskDatabase:
                 ).exists(),
             ),
         )
+        # A previous workflow allocation may finish capture after the next attempt has started.
+        current_attempt = func.json_extract(self.task_diagnostics_table.c.evidence_json, "$.attempt_id")
         statement = statement.on_conflict_do_update(
             index_elements=[self.task_diagnostics_table.c.task_id],
+            where=current_attempt == attempt_id if attempt_id is not None else None,
             set_={"evidence_json": statement.excluded.evidence_json, "updated_at": statement.excluded.updated_at},
         )
         with self.engine.begin() as connection:

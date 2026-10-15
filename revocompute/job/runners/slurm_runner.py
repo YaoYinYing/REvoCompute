@@ -21,6 +21,7 @@ import shutil
 import subprocess
 import threading
 import time
+import uuid
 from collections import deque
 from itertools import islice
 from pathlib import Path
@@ -29,7 +30,7 @@ from typing import Any
 from revocompute.job import ExecutionBuilder, ExecutionPlan, Job, JobState
 from revocompute.job._stages import extract_stage_from_log_line
 from revocompute import runtime_bundle
-from revocompute.execution_diagnostics import STATUS_PATH, redacted_log_lines, scheduler_failure
+from revocompute.execution_diagnostics import STATUS_PATH, diagnostic_secret_values, redacted_log_lines, scheduler_failure
 from revocompute.storage import publish_result_text
 from revocompute.operational_events import emit_event
 from revocompute.resource_observations import (
@@ -303,6 +304,7 @@ class SlurmJob(Job):
         # ``manage_db`` cannot serve that purpose: it is the admin configuration
         # database, not the one that owns the task row.
         self._task_store = task_store
+        self._diagnostic_attempt: str | None = None
         self._username = username
         self._process: subprocess.Popen | None = None
         self._stdout_lines: list[str] = []
@@ -321,6 +323,7 @@ class SlurmJob(Job):
         self._wrapper_started_at: float | None = None
         self._allocation_tracking_started = False
         self._allocation_finished_notified = False
+        self._allocation_finished_at: float | None = None
         # Two separate facts, two separate gates: the request exists (job
         # identity known), and the allocation is running (the compute node
         # observed it holding resources).  Accounting hangs off the second only.
@@ -358,6 +361,11 @@ class SlurmJob(Job):
     # -- Job ABC -------------------------------------------------------------
 
     def submit(self) -> str:
+        if self._task_store is not None:
+            self._diagnostic_attempt = uuid.uuid4().hex
+            self._task_store.record_task_diagnostics(
+                self.task_id, {"attempt_id": self._diagnostic_attempt, "stage_id": str(self.tt.name)},
+            )
         if self._db is not None and not self._db.slurm_enabled():
             raise RuntimeError("SLURM is disabled — set slurm_enabled=true in admin config")
 
@@ -677,6 +685,9 @@ class SlurmJob(Job):
             self._emit_terminal("slurm.allocation.failed", reason_code="nonzero_exit")
             return JobState.FAILED
         finally:
+            # Freeze execution end before diagnostic I/O without moving protocol ingest after settlement.
+            if self._allocation_finished_at is None:
+                self._allocation_finished_at = time.time()
             self._persist_output()
             # Ingest before the terminal event, and for every outcome: an OOM
             # row is the evidence the estimator exists to learn from, and a
@@ -770,7 +781,8 @@ class SlurmJob(Job):
             return
         if self._allocation_finished_callback is not None:
             try:
-                self._allocation_finished_callback(self._slurm_job_id, time.time())
+                finished_at = self._allocation_finished_at if self._allocation_finished_at is not None else time.time()
+                self._allocation_finished_callback(self._slurm_job_id, finished_at)
             except Exception:
                 # The finish/settlement callback is accounting, not execution:
                 # never let it escape poll() and fail an already-finished job.
@@ -1593,6 +1605,10 @@ class SlurmJob(Job):
         """Drain and preserve captured evidence without replacing the job outcome."""
         if self._task_store is not None:
             try:
+                if self._diagnostic_attempt is not None:
+                    current = self._task_store.get_task_diagnostics(self.task_id) or {}
+                    if current.get("attempt_id") != self._diagnostic_attempt:
+                        return
                 task = self._task_store.get_task(self.task_id)
                 lifecycle = self._task_store.get_data_lifecycle(self.task_id)
                 if (
@@ -1635,6 +1651,7 @@ class SlurmJob(Job):
                 except (OSError, subprocess.SubprocessError):
                     pass
         evidence = {
+            "attempt_id": self._diagnostic_attempt,
             "reason_code": reason, "exit_code": exit_code,
             "stage_id": str(self.tt.name), **(self._scheduler_failure or {}),
         }
@@ -1668,15 +1685,12 @@ class SlurmJob(Job):
             logging.exception("Could not preserve bounded execution context for task %s", self.task_id)
         try:
             if self._task_store is not None:
-                self._task_store.record_task_diagnostics(self.task_id, evidence)
+                self._task_store.record_task_diagnostics(self.task_id, evidence, attempt_id=self._diagnostic_attempt)
         except Exception:
             logging.exception("Could not retain execution outcome evidence for task %s", self.task_id)
 
     def _diagnostic_secrets(self) -> tuple[str, ...]:
-        return tuple(
-            str(value) for key, value in self.execution_plan.environment.items()
-            if re.search(r"secret|password|token|credential|api.?key|private.?key", key, re.I) and value
-        )
+        return diagnostic_secret_values(self.execution_plan.environment)
 
     def _save_output(self) -> None:
         # Keep scheduler diagnostics in a clearly named, previewable namespace
