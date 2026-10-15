@@ -79,6 +79,11 @@ class RunnerScenario:
     access_policies: tuple[AccessState, ...] = ()
     task_summaries: tuple[Mapping[str, Any], ...] = ()
     reject_password_update: bool = False
+    #: The deployment's own MCP capability projection. ``None`` is the default
+    #: deployment: the public capability read reports the surface as absent, so
+    #: the Home entry stays documentation-only. A served path means this
+    #: deployment really answers there.
+    mcp_endpoint: str | None = None
     #: A captured real-result bundle. When present it owns the result surface
     #: (manifest, artifacts, tables, logical files, storyboard) instead of the
     #: synthetic ``result`` fixture, so a test can drive the same
@@ -131,6 +136,10 @@ class RunnerScenario:
 
     def with_password_rejection(self) -> RunnerScenario:
         return replace(self, reject_password_update=True)
+
+    def with_mcp_endpoint(self, endpoint: str | None) -> RunnerScenario:
+        """Declare the deployment's MCP capability projection for the Home entry."""
+        return replace(self, mcp_endpoint=endpoint)
 
     # -- catalog and Runner projections ------------------------------------
 

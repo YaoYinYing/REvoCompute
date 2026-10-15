@@ -47,7 +47,7 @@ _PROFILE_FIELDS = frozenset({"full_name", "affiliation", "position", "pi_name"})
 _APP_PAGE = re.compile(
     r"/(?:api-docs|runners|runners/[^/]+|compute/terms"
     r"|compute/(?:login|register|reset_password|user_verify|profile|quota|account/[^/]+|user_control|configuration|logs"
-    r"|create_task|dashboard|results/[0-9a-fA-F]{32}))"
+    r"|runner_fleet|create_task|dashboard|results/[0-9a-fA-F]{32}))"
 )
 
 
@@ -351,6 +351,37 @@ class FrontendFixtureRouter:
     def _system_notices(self, route: Any, query: Any) -> None:
         return route.fulfill(json={"notices": []})
 
+    def _mcp_capability(self, route: Any, query: Any) -> None:
+        """The deployment's own MCP capability projection, as the real route serves it.
+
+        The public Home page reads this to decide whether its "Connect an AI agent"
+        entry may offer a live endpoint: a scenario that declares no endpoint is the
+        default deployment and reports the surface absent, which is what keeps the
+        entry documentation-only. The route is public, so it is declared here once
+        rather than repeated in every test that loads the public shell.
+        """
+        endpoint = self.scenario.mcp_endpoint
+        return route.fulfill(json=self._mcp_payload(endpoint))
+
+    @staticmethod
+    def _mcp_payload(endpoint: str | None) -> dict[str, Any]:
+        """The seven facts the real capability reports, for a fixture scenario.
+
+        The Home page reads only ``enabled`` to decide whether its "Connect an AI
+        agent" entry may offer a live endpoint, and a fixture scenario that declares
+        no endpoint is the default deployment whose surface is absent. The full
+        fact set is served so a fixture is the shape the real route returns.
+        """
+        return {
+            "listener_ready": endpoint is not None,
+            "route_configured": endpoint is not None,
+            "gateway_verified": True if endpoint is not None else None,
+            "operational": endpoint is not None,
+            "enabled": endpoint is not None,
+            "endpoint": endpoint,
+            "detail": None,
+        }
+
     # -- the account's own resource position --------------------------------
 
     def _resource_entitlement(self, route: Any, query: Any) -> None:
@@ -514,6 +545,7 @@ _API_ROUTES: tuple[tuple[re.Pattern[str], Any], ...] = (
     (re.compile(r"/compute/api/auth/register"), FrontendFixtureRouter._auth_register),
     (re.compile(r"/compute/api/legal/terms"), FrontendFixtureRouter._legal_terms),
     (re.compile(r"/compute/api/system/notices"), FrontendFixtureRouter._system_notices),
+    (re.compile(r"/compute/api/mcp"), FrontendFixtureRouter._mcp_capability),
     (re.compile(r"/compute/api/resource-entitlement"), FrontendFixtureRouter._resource_entitlement),
     (re.compile(r"/compute/api/resource-ledger"), FrontendFixtureRouter._resource_ledger),
     (re.compile(r"/compute/api/auth/admin/reports/resources"), FrontendFixtureRouter._admin_resource_report),

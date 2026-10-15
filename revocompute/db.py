@@ -48,6 +48,7 @@ from revocompute import resource_model as rm
 from revocompute import storage_quota as squota
 from revocompute.operational_events import emit_event
 from revocompute.schema_epoch import require_current_schema
+from revocompute.sqlite_startup import enter_wal_mode
 
 
 DEFAULT_MONTHLY_GPU_SECONDS = 60_000
@@ -1054,23 +1055,14 @@ class TaskDatabase:
     @staticmethod
     def _safe_apply_pragmas(conn) -> None:
         conn.exec_driver_sql("PRAGMA busy_timeout=30000;")
-        # During dockerized server tests, concurrent web/worker startup can briefly
-        # contend on the same SQLite file. Retrying PRAGMA setup avoids process
-        # exit on transient lock without changing DB semantics.
-        for attempt in range(3):
-            try:
-                conn.exec_driver_sql("PRAGMA journal_mode=WAL;")
-                conn.exec_driver_sql("PRAGMA synchronous=NORMAL;")
-                return
-            except OperationalError as exc:
-                if "database is locked" not in str(exc).lower():
-                    raise
-                if attempt == 2:
-                    logging.warning(
-                        "SQLite pragma initialization is locked; proceeding with default pragmas for this process."
-                    )
-                    return
-                time.sleep(0.2 * (attempt + 1))
+        # Every service of a multi-process deployment runs this startup pass at
+        # once, so a peer can hold the lock a WAL conversion needs.  A shared
+        # helper carries the bounded retry, so this store, the user/Operator Job
+        # stores, and the admin config store cannot drift apart on it.
+        if not enter_wal_mode(conn.exec_driver_sql):
+            logging.warning(
+                "SQLite pragma initialization is locked; proceeding with default pragmas for this process."
+            )
 
     @staticmethod
     def _normalize_task_row(row: dict) -> dict:

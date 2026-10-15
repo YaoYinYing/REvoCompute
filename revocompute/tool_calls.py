@@ -6,13 +6,16 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import secrets
 import time
 from dataclasses import dataclass
 from typing import Any
 
+from revocompute.sqlite_startup import enter_wal_mode
 from sqlalchemy import Column, Float, Index, Integer, MetaData, String, Table, Text, create_engine, func, select, update
+from sqlalchemy.exc import OperationalError
 
 TOOL_CALL_ID_PATTERN = re.compile(r"tool_call_[A-Za-z0-9_-]{32}\Z")
 ACTIVE_STATUSES = ("queued", "preparing", "running")
@@ -87,7 +90,22 @@ class ToolCallDatabase:
         )
         with self.engine.begin() as conn:
             conn.exec_driver_sql("PRAGMA busy_timeout=30000")
-            self.metadata.create_all(conn, checkfirst=True)
+            # A peer process running this startup pass at the same time can hold
+            # the lock the WAL conversion needs; the shared helper retries that
+            # one case and re-raises anything else.
+            if not enter_wal_mode(conn.exec_driver_sql):
+                logging.warning(
+                    "Tool call pragma initialization is locked; proceeding with default pragmas for this process."
+                )
+            try:
+                self.metadata.create_all(conn, checkfirst=True)
+            except OperationalError as exc:
+                # Concurrent startup passes (web and MCP services) can race
+                # ``create_all``; the loser sees an "already exists" error, which
+                # is benign.  Anything else is real schema drift and still fails.
+                if "already exists" not in str(exc).lower():
+                    raise
+                logging.warning("Tool call metadata already present, skipping creation")
 
     @staticmethod
     def _row(row: Any) -> dict[str, Any] | None:

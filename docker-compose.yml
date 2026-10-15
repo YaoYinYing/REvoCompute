@@ -170,6 +170,10 @@ services:
         RUNNER_USERNAME: ${RUNNER_USERNAME}
         RUNNER_GROUP: ${RUNNER_GROUP}
         PORT: ${PORT:-8080}
+        # Installing the optional MCP transport stack is a property of the image,
+        # so it is an explicit build choice (see docker-compose.mcp.yml). The
+        # default image is the one every deployment already ran.
+        REVOCOMPUTE_EXTRAS: ${REVOCOMPUTE_EXTRAS:-resend}
     environment:
       <<: [*task-env, *web-auth-env]
       ADMIN_BOOTSTRAP_CREDENTIALS: ${ADMIN_BOOTSTRAP_CREDENTIALS:-}

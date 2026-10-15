@@ -1,0 +1,76 @@
+# Layered only when MCP_ENABLED is true (see revocompute_ctl.compose.compose_args).
+# A stack that never opts in never renders this file, so it sees exactly the model
+# it did before.
+#
+# The MCP surface is its own service.  The web service runs `gunicorn --preload`
+# with two workers: the master imports the application once and then forks, so a
+# listener started at import time would leave its event loop in the master --
+# unsupervised, and re-forked on every worker recycle -- while no worker would
+# serve it.  `mcp` is therefore a separate process (`python -m revocompute.mcp`,
+# the existing `revocompute-mcp` entrypoint) with no fork anywhere in its path.
+#
+# The service is `web` extended, not a copy: the image, the runner tree, the
+# server dir, the auth database and the logs are the same mounts, so the MCP
+# process reads exactly the canonical application, user database and Task store
+# the web process does.  That is what makes MCP one protocol projection over one
+# application rather than a second execution plane.  What the two processes share
+# is durable -- the Redis-backed rate limiter and the SQLite stores both read
+# under the shared server directory (user, Task, admin config, Tool call, MCP
+# handle, and Operator Job records); what they do not share is the limiter's
+# in-memory fallback, which is per process by construction and used only while
+# Redis is unavailable, and the Operator Job restart pass, which is a startup
+# action the web service owns alone (the MCP entrypoint declares its role, so
+# starting or restarting `mcp` cannot fail a job the web service is running).
+# See revocompute/mcp/asgi.py.
+#
+# The port below is container-internal: it is where the gateway's `/k/` route
+# proxies (revocompute_ctl/mcp.py), never a host port.  Nothing outside the compose
+# network reaches it, so the canonical rate limiter and account rules remain its
+# only gates.
+services:
+  mcp:
+    # Profile-gated.  The overlay is layered only when the deployment opted in, so
+    # a bare `docker compose up` over the layered model still starts only the base
+    # services; revocompute_ctl names this service and enables the profile
+    # together (revocompute_ctl.compose.compose_args / stack_services), which is
+    # what makes the controller's model and its service list agree.
+    profiles: ["mcp"]
+    extends:
+      file: docker-compose.yml
+      service: web
+    environment:
+      MCP_ENABLED: ${MCP_ENABLED:-false}
+      MCP_PORT: ${MCP_PORT:-8081}
+      MCP_LOG_LEVEL: ${MCP_LOG_LEVEL:-warning}
+      # The compose service name and port the canonical web process dials for the
+      # MCP-service readiness fact it reports in the capability.  Deployment-owned
+      # topology, never a caller-supplied destination.
+      MCP_SERVICE: ${MCP_SERVICE:-mcp}
+      # A deployment behind automatic HTTPS should set an https:// base URL here
+      # so a copied MCP endpoint is the URL a client can actually reach.
+      SERVER_BASE_URL: ${SERVER_BASE_URL:-http://localhost:8080}
+      # Whether the canonical web process verifies the endpoint is genuinely
+      # reachable through the gateway by driving one bounded MCP initialize
+      # against its own SERVER_BASE_URL (a fixed destination, never a
+      # caller-supplied URL).  Unset means unverified: the capability reports
+      # reachability unknown and advertises nothing, so external connectivity is
+      # never claimed on a route file alone.
+      MCP_GATEWAY_PROBE: ${MCP_GATEWAY_PROBE:-false}
+    command: ["python", "-m", "revocompute.mcp"]
+    # `expose` is inherited from `web` as a *merged list* by default, so a plain
+    # list here would render both 8080 and 8081.  `!override` is the tag Compose
+    # provides to replace an inherited value instead of merging it, so this
+    # service exposes the MCP port alone.  The port is metadata either way:
+    # nothing is published from this service, which is the point.
+    expose: !override ["${MCP_PORT:-8081}"]
+
+  web:
+    # The gateway proxies /k/ to the mcp service, so the web process needs its
+    # name and port only for the readiness fact it reports in the capability.  The
+    # web process binds neither and holds no MCP listener of its own.
+    environment:
+      MCP_ENABLED: ${MCP_ENABLED:-false}
+      MCP_SERVICE: ${MCP_SERVICE:-mcp}
+      MCP_PORT: ${MCP_PORT:-8081}
+      SERVER_BASE_URL: ${SERVER_BASE_URL:-http://localhost:8080}
+      MCP_GATEWAY_PROBE: ${MCP_GATEWAY_PROBE:-false}

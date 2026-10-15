@@ -277,6 +277,13 @@ def main() -> None:
 
         if cmd_api_receipt(state, flags.task, base_url=state.get("SERVER_BASE_URL")) != 0:
             raise SystemExit(1)
+    elif subcommand == "mcp-status":
+        # Read-only against the deployment: it reports the switch, the gateway
+        # route, and what the running web process answers. It never edits the
+        # route, so it needs no lock and starts no container.
+        from revocompute_ctl.mcp import cmd_mcp_status
+
+        raise SystemExit(cmd_mcp_status(state))
     elif subcommand == "up":
         cmd_up(state, compose_cmd)
     elif subcommand == "down":

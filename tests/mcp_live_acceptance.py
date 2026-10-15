@@ -4,10 +4,15 @@
 
 """Live interoperability acceptance for the REvoCompute MCP surface.
 
-Runs the *deployed* shape: the canonical web process starts the MCP companion
-listener in its own process, and an official MCP client talks to it over
-streamable HTTP on a real socket.  It exercises the complete progressive
-workflow and the negative/security cases, and prints a machine-readable receipt.
+Runs the *deployed* shape: the canonical application is imported by the MCP
+service process (``python -m revocompute.mcp``, the ``mcp`` service
+``docker-compose.mcp.yml`` declares), and an official MCP client talks to it over
+streamable HTTP on a real socket.  The web service is deliberately not involved:
+it runs ``gunicorn --preload``, so the surface is its own process rather than a
+listener started at import time under the pre-fork master.
+
+It exercises the complete progressive workflow and the negative/security cases,
+and prints a machine-readable receipt.
 
 Nothing here is a substitute for a GPU or Slurm deployment: the scientific
 submission is only required to reach the canonical admission decision, and the
@@ -27,6 +32,7 @@ import hashlib
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -71,6 +77,11 @@ def _isolated_env(root: Path) -> None:
             "RUNTIME_BUNDLE_DIR": str(root / "runtime-bundles"),
             "ADMIN_USERS": "admin",
             "ADMIN_BOOTSTRAP_CREDENTIALS": "admin\tlive-test-password",
+            # One deployment, two processes: the MCP service is a child process,
+            # so the token-signing key must be a fixed value the seeding process
+            # and the service read from the same environment.  A generated
+            # per-process key would make every seeded token unverifiable there.
+            "AUTH_SECRET_KEY": "mcp-acceptance-signing-key-not-a-credential",
             "RUNNER_UID": "1234",
             "RUNNER_GID": "5678",
             # A dead Redis keeps the limiter's per-process fallback honest and
@@ -78,6 +89,44 @@ def _isolated_env(root: Path) -> None:
             "REDIS_URL": "redis://127.0.0.1:1/0",
         }
     )
+
+
+def _build_deployment(root: Path) -> None:
+    """Prepare the isolated instance and opt this process's env into MCP."""
+    _isolated_env(root)
+    os.environ["MCP_ENABLED"] = "true"
+    os.environ["MCP_LOG_LEVEL"] = "warning"
+
+
+def _mcp_service_env(root: Path, *, port: int) -> dict[str, str]:
+    """The environment the ``mcp`` service process is started with.
+
+    One deployment, two processes: the service is handed the same paths, auth
+    secret, and Redis URL the seeding process used, so the handles and tokens
+    minted there resolve here.  ``MCP_PORT`` is the only value the two do not
+    share -- the seeding process never binds it.
+    """
+    keys = (
+        "SERVER_DIR",
+        "DB_PATH",
+        "MANAGE_DB_PATH",
+        "LOG_DIR",
+        "CONFIG_DIR",
+        "RUNTIME_BUNDLE_DIR",
+        "USER_DB_PATH",
+        "MCP_HANDLE_DB_PATH",
+        "ADMIN_USERS",
+        "ADMIN_BOOTSTRAP_CREDENTIALS",
+        "AUTH_SECRET_KEY",
+        "RUNNER_UID",
+        "RUNNER_GID",
+        "REDIS_URL",
+        "MCP_ENABLED",
+        "MCP_LOG_LEVEL",
+    )
+    environment = {key: os.environ[key] for key in keys if key in os.environ}
+    environment["MCP_PORT"] = str(port)
+    return environment
 
 
 def _seed_finished_task(
@@ -528,81 +577,77 @@ def main(argv: list[str] | None = None) -> int:
 
     with tempfile.TemporaryDirectory(prefix="mcp-acceptance-") as tmp:
         root = Path(tmp)
-        _isolated_env(root)
-        os.environ["MCP_ENABLED"] = "true"
+        _build_deployment(root)
         os.environ["MCP_PORT"] = str(args.port)
-        os.environ["MCP_LOG_LEVEL"] = "warning"
-
-        # Importing the canonical application is the deployed web entrypoint:
-        # it starts the MCP companion listener in this same process, so the
-        # acceptance exercises the deployed shape (one process, one limiter, one
-        # application).
+        # The canonical application owns the user database the seeded tokens are
+        # written into, so it is imported here -- and importing it is harmless:
+        # the web process starts no MCP listener at any point, which is the whole
+        # point of the surface being its own service.
         import revocompute.app as module
 
-        deadline = time.monotonic() + 30
-        import socket
-
-        while time.monotonic() < deadline:
-            with socket.socket() as probe:
-                if probe.connect_ex(("127.0.0.1", args.port)) == 0:
-                    break
-            time.sleep(0.5)
-        else:
-            print("MCP listener did not start", file=sys.stderr)
-            return 1
-
-        submit_type, submit_role = _submission_target(module)
-        # The canonical web process cannot execute Slurm work, and this
-        # acceptance runs without a broker or worker.  Stub only the Celery
-        # dispatch step so the *submission* path (security, contract,
-        # entitlement, readiness, resource, idempotency, persistence,
-        # handle minting) is exercised end to end; no scientific execution is
-        # claimed.
-        class _Queued:
-            id = "mcp-acceptance-queued"
-
-        module.task_runtime.run_compute_task.apply_async = lambda *_args, **_kwargs: _Queued()
-        task_id, token = _seed_finished_task(module)
-        from revocompute.mcp.bounds import MAX_INLINE_ARTIFACT_BYTES
-
-        big_task_id, _big_token = _seed_finished_task(
-            module,
-            artifact_name="big.txt",
-            payload=b"z" * (MAX_INLINE_ARTIFACT_BYTES + 1024),
+        # The canonical process cannot execute Slurm work and this acceptance runs
+        # without a broker or worker, so only the Celery *dispatch* is stubbed.  The
+        # stub has to land in the MCP service too -- dispatch happens in the process
+        # that serves the request -- so the service is started through a bootstrap
+        # script that applies it before serving.  Only `submit_task`'s enqueue is
+        # stubbed; the submission path (security, contract, entitlement, readiness,
+        # resource, idempotency, persistence, handle minting) is exercised end to
+        # end, and no scientific execution is claimed.
+        launcher = root / "mcp_service_launcher.py"
+        launcher.write_text(
+            "import revocompute.app  # noqa: F401 - the canonical application\n"
+            "from revocompute.task_runtime import run_compute_task\n"
+            "\n"
+            "\n"
+            "class _Queued:\n"
+            '    id = "mcp-acceptance-queued"\n'
+            "\n"
+            "\n"
+            "run_compute_task.apply_async = lambda *_args, **_kwargs: _Queued()\n"
+            "\n"
+            "from revocompute.mcp.asgi import serve\n"  # noqa: E402
+            "\n"
+            "serve()\n",
+            encoding="utf-8",
         )
-        quarantined_task_id, _quarantined_token = _seed_finished_task(
-            module, artifact_name="quarantined.txt", anchor=False
-        )
-        db = module.app.config["user_db"]
-        user = db.get_user_by_username("mcp-acceptance")
-        handle = _mint_handle(module, int(user["id"]), task_id)
-        big_handle = _mint_handle(module, int(user["id"]), big_task_id)
-        quarantined_handle = _mint_handle(module, int(user["id"]), quarantined_task_id)
-        other_token, other_id = _second_user(module)
-        foreign_handle = _mint_handle(module, other_id, task_id)
 
-        import anyio
-
-        url = f"http://127.0.0.1:{args.port}/k/mcp"
-        receipt = anyio.run(
-            _workflow,
-            url,
-            token,
-            other_token,
-            handle,
-            foreign_handle,
-            big_handle,
-            big_task_id,
-            quarantined_handle,
-            submit_type,
-            submit_role,
+        service_env = _mcp_service_env(root, port=args.port)
+        service = subprocess.Popen(
+            [sys.executable, str(launcher)],
+            env={**os.environ, **service_env},
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
         )
-        receipt["transport"] = "streamable-http"
-        receipt["endpoint"] = url
-        receipt["client"] = "official mcp python SDK"
-        receipt["exact_head"] = os.environ.get("GITHUB_SHA") or _git_head()
-        failures = _assert_receipt(receipt)
-        receipt["failures"] = failures
+        try:
+            deadline = time.monotonic() + 45
+            import socket
+
+            while time.monotonic() < deadline:
+                if service.poll() is not None:
+                    print(
+                        f"MCP service exited early: {(service.stderr.read() if service.stderr else '')[-2000:]}",
+                        file=sys.stderr,
+                    )
+                    return 1
+                with socket.socket() as probe:
+                    if probe.connect_ex(("127.0.0.1", args.port)) == 0:
+                        break
+                time.sleep(0.5)
+            else:
+                print("MCP service did not start", file=sys.stderr)
+                return 1
+
+            failures, receipt = _run_acceptance(module, args.port)
+        finally:
+            service.terminate()
+            try:
+                service.wait(timeout=15)
+            except subprocess.TimeoutExpired:  # pragma: no cover - a hung service is a bug
+                service.kill()
+                service.wait(timeout=15)
+            if service.stderr is not None:
+                service.stderr.close()
 
     print(json.dumps(receipt, indent=2, sort_keys=True))
     if failures:
@@ -611,6 +656,53 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  - {failure}", file=sys.stderr)
         return 1
     return 0
+
+
+def _run_acceptance(module, port: int) -> tuple[list[str], dict]:
+    """Seed the fixtures against the canonical application and drive the workflow."""
+    submit_type, submit_role = _submission_target(module)
+    task_id, token = _seed_finished_task(module)
+    from revocompute.mcp.bounds import MAX_INLINE_ARTIFACT_BYTES
+
+    big_task_id, _big_token = _seed_finished_task(
+        module,
+        artifact_name="big.txt",
+        payload=b"z" * (MAX_INLINE_ARTIFACT_BYTES + 1024),
+    )
+    quarantined_task_id, _quarantined_token = _seed_finished_task(
+        module, artifact_name="quarantined.txt", anchor=False
+    )
+    db = module.app.config["user_db"]
+    user = db.get_user_by_username("mcp-acceptance")
+    handle = _mint_handle(module, int(user["id"]), task_id)
+    big_handle = _mint_handle(module, int(user["id"]), big_task_id)
+    quarantined_handle = _mint_handle(module, int(user["id"]), quarantined_task_id)
+    other_token, other_id = _second_user(module)
+    foreign_handle = _mint_handle(module, other_id, task_id)
+
+    import anyio
+
+    url = f"http://127.0.0.1:{port}/k/mcp"
+    receipt = anyio.run(
+        _workflow,
+        url,
+        token,
+        other_token,
+        handle,
+        foreign_handle,
+        big_handle,
+        big_task_id,
+        quarantined_handle,
+        submit_type,
+        submit_role,
+    )
+    receipt["transport"] = "streamable-http"
+    receipt["endpoint"] = url
+    receipt["client"] = "official mcp python SDK"
+    receipt["exact_head"] = os.environ.get("GITHUB_SHA") or _git_head()
+    failures = _assert_receipt(receipt)
+    receipt["failures"] = failures
+    return failures, receipt
 
 
 def _expect(receipt: dict, failures: list[str], step: str, field: str, expected: object) -> None:

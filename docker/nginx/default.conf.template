@@ -53,5 +53,14 @@ http {
             default_type text/html;
             add_header Retry-After 120 always;
         }
+
+        # The agent MCP surface, when (and only when) the deployment opted in.
+        # The controller writes SERVER_DIR/mcp-gateway/mcp.conf — already mounted
+        # read-only at /srv/deployment — from MCP_ENABLED. When the directory is
+        # absent the mask matches nothing and nginx includes an empty file list,
+        # so /k/ is not a route at all rather than a route to a dead port. The
+        # route carries no limiter of its own: MCP terminates in the same
+        # application the HTTP API does, so one budget covers both.
+        include /srv/deployment/mcp-gateway/*.conf;
     }
 }

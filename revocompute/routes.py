@@ -271,6 +271,40 @@ def health():
     return "", 200
 
 
+@app.route("/compute/api/mcp", methods=["GET"])
+def mcp_capability():
+    """Whether an agent host can actually reach this deployment's MCP surface.
+
+    A public read-only projection of what a client can reach, so the browser can
+    tell whether ``/k/mcp`` is really operational before offering an "Connect an
+    AI agent" entry: GitHub code existing must never be presented as deployed
+    support, and neither must a switch that was set without the MCP service
+    behind it, nor an answering MCP service behind a gateway that serves nothing.
+
+    The answer reports the deployment facts *separately* rather than reducing them
+    to one boolean -- whether the MCP service answered an ``initialize`` at the
+    fixed destination this deployment dials for it, whether the gateway route state
+    declares the MCP location, and whether this deployment reached its own public
+    endpoint through the gateway -- and advertises the endpoint only on that last,
+    genuinely observed fact. A
+    route *file* is not a route *served*: a stale config, a gateway that never
+    reloaded, or an upstream that is down all leave the service answering and the
+    file present while nothing external answers, so neither alone advertises an
+    endpoint.
+
+    Every fact is read from state the deployment owns, and the only outbound call
+    is to this deployment's own public base URL joined with the fixed MCP path —
+    never a caller-supplied target, so no SSRF surface is added. It is not an
+    authentication surface: what a client may *do* is still decided per request by
+    the canonical credential, entitlement, admission, and result rules. ``detail``
+    carries a fixed role-based reason, never a credential, host path, internal
+    port, or filesystem error string.
+    """
+    from revocompute import mcp
+
+    return jsonify(mcp.surface()), 200
+
+
 @app.route("/compute/api/infrastructure", methods=["GET"])
 @login_required
 def infrastructure_readiness():

@@ -1,5 +1,7 @@
 import { Check, Clipboard } from 'lucide';
 import { createIcons } from 'lucide';
+import { getMcpCapability } from '../../api/app-api';
+import { t } from '../../app/i18n';
 import type { AppShell } from '../../app/shell';
 import './home.css';
 
@@ -28,9 +30,9 @@ export function mountHome(root: HTMLElement, shell: AppShell): void {
           </div>
         </figure>
         <aside class="agent-guide" aria-labelledby="agent-guide-title">
-          <div><h2 id="agent-guide-title">Connect an AI agent</h2><p>Discover, submit, and retrieve tasks over a stable guide.</p></div>
+          <div><h2 id="agent-guide-title">${t('home.agent.title')}</h2><p>${t('home.agent.guide')}</p></div>
           <a data-agent-url href="/skills.md"><code></code></a>
-          <button class="icon-button" type="button" data-copy-guide title="Copy agent API guide URL" aria-label="Copy agent API guide URL"><i data-lucide="clipboard"></i></button>
+          <button class="icon-button" type="button" data-copy-guide title="${t('home.agent.copyUrl')}" aria-label="${t('home.agent.copyUrl')}"><i data-lucide="clipboard"></i></button>
           <span class="sr-only" data-copy-status role="status" aria-live="polite"></span>
         </aside>
       </section>
@@ -69,13 +71,50 @@ export function mountHome(root: HTMLElement, shell: AppShell): void {
       await navigator.clipboard.writeText(url);
       button.innerHTML = '<i data-lucide="check"></i>';
       createIcons({ icons: { Check }, root: button });
-      status.textContent = 'Agent API guide URL copied.';
+      status.textContent = t('home.agent.copied');
       window.setTimeout(() => {
         button.innerHTML = '<i data-lucide="clipboard"></i>';
         createIcons({ icons: { Clipboard }, root: button }); status.textContent = '';
       }, 1600);
     } catch {
-      status.textContent = 'Select the URL to copy it manually.'; link.focus(); shell.notify('Select the URL to copy it manually.');
+      status.textContent = t('home.agent.copyManually'); link.focus(); shell.notify(t('home.agent.copyManually'));
     }
   });
+  void applyAgentCapability(root);
+}
+
+/*
+ * The "Connect an AI agent" entry states one deployment fact: whether an agent
+ * host can actually reach this deployment's MCP endpoint.
+ *
+ * A public Home page is seen before a reader has any way to tell code from a
+ * running deployment, so "the repository has MCP" must never be presented as
+ * "this server speaks MCP". The entry keeps the always-available agent API guide
+ * — /skills.md is served by every deployment — and only *adds* the MCP endpoint
+ * once the deployment's own capability read says the endpoint is reachable. That
+ * read is the server's, not the browser's: the capability is `enabled` only after
+ * the deployment's own public endpoint answered a real MCP handshake through the
+ * gateway, so this page never has to decide external reachability itself and never
+ * probes a URL. A healthy internal listener plus a route file is not enough — a
+ * route file is a file fact, not proof the gateway serves the route — and a
+ * deployment that cannot verify its own edge reports reachability unverified
+ * rather than advertising an endpoint. A read that fails, is slow, or reports the
+ * surface off leaves the documentation-only state; the upgrade to the live endpoint
+ * happens only on an affirmative read.
+ */
+async function applyAgentCapability(root: HTMLElement): Promise<void> {
+  const aside = root.querySelector<HTMLElement>('.agent-guide');
+  if (!aside) return;
+  const capability = await getMcpCapability().catch(() => null);
+  if (!capability?.enabled || !capability.endpoint) return;
+  const endpoint = new URL(capability.endpoint, location.origin).href;
+  aside.dataset.mcpState = 'enabled';
+  const copy = aside.querySelector('p');
+  if (copy) copy.textContent = t('home.agent.mcp');
+  const mcpLink = document.createElement('a');
+  mcpLink.className = 'agent-guide-endpoint'; mcpLink.href = capability.endpoint;
+  mcpLink.setAttribute('aria-label', t('home.agent.endpoint', { endpoint }));
+  const code = document.createElement('code'); code.textContent = endpoint; mcpLink.append(code);
+  const guide = aside.querySelector('[data-agent-url]');
+  if (guide) guide.after(mcpLink); else aside.append(mcpLink);
 }
