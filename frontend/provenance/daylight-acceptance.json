@@ -383,7 +383,7 @@
     "verification": {
       "frontend_typecheck": "passed",
       "frontend_build": "passed; existing large chunk warning",
-      "frontend_unit_suite": "155 passed, two fetch-fixture failures repaired by providing the newly consumed infrastructure response; final Runner detail subset 3 passed including exclusive-bound behavior",
+      "frontend_unit_suite": "158 passed in the final complete frontend unit run, including exclusive parameter-bound behavior and the infrastructure fetch fixture correction.",
       "functional_browser_gate": "12 passed (account/security/API key/access/credit/administration/configuration/log/authentication behavior); final production site captures 2 passed",
       "reflow_and_controls": "23 passed across public header, WCAG spacing/text resizing and the production molecular advanced-controls cases"
     },
