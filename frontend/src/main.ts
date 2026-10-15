@@ -7,6 +7,7 @@ import { applyLocale, initialLocale, t } from './app/i18n';
 import { GUIDED_TOUR_ABORT_EVENT } from './app/guided-tour';
 import { applyTheme, storedTheme } from './app/theme';
 import './styles/app.css';
+import './styles/daylight.css';
 
 /*
  * One document, one shell, many routes.

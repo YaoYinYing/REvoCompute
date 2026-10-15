@@ -1,7 +1,8 @@
+@import './fonts.css';
 /*
  * REvoCompute shared foundation: canvas, tokens, surfaces, controls.
  * Feature-local layout stays in each feature's own stylesheet.
- * Design language: "Soft Precision" — see docs/developer-guide/frontend-design-language.md.
+ * Design language: approved Daylight Bench · Study A.
  *   precise without sharpness, professional without industrial coldness,
  *   complex without disorder, restrained without emptiness.
  */
@@ -11,26 +12,25 @@
      lab-coat / working-surface relationship of the visual ancestry) rather than a
      sterile blue-grey. The bias stays below the threshold of a visible cast, so
      it never competes with identity or status colour.
-     REvo blue is ink, not paint: it marks action, selection, focus and links only. */
-  --app-bg: #f2f3ef; --app-surface: #fbfbf8; --app-raised: #fff; --app-stage: #e7e9e4;
-  --app-ink: #1a1e1d; --app-muted: #5c6763; --app-line: #e0e3dd; --app-line-strong: #c6ccc3;
-  --app-accent: #1d5c8f; --app-accent-2: #17486f; --app-soft: #e7eef4;
-  --app-success: #2f7c5c; --app-danger: #af4438; --app-warning: #8a5a12; --app-running: #2b6da4; --app-focus: #3a7cba;
+     Deep green marks action; plum distinguishes selection and focus. */
+  --app-bg: #f5f8f2; --app-surface: #f9fbf6; --app-raised: #fdfefb; --app-stage: #e7eee1;
+  --app-ink: #29433e; --app-muted: #526c55; --app-line: #d2ddcb; --app-line-strong: #bdceb3;
+  --app-accent: #355e4e; --app-accent-2: #264a3b; --app-soft: #e4eedf; --app-plum: #a6406c;
+  --app-success: #52765c; --app-danger: #a33f59; --app-warning: #84651d; --app-running: #39766a; --app-focus: #a6406c;
   --app-scrim: rgb(18 22 20 / 48%);
   /* Radius scale: curvature communicates role. Softened rectangles, not bubbles. */
-  --r-surface-lg: 14px; --r-surface: 10px; --r-control: 8px; --r-util: 6px; --r-pill: 999px;
+  --r-surface-lg: 8px; --r-surface: 6px; --r-control: 4px; --r-util: 3px; --r-pill: 999px;
   /* Elevation: shadow means elevation, so most surfaces stand on border + tone.
      A restrained ground shadow keeps work surfaces feeling laid on the bench
      rather than floating above it. */
   --shadow-surface: 0 1px 2px rgb(22 30 26 / 6%), 0 8px 18px -16px rgb(22 30 26 / 34%);
   --shadow-raised: 0 2px 6px rgb(22 30 26 / 8%), 0 14px 30px -22px rgb(22 30 26 / 42%);
   --shadow-dialog: 0 24px 60px -32px rgb(12 18 16 / 50%);
-  /* One sans carries UI and display; mono is reserved for machine identity. */
-  --font-sans: 'IBM Plex Sans', Inter, system-ui, -apple-system, sans-serif;
-  --font-display: var(--font-sans);
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
-  /* Navigation rail geometry: quiet product chrome, not an IDE toolbar. */
-  --rail-collapsed: 4.25rem; --rail-expanded: 13rem;
+  /* Study A: Instrument Sans identity, DM Sans reading, Plex Mono machine facts. */
+  --font-sans: 'DM Sans', system-ui, -apple-system, sans-serif;
+  --font-display: 'Instrument Sans', var(--font-sans);
+  --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
   /* The global bar's own height, in rem so it tracks a text-only resize. A
      page-level sticky surface clears the bar through this token instead of
      re-deriving the bar's height as a second magic number. */
@@ -45,8 +45,8 @@
      no pure-white text, softer boundaries, preserved accent and status distinction. */
   --app-bg: #101216; --app-surface: #16191d; --app-raised: #1c2025; --app-stage: #0c0e11;
   --app-ink: #e7e9ec; --app-muted: #98a1aa; --app-line: #282d33; --app-line-strong: #394047;
-  --app-accent: #74aad8; --app-accent-2: #93bde3; --app-soft: #1b2731;
-  --app-success: #6bb394; --app-danger: #d6796f; --app-warning: #cba05c; --app-running: #6aa9d8; --app-focus: #74aad8;
+  --app-accent: #a4c5a1; --app-accent-2: #c0d9b9; --app-soft: #24382d; --app-plum: #dc91af;
+  --app-success: #9dbca0; --app-danger: #e39bb1; --app-warning: #d9bb78; --app-running: #94c6b9; --app-focus: #dc91af;
   --app-scrim: rgb(0 0 0 / 62%);
   --shadow-surface: 0 1px 2px rgb(0 0 0 / 26%);
   --shadow-raised: 0 2px 8px rgb(0 0 0 / 34%), 0 18px 40px -26px rgb(0 0 0 / 76%);
@@ -64,56 +64,17 @@ a { color: var(--app-accent); }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 
 /* --- Application shell ---------------------------------------------------- */
-/* One working surface: a quiet navigation rail beside a global top bar and the
-   page outlet. The rail is chrome that persists: it stays in place while the
-   reader navigates and while the page scrolls, and when it is taller than the
-   viewport it scrolls inside itself rather than taking the page with it. Its
-   width is governed by one explicit control at its foot, never by reactivating a
-   destination. */
-.app-shell { display: grid; min-height: 100vh; grid-template-columns: var(--rail-collapsed) minmax(0, 1fr); grid-template-rows: auto 1fr; grid-template-areas: "brand header" "nav outlet"; }
-.app-shell[data-rail="expanded"] { grid-template-columns: var(--rail-expanded) minmax(0, 1fr); }
+
 /* The skip link is revealed by focus alone: it is the first control in the tab
    order and pins to the top-left corner where the rail meets the bar. */
 .skip-link { position: fixed; top: .5rem; left: .5rem; z-index: 80; padding: .55rem .8rem; border: 1px solid var(--app-accent); border-radius: var(--r-control); background: var(--app-raised); color: var(--app-accent); font-size: .82rem; font-weight: 650; text-decoration: none; transform: translateY(calc(-100% - 1rem)); }
 .skip-link:focus-visible { transform: none; }
 .app-brand, .app-nav a, .app-user, .primary-button, .secondary-button, .task-action, .back-link, .ghost-button { display: inline-flex; align-items: center; gap: .45rem; color: inherit; text-decoration: none; }
-.app-brand { grid-area: brand; align-self: stretch; justify-content: center; padding: 0 .5rem; border-right: 1px solid var(--app-line); background: var(--app-surface); }
-.app-brand img { width: 1.9rem; height: 1.9rem; flex: none; }
-.app-brand span { font-family: var(--font-display); font-size: 1.02rem; font-weight: 700; white-space: nowrap; }
-.app-shell[data-rail="collapsed"] .app-brand span { display: none; }
-.app-shell[data-rail="expanded"] .app-brand { justify-content: start; padding: 0 1rem; }
 
-/* The rail is a column that outlives every route: it is sticky for the height of
-   the document and scrolls its own overflow, so a long navigation never scrolls
-   out of reach and never drags the page with it. */
-.app-nav { grid-area: nav; position: sticky; top: 0; align-self: start; display: flex; flex-direction: column; gap: 1.15rem; max-height: 100vh; overflow-y: auto; overscroll-behavior: contain; padding: .75rem .5rem 1rem; border-right: 1px solid var(--app-line); background: var(--app-surface); }
-/* A navigation region: a quiet label over its destinations, separated by a
-   hairline so the sections read as authored divisions rather than one flat list.
-   The grouping is carried by rule, label and space — never by a card. */
-.app-nav-group { display: grid; gap: .3rem; flex: none; }
-.app-nav-group + .app-nav-group { padding-top: 1.05rem; border-top: 1px solid var(--app-line); }
-/* The region label is a word, so it appears only when a word fits: a collapsed
-   icon rail and a tablet-width rail both keep the rule and drop the label. */
-.app-nav-group-label { margin: 0; padding: 0 .8rem .1rem; color: var(--app-muted); font-size: .62rem; font-weight: 650; letter-spacing: .06em; text-transform: uppercase; }
-.app-nav-group-items { display: grid; gap: .15rem; }
-.app-shell[data-rail="collapsed"] .app-nav-group-label { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
-@media (max-width: 62rem) { .app-nav-group-label { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; } }
-/* The foot sits at the end of the rail, past every destination: the rail's own
-   control is a control, so it is set apart from the links it never imitates. */
-.app-nav-foot { margin-top: auto; padding-top: .8rem; border-top: 1px solid var(--app-line); }
-.app-rail-toggle { display: grid; width: 100%; min-height: 2.6rem; place-items: center; padding: 0; border: 1px solid transparent; border-radius: var(--r-control); background: transparent; color: var(--app-muted); cursor: pointer; }
-.app-rail-toggle:hover { background: color-mix(in srgb, var(--app-ink) 5%, transparent); color: var(--app-ink); }
-.app-rail-toggle svg { width: 1.05rem; height: 1.05rem; }
-.app-shell[data-rail="expanded"] .app-rail-toggle { grid-auto-flow: column; justify-content: start; gap: .45rem; padding: 0 .8rem; }
-.app-shell[data-rail="collapsed"] .app-nav { gap: .8rem; padding-top: .6rem; }
-.app-shell[data-rail="collapsed"] .app-nav-group + .app-nav-group { padding-top: .7rem; }
-.app-nav a { position: relative; justify-content: center; padding: .7rem; border-radius: var(--r-control); color: var(--app-muted); font-size: .86rem; font-weight: 600; text-decoration: none; transition: color .15s ease, background .15s ease; }
-.app-nav a:hover { color: var(--app-ink); background: color-mix(in srgb, var(--app-ink) 4%, transparent); }
+
+
 /* Active state is quiet: accent ink and a soft fill, not a heavy status stripe. */
-.app-nav a[aria-current="page"] { color: var(--app-accent); background: var(--app-soft); }
-.app-nav a > span { white-space: nowrap; }
-.app-shell[data-rail="collapsed"] .app-nav a > span { display: none; }
-.app-shell[data-rail="expanded"] .app-nav a { justify-content: start; padding: .7rem .8rem; }
+
 .app-nav svg, .app-header-actions svg { width: 1.05rem; height: 1.05rem; flex: none; }
 
 .app-header { grid-area: header; position: sticky; top: 0; z-index: 30; display: flex; min-height: var(--app-bar); align-items: center; justify-content: end; gap: .5rem; padding: 0 1.25rem; border-bottom: 1px solid var(--app-line); background: color-mix(in srgb, var(--app-surface) 88%, transparent); backdrop-filter: blur(14px); }
@@ -206,35 +167,6 @@ a { color: var(--app-accent); }
 .task-action.primary-action { border-color: color-mix(in srgb, var(--app-accent) 40%, var(--app-line)); color: var(--app-accent); background: var(--app-surface); }.task-action.primary-action:hover { background: var(--app-soft); border-color: var(--app-accent); }
 .task-action[data-action="delete"] { color: var(--app-muted); }.task-action[data-action="delete"]:hover { color: var(--app-danger); background: color-mix(in srgb, var(--app-danger) 8%, transparent); }
 .task-action:disabled { opacity: .5; cursor: not-allowed; }
-
-/* --- Dashboard: a task register, with an overview in the margin ----------- */
-.dashboard-page { display: grid; grid-template-columns: 10rem minmax(0, 1fr); column-gap: 2.5rem; align-content: start; }
-.dashboard-page > .page-heading { grid-column: 1 / -1; margin-bottom: 2rem; }
-.dashboard-page .page-heading h1 { font-size: clamp(2.4rem, 4vw, 3.8rem); }
-.dashboard-stats { grid-column: 1; grid-row: 2 / 5; align-self: start; display: grid; border-top: 2px solid var(--app-ink); }
-.dashboard-stats div { display: flex; align-items: baseline; justify-content: space-between; gap: .5rem; padding: .8rem 0; border-bottom: 1px solid var(--app-line); }
-.dashboard-stats span { color: var(--app-muted); font-size: .75rem; font-weight: 600; }
-.dashboard-stats strong { font: 600 1.5rem/1 var(--font-display); font-variant-numeric: tabular-nums; letter-spacing: -.03em; }
-.dashboard-stats div:first-child { display: grid; gap: .65rem; padding: 1rem 0 1.4rem; }
-.dashboard-stats div:first-child strong { font-size: 4rem; }
-.dashboard-stats div[data-attention]:not([data-empty]) strong { color: var(--app-warning); }
-.dashboard-page > .work-toolbar, .dashboard-page > .view-toolbar, .dashboard-page > .task-list { grid-column: 2; }
-.dashboard-page > .work-toolbar { margin: 0 0 1.25rem; display: block; }
-.dashboard-page .search-control { max-width: 38rem; margin-bottom: .5rem; }
-.dashboard-page .search-control small:empty { display: none; }
-.dashboard-filter-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr)); align-items: end; gap: .7rem; }
-.dashboard-filters > summary { display: none; min-height: 2.75rem; align-content: center; color: var(--app-accent); cursor: pointer; font-size: .8rem; font-weight: 600; }
-.dashboard-page .view-toolbar { border-top: 1px solid var(--app-line); padding-top: .75rem; }
-/* The detailed register uses the full measure. Compact and table remain distinct
-   expert views; expanding a preview never takes space from a neighbouring task. */
-.dashboard-page .task-list[data-layout="detailed"] { grid-template-columns: 1fr; gap: 0; border-top: 2px solid var(--app-ink); }
-.task-list[data-layout="detailed"] .task-card { display: grid; grid-template-columns: minmax(13rem, .9fr) minmax(0, 1.5fr); border: 0; border-bottom: 1px solid var(--app-line-strong); border-radius: 0; background: transparent; padding: 1.1rem 0; }
-.task-list[data-layout="detailed"] .task-card > header { padding: 0 1.5rem 0 0; grid-template-columns: 1fr; align-content: start; justify-items: start; gap: .6rem; }
-.task-list[data-layout="detailed"] .task-card h2 { font-size: 1.3rem; line-height: 1.25; }
-.task-list[data-layout="detailed"] .task-card dl { padding: .15rem 0 0; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.task-list[data-layout="detailed"] .task-card dd { white-space: normal; overflow-wrap: anywhere; }
-.task-list[data-layout="detailed"] .task-actions { grid-column: 2; padding: .65rem 0 0; border: 0; justify-content: start; }
-.task-list[data-layout="detailed"] .task-error, .task-list[data-layout="detailed"] .input-preview { grid-column: 1 / -1; margin: .8rem 0 0; }
 
 /* Toolbar: one aligned system. Filtering and view mode stay conceptually separate. */
 .work-toolbar { margin: 1.35rem 0; }
@@ -401,21 +333,18 @@ a { color: var(--app-accent); }
 @media (max-width: 70rem) {
   .runner-catalog .runner-grid, .runner-catalog[data-density] .runner-grid { grid-template-columns: 1fr; }
   .task-list, .task-list[data-layout="compact"] { grid-template-columns: 1fr; }
-  .dashboard-page { grid-template-columns: 8rem minmax(0, 1fr); column-gap: 1.5rem; }
+
   .runner-detail-heading { grid-template-columns: minmax(0, 1fr) 14rem; gap: 2rem; }
   .method-reference { grid-template-columns: 9rem minmax(0, 1fr); gap: 2rem; }
   .parameter-list article { grid-template-columns: minmax(8rem, .6fr) minmax(0, 1fr); }
   .parameter-list dl { grid-column: 2; }
 }
-/* Tablet and below: the rail becomes a mobile-specific bottom navigation;
-   the brand and the global actions share one top bar. */
+
 @media (max-width: 56rem) {
-  .app-shell { --app-bottom-clearance: calc(var(--app-bar) + var(--app-admin-height, 0px)); grid-template-columns: auto minmax(0, 1fr); grid-template-rows: auto 1fr; grid-template-areas: "brand header" "outlet outlet"; }
+
   /* Narrow chrome keeps the logo and icon-only controls so the top bar cannot
      force the document wider than the viewport. */
-  .app-brand { justify-content: start; padding: 0 .75rem; }
-  .app-brand span { display: none; }
-  .app-nav { position: fixed; top: auto; right: 0; bottom: 0; left: 0; z-index: 35; flex-direction: row; justify-content: space-around; align-items: stretch; gap: 0; height: 3.5rem; padding: 0; border-top: 1px solid var(--app-line); border-right: 0; }
+
   /* The bottom bar has no room for region separation, so the Compute and Account
      destinations sit directly on it (their wrappers dissolve; their headings are
      removed from the tree in script). Administration is a different navigation
@@ -423,21 +352,12 @@ a { color: var(--app-accent); }
      bar rather than three more items competing inside the primary bar. The rail's
      width control is a desktop column affordance: on the bar it has no column to
      govern, so it leaves the bar entirely. */
-  .app-nav-group:not([data-nav-group="admin"]),
-  .app-nav-group:not([data-nav-group="admin"]) .app-nav-group-items { display: contents; }
-  .app-nav-foot { display: none; }
-  .app-nav-group[data-nav-group="admin"] { position: fixed; right: 0; bottom: 3.5rem; left: 0; z-index: 34; display: grid; padding: 0; border-top: 1px solid var(--app-line); background: var(--app-surface); }
-  .app-nav-group[data-nav-group="admin"][hidden] { display: none; }
+
   /* Only the regions whose links merge into the bar lose their heading; the
      Administration heading names its own secondary surface and must paint. */
-  .app-nav-group:not([data-nav-group="admin"]) > .app-nav-group-label { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
-  .app-nav-group[data-nav-group="admin"] > .app-nav-group-label { position: static; width: auto; height: auto; margin: 0; overflow: visible; clip: auto; white-space: normal; padding: .45rem .75rem .15rem; }
-  .app-nav-group[data-nav-group="admin"] .app-nav-group-items { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; }
-  .app-nav-group[data-nav-group="admin"] a { min-height: 2.75rem; flex: none; flex-direction: column; gap: .15rem; justify-content: center; padding: .3rem; border-radius: 0; font-size: .66rem; }
+
   /* The secondary surface carries its destinations by name, like the bar does. */
-  .app-shell[data-rail] .app-nav-group[data-nav-group="admin"] a > span { display: inline; }
-  .app-nav a { flex: 1; flex-direction: column; gap: .15rem; justify-content: center; padding: .3rem; border-radius: 0; font-size: .66rem; }
-  .app-shell[data-rail] .app-nav > .app-nav-group:not([data-nav-group="admin"]) a > span { display: inline; }
+
   .app-header { grid-area: header; min-width: 0; --app-bar: 3.5rem; padding: 0 .6rem; background: var(--app-surface); backdrop-filter: none; }
   .app-header-actions { gap: .3rem; min-width: 0; }
   .app-header .app-new-task { width: 2.15rem; min-width: 2.15rem; justify-content: center; padding: 0; }
@@ -448,28 +368,7 @@ a { color: var(--app-accent); }
      clears it too — the surface never covers the end of the page. */
   .app-outlet { padding-bottom: var(--app-bottom-clearance); }
   .page-heading, .runner-detail-heading { grid-template-columns: 1fr; align-items: start; gap: 1rem; }
-  .dashboard-page { display: block; }
-  .dashboard-stats { grid-template-columns: 1.1fr repeat(2, minmax(0, 1fr)); gap: 0 1rem; margin: 0 0 1.25rem; }
-  .dashboard-stats div { display: grid; align-content: center; gap: .3rem; padding: .65rem 0; }
-  .dashboard-stats div:first-child { grid-row: span 2; align-content: center; padding: .8rem 0; }
-  .dashboard-stats div:first-child strong { font-size: 3.5rem; }
-  .dashboard-page { padding-top: 1.25rem; }
-  .dashboard-page > .page-heading { display: grid; gap: .75rem; margin-bottom: .75rem; padding-bottom: .75rem; }
-  .dashboard-page .page-heading h1 { font-size: 2.2rem; }
-  .dashboard-page .page-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .4rem; }
-  .dashboard-page .page-actions > * { min-width: 0; min-height: 2.75rem; padding: 0 .4rem; line-height: 1.3; justify-content: center; text-align: center; }
-  .dashboard-page .dashboard-stats div { padding-block: .5rem; }
-  .dashboard-page .dashboard-stats div:first-child { padding-block: .5rem; }
-  .dashboard-page .search-control { margin-bottom: 0; }
-  .dashboard-filters > summary { display: list-item; }
-  .dashboard-filter-fields { padding: .5rem 0 1rem; }
-  .dashboard-page .view-toolbar { flex-direction: row; flex-wrap: wrap; align-items: end; gap: .75rem; }
-  .dashboard-page .view-toolbar .layout-switch button { padding-inline: .6rem; min-height: 2.75rem; }
-  .dashboard-page .page-heading .page-kicker { line-height: 1.4; }
-  .dashboard-page .dashboard-stats { margin-bottom: .75rem; }
-  .dashboard-page .dashboard-stats span { font-size: .7rem; line-height: 1.3; }
-  .dashboard-page > .work-toolbar { margin-bottom: .75rem; }
-  .dashboard-page .layout-switch legend { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; }
+
   .runner-group { grid-template-columns: 1fr; gap: .8rem; }
   .runner-detail-heading { grid-template-columns: 1fr; }
   .method-runtime { border-top: 1px solid var(--app-line); }
@@ -480,13 +379,10 @@ a { color: var(--app-accent); }
   .method-index .page-kicker { flex-basis: 100%; margin: 0; }
   .runner-detail-cta { align-items: start; flex-direction: column; }
   .task-card dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .app-shell .app-feedback { bottom: calc(var(--app-bottom-clearance) + .75rem); max-height: calc(100dvh - var(--app-bottom-clearance) - 4.25rem); }
+
 }
 @media (max-width: 48rem) {
-  .dashboard-filter-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .task-list[data-layout="detailed"] .task-card { grid-template-columns: 1fr; }
-  .task-list[data-layout="detailed"] .task-card > header { grid-template-columns: minmax(0, 1fr) auto; padding: 0 0 .8rem; }
-  .task-list[data-layout="detailed"] .task-actions { grid-column: 1; }
+
   .guidance-grid { grid-template-columns: 1fr; }
   .guidance-grid article:first-child { grid-row: auto; }
   .guidance-grid article:last-child:not(:nth-child(3)) { grid-column: auto; }

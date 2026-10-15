@@ -107,13 +107,15 @@ export function mountShell(root: HTMLElement): AppShell {
   for (const destination of ADMIN_DESTINATIONS) {
     const link = navLink(destination.path, destination.icon, t(destination.label)); groups.admin.items.append(link);
   }
-  Object.values(groups).forEach(group => nav.append(group.element));
+  const secondaryNav = document.createElement('div'); secondaryNav.className = 'app-secondary-nav'; secondaryNav.id = 'app-secondary-nav';
+  secondaryNav.append(groups.account.element, groups.admin.element);
+  nav.append(groups.compute.element, secondaryNav);
 
   // The rail's collapse control sits at the foot of the navigation, in the same
   // column, where it is a control rather than a destination: it never navigates,
   // it acts, and it states its own accessible name and expanded state.
   const railToggle = document.createElement('button');
-  railToggle.type = 'button'; railToggle.className = 'app-rail-toggle';
+  railToggle.type = 'button'; railToggle.className = 'app-rail-toggle'; railToggle.setAttribute('aria-controls', 'app-secondary-nav');
   const foot = document.createElement('div'); foot.className = 'app-nav-foot'; foot.append(railToggle);
   nav.append(foot);
 
@@ -122,7 +124,7 @@ export function mountShell(root: HTMLElement): AppShell {
     railToggle.title = t(expanded ? 'shell.nav.collapse' : 'shell.nav.expand');
     railToggle.setAttribute('aria-label', railToggle.title);
     railToggle.setAttribute('aria-expanded', String(expanded));
-    railToggle.innerHTML = `<i data-lucide="${expanded ? 'panel-left-close' : 'panel-left'}" aria-hidden="true"></i>`;
+    railToggle.innerHTML = `<i data-lucide="${expanded ? 'panel-left-close' : 'panel-left'}" aria-hidden="true"></i><span>${t('shell.nav.more')}</span>`;
     createIcons({ icons: shellIcons, root: railToggle });
   };
   const onRailToggle = (): void => {
@@ -131,13 +133,21 @@ export function mountShell(root: HTMLElement): AppShell {
     syncRailToggle();
   };
   railToggle.addEventListener('click', onRailToggle);
+  const closeNavigation = (): void => {
+    if (shell.dataset.rail !== 'expanded') return;
+    shell.dataset.rail = 'collapsed'; localStorage.setItem(railKey, 'collapsed'); syncRailToggle();
+  };
+  const onNavigationKey = (event: KeyboardEvent): void => { if (event.key === 'Escape' && shell.dataset.rail === 'expanded') { closeNavigation(); railToggle.focus(); } };
+  const onNavigationOutside = (event: PointerEvent): void => { if (!nav.contains(event.target as Node)) closeNavigation(); };
+  document.addEventListener('keydown', onNavigationKey);
+  document.addEventListener('pointerdown', onNavigationOutside);
 
   // The region caption names the region on the desktop rail. On the mobile bar the
   // Compute and Account destinations sit directly on the bar, so their captions are
   // removed from the tree there; the Administration caption is kept because on mobile
   // it names the bounded secondary surface above the bar (see app.css).
   const syncGroupCaptions = (grouped: boolean): void => {
-    [groups.compute, groups.account].forEach(group => group.caption.hidden = !grouped);
+    groups.compute.caption.hidden = !grouped; groups.account.caption.hidden = false;
   };
   syncGroupCaptions(navGrouped.matches);
   const onNavGroupedChange = (event: MediaQueryListEvent): void => syncGroupCaptions(event.matches);
@@ -257,7 +267,7 @@ export function mountShell(root: HTMLElement): AppShell {
       groups.admin.element.hidden = user?.role !== 'admin';
       void systemNotices.refresh();
     },
-    syncActive() { syncActiveToLocation(); },
+    syncActive() { syncActiveToLocation(); closeNavigation(); },
     refreshNotices() { void systemNotices.refresh(); },
     // The chrome is mounted once per document and replaced only when the reader
     // crosses to the other chrome, which this document now does without a reload.
@@ -268,6 +278,8 @@ export function mountShell(root: HTMLElement): AppShell {
       navGrouped.removeEventListener('change', onNavGroupedChange);
       adminResize.disconnect();
       railToggle.removeEventListener('click', onRailToggle);
+      document.removeEventListener('keydown', onNavigationKey);
+      document.removeEventListener('pointerdown', onNavigationOutside);
     },
   };
 }

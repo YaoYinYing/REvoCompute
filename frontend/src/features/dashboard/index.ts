@@ -54,12 +54,12 @@ export class Dashboard {
     const page = document.createElement('main'); page.className = 'dashboard-page'; this.root.append(page);
     this.page = page;
     const head = document.createElement('header'); head.className = 'page-heading';
-    head.innerHTML = `<div><p class="page-kicker">${t('dashboard.register')}</p><h1>${t('dashboard.title')}</h1></div>`;
+    head.innerHTML = `<div><p class="page-kicker">${t('dashboard.register')}</p><h1>${t('dashboard.title')}<span class="heading-stop" aria-hidden="true">.</span></h1><p>${t('dashboard.intro')}</p></div>`;
     const actions = document.createElement('div'); actions.className = 'page-actions';
     actions.append(guidedTour.launcher());
     const refresh = button(t('dashboard.action.refresh'), 'refresh', 'refresh-cw');
     const create = document.createElement('a'); create.href = '/compute/create_task'; create.className = 'primary-button'; create.textContent = t('dashboard.action.newTask');
-    actions.append(create, refresh); head.append(actions);
+    actions.append(refresh, create); head.append(actions);
     this.stats = document.createElement('section'); this.stats.className = 'dashboard-stats'; this.stats.setAttribute('aria-label', t('dashboard.stats.label'));
 
     // Filtering answers "which tasks?" and lives in one aligned tool band.
@@ -184,6 +184,7 @@ export class Dashboard {
     const card = document.createElement('article'); card.className = 'task-card'; card.dataset.status = task.status;
     const header = document.createElement('header'); const identity = document.createElement('div');
     identity.append(textNode('h2', task.display_name), textNode('p', task.task_type, 'task-card-type'));
+    const taskId = textNode('p', task.task_id, 'task-identity-id'); taskId.setAttribute('aria-label', `${t('dashboard.card.taskId')}: ${task.task_id}`); identity.append(taskId);
     const status = document.createElement('span'); status.className = `status status-${task.status.replace(':', '-')}`; status.textContent = statusText(task); header.append(identity, status);
     // Selection is part of the task's identity, not an action of it: the box opens
     // the card, beside the name, ahead of anything a reader would press. Only an
@@ -192,12 +193,11 @@ export class Dashboard {
     const facts = document.createElement('dl');
     const factValues: Array<[string, string, boolean]> = [
       [t('dashboard.card.submitted'), formatDate(task.submitted_at), false],
-      [t('dashboard.card.taskId'), task.task_id, true],
       [t('dashboard.card.walltime'), formatDuration(task.walltime_seconds), false],
     ];
     if (task.finished_at) factValues.push([t('dashboard.card.finished'), formatDate(task.finished_at), false]);
     if (this.user.role === 'admin') factValues.push([t('dashboard.card.owner'), task.owner || '-', false]);
-    factValues.forEach(([label, value, machine]) => { const row = document.createElement('div'); const dt = document.createElement('dt'); dt.textContent = label; const dd = document.createElement('dd'); dd.textContent = value; if (machine) dd.classList.add('machine'); row.append(dt, dd); facts.append(row); });
+    factValues.forEach(([label, value, machine]) => { const row = document.createElement('div'); row.className = machine ? 'task-id-fact' : ''; const dt = document.createElement('dt'); dt.textContent = label; const dd = document.createElement('dd'); dd.textContent = value; if (machine) dd.classList.add('machine'); row.append(dt, dd); facts.append(row); });
     if (task.progress != null && !task.terminal) { const progress = document.createElement('p'); progress.className = 'task-progress'; progress.textContent = typeof task.progress === 'string' ? task.progress : JSON.stringify(task.progress); facts.append(progress); }
     card.append(header, facts);
     if (task.error) { const problem = document.createElement('details'); problem.className = 'task-error'; const summary = document.createElement('summary'); summary.textContent = t('dashboard.card.executionError'); const body = document.createElement('p'); body.textContent = task.error; problem.append(summary, body); card.append(problem); }

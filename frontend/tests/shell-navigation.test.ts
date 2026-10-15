@@ -64,15 +64,13 @@ describe('shell navigation structure', () => {
     }
   });
 
-  it('keeps the mobile Administration caption while the bar regions drop theirs', () => {
+  it('names both secondary navigation regions on mobile', () => {
     const { root } = shellWithPageHeading();
     const caption = (region: string): HarnessNode => captionOf(root.querySelector(`div.app-nav-group[data-nav-group="${region}"]`)!);
-    // On the mobile bar the Compute and Account destinations sit directly on the bar,
-    // so their captions leave the tree. Administration is a separate surface whose
-    // caption names it above the bar and must stay, even while its group is hidden
-    // until an administrator signs in.
+    // Compute sits on the top bar. Account and Administration live in the same
+    // expandable menu, where their captions name the two regions.
     expect(caption('compute').hidden).toBe(true);
-    expect(caption('account').hidden).toBe(true);
+    expect(caption('account').hidden).toBe(false);
     expect(caption('admin').hidden).toBe(false);
     expect(caption('admin').textContent).toBe('Administration');
     expect(root.querySelector('div.app-nav-group[data-nav-group="admin"]')!.hidden).toBe(true);

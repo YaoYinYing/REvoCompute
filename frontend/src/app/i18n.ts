@@ -31,6 +31,7 @@ const en: Dictionary = {
   'shell.nav.dashboard': 'Dashboard',
   'shell.nav.profile': 'Profile',
   'shell.nav.newTask': 'New task',
+  'shell.nav.more': 'Account & more',
   'shell.nav.expand': 'Expand navigation',
   'shell.nav.collapse': 'Collapse navigation',
   'shell.account.account': 'Account',
@@ -147,7 +148,8 @@ const en: Dictionary = {
   'page.error.notice': 'Application failed.',
 
   // Dashboard
-  'dashboard.title': 'Dashboard',
+  'dashboard.title': 'Tasks',
+  'dashboard.intro': 'Monitor ongoing computations and return to the evidence.',
   'dashboard.register': 'Task register',
   'dashboard.filters.summary': 'Filters & order',
   'dashboard.filters.active': 'Filters & order · active',
@@ -633,6 +635,7 @@ const zhCN: Dictionary = {
   'shell.nav.dashboard': '任务面板',
   'shell.nav.profile': '个人资料',
   'shell.nav.newTask': '新建任务',
+  'shell.nav.more': '账户与更多',
   'shell.nav.expand': '展开导航',
   'shell.nav.collapse': '收起导航',
   'shell.account.account': '账户',
@@ -743,7 +746,8 @@ const zhCN: Dictionary = {
   'page.error.action': '返回任务面板',
   'page.error.notice': '应用出现错误。',
 
-  'dashboard.title': '任务面板',
+  'dashboard.title': '任务',
+  'dashboard.intro': '跟踪计算进展，返回结果与证据。',
   'dashboard.register': '计算任务记录',
   'dashboard.filters.summary': '筛选与排序',
   'dashboard.filters.active': '筛选与排序 · 已启用',

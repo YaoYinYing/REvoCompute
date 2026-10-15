@@ -557,7 +557,7 @@ def test_catalog_density_switch_sizes_to_its_two_controls(page: Page, width: int
     [
         ("/runners", "Runner catalog"),
         ("/compute/create_task?task_type=sequence_demo", "Sequence demo"),
-        ("/compute/dashboard", "Dashboard"),
+        ("/compute/dashboard", "Tasks"),
         (f"/compute/results/{TASK_ID}", "Sequence demo"),
     ],
 )
