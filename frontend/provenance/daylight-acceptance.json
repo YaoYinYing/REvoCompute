@@ -1,0 +1,220 @@
+{
+  "implementation_commit": "9fb8e301c08af840b0022445ea34a9ef175f5d81",
+  "created_at": "2026-10-15T16:21:10.626272+00:00",
+  "build_manifest_sha256": "3d4a0107d8c6eee38306d0a640bee9fc0243fef7d34085dba95a45689c4cfbc4",
+  "screenshots": [
+    {
+      "path": "docs/assets/daylight/create-desktop.png",
+      "sha256": "fb5cbb5cb7eade73ffc56fd342c8aae7034dc9006a1e8b43c06daeedf64b10d7",
+      "test": "test_playwright_daylight_production.py",
+      "boundary": "production frontend and real Mol* with authenticated API replay of authentic scientific artifacts"
+    },
+    {
+      "path": "docs/assets/daylight/create-mobile.png",
+      "sha256": "5bcb19715fe7893052f5229ba5a86914103dbf019f8f44e3e0354b17524ed6ab",
+      "test": "test_playwright_daylight_production.py",
+      "boundary": "production frontend and real Mol* with authenticated API replay of authentic scientific artifacts"
+    },
+    {
+      "path": "docs/assets/daylight/create-advanced.png",
+      "sha256": "6084d4e6d0d1d8604834634cd50531edb2d81e881c00b38697a7d1368e0e00d1",
+      "test": "test_playwright_daylight_production.py",
+      "boundary": "production frontend and real Mol* with authenticated API replay of authentic scientific artifacts"
+    },
+    {
+      "path": "docs/assets/daylight/gremlin-raw.png",
+      "sha256": "0a137743093347f5eb94d3bd59cbe6d30f8db0fc851205f527338ca41975adda",
+      "test": "test_playwright_daylight_production.py",
+      "boundary": "production frontend and real Mol* with authenticated API replay of authentic scientific artifacts"
+    },
+    {
+      "path": "docs/assets/daylight/gremlin-apc.png",
+      "sha256": "1c4cf6c8d0c7172c93d931f93c135f6bf591e9c746f2604e18e29f377cf9151e",
+      "test": "test_playwright_daylight_production.py",
+      "boundary": "production frontend and real Mol* with authenticated API replay of authentic scientific artifacts"
+    },
+    {
+      "path": "docs/assets/daylight/gremlin-mobile.png",
+      "sha256": "1966189ab5fd8b928d5c47055a665ec034111f63d721e30424979b801a80e979",
+      "test": "test_playwright_daylight_production.py",
+      "boundary": "production frontend and real Mol* with authenticated API replay of authentic scientific artifacts"
+    },
+    {
+      "path": "docs/assets/daylight/generic-result-table.png",
+      "sha256": "427cae05f86f664f8953259668f2f0de0f2fc22e6df7470f348f749876a118e7",
+      "test": "test_playwright_daylight_production.py",
+      "boundary": "production frontend and real Mol* with authenticated API replay of authentic scientific artifacts"
+    },
+    {
+      "path": "docs/assets/daylight/fpocket-desktop.png",
+      "sha256": "c60ee6a435e76559ea642d090d84a1f0af6ee04aaef40a6c290b1ae5a113628e",
+      "test": "test_playwright_daylight_production.py",
+      "boundary": "production frontend and real Mol* with authenticated API replay of authentic scientific artifacts"
+    },
+    {
+      "path": "docs/assets/daylight/fpocket-mobile.png",
+      "sha256": "409185d38f9714ed2558da10fa6b24f2463a475be7b8264d6a1283cc31e29d1d",
+      "test": "test_playwright_daylight_production.py",
+      "boundary": "production frontend and real Mol* with authenticated API replay of authentic scientific artifacts"
+    },
+    {
+      "path": "docs/assets/daylight/fpocket-geometry.png",
+      "sha256": "f6820de477bb103e6ff9a6b36a2f99f2f527180e7e661063222c5f2c9d6447fc",
+      "test": "test_playwright_daylight_production.py",
+      "boundary": "production frontend and real Mol* with authenticated API replay of authentic scientific artifacts"
+    },
+    {
+      "path": "docs/assets/daylight/dashboard-desktop.png",
+      "sha256": "88f5daa4a5f6560d00b7f7e22b6a5e7934d6f91bc4168148100f05d1b4590c87",
+      "test": "test_production_dashboard_with_real_flask_session_and_owned_tasks",
+      "boundary": "real local Flask auth and API with synthetic owned task rows"
+    },
+    {
+      "path": "docs/assets/daylight/dashboard-mobile.png",
+      "sha256": "58c93d0d5dc179c4dbe95de99d368e729d50374caefbd2775404190f5764b824",
+      "test": "test_production_dashboard_with_real_flask_session_and_owned_tasks",
+      "boundary": "real local Flask auth and API with synthetic owned task rows"
+    },
+    {
+      "path": "docs/assets/daylight/dashboard-zh-dark.png",
+      "sha256": "dc6c460ac072266fe83cd5da2094974752ef50f09975824110835438993e0dab",
+      "test": "test_production_dashboard_with_real_flask_session_and_owned_tasks",
+      "boundary": "real local Flask auth and API with synthetic owned task rows"
+    }
+  ],
+  "references": {
+    "shell_dashboard": [
+      {
+        "asset": "dashboard-study.html",
+        "sha256": "5667368244639ebd5fc64ccc085c3d6913426bf429e64826765fd88bc0e4dcd9"
+      },
+      {
+        "asset": "propagation.css",
+        "sha256": "746f4a800c21c5886c2a7178f2b1f9689dc2107b76e0e5a305a2408aee32d709"
+      },
+      {
+        "asset": "propagation-shared.js",
+        "sha256": "9ed936f394a1cdb6bf255e8108f827a54324598346153c04794c0dd172307ff9"
+      },
+      {
+        "asset": "public/screenshots/propagation-dashboard-viewport.png",
+        "sha256": "ad9fa11b769f70cee19c237e739ef2d7e6a2ea61c5fe357a229a3f09f9a5ace2"
+      }
+    ],
+    "create": [
+      {
+        "asset": "prepare-study.html",
+        "sha256": "ba2bd179ec800331a9f33c05d3ffa84b30432d9a83960eb933d8284722676be1"
+      },
+      {
+        "asset": "prepare-study.js",
+        "sha256": "a403a8049c9e63127e113e42584104f3265816df5f976f0d6b09eeb878a6b1d1"
+      },
+      {
+        "asset": "public/screenshots/propagation-create.png",
+        "sha256": "700b571e2ad79fc6e9baae8e3e22fc274bcc2c5dc3bc4510027095856f8573d9"
+      },
+      {
+        "asset": "public/screenshots/propagation-create-advanced.png",
+        "sha256": "23920dfce60c0085ccdb7c6571e1fa5e15edd2fc5df257d0faf03cd6db5055f8"
+      }
+    ],
+    "fpocket": [
+      {
+        "asset": "bench.html",
+        "sha256": "10cb9473b0b121232a6722314f3d90134af0cfbc657bb23bcc715d0907e18547"
+      },
+      {
+        "asset": "bench.css",
+        "sha256": "1abfe8e9beabc71b16a4e9efe23504d0a299327ff85c8f9e66aa899881a6dd64"
+      },
+      {
+        "asset": "bench.js",
+        "sha256": "fa827ae6ed0b0d61d9a8c8b21d09253f09b5fffadd52743ef797e1f6d049ad25"
+      },
+      {
+        "asset": "public/screenshots/consolidated-desktop.png",
+        "sha256": "96dc7643f884e60061b0ed57c729fad4f5b4fbd07b40fd225ee5f4018a39e50e"
+      },
+      {
+        "asset": "public/screenshots/consolidated-selection.png",
+        "sha256": "ad7ab770f2714a494fe326867001921552b8a918ca52d411978678061301d703"
+      },
+      {
+        "asset": "public/screenshots/consolidated-focus.png",
+        "sha256": "ab865a05b212fe24b7b6bcadf5b0a49500b9ef2b9f161d0def34cabbfcc6a4a6"
+      },
+      {
+        "asset": "public/screenshots/consolidated-geometry.png",
+        "sha256": "64a1a3a1877b224a2ae4c053fdb3e1e7a53bf1bdab5298aa1348821feb74cd65"
+      }
+    ],
+    "gremlin": [
+      {
+        "asset": "matrix-study.html",
+        "sha256": "b5a7a6c96a7f1e5ad56e632f06e04dfd962095ec3ba2beffb39ab1b314c96821"
+      },
+      {
+        "asset": "matrix-study.js",
+        "sha256": "5b250f827a4873af3cd56d9b370e6c6833016700212e5ceb98dfb49479e11bd6"
+      },
+      {
+        "asset": "public/screenshots/propagation-matrix.png",
+        "sha256": "d72baee199cb6a2634250d5ef29581a01f35a9b71d2cbe564d3d84bc3f552483"
+      },
+      {
+        "asset": "public/screenshots/propagation-matrix-apc.png",
+        "sha256": "3d439aed56d888d8d41367d4f38b8e1d82c6ffdf9167e7a97fdfac8eb296c5da"
+      }
+    ],
+    "generic_result": [
+      {
+        "asset": "public/screenshots/consolidated-artifacts.png",
+        "sha256": "6a1927a8becd4bc720263fd94bfdf0cee411d2a690982f8ecbc717654b8522c3"
+      },
+      {
+        "asset": "public/screenshots/consolidated-provenance.png",
+        "sha256": "23e94ff250ade97dbdaa9864144ebcdcf2e4d410b200bf43783d4320b1de0b27"
+      },
+      {
+        "asset": "public/screenshots/propagation-matrix.png",
+        "sha256": "d72baee199cb6a2634250d5ef29581a01f35a9b71d2cbe564d3d84bc3f552483"
+      }
+    ]
+  },
+  "scientific_replays": [
+    {
+      "path": "tests/data/fpocket_replay/1suo_2pockets.json",
+      "sha256": "4d3738c08cc000c3111d859482d77adb6d52a823e5ca622b3332079d58e958db"
+    },
+    {
+      "path": "tests/data/gremlin_lh_replay/2kl8_seed0_944ed43af62e.json",
+      "sha256": "440bd71007d850954dd04015963aa1b87cf15752d75fd486b6070640f1d36a15"
+    }
+  ],
+  "verification": {
+    "frontend_unit_suite": "157 passed; final matrix/scientific subset 19 passed",
+    "typecheck": "passed at implementation commit",
+    "production_build": "passed; existing large bundle warning",
+    "integrated_browser_run": "169 passed, 3 failed; all three failures repaired and focused rerun 3 passed",
+    "final_changed_surface_gate": "11 browser + 3 server parameter projection passed",
+    "final_matrix_render_gate": "3 passed, real production bundle and matrix semantics",
+    "final_real_api_dashboard": "1 passed"
+  },
+  "limitations": [
+    "Screenshots are local production frontend integration, not a deployment or live Slurm/Apptainer run.",
+    "Geometry inspection displays authentic PQR centres with fixed-size markers, not measured sphere radii or a cavity surface.",
+    "A bounded matrix pans horizontally on narrow screens to preserve readable axes.",
+    "Runner scientific presentation labels remain English; shared application UI supports both existing locales.",
+    "Full backend suite and Docker/Compose deployment were not rerun for this UI-only integration."
+  ],
+  "integration_conflicts": {
+    "pr87_head": "9aba7fade76613a39a9dea0ca8f752cbd397b5ce",
+    "read_only_merge_tree_conflicts": [
+      "frontend/src/features/dashboard/index.ts",
+      "frontend/src/features/results/ResultWorkspace.ts"
+    ],
+    "i18n": "both PRs edit i18n; Git auto-merges at these heads, semantic reconciliation still required",
+    "pr84": "only TODO.md changed; older composition reference is superseded by approved Daylight direction"
+  }
+}
