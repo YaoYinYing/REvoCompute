@@ -24,6 +24,7 @@ function textNode<K extends keyof HTMLElementTagNameMap>(tag: K, value: string, 
 
 export class Dashboard {
   private tasks: TaskSummary[] = [];
+  private readonly archiveRequests = new Map<string, number>();
   private query: TaskQuery = initialTaskQuery();
   private selected = new Set<string>();
   private previewViewers = new Map<string, { dispose(): void }>();
@@ -251,7 +252,19 @@ export class Dashboard {
   }
   private taskActions(task: TaskSummary): HTMLElement {
     const actions = document.createElement('footer'); actions.className = 'task-actions'; actions.dataset.taskId = task.task_id;
-    if (task.result.available) { const open = document.createElement('a'); open.href = task.result.page_url; open.className = 'task-action primary-action'; open.innerHTML = `<i data-lucide="external-link" aria-hidden="true"></i><span>${t('dashboard.card.results')}</span>`; actions.append(open); if (task.result.download_url) { const download = document.createElement('a'); download.href = task.result.download_url; download.className = 'task-action'; download.innerHTML = `<i data-lucide="download" aria-hidden="true"></i><span>${t('dashboard.card.download')}</span>`; actions.append(download); } else if (task.result.archive_request_allowed && task.result.archive_request_url) actions.append(button(t('dashboard.card.prepareZip'), 'archive', 'archive')); }
+    if (task.result.available) { const open = document.createElement('a'); open.href = task.result.page_url; open.className = 'task-action primary-action'; open.innerHTML = `<i data-lucide="external-link" aria-hidden="true"></i><span>${t('dashboard.card.results')}</span>`; actions.append(open); if (task.result.download_url) { const download = document.createElement('a'); download.href = task.result.download_url; download.className = 'task-action'; download.innerHTML = `<i data-lucide="download" aria-hidden="true"></i><span>${t('dashboard.card.download')}</span>`; actions.append(download); } else if (task.result.archive_request_allowed && task.result.archive_request_url) {
+      const started = this.archiveRequests.get(task.task_id);
+      const building = started != null && Date.now() - started < 120_000;
+      const archive = button(t(building ? 'results.archiveBuilding' : 'dashboard.card.prepareZip'), 'archive', 'archive');
+      archive.disabled = building; actions.append(archive);
+      if (started != null && !building) actions.append(textNode('span', t('results.archiveWaiting'), 'task-progress'));
+    } }
+    if (!task.result.available && ['pending', 'running', 'cancelled'].includes(task.status)) {
+      const progress = document.createElement('a'); progress.className = 'task-action primary-action';
+      progress.href = task.result.page_url;
+      progress.textContent = t(task.status === 'cancelled' ? 'dashboard.card.details' : 'dashboard.card.progress');
+      actions.prepend(progress);
+    }
     if (task.actions.cancel.allowed) actions.append(button(t('dashboard.card.cancel'), 'cancel', 'ban'));
     if (task.actions.delete.allowed) actions.append(button(t('dashboard.card.delete'), 'delete', 'trash-2'));
     return actions;
@@ -286,7 +299,13 @@ export class Dashboard {
     if (action === 'select') { (target as HTMLInputElement).checked ? this.selected.add(task.task_id) : this.selected.delete(task.task_id); this.syncSelectionState(); return; }
     if (action === 'cancel' && await confirmAction({ title: t('dashboard.confirm.cancelTitle', { name: task.display_name }), message: t('dashboard.confirm.cancel', { name: task.display_name }), confirmLabel: t('dashboard.card.cancel') })) await this.mutate(() => runTaskAction(task.actions.cancel, 'POST'), t('dashboard.notice.cancelled'));
     if (action === 'delete' && await confirmAction({ title: t('dashboard.confirm.deleteTitle', { name: task.display_name }), message: t('dashboard.confirm.delete', { name: task.display_name }), confirmLabel: t('dashboard.card.delete') })) await this.mutate(() => runTaskAction(task.actions.delete, 'DELETE'), t('dashboard.notice.deleted'));
-    if (action === 'archive' && task.result.archive_request_url) await this.mutate(() => prepareArchive(task.result.archive_request_url!), t('dashboard.notice.archive'));
+    if (action === 'archive' && task.result.archive_request_url) {
+      const started = this.archiveRequests.get(task.task_id);
+      if (started != null && Date.now() - started < 120_000) return;
+      this.archiveRequests.set(task.task_id, Date.now()); (target as HTMLButtonElement).disabled = true;
+      try { await prepareArchive(task.result.archive_request_url); await this.load(); }
+      catch (error) { this.archiveRequests.delete(task.task_id); this.shell.notify((error as Error).message, 'error'); await this.load(); }
+    }
   }
   private async mutate(operation: () => Promise<unknown>, message: string): Promise<void> { try { await operation(); this.shell.notify(message, 'success'); await this.load(); } catch (error) { this.shell.notify((error as Error).message, 'error'); } }
   private disposePreviews(): void { this.previewViewers.forEach(viewer => viewer.dispose()); this.previewViewers.clear(); }

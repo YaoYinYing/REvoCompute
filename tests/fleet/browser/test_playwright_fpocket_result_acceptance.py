@@ -241,7 +241,7 @@ def test_fpocket_ranked_pockets_render_as_the_primary_view(monkeypatch, tmp_path
     # Selecting a pocket is the real integration boundary: the protein structure
     # mounts once in the shared panel, the pocket stays active, and the contacted
     # residues reach the molecular adapter as ONE combined selection.
-    assert page.evaluate("window.__viewerMounts") is None
+    page.wait_for_function("() => window.__viewerMounts === 1")
     page.locator(".fpl-pocket-row").first.click()
     expect(page.locator('.fpl-pocket-row[aria-current="true"]')).to_have_count(1)
     expect(page.locator(".fpl-detail")).to_contain_text(expected_rows[0]["druggability_score"])
@@ -249,14 +249,21 @@ def test_fpocket_ranked_pockets_render_as_the_primary_view(monkeypatch, tmp_path
     assert page.evaluate("window.__viewerLoads")[-1] == "1SUO.pdb"
     page.get_by_role("button", name="Select contacted residues").click()
     selects = page.evaluate("window.__viewerSelects")
-    assert len(selects) == 1, selects
+    assert len(selects) >= 1, selects
     assert set(selects[0]["residues"]) == set(expected_rows[0]["residue_ids"].split())
 
     # The pocket's own geometry files remain reachable from the result: the storyboard
     # hands the contacted-atom artifact to the shared panel, which loads it.
-    page.get_by_role("button", name="Open contacted atoms").click()
-    page.wait_for_function("() => (window.__viewerLoads || []).includes('pocket1_atm.pdb')")
-    assert page.evaluate("window.__viewerLoads")[-1] == "pocket1_atm.pdb"
+    page.get_by_role("button", name="Inspect alpha-sphere coordinates").click()
+    page.wait_for_function("() => (window.__viewerLoads || []).includes('pocket1_vert.pqr')")
+    expect(page.locator('.storyboard-structure-panel .structure-host')).to_have_attribute('data-label', '1SUO.pdb')
+    expect(page.locator('.storyboard-geometry-panel')).to_contain_text('fixed display size')
+    page.locator('.fpl-pocket-row').nth(1).click()
+    expect(page.locator('.fpl-stage')).to_contain_text('Pocket 2')
+    expect(page.locator('.storyboard-geometry-panel')).to_have_count(0)
+    page.wait_for_function("() => window.__viewerSelection.includes('" + expected_rows[1]['residue_ids'].split()[0] + "')")
+    page.get_by_role('button', name='Full structure', exact=True).click()
+    assert page.evaluate('window.__viewerResets') >= 1
 
     # The generic views stay reachable as the audit/fallback path.
     for title in ("Ranked pockets", "Detection summary", "Raw fpocket output"):

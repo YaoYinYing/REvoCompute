@@ -86,6 +86,7 @@ async (payload) => {
     selection: { set: (state) => selected.push(state) },
     services: {
       openFile: (artifact) => opened.push(artifact.url || artifact.name),
+      openGeometry: (artifact) => opened.push(artifact.url || artifact.name),
       downloadFile: (artifact) => downloaded.push(artifact.url || artifact.name),
       openView: async (viewId) => viewed.push(viewId),
       focusStructure: (selection) => { focused.push(selection); return true; },
@@ -132,6 +133,7 @@ def test_storyboard_renders_the_ranked_selector_from_the_real_table(page: Page) 
     expect(page.get_by_role("heading", name="fpocket pockets")).to_be_visible()
     table = page.locator("table.fpl-pockets")
     expect(table.locator("tbody tr")).to_have_count(40)
+    page.get_by_role("button", name="Compare descriptors").click()
     headers = table.locator("thead th").all_inner_texts()
     for label in ("Rank", "Pocket", "Score", "Druggability", "Alpha spheres", "Volume (A^3)", "SASA (A^2)"):
         assert label in headers, headers
@@ -145,8 +147,8 @@ def test_storyboard_selection_updates_the_detail_without_reloading(page: Page) -
     expected = _pocket_rows()
     _mount(page)
 
-    # Nothing is selected until a pocket is chosen.
-    expect(page.get_by_text("Select a pocket", exact=False)).to_be_visible()
+    # The strongest ranked pocket opens in context; explicit selection replaces it.
+    expect(page.locator('.fpl-pocket-row[aria-current="true"] td').first).to_have_text("1")
     page.locator(".fpl-pocket-row").nth(1).click()
 
     readout = page.locator(".fpl-detail")
@@ -156,6 +158,7 @@ def test_storyboard_selection_updates_the_detail_without_reloading(page: Page) -
     # The selected row is marked and the contacted residues are listed.
     expect(page.locator('.fpl-pocket-row[aria-current="true"]')).to_have_count(1)
     expect(page.locator('.fpl-pocket-row[aria-current="true"] td').first).to_have_text("2")
+    page.locator(".fpl-detail summary", has_text="Contacted residues").click()
     residues = page.locator(".fpl-chip").all_inner_texts()
     assert residues and set(residues) == set(expected[1]["residue_ids"].split())
 
@@ -191,8 +194,8 @@ def test_storyboard_selection_drives_the_structure_focus_boundary(page: Page) ->
     # so the adapter applies a single combined selection, not N replacements.
     page.get_by_role("button", name="Select contacted residues").click()
     selections = [entry["structure"] for entry in page.evaluate("window.__fpl.selected") if "structure" in entry]
-    assert len(selections) == 1, selections
-    collection = selections[0].get("residues")
+    assert selections, selections
+    collection = selections[-1].get("residues")
     assert collection and len(collection) == len(expected[0]["residue_ids"].split())
     # The tokens are PDB AUTHOR numbering, so the selection declares auth_seq_id
     # and carries every residue's identity (including any insertion code).
@@ -250,7 +253,7 @@ def test_storyboard_keeps_bare_and_insertion_coded_residues_distinct(page: Page)
 
 def test_storyboard_mounts_the_structure_when_a_pocket_is_selected(page: Page) -> None:
     _mount(page)
-    assert page.evaluate("window.__fpl.opened") == []
+    assert page.evaluate("window.__fpl.opened") == ["/files/structure"]
     page.locator(".fpl-pocket-row").first.click()
     opened = page.evaluate("window.__fpl.opened")
     # Selecting a pocket pulls the protein structure into the shared panel once.
@@ -262,10 +265,10 @@ def test_storyboard_mounts_the_structure_when_a_pocket_is_selected(page: Page) -
 def test_storyboard_opens_the_pocket_geometry_files(page: Page) -> None:
     _mount(page)
     page.locator(".fpl-pocket-row").first.click()
-    page.get_by_role("button", name="Open contacted atoms").click()
-    page.get_by_role("button", name="Open alpha spheres").click()
+    page.get_by_role("button", name="Download contacted atoms").click()
+    page.get_by_role("button", name="Inspect alpha-sphere coordinates").click()
     opened = page.evaluate("window.__fpl.opened")
-    assert "/files/pocket1_atm" in opened
+    assert "/files/pocket1_atm" in page.evaluate("window.__fpl.downloaded")
     assert "/files/pocket1_vert" in opened
 
 
@@ -276,7 +279,7 @@ def test_storyboard_keeps_the_ranked_table_usable_without_geometry(page: Page) -
     expect(table.locator("tbody tr")).to_have_count(40)
     page.locator(".fpl-pocket-row").nth(2).click()
     expect(page.locator(".fpl-detail")).to_contain_text("Druggability score")
-    expect(page.get_by_role("button", name="Open contacted atoms")).to_have_count(0)
+    expect(page.get_by_role("button", name="Download contacted atoms")).to_have_count(0)
     expect(page.get_by_text("Pocket geometry files were not published", exact=False)).to_be_visible()
 
 

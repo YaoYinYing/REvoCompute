@@ -595,8 +595,9 @@ def test_preview_failure_does_not_break_other_files_or_archive(page: Page) -> No
     expect(page.get_by_text("Text preview could not be loaded.")).to_be_visible()
     page.locator(".result-file-open", has_text="good.txt").click()
     expect(page.locator(".result-preview pre")).to_have_text("artifact contents")
-    page.get_by_role("button", name="Create ZIP", exact=True).click()
-    expect(page.get_by_text("Archive generation requested.", exact=True)).to_be_visible()
+    with page.expect_response(f"{ORIGIN}/compute/api/results/{TASK_ID}/archive"):
+        page.get_by_role("button", name="Prepare full-result ZIP", exact=True).click()
+    expect(page.get_by_text("Preparing full-result ZIP…", exact=True).first).to_be_visible()
     assert archive_requests == ["Bearer ephemeral"]
 
 

@@ -2,19 +2,33 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 
 const STYLE = `
-.glh-result { display: grid; gap: 1.1rem; padding: 1rem; }
+.glh-bench { display: grid; grid-template-columns: minmax(0, 2.5fr) minmax(16rem, 1fr); border: 1px solid var(--app-line); border-radius: var(--r-control); background: var(--app-surface); overflow: hidden; }
+.glh-result .btn { font: inherit; font-size: .875rem; padding: .55rem .7rem; min-height: 2.5rem; border: 1px solid var(--app-line); border-radius: var(--r-control); color: var(--app-ink); background: var(--app-surface); cursor: pointer; }
+.glh-pair-preview { max-height: 24rem; overflow: auto; border-block: 1px solid var(--app-line); }
+.glh-pair-preview th { position: sticky; top: 0; background: var(--app-soft); }
+.glh-more > summary { cursor: pointer; font-size: .875rem; padding-block: .75rem; }
+.glh-inspector .scalar-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); border: 0; background: transparent; }
+.glh-inspector .scalar-grid dt, .glh-inspector .scalar-grid dd { padding: .6rem 0; border-bottom: 1px solid var(--app-line); overflow-wrap: anywhere; }
+.glh-inspector .scalar-grid dd { font: .875rem/1.5 var(--font-mono); text-align: right; }
+.glh-landscape { min-width: 0; padding: 1rem; }
+.glh-inspector { display: grid; gap: 1.5rem; align-content: start; padding: 1.5rem; background: var(--app-soft); }
+.glh-inspector .glh-section h3 { font-size: 1.15rem; }
+.glh-actions button[aria-pressed="true"] { color: var(--app-plum); border-color: var(--app-plum); }
+@media (max-width: 1000px) { .glh-bench { grid-template-columns: minmax(0, 1fr); } }
+
+.glh-result { --muted: var(--app-muted); display: grid; gap: 1.75rem; padding: .25rem; }
 .glh-result h2, .glh-result h3, .glh-result p { margin: 0; }
 .glh-result h2 { font-family: var(--font-display); font-size: 1.35rem; font-weight: 600; }
-.glh-intro, .glh-question, .glh-note { color: var(--muted); font-size: .82rem; line-height: 1.5; }
+.glh-intro, .glh-question, .glh-note { color: var(--muted); font-size: .875rem; line-height: 1.5; }
 .glh-section { display: grid; gap: .55rem; min-width: 0; padding-top: .9rem; border-top: 1px solid color-mix(in srgb, currentColor 18%, transparent); }
 .glh-section:first-of-type { padding-top: 0; border-top: 0; }
-.glh-section h3 { font-size: .95rem; font-weight: 650; }
+.glh-section h3 { font: 500 1.35rem/1.3 var(--font-display); letter-spacing: -.025em; }
 .glh-actions { display: flex; flex-wrap: wrap; gap: .45rem; }
 .glh-provenance { display: grid; gap: .5rem; }
 .glh-provenance-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: .55rem; }
-.glh-provenance-row .glh-label { font-size: .82rem; font-weight: 600; }
+.glh-provenance-row .glh-label { font-size: .875rem; font-weight: 600; }
 .glh-provenance-row .glh-note { flex: 1 1 14rem; }
-.glh-unavailable { color: var(--muted); font-size: .82rem; font-style: italic; }
+.glh-unavailable { color: var(--muted); font-size: .875rem; font-style: italic; }
 `;
 
 function list(value) { return Array.isArray(value) ? value : value ? [value] : []; }
@@ -55,6 +69,9 @@ export default {
     if (!Scientific) throw new Error("Scientific result components are unavailable.");
     const controller = new AbortController();
     let destroyed = false;
+    let embedded = null;
+    let matrixController = null;
+    let pairRenderer = null;
 
     // Navigate to the task's own declared views instead of re-implementing them.
     const views = Array.isArray(context.views) ? context.views : [];
@@ -111,7 +128,19 @@ export default {
     const pairsActions = document.createElement("div"); pairsActions.className = "glh-actions";
     const pairsAction = openDeclaredView(rankedPairsView) || (pairwiseFile ? fileAction("Open ranked residue pairs", pairwiseFile, context) : null);
     pairsActions.append(pairsAction || message("Ranked residue pairs were not published.", "glh-unavailable"));
-    pairsSection.append(pairsActions); root.append(pairsSection);
+    pairsSection.append(pairsActions);
+    if (rankedPairsView && context.services.mountView) {
+      const pairTable = document.createElement("div"); pairTable.className = "glh-pair-preview";
+      pairTable.setAttribute("role", "region"); pairTable.setAttribute("aria-label", "Ranked residue pairs preview"); pairTable.tabIndex = 0;
+      pairsSection.append(pairTable);
+      queueMicrotask(async () => {
+        try {
+          const instance = await context.services.mountView(rankedPairsView.id, pairTable, controller.signal);
+          if (destroyed) instance?.destroy(); else pairRenderer = instance;
+        } catch (error) { if (!destroyed && error.name !== "AbortError") pairTable.append(message(error.message, "glh-unavailable")); }
+      });
+    }
+    root.append(pairsSection);
 
     const provenanceSection = section("What model and provenance artifacts are available for downstream analysis?", "Durable scientific objects for reuse, with the run metadata that identifies them.");
     const provenance = document.createElement("div"); provenance.className = "glh-provenance";
@@ -135,6 +164,36 @@ export default {
     });
     provenanceSection.append(provenance); root.append(provenanceSection);
 
+    if (primaryMatrixView && context.services.mountView) {
+      const bench = document.createElement("div"); bench.className = "glh-bench";
+      const landscape = document.createElement("section"); landscape.className = "glh-landscape";
+      const tabs = document.createElement("div"); tabs.className = "glh-actions";
+      tabs.setAttribute("role", "group"); tabs.setAttribute("aria-label", "Coupling matrix");
+      const canvas = document.createElement("div"); canvas.className = "glh-matrix";
+      let generation = 0;
+      const show = async view => {
+        const current = ++generation;
+        matrixController?.abort(); matrixController = new AbortController();
+        embedded?.destroy(); embedded = null;
+        canvas.replaceChildren(message("Loading " + view.title + "…"));
+        tabs.querySelectorAll("button").forEach(tab => tab.setAttribute("aria-pressed", String(tab.dataset.viewId === view.id)));
+        try {
+          const instance = await context.services.mountView(view.id, canvas, matrixController.signal);
+          if (destroyed || current !== generation) { instance?.destroy(); return; }
+          embedded = instance;
+        } catch (error) { if (!destroyed && current === generation && error.name !== "AbortError") canvas.replaceChildren(message(error.message, "glh-unavailable")); }
+      };
+      for (const view of matrixViews) {
+        const tab = button(view.title, () => show(view)); tab.dataset.viewId = view.id; tabs.append(tab);
+      }
+      landscape.append(tabs, canvas);
+      const inspector = document.createElement("aside"); inspector.className = "glh-inspector";
+      const more = document.createElement("details"); more.className = "glh-more";
+      const summary = document.createElement("summary"); summary.textContent = "Weighting and fitted model";
+      more.append(summary, informationSection, modelSection); inspector.append(alignmentSection, more);
+      bench.append(landscape, inspector); intro.after(bench);
+      queueMicrotask(() => { if (!destroyed) void show(primaryMatrixView); });
+    }
     host.replaceChildren(root);
 
     function fillMetrics(target, metrics) {
@@ -192,6 +251,6 @@ export default {
     }
     await Promise.all([loadStatistics(), loadMetadata()]);
 
-    return { destroy() { destroyed = true; controller.abort(); } };
+    return { destroy() { destroyed = true; controller.abort(); matrixController?.abort(); embedded?.destroy(); pairRenderer?.destroy(); } };
   },
 };

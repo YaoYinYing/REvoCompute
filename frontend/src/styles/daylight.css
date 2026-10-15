@@ -77,7 +77,7 @@ body { container-type: inline-size; }
 .dashboard-page .task-list[data-layout] .task-actions { grid-column: 4; grid-row: 1 / span 2; padding: 0; border: 0; flex-wrap: wrap; justify-content: end; align-content: start; gap: .25rem; }
 .dashboard-page .task-action { font-weight: 400; padding-inline: .45rem; }
 .dashboard-page .task-error, .dashboard-page .input-preview { grid-column: 1 / -1; padding: .7rem 0 0; margin: 0; font-size: .875rem; }
-.dashboard-page .task-error p, .dashboard-page .input-preview summary { font-size: .875rem; }
+.dashboard-page .task-error summary, .dashboard-page .task-error p, .dashboard-page .input-preview summary { font-size: .875rem; }
 .dashboard-page .task-list[data-layout="compact"] .task-card dl > div:not(:first-child) { display: none; }
 .dashboard-page .task-list[data-layout="compact"] .task-card { padding-block: .8rem; }
 .dashboard-page .task-table { font-size: .875rem; min-width: 55rem; }

@@ -529,7 +529,7 @@ def gremlin_lh_runner() -> RunnerDefinition:
                 description="Coupling penalty: conventional squared L2, low-rank spectral LH, or group-sparse block LB.",
             ),
             ParameterSpec.number(
-                "lambda_l2",
+                "lambda_l2", advanced=True,
                 default=0.01,
                 has_default=True,
                 exclusive_minimum=0.0,
@@ -545,7 +545,7 @@ def gremlin_lh_runner() -> RunnerDefinition:
                 description="Low-rank spectral penalty strength used in LH mode.",
             ),
             ParameterSpec.number(
-                "lambda_lb",
+                "lambda_lb", advanced=True,
                 default=0.005,
                 has_default=True,
                 exclusive_minimum=0.0,
@@ -572,7 +572,7 @@ def gremlin_lh_runner() -> RunnerDefinition:
                 ),
             ),
             ParameterSpec.number(
-                "learning_rate",
+                "learning_rate", advanced=True,
                 default=1.0,
                 has_default=True,
                 exclusive_minimum=0.0,
@@ -580,7 +580,7 @@ def gremlin_lh_runner() -> RunnerDefinition:
                 description="Learning rate for the notebook's scalar-second-moment Adam optimizer.",
             ),
             ParameterSpec.number(
-                "identity_cutoff",
+                "identity_cutoff", advanced=True,
                 default=0.8,
                 has_default=True,
                 minimum=0.1,
@@ -588,7 +588,7 @@ def gremlin_lh_runner() -> RunnerDefinition:
                 description="Aligned-sequence identity threshold used to down-weight phylogenetically similar rows.",
             ),
             ParameterSpec.number(
-                "gap_cutoff",
+                "gap_cutoff", advanced=True,
                 default=0.5,
                 has_default=True,
                 minimum=0,
@@ -599,13 +599,13 @@ def gremlin_lh_runner() -> RunnerDefinition:
                 ),
             ),
             ParameterSpec.boolean(
-                "use_bias",
+                "use_bias", advanced=True,
                 default=True,
                 has_default=True,
                 description="Fit one-body residue fields in addition to pairwise couplings.",
             ),
             ParameterSpec.boolean(
-                "inverse_covariance_init",
+                "inverse_covariance_init", advanced=True,
                 default=False,
                 has_default=True,
                 description=(
@@ -614,13 +614,13 @@ def gremlin_lh_runner() -> RunnerDefinition:
                 ),
             ),
             ParameterSpec.boolean(
-                "exact_lh_eigenvalue",
+                "exact_lh_eigenvalue", advanced=True,
                 default=False,
                 has_default=True,
                 description="Use an exact eigendecomposition for LH instead of the notebook's faster one-step power estimate.",
             ),
             ParameterSpec.boolean(
-                "a3m",
+                "a3m", advanced=True,
                 default=True,
                 has_default=True,
                 description=(
@@ -629,7 +629,7 @@ def gremlin_lh_runner() -> RunnerDefinition:
                 ),
             ),
             ParameterSpec.integer(
-                "seed",
+                "seed", advanced=True,
                 default=0,
                 has_default=True,
                 minimum=0,

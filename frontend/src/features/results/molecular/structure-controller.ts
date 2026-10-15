@@ -4,7 +4,8 @@ import type { MolecularViewer, MolecularViewerFactory } from './viewer-contract'
 
 const MAX_STRUCTURE_BYTES = 64 * 1024 * 1024;
 
-function structureFormat(path: string): 'pdb' | 'mmcif' {
+function structureFormat(path: string): 'pdb' | 'mmcif' | 'pqr' {
+  if (/\.pqr$/i.test(path)) return 'pqr';
   return /\.(?:cif|mmcif)$/i.test(path) ? 'mmcif' : 'pdb';
 }
 

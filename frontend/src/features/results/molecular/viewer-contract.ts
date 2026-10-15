@@ -1,6 +1,6 @@
 export interface StructureSource {
   data: string;
-  format: 'pdb' | 'mmcif';
+  format: 'pdb' | 'mmcif' | 'pqr';
   label?: string;
 }
 

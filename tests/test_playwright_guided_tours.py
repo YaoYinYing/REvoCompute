@@ -215,6 +215,7 @@ def test_a_reader_navigation_ends_the_flow_and_back_leaves_no_orphan(page: Page)
     assert _stored(page, CREATE_STEP) == "0"
 
     # A real in-app link: intercepted by the shell, rendered in-document, no pagehide.
+    page.locator(".app-rail-toggle").click()
     page.locator("[data-nav-group='account']").get_by_role("link", name="Account", exact=True).click()
     expect(page.get_by_role("heading", name="Account", exact=True)).to_be_visible()
     expect(page.locator(".tour-callout")).to_have_count(0)
@@ -256,6 +257,7 @@ def test_the_abort_signal_fires_on_a_route_change_and_not_on_a_first_render(page
     assert page.evaluate("window.__tourAborts") == 0
 
     # A real in-document route change announces it exactly once.
+    page.locator(".app-rail-toggle").click()
     page.locator("[data-nav-group='account']").get_by_role("link", name="Account", exact=True).click()
     expect(page.get_by_role("heading", name="Account", exact=True)).to_be_visible()
     assert page.evaluate("window.__tourAborts") == 1
@@ -281,6 +283,7 @@ def test_a_tour_survives_a_reader_leg_into_the_second_route_that_owns_an_overlay
 
     # The reader takes the Account region's own Quota destination: an in-document
     # navigation into the second overlay-owning route.
+    page.locator(".app-rail-toggle").click()
     page.locator("[data-nav-group='account']").get_by_role("link", name="Quota", exact=True).click()
     expect(page.get_by_role("heading", name="Quota", exact=True)).to_be_visible()
     assert page.url == f"{ORIGIN}/compute/quota"

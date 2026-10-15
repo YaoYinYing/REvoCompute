@@ -20,6 +20,7 @@ const REPRESENTATIONS: Record<string, string> = {
   cartoon: 'cartoon',
   cartoon_ligand: 'polymer-and-ligand',
   sticks: 'ball-and-stick',
+  points: 'spacefill',
   surface_ligand: 'molecular-surface',
 };
 
@@ -35,7 +36,7 @@ const BACKGROUNDS = { light: 0xf8faf7, dark: 0x111318 } as const;
 
 export interface StructureSource {
   data: string;
-  format: 'pdb' | 'mmcif';
+  format: 'pdb' | 'mmcif' | 'pqr';
   label?: string;
 }
 
@@ -382,7 +383,7 @@ export class MolecularViewer {
           const existing = this.components();
           if (existing.length) await this.plugin.managers.structure.component.removeRepresentations(existing);
           for (const component of this.components()) {
-            await this.plugin.builders.structure.representation.addRepresentation(component.cell, { type: provider });
+            await this.plugin.builders.structure.representation.addRepresentation(component.cell, { type: provider, ...(this.representation === 'points' ? { size: 'uniform', sizeParams: { value: 0.25 } } : {}) });
           }
         }, { canUndo: 'Structure representation' });
       }

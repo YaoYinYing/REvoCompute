@@ -128,3 +128,40 @@ def test_production_dashboard_with_real_flask_session_and_owned_tasks(page: Page
     finally:
         server.shutdown()
         thread.join(timeout=5)
+
+
+def test_archive_readiness_is_persistent_and_does_not_replace_the_preview(page: Page) -> None:
+    scenario = controlled_scenario().with_result('archive_pending').with_lifecycle('finished')
+    mount_scenario(page, scenario)
+    manifest = scenario.result_manifest()
+    assert manifest
+    posts = []
+
+    def prepare(route):
+        posts.append(route.request.method)
+        manifest['archive']['ready'] = True
+        manifest['archive']['download_url'] = f'/compute/api/download/{scenario.task_id}'
+        route.fulfill(status=202, json={'status': 'building'})
+
+    page.route(f'{ORIGIN}/compute/api/results/{scenario.task_id}', lambda route: route.fulfill(json=manifest))
+    page.route(f'{ORIGIN}/compute/api/results/{scenario.task_id}/archive', prepare)
+    page.goto(f'{ORIGIN}/compute/results/{scenario.task_id}')
+    expect(page.locator('.result-preview pre')).to_be_visible()
+    preview = page.locator('.result-preview pre').inner_text()
+    page.get_by_role('button', name='Prepare full-result ZIP', exact=True).click()
+    expect(page.locator('.result-archive-status')).to_have_text('Full-result ZIP is ready to download.')
+    expect(page.get_by_role('button', name='Download ZIP', exact=True)).to_be_enabled()
+    expect(page.locator('.result-preview pre')).to_have_text(preview)
+    assert posts == ['POST']
+
+
+def test_archive_failure_stays_visible_and_allows_retry(page: Page) -> None:
+    scenario = controlled_scenario().with_result('archive_pending').with_lifecycle('finished')
+    mount_scenario(page, scenario)
+    page.route(f'{ORIGIN}/compute/api/results/{scenario.task_id}/archive',
+               lambda route: route.fulfill(status=503, json={'error': 'Archive worker unavailable'}))
+    page.goto(f'{ORIGIN}/compute/results/{scenario.task_id}')
+    page.get_by_role('button', name='Prepare full-result ZIP', exact=True).click()
+    expect(page.locator('.result-archive-status')).to_contain_text('Archive worker unavailable')
+    expect(page.get_by_role('button', name='Prepare full-result ZIP', exact=True)).to_be_enabled()
+    expect(page.locator('.result-preview pre')).to_be_visible()

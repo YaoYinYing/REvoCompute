@@ -7,8 +7,13 @@ export interface StoryboardServices {
   downloadFile(artifact: LogicalResultFile): void;
   /** Navigate to one of the task's own declared result views by manifest id. */
   openView?(viewId: string): Promise<void>;
+  mountView?(viewId: string, host: HTMLElement, signal: AbortSignal): Promise<void | { destroy(): void }>;
   focusStructure?(selection: unknown): boolean;
   selectStructure?(selection: unknown): boolean;
+  resetStructure?(): void;
+  closeGeometry?(): void;
+  /** Inspect optional geometry beside the retained protein, without replacing it. */
+  openGeometry?(artifact: LogicalResultFile, description: string): Promise<void>;
 }
 
 interface StoryboardInstance { destroy?(): void }

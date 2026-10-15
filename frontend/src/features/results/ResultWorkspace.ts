@@ -1,4 +1,4 @@
-import { ApiError, beginDownload, downloadUrl, loadAuthorizedResult, requestResultArchive, taskIdFromLocation } from '../../api/result-api';
+import { ApiError, beginDownload, downloadUrl, getResultManifest, loadAuthorizedResult, requestResultArchive, taskIdFromLocation } from '../../api/result-api';
 import { resultFileName, type ArtifactRole, type LogicalResultFile, type ResultArtifact, type ResultFile, type ResultManifest,
   type ResultView, type TaskStatus } from '../../api/result-types';
 import { setButtonIcon } from '../../components/icons';
@@ -19,7 +19,6 @@ function formatBytes(value = 0): string {
   if (value < 1024 ** 3) return `${(value / 1024 ** 2).toFixed(1)} MiB`; return `${(value / 1024 ** 3).toFixed(2)} GiB`;
 }
 function theme(): 'light' | 'dark' { return document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light'; }
-// Manifest-declared artifact role → user-facing wording and rail grouping. The vocabulary is the server's; only its projection is here.
 // Manifest-declared artifact role → rail grouping. The vocabulary is the server's; only its
 // projection is here. A file row states type and size, not which group it already sits in.
 const ARTIFACT_ROLE_GROUPS: Array<{ labelKey: string; roles: ArtifactRole[] }> = [
@@ -41,8 +40,8 @@ interface WorkspaceNodes {
   status: HTMLElement; outcome: HTMLElement; title: HTMLElement; meta: HTMLElement; tabs: HTMLElement;
   previewTitle: HTMLElement; previewDescription: HTMLElement; preview: HTMLElement; download: HTMLAnchorElement;
   rail: HTMLElement; railDetails: HTMLDetailsElement; reopen: HTMLButtonElement; search: HTMLInputElement;
-  fileList: HTMLElement; integrity: HTMLElement; artifactSummary: HTMLElement; archive: HTMLButtonElement;
-  limitations: HTMLElement; run: HTMLElement; toast: HTMLElement;
+  fileList: HTMLElement; integrity: HTMLElement; artifactSummary: HTMLElement; archive: HTMLButtonElement; archiveStatus: HTMLElement;
+  limitations: HTMLElement; run: HTMLElement;
 }
 
 export class ResultWorkspace {
@@ -59,6 +58,10 @@ export class ResultWorkspace {
   private loadController: AbortController | null = null;
   private poll: number | null = null;
   private disposed = false;
+  private archiveBusy = false;
+  private archiveTimer: number | null = null;
+  private archiveChecks = 0;
+  private readonly geometry: StructureController;
   private previewGeneration = 0;
   private storyboardStructureGeneration = 0;
   private structureRepresentation = 'cartoon';
@@ -69,14 +72,27 @@ export class ResultWorkspace {
   private readonly railMedia = matchMedia('(max-width: 64rem)');
 
   constructor(private readonly root: HTMLElement, createViewer: MolecularViewerFactory) {
-    installScientificPrimitives(); this.structure = new StructureController(createViewer, {
+    installScientificPrimitives(); this.geometry = new StructureController(createViewer, { controlsCollapsed: true }); this.structure = new StructureController(createViewer, {
       selectionEnabled: true, controlsCollapsed: true,
       onSelectionChanged: (residues) => this.storyboard.setMolecularSelection(residues),
     });
     this.nodes = this.buildShell(); this.storyboard = new StoryboardHost(this.nodes.preview, {
       openFile: (file) => this.openLogicalFile(file), downloadFile: (file) => beginDownload(file.url),
       openView: (viewId) => this.openViewById(viewId),
+      mountView: async (viewId, host, signal) => {
+        const view = this.manifest?.views?.find(item => item.id === viewId);
+        if (!view) throw new Error(t('results.viewNoArtifact'));
+        const artifact = this.artifactForView(view);
+        if (!artifact) throw new Error(t('results.viewNoArtifact'));
+        const context = { signal, taskId: this.taskId };
+        const renderer = this.viewRenderers.resolve(view);
+        if (renderer) return renderer.render(view, artifact, host, context);
+        return this.rendererRegistry.resolve(artifact)?.render(artifact, host, context);
+      },
       focusStructure: (selection) => this.structure.focus(selection), selectStructure: (selection) => this.structure.select(selection),
+      resetStructure: () => this.structure.resetCamera(),
+      openGeometry: (file, description) => this.openGeometry(file, description),
+      closeGeometry: () => { this.geometry.dispose(); this.nodes.preview.querySelector('.storyboard-geometry-panel')?.remove(); },
     });
     createBasicRenderers().forEach((renderer) => this.rendererRegistry.register(renderer));
     this.rendererRegistry.register({ id: 'structure', render: (artifact, host) => this.renderStructure(artifact, host) });
@@ -125,12 +141,14 @@ export class ResultWorkspace {
     const tools = element('div', 'result-file-tools'); const search = element('input', 'result-search') as HTMLInputElement;
     search.type = 'search'; search.placeholder = t('results.filter'); search.setAttribute('aria-label', t('results.filterLabel'));
     const archive = element('button', 'result-button result-button-small', t('results.archiveCreate')) as HTMLButtonElement; archive.type = 'button'; archive.hidden = true;
-    tools.append(search, archive);
+    const archiveStatus = element('p', 'result-archive-status'); archiveStatus.setAttribute('role', 'status');
+    archive.className = 'result-button result-archive-action'; actions.prepend(archive); identity.append(archiveStatus);
+    tools.append(search);
     const fileList = element('nav', 'result-file-list'); fileList.setAttribute('aria-label', t('results.fileListLabel'));
     const integrity = element('div'); railDetails.append(summary, tools, fileList, integrity); rail.append(reopen, railDetails);
     workspace.append(main, rail); const record = element('section', 'result-record'); const limitations = element('div'); const run = element('div'); record.append(limitations, run);
-    const toast = element('aside', 'result-toasts'); toast.setAttribute('aria-live', 'polite'); page.append(header, status, workspace, record, toast); this.root.append(page);
-    return { status, outcome, title, meta, tabs, previewTitle, previewDescription, preview, download, rail, railDetails, reopen, search, fileList, integrity, artifactSummary, archive, limitations, run, toast };
+    page.append(header, status, workspace, record); this.root.append(page);
+    return { status, outcome, title, meta, tabs, previewTitle, previewDescription, preview, download, rail, railDetails, reopen, search, fileList, integrity, artifactSummary, archive, archiveStatus, limitations, run };
   }
 
   private bind(): void {
@@ -168,6 +186,7 @@ export class ResultWorkspace {
     this.setState(quiet ? manifest.status : manifest.outcome || manifest.status, manifest.error || '', quiet);
     // The summary is rendered by renderFiles(), which owns the filtered view.
     this.renderFiles(); this.renderTabs(); this.renderRecord(); this.syncArchive();
+    if (manifest.storyboard) { this.nodes.railDetails.open = false; this.syncRail(); }
     if (manifest.storyboard?.entrypoint_url) void this.openStoryboard();
     else {
       // The declared primary view opens the page; a manifest that declares no primary
@@ -234,7 +253,7 @@ export class ResultWorkspace {
       return;
     }
     this.storyboardStructureGeneration += 1;
-    this.destroyViewRenderer(); this.storyboard.destroy(); this.cancelRender(); this.selectArtifact(artifact); this.markTab(null);
+    this.destroyViewRenderer(); this.geometry.dispose(); this.storyboard.destroy(); this.cancelRender(); this.selectArtifact(artifact); this.markTab(null);
     const fileName = resultFileName(artifact);
     this.nodes.previewTitle.textContent = view.title; this.nodes.previewDescription.textContent = view.description || '';
     this.nodes.download.hidden = false; this.nodes.download.href = downloadUrl(artifact); this.nodes.download.title = fileName;
@@ -262,7 +281,7 @@ export class ResultWorkspace {
   private async openStoryboard(): Promise<void> {
     const manifest = this.manifest; if (!manifest?.storyboard) return;
     const generation = ++this.previewGeneration;
-    this.storyboardStructureGeneration += 1; this.cancelRender(); this.structure.dispose(); this.nodes.preview.setAttribute('aria-busy', 'true');
+    this.storyboardStructureGeneration += 1; this.cancelRender(); this.structure.dispose(); this.geometry.dispose(); this.nodes.preview.setAttribute('aria-busy', 'true');
     this.nodes.previewTitle.textContent = t('results.scientific'); this.nodes.previewDescription.textContent = ''; this.nodes.download.hidden = true;
     try { const current = await this.storyboard.mount(manifest.storyboard, manifest); if (current && generation === this.previewGeneration) this.markTab('storyboard'); }
     catch (error) { if (generation === this.previewGeneration) this.renderPreviewError((error as Error).message || t('results.storyboardUnavailable')); }
@@ -275,8 +294,9 @@ export class ResultWorkspace {
     const generation = ++this.storyboardStructureGeneration;
     this.cancelRender(); const controller = new AbortController(); this.renderController = controller;
     this.selectArtifact(file);
-    let panel = this.nodes.preview.querySelector<HTMLElement>(':scope > .storyboard-structure-panel');
-    if (!panel) { panel = element('section', 'storyboard-structure-panel'); this.nodes.preview.append(panel); }
+    const slot = this.nodes.preview.querySelector<HTMLElement>('[data-structure-slot]') || this.nodes.preview;
+    let panel = slot.querySelector<HTMLElement>(':scope > .storyboard-structure-panel');
+    if (!panel) { panel = element('section', 'storyboard-structure-panel'); slot.append(panel); }
     panel.setAttribute('aria-busy', 'true');
     try { await this.renderStructure(file, panel); if (generation === this.storyboardStructureGeneration) panel.dataset.ready = 'true'; }
     catch (error) {
@@ -288,7 +308,7 @@ export class ResultWorkspace {
   async openArtifact(artifact: ResultFile, requestedGeneration?: number): Promise<void> {
     const generation = requestedGeneration ?? ++this.previewGeneration;
     this.storyboardStructureGeneration += 1;
-    this.destroyViewRenderer(); this.storyboard.destroy(); this.cancelRender(); this.selectArtifact(artifact); this.markTab(null);
+    this.destroyViewRenderer(); this.geometry.dispose(); this.storyboard.destroy(); this.cancelRender(); this.selectArtifact(artifact); this.markTab(null);
     const fileName = resultFileName(artifact); this.nodes.previewTitle.textContent = localName(fileName); this.nodes.previewDescription.textContent = formatBytes(artifact.size);
     this.nodes.download.hidden = false; this.nodes.download.href = downloadUrl(artifact); this.nodes.download.title = fileName;
     this.nodes.download.textContent = t('results.downloadNamed', { name: localName(fileName) });
@@ -347,12 +367,18 @@ export class ResultWorkspace {
     this.nodes.artifactSummary.textContent = showingFiltered
       ? t('results.fileSummaryFiltered', { shown: artifacts.length, total: this.manifest?.artifacts.length ?? artifacts.length, size: formatBytes(size) })
       : t('results.fileSummaryAll', { count: artifacts.length, size: formatBytes(size) });
+    // Capture actual disclosure state before replacing nodes. A queued toggle
+    // from a detached tree must not overwrite a reader's more recent choice.
+    this.nodes.fileList.querySelectorAll<HTMLDetailsElement>('[data-directory-key]').forEach(details => {
+      this.directoryExpansion.set(details.dataset.directoryKey!, details.open);
+    });
     this.nodes.fileList.replaceChildren();
     const renderNode = (node: ArtifactTreeNode, target: HTMLElement, group: string): void => {
       node.directories.forEach((directory) => { const details = element('details', 'result-directory') as HTMLDetailsElement;
         const key = `${group}/${directory.path}`;
         details.open = this.directoryExpansion.get(key) ?? true;
-        details.addEventListener('toggle', () => this.directoryExpansion.set(key, details.open));
+        details.dataset.directoryKey = key;
+        details.addEventListener('toggle', () => { if (details.isConnected) this.directoryExpansion.set(key, details.open); });
         const summary = element('summary', '', directory.name); const children = element('div', 'result-directory-children'); details.append(summary, children); target.append(details); renderNode(directory, children, group); });
       node.artifacts.forEach((artifact) => target.append(this.fileRow(artifact)));
     };
@@ -397,16 +423,57 @@ export class ResultWorkspace {
 
   private syncArchive(): void {
     const archive = this.manifest?.archive; const available = Boolean(archive?.request_url || archive?.download_url);
-    this.nodes.archive.hidden = !available; this.nodes.archive.disabled = !available;
-    this.nodes.archive.textContent = archive?.ready ? t('results.archiveDownload') : t('results.archiveCreate');
+    if (archive?.ready && archive.download_url) {
+      this.archiveBusy = false;
+      if (this.archiveTimer != null) clearTimeout(this.archiveTimer);
+      this.archiveTimer = null;
+      this.nodes.archiveStatus.textContent = t('results.archiveReady');
+      this.nodes.archiveStatus.dataset.error = 'false';
+    }
+    this.nodes.archive.hidden = !available; this.nodes.archive.disabled = !available || this.archiveBusy;
+    this.nodes.archive.textContent = archive?.ready && archive.download_url ? t('results.archiveDownload') : t(this.archiveBusy ? 'results.archiveBuilding' : 'results.archiveCreate');
   }
   private async archiveAction(): Promise<void> {
-    const archive = this.manifest?.archive; if (!archive) return;
-    if (archive.ready && archive.download_url) { location.assign(archive.download_url); return; }
-    if (!archive.request_url) return; this.nodes.archive.disabled = true;
-    try { await requestResultArchive(archive.request_url); this.toast(t('results.archiveRequested')); }
-    catch (error) { this.toast((error as Error).message || t('results.archiveFailed'), true); }
-    finally { this.nodes.archive.disabled = false; }
+    const archive = this.manifest?.archive; if (!archive || this.archiveBusy) return;
+    if (archive.ready && archive.download_url) { beginDownload(archive.download_url); return; }
+    if (!archive.request_url) return;
+    this.archiveBusy = true; this.archiveChecks = 0;
+    this.nodes.archiveStatus.dataset.error = 'false';
+    this.nodes.archiveStatus.textContent = t('results.archiveBuilding'); this.syncArchive();
+    try {
+      await requestResultArchive(archive.request_url);
+      if (!this.disposed) await this.checkArchive();
+    } catch (error) { this.archiveError((error as Error).message || t('results.archiveFailed')); }
+  }
+  private async checkArchive(): Promise<void> {
+    try {
+      const manifest = await getResultManifest(this.taskId, this.listeners.signal);
+      if (this.disposed) return;
+      // Refresh only archive state: never tear down an active molecular selection.
+      if (this.manifest) this.manifest.archive = manifest.archive;
+      if (manifest.archive?.ready && manifest.archive.download_url) { this.syncArchive(); return; }
+      if (++this.archiveChecks >= 30) { this.archiveError(t('results.archiveWaiting')); return; }
+      this.archiveTimer = window.setTimeout(() => void this.checkArchive(), 4000);
+    } catch (error) { if (!this.disposed) this.archiveError((error as Error).message || t('results.archiveFailed')); }
+  }
+  private archiveError(message: string): void {
+    this.archiveBusy = false; this.nodes.archiveStatus.textContent = message;
+    this.nodes.archiveStatus.dataset.error = 'true'; this.syncArchive();
+  }
+
+  private async openGeometry(file: LogicalResultFile, description: string): Promise<void> {
+    let panel = this.nodes.preview.querySelector<HTMLElement>('.storyboard-geometry-panel');
+    if (!panel) { panel = element('section', 'storyboard-geometry-panel'); this.nodes.preview.append(panel); }
+    this.geometry.dispose();
+    const heading = element('h3', '', resultFileName(file));
+    const note = element('p', 'result-note', description);
+    const close = element('button', 'result-button', t('results.geometryClose'));
+    const host = element('div', 'structure-host'); host.style.height = '24rem'; host.style.position = 'relative';
+    close.addEventListener('click', () => { this.geometry.dispose(); panel?.remove(); });
+    panel.replaceChildren(heading, note, close, host);
+    await this.geometry.setRepresentation('points');
+    try { await this.geometry.mount(host, file, this.structureTheme); }
+    catch (error) { host.replaceChildren(element('p', 'result-empty', (error as Error).message)); }
   }
 
   private readonly syncRail = (): void => {
@@ -429,12 +496,11 @@ export class ResultWorkspace {
   private renderEmpty(): void { this.resetPreview(); this.nodes.preview.replaceChildren(element('p', 'result-empty', t('results.noPreview'))); }
   private renderPreviewError(message: string): void { this.resetPreview(); this.nodes.preview.replaceChildren(element('p', 'result-empty', message)); this.nodes.preview.setAttribute('aria-busy', 'false'); }
   private renderFatal(message: string): void { this.setState(t('results.fatalTitle'), message); this.renderPreviewError(t('results.fatalHint')); }
-  private toast(message: string, error = false): void { const node = element('div', `result-toast${error ? ' is-error' : ''}`, message); node.setAttribute('role', error ? 'alert' : 'status'); this.nodes.toast.append(node); setTimeout(() => node.remove(), 3600); }
   private cancelRender(): void { this.renderController?.abort(); this.renderController = null; }
-  private resetPreview(): void { this.storyboardStructureGeneration += 1; this.destroyViewRenderer(); this.cancelRender(); this.storyboard.destroy(); this.structure.dispose(); }
+  private resetPreview(): void { this.storyboardStructureGeneration += 1; this.destroyViewRenderer(); this.cancelRender(); this.storyboard.destroy(); this.structure.dispose(); this.geometry.dispose(); }
 
   destroy(): void {
-    if (this.disposed) return; this.disposed = true; this.destroyViewRenderer(); this.cancelRender(); this.loadController?.abort(); this.storyboard.destroy(); this.structure.dispose();
-    if (this.poll != null) clearInterval(this.poll); this.listeners.abort(); this.root.replaceChildren();
+    if (this.disposed) return; this.disposed = true; this.destroyViewRenderer(); this.cancelRender(); this.loadController?.abort(); this.storyboard.destroy(); this.structure.dispose(); this.geometry.dispose();
+    if (this.poll != null) clearInterval(this.poll); if (this.archiveTimer != null) clearTimeout(this.archiveTimer); this.listeners.abort(); this.root.replaceChildren();
   }
 }

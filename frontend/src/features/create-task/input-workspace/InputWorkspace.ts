@@ -56,6 +56,7 @@ export class InputWorkspace {
       }
       index += 1;
       const section = element('section', 'ct-protocol-step'); section.dataset.stepId = step.id;
+      section.dataset.content = step.capabilities.every(capability => capability.plugin === 'parameters') ? 'parameters' : 'input';
       const heading = element('header', 'ct-step-heading'); heading.append(element('span', 'ct-step-number', String(index).padStart(2, '0')), element('h2', 'ct-step-title', step.title));
       if (step.description) heading.append(element('p', 'ct-step-description', step.description));
       const body = element('div', 'ct-step-body'); section.append(heading, body); this.root.append(section); stepTargets.set(step.id, body);
