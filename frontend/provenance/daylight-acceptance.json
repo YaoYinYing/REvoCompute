@@ -216,5 +216,196 @@
     ],
     "i18n": "both PRs edit i18n; Git auto-merges at these heads, semantic reconciliation still required",
     "pr84": "only TODO.md changed; older composition reference is superseded by approved Daylight direction"
+  },
+  "full_site_extension": {
+    "implementation_commit": "f344f1375e9434a3c63b0efd918ec44c53eb5b7a",
+    "created_at": "2026-10-15T17:28:52.926597+00:00",
+    "build_manifest_sha256": "b9bb9b26a996a5adaeabffe6771a5064534c3fc335f5b425a72fdc2207fc7863",
+    "screenshots": [
+      {
+        "path": "docs/assets/daylight/site/quota-mobile.png",
+        "sha256": "8e150756a5b62f4d80e63d9c572bcc75c759232dc427dfeb2e00ffbbc07bad3b",
+        "viewport_width": 390,
+        "boundary": "real built production frontend; existing synthetic API account/operations fixtures and server-contract method fixtures; no live deployment or account data"
+      },
+      {
+        "path": "docs/assets/daylight/site/users-desktop.png",
+        "sha256": "673df400ba6e112fb9127406fd7cca6b2fc8999cec5861766dc7d457bd4e9298",
+        "viewport_width": 1440,
+        "boundary": "real built production frontend; existing synthetic API account/operations fixtures and server-contract method fixtures; no live deployment or account data"
+      },
+      {
+        "path": "docs/assets/daylight/site/fleet-mobile.png",
+        "sha256": "b3fd122720efb19ed83cf4a9a57365e747dcf8c5f401bcbf7ddaa473b7da6d15",
+        "viewport_width": 390,
+        "boundary": "real built production frontend; existing synthetic API account/operations fixtures and server-contract method fixtures; no live deployment or account data"
+      },
+      {
+        "path": "docs/assets/daylight/site/configuration-desktop.png",
+        "sha256": "be122a0c18978ec081cb85b6394ade5c192ce9b365b08db855ea99f0bd3a0b34",
+        "viewport_width": 1440,
+        "boundary": "real built production frontend; existing synthetic API account/operations fixtures and server-contract method fixtures; no live deployment or account data"
+      },
+      {
+        "path": "docs/assets/daylight/site/gpu-credits-desktop.png",
+        "sha256": "40861ca3c87cd82ada879c9c301b88c83eb662fa7272f5f2937005eecfe57610",
+        "viewport_width": 1440,
+        "boundary": "real built production frontend; existing synthetic API account/operations fixtures and server-contract method fixtures; no live deployment or account data"
+      },
+      {
+        "path": "docs/assets/daylight/site/catalog-mobile.png",
+        "sha256": "17d6ac4e85b7891dcb8065423e1a7c724c0412e3ff9de905a566a0ddf1f5b1a0",
+        "viewport_width": 390,
+        "boundary": "real built production frontend; existing synthetic API account/operations fixtures and server-contract method fixtures; no live deployment or account data"
+      },
+      {
+        "path": "docs/assets/daylight/site/configuration-dark-desktop.png",
+        "sha256": "15c09f89b223f3f75fdb43076bcdf2b7c8e1364299a048b0270013797ba06dea",
+        "viewport_width": 1440,
+        "boundary": "real built production frontend; existing synthetic API account/operations fixtures and server-contract method fixtures; no live deployment or account data"
+      },
+      {
+        "path": "docs/assets/daylight/site/fleet-desktop.png",
+        "sha256": "77bcca4f42644cd29c402cfac496e922dd0bc53ecc62cf93bf3f5a8d93513231",
+        "viewport_width": 1440,
+        "boundary": "real built production frontend; existing synthetic API account/operations fixtures and server-contract method fixtures; no live deployment or account data"
+      },
+      {
+        "path": "docs/assets/daylight/site/quota-desktop.png",
+        "sha256": "a0a566f71c0b4bf2768405c276034a58cef423ba190db3c85e528bd71f30c5cc",
+        "viewport_width": 1440,
+        "boundary": "real built production frontend; existing synthetic API account/operations fixtures and server-contract method fixtures; no live deployment or account data"
+      },
+      {
+        "path": "docs/assets/daylight/site/security-desktop.png",
+        "sha256": "40f46a6c3cfd120265289dbb4a5816689a3109ab5668dd3b70ff17866fe7b55c",
+        "viewport_width": 1440,
+        "boundary": "real built production frontend; existing synthetic API account/operations fixtures and server-contract method fixtures; no live deployment or account data"
+      },
+      {
+        "path": "docs/assets/daylight/site/catalog-desktop.png",
+        "sha256": "0a44d41458d75cfec6cb175c7ba6e73fafa827f935df73b8fa014f2715d0f3a9",
+        "viewport_width": 1440,
+        "boundary": "real built production frontend; existing synthetic API account/operations fixtures and server-contract method fixtures; no live deployment or account data"
+      },
+      {
+        "path": "docs/assets/daylight/site/runner-access-desktop.png",
+        "sha256": "23ea735958f894eb7980939fb7fb766888e4388e599f9121b2b77a9f7f5e80bd",
+        "viewport_width": 1440,
+        "boundary": "real built production frontend; existing synthetic API account/operations fixtures and server-contract method fixtures; no live deployment or account data"
+      },
+      {
+        "path": "docs/assets/daylight/site/profile-mobile.png",
+        "sha256": "9734be85436545e22375ae3cb2ea85bc0ea218df94bf2e015926fb02fa193913",
+        "viewport_width": 390,
+        "boundary": "real built production frontend; existing synthetic API account/operations fixtures and server-contract method fixtures; no live deployment or account data"
+      },
+      {
+        "path": "docs/assets/daylight/site/api-key-desktop.png",
+        "sha256": "38e6fa794360a6f7996bc4def38f716d597ad0a4ca2d55149e328ed3ca26cc4a",
+        "viewport_width": 1440,
+        "boundary": "real built production frontend; existing synthetic API account/operations fixtures and server-contract method fixtures; no live deployment or account data"
+      },
+      {
+        "path": "docs/assets/daylight/site/method-desktop.png",
+        "sha256": "d1db4971e95955c3475025189bc48d6a40aa240e184c1a7071bad12406c94212",
+        "viewport_width": 1440,
+        "boundary": "real built production frontend; existing synthetic API account/operations fixtures and server-contract method fixtures; no live deployment or account data"
+      },
+      {
+        "path": "docs/assets/daylight/site/logs-desktop.png",
+        "sha256": "4391b8aa3e2825e0d978c8c4adced1a15f5dcf73540be9c53d757274d88e4b5b",
+        "viewport_width": 1440,
+        "boundary": "real built production frontend; existing synthetic API account/operations fixtures and server-contract method fixtures; no live deployment or account data"
+      },
+      {
+        "path": "docs/assets/daylight/site/metrics-desktop.png",
+        "sha256": "b71137efabd1c4f1d4309d8b711b56b3f7d1901808f1f6b0be65f261918554c9",
+        "viewport_width": 1440,
+        "boundary": "real built production frontend; existing synthetic API account/operations fixtures and server-contract method fixtures; no live deployment or account data"
+      },
+      {
+        "path": "docs/assets/daylight/site/profile-desktop.png",
+        "sha256": "33e01d31ac8031237b87b093ec8b5aa3b54d98d84e446f0f402d7108ad9b8954",
+        "viewport_width": 1440,
+        "boundary": "real built production frontend; existing synthetic API account/operations fixtures and server-contract method fixtures; no live deployment or account data"
+      },
+      {
+        "path": "docs/assets/daylight/site/login-desktop.png",
+        "sha256": "3da9b846b47bd673c6d0c8d1b2fa10e7318787cb31c071ce3b182867d89dea3a",
+        "viewport_width": 1440,
+        "boundary": "real built production frontend; existing synthetic API account/operations fixtures and server-contract method fixtures; no live deployment or account data"
+      },
+      {
+        "path": "docs/assets/daylight/site/home-mobile.png",
+        "sha256": "d311033e2a2c48ea8469c5b95747dd2a596ac0859a330b7392d87d585ab18e09",
+        "viewport_width": 390,
+        "boundary": "real built production frontend; existing synthetic API account/operations fixtures and server-contract method fixtures; no live deployment or account data"
+      },
+      {
+        "path": "docs/assets/daylight/site/login-mobile.png",
+        "sha256": "fa854c33cf1cb9298613c71411e671b8fa3213fbf14a765ce92c9003e1908d5e",
+        "viewport_width": 390,
+        "boundary": "real built production frontend; existing synthetic API account/operations fixtures and server-contract method fixtures; no live deployment or account data"
+      },
+      {
+        "path": "docs/assets/daylight/site/home-desktop.png",
+        "sha256": "fad8f4af331647959f67699b356285686e7c9a0d08bcf07665da981bd135238f",
+        "viewport_width": 1440,
+        "boundary": "real built production frontend; existing synthetic API account/operations fixtures and server-contract method fixtures; no live deployment or account data"
+      },
+      {
+        "path": "docs/assets/daylight/site/api-reference-desktop.png",
+        "sha256": "9744d2afed35f1158c338d1ed21ae1e8924bd259e8ef00dd2d86e10c02e1261d",
+        "viewport_width": 1440,
+        "boundary": "real built production frontend; existing synthetic API account/operations fixtures and server-contract method fixtures; no live deployment or account data"
+      },
+      {
+        "path": "docs/assets/daylight/site/terms-desktop.png",
+        "sha256": "4757df145293df950e8ae3e72535ab6377c28d3498ffbfb405ec11ce21bd5948",
+        "viewport_width": 1440,
+        "boundary": "real built production frontend; existing synthetic API account/operations fixtures and server-contract method fixtures; no live deployment or account data"
+      },
+      {
+        "path": "docs/assets/daylight/site/password-reset-desktop.png",
+        "sha256": "3ba8a7ee99f45380dac5561f6a5beca35bd2fa30e45432db304c263d8772cd3e",
+        "viewport_width": 1440,
+        "boundary": "real built production frontend; existing synthetic API account/operations fixtures and server-contract method fixtures; no live deployment or account data"
+      },
+      {
+        "path": "docs/assets/daylight/site/register-desktop.png",
+        "sha256": "d40970742127846e6bcacbebf24f02af45c225bc2c4ba18584256e0c28e375c2",
+        "viewport_width": 1440,
+        "boundary": "real built production frontend; existing synthetic API account/operations fixtures and server-contract method fixtures; no live deployment or account data"
+      }
+    ],
+    "navigation": "Runner catalog to method detail to preparation; shared shell to all personal sections; local account index and operations index; browser Back preserves document and current destination; public/auth/API and forbidden-admin sign-in flow.",
+    "verification": {
+      "frontend_typecheck": "passed",
+      "frontend_build": "passed; existing large chunk warning",
+      "frontend_unit_suite": "155 passed, two fetch-fixture failures repaired by providing the newly consumed infrastructure response; final Runner detail subset 3 passed including exclusive-bound behavior",
+      "functional_browser_gate": "12 passed (account/security/API key/access/credit/administration/configuration/log/authentication behavior); final production site captures 2 passed",
+      "reflow_and_controls": "23 passed across public header, WCAG spacing/text resizing and the production molecular advanced-controls cases"
+    },
+    "regressions": {
+      "280px_overflow": "Reproduced genuine private header/navigation overflow under WCAG text spacing; wrapping chrome fixed and regression passed.",
+      "320px_molecular_controls": "Native disclosure was below the initial viewport, not clipped or inaccessible. Test now scrolls it into view before measuring hit visibility; pointer and panel containment pass at 320 and 768 px.",
+      "quota_style_dependency": "Shared table and envelope styles are now imported by their actual owners, so a fresh Quota route does not depend on visiting Admin.",
+      "public_navigation": "Native details is opened for the desktop layout, closed when switching into compact mode; observer follows actual header and root font geometry.",
+      "exclusive_parameter_bounds": "Runner detail now preserves strict inequalities and the owning schema UI annotations."
+    },
+    "ownership": {
+      "pr82": "No admission/readiness gating or submission contract changes. Infrastructure is displayed as a read-only global fact.",
+      "pr83": "No Runner lifecycle implementation changes or new administrative actions.",
+      "pr85": "No accounting calculations, credit policies or Metrics aggregation changes.",
+      "pr87": "Untouched; remains separate."
+    },
+    "limitations": [
+      "Full BrowserContracts was not rerun; the previous head has many assertions of the superseded sidebar/gallery design. No full-green browser-suite claim is made.",
+      "Account/operations body copy still includes pre-existing English text; navigation and public branding use the existing locale catalog.",
+      "Dense evidence tables intentionally scroll locally on phones.",
+      "Existing Metrics minor tick labels can be visually repetitive; aggregation/chart functional ownership remains PR85.",
+      "No live deployment, scheduler validation, merge, or force push."
+    ]
   }
 }
