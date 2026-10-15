@@ -102,6 +102,7 @@ body { container-type: inline-size; }
   .app-user { display: none; }
   .app-header .lang-menu-value { display: none; }
   .app-nav, .app-shell[data-rail="collapsed"] .app-nav { position: relative; inset: auto; min-height: 3.25rem; height: auto; flex-wrap: wrap; padding-inline: 1.25rem; justify-content: space-between; }
+  .app-nav-group[data-nav-group="compute"], .app-nav-group[data-nav-group="compute"] .app-nav-group-items { height: auto; min-height: 3.25rem; }
   .app-nav-foot { display: block; margin-left: auto; }
   .app-secondary-nav { right: 1rem; max-height: calc(100dvh - 9rem); }
   .dashboard-page { width: calc(100% - 2.5rem); padding-top: 1.5rem; }

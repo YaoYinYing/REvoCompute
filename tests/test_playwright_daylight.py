@@ -34,6 +34,9 @@ def test_dashboard_views_filters_and_important_type_remain_usable(page: Page, wi
     open_tasks(page)
     expect(page.get_by_role('heading', name='Tasks', exact=True)).to_be_visible()
     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+    nav = page.locator('.app-nav').bounding_box()
+    toggle = page.locator('.app-rail-toggle').bounding_box()
+    assert nav and toggle and toggle['y'] + toggle['height'] <= nav['y'] + nav['height'] + 1
     assert page.evaluate("document.fonts.check('400 14px \"DM Sans\"') && document.fonts.check('500 40px \"Instrument Sans\"')")
     for layout in ('compact', 'table', 'detailed'):
         page.locator(f'[data-layout="{layout}"]').first.click()
