@@ -197,6 +197,9 @@ def test_advanced_controls_toggle_is_discoverable_and_operable(page: Page, monke
 def test_advanced_controls_reach_every_reader_at_narrow_widths(page: Page, monkeypatch: pytest.MonkeyPatch, width: int, height: int) -> None:
     """No width strands the disclosure, covers the science, or traps a scroll."""
     errors = _open_result(page, monkeypatch, width=width, height=height)
+    # The complete molecular toolbar can place the stage below the initial
+    # viewport on a phone. Measure reachability after ordinary page scrolling.
+    page.locator(_DISCLOSURE).first.scroll_into_view_if_needed()
     closed = _reading(page)
     assert closed["disclosure"]["inside"], closed
     assert closed["disclosure"]["hittable"], closed

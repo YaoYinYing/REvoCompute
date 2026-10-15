@@ -53,6 +53,18 @@ const ACCOUNT_DESTINATIONS: ReadonlyArray<NavDestination> = [
  */
 const QUOTA_DESTINATION: NavDestination = ['/compute/quota', 'scale', 'shell.account.quota'];
 
+/** In-page workspace navigation shares the shell's destination vocabulary. */
+export function accountNavigation(): HTMLElement {
+  const navigation = document.createElement('nav'); navigation.className = 'account-navigation';
+  navigation.setAttribute('aria-label', t('shell.nav.account'));
+  for (const [href, , label] of [...ACCOUNT_DESTINATIONS, QUOTA_DESTINATION]) {
+    const link = document.createElement('a'); link.href = href; link.textContent = t(label);
+    if (location.pathname === href || (href === '/compute/profile' && location.pathname === '/compute/account/account')) link.setAttribute('aria-current', 'page');
+    navigation.append(link);
+  }
+  return navigation;
+}
+
 export function mountShell(root: HTMLElement): AppShell {
   root.replaceChildren();
   applyLocale(locale(), false);

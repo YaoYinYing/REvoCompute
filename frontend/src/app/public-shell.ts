@@ -41,6 +41,16 @@ export function mountPublicShell(root: HTMLElement): AppShell {
   feedback.append(notices);
   root.append(header, outlet, feedback);
   createIcons({ icons: publicIcons, root: header });
+  const navigation = header.querySelector<HTMLDetailsElement>('.public-navigation')!;
+  let desktop: boolean | null = null;
+  const syncNavigation = (): void => {
+    const style = getComputedStyle(header);
+    const available = header.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+    const wide = available > 66 * parseFloat(getComputedStyle(document.documentElement).fontSize);
+    if (desktop !== wide) { desktop = wide; navigation.open = wide; }
+  };
+  const resize = new ResizeObserver(syncNavigation); resize.observe(header); syncNavigation();
+
   return {
     outlet,
     notify(message, tone = 'info') {
@@ -57,12 +67,14 @@ export function mountPublicShell(root: HTMLElement): AppShell {
       account.innerHTML = `<i data-lucide="${user ? 'user-round' : 'log-in'}" aria-hidden="true"></i><span>${t(user ? 'shell.action.profile' : 'shell.action.signIn')}</span>`;
       createIcons({ icons: { LogIn, UserRound }, root: account });
     },
-    // The public header carries one account affordance and no navigation state to
-    // synchronize; the methods exist so the shared router can address either shell
-    // without knowing which one it mounted. Nothing here subscribes at the document
-    // level, so leaving the chrome has nothing of its own to release.
-    syncActive() {},
+    // The public header preserves its disclosure while the router changes pages.
+    syncActive() {
+      navigation.querySelectorAll<HTMLAnchorElement>('a').forEach(link => {
+        if (link.pathname === location.pathname && link.origin === location.origin) link.setAttribute('aria-current', 'page');
+        else link.removeAttribute('aria-current');
+      });
+    },
     refreshNotices() {},
-    destroy() {},
+    destroy() { resize.disconnect(); },
   };
 }

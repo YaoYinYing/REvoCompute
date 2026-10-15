@@ -125,8 +125,8 @@ const en: Dictionary = {
   'theme.dark': 'Dark',
 
   // Public chrome
-  'public.brand': 'REvoDesign',
-  'public.home': 'REvoDesign home',
+  'public.brand': 'REvoCompute',
+  'public.home': 'REvoCompute home',
   'public.nav.home': 'Home',
   'public.nav.runners': 'Runners',
   'public.nav.api': 'API',
@@ -731,8 +731,8 @@ const zhCN: Dictionary = {
   'theme.light': '浅色',
   'theme.dark': '深色',
 
-  'public.brand': 'REvoDesign',
-  'public.home': 'REvoDesign 首页',
+  'public.brand': 'REvoCompute',
+  'public.home': 'REvoCompute 首页',
   'public.nav.home': '首页',
   'public.nav.runners': '计算模块',
   'public.nav.api': 'API',

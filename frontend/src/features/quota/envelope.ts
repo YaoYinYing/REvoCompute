@@ -1,3 +1,4 @@
+import './envelope.css';
 /*
  * The canonical per-account resource envelope, read only.
  *

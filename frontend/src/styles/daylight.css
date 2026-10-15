@@ -125,3 +125,16 @@ body { container-type: inline-size; }
   .dashboard-page .task-list[data-layout] .task-actions { justify-content: start; }
   .dashboard-page .task-list[data-layout="compact"] .task-card dl { display: none; }
 }
+
+/* Narrow layouts and enlarged text wrap the chrome rather than the document. */
+@container (max-width: 24rem) {
+  .app-shell, .app-shell[data-rail="expanded"] { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto auto 1fr; grid-template-areas: "brand" "header" "nav" "outlet"; }
+  .app-header { justify-content: end; padding: 0 .75rem .5rem; min-height: 2.5rem; }
+  .app-nav, .app-shell[data-rail="collapsed"] .app-nav { padding-inline: .75rem; }
+  .app-nav-group[data-nav-group="compute"], .app-nav-group[data-nav-group="compute"] .app-nav-group-items { flex-wrap: wrap; min-width: 0; gap: .2rem; }
+  .app-shell[data-rail] .app-nav a { padding-inline: .55rem; }
+}
+.public-header { background: var(--app-bg); backdrop-filter: none; }
+.public-brand { font-weight: 500; letter-spacing: -.03em; }
+.public-navigation a { font-size: .875rem; font-weight: 400; }
+.public-navigation a[aria-current="page"] { text-decoration: underline; text-decoration-color: var(--app-plum); text-underline-offset: .5rem; }

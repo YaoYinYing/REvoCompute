@@ -1,4 +1,6 @@
 import type { CurrentUser } from '../../api/app-api';
+import { ADMIN_DESTINATIONS } from '../../app/admin-destinations';
+import { t } from '../../app/i18n';
 import type { AppShell } from '../../app/shell';
 import { guidedTour } from '../../app/guided-tour';
 import { ConfigurationAdmin } from './configuration/ConfigurationAdmin';
@@ -30,6 +32,12 @@ export async function mountAdmin(
   const [title, description] = headings[route];
   const root = element('main', 'admin-page');
   root.append(element('header', 'page-heading', [element('div', '', [text('h1', title), text('p', description)])]));
+  const navigation = element('nav', 'operations-navigation'); navigation.setAttribute('aria-label', t('shell.nav.administration'));
+  for (const destination of ADMIN_DESTINATIONS) {
+    const link = document.createElement('a'); link.href = destination.path; link.textContent = t(destination.label);
+    if (location.pathname === destination.path) link.setAttribute('aria-current', 'page'); navigation.append(link);
+  }
+  root.append(navigation);
   const workspace = element('div', 'admin-workspace'); root.append(workspace); outlet.replaceChildren(root);
   if (route === 'admin-fleet') await new FleetAdmin(shell).mount(workspace);
   else if (route === 'admin-users') await new UserAdmin(shell, user).mount(workspace);
