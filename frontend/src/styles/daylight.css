@@ -1,4 +1,5 @@
 /* Approved Daylight Bench: shared identity and the production Task register. */
+body { container-type: inline-size; }
 .app-shell, .app-shell[data-rail="expanded"] { display: grid; min-height: 100vh; --app-bottom-clearance: 0px; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-rows: auto 1fr; grid-template-areas: "brand nav header" "outlet outlet outlet"; }
 .app-brand, .app-shell[data-rail="expanded"] .app-brand { grid-area: brand; justify-content: start; padding: 0 2rem 0 3rem; min-height: 4.25rem; border: 0; border-bottom: 1px solid var(--app-line); background: var(--app-bg); }
 .app-shell[data-rail] .app-brand span { display: inline; font: 600 1.3rem var(--font-display); letter-spacing: -.055em; }
@@ -18,13 +19,14 @@
 .app-shell[data-rail="collapsed"] .app-secondary-nav { display: none; }
 .app-nav .app-nav-group-label { position: static; width: auto; height: auto; margin: 0; clip: auto; padding: .3rem .7rem; font-size: .875rem; }
 .app-nav-foot { margin: 0; padding: 0; border: 0; display: block; }
-.app-rail-toggle, .app-shell[data-rail="expanded"] .app-rail-toggle { display: flex; justify-content: center; width: auto; min-height: 2.75rem; padding: 0 .65rem; gap: .45rem; font-size: .875rem; border: 1px solid var(--app-line-strong); }
+.app-rail-toggle, .app-shell[data-rail="expanded"] .app-rail-toggle { display: flex; justify-content: center; width: auto; min-height: 2.75rem; padding: 0 .65rem; gap: .45rem; font-size: .875rem; border: 1px solid var(--app-line-strong); border-radius: var(--r-control); background: var(--app-bg); color: var(--app-ink); cursor: pointer; }
 .app-header { position: static; min-height: 4.25rem; padding: 0 3rem 0 1rem; background: var(--app-bg); backdrop-filter: none; }
-.app-header .app-new-task { display: none; }
+.app-nav .app-new-task { background: transparent; color: var(--app-muted); border: 0; font-weight: 400; min-height: 2.75rem; }
 .app-header-actions { gap: .45rem; }
 .app-user, .lang-menu-value, .lang-options button, .skip-link { font-size: .875rem; }
 .app-user { max-width: 8rem; }
 .app-outlet { padding-bottom: 0; }
+.app-shell .app-feedback { max-height: calc(100dvh - var(--app-chrome-height, 4.25rem) - 2rem); }
 .primary-button, .secondary-button, .task-action, .tour-launcher, .ghost-button, .danger-button { font-size: .875rem; min-height: 2.5rem; }
 .dashboard-page { display: block; width: min(100% - 6rem, 90rem); padding-top: 2rem; }
 .dashboard-page > .page-heading { align-items: center; border: 0; padding-bottom: 0; margin: 0 0 1.8rem; }
@@ -80,7 +82,7 @@
 .dashboard-page .task-list[data-layout="compact"] .task-card { padding-block: .8rem; }
 .dashboard-page .task-table { font-size: .875rem; min-width: 55rem; }
 .dashboard-page .task-table th, .dashboard-page .task-table td { padding: .85rem .75rem; font-size: .875rem; }
-@media (max-width: 75rem) {
+@container (max-width: 75rem) {
   .app-brand, .app-shell[data-rail="expanded"] .app-brand { padding-inline: 1.5rem; }
   .app-header { padding-right: 1.5rem; }
   .app-user span { display: none; }
@@ -89,7 +91,7 @@
   .dashboard-page .task-list[data-layout] .task-actions { grid-column: 1 / -1; grid-row: auto; justify-content: end; }
   .dashboard-stats div, .dashboard-stats div:first-child { padding: 1rem; }
 }
-@media (max-width: 56rem) {
+@container (max-width: 56rem) {
   .app-shell, .app-shell[data-rail="expanded"] { grid-template-columns: auto minmax(0, 1fr); grid-template-rows: auto auto 1fr; grid-template-areas: "brand header" "nav nav" "outlet outlet"; }
   .app-brand, .app-shell[data-rail="expanded"] .app-brand { padding-inline: 1.25rem .5rem; min-height: 3.75rem; }
   .app-shell[data-rail] .app-brand span { font-size: 1.2rem; }
@@ -99,8 +101,8 @@
   .app-header .icon-button { width: 2rem; min-width: 2rem; height: 2.5rem; border-color: transparent; }
   .app-user { display: none; }
   .app-header .lang-menu-value { display: none; }
-  .app-nav, .app-shell[data-rail="collapsed"] .app-nav { position: relative; inset: auto; height: 3.25rem; padding-inline: 1.25rem; justify-content: space-between; }
-  .app-nav-foot { display: block; }
+  .app-nav, .app-shell[data-rail="collapsed"] .app-nav { position: relative; inset: auto; min-height: 3.25rem; height: auto; flex-wrap: wrap; padding-inline: 1.25rem; justify-content: space-between; }
+  .app-nav-foot { display: block; margin-left: auto; }
   .app-secondary-nav { right: 1rem; max-height: calc(100dvh - 9rem); }
   .dashboard-page { width: calc(100% - 2.5rem); padding-top: 1.5rem; }
   .dashboard-page > .page-heading { display: block; margin-bottom: 1.5rem; }

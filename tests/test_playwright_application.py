@@ -432,7 +432,7 @@ def test_single_run_task_action_preflights_then_submits_without_a_second_click(p
     }))
     _open_sequence_create(page)
     page.get_by_role("button", name="Run task", exact=True).click()
-    expect(page.get_by_role("heading", name="Dashboard", exact=True)).to_be_visible()
+    expect(page.get_by_role("heading", name="Tasks", exact=True)).to_be_visible()
     assert "preflight" in order and "submit" in order
     assert order.index("preflight") < order.index("submit")
 
@@ -447,7 +447,7 @@ def test_run_task_is_disabled_until_local_validation_passes(page: Page) -> None:
     page.locator("textarea[aria-label='Protein sequence']").fill(">sample\nACDEFG")
     expect(run).to_be_enabled()
     run.click()
-    expect(page.get_by_role("heading", name="Dashboard", exact=True)).to_be_visible()
+    expect(page.get_by_role("heading", name="Tasks", exact=True)).to_be_visible()
     assert "preflight" in order
 
 
@@ -496,7 +496,7 @@ def test_failed_preflight_blocks_submission_and_restores_the_form(page: Page) ->
     run = page.get_by_role("button", name="Run task", exact=True)
     run.click()
     expect(page.locator(".ct-validation-row.error")).to_contain_text("Sequence is too short.")
-    assert page.get_by_role("heading", name="Dashboard", exact=True).count() == 0
+    assert page.get_by_role("heading", name="Tasks", exact=True).count() == 0
     expect(run).to_be_enabled()
     assert "submit" not in order
 
@@ -513,7 +513,7 @@ def test_repeated_run_task_clicks_submit_once(page: Page) -> None:
         const button = [...document.querySelectorAll('button')].find(item => item.textContent.trim() === 'Run task');
         button.click(); button.click(); button.click();
     }""")
-    expect(page.get_by_role("heading", name="Dashboard", exact=True)).to_be_visible()
+    expect(page.get_by_role("heading", name="Tasks", exact=True)).to_be_visible()
     assert len(submits) == 1
 
 
@@ -566,7 +566,7 @@ def test_runner_to_result_workflow_is_frontend_owned_and_refreshable(page: Page)
     expect(page.get_by_role("heading", name="Sequence demo", exact=True)).to_be_visible()
     page.locator("textarea[aria-label='Protein sequence']").fill(">sample\nACDEFG")
     page.get_by_role("button", name="Run task", exact=True).click()
-    expect(page.get_by_role("heading", name="Dashboard", exact=True)).to_be_visible()
+    expect(page.get_by_role("heading", name="Tasks", exact=True)).to_be_visible()
     page.get_by_role("link", name="Results").click()
     expect(page.get_by_role("heading", name="Sequence demo", exact=True)).to_be_visible()
     page.reload()
@@ -730,10 +730,11 @@ def test_admin_dashboard_batch_action_uses_authorized_api(page: Page) -> None:
     page.on("dialog", lambda dialog: dialog.accept())
 
     page.goto(f"{ORIGIN}/compute/dashboard")
-    # Administration is a navigation region, not a top-bar menu: the admin sees the
-    # pages in the left navigation and the top bar carries no Administration launcher.
+    # Administration retains its authorized destinations in the named secondary menu.
+    page.get_by_role("button", name="Account & more: Expand navigation", exact=True).click()
     expect(page.locator("[data-nav-group='admin']").get_by_role("link", name="Server logs")).to_have_attribute("href", "/compute/logs")
     assert page.locator(".app-header").get_by_label("Administration").count() == 0
+    page.keyboard.press("Escape")
     expect(page.get_by_role("button", name="Delete selected (0)")).to_be_hidden()
     page.get_by_role("checkbox", name="Select sample.fasta", exact=True).check()
     page.get_by_role("button", name="Delete selected (1)").click()
@@ -762,6 +763,7 @@ def test_anonymous_shell_offers_no_forbidden_administration_links(page: Page, wi
     assert page.locator(".app-header").get_by_label("Administration").count() == 0
     # Account is the only other region, and it is a sign-in affordance: the
     # region's own links are hidden behind the one visible sign-in destination.
+    page.get_by_role("button", name="Account & more: Expand navigation", exact=True).click()
     expect(page.locator("[data-nav-group='account']")).to_be_visible()
     account = page.locator("[data-nav-group='account'] a:visible")
     expect(account).to_have_count(1)
@@ -797,7 +799,8 @@ def test_dark_theme_and_mobile_navigation_clearance(page: Page) -> None:
         "document.querySelector('.app-nav').getBoundingClientRect().height]; }"
     )
     assert create_colors[0] != create_colors[1]
-    assert create_colors[2] >= create_colors[3]
+    assert page.locator(".app-nav").evaluate("node => getComputedStyle(node).position") != "fixed"
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
     page.goto(f"{ORIGIN}/compute/results/{TASK_ID}")
     expect(page.locator("html")).to_have_attribute("data-theme", "dark")
@@ -826,9 +829,11 @@ def test_page_kickers_keep_their_role_inside_page_headings(page: Page, width: in
     kicker = page.locator(".page-heading .page-kicker")
     expect(kicker).to_be_visible()
     page.evaluate("() => document.fonts.ready")
-    # A context label keeps the same role as its sibling on the method reference;
-    # its nesting must not turn it into introductory prose.
-    assert kicker.evaluate(paint) == kicker_paint
+    # Daylight keeps the context label readable and subordinate to its page title;
+    # the method reference composition is migrated in a later visual slice.
+    dashboard_kicker = kicker.evaluate(paint)
+    title_size = page.locator(".page-heading h1").evaluate("node => parseFloat(getComputedStyle(node).fontSize)")
+    assert 14 <= float(dashboard_kicker["fontSize"].removesuffix("px")) < title_size
     # Account's heading is the section's own identity, not a context label over
     # one, so the page contrasts its heading with its introductory prose instead.
     page.goto(f"{ORIGIN}/compute/profile")
@@ -917,7 +922,7 @@ def test_login_forgot_password_and_return_target_validation(page: Page) -> None:
     page.get_by_label("Password", exact=True).fill("correct horse battery staple")
     page.get_by_role("button", name="Sign in", exact=True).click()
     expect(page).to_have_url(f"{ORIGIN}/compute/dashboard")
-    expect(page.get_by_role("heading", name="Dashboard", exact=True)).to_be_visible()
+    expect(page.get_by_role("heading", name="Tasks", exact=True)).to_be_visible()
     assert any(url.endswith("/forgot-password") and body == {"email": "tester@example.org"} for url, body in posted)
     assert any(url.endswith("/login") and body["username"] == "tester" for url, body in posted)
 
@@ -1009,6 +1014,7 @@ def test_profile_server_state_api_key_access_credits_and_metrics(page: Page) -> 
     expect(page.get_by_label("Affiliation", exact=True)).to_have_value("New Institute")
 
     # Every Account section is a direct destination in the shell's Account region.
+    page.get_by_role("button", name="Account & more: Expand navigation", exact=True).click()
     account_nav = page.locator("[data-nav-group='account']")
     expect(account_nav.get_by_role("link", name="Security", exact=True)).to_have_attribute(
         "href", "/compute/account/security")
@@ -1125,6 +1131,7 @@ def test_auth_profile_and_admin_views_are_responsive_under_production_csp(page: 
     # The Account sections are the shell's own Account region, one page each: there
     # is no nested tab strip inside the page, so the section controls are the
     # navigation and never appear twice.
+    page.get_by_role("button", name="Account & more: Expand navigation", exact=True).click()
     expect(page.locator("[data-nav-group='account']").get_by_role("link", name="GPU credits", exact=True)).to_be_visible()
     expect(page.get_by_role("tab")).to_have_count(0)
 
@@ -1338,9 +1345,9 @@ def test_save_feedback_and_system_notices_clear_each_other_and_navigation(page: 
     assert stack is not None and feedback is not None and feedback["height"] > 0
     assert stack["y"] >= 56, stack
     assert stack["y"] + stack["height"] < feedback["y"], (stack, feedback)
-    if width <= 896:
-        admin = page.locator("[data-nav-group='admin']").bounding_box()
-        assert admin is not None and feedback["y"] + feedback["height"] < admin["y"], (feedback, admin)
+    navigation = page.locator(".app-nav").bounding_box()
+    assert navigation is not None and stack["y"] > navigation["y"] + navigation["height"]
+    assert feedback["y"] + feedback["height"] <= page.viewport_size["height"]
 
 
 def test_admin_configuration_and_logs_use_live_controls(page: Page) -> None:

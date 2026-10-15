@@ -31,9 +31,6 @@ function storedRail(): RailState { return localStorage.getItem(railKey) === 'exp
 /** A destination the navigation can reach. */
 type NavDestination = [href: string, icon: string, label: string];
 
-/** Above this width the navigation is grouped into labelled regions. */
-const navGrouped = matchMedia('(min-width: 62rem)');
-
 /** The current user's own Account sections, reached directly from the navigation. */
 const ACCOUNT_DESTINATIONS: ReadonlyArray<NavDestination> = [
   ['/compute/profile', 'user-round', 'shell.account.account'],
@@ -64,9 +61,7 @@ export function mountShell(root: HTMLElement): AppShell {
   shell.className = 'app-shell';
   shell.dataset.rail = storedRail();
 
-  // The rail collapses to the logo alone (app.css hides the wordmark) and the logo
-  // is decorative, so the link needs its own accessible name rather than borrowing
-  // the hidden text. The public shell names its brand the same way.
+  // The decorative logo and wordmark share one accessible home destination.
   const brand = document.createElement('a'); brand.className = 'app-brand'; brand.href = '/'; brand.setAttribute('aria-label', t('shell.home'));
   const logo = document.createElement('img'); logo.src = appAsset('logo.svg'); logo.alt = ''; logo.width = 30; logo.height = 30;
   const brandText = document.createElement('span'); brandText.textContent = 'REvoCompute'; brand.append(logo, brandText);
@@ -111,18 +106,16 @@ export function mountShell(root: HTMLElement): AppShell {
   secondaryNav.append(groups.account.element, groups.admin.element);
   nav.append(groups.compute.element, secondaryNav);
 
-  // The rail's collapse control sits at the foot of the navigation, in the same
-  // column, where it is a control rather than a destination: it never navigates,
-  // it acts, and it states its own accessible name and expanded state.
+  // A named disclosure exposes the user's Account and authorized Admin destinations.
   const railToggle = document.createElement('button');
   railToggle.type = 'button'; railToggle.className = 'app-rail-toggle'; railToggle.setAttribute('aria-controls', 'app-secondary-nav');
   const foot = document.createElement('div'); foot.className = 'app-nav-foot'; foot.append(railToggle);
-  nav.append(foot);
+  nav.append(foot, secondaryNav);
 
   const syncRailToggle = (): void => {
     const expanded = shell.dataset.rail === 'expanded';
     railToggle.title = t(expanded ? 'shell.nav.collapse' : 'shell.nav.expand');
-    railToggle.setAttribute('aria-label', railToggle.title);
+    railToggle.setAttribute('aria-label', `${t('shell.nav.more')}: ${railToggle.title}`);
     railToggle.setAttribute('aria-expanded', String(expanded));
     railToggle.innerHTML = `<i data-lucide="${expanded ? 'panel-left-close' : 'panel-left'}" aria-hidden="true"></i><span>${t('shell.nav.more')}</span>`;
     createIcons({ icons: shellIcons, root: railToggle });
@@ -142,16 +135,8 @@ export function mountShell(root: HTMLElement): AppShell {
   document.addEventListener('keydown', onNavigationKey);
   document.addEventListener('pointerdown', onNavigationOutside);
 
-  // The region caption names the region on the desktop rail. On the mobile bar the
-  // Compute and Account destinations sit directly on the bar, so their captions are
-  // removed from the tree there; the Administration caption is kept because on mobile
-  // it names the bounded secondary surface above the bar (see app.css).
-  const syncGroupCaptions = (grouped: boolean): void => {
-    groups.compute.caption.hidden = !grouped; groups.account.caption.hidden = false;
-  };
-  syncGroupCaptions(navGrouped.matches);
-  const onNavGroupedChange = (event: MediaQueryListEvent): void => syncGroupCaptions(event.matches);
-  navGrouped.addEventListener('change', onNavGroupedChange);
+  groups.compute.caption.hidden = true;
+  groups.account.caption.hidden = false;
 
   function navLink(href: string, icon: string, label: string): HTMLAnchorElement {
     const link = document.createElement('a'); link.href = href; link.title = label; link.innerHTML = `<i data-lucide="${icon}" aria-hidden="true"></i><span>${label}</span>`;
@@ -169,7 +154,6 @@ export function mountShell(root: HTMLElement): AppShell {
   }
   const allLinks = (): HTMLAnchorElement[] => [
     ...[...groups.compute.items.children, ...groups.account.items.children, ...groups.admin.items.children] as HTMLAnchorElement[],
-    newTask,
   ];
   function syncActiveToLocation(): void {
     for (const link of allLinks()) {
@@ -182,8 +166,7 @@ export function mountShell(root: HTMLElement): AppShell {
   const actions = document.createElement('div'); actions.className = 'app-header-actions';
   const noticesButton = document.createElement('button'); noticesButton.type = 'button'; noticesButton.className = 'icon-button app-notice-button'; noticesButton.title = t('shell.action.notices'); noticesButton.setAttribute('aria-label', t('shell.action.notices')); noticesButton.innerHTML = '<i data-lucide="bell" aria-hidden="true"></i>';
   noticesButton.hidden = true;
-  // The top bar is global chrome only. Administration lives in the left
-  // navigation, so it must not also be re-launched from a second hidden menu here.
+  // Session utilities remain separate from the destination menu.
   const userLink = document.createElement('a'); userLink.className = 'app-user'; userLink.innerHTML = '<i data-lucide="user-round" aria-hidden="true"></i><span></span>';
   const logout = document.createElement('button'); logout.type = 'button'; logout.className = 'icon-button'; logout.title = t('shell.action.logout'); logout.setAttribute('aria-label', t('shell.action.logout')); logout.hidden = true; logout.innerHTML = '<i data-lucide="log-out" aria-hidden="true"></i>';
   logout.addEventListener('click', async () => {
@@ -193,10 +176,9 @@ export function mountShell(root: HTMLElement): AppShell {
   });
   actions.append(languageMenu(), noticesButton, userLink, logout, themeButton());
   header.append(actions);
-  // The top bar holds global capability plus one primary page action, so the bar is
-  // usable at any width without turning the rail into an IDE toolbar.
+  // Create Task is reachable from every authenticated application route.
   const newTask = document.createElement('a'); newTask.href = '/compute/create_task'; newTask.className = 'app-new-task'; newTask.title = t('shell.nav.newTask'); newTask.innerHTML = `<i data-lucide="plus" aria-hidden="true"></i><span>${t('shell.nav.newTask')}</span>`;
-  header.prepend(newTask);
+  groups.compute.items.append(newTask);
 
   // The outlet is the persistent content region: it outlives every route, so the
   // skip link has a target that survives navigation. It is not itself a `main`
@@ -217,13 +199,12 @@ export function mountShell(root: HTMLElement): AppShell {
   createIcons({ icons: shellIcons, root: shell });
   syncRailToggle();
 
-  // Measure the secondary surface rather than assuming its height: translated
-  // labels and narrow widths can wrap. CSS applies this clearance only on mobile.
-  const adminResize = new ResizeObserver(() => {
-    shell.style.setProperty('--app-admin-height', `${groups.admin.element.getBoundingClientRect().height}px`);
+  // The notice stack clears wrapping/translated navigation at every content size.
+  const chromeResize = new ResizeObserver(() => {
+    const height = Math.max(...[brand, nav, header].map(node => node.offsetTop + node.offsetHeight));
+    shell.style.setProperty('--app-chrome-height', `${height}px`);
   });
-  adminResize.observe(groups.admin.element);
-
+  [brand, nav, header].forEach(node => chromeResize.observe(node));
   const systemNotices = mountSystemNotices({ button: noticesButton, host: feedback });
 
   const syncAccount = (user: CurrentUser | null): void => {
@@ -275,8 +256,7 @@ export function mountShell(root: HTMLElement): AppShell {
     // each chrome releases its own before the next one mounts: an unbounded set of
     // listeners and observers would otherwise accumulate across every crossing.
     destroy() {
-      navGrouped.removeEventListener('change', onNavGroupedChange);
-      adminResize.disconnect();
+      chromeResize.disconnect();
       railToggle.removeEventListener('click', onRailToggle);
       document.removeEventListener('keydown', onNavigationKey);
       document.removeEventListener('pointerdown', onNavigationOutside);

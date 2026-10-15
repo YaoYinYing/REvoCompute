@@ -668,5 +668,5 @@ def test_gpu_structure_runner_is_exercisable_without_weights_or_inference(page: 
     _provide_sequence(page)
     _run_task(page).click()
 
-    expect(page.get_by_role("heading", name="Dashboard", exact=True)).to_be_visible()
+    expect(page.get_by_role("heading", name="Tasks", exact=True)).to_be_visible()
     assert requests.submit()
