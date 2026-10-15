@@ -701,6 +701,15 @@ class TaskDatabase:
             Column("outcome", String, nullable=False, default=""),
             Column("updated_at", Float, nullable=False),
         )
+        # Adapter-authored facts must not be trusted merely because a file in
+        # the Runner-writable result tree claims to be scheduler evidence.
+        self.task_diagnostics_table = Table(
+            "task_execution_diagnostics",
+            self.metadata,
+            Column("task_id", String(32), primary_key=True),
+            Column("evidence_json", Text, nullable=False),
+            Column("updated_at", Float, nullable=False),
+        )
         # The publication identity of a finalized result manifest, in canonical
         # server-owned state.  The result directory belongs to the runner's
         # Unix identity, so a digest recorded *inside* it would be written and
@@ -1211,6 +1220,7 @@ class TaskDatabase:
                     # surviving ``PARTIAL_SUCCESS`` row would be read back as
                     # this attempt's progress.
                     conn.execute(self.task_progress_table.delete().where(self.task_progress_table.c.task_id == md5sum))
+                    conn.execute(self.task_diagnostics_table.delete().where(self.task_diagnostics_table.c.task_id == md5sum))
                     return PreparationClaim("ABANDONED", row, token)
                 if row["status"] == "queued":
                     # A queued row is owned by whatever path queued it: either
@@ -1231,6 +1241,7 @@ class TaskDatabase:
                 # re-prepared like an abandoned row (whose stale progress row
                 # is cleared for the same reason).
                 conn.execute(self.task_progress_table.delete().where(self.task_progress_table.c.task_id == md5sum))
+                conn.execute(self.task_diagnostics_table.delete().where(self.task_diagnostics_table.c.task_id == md5sum))
                 return PreparationClaim("UNOWNED", row, token)
             return PreparationClaim("ACQUIRED", None, token)
 
@@ -1489,6 +1500,7 @@ class TaskDatabase:
         with self.engine.begin() as conn:
             conn.execute(self.tasks_table.delete().where(self.tasks_table.c.md5sum == md5sum))
             conn.execute(self.task_progress_table.delete().where(self.task_progress_table.c.task_id == md5sum))
+            conn.execute(self.task_diagnostics_table.delete().where(self.task_diagnostics_table.c.task_id == md5sum))
             conn.execute(
                 self.result_publications_table.delete().where(
                     self.result_publications_table.c.task_id == md5sum
@@ -2596,6 +2608,38 @@ class TaskDatabase:
         record = dict(row)
         record["progress"] = json.loads(record.pop("progress_json") or "{}")
         return record
+
+    def record_task_diagnostics(self, task_id: str, evidence: dict[str, Any]) -> None:
+        """Retain bounded adapter facts independently of result publication."""
+        encoded = json.dumps(evidence, sort_keys=True)
+        if len(encoded.encode("utf-8")) > 8192:
+            raise ValueError("execution evidence exceeds its metadata budget")
+        statement = sqlite_insert(self.task_diagnostics_table).from_select(
+            ["task_id", "evidence_json", "updated_at"],
+            select(self.tasks_table.c.md5sum, literal(encoded), literal(time.time())).where(
+                self.tasks_table.c.md5sum == task_id,
+                self.tasks_table.c.status.notin_(tuple(self.TERMINAL_STATUSES)),
+                ~select(self.data_lifecycle_table.c.task_id).where(
+                    self.data_lifecycle_table.c.task_id == task_id,
+                    self.data_lifecycle_table.c.state.notin_(("ACTIVE", "ARCHIVED")),
+                ).exists(),
+            ),
+        )
+        statement = statement.on_conflict_do_update(
+            index_elements=[self.task_diagnostics_table.c.task_id],
+            set_={"evidence_json": statement.excluded.evidence_json, "updated_at": statement.excluded.updated_at},
+        )
+        with self.engine.begin() as connection:
+            connection.execute(statement)
+
+    def get_task_diagnostics(self, task_id: str) -> dict[str, Any] | None:
+        with self.engine.connect() as connection:
+            encoded = connection.execute(
+                select(self.task_diagnostics_table.c.evidence_json).where(
+                    self.task_diagnostics_table.c.task_id == task_id
+                )
+            ).scalar_one_or_none()
+        return json.loads(encoded) if encoded else None
 
     def record_result_publication(
         self,

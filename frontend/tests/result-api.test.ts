@@ -36,6 +36,18 @@ describe('Result API boundary', () => {
     expect((result as ResultManifest).filename).toBe('safe model.cif');
   });
 
+  it('keeps a failed Task addressable when its advertised manifest is unavailable', async () => {
+    const responses = [
+      { id: 1, username: 'owner' },
+      { task_id: 'a'.repeat(32), task_type: 'example', display_name: 'run', status: 'failed', terminal: true,
+        status_url: '/status', results_url: '/result', result_available: true, error: 'Publication failed' },
+    ];
+    vi.stubGlobal('fetch', vi.fn(async () => responses.length
+      ? new Response(JSON.stringify(responses.shift()), { status: 200 })
+      : new Response(JSON.stringify({ error: 'Unavailable' }), { status: 404 })));
+    await expect(loadAuthorizedResult('a'.repeat(32))).resolves.toMatchObject({ status: 'failed', error: 'Publication failed' });
+  });
+
   it('parses the server AF3 logical-file shape without inventing a path', () => {
     const manifest = parseResultManifest({
       schema_version: 3, task_id: 'a'.repeat(32), task_type: 'alphafold3', created_at: '2026-09-29T00:00:00Z',

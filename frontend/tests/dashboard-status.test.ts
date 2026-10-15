@@ -109,3 +109,13 @@ describe('Dashboard status vocabulary', () => {
     expect(cell.textContent).toBe('SUCCESS');
   });
 });
+
+
+it('gives a failed Task a direct View error action in both Dashboard layouts', () => {
+  for (const layout of ['detailed', 'table'] as const) {
+    const root = render([task({ status: 'failed', outcome: null })], layout);
+    const action = root.querySelector('button[data-action="diagnostics"]');
+    expect(action?.textContent).toContain('View error');
+    expect(root.querySelector('button[data-action="delete"]')).not.toBeNull();
+  }
+});

@@ -21,12 +21,16 @@ import shutil
 import subprocess
 import threading
 import time
+from collections import deque
+from itertools import islice
 from pathlib import Path
 from typing import Any
 
 from revocompute.job import ExecutionBuilder, ExecutionPlan, Job, JobState
 from revocompute.job._stages import extract_stage_from_log_line
 from revocompute import runtime_bundle
+from revocompute.execution_diagnostics import STATUS_PATH, redacted_log_lines, scheduler_failure
+from revocompute.storage import publish_result_text
 from revocompute.operational_events import emit_event
 from revocompute.resource_observations import (
     OBSERVATION_PREFIX,
@@ -326,6 +330,8 @@ class SlurmJob(Job):
         self._allocation_live = False
         self._wrapper_started = False
         self._admission_error: Exception | None = None
+        self._failure_reason: str | None = None
+        self._scheduler_failure: dict[str, str] | None = None
         self._accounting_enabled = False
         self._allocation_dispatched_callback = allocation_dispatched_callback
         self._allocation_started_callback = allocation_started_callback
@@ -374,6 +380,7 @@ class SlurmJob(Job):
                 self._allocation_submitted_at = time.time()
             self._process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         except Exception:
+            self._failure_reason = "submission_failed"
             emit_event(
                 "slurm.allocation.failed",
                 level="ERROR",
@@ -381,6 +388,7 @@ class SlurmJob(Job):
                 **self._event_fields(),
             )
             self._remove_wrapper_script()
+            self._persist_output()
             self._cleanup_scratch_dir()
             raise
 
@@ -398,12 +406,14 @@ class SlurmJob(Job):
         # cancelled or recovered after a server restart.
         self._job_id_event.wait(timeout=5.0)
         if not self._slurm_job_id:
+            self._failure_reason = "job_id_unavailable"
             self.cancel()
             if self._stdout_thread:
                 self._stdout_thread.join(timeout=2)
             if self._stderr_thread:
                 self._stderr_thread.join(timeout=2)
             self._remove_wrapper_script()
+            self._persist_output()
             detail = " ".join(line.strip() for line in self._stderr_lines if line.strip())
             suffix = f": {detail[-1000:]}" if detail else ""
             emit_event(
@@ -441,6 +451,7 @@ class SlurmJob(Job):
             # so a persisted-fact failure is exactly the case ``poll()`` must
             # fail closed on if the process survives to reach it.
             self._dispatch_error = str(exc)
+            self._failure_reason = "allocation_unrecorded"
             self.cancel()
             self._remove_wrapper_script()
             raise
@@ -641,13 +652,13 @@ class SlurmJob(Job):
             # nonzero, and the refusal is the Task's failure rather than an
             # accounting detail to swallow.
             if self._admission_error is not None:
+                self._failure_reason = "admission_failed"
                 raise self._admission_error
 
             # The wrapper is removed before any output is captured, so a task
             # that rewrote the running script cannot ship those bytes in the
             # download archive.
             self._remove_wrapper_script()
-            self._save_output()
 
             exit_code = self._process.returncode
             if exit_code == 0:
@@ -666,6 +677,7 @@ class SlurmJob(Job):
             self._emit_terminal("slurm.allocation.failed", reason_code="nonzero_exit")
             return JobState.FAILED
         finally:
+            self._persist_output()
             # Ingest before the terminal event, and for every outcome: an OOM
             # row is the evidence the estimator exists to learn from, and a
             # failed run is where it appears.
@@ -678,6 +690,7 @@ class SlurmJob(Job):
     def cancel(self) -> None:
         proc = self._process
         if proc is None or proc.poll() is not None:
+            self._persist_output()
             self._cleanup_scratch_dir()
             return
         proc.terminate()
@@ -691,6 +704,7 @@ class SlurmJob(Job):
             if self._slurm_job_id:
                 self._emit_terminal("slurm.allocation.cancelled")
         finally:
+            self._persist_output()
             self._remove_allocation_approval()
             self._cleanup_scratch_dir()
 
@@ -737,6 +751,8 @@ class SlurmJob(Job):
         }
 
     def _emit_terminal(self, event: str, *, reason_code: str | None = None) -> None:
+        if event == "slurm.allocation.failed":
+            self._failure_reason = reason_code
         duration_ms = None
         if self._allocation_started is not None:
             duration_ms = max(0, round((time.monotonic() - self._allocation_started) * 1000))
@@ -1573,21 +1589,120 @@ class SlurmJob(Job):
             stream.close()
             self._job_id_reader_finished("stderr")
 
+    def _persist_output(self) -> None:
+        """Drain and preserve captured evidence without replacing the job outcome."""
+        if self._task_store is not None:
+            try:
+                task = self._task_store.get_task(self.task_id)
+                lifecycle = self._task_store.get_data_lifecycle(self.task_id)
+                if (
+                    task is None or task["status"] in self._task_store.TERMINAL_STATUSES
+                    or (lifecycle is not None and lifecycle["state"] not in {"ACTIVE", "ARCHIVED"})
+                ):
+                    return
+            except Exception:
+                logging.exception("Could not verify diagnostic retention for task %s", self.task_id)
+                return
+        try:
+            for thread in (self._stdout_thread, self._stderr_thread):
+                if thread is not None and thread is not threading.current_thread() and thread.is_alive():
+                    thread.join(timeout=10)
+            self._save_output()
+        except Exception:
+            logging.exception("Could not preserve execution diagnostics for task %s", self.task_id)
+        finally:
+            try:
+                self._persist_execution_evidence()
+            except Exception:
+                logging.exception("Could not preserve bounded execution evidence for task %s", self.task_id)
+
+    def _persist_execution_evidence(self) -> None:
+        """Keep adapter facts in the Server store; logs stay in owned result storage."""
+        exit_code = self._process.returncode if self._process is not None else None
+        reason = self._failure_reason
+        if reason is None and exit_code not in (None, 0):
+            reason = "nonzero_exit"
+        if reason is not None and self._scheduler_failure is None:
+            self._scheduler_failure = {}
+            command = shutil.which("scontrol")
+            if command and self._slurm_job_id:
+                try:
+                    answer = subprocess.run(
+                        [command, "show", "job", self._slurm_job_id, "-o"],
+                        capture_output=True, text=True, timeout=3, check=True,
+                    )
+                    self._scheduler_failure = scheduler_failure(answer.stdout, self._slurm_job_id)
+                except (OSError, subprocess.SubprocessError):
+                    pass
+        evidence = {
+            "reason_code": reason, "exit_code": exit_code,
+            "stage_id": str(self.tt.name), **(self._scheduler_failure or {}),
+        }
+        logs: dict[str, str] = {}
+        for stream_name, lines in (("stdout", self._stdout_lines), ("stderr", self._stderr_lines)):
+            # Redact complete lines before bounding the excerpt. Track PEM
+            # blocks across discarded lines so a long key cannot lose its label.
+            retained: deque[str] = deque()
+            size = 0
+            for safe in redacted_log_lines(
+                (line for line in islice(lines, len(lines)) if not self._is_captured_protocol_line(line)),
+                secret_values=self._diagnostic_secrets(),
+            ):
+                length = len(safe.encode("utf-8"))
+                if length > 64 * 1024:
+                    safe = "[overlong diagnostic line omitted]\n"
+                    length = len(safe)
+                retained.append(safe)
+                size += length
+                while size > 64 * 1024:
+                    size -= len(retained.popleft().encode("utf-8"))
+            logs[stream_name] = "".join(retained)
+        payload = json.dumps(
+            {"source": "slurm_adapter", "schema_version": 1, "task_id": self.task_id, "logs": logs},
+            ensure_ascii=False,
+        )
+        try:
+            publish_result_text(self.output_dir, STATUS_PATH, payload)
+            evidence["record_sha256"] = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        except Exception:
+            logging.exception("Could not preserve bounded execution context for task %s", self.task_id)
+        try:
+            if self._task_store is not None:
+                self._task_store.record_task_diagnostics(self.task_id, evidence)
+        except Exception:
+            logging.exception("Could not retain execution outcome evidence for task %s", self.task_id)
+
+    def _diagnostic_secrets(self) -> tuple[str, ...]:
+        return tuple(
+            str(value) for key, value in self.execution_plan.environment.items()
+            if re.search(r"secret|password|token|credential|api.?key|private.?key", key, re.I) and value
+        )
+
     def _save_output(self) -> None:
         # Keep scheduler diagnostics in a clearly named, previewable namespace
         # instead of ambiguous ``slurm_srun-32.out`` files at the result root.
         execution_dir = os.path.join(self.output_dir, "execution")
-        os.makedirs(execution_dir, exist_ok=True)
+        # A tracked task must not recreate a root concurrently removed by a
+        # purge. Untracked standalone jobs own their supplied directory.
+        if self._task_store is None:
+            os.makedirs(self.output_dir, exist_ok=True)
         username = _sanitize_name(self._username or "unknown-user")
         task_name = _sanitize_name(getattr(self.tt, "name", "unknown-task"))
         task_id = _sanitize_name(self.task_id)
         out_path = os.path.join(execution_dir, f"slurm-{username}-{task_name}-{task_id}.stdout.log")
         err_path = os.path.join(execution_dir, f"slurm-{username}-{task_name}-{task_id}.stderr.log")
         try:
-            with open(out_path, "w") as f:
-                f.writelines(line for line in self._stdout_lines if not self._is_captured_protocol_line(line))
-            with open(err_path, "w") as f:
-                f.writelines(self._stderr_lines)
+            publish_result_text(
+                self.output_dir, os.path.relpath(out_path, self.output_dir),
+                redacted_log_lines(
+                    (line for line in islice(self._stdout_lines, len(self._stdout_lines)) if not self._is_captured_protocol_line(line)),
+                    secret_values=self._diagnostic_secrets(),
+                ),
+            )
+            publish_result_text(
+                self.output_dir, os.path.relpath(err_path, self.output_dir),
+                redacted_log_lines(islice(self._stderr_lines, len(self._stderr_lines)), secret_values=self._diagnostic_secrets()),
+            )
             self._save_resource_observation(execution_dir, username, task_name, task_id)
         except OSError as exc:
             logging.warning("Could not save SLURM output for %s: %s", self._job_id, exc)
@@ -1740,9 +1855,10 @@ class SlurmJob(Job):
             execution_dir,
             f"slurm-{username}-{task_name}-{task_id}.resource.json",
         )
-        with open(destination, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, ensure_ascii=True, indent=2, sort_keys=True)
-            handle.write("\n")
+        publish_result_text(
+            self.output_dir, os.path.relpath(destination, self.output_dir),
+            json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
+        )
 
     def _resource_capture_text(self) -> str | None:
         try:
@@ -1794,7 +1910,7 @@ class SlurmJob(Job):
         return (
             relative.startswith("execution/slurm-")
             and filename.startswith("slurm-")
-            and filename.endswith((".stdout.log", ".stderr.log", ".resource.json"))
+            and filename.endswith((".stdout.log", ".stderr.log", ".resource.json", ".execution.json"))
         )
 
     def _maybe_stage_callback(self, state: JobState) -> None:

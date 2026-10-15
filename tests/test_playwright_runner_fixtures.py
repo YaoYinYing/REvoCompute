@@ -235,8 +235,11 @@ def test_failed_lifecycle_surfaces_on_dashboard_and_in_result_diagnostics(page: 
     failed = page.locator(".task-card .status-failed")
     expect(failed).to_be_visible()
     expect(failed).to_have_text("failed")
+    page.get_by_role("button", name="View error", exact=True).click()
+    expect(page.get_by_role("dialog")).to_contain_text("Runner stopped before publishing a model")
+    page.keyboard.press("Escape")
     page.get_by_text("Execution error").click()
-    expect(page.get_by_text("Runner stopped before publishing a model")).to_be_visible()
+    expect(page.locator("#main-content").get_by_text("Runner stopped before publishing a model", exact=True)).to_be_visible()
 
     _open_result_after_lifecycle(page, ("queued", "running"), "Runner stopped before publishing a model")
     expect(page.locator(".result-status")).to_contain_text("Runner stopped before publishing a model")

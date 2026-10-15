@@ -2136,3 +2136,86 @@ def test_capture_log_omits_protocol_lines_and_keeps_runner_diagnostics(tmp_path)
 
     stdout = tmp_path / "out" / "execution" / "slurm-alice-cpu_runner-task-1.stdout.log"
     assert stdout.read_text(encoding="utf-8") == "REVODESIGN_JOB_ID=42\nmodel loaded\n"
+
+
+@pytest.mark.parametrize("ending", ["timeout", "unrecorded", "exception"])
+def test_terminal_exception_paths_preserve_captured_execution_output(tmp_path, ending):
+    """Evidence must survive every wait outcome, not just the ordinary return path."""
+    job = SlurmJob("task-1", _make_task_type(), _make_runner(), _make_entities(), str(tmp_path / "out"))
+    process = _FakeSrunProcess(
+        stdout="REVODESIGN_JOB_ID=4217\nanalysis began\n",
+        stderr="diagnostic context\n",
+        returncode=None if ending == "timeout" else 1,
+        timeout_once=ending == "timeout",
+    )
+    with patch("subprocess.Popen", return_value=process):
+        job.submit()
+        if ending == "unrecorded":
+            job._dispatched_notified = False
+        if ending == "exception":
+            job._admission_error = RuntimeError("admission recording unavailable")
+            with pytest.raises(RuntimeError, match="admission recording unavailable"):
+                job.poll()
+        else:
+            assert job.poll() == JobState.FAILED
+    execution = tmp_path / "out" / "execution"
+    assert next(execution.glob("*.stdout.log")).read_text().endswith("analysis began\n")
+    assert next(execution.glob("*.stderr.log")).read_text() == "diagnostic context\n"
+
+
+def test_submission_without_job_identity_preserves_output(tmp_path):
+    job = SlurmJob("task-1", _make_task_type(), _make_runner(), _make_entities(), str(tmp_path / "out"))
+    process = _FakeSrunProcess(stdout="", stderr="allocation request refused\n", returncode=1)
+    with patch("subprocess.Popen", return_value=process):
+        with pytest.raises(RuntimeError, match="did not return a scheduler job ID"):
+            job.submit()
+    execution = tmp_path / "out" / "execution"
+    assert next(execution.glob("*.stderr.log")).read_text() == "allocation request refused\n"
+
+
+def test_preserving_diagnostics_cannot_replace_the_execution_failure(tmp_path, monkeypatch):
+    job = SlurmJob("task-1", _make_task_type(), _make_runner(), _make_entities(), str(tmp_path / "out"))
+    process = _FakeSrunProcess(stdout="REVODESIGN_JOB_ID=4217\n", stderr="failure context\n", returncode=2)
+    def refuse_write(*args, **kwargs):
+        raise OSError("evidence storage unavailable")
+    monkeypatch.setattr("revocompute.job.runners.slurm_runner.publish_result_text", refuse_write)
+    with patch("subprocess.Popen", return_value=process):
+        job.submit()
+        assert job.poll() == JobState.FAILED
+
+
+def test_adapter_evidence_redacts_key_blocks_before_bounding_and_confirms_scheduler_state(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from revocompute.execution_diagnostics import STATUS_PATH
+
+    root = tmp_path / "out"
+    root.mkdir()
+    job = SlurmJob("task-1", _make_task_type(), _make_runner(), _make_entities(), str(root))
+    captured = []
+    job._task_store = SimpleNamespace(record_task_diagnostics=lambda task_id, evidence: captured.append(evidence))
+    job._process = SimpleNamespace(returncode=137)
+    job._slurm_job_id = "42"
+    job._stderr_lines = ["-----BEGIN PRIVATE KEY-----\n", *("unlabelled-key-body\n" for _ in range(10000)), "killed\n"]
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/scontrol")
+    with patch("subprocess.run", return_value=SimpleNamespace(stdout="JobId=42 JobState=OUT_OF_MEMORY")):
+        job._persist_execution_evidence()
+    assert captured[0]["reason_code"] == "out_of_memory"
+    assert captured[0]["exit_code"] == 137
+    record = (root / STATUS_PATH).read_text()
+    assert "unlabelled-key-body" not in record
+    assert len(record.encode()) < 264 * 1024
+    assert captured[0]["record_sha256"] == hashlib.sha256(record.encode()).hexdigest()
+
+
+def test_owner_log_artifacts_withhold_credentials_and_private_host_context(tmp_path):
+    job = SlurmJob("task-1", _make_task_type(), _make_runner(), _make_entities(), str(tmp_path / "out"))
+    job._stderr_lines = [
+        'API_TOKEN="private-token"\n', 'srun: error: private-node: failed\n',
+        'file /srv/private/run.py\n', '-----BEGIN PRIVATE KEY-----\n', 'private-body\n',
+        '-----END PRIVATE KEY-----\n', 'useful diagnostic context\n',
+    ]
+    job._save_output()
+    output = next((tmp_path / "out" / "execution").glob("*.stderr.log")).read_text()
+    for private in ("private-token", "private-node", "/srv/private", "private-body"):
+        assert private not in output
+    assert "useful diagnostic context" in output

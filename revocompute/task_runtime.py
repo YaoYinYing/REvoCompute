@@ -44,6 +44,7 @@ from revocompute.infrastructure import (
     publish_worker_probe_snapshot,
 )
 from revocompute.job import Job, JobState
+from revocompute.execution_diagnostics import REASONS, safe_diagnostic_text
 from revocompute.job.runners.slurm_runner import (
     SlurmJob,
     surviving_allocation_receipts,
@@ -78,6 +79,7 @@ from revocompute.storage import (
     ArtifactIdentityError,
     ArtifactOversizedError,
     PublicationAnchor,
+    publish_result_text,
     ResultPublicationError,
     StorageResolver,
     _ResultTreeWalker,
@@ -403,7 +405,7 @@ def _sanitize_task_error(task: dict[str, Any], error: Any) -> str | None:
         message = message.replace(result_dir, "<result_dir>")
     if CONFIG.server_dir and CONFIG.server_dir in message:
         message = message.replace(CONFIG.server_dir, "<server_dir>")
-    return message
+    return safe_diagnostic_text(message)
 
 
 # ---------------------------------------------------------------------------
@@ -1392,36 +1394,6 @@ def _anchor_result_manifest(
         ) from exc
 
 
-def _publish_result_tree_file(result_dir: str, name: str, payload: str) -> None:
-    """Write *payload* to *name* inside *result_dir*, descriptor-bound.
-
-    The same create/rename primitive the manifest uses: ``name`` is at a
-    canonical spot inside the runner-owned result tree, so writing it by path
-    would let a symlink planted there capture the write.  A fresh candidate is
-    created with ``O_CREAT|O_EXCL|O_NOFOLLOW``, written through that descriptor,
-    and published with ``renameat``; a failure removes the candidate.
-    """
-    with _ResultTreeWalker(result_dir) as walker:
-        candidate = f".{name}.tmp-{os.getpid()}-{time.time_ns()}"
-        descriptor = walker.create_entry(candidate)
-        try:
-            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-                descriptor = None
-                handle.write(payload)
-            walker.replace_entry(candidate, name)
-        except BaseException:
-            if descriptor is not None:
-                try:
-                    os.close(descriptor)
-                except OSError:
-                    pass
-            try:
-                walker.unlink_entry(candidate)
-            except OSError:
-                pass
-            raise
-
-
 def _finalize_results_manifest(
     task: dict[str, Any],
     *,
@@ -1447,7 +1419,7 @@ def _finalize_results_manifest(
     except KeyError:
         task_type = None
     if task_type is not None and task_type.citations:
-        _publish_result_tree_file(result_dir, "citations.bib", citations_bibtex(task_type.citations))
+        publish_result_text(result_dir, "citations.bib", citations_bibtex(task_type.citations))
     artifacts: list[dict[str, Any]] = []
     publication_problems: list[str] = []
     publication_capacity_guard = False
@@ -1892,7 +1864,7 @@ def _finalize_failed_results(task: dict, error: Any, *, finished_at: float) -> N
             f"Input: {task.get('filename', 'unknown')}\n\n"
             f"{message}\n"
         )
-        _publish_result_tree_file(result_dir, "task_failed.txt", report)
+        publish_result_text(result_dir, "task_failed.txt", report)
         _finalize_results_manifest(task, execution_state="failed", finished_at=finished_at)
     except DataPurgedError:
         _abandon_published_result(task, result_dir)
@@ -1978,10 +1950,22 @@ def _task_is_terminal(md5sum: str) -> bool:
     return bool(task and _is_terminal_status(task.get("status")))
 
 
-def _record_failure(md5sum: str, task: dict, start_time: float, run_stage: str, error_message: str) -> None:
+def _record_failure(
+    md5sum: str, task: dict, start_time: float, run_stage: str, error_message: str,
+    *, reason_code: str | None = None,
+) -> None:
     finish_time = time.time()
     if _task_is_terminal(md5sum):
         return
+    try:
+        evidence = task_store.get_task_diagnostics(md5sum) or {}
+        if reason_code is not None or not evidence.get("reason_code"):
+            evidence["reason_code"] = reason_code or "execution_exception"
+        if run_stage:
+            evidence["stage_id"] = run_stage
+        task_store.record_task_diagnostics(md5sum, evidence)
+    except Exception:
+        logging.exception("Could not retain failure classification for task %s", md5sum)
     _capture_debug_submission(task, _entities_from_input_form(task))
     _finalize_failed_results(task, error_message, finished_at=finish_time)
     task_store.update_task(
@@ -2122,7 +2106,7 @@ def _capture_debug_submission(task: dict[str, Any], entities: list[dict], params
             "submitted_at": form.get("submitted_at") or task.get("uploaded_at"),
             "inputs": files,
         }
-        _publish_result_tree_file(
+        publish_result_text(
             debug_dir,
             "submission.json",
             json.dumps(submission, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
@@ -2371,12 +2355,13 @@ def _execute_compute_task(
                 reason_code="allocation_failed",
                 **runtime_event_fields,
             )
+            evidence = task_store.get_task_diagnostics(md5sum) or {}
             _record_failure(
                 md5sum,
                 task,
                 start_time,
                 stage_state["current"],
-                "SLURM job failed — check job logs for details",
+                REASONS.get(evidence.get("reason_code"), "Execution failed. See available diagnostic evidence."),
             )
             return
         if final_state == JobState.CANCELLED:
@@ -2400,7 +2385,9 @@ def _execute_compute_task(
             # coherent transition.  The task is settled as failed rather than
             # finished: a finished row whose canonical result Core's own reader
             # refuses is exactly the state this boundary exists to prevent.
-            _record_failure(md5sum, task, start_time, stage_state["current"], str(exc))
+            _record_failure(
+                md5sum, task, start_time, stage_state["current"], str(exc), reason_code="publication_failed"
+            )
             logging.error("Publication failed for task %s: %s", md5sum, exc)
             return
         except DataPurgedError:

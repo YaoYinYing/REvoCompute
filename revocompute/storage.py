@@ -20,6 +20,7 @@ import os
 import re
 import stat
 import tempfile
+import uuid
 import weakref
 import zipfile
 from collections.abc import Iterable, Iterator
@@ -488,6 +489,43 @@ def replace_entry(directory_fd: int, source_name: str, destination_name: str) ->
     entry or the new one and never a partial file.
     """
     os.rename(source_name, destination_name, src_dir_fd=directory_fd, dst_dir_fd=directory_fd)
+
+
+def publish_result_text(root: str, relative_path: str, payload: str | Iterable[str]) -> None:
+    """Atomically write server evidence without following Runner-planted links."""
+    parts = manifest_relative_parts(relative_path)
+    if not parts:
+        raise ArtifactIdentityError("invalid evidence path")
+    with _ResultTreeWalker(root) as walker:
+        directory = os.dup(walker._root_fd)
+        candidate = f".evidence-{uuid.uuid4().hex}"
+        try:
+            for part in parts[:-1]:
+                try:
+                    os.mkdir(part, dir_fd=directory)
+                except FileExistsError:
+                    pass
+                child = os.open(part, SAFE_OPEN_FLAGS | os.O_DIRECTORY, dir_fd=directory)
+                os.close(directory)
+                directory = child
+            descriptor = create_private_entry(directory, candidate)
+            try:
+                handle = os.fdopen(descriptor, "w", encoding="utf-8")
+            except BaseException:
+                os.close(descriptor)
+                raise
+            with handle:
+                if isinstance(payload, str):
+                    handle.write(payload)
+                else:
+                    handle.writelines(payload)
+            replace_entry(directory, candidate, parts[-1])
+        finally:
+            try:
+                os.unlink(candidate, dir_fd=directory)
+            except OSError:
+                pass
+            os.close(directory)
 
 
 class _ResultTreeWalker:

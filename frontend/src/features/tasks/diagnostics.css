@@ -1,0 +1,7 @@
+.task-diagnostics{margin-block:1rem;padding:1.25rem;border:1px solid var(--app-line-strong);border-radius:8px;background:var(--app-surface);font-size:14px;line-height:1.6;min-width:0}
+.task-diagnostics h3{font-size:20px;margin:0 0 .75rem}.task-diagnostics h4{font-size:16px;margin:1.25rem 0 .5rem}
+.task-diagnostics p,.task-diagnostics a,.task-diagnostics button{font-size:14px;line-height:1.6}.task-diagnostics p{margin:.75rem 0;overflow-wrap:anywhere}
+.task-diagnostic-facts{display:grid;grid-template-columns:minmax(8rem,auto) minmax(0,1fr);gap:.5rem 1rem;margin:1rem 0}.task-diagnostic-facts dt{font-size:14px}.task-diagnostic-facts dd{margin:0;overflow-wrap:anywhere;font-size:14px}
+.task-diagnostics pre{font-family:var(--font-mono,monospace);font-size:14px;line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere;max-height:20rem;overflow:auto;padding:1rem;border:1px solid var(--app-line-strong);border-radius:4px;background:var(--app-bg);color:var(--app-ink)}
+.task-diagnostics a{display:inline-block;padding:.5rem 0;text-decoration:underline;text-underline-offset:3px}.task-diagnostics button{min-height:40px;padding:.5rem 1rem}
+@media(max-width:40rem){.task-diagnostic-facts{grid-template-columns:1fr;gap:.25rem}.task-diagnostic-facts dd{margin-bottom:.5rem}.task-diagnostics{padding:1rem}.task-diagnostics pre{padding:.75rem}}
