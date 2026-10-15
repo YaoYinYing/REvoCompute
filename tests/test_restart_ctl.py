@@ -94,6 +94,10 @@ _DOCKER_SHIM = textwrap.dedent(
       printf "redis\\nweb\\ngateway\\nmaintenance\\nworker\\n"
       exit 0
     fi
+    if [[ "$1" == "compose" && "$*" == *" ps -a --services"* ]]; then
+      printf "%s\\n" ${SHIM_ALL_SERVICES:-redis web gateway maintenance worker}
+      exit 0
+    fi
     if [[ "$1" == "image" && "$2" == "inspect" && "$3" == "--format" ]]; then
       if [[ "$4" == "{{.Created}}" ]]; then
         printf '%s\\n' "${SHIM_CREATED:-2020-01-01T00:00:00Z}"
@@ -1393,6 +1397,207 @@ def test_a_rollback_down_removes_the_orphaned_mcp_container(monkeypatch, tmp_pat
     teardown = [command for command in commands if "down" in command.split()]
     assert teardown, commands
     assert any("--remove-orphans" in command for command in teardown), teardown
+
+
+def _rollback_restart(monkeypatch, tmp_path, *, enabled: str, project_services: str) -> tuple[list[str], Path]:
+    """Run the rollback restart and return (compose commands, the route file)."""
+    bin_dir = _write_shims(tmp_path)
+    task_dir, _auth_dir, env_file = _deploy_env(tmp_path)
+    with env_file.open("a", encoding="utf-8") as stream:
+        stream.write(f"MCP_ENABLED={enabled}\n")
+    monkeypatch.setenv("SHIM_IDS", str(tmp_path / "ids.txt"))
+    monkeypatch.setenv("SHIM_LOG", str(tmp_path / "docker.log"))
+    monkeypatch.setenv("SHIM_ALL_SERVICES", project_services)
+    # The route file a previous opt-in left behind, which this rollback undoes.
+    route = task_dir / "mcp-gateway" / "mcp.conf"
+    route.parent.mkdir(parents=True, exist_ok=True)
+    route.write_text("location /k/ {}\n", encoding="utf-8")
+    _run_cli(monkeypatch, tmp_path, env_file, bin_dir, "restart", "--mode=prepared", "--keep-gateway")
+    return (tmp_path / "docker.log").read_text(encoding="utf-8").splitlines(), route
+
+
+def _mcp_removals(commands: list[str]) -> list[str]:
+    """The commands that remove the ``mcp`` service, and nothing else."""
+    return [command for command in commands if "rm" in command.split() and "mcp" in command.split()]
+
+
+def test_keep_gateway_rollback_keeps_the_drain_and_sweep_before_it_removes_mcp(monkeypatch, tmp_path):
+    # The removal is an addition to the existing teardown, never a replacement:
+    # an in-flight Tool call is still drained and the SLURM preservation sweep
+    # still runs, and the order that guards the running work is unchanged.  The
+    # removal is the last thing the path does.
+    from revocompute_ctl import compose as compose_mod
+
+    state = EnvState(
+        str(tmp_path / "server.env"),
+        values={"SERVER_DIR": str(tmp_path / "server"), "ENABLED_TOOL_FAMILIES": "bioio", "MCP_ENABLED": "false"},
+    )
+    events: list[str] = []
+    monkeypatch.setattr(steps_mod, "require_env_file", lambda _state: None)
+    monkeypatch.setattr(steps_mod, "resolve_runner_identity", lambda _state: None)
+    monkeypatch.setattr(steps_mod, "enabled_tool_families", lambda _state: ("bioio",))
+    monkeypatch.setattr("revocompute_ctl.maintenance.begin_maintenance", lambda _state: events.append("begin"))
+    monkeypatch.setattr("revocompute_ctl.maintenance.end_maintenance", lambda _state: events.append("end"))
+    monkeypatch.setattr(steps_mod, "drain_tool_calls", lambda _state: events.append("drain"))
+    monkeypatch.setattr("revocompute_ctl.sweep.pre_stop_sweep_slurm", lambda *_args, **_kwargs: events.append("sweep"))
+
+    def phrase(argv: list[str]) -> str:
+        # The compose invocation from its verb on: the verb and the services it
+        # names are what this order is about.
+        for verb in ("up", "stop", "rm", "down"):
+            if verb in argv:
+                return " ".join(argv[argv.index(verb) :])
+        return " ".join(argv)
+
+    def fake_run(argv, **_kwargs):
+        if " ps -a --services" in " ".join(argv):
+            return subprocess.CompletedProcess(argv, 0, stdout="redis\nweb\ngateway\nmaintenance\nworker\nmcp\n")
+        events.append(phrase(argv))
+        return subprocess.CompletedProcess(argv, 0, stdout="")
+
+    monkeypatch.setattr(steps_mod, "run_cmd", fake_run)
+    monkeypatch.setattr(compose_mod, "run_cmd", fake_run)
+
+    steps_mod.cmd_down(state, ("docker", "compose"), keep_gateway=True)
+
+    assert events == [
+        "begin",
+        "drain",
+        "sweep",
+        "up -d --no-deps --force-recreate gateway",
+        "stop redis web maintenance worker tool-worker",
+        "rm --force --stop mcp",
+    ], events
+
+
+def test_keep_gateway_rollback_removes_the_mcp_service_it_no_longer_declares(monkeypatch, tmp_path):
+    # Flipping MCP_ENABLED off drops the overlay *and* its profile from the model,
+    # so `mcp` leaves the service list and a `stop` of the declared services
+    # cannot reach the container the deployment is still running.  The
+    # keep-gateway path has to remove it by name; the ordinary `down` path sweeps
+    # orphans, and that cannot be used here because the gateway must stay up.
+    commands, route = _rollback_restart(
+        monkeypatch, tmp_path, enabled="false", project_services="redis\nweb\ngateway\nmaintenance\nworker\nmcp\n"
+    )
+
+    removals = _mcp_removals(commands)
+    assert len(removals) == 1, commands
+    removal = removals[0]
+    tokens = removal.split()
+    # The disabled model cannot see the service, so this command layers the
+    # overlay -- with the profile that makes the overlay declare it.
+    assert "docker-compose.mcp.yml" in removal, removal
+    assert tokens[tokens.index("--profile") + 1] == "mcp", removal
+    assert tokens[-4:] == ["rm", "--force", "--stop", "mcp"], removal
+    # Named, not swept: this path keeps the gateway serving, so a project-wide
+    # orphan removal would be the wrong shape here.
+    assert not any("--remove-orphans" in command for command in commands), commands
+    # And the public route goes with the service.
+    assert not route.exists(), "the rollback left the MCP gateway route in place"
+
+
+def test_keep_gateway_rollback_leaves_the_gateway_serving(monkeypatch, tmp_path):
+    commands, _route = _rollback_restart(
+        monkeypatch, tmp_path, enabled="false", project_services="redis\nweb\ngateway\nmaintenance\nworker\nmcp\n"
+    )
+
+    # The gateway is refreshed and kept: it serves the maintenance page while the
+    # stack is down, which is exactly why this path cannot use `down`.
+    assert any("up -d --no-deps --force-recreate gateway" in command for command in commands), commands
+    assert not any("down" in command.split() for command in commands), commands
+    # It is never itself stopped or removed, and the stack stop still names every
+    # service the model declares -- with `mcp` no longer among them.
+    teardown = [command for command in commands if "stop" in command.split() or "rm" in command.split()]
+    assert teardown, commands
+    assert not any("gateway" in command.split() for command in teardown), teardown
+    stop = next(command for command in commands if "stop" in command.split())
+    assert stop.endswith("stop redis web maintenance worker tool-worker"), stop
+
+
+def test_a_never_opted_in_deployment_sends_no_mcp_command_at_all(monkeypatch, tmp_path):
+    # The common case: the surface was never enabled, so there is nothing to
+    # remove and the rollback issues no MCP command -- no overlay, no profile,
+    # and no service named anywhere.
+    commands, route = _rollback_restart(
+        monkeypatch, tmp_path, enabled="false", project_services="redis\nweb\ngateway\nmaintenance\nworker\n"
+    )
+
+    assert not any("mcp" in command.split() for command in commands), commands
+    assert not any("docker-compose.mcp.yml" in command for command in commands), commands
+    assert not any("--profile" in command.split() for command in commands), commands
+    assert not route.exists()
+
+
+def test_keep_gateway_with_the_surface_still_on_stops_mcp_with_the_stack(monkeypatch, tmp_path):
+    # Control: while the switch is on, `mcp` is a service the model declares, so
+    # the ordinary stop reaches it and no separate removal is issued.
+    commands, _route = _rollback_restart(
+        monkeypatch, tmp_path, enabled="true", project_services="redis\nweb\ngateway\nmaintenance\nworker\nmcp\n"
+    )
+
+    assert not _mcp_removals(commands), commands
+    stop = next(command for command in commands if "stop" in command.split())
+    assert stop.endswith("stop redis web maintenance worker tool-worker mcp"), stop
+
+
+def test_the_ordinary_down_path_sweeps_orphans_instead_of_naming_the_service(monkeypatch, tmp_path):
+    # The two teardown paths stay distinct: with no gateway to preserve, `down`
+    # still removes orphans rather than naming one service.
+    bin_dir = _write_shims(tmp_path)
+    _task_dir, _auth_dir, env_file = _deploy_env(tmp_path)
+    with env_file.open("a", encoding="utf-8") as stream:
+        stream.write("MCP_ENABLED=false\n")
+    monkeypatch.setenv("SHIM_IDS", str(tmp_path / "ids.txt"))
+    monkeypatch.setenv("SHIM_LOG", str(tmp_path / "docker.log"))
+    monkeypatch.setenv("SHIM_ALL_SERVICES", "redis\nweb\ngateway\nmaintenance\nworker\nmcp\n")
+
+    _run_cli(monkeypatch, tmp_path, env_file, bin_dir, "down")
+
+    commands = (tmp_path / "docker.log").read_text(encoding="utf-8").splitlines()
+    assert not _mcp_removals(commands), commands
+    teardown = [command for command in commands if "down" in command.split()]
+    assert teardown and all("--remove-orphans" in command for command in teardown), teardown
+
+
+def test_remove_mcp_service_is_scoped_idempotent_and_off_when_nothing_opted_in(tmp_path, monkeypatch):
+    # The helper's contract, driven directly: it decides from the project's own
+    # container list, so a repeated rollback is harmless and a switch that is on
+    # is left to the ordinary stop.
+    from revocompute_ctl import compose as compose_mod
+
+    issued: list[str] = []
+    containers = ["redis\nweb\ngateway\nmaintenance\nworker\nmcp\n"]
+
+    def fake_run(argv, **_kwargs):
+        if "-a" in argv and "--services" in argv:
+            return subprocess.CompletedProcess(argv, 0, stdout=containers[0])
+        issued.append(" ".join(argv))
+        return subprocess.CompletedProcess(argv, 0, stdout="")
+
+    monkeypatch.setattr(compose_mod, "run_cmd", fake_run)
+
+    off = EnvState(str(tmp_path / "off.env"), values={"SERVER_DIR": str(tmp_path), "MCP_ENABLED": "false"})
+    assert compose_mod.remove_mcp_service(off, ("docker", "compose")) is True
+    assert len(issued) == 1, issued
+    assert issued[0].endswith("rm --force --stop mcp"), issued
+    assert "docker-compose.mcp.yml" in issued[0], issued
+    # Idempotent: the project no longer lists the container, so nothing is issued.
+    containers[0] = "redis\nweb\ngateway\nmaintenance\nworker\n"
+    assert compose_mod.remove_mcp_service(off, ("docker", "compose")) is False
+    assert len(issued) == 1, issued
+
+    # A switch that is on: the stack owns the service, so the helper stands down.
+    containers[0] = "redis\nweb\ngateway\nmaintenance\nworker\nmcp\n"
+    on = EnvState(str(tmp_path / "on.env"), values={"SERVER_DIR": str(tmp_path), "MCP_ENABLED": "true"})
+    assert compose_mod.remove_mcp_service(on, ("docker", "compose")) is False
+    assert len(issued) == 1, issued
+
+    # An unanswerable question falls through: removing what is not there is
+    # harmless, leaving a live protocol process behind is not.
+    monkeypatch.setattr(
+        compose_mod, "run_cmd", lambda argv, **_kwargs: subprocess.CompletedProcess(argv, 1, stdout="")
+    )
+    assert compose_mod.remove_mcp_service(off, ("docker", "compose")) is True
 
 
 def test_mcp_gateway_route_dry_run_reports_without_writing(tmp_path, monkeypatch):

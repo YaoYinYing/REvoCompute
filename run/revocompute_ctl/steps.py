@@ -25,7 +25,7 @@ from pathlib import Path
 
 import yaml
 
-from revocompute_ctl.compose import compose_args, run_cmd, stack_services
+from revocompute_ctl.compose import compose_args, remove_mcp_service, run_cmd, stack_services
 from revocompute_ctl.attestation import clear_deployment_attestations
 from revocompute.runner_bundles import materialize_runner_bundles, runner_bundle_root
 from revocompute.runner_registry import (
@@ -635,6 +635,13 @@ def cmd_down(state, compose_cmd: tuple[str, ...], *, keep_gateway: bool = False)
             [*compose_cmd, *compose_args(state), "--env-file", state.env_file, "stop", *services],
             env=state.exported(),
         )
+        # The gateway stays up on this path, so a switch that just turned off
+        # leaves a running ``mcp`` container the model above no longer declares.
+        # Stopping the declared services cannot reach it and an orphan sweep
+        # would be a whole-project operation in a path that must keep the
+        # gateway serving, so the service it can no longer see is removed by
+        # name, over the overlay that does declare it.
+        remove_mcp_service(state, compose_cmd)
         return
     run_cmd(
         [
