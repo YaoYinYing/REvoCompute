@@ -1,4 +1,5 @@
 import { createIcons, Dice5 } from 'lucide';
+import { alignmentPreview, residueTone } from './alignment-preview';
 import { parameterValue, seedConstant, validateParameter } from '../parameter-controls';
 import type { ParameterDefinition } from '../types';
 import { t } from '../../../app/i18n';
@@ -112,12 +113,66 @@ const filesPlugin: WorkspacePlugin = {
       const group = element('div', 'ct-file-role');
       const label = element('label', 'ct-label', role.title); const id = `ct-files-${definition.id}-${role.id}`; label.htmlFor = id;
       const input = element('input'); input.id = id; input.type = 'file'; input.multiple = role.cardinality.max > 1; input.accept = role.accept || role.extensions.join(',');
+      input.setAttribute('aria-label', `${t('ct.files.choose')}: ${role.title}`);
       const hint = element('p', 'ct-help', role.description || t('ct.files.hint', { minimum: role.cardinality.min, maximum: role.cardinality.max, formats: role.formats.join(', ') }));
+      const well = element('div', 'ct-file-well');
+      const mark = element('span', 'ct-file-symbol', '↥'); mark.setAttribute('aria-hidden', 'true');
+      const identity = element('div', 'ct-file-identity');
+      const fileName = element('strong'); const fileSize = element('p'); identity.append(fileName, fileSize);
+      const choose = element('label', 'ct-file-button', t('ct.files.choose')); choose.htmlFor = id; choose.append(input);
+      well.append(mark, identity, choose);
+      const remove = element('button', 'ct-file-remove', t('ct.files.remove')); remove.type = 'button'; remove.hidden = true;
       const list = element('div', 'ct-file-list');
+      const preview = element('div', 'ct-input-preview'); preview.hidden = true; preview.setAttribute('aria-label', t('ct.files.preview'));
+      let previewGeneration = 0;
       const error = element('p', 'ct-field-error'); error.hidden = true; input.setAttribute('aria-describedby', `${id}-error`); error.id = `${id}-error`;
       const render = () => {
         const files = context.roleFiles(role.id); list.replaceChildren();
-        if (!files.length) list.textContent = t('ct.files.none');
+        const generation = ++previewGeneration; preview.hidden = true; preview.textContent = '';
+        const first = files[0];
+        fileName.textContent = first?.name || role.title;
+        fileSize.textContent = first ? `${formatBytes(first.size)} · ${t('ct.files.original')}` : role.formats.join(' / ');
+        well.classList.toggle('has-file', Boolean(first)); remove.hidden = !files.length;
+        // Display projection only; the original File remains the submission input.
+        if (first && /\.(?:a3m|aln|fasta|fa|faa|txt|csv|tsv)$/i.test(first.name)) {
+          void first.slice(0, 65536).text().then(source => {
+            if (generation !== previewGeneration || !target.isConnected) return;
+            preview.replaceChildren();
+            preview.append(element('p', 'ct-preview-caption', t('ct.files.preview')));
+            const alignment = role.type === 'alignment'
+              ? alignmentPreview(source, /\.a3m$/i.test(first.name), first.size > 65536) : null;
+            if (alignment) {
+              const caption = preview.querySelector('p')!;
+              caption.append(element('span', 'ct-preview-dimensions', `${alignment.rows.length} × ${alignment.columns ?? '…'}`));
+              const rows = element('div', 'ct-alignment-rows'); rows.tabIndex = 0;
+              rows.setAttribute('aria-label', t('ct.files.alignedPreview'));
+              for (const record of alignment.rows) {
+                const row = element('div', 'ct-alignment-row');
+                const label = element('span', '', record.name.split(/\s+/)[0]); label.title = record.name;
+                const sequence = element('code');
+                sequence.setAttribute('role', 'img');
+                sequence.setAttribute('aria-label', record.cells.map(cell => cell.symbol).join(''));
+                for (const [index, cell] of record.cells.entries()) {
+                  const residue = element('b', `ct-aa ct-aa-${residueTone(cell.symbol)}`, cell.symbol);
+                  residue.setAttribute('aria-hidden', 'true');
+                  residue.title = t('ct.files.columnMap', { column: index + 1, source: cell.sourceCharacter, residue: cell.residue ?? '—' });
+                  sequence.append(residue);
+                }
+                row.append(label, sequence); rows.append(row);
+              }
+              const foot = element('div', 'ct-preview-foot');
+              foot.append(element('p', '', t(/\.a3m$/i.test(first.name) ? 'ct.files.a3mDisplay' : 'ct.files.fastaDisplay')));
+              if (alignment.limited) foot.append(element('p', '', t('ct.files.previewLimited')));
+              if (alignment.ragged) foot.append(element('p', 'ct-preview-warning', t('ct.files.previewRagged')));
+              preview.append(rows, foot);
+            } else {
+              preview.append(element('pre', '', source.split(/\r?\n/).slice(0, 12).join('\n')),
+                element('p', 'ct-preview-foot', t('ct.files.previewOriginal')));
+            }
+            preview.hidden = false;
+          }).catch(() => { /* Upload remains available when a local preview cannot be read. */ });
+        }
+        list.hidden = files.length < 2;
         files.forEach((file, index) => {
           const row = element('div', 'ct-file-row');
           const name = element('span', '', `${filePath(file)} (${formatBytes(file.size)})`); row.append(name);
@@ -128,8 +183,9 @@ const filesPlugin: WorkspacePlugin = {
           list.append(row);
         });
       };
+      remove.addEventListener('click', () => { context.setRoleFiles(role.id, []); input.value = ''; render(); context.filesChanged(); });
       input.addEventListener('change', () => { context.setRoleFiles(role.id, Array.from(input.files || [])); render(); context.filesChanged(); });
-      group.append(label, input, hint, list, error); target.append(group); controls.push({ role, input, list, error });
+      const contract = element('details', 'ct-input-contract'); contract.append(element('summary', '', t('ct.files.contract')), hint); if (roles.length === 1) label.classList.add('sr-only'); group.append(label, well, remove, list, preview, contract, error); target.append(group); render(); controls.push({ role, input, list, error });
     });
     return {
       readValue: () => Object.fromEntries(roles.map(role => [role.id, context.roleFiles(role.id).map(filePath)])),

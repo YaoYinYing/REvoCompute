@@ -18,3 +18,8 @@
 :root[data-theme="dark"] .api-docs-host .swagger-ui .copy-to-clipboard { background: var(--app-soft); }
 :root[data-theme="dark"] .api-docs-host .swagger-ui svg { fill: currentColor; }
 @media (max-width: 34rem) { .api-docs-page { width: min(100% - 1rem, 96rem); padding-top: 1.5rem; }.api-docs-host { overflow-x: auto; } }
+.api-docs-heading h1 { font-weight: 500; letter-spacing: -.04em; }
+.api-docs-host .swagger-ui { color: var(--app-ink); }
+.api-docs-host .swagger-ui .scheme-container { background: var(--app-soft); box-shadow: none; border-bottom: 1px solid var(--app-line); }
+.api-docs-host .swagger-ui .opblock { box-shadow: none; border-radius: var(--r-control); }
+.api-docs-host .swagger-ui .opblock-summary-description { font-size: .875rem; }

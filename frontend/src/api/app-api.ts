@@ -31,7 +31,8 @@ const jsonRequest = <T>(url: string, body: unknown): Promise<T> => requestJson(u
 
 export interface ParameterDefinition {
   type?: string | string[]; title?: string; description?: string; default?: unknown; enum?: unknown[];
-  minimum?: number; maximum?: number; unit?: string; advanced?: boolean;
+  minimum?: number; maximum?: number; exclusiveMinimum?: number; exclusiveMaximum?: number; unit?: string; advanced?: boolean;
+  'x-unit'?: string; 'x-advanced'?: boolean;
 }
 export interface ParameterSchema { properties?: Record<string, ParameterDefinition>; required?: string[] }
 

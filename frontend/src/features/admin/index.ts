@@ -11,7 +11,7 @@ import './admin.css';
 export type AdminRoute = 'admin-fleet' | 'admin-users' | 'admin-configuration' | 'admin-logs';
 
 const headings: Record<AdminRoute, [string, string]> = {
-  'admin-fleet': ['Runner Management', 'Every enabled Runner runtime family, its derived readiness, transient capacity, and access, with the typed corrective actions that keep it submittable.'],
+  'admin-fleet': ['Runner Management', 'Build, live-test and active-image evidence for Runner families.'],
   'admin-users': ['User control', 'Manage accounts, Runner access, and GPU credit operations.'],
   'admin-configuration': ['Runtime configuration', 'Manage task availability, resource policy, and infrastructure evidence.'],
   'admin-logs': ['Server logs', 'Inspect bounded active logs and managed rotated archives.'],

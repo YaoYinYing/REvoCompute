@@ -1,0 +1,79 @@
+{
+  "origin": "Exact self-hosted font assets from approved Daylight Bench study, unchanged. Google Fonts distributions; copyright notices accompany each family in public/fonts.",
+  "fonts": [
+    {
+      "family": "DM Sans",
+      "weight": 400,
+      "file": "dm-sans-400.ttf",
+      "sha256": "b0ae3e89a7d3ef2b1838bb4b1ceb0b17cc3435af061eee809d76aa623ff116e9",
+      "source": "https://github.com/google/fonts/tree/main/ofl/dmsans",
+      "license": "OFL-1.1"
+    },
+    {
+      "family": "DM Sans",
+      "weight": 500,
+      "file": "dm-sans-500.ttf",
+      "sha256": "376427b5322148d8de1e03f263bcca4935a2d60ba71d9f94f4947ab664c711ae",
+      "source": "https://github.com/google/fonts/tree/main/ofl/dmsans",
+      "license": "OFL-1.1"
+    },
+    {
+      "family": "DM Sans",
+      "weight": 600,
+      "file": "dm-sans-600.ttf",
+      "sha256": "b79a2ea7a38f33fd96a282fadb9ce97626bb0724a44d21075859f0e50239993a",
+      "source": "https://github.com/google/fonts/tree/main/ofl/dmsans",
+      "license": "OFL-1.1"
+    },
+    {
+      "family": "DM Sans",
+      "weight": 700,
+      "file": "dm-sans-700.ttf",
+      "sha256": "2a8e7f713ee79fbccdef3cef5c787aff47580299f7da60144961e7db2ec08211",
+      "source": "https://github.com/google/fonts/tree/main/ofl/dmsans",
+      "license": "OFL-1.1"
+    },
+    {
+      "family": "IBM Plex Mono",
+      "weight": 400,
+      "file": "ibm-plex-mono-400.ttf",
+      "sha256": "a7fdc993f9f0387caedba4e42521136fa97e4c0837ae6239bf0413ccf8af00c2",
+      "source": "https://github.com/google/fonts/tree/main/ofl/ibmplexmono",
+      "license": "OFL-1.1"
+    },
+    {
+      "family": "IBM Plex Mono",
+      "weight": 500,
+      "file": "ibm-plex-mono-500.ttf",
+      "sha256": "4fc14a73ca53ba9d32fd759ae1ca1a3133326035d0dd337862b3ee1633cc156e",
+      "source": "https://github.com/google/fonts/tree/main/ofl/ibmplexmono",
+      "license": "OFL-1.1"
+    },
+    {
+      "family": "Instrument Sans",
+      "weight": 400,
+      "file": "instrument-sans-400.ttf",
+      "sha256": "01689ad055025ff1891607b077513c9389f73360d471dcffa036e326af179b00",
+      "source": "https://github.com/google/fonts/tree/main/ofl/instrumentsans",
+      "license": "OFL-1.1"
+    },
+    {
+      "family": "Instrument Sans",
+      "weight": 500,
+      "file": "instrument-sans-500.ttf",
+      "sha256": "a7bcb84cb01f6e33eecdd2cbff3f97ff1674c0e8e37c6921b6cd717b8c854d98",
+      "source": "https://github.com/google/fonts/tree/main/ofl/instrumentsans",
+      "license": "OFL-1.1"
+    },
+    {
+      "family": "Instrument Sans",
+      "weight": 600,
+      "file": "instrument-sans-600.ttf",
+      "sha256": "5e39a358a65a72b6b74b56b384bbe17a61d8899d33cc255d49112e6522e3df0d",
+      "source": "https://github.com/google/fonts/tree/main/ofl/instrumentsans",
+      "license": "OFL-1.1"
+    }
+  ],
+  "assetRoot": "frontend/src/assets/fonts",
+  "licenseRoot": "frontend/public/fonts"
+}

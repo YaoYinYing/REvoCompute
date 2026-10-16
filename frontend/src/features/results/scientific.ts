@@ -262,8 +262,8 @@ export class PairMatrix {
   private geometry(): { width: number; height: number; left: number; top: number; size: number; legendX: number; legendWidth: number; scale: number } {
     const base = this.options.geometry || { width: 800, height: 600, left: 78, top: 30, size: 500, legendX: 604, legendWidth: 24 };
     const available = (this.options.observe || this.options.figure.parentElement)?.clientWidth || base.width;
-    const width = Math.max(1, Math.min(base.width, available)), scale = width / base.width;
-    return { width, height: Math.round(base.height * scale), left: base.left * scale, top: base.top * scale, size: base.size * scale, legendX: base.legendX * scale, legendWidth: Math.max(8, base.legendWidth * scale), scale };
+    const width = Math.max(this.options.minimumWidth || 1, Math.min(base.width, available)), scale = width / base.width;
+    return { width, height: Math.ceil(Math.max(base.height * scale, (base.top + base.size) * scale + 48)), left: base.left * scale, top: base.top * scale, size: base.size * scale, legendX: base.legendX * scale, legendWidth: Math.max(8, base.legendWidth * scale), scale };
   }
   private cellFromEvent(event: MouseEvent | PointerEvent): { x: number; y: number } | null {
     const canvas = this.options.canvas as HTMLCanvasElement, box = canvas.getBoundingClientRect(), geometry = this.geometry();
@@ -316,13 +316,13 @@ export class PairMatrix {
     const figure = this.options.figure as HTMLElement; figure.querySelectorAll('.pair-matrix-label').forEach((node) => node.remove()); const ticks = Math.max(1, this.options.ticks ?? 5), span = maximum - minimum || 1;
     const label = (text: string, styles: Partial<CSSStyleDeclaration>, classes = ''): void => { const node = document.createElement('span'); node.className = `pair-matrix-label ${classes}`; node.textContent = text; Object.assign(node.style, styles); figure.append(node); };
     for (let tick = 0; tick <= ticks; tick += 1) { const x = Math.round((this.values[0]!.length - 1) * tick / ticks), y = Math.round((this.values.length - 1) * tick / ticks);
-      label(this.xLabels[x]!, { left: `${geometry.left + geometry.size * (x + 0.5) / this.values[0]!.length}px`, top: `${geometry.top + geometry.size + 8 * geometry.scale}px` }, 'pair-matrix-label-x');
-      label(this.yLabels[y]!, { left: '0', width: `${geometry.left - 8 * geometry.scale}px`, textAlign: 'right', top: `${geometry.top + geometry.size * (y + 0.5) / this.values.length}px` }, 'pair-matrix-label-y');
+      label(this.xLabels[x]!, { left: `${geometry.left + geometry.size * (x + 0.5) / this.values[0]!.length}px`, top: `${geometry.top + geometry.size + 12}px` }, 'pair-matrix-label-x');
+      label(this.yLabels[y]!, { left: `${geometry.left - 22}px`, top: `${geometry.top + geometry.size * (y + 0.5) / this.values.length}px` }, 'pair-matrix-label-y');
       label((minimum + span * tick / ticks).toFixed(this.options.decimals ?? 1), { left: `${geometry.legendX + geometry.legendWidth + 7 * geometry.scale}px`, top: `${geometry.top + geometry.size - geometry.size * tick / ticks}px` }, 'pair-matrix-label-y');
     }
-    label(this.options.xTitle || 'Column', { left: `${geometry.left + geometry.size / 2}px`, top: `${geometry.top + geometry.size + 26 * geometry.scale}px` }, 'pair-matrix-title pair-matrix-label-x');
-    label(this.options.yTitle || 'Row', { left: `${20 * geometry.scale}px`, top: `${geometry.top + geometry.size / 2}px` }, 'pair-matrix-title pair-matrix-title-y');
-    label(this.options.legendTitle || 'Scale', { left: `${geometry.legendX}px`, top: `${geometry.top - 18 * geometry.scale}px` }, 'pair-matrix-title');
+    label(this.options.xTitle || 'Column', { left: `${geometry.left + geometry.size / 2}px`, top: `${geometry.top + geometry.size + 36}px` }, 'pair-matrix-title pair-matrix-label-x');
+    label(this.options.yTitle || 'Row', { left: `${Math.max(12, 20 * geometry.scale)}px`, top: `${geometry.top + geometry.size / 2}px` }, 'pair-matrix-title pair-matrix-title-y');
+    label(this.options.legendTitle || 'Scale', { left: `${geometry.legendX}px`, top: `${Math.max(10, geometry.top - 18 * geometry.scale)}px` }, 'pair-matrix-title');
   }
   destroy(): void { this.observer?.disconnect(); this.themeObserver?.disconnect(); const canvas = this.options.canvas as HTMLCanvasElement;
     canvas.removeEventListener('click', this.click); canvas.removeEventListener('pointermove', this.pointer); canvas.removeEventListener('keydown', this.keydown); (this.options.figure as HTMLElement).querySelectorAll('.pair-matrix-label').forEach((node) => node.remove()); }

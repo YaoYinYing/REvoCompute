@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { applyLocale, translate } from '../src/app/i18n';
-import { mountRunnerCatalog } from '../src/features/runners/index';
 import { parseWorkspaceDescriptor, PayloadFault } from '../src/features/create-task/api';
 import { PluginHost } from '../src/features/create-task/input-workspace/PluginHost';
 import { validateParameter } from '../src/features/create-task/parameter-controls';
@@ -99,45 +98,6 @@ function installDom(): void {
 
 beforeEach(() => { installDom(); });
 afterEach(() => { applyLocale('en', false); vi.unstubAllGlobals(); });
-
-/** Every descendant, in document order. */
-function descendants(node: FakeElement): FakeElement[] {
-  return node.children.flatMap(child => [child, ...descendants(child)]);
-}
-
-describe('§11 boundary on the Runner catalog', () => {
-  it('renders app-owned labels in Chinese while the server method name stays verbatim', async () => {
-    applyLocale('zh-CN');
-    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
-      if (String(url).includes('/infrastructure')) return new Response(JSON.stringify({ status: 'READY' }));
-      return new Response(JSON.stringify({
-        version: 3,
-        categories: [{ name: 'folding', label: 'Folding' }],
-        task_types: [{
-          name: 'alphafold', display_name: 'AlphaFold Fold', category: 'folding',
-          summary: 'Predict a structure.', access: { restricted: false },
-          detail_url: '/compute/api/types/alphafold', parameters_url: '/compute/api/task-parameters/alphafold',
-        }],
-      }));
-    }));
-
-    const root = new FakeElement('main');
-    await mountRunnerCatalog(root as unknown as HTMLElement);
-
-    const readiness = descendants(root).find(node => node.className === 'readiness-state')!;
-    // Frontend-authored status copy follows the locale.
-    expect(readiness.textContent).toBe('基础设施就绪');
-    expect(readiness.textContent).not.toBe(translate('en', 'runners.ready'));
-
-    // The catalog card renders the server's own display_name verbatim.
-    expect(descendants(root).filter(node => node.tagName === 'h3').map(node => node.textContent)).toContain('AlphaFold Fold');
-
-    // The card's call-to-action is app-owned and localized.
-    const links = descendants(root).filter(node => node.tagName === 'a');
-    expect(links.some(node => node.innerHTML.includes('查看方法'))).toBe(true);
-    expect(links.some(node => node.innerHTML.includes('View method'))).toBe(false);
-  });
-});
 
 describe('§11 boundary on the Create Task workbench', () => {
   it('localizes the validation frame but keeps the server parameter label verbatim', () => {

@@ -35,7 +35,7 @@ afterEach(() => { applyLocale('en', false); vi.unstubAllGlobals(); });
 /** Mount the real detail page for a Runner whose parameter contract is `contract`. */
 async function mountPage(contract: ParameterSchema): Promise<HarnessNode> {
   vi.stubGlobal('fetch', vi.fn(async (url: string | URL) => {
-    const payload = String(url).includes('/task-parameters/') ? contract : detail();
+    const payload = String(url).includes('/task-parameters/') ? contract : String(url).endsWith('/infrastructure') ? { status: 'READY' } : detail();
     return new Response(JSON.stringify(payload), { status: 200, headers: { 'content-type': 'application/json' } });
   }));
   const root = document.createElement('div') as unknown as HarnessNode;
@@ -54,6 +54,11 @@ function labeledFacts(root: HarnessNode, name: string): Array<[string, string]> 
 }
 
 describe('Runner detail parameter reference', () => {
+  it('keeps exclusive bounds exclusive in the scientific reference', async () => {
+    const root = await mountPage(schema({ strength: { type: 'number', exclusiveMinimum: 0, maximum: 10 } }));
+    expect(labeledFacts(root, 'strength')).toContainEqual(['Range', '> 0 · ≤ 10']);
+  });
+
   it('names a bounded parameter\'s range as a labelled definition, never a value with an empty label', async () => {
     const root = await mountPage(schema({ msa_depth: { type: 'integer', title: 'MSA depth', description: 'Depth of the search.', minimum: 0, maximum: 100 } }));
     const facts = labeledFacts(root, 'msa_depth');

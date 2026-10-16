@@ -112,7 +112,7 @@ def test_history_back_and_forward_return_to_the_real_pages(page: Page) -> None:
     expect(page.get_by_role("heading", name="Runner catalog", exact=True)).to_be_visible()
 
     page.go_back()
-    expect(page.get_by_role("heading", name="Dashboard", exact=True)).to_be_visible()
+    expect(page.get_by_role("heading", name="Tasks", exact=True)).to_be_visible()
     assert page.url == f"{ORIGIN}/compute/dashboard"
     page.go_forward()
     expect(page.get_by_role("heading", name="Runner catalog", exact=True)).to_be_visible()
@@ -145,7 +145,7 @@ def test_a_traversal_during_a_slow_render_still_lands_on_the_page_it_names(page:
         held.fallback()
     expect(page).to_have_url(f"{ORIGIN}/compute/dashboard")
     expect(page.locator(".task-card").first).to_be_visible()
-    expect(page.get_by_role("heading", name="Dashboard", exact=True)).to_be_visible()
+    expect(page.get_by_role("heading", name="Tasks", exact=True)).to_be_visible()
     # The address bar and the outlet agree: the late response did not repaint the
     # page the reader already left.
     assert page.evaluate("() => document.querySelectorAll('.runner-catalog').length") == 0
@@ -215,10 +215,10 @@ def test_history_navigation_names_and_focuses_the_page_it_lands_on(page: Page) -
     expect(page.get_by_role("heading", name="Runner catalog", exact=True)).to_be_visible()
 
     page.go_back()
-    expect(page.get_by_role("heading", name="Dashboard", exact=True)).to_be_visible()
+    expect(page.get_by_role("heading", name="Tasks", exact=True)).to_be_visible()
     # The document is named for the page the reader is now on, and focus moves to
     # that page's own heading rather than staying on the control they left.
-    expect(page).to_have_title("Dashboard | REvoCompute")
+    expect(page).to_have_title("Tasks. | REvoCompute")
     expect(page.locator(".app-outlet h1")).to_be_focused()
 
     # Each traversal announces the page it landed on, once, and the
@@ -226,10 +226,10 @@ def test_history_navigation_names_and_focuses_the_page_it_lands_on(page: Page) -
     page.go_forward()
     expect(page.get_by_role("heading", name="Runner catalog", exact=True)).to_be_visible()
     page.go_back()
-    expect(page.get_by_role("heading", name="Dashboard", exact=True)).to_be_visible()
+    expect(page.get_by_role("heading", name="Tasks", exact=True)).to_be_visible()
     announcements = _announcements(page)
     assert len(announcements) == 3, announcements
-    assert announcements[-1].endswith("Dashboard | REvoCompute"), announcements
+    assert announcements[-1].endswith("Tasks. | REvoCompute"), announcements
     # Each announcement is transient: the regions are removed after the reader has
     # had time to hear them, so repeated traversals never accumulate regions.
     page.wait_for_function("() => document.querySelectorAll('[data-route-announcement]').length === 0")
@@ -283,7 +283,7 @@ def test_repeated_navigation_leaves_no_duplicate_chrome(page: Page) -> None:
     # second router or a second auth owner would have doubled the chrome.
     assert page.evaluate(CHROME_STATE) == {
         "appShell": 1, "publicHeader": 0, "outlet": "app-outlet",
-        "headings": ["Dashboard"], "mains": 1,
+        "headings": ["Tasks."], "mains": 1,
     }
 
 
@@ -350,7 +350,7 @@ def test_a_superseded_route_disposes_the_view_it_replaced(page: Page) -> None:
 
     # The result page is gone from the document and its viewer stayed disposed.
     assert page.locator(".structure-host").count() == 0
-    assert page.evaluate(CHROME_STATE)["headings"] == ["Dashboard"]
+    assert page.evaluate(CHROME_STATE)["headings"] == ["Tasks."]
     assert page.url == f"{ORIGIN}/compute/dashboard"
 
 
@@ -410,6 +410,7 @@ def test_a_route_change_tears_down_the_guided_tour_it_was_decorating(page: Page)
     mount_scenario(page, controlled_scenario())
     page.goto(f"{ORIGIN}/compute/dashboard")
     expect(page.locator(".task-card").first).to_be_visible()
+    page.locator(".dashboard-help > summary").click()
     page.get_by_role("button", name="Guided tour").click()
     expect(page.locator(".tour-callout")).to_be_visible()
     assert page.evaluate("() => document.querySelectorAll('.tour-anchor').length") >= 1

@@ -260,14 +260,41 @@ def _serve_app(page: Page, *, status: dict | None = None, manifest: dict | None 
     page.goto(f"{ORIGIN}/compute/results/{TASK_ID}")
 
 
+def _open_files(page: Page) -> None:
+    if not page.locator(".result-rail").is_visible():
+        page.get_by_role("button", name="Open Files and diagnostics", exact=True).click()
+
+
+def _open_views(page: Page) -> None:
+    if page.locator(".result-view-menu").get_attribute("open") is None:
+        page.locator(".result-view-menu > summary").click()
+
+
+
+def test_incomplete_outputs_preserve_the_execution_error_and_available_artifacts(page: Page) -> None:
+    manifest = _manifest(
+        artifacts=[_artifact("partial.txt", role="primary")], status="failed", outcome="FAILED",
+        error="Solver exited with status 9",
+        output_check={"state": "failed", "checks": [], "problems": ["Required model missing"]},
+    )
+    _serve_app(page, manifest=manifest)
+    expect(page.locator(".result-status")).to_contain_text("Solver exited with status 9")
+    expect(page.locator(".result-status")).to_contain_text("Output check incomplete")
+    expect(page.locator(".result-preview pre")).to_have_text("artifact contents")
+    _open_files(page)
+    expect(page.locator(".result-file-open", has_text="partial.txt")).to_be_visible()
+
 def test_direct_url_refresh_reconstructs_files_and_preserves_direct_downloads(page: Page) -> None:
     files = [_artifact("models/result.txt", role="primary"), _artifact("execution/slurm.stdout", role="diagnostic")]
     _serve_app(page, manifest=_manifest(artifacts=files))
     expect(page.get_by_role("heading", name="Example method")).to_be_visible()
+    _open_files(page)
     expect(page.locator(".result-file-open", has_text="result.txt")).to_be_visible()
     search = page.get_by_label("Filter result artifacts")
     search.fill("stdout")
+    _open_files(page)
     expect(page.locator(".result-file-open", has_text="slurm.stdout")).to_be_visible()
+    _open_files(page)
     expect(page.locator(".result-file-open", has_text="result.txt")).to_have_count(0)
     download = page.get_by_label("Download execution/slurm.stdout")
     expect(download).to_have_attribute("href", f"/compute/api/results/{TASK_ID}/artifacts/execution/slurm.stdout?download=1")
@@ -286,6 +313,7 @@ def test_direct_url_refresh_reconstructs_files_and_preserves_direct_downloads(pa
     search.fill("stdout")
     search.fill("")
     expect(models).not_to_have_attribute("open", "")
+    _open_files(page)
     expect(page.locator(".result-file-open", has_text="result.txt")).to_have_attribute("aria-current", "true")
     page.reload()
     expect(page.get_by_role("heading", name="Example method")).to_be_visible()
@@ -297,6 +325,7 @@ def test_declared_zero_byte_artifact_stays_visible_and_counted(page: Page) -> No
         _artifact("execution/task_finished", role="diagnostic", size=0),
     ]
     _serve_app(page, manifest=_manifest(artifacts=files))
+    _open_files(page)
     expect(page.locator(".result-file-open", has_text="result.txt")).to_be_visible()
     marker = page.locator(".result-file-open", has_text="task_finished")
     expect(marker).to_be_visible()
@@ -306,6 +335,7 @@ def test_declared_zero_byte_artifact_stays_visible_and_counted(page: Page) -> No
     search = page.get_by_label("Filter result artifacts")
     search.fill("task_finished")
     expect(marker).to_be_visible()
+    _open_files(page)
     expect(page.locator(".result-file-open", has_text="result.txt")).to_have_count(0)
     expect(summary).to_contain_text("1 of 2 files")
 
@@ -331,8 +361,10 @@ def test_molecular_viewer_chunk_is_lazy_and_failure_isolated(page: Page) -> None
 
     expect(page.locator(".result-preview pre")).to_have_text("artifact contents")
     assert not any(url.endswith(viewer_file) for url in requested)
+    _open_files(page)
     page.locator(".result-file-open", has_text="model.pdb").click()
     expect(page.locator(".result-preview .result-empty")).to_be_visible()
+    _open_files(page)
     expect(page.locator(".result-file-open", has_text="summary.txt")).to_be_visible()
     expect(page.get_by_label("Download model.pdb")).to_be_visible()
     assert any(url.endswith(viewer_file) for url in requested)
@@ -397,6 +429,7 @@ def test_unregistered_view_plugin_keeps_its_declared_title_and_tears_down_the_ma
     manifest = _manifest(artifacts=[matrix], views=[_matrix_view(matrix), entity])
     _serve_app(page, manifest=manifest, tables_enabled=True, table_columns=MATRIX_COLUMNS, table_rows=MATRIX_ROWS)
     expect(page.locator(".pair-matrix-view canvas")).to_be_visible()
+    _open_views(page)
     page.get_by_role("button", name="Ranked pairs", exact=True).click()
     expect(page.get_by_role("heading", name="Ranked pairs")).to_be_visible()
     # The previous matrix renderer is torn down, so it no longer repaints on a theme change.
@@ -415,11 +448,13 @@ def test_tabs_switch_between_declared_views_and_unavailable_sources_are_isolated
     manifest = _manifest(artifacts=[matrix, table], views=[_matrix_view(matrix), entity])
     _serve_app(page, manifest=manifest, tables_enabled=True, table_columns=MATRIX_COLUMNS, table_rows=MATRIX_ROWS)
     expect(page.locator(".pair-matrix-view canvas")).to_be_visible()
+    _open_views(page)
     page.get_by_role("button", name="Ranked pairs", exact=True).click()
     expect(page.locator(".result-preview table")).to_be_visible()
     expect(page.locator(".pair-matrix-view")).to_have_count(0)
     expect(page.get_by_role("heading", name="Ranked pairs")).to_be_visible()
     expect(page.locator(".result-preview-header")).to_contain_text("Residue pairs ordered by coupling strength.")
+    _open_views(page)
     page.get_by_role("button", name="Coupling strengths", exact=True).click()
     expect(page.locator(".pair-matrix-view canvas")).to_be_visible()
 
@@ -456,22 +491,26 @@ def test_polling_stops_when_a_running_task_becomes_terminal(page: Page) -> None:
     page.wait_for_function("window.__clearedPolls === 1")
 
 
-def test_rail_is_non_obscuring_on_mobile_and_collapsible_on_desktop(page: Page) -> None:
+def test_files_dialog_keeps_the_stage_full_width_and_returns_keyboard_focus(page: Page) -> None:
     files = [_artifact("result.txt", role="primary")]
     page.set_viewport_size({"width": 1280, "height": 800})
     _serve_app(page, manifest=_manifest(artifacts=files))
-    expanded = page.locator(".result-main").bounding_box()
-    page.locator(".result-files > summary").click()
-    expect(page.locator(".result-app")).to_have_class("result-app is-rail-collapsed")
-    collapsed = page.locator(".result-main").bounding_box()
-    assert expanded and collapsed and collapsed["width"] >= expanded["width"] + 200
-    page.get_by_label("Open Files and diagnostics").click()
-    restored = page.locator(".result-main").bounding_box()
-    assert restored and abs(restored["width"] - expanded["width"]) <= 2
+    stage = page.locator(".result-main").bounding_box()
+    opener = page.get_by_role("button", name="Open Files and diagnostics", exact=True)
+    opener.click()
+    expect(page.get_by_role("dialog", name="Files and diagnostics")).to_be_visible()
+    expect(page.locator(".result-file-open", has_text="result.txt")).to_be_visible()
+    assert page.locator(".result-main").bounding_box()["width"] == stage["width"]
+    page.keyboard.press("Escape")
+    expect(opener).to_be_focused()
     page.set_viewport_size({"width": 300, "height": 700})
-    expect(page.locator(".result-workspace")).to_be_visible()
-    boxes = [page.locator(".result-main").bounding_box(), page.locator(".result-rail").bounding_box()]
-    assert boxes[0] and boxes[1] and boxes[1]["y"] >= boxes[0]["y"] + boxes[0]["height"] - 1
+    opener.click()
+    dialog = page.get_by_role("dialog", name="Files and diagnostics")
+    expect(dialog).to_be_visible()
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.locator(".result-file-open", has_text="result.txt").click()
+    expect(dialog).not_to_be_visible()
+    expect(page.locator(".result-preview pre")).to_have_text("artifact contents")
 
 
 def test_pagehide_preserves_bfcache_state_but_disposes_on_true_unload(page: Page) -> None:
@@ -481,6 +520,7 @@ def test_pagehide_preserves_bfcache_state_but_disposes_on_true_unload(page: Page
     expect(page.locator(".result-app")).to_be_visible()
     assert page.evaluate("window.__viewerDisposals || 0") == 0
     page.evaluate("window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }))")
+    _open_files(page)
     expect(page.locator(".result-file-open", has_text="model.pdb")).to_be_visible()
     page.evaluate("window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: false }))")
     expect(page.locator(".app-outlet")).to_be_empty()
@@ -493,26 +533,25 @@ def test_structure_switch_reuses_viewer_and_latest_success_finishes_last(page: P
     page.add_init_script("window.__holdStructure = 'models/first.pdb';")
     _serve_app(page, manifest=_manifest(artifacts=[first, second]))
     expect(page.locator(".structure-host")).to_be_visible()
-    page.get_by_role("group", name="Structure representation").get_by_role(
-        "button", name="Sticks", exact=True
-    ).click()
-    page.get_by_role("group", name="Structure colour").get_by_role(
-        "button", name="Sequence", exact=True
-    ).click()
+    page.get_by_role("combobox", name="Structure representation", exact=True).select_option("sticks")
+    page.get_by_role("combobox", name="Structure colour", exact=True).select_option("rainbow")
+    page.locator(".structure-extra-tools > summary").click()
     page.get_by_role("button", name="Dark canvas", exact=True).click()
     expect(page.locator(".structure-host")).to_have_attribute("data-theme", "dark")
+    _open_files(page)
     second_row = page.locator(".result-file-open", has_text="second.pdb")
     expect(second_row).to_be_visible()
     second_row.click()
     page.wait_for_function("window.__viewerLoads.includes('models/first.pdb')")
     page.evaluate("window.__releaseStructure()")
     expect(page.locator(".structure-host")).to_have_attribute("data-label", "models/second.pdb")
-    expect(page.get_by_role("button", name="Sticks", exact=True)).to_have_attribute("aria-pressed", "true")
-    expect(page.get_by_role("button", name="Sequence", exact=True)).to_have_attribute("aria-pressed", "true")
+    expect(page.get_by_role("combobox", name="Structure representation", exact=True)).to_have_value("sticks")
+    expect(page.get_by_role("combobox", name="Structure colour", exact=True)).to_have_value("rainbow")
+    page.locator(".structure-extra-tools > summary").click()
     expect(page.get_by_role("button", name="Light canvas", exact=True)).to_have_attribute("aria-pressed", "true")
     expect(page.locator(".structure-host")).to_have_attribute("data-theme", "dark")
     page.set_viewport_size({"width": 300, "height": 700})
-    assert page.get_by_role("group", name="Structure representation").evaluate(
+    assert page.get_by_role("combobox", name="Structure representation", exact=True).evaluate(
         "node => node.getBoundingClientRect().right <= document.documentElement.clientWidth"
     )
     assert page.evaluate("window.__viewerMounts") == 1
@@ -537,6 +576,7 @@ def test_structure_controls_fullscreen_png_source_and_storyboard_reopen(page: Pa
     )
     _serve_app(page, manifest=manifest)
     expect(page.locator(".probe-storyboard")).to_be_visible()
+    _open_views(page)
     page.get_by_role("button", name="Structure", exact=True).click()
     expect(page.locator(".structure-host")).to_be_visible()
     assert page.evaluate("window.__storyboardDestroyed") == 1
@@ -552,15 +592,18 @@ def test_structure_controls_fullscreen_png_source_and_storyboard_reopen(page: Pa
     expect(page.get_by_label("Enter fullscreen")).to_be_visible()
     page.get_by_role("button", name="Save PNG", exact=True).click()
     page.wait_for_function("window.__viewerCaptures === 1")
+    page.locator(".structure-extra-tools > summary").click()
+    expect(page.get_by_role("button", name="Download", exact=True)).to_be_visible()
     with page.expect_download() as source_download:
         page.get_by_role("button", name="Download", exact=True).click()
     assert source_download.value.suggested_filename
+    _open_views(page)
     page.get_by_role("button", name="Scientific result", exact=True).click()
     expect(page.locator(".probe-storyboard")).to_be_visible()
     assert page.evaluate("window.__viewerDisposals") == 1
     page.get_by_role("button", name="Open structure", exact=True).click()
     expect(page.locator(".structure-host")).to_be_visible()
-    expect(page.get_by_role("group", name="Structure colour").get_by_role("button", name="Confidence", exact=True)).to_be_visible()
+    expect(page.get_by_role("combobox", name="Structure colour", exact=True).locator("option[value=confidence]")).to_have_count(1)
     assert page.evaluate("window.__viewerMounts") == 2
 
 
@@ -593,10 +636,12 @@ def test_preview_failure_does_not_break_other_files_or_archive(page: Page) -> No
     page.route(f"{ORIGIN}/compute/api/results/{TASK_ID}/archive", lambda route: (archive_requests.append(route.request.headers.get("authorization", "")), route.fulfill(json={"ready": False})))
     _serve_app(page, manifest=_manifest(artifacts=[broken, good]), failed_artifacts={"broken.txt"})
     expect(page.get_by_text("Text preview could not be loaded.")).to_be_visible()
+    _open_files(page)
     page.locator(".result-file-open", has_text="good.txt").click()
     expect(page.locator(".result-preview pre")).to_have_text("artifact contents")
-    page.get_by_role("button", name="Create ZIP", exact=True).click()
-    expect(page.get_by_text("Archive generation requested.", exact=True)).to_be_visible()
+    with page.expect_response(f"{ORIGIN}/compute/api/results/{TASK_ID}/archive"):
+        page.get_by_role("button", name="Prepare full-result ZIP", exact=True).click()
+    expect(page.get_by_text("Preparing full-result ZIP…", exact=True).first).to_be_visible()
     assert archive_requests == ["Bearer ephemeral"]
 
 
@@ -663,8 +708,9 @@ def test_molstar_selection_controls_stay_reachable_at_mobile_width(page: Page, m
         # The real production bundle: the Mol* selection controls are chunk
         # markup, so the fixture-viewer double cannot lay them out at all.
         monkeypatch.setattr(browser_frontend_assets, "_RESULT_DIST", ROOT / "frontend" / "dist")
-        frontend_fixtures.mount_scenario(page, frontend_fixtures.structure_scenario())
+        frontend_fixtures.mount_scenario(page, frontend_fixtures.structure_scenario().with_lifecycle("finished"))
         page.goto(f"{frontend_fixtures.DEFAULT_ORIGIN}/compute/results/{frontend_fixtures.DEFAULT_TASK_ID}")
+        page.get_by_role("button", name="Toggle Selection Mode", exact=True).click()
         page.locator(".msp-selection-viewport-controls").first.wait_for(timeout=90_000)
         page.wait_for_timeout(1500)
         reading = page.evaluate(_CONTAINMENT_JS)

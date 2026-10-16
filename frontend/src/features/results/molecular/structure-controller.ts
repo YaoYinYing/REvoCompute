@@ -4,7 +4,8 @@ import type { MolecularViewer, MolecularViewerFactory } from './viewer-contract'
 
 const MAX_STRUCTURE_BYTES = 64 * 1024 * 1024;
 
-function structureFormat(path: string): 'pdb' | 'mmcif' {
+function structureFormat(path: string): 'pdb' | 'mmcif' | 'pqr' {
+  if (/\.pqr$/i.test(path)) return 'pqr';
   return /\.(?:cif|mmcif)$/i.test(path) ? 'mmcif' : 'pdb';
 }
 
@@ -12,9 +13,11 @@ export class StructureController {
   private viewer: MolecularViewer | null = null;
   private host: HTMLElement | null = null;
   private generation = 0;
+  private geometryGeneration = 0;
+  private geometryAbort: AbortController | null = null;
   private controller: AbortController | null = null;
-  private representation = 'cartoon';
-  private color = 'chain';
+  private representation = 'cartoon_ligand';
+  private color = 'rainbow';
   private operation: Promise<void> = Promise.resolve();
   private viewerMount: Promise<MolecularViewer> | null = null;
   private selectionUnsubscribe: (() => void) | null = null;
@@ -102,6 +105,21 @@ export class StructureController {
 
   setTheme(theme: 'light' | 'dark'): void { this.viewer?.setTheme(theme); }
   resize(): void { this.viewer?.resize(); }
+  async setGeometry(artifact: ResultFile | null): Promise<void> {
+    const generation = ++this.geometryGeneration; this.geometryAbort?.abort(); this.geometryAbort = null;
+    if (!artifact) { await this.viewer?.setSphereGeometry?.(null); return; }
+    if (artifact.size > 4 * 1024 * 1024) throw new Error('Alpha-sphere evidence exceeds the preview limit.');
+    const controller = new AbortController(); this.geometryAbort = controller;
+    const response = await fetch(artifact.url, { credentials: 'same-origin', signal: controller.signal });
+    if (!response.ok) throw new Error('Alpha-sphere evidence could not be opened.');
+    const source = await response.text();
+    if (source.length > 4 * 1024 * 1024) throw new Error('Alpha-sphere evidence exceeds the preview limit.');
+    if (generation !== this.geometryGeneration) return;
+    if (!this.viewer?.setSphereGeometry) throw new Error('Recorded sphere display is unavailable.');
+    await this.viewer.setSphereGeometry(source);
+  }
+
+  annotate(annotation: { point: { x: number; y: number; z: number }; label: string } | null): void { this.viewer?.annotate?.(annotation); }
   resetCamera(): void { this.viewer?.resetCamera?.(); }
   select(selection: unknown): boolean { if (this.loading) { this.pendingSelection = selection; return true; } return this.viewer?.select?.(selection) || false; }
   focus(selection: unknown): boolean { if (this.loading) { this.pendingFocus = selection; return true; } return this.viewer?.focus?.(selection) || false; }
@@ -111,7 +129,7 @@ export class StructureController {
   }
 
   dispose(): void {
-    this.generation += 1;
+    this.generation += 1; this.geometryGeneration += 1; this.geometryAbort?.abort(); this.geometryAbort = null;
     this.controller?.abort();
     this.controller = null;
     this.loading = false; this.pendingFocus = null; this.pendingSelection = null;

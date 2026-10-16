@@ -115,7 +115,7 @@ def test_history_back_and_forward_return_to_the_quota_page(page: Page) -> None:
     expect(page.get_by_role("heading", name="Quota", exact=True)).to_be_visible()
 
     page.go_back()
-    expect(page.get_by_role("heading", name="Dashboard", exact=True)).to_be_visible()
+    expect(page.get_by_role("heading", name="Tasks", exact=True)).to_be_visible()
     assert page.url == f"{ORIGIN}/compute/dashboard"
     page.go_forward()
     expect(page.get_by_role("heading", name="Quota", exact=True)).to_be_visible()
@@ -143,6 +143,7 @@ def test_the_chinese_catalog_renders_the_quota_page(page: Page) -> None:
     # heading: the section heading, its table's column headings and cells, and the
     # storage facts all render the Chinese catalog.
     envelope = page.locator(".resource-envelope")
+    page.locator(".quota-policy > summary").click()
     expect(envelope.get_by_role("heading", name="资源清单", level=3)).to_be_visible()
     expect(envelope.get_by_role("heading", name="持久存储", level=4)).to_be_visible()
     for heading in ["单位", "类别", "是否设限", "额度", "已用", "预留", "剩余", "用量"]:
@@ -300,12 +301,12 @@ def test_a_zero_allowance_bar_is_the_enforced_zero_text_state(page: Page) -> Non
     # No bar is drawn for the zero-allowance unit, and the page says why.
     gpu_item = page.locator(".quota-bar-item").first
     expect(gpu_item.locator(".quota-bar")).to_have_count(0)
-    expect(gpu_item.locator(".quota-bar-note")).to_contain_text("enforced zero")
+    expect(gpu_item.locator(".quota-bar-note").first).to_contain_text("enforced zero")
     # The ungated CPU unit is distinct: it has no denominator either, but its own
     # wording (not the zero-ceiling wording).
     ungated_item = page.locator(".quota-bar-item").nth(1)
     expect(ungated_item.locator(".quota-bar")).to_have_count(0)
-    expect(ungated_item.locator(".quota-bar-note")).to_contain_text("Not gated")
+    expect(ungated_item.locator(".quota-bar-note").first).to_contain_text("Not gated")
 
 
 def test_a_unit_with_no_ceiling_draws_no_bar(page: Page) -> None:

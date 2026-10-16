@@ -1,0 +1,7 @@
+/* Shared read-only and operational data registers. */
+.admin-table-scroll { width: 100%; min-width: 0; overflow-x: auto; border: 1px solid var(--app-line); border-radius: var(--r-control); background: var(--app-surface); box-shadow: none; }
+.admin-table { width: 100%; border-collapse: collapse; font-size: .875rem; }
+.admin-table th, .admin-table td { min-width: 7rem; padding: .75rem .8rem; border-bottom: 1px solid var(--app-line); text-align: left; vertical-align: top; }
+.admin-table th { background: var(--app-soft); border-bottom: 1px solid var(--app-line-strong); color: var(--app-muted); font-size: .875rem; white-space: nowrap; }
+.admin-table tbody tr:last-child td { border-bottom: 0; }
+.admin-table tbody tr:nth-child(even) { background: color-mix(in srgb, var(--app-soft) 35%, transparent); }

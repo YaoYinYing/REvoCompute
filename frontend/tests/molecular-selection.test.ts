@@ -38,3 +38,21 @@ describe('MolecularViewer.matchesResidue insertion-code semantics', () => {
     expect(MolecularViewer.matchesResidue(residue({ authSeqId: 43 }), { chain: 'A', residue: 42, numbering: 'auth_seq_id' })).toBe(false);
   });
 });
+
+describe('MolecularViewer presentation independence', () => {
+  it('keeps the camera when representation changes and clears an explicitly empty selection', async () => {
+    const snapshot = { position: [18, 20, 60], target: [1, 2, 3], radius: 14 };
+    let camera = snapshot;
+    let cleared = false;
+    const viewer = new MolecularViewer();
+    Object.assign(viewer, {
+      plugin: { canvas3d: { camera: { getSnapshot: () => camera, setState: (value: typeof snapshot) => { camera = value; } } },
+        managers: { structure: { selection: { clear: () => { cleared = true; } } } } },
+      applyPresentation: async () => { camera = { ...snapshot, radius: 90 }; },
+    });
+    await viewer.setRepresentation('sticks');
+    expect(camera).toEqual(snapshot);
+    expect(viewer.select({ residues: [] })).toBe(true);
+    expect(cleared).toBe(true);
+  });
+});

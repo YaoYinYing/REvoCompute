@@ -329,7 +329,7 @@ export class GuidedTour {
     if (!flow || this.inProgress(flow) || this.isDone(flow)) return;
     const host = document.querySelector<HTMLElement>('main.result-app, main.admin-page .page-heading');
     if (!host || host.querySelector('.tour-launcher')) return;
-    const actions = host.querySelector<HTMLElement>('.result-header-actions, .page-actions');
+    const actions = host.querySelector<HTMLElement>('.result-help-actions') || host.querySelector<HTMLElement>('.result-header-actions, .page-actions');
     (actions ?? host).append(this.launcher(flow.id));
   }
 
