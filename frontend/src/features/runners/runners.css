@@ -3,7 +3,7 @@
 .runners-page .page-heading { border: 0; margin-bottom: 2rem; }
 .runners-page .page-heading h1 { font-weight: 500; letter-spacing: -.045em; font-size: 38px; }
 .runner-toolbar { padding: 1rem 0 1.5rem; border-block: 1px solid var(--app-line); }
-.runner-toolbar label > span:first-child, .runner-toolbar input, .runner-toolbar select, .runner-toolbar .catalog-count, .runner-toolbar legend, .runner-toolbar button { font-size: 12px; }
+.runner-toolbar label > span:first-child, .runner-toolbar input, .runner-toolbar select, .runner-toolbar .catalog-count, .runner-toolbar legend, .runner-toolbar button { font-size: 14px; }
 .runner-group { grid-template-columns: minmax(10rem, .65fr) minmax(0, 3fr); gap: 2.5rem; }
 .runner-group > header { border: 0; }
 .runner-group > header h2 { font-size: 1.5rem; font-weight: 500; letter-spacing: -.035em; }
@@ -11,20 +11,20 @@
 .runner-catalog[data-density] .runner-grid { grid-template-columns: minmax(0, 1fr); gap: 0; border-top: 1px solid var(--app-line); }
 .runner-catalog[data-density] .runner-card { display: grid; grid-template-columns: minmax(11rem, 1fr) minmax(0, 1.6fr) minmax(9rem, .65fr); gap: .7rem 1.5rem; max-width: none; min-height: 0; padding: 1.5rem 0; border: 0; border-bottom: 1px solid var(--app-line); border-radius: 0; background: transparent; }
 .runner-catalog[data-density] .runner-card h3 { grid-column: 1; grid-row: 1; margin: 0; font: 500 21px/1.3 var(--font-display); letter-spacing: -.025em; overflow-wrap: anywhere; }
-.runner-badges { grid-column: 1; grid-row: 2; }
-.runner-catalog[data-density] .runner-summary { grid-column: 2; grid-row: 1 / span 2; display: block; margin: 0; font-size: 13px; line-height: 1.6; overflow: visible; }
+.runner-badges { grid-column: 1; grid-row: 2; display:flex; align-items:center; flex-wrap:wrap; gap:8px 16px; }
+.runner-catalog[data-density] .runner-summary { grid-column: 2; grid-row: 1 / span 2; display: block; margin: 0; font-size: 14px; line-height: 1.6; overflow: visible; }
 .runner-catalog[data-density] .runner-card footer { grid-column: 3; grid-row: 1 / span 2; display: grid; gap: .75rem; align-content: start; margin: 0; padding: 0; border: 0; }
-.runner-card footer a { font-size: 12px; min-height: 2.5rem; align-items: center; gap: .5rem; }
+.runner-card footer a { font-size: 14px; min-height: 2.5rem; align-items: center; gap: .5rem; }
 .runner-card footer .runner-prepare { color: var(--app-muted); font-weight: 400; }
 .runner-catalog[data-density="compact"] .runner-card { padding-block: .85rem; }
 .runner-catalog[data-density="compact"] .runner-card h3 { font-size: 1.125rem; }
-.runner-card .badge { font-size: 12px; padding-inline: .4rem; border-radius: 3px; }
+.runner-card .badge { font-size: 14px; padding-inline: .4rem; border-radius: 3px; }
 .runner-detail-heading { gap: 3rem; align-items: start; border-bottom: 1px solid var(--app-line); padding-bottom: 2rem; }
 .runner-detail-heading h1 { max-width: 24ch; font-size: clamp(1.9rem, 3vw, 2.5rem); font-weight: 500; letter-spacing: -.045em; }
 .method-runtime { padding: 1.25rem; border: 1px solid var(--app-line); border-radius: var(--r-control); background: var(--app-surface); }
 .runner-facts { border: 0; }
 .runner-facts div:last-child { border-bottom: 0; }
-.runner-facts dt, .runner-facts dd, .method-runtime > summary, .method-index a, .parameter-list code, .parameter-list dl div, .stage-list small, .stage-list li > span, .input-role-list code, .back-link, .access-banner, .access-terms { font-size: 12px; }
+.runner-facts dt, .runner-facts dd, .method-runtime > summary, .method-index a, .parameter-list code, .parameter-list dl div, .stage-list small, .stage-list li > span, .input-role-list code, .back-link, .access-banner, .access-terms { font-size: 14px; }
 .method-index { top: 1rem; }
 .method-index a { padding-left: .7rem; border-left: 2px solid var(--app-line); }
 .method-index a:hover { border-left-color: var(--app-plum); }
@@ -40,3 +40,27 @@
   .method-runtime { padding: .75rem; }
   .runner-detail-heading { grid-template-columns: minmax(0, 1fr); }
 }
+
+.catalog-comparison-bar { display:flex; align-items:center; flex-wrap:wrap; gap:12px; padding:12px 0; border-bottom:1px solid var(--app-line); }
+.catalog-comparison-bar.has-selection { position:sticky; top:0; z-index:15; background:var(--app-bg); }
+.catalog-selection-count { flex:1 1 20rem; margin:0; font-size:14px; color:var(--app-muted); overflow-wrap:anywhere; }
+.runner-compare { display:flex; align-items:center; gap:8px; min-height:44px; font-size:14px; cursor:pointer; }
+.runner-compare input { accent-color:var(--app-plum); width:18px; height:18px; }
+.method-comparison { width:min(86rem,calc(100% - 32px)); max-height:calc(100dvh - 32px); padding:24px; color:var(--app-ink); background:var(--app-raised); border:1px solid var(--app-line); border-radius:6px; }
+.method-comparison::backdrop { background:var(--app-scrim); }
+.method-comparison > button { float:right; }
+.method-comparison h2 { margin:0 0 24px; font:500 28px var(--font-display); }
+.method-comparison-scroll { clear:both; overflow:auto; }
+.method-comparison table { width:100%; border-collapse:collapse; table-layout:fixed; min-width:42rem; font-size:14px; }
+.method-comparison caption { text-align:left; padding-bottom:16px; color:var(--app-muted); }
+.method-comparison th,.method-comparison td { padding:14px; vertical-align:top; border-bottom:1px solid var(--app-line); overflow-wrap:anywhere; text-align:left; }
+.method-comparison th:first-child { width:9rem; }
+.method-comparison thead th { font-size:18px; background:var(--app-stage); }
+.method-comparison tbody th { color:var(--app-muted); font-weight:400; }
+.method-comparison td p { margin:0; }
+.method-comparison .input-role-list { display:grid; gap:12px; }
+.method-comparison .input-role-list article { padding:0; border:0; background:transparent; }
+.method-comparison .input-role-list h3 { margin:0 0 4px; font-size:14px; }
+.method-comparison .input-role-list code { font-size:12px; }
+.method-comparison .input-role-list .role-formats { margin-top:4px; }
+@media(max-width:760px) { .method-comparison { padding:16px; } .method-comparison h2 { font-size:23px; } }

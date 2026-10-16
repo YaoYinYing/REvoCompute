@@ -171,14 +171,14 @@
 .result-method-row { grid-column: 2; font: 11px var(--font-mono); letter-spacing: .06em; }
 .result-meta { grid-column: 2; margin: 5px 0 0; font-size: 12px; }
 .result-outcome { border: 0; padding: 0; font-size: 11px; font-weight: 400; }
-.result-header-actions { flex-wrap: wrap; gap: 8px; flex: none; }
-.result-header-actions > .result-button, .result-header-actions > .result-icon-button, .result-header-actions > .result-rail-reopen { background: transparent; border-color: transparent; font-size: 12px; font-weight: 400; }
+.result-header-actions { flex-wrap: wrap; gap: 8px; flex: 0 1 auto; }
+.result-header-actions > .result-button, .result-header-actions > .result-icon-button, .result-header-actions > .result-rail-reopen { background: transparent; border-color: transparent; font-size: 14px; font-weight: 400; }
 .result-workspace { display: block; min-height: 0; border: 0; }
 .result-main { padding: 0; }
 .result-preview { border: 0; padding: 0; border-radius: 0; box-shadow: none; background: transparent; overflow: auto; }
 .result-preview:has(.fpl-result, .glh-result) { overflow:visible; }
 .result-main:has(.fpl-result, .glh-result) > .result-preview-header { display: none; }
-.result-view-menu { position:relative; font-size:12px; }
+.result-view-menu { position:relative; font-size:14px; }
 .result-view-menu>summary { padding:9px; cursor:pointer; }
 .result-view-panel { position:absolute; top:100%; right:0; width:24rem; max-width:calc(100vw - 40px); max-height:70vh; overflow:auto; padding:8px; background:var(--app-raised); border:1px solid var(--result-line); border-radius:6px; box-shadow:var(--shadow-raised); z-index:50; }
 .result-view-panel .result-tabs { display:grid; gap:3px; border:0; min-height:0; }
@@ -190,7 +190,7 @@
 .result-rail > button { float: right; }
 .result-files { clear: both; padding-top: 16px; }
 .result-files > summary { font: 500 23px var(--font-display); }
-.result-archive-status { grid-column: 1 / -1; margin: 4px 0 0; font-size: 12px; }
+.result-archive-status { grid-column: 1 / -1; margin: 4px 0 0; font-size: 14px; }
 .result-archive-status:empty { display: none; }
 .result-archive-status[data-error="true"] { color: var(--app-danger); }
 .result-record-dialog { width:min(64rem,calc(100% - 32px)); max-height:calc(100dvh - 32px); overflow:auto; padding:24px; border:1px solid var(--result-line); border-radius:8px; background:var(--app-raised); color:var(--result-ink); }

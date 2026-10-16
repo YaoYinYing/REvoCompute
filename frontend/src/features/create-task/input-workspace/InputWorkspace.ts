@@ -45,7 +45,6 @@ export class InputWorkspace {
     if (generation !== this.generation || host !== this.host) { host.destroy(); return; }
     const displayed = new Set(displaySteps(form.input_workspace.steps));
     const stepTargets = new Map<string, HTMLElement>();
-    let index = 0;
     form.input_workspace.steps.forEach(step => {
       if (!displayed.has(step)) {
         // Contract-only step (e.g. the terminal review anchor): keep it mounted so
@@ -54,7 +53,6 @@ export class InputWorkspace {
         stepTargets.set(step.id, element('div'));
         return;
       }
-      index += 1;
       const section = element('section', 'ct-protocol-step'); section.dataset.stepId = step.id;
       section.dataset.content = step.capabilities.every(capability => capability.plugin === 'parameters') ? 'parameters' : 'input';
       const heading = element('header', 'ct-step-heading');

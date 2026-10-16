@@ -139,7 +139,7 @@ export class ResultWorkspace {
     const viewMenu = element('details', 'result-view-menu'); const viewSummary = element('summary', '', t('results.viewsLabel')); const helpActions = element('div', 'result-help-actions'); const viewPanel = element('div', 'result-view-panel'); viewPanel.append(tabs, dashboard, helpActions); viewMenu.append(viewSummary, viewPanel); actions.append(viewMenu);
     const rail = element('dialog', 'result-rail'); rail.setAttribute('aria-label', t('results.filesLabel'));
     const closeFiles = element('button', 'result-button', t('ct.cancel')); closeFiles.type = 'button'; closeFiles.addEventListener('click', () => { rail.close(); });
-    rail.addEventListener('close', () => { railDetails.open = false; });
+    rail.addEventListener('close', () => { railDetails.open = false; actions.prepend(archive); identity.append(archiveStatus); });
     const reopen = element('button', 'result-rail-reopen', t('results.filesLabel')) as HTMLButtonElement; reopen.type = 'button'; reopen.hidden = false; reopen.setAttribute('aria-label', t('results.filesReopenLabel'));
     const railDetails = element('details', 'result-files') as HTMLDetailsElement; railDetails.open = false;
     const summary = element('summary', '', t('results.filesSummary')); const artifactSummary = element('span', 'result-muted'); summary.append(artifactSummary);
@@ -147,7 +147,7 @@ export class ResultWorkspace {
     search.type = 'search'; search.placeholder = t('results.filter'); search.setAttribute('aria-label', t('results.filterLabel'));
     const archive = element('button', 'result-button result-button-small', t('results.archiveCreate')) as HTMLButtonElement; archive.type = 'button'; archive.hidden = true;
     const archiveStatus = element('p', 'result-archive-status'); archiveStatus.setAttribute('role', 'status');
-    archive.className = 'result-button result-archive-action'; tools.append(archive); identity.append(archiveStatus);
+    archive.className = 'result-button result-archive-action'; actions.prepend(archive); identity.append(archiveStatus);
     tools.append(search);
     const fileList = element('nav', 'result-file-list'); fileList.setAttribute('aria-label', t('results.fileListLabel'));
     const integrity = element('div'); railDetails.append(summary, tools, fileList, integrity); rail.append(closeFiles, railDetails); actions.prepend(reopen);
@@ -501,7 +501,10 @@ export class ResultWorkspace {
 
   private readonly syncRail = (): void => {
     const dialog = this.nodes.rail as HTMLDialogElement;
-    if (this.nodes.railDetails.open && dialog.isConnected && !dialog.open) dialog.showModal();
+    if (this.nodes.railDetails.open && dialog.isConnected && !dialog.open) {
+      this.nodes.search.before(this.nodes.archive, this.nodes.archiveStatus);
+      dialog.showModal();
+    }
     if (!this.nodes.railDetails.open && dialog.open) dialog.close();
     this.structure.resize();
   };

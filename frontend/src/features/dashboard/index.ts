@@ -253,15 +253,15 @@ export class Dashboard {
       archive.disabled = building; actions.append(archive);
       if (started != null && !building) actions.append(textNode('span', t('results.archiveWaiting'), 'task-progress'));
     } }
-    if (!task.result.available && ['pending', 'running', 'cancelled'].includes(task.status)) {
+    if (!task.result.available) {
       const progress = document.createElement('a'); progress.className = 'task-action primary-action';
       progress.href = task.result.page_url;
-      progress.textContent = t(task.status === 'cancelled' ? 'dashboard.card.details' : 'dashboard.card.progress');
+      progress.textContent = t(task.terminal ? 'dashboard.card.details' : 'dashboard.card.progress');
       actions.prepend(progress);
     }
     if (task.actions.cancel.allowed) actions.append(button(t('dashboard.card.cancel'), 'cancel', 'ban'));
     if (task.actions.delete.allowed) actions.append(button(t('dashboard.card.delete'), 'delete', 'trash-2'));
-    const secondary = [...actions.children].filter(node => !node.classList.contains('primary-action'));
+    const secondary = [...actions.children].filter(node => (node as HTMLElement).dataset.action === 'delete');
     const overflow = document.createElement('details'); overflow.className = 'task-overflow'; const summary = textNode('summary', '···'); summary.setAttribute('aria-label', `${t('dashboard.card.details')}: ${task.display_name}`);
     const menu = document.createElement('div'); menu.className = 'task-overflow-menu'; menu.append(...secondary);
     const facts = document.createElement('dl'); for (const [label, value] of [[t('dashboard.card.submitted'), formatDate(task.submitted_at)], [t('dashboard.card.finished'), formatDate(task.finished_at)], [t('dashboard.card.owner'), task.owner || '—']]) { facts.append(textNode('dt', label!), textNode('dd', value!)); } menu.append(facts); overflow.append(summary, menu); actions.append(overflow);

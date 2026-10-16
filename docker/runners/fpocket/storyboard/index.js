@@ -182,7 +182,7 @@ export default {
     let expanded = false;
     compare.addEventListener("click", () => { expanded = !expanded; compare.setAttribute("aria-expanded", String(expanded)); renderTable(); });
     search.addEventListener("input", () => renderTable());
-    const evidenceHead = document.createElement('header'); evidenceHead.className = 'fpl-evidence-head'; const evidenceIdentity = document.createElement('div'); const evidenceKicker = document.createElement('p'); evidenceKicker.className = 'fpl-eyebrow'; evidenceKicker.textContent = 'Ranked pockets'; selectorTitle.textContent = 'Evidence in order'; evidenceIdentity.append(evidenceKicker, selectorTitle); selectorTools.append(search, compare); evidenceHead.append(evidenceIdentity, selectorTools); selector.append(evidenceHead, tableWrap);
+    const evidenceHead = document.createElement('header'); evidenceHead.className = 'fpl-evidence-head'; const evidenceIdentity = document.createElement('div'); const evidenceKicker = document.createElement('p'); evidenceKicker.className = 'fpl-eyebrow'; evidenceKicker.textContent = 'Ranked pockets'; selectorTitle.textContent = 'Detected pockets'; evidenceIdentity.append(evidenceKicker, selectorTitle); selectorTools.append(search, compare); evidenceHead.append(evidenceIdentity, selectorTools); selector.append(evidenceHead, tableWrap);
     const detail = document.createElement("aside"); detail.className = "fpl-inspector"; detail.setAttribute("aria-label", "Pocket inspector");
     const detailTitle = document.createElement("h3"); detailTitle.textContent = "Selected pocket";
     const detailBody = document.createElement("div"); detailBody.className = "fpl-detail";
@@ -292,7 +292,7 @@ export default {
     // its alpha spheres contact, and open the contacted-atom / vertex files.
     function renderDetail(pocket, index) {
       detailTitle.textContent = "Pocket " + (pocketNumber(pocket.pocket) ?? index + 1);
-      inspectorStatus.textContent = 'Rank ' + text(pocket.rank || index + 1) + ' · spatial evidence';
+      inspectorStatus.textContent = 'Rank ' + text(pocket.rank || index + 1) + ' · selected pocket';
       spatialStatus.textContent = 'Pocket ' + (pocketNumber(pocket.pocket) ?? index + 1) + ' · ' + (highlightContacts ? text(pocket.residue_count) + ' contacts highlighted' : 'contact highlight off');
       const nodes = [];
       const pairList = document.createElement("dl"); pairList.className = "fpl-metrics";
