@@ -2167,6 +2167,34 @@ def test_terminal_exception_paths_preserve_captured_execution_output(tmp_path, e
     assert next(execution.glob("*.stderr.log")).read_text() == "diagnostic context\n"
 
 
+
+def test_diagnostic_initialization_failure_does_not_block_slurm_submission(tmp_path, caplog):
+    """Transient optional evidence-store failures cannot change job admission."""
+
+    class _UnavailableDiagnostics(_RecordingTaskStore):
+        def record_task_diagnostics(self, task_id, evidence, **kwargs):
+            raise OSError("database is locked")
+
+    store = _UnavailableDiagnostics()
+    job = SlurmJob(
+        "task-1", _make_task_type(), _make_runner(), _make_entities(),
+        str(tmp_path / "out"), task_store=store,
+    )
+    process = _FakeSrunProcess(stdout="REVODESIGN_JOB_ID=42\\n", returncode=0)
+    with patch("subprocess.Popen", return_value=process) as spawn:
+        assert job.submit() == "42"
+    assert spawn.call_count == 1
+    assert job._diagnostic_disabled is True
+    assert job._diagnostic_attempt is None
+    assert "Could not initialize optional diagnostics" in caplog.text
+
+    # Without a server-owned attempt, later log publication must stay disabled:
+    # reusing this task ID may otherwise surface a prior stage's evidence.
+    job._persist_output()
+    assert not (tmp_path / "out" / "execution").exists()
+
+
+
 def test_submission_without_job_identity_preserves_output(tmp_path):
     job = SlurmJob("task-1", _make_task_type(), _make_runner(), _make_entities(), str(tmp_path / "out"))
     process = _FakeSrunProcess(stdout="", stderr="allocation request refused\n", returncode=1)
