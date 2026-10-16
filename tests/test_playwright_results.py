@@ -708,7 +708,7 @@ def test_molstar_selection_controls_stay_reachable_at_mobile_width(page: Page, m
         # The real production bundle: the Mol* selection controls are chunk
         # markup, so the fixture-viewer double cannot lay them out at all.
         monkeypatch.setattr(browser_frontend_assets, "_RESULT_DIST", ROOT / "frontend" / "dist")
-        frontend_fixtures.mount_scenario(page, frontend_fixtures.structure_scenario())
+        frontend_fixtures.mount_scenario(page, frontend_fixtures.structure_scenario().with_lifecycle("finished"))
         page.goto(f"{frontend_fixtures.DEFAULT_ORIGIN}/compute/results/{frontend_fixtures.DEFAULT_TASK_ID}")
         page.get_by_role("button", name="Toggle Selection Mode", exact=True).click()
         page.locator(".msp-selection-viewport-controls").first.wait_for(timeout=90_000)
