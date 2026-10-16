@@ -13,3 +13,6 @@ test-results
 # Explicit repository-only Runner test namespaces; runtime asset names remain untouched.
 docker/runners/*/tests
 docker/runner_testkit
+
+# The Daylight geometry check needs this recorded fixture during the frontend build.
+!docker/runners/fpocket/tests/fast/fixtures/1SUO_out/pockets/pocket1_vert.pqr

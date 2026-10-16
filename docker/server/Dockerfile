@@ -52,7 +52,7 @@ COPY --from=frontend-builder --chown=${RUNNER_UID}:${RUNNER_GID} \
     /app/server/revocompute/static/app/
 RUN python -m pip install --no-cache-dir uv && \
     uv pip install --system --no-cache "/app/server[${REVOCOMPUTE_EXTRAS}]" && \
-    rm -rf /app/server/frontend /app/server/node_modules /app/server/package.json /app/server/package-lock.json /root/.npm
+    rm -rf /app/server/docker/runners/fpocket/tests /app/server/frontend /app/server/node_modules /app/server/package.json /app/server/package-lock.json /root/.npm
 
 
 ENV PYTHONPATH=/app/server
