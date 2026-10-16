@@ -407,5 +407,122 @@
       "Existing Metrics minor tick labels can be visually repetitive; aggregation/chart functional ownership remains PR85.",
       "No live deployment, scheduler validation, merge, or force push."
     ]
+  },
+  "fidelity_correction": {
+    "implementation_commit": "e4c869ea607a2f63fc039e4abd29a161f23dd0dc",
+    "captured_at": "2026-10-16T00:27:28.984486+00:00",
+    "approved_reference_root": "/Users/yyy/Documents/protein_design/REvoCompute-visual-exploration-20261014",
+    "build_manifest_sha256": "27bccbe2c1d1949cd7694207e0b03644f6f4b2482c8256bac6cc18329ecfbe14",
+    "comparisons": [
+      {
+        "path": "docs/assets/daylight/fidelity/dashboard-reference.png",
+        "sha256": "ad9fa11b769f70cee19c237e739ef2d7e6a2ea61c5fe357a229a3f09f9a5ace2",
+        "source": "/Users/yyy/Documents/protein_design/REvoCompute-visual-exploration-20261014/public/screenshots/propagation-dashboard-viewport.png"
+      },
+      {
+        "path": "docs/assets/daylight/fidelity/dashboard-production.png",
+        "sha256": "5754512a83444b1028536b30056340c429b21477d6a8e69048a231df0d50e8ab",
+        "source": "/Users/yyy/.codex/worktrees/daylight-production-ui/REvoCompute/.codex-tmp/fidelity-captures/test_production_dashboard_with0/daylight-real-api-1440-viewport.png"
+      },
+      {
+        "path": "docs/assets/daylight/fidelity/create-reference.png",
+        "sha256": "437f455c79f72610e20bfdfa1a3a01e1a9b0a28b825bb6735f3a3e27738b6e6c",
+        "source": "/Users/yyy/Documents/protein_design/REvoCompute-visual-exploration-20261014/public/screenshots/propagation-create-viewport.png"
+      },
+      {
+        "path": "docs/assets/daylight/fidelity/create-production.png",
+        "sha256": "5999affc1c8d3c535a323045b439ad3a3859502744199530100eb2d43ba38e3a",
+        "source": "/Users/yyy/.codex/worktrees/daylight-production-ui/REvoCompute/.codex-tmp/fidelity-captures/test_preparation_and_matrix_us0/create-1440-viewport.png"
+      },
+      {
+        "path": "docs/assets/daylight/fidelity/fpocket-reference.png",
+        "sha256": "96dc7643f884e60061b0ed57c729fad4f5b4fbd07b40fd225ee5f4018a39e50e",
+        "source": "/Users/yyy/Documents/protein_design/REvoCompute-visual-exploration-20261014/public/screenshots/consolidated-desktop.png"
+      },
+      {
+        "path": "docs/assets/daylight/fidelity/fpocket-production.png",
+        "sha256": "1c2727bf3ef458d72acbabe219dfce6abca63e183aa4968e3f4570a80c8b17f9",
+        "source": "/Users/yyy/.codex/worktrees/daylight-production-ui/REvoCompute/.codex-tmp/fidelity-captures/test_original_approved_fpocket0/fpocket-approved-run-1440-viewport.png"
+      },
+      {
+        "path": "docs/assets/daylight/fidelity/gremlin-reference.png",
+        "sha256": "5b476542fde251a22a356ec2b7e325e17462a4c2f9b1df2917b4ed28c6740d25",
+        "source": "/Users/yyy/Documents/protein_design/REvoCompute-visual-exploration-20261014/public/screenshots/propagation-matrix-viewport.png"
+      },
+      {
+        "path": "docs/assets/daylight/fidelity/gremlin-production.png",
+        "sha256": "837baa1208368ec640e27b4df8ea88f5cb6c536107d37d8106440a06ffb7bc47",
+        "source": "/Users/yyy/.codex/worktrees/daylight-production-ui/REvoCompute/.codex-tmp/fidelity-captures/test_preparation_and_matrix_us0/gremlin-raw-1440-viewport.png"
+      },
+      {
+        "path": "docs/assets/daylight/fidelity/catalog-reference.png",
+        "sha256": "0a44d41458d75cfec6cb175c7ba6e73fafa827f935df73b8fa014f2715d0f3a9",
+        "source": "/Users/yyy/.codex/worktrees/daylight-production-ui/REvoCompute/docs/assets/daylight/site/catalog-desktop.png"
+      },
+      {
+        "path": "docs/assets/daylight/fidelity/catalog-production.png",
+        "sha256": "8ba133a6b3ec3596273a80c783006e5318e29ae23f3074469f100434887d06df",
+        "source": "/Users/yyy/.codex/worktrees/daylight-production-ui/REvoCompute/.codex-tmp/fidelity-captures/test_whole_site_navigation_wit0/catalog-1440-viewport.png"
+      },
+      {
+        "path": "docs/assets/daylight/fidelity/fleet-reference.png",
+        "sha256": "77bcca4f42644cd29c402cfac496e922dd0bc53ecc62cf93bf3f5a8d93513231",
+        "source": "/Users/yyy/.codex/worktrees/daylight-production-ui/REvoCompute/docs/assets/daylight/site/fleet-desktop.png"
+      },
+      {
+        "path": "docs/assets/daylight/fidelity/fleet-production.png",
+        "sha256": "16904d2c79c2226572aa64c9bc31757b10fe511702a3c01204baa2aaaeef70d5",
+        "source": "/Users/yyy/.codex/worktrees/daylight-production-ui/REvoCompute/.codex-tmp/fidelity-captures/test_whole_site_navigation_wit0/fleet-1440-viewport.png"
+      }
+    ],
+    "validation": [
+      "158 frontend unit tests passed, then 26 focused cases passed including new camera/selection regression",
+      "17 final browser checks passed",
+      "2 focused Metrics/account browser checks passed; peak 11 -> maximum 20",
+      "15 earlier browser milestone checks passed including 320px/768px molecular controls",
+      "TypeScript, API type generation, Vite production build, lock/build/provenance checks passed"
+    ],
+    "absorbed": {
+      "82": "Actual access entitlement guides restricted catalog CTA; infrastructure and server admission are labelled separately; Create Task states server readiness/access/resource checks.",
+      "83": "Server-evidence Build/Live test/Active image/Freshness lanes, contextual native dialog, Escape/focus restoration, host evidence disclosure, explicit management activity, no Web promotion/rollback controls.",
+      "84": "Full-width denser Dashboard register and count rail retained; integer-only Metrics axes rounded to next multiple of ten; thinned endpoint labels.",
+      "85": "Usage-first GPU/CPU overview, authentic settled/reserved quantities even for ungated units, durable storage ownership/ceiling, canonical envelope disclosure and unattributed bounded ledger preserved."
+    },
+    "deferred": [
+      "Public task catalog has no per-family readiness/submission eligibility projection. No client-side readiness oracle or backend admission rewrite added.",
+      "No GPU-credit waterfall: authoritative opening balance and complete ordered history are absent from the bounded API contract.",
+      "Fleet has no independent enabled-state projection; no guessed enabled/promoted evidence added.",
+      "Alpha-sphere artifact viewer shows authentic PQR centres at a labelled fixed display size, not exact sphere radii or invented cavity surfaces.",
+      "GREMLIN ranked table and selected matrix readout remain separate generic renderers; prototype-specific cross-selection and compact column mapping remain refinement work.",
+      "Figma synchronization deferred. PR #87 untouched; #86 Local Result Workspace parked."
+    ],
+    "boundaries": [
+      "No deployment, merge, live compute or production account mutation.",
+      "No backend authorization, readiness or accounting algorithm changes.",
+      "Known pre-existing large Mol*/Swagger chunk warning; historical BrowserContracts assertions were not used to restore old layouts.",
+      "Fleet host-only transitions are omitted from UI; existing server authorization remains authoritative."
+    ],
+    "additional_captures": [
+      {
+        "path": "docs/assets/daylight/fidelity/create-mobile-production.png",
+        "sha256": "a75843a752b6a71b4212d8207e70900bae9ad4d35dd01056e267fa6455b28ab9"
+      },
+      {
+        "path": "docs/assets/daylight/fidelity/fpocket-mobile-production.png",
+        "sha256": "b5b33cf99aad36e0850e5cc2bb5ba5633b9fd16f85f619e852745032c6a0d212"
+      },
+      {
+        "path": "docs/assets/daylight/fidelity/gremlin-mobile-production.png",
+        "sha256": "3bf293ecff2c78864d8a95267ed99b267ea204c0248f6c035c2ee0f09a9f521f"
+      },
+      {
+        "path": "docs/assets/daylight/fidelity/metrics-production.png",
+        "sha256": "b19849195947c576609593b34d6dbccfb6a88e655c7023184f4d575703646566"
+      },
+      {
+        "path": "docs/assets/daylight/fidelity/quota-production.png",
+        "sha256": "af5a7c51c13aa1b4196e83faa40657b8f91ae7625d4d10ec9151cde63f719a72"
+      }
+    ]
   }
 }
