@@ -6,6 +6,7 @@ COPY frontend/scripts/verify-lock.mjs ./scripts/verify-lock.mjs
 RUN node scripts/verify-lock.mjs && npm ci
 COPY frontend/ ./
 COPY revocompute/static/openapi.json /build/revocompute/static/openapi.json
+COPY docker/runners/fpocket/tests/fast/fixtures/1SUO_out/pockets/pocket1_vert.pqr /build/docker/runners/fpocket/tests/fast/fixtures/1SUO_out/pockets/pocket1_vert.pqr
 RUN npm run typecheck && npm run test && npm run build
 
 FROM python:3.12-slim
