@@ -107,3 +107,7 @@ export const deleteTaskBatch = (taskIds: string[]): Promise<Record<string, unkno
   method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ md5sums: taskIds }),
 });
 export const prepareArchive = (url: string): Promise<Record<string, unknown>> => authorizedJson(url, { method: 'POST' });
+
+export type TaskDiagnostics = components['schemas']['TaskDiagnostics'];
+export const getTaskDiagnostics = (taskId: string, signal?: AbortSignal): Promise<TaskDiagnostics> =>
+  requestJson(`/compute/api/tasks/${encodeURIComponent(taskId)}/diagnostics`, { signal });

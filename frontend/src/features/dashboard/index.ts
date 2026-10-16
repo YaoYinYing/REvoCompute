@@ -2,7 +2,8 @@ import { Archive, Ban, Download, ExternalLink, RefreshCw, Search, Trash2 } from 
 import { createIcons } from 'lucide';
 import { deleteTaskBatch, getTasks, prepareArchive, runTaskAction, type CurrentUser, type TaskSummary } from '../../api/app-api';
 import { ApiError } from '../../app/session';
-import { confirmAction } from '../../app/dialogs';
+import { confirmAction, openDialog } from '../../app/dialogs';
+import { mountTaskDiagnostics } from '../tasks/diagnostics';
 import { t } from '../../app/i18n';
 import { guidedTour, recordTourResult } from '../../app/guided-tour';
 import type { AppShell } from '../../app/shell';
@@ -246,7 +247,11 @@ export class Dashboard {
   }
   private taskActions(task: TaskSummary): HTMLElement {
     const actions = document.createElement('footer'); actions.className = 'task-actions'; actions.dataset.taskId = task.task_id;
-    if (task.result.available) { const open = document.createElement('a'); open.href = task.result.page_url; open.className = 'task-action primary-action'; open.innerHTML = `<i data-lucide="external-link" aria-hidden="true"></i><span>${t('dashboard.card.results')}</span>`; actions.append(open); if (task.result.download_url) { const download = document.createElement('a'); download.href = task.result.download_url; download.className = 'task-action'; download.innerHTML = `<i data-lucide="download" aria-hidden="true"></i><span>${t('dashboard.card.download')}</span>`; actions.append(download); } else if (task.result.archive_request_allowed && task.result.archive_request_url) {
+    if (task.status === 'failed') {
+      const evidence = button(t('diagnostics.viewError'), 'diagnostics', 'external-link');
+      evidence.classList.add('primary-action'); actions.append(evidence);
+    }
+    if (task.result.available) { const open = document.createElement('a'); open.href = task.result.page_url; open.className = task.status === 'failed' ? 'task-action' : 'task-action primary-action'; open.innerHTML = `<i data-lucide="external-link" aria-hidden="true"></i><span>${t('dashboard.card.results')}</span>`; actions.append(open); if (task.result.download_url) { const download = document.createElement('a'); download.href = task.result.download_url; download.className = 'task-action'; download.innerHTML = `<i data-lucide="download" aria-hidden="true"></i><span>${t('dashboard.card.download')}</span>`; actions.append(download); } else if (task.result.archive_request_allowed && task.result.archive_request_url) {
       const started = this.archiveRequests.get(task.task_id);
       const building = started != null && Date.now() - started < 120_000;
       const archive = button(t(building ? 'results.archiveBuilding' : 'dashboard.card.prepareZip'), 'archive', 'archive');
@@ -254,10 +259,10 @@ export class Dashboard {
       if (started != null && !building) actions.append(textNode('span', t('results.archiveWaiting'), 'task-progress'));
     } }
     if (!task.result.available) {
-      const progress = document.createElement('a'); progress.className = 'task-action primary-action';
+      const progress = document.createElement('a'); progress.className = task.status === 'failed' ? 'task-action' : 'task-action primary-action';
       progress.href = task.result.page_url;
       progress.textContent = t(task.terminal ? 'dashboard.card.details' : 'dashboard.card.progress');
-      actions.prepend(progress);
+      actions.append(progress);
     }
     if (task.actions.cancel.allowed) actions.append(button(t('dashboard.card.cancel'), 'cancel', 'ban'));
     if (task.actions.delete.allowed) actions.append(button(t('dashboard.card.delete'), 'delete', 'trash-2'));
@@ -294,6 +299,15 @@ export class Dashboard {
     const taskId = owner?.dataset.taskId ?? owner?.dataset.task;
     const task = this.tasks.find(item => item.task_id === taskId);
     if (!task) return;
+    if (action === 'diagnostics') {
+      const controller = new AbortController(); const content = document.createElement('section');
+      const abort = (): void => controller.abort();
+      this.controller.signal.addEventListener('abort', abort, { once: true });
+      mountTaskDiagnostics(content, task.task_id, controller.signal);
+      try { await openDialog({ title: task.display_name, content, cancelLabel: t('diagnostics.close') }); }
+      finally { controller.abort(); this.controller.signal.removeEventListener('abort', abort); }
+      return;
+    }
     if (action === 'select') { (target as HTMLInputElement).checked ? this.selected.add(task.task_id) : this.selected.delete(task.task_id); this.syncSelectionState(); return; }
     if (action === 'cancel' && await confirmAction({ title: t('dashboard.confirm.cancelTitle', { name: task.display_name }), message: t('dashboard.confirm.cancel', { name: task.display_name }), confirmLabel: t('dashboard.card.cancel') })) await this.mutate(() => runTaskAction(task.actions.cancel, 'POST'), t('dashboard.notice.cancelled'));
     if (action === 'delete' && await confirmAction({ title: t('dashboard.confirm.deleteTitle', { name: task.display_name }), message: t('dashboard.confirm.delete', { name: task.display_name }), confirmLabel: t('dashboard.card.delete') })) await this.mutate(() => runTaskAction(task.actions.delete, 'DELETE'), t('dashboard.notice.deleted'));

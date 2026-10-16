@@ -6,6 +6,7 @@ COPY frontend/scripts/verify-lock.mjs ./scripts/verify-lock.mjs
 RUN node scripts/verify-lock.mjs && npm ci
 COPY frontend/ ./
 COPY revocompute/static/openapi.json /build/revocompute/static/openapi.json
+COPY docker/runners/fpocket/tests/fast/fixtures/1SUO_out/pockets/pocket1_vert.pqr /build/docker/runners/fpocket/tests/fast/fixtures/1SUO_out/pockets/pocket1_vert.pqr
 RUN npm run typecheck && npm run test && npm run build
 
 FROM python:3.12-slim
@@ -51,7 +52,7 @@ COPY --from=frontend-builder --chown=${RUNNER_UID}:${RUNNER_GID} \
     /app/server/revocompute/static/app/
 RUN python -m pip install --no-cache-dir uv && \
     uv pip install --system --no-cache "/app/server[${REVOCOMPUTE_EXTRAS}]" && \
-    rm -rf /app/server/frontend /app/server/node_modules /app/server/package.json /app/server/package-lock.json /root/.npm
+    rm -rf /app/server/docker/runners/fpocket/tests /app/server/frontend /app/server/node_modules /app/server/package.json /app/server/package-lock.json /root/.npm
 
 
 ENV PYTHONPATH=/app/server

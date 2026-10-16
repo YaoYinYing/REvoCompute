@@ -4,6 +4,40 @@
  */
 
 export interface paths {
+    "/compute/api/tasks/{task_id}/diagnostics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read bounded safe execution failure evidence for an owned Task */
+        get: operations["getTaskDiagnostics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/compute/api/tasks/{task_id}/diagnostics/{stream}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download an authorized redacted bounded stdout or stderr excerpt */
+        get: operations["downloadTaskDiagnosticExcerpt"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/openapi.json": {
         parameters: {
             query?: never;
@@ -1657,6 +1691,26 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        TaskDiagnostics: {
+            task_id: string;
+            /** @enum {string} */
+            availability: "available" | "unavailable" | "expired";
+            summary: string;
+            /** @enum {string|null} */
+            reason_code: "timeout" | "out_of_memory" | "allocation_failed" | "nonzero_exit" | "missing_result" | "submission_failed" | "job_id_unavailable" | "allocation_unrecorded" | "admission_failed" | "execution_exception" | "publication_failed" | "runner_validation_failed" | null;
+            exit_code: number | null;
+            /** @enum {string|null} */
+            exit_code_source: "srun" | null;
+            scheduler_state: string | null;
+            stage: string | null;
+            logs: {
+                /** @enum {string} */
+                stream: "stdout" | "stderr";
+                preview: string;
+                truncated: boolean;
+                download_url: string;
+            }[];
+        };
         /** @example 0123456789abcdef0123456789abcdef */
         TaskId: string;
         LoginRequest: {
@@ -3322,6 +3376,55 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    getTaskDiagnostics: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Confirmed execution facts and bounded redacted log context; unavailable or expired evidence is explicit */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskDiagnostics"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    downloadTaskDiagnosticExcerpt: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+                stream: "stdout" | "stderr";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description At most 64 KiB of redacted execution context, delivered as a text attachment */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
     getOpenApiContract: {
         parameters: {
             query?: never;
