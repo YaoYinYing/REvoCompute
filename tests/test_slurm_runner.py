@@ -2180,7 +2180,7 @@ def test_diagnostic_initialization_failure_does_not_block_slurm_submission(tmp_p
         "task-1", _make_task_type(), _make_runner(), _make_entities(),
         str(tmp_path / "out"), task_store=store,
     )
-    process = _FakeSrunProcess(stdout="REVODESIGN_JOB_ID=42\\n", returncode=0)
+    process = _FakeSrunProcess(stdout="REVODESIGN_JOB_ID=42\n", returncode=0)
     with patch("subprocess.Popen", return_value=process) as spawn:
         assert job.submit() == "42"
     assert spawn.call_count == 1
