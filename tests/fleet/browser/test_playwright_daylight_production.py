@@ -31,7 +31,9 @@ def production_bundle(monkeypatch):
 def capture(page: Page, tmp_path: Path, name: str) -> None:
     page.evaluate('document.fonts.ready')
     for width in (1440, 1024, 390):
-        page.set_viewport_size({'width': width, 'height': 1080})
+        page.set_viewport_size({'width': width, 'height': 1050 if name.startswith('fpocket') else 1080})
+        page.evaluate('scrollTo(0, 0)')
+        page.screenshot(path=str(tmp_path / f'{name}-{width}-viewport.png'))
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), name
         page.screenshot(path=str(tmp_path / f'{name}-{width}.png'), full_page=True)
 
@@ -50,6 +52,7 @@ def test_preparation_and_matrix_use_the_production_bundle(page: Page, production
     assert payload
     page.locator('input[type=file]').first.set_input_files({'name': '2KL8.a3m', 'mimeType': 'text/plain', 'buffer': payload[0]})
     expect(page.locator('.ct-file-list')).to_contain_text('2KL8.a3m')
+    expect(page.locator('.ct-input-preview')).to_contain_text(payload[0].decode().splitlines()[0])
     capture(page, tmp_path, 'create')
     page.locator('.ct-advanced > summary').click()
     expect(page.locator('[data-ct-parameter="seed"]')).to_be_visible()
@@ -96,6 +99,7 @@ def test_spatial_pocket_selection_keeps_the_real_protein(page: Page, production_
     page.get_by_role('button', name='Focus this pocket', exact=True).click()
     capture(page, tmp_path, 'fpocket-focus')
     page.get_by_role('button', name='Full structure', exact=True).click()
+    page.locator('.fpl-detail summary', has_text='Pocket artifacts').click()
     page.get_by_role('button', name='Inspect alpha-sphere coordinates', exact=True).click()
     expect(page.locator('.storyboard-geometry-panel canvas').first).to_be_visible(timeout=30000)
     expect(page.locator('.storyboard-structure-panel canvas').first).to_be_visible()
@@ -104,3 +108,27 @@ def test_spatial_pocket_selection_keeps_the_real_protein(page: Page, production_
     page.get_by_role('button', name='Close geometry', exact=True).click()
     expect(page.locator('.storyboard-geometry-panel')).to_have_count(0)
     assert page.evaluate('window.__cspViolations') == []
+
+
+def test_original_approved_fpocket_run_with_real_molecular_stage(page: Page, production_bundle, monkeypatch, tmp_path: Path) -> None:
+    """The approved prototype's exact retained run, normalized by production code."""
+    from conftest import _load_fleet_module
+    from test_playwright_fpocket_result_acceptance import _build_manifest, _projected_manifest, _serve
+    module = _load_fleet_module(monkeypatch, tmp_path, extra_env={'RUNNER_UID': '1234', 'RUNNER_GID': '5678'})
+    task_id, manifest, root = _build_manifest(module, tmp_path)
+    paths = {key: [file['path'] for file in files] for key, files in manifest['result']['files'].items()}
+    page.set_viewport_size({'width': 1440, 'height': 1050})
+    _serve(page, _projected_manifest(manifest, task_id), root, task_id, paths)
+    expect(page.locator('.storyboard-structure-panel[data-ready="true"]')).to_be_visible(timeout=60000)
+    expect(page.locator('.fpl-detail')).to_contain_text('0.629')
+    expect(page.get_by_role('checkbox', name='Highlight contacts')).to_be_checked()
+    capture(page, tmp_path, 'fpocket-approved-run')
+    page.get_by_role('checkbox', name='Highlight contacts').uncheck()
+    page.locator('.fpl-pocket-row').nth(1).click()
+    expect(page.get_by_role('checkbox', name='Highlight contacts')).not_to_be_checked()
+    expect(page.locator('.fpl-detail')).to_contain_text('0.301')
+    page.get_by_role('checkbox', name='Highlight contacts').check()
+    page.get_by_role('button', name='Focus this pocket', exact=True).click()
+    page.locator('.fpl-pocket-row').first.click()
+    page.get_by_role('button', name='Full structure', exact=True).click()
+    expect(page.locator('.storyboard-structure-panel canvas').first).to_be_visible()

@@ -317,7 +317,7 @@ export class PairMatrix {
     const label = (text: string, styles: Partial<CSSStyleDeclaration>, classes = ''): void => { const node = document.createElement('span'); node.className = `pair-matrix-label ${classes}`; node.textContent = text; Object.assign(node.style, styles); figure.append(node); };
     for (let tick = 0; tick <= ticks; tick += 1) { const x = Math.round((this.values[0]!.length - 1) * tick / ticks), y = Math.round((this.values.length - 1) * tick / ticks);
       label(this.xLabels[x]!, { left: `${geometry.left + geometry.size * (x + 0.5) / this.values[0]!.length}px`, top: `${geometry.top + geometry.size + 12}px` }, 'pair-matrix-label-x');
-      label(this.yLabels[y]!, { left: '0', width: `${geometry.left - 8 * geometry.scale}px`, textAlign: 'right', top: `${geometry.top + geometry.size * (y + 0.5) / this.values.length}px` }, 'pair-matrix-label-y');
+      label(this.yLabels[y]!, { left: `${geometry.left - 22}px`, top: `${geometry.top + geometry.size * (y + 0.5) / this.values.length}px` }, 'pair-matrix-label-y');
       label((minimum + span * tick / ticks).toFixed(this.options.decimals ?? 1), { left: `${geometry.legendX + geometry.legendWidth + 7 * geometry.scale}px`, top: `${geometry.top + geometry.size - geometry.size * tick / ticks}px` }, 'pair-matrix-label-y');
     }
     label(this.options.xTitle || 'Column', { left: `${geometry.left + geometry.size / 2}px`, top: `${geometry.top + geometry.size + 36}px` }, 'pair-matrix-title pair-matrix-label-x');

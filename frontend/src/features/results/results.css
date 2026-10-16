@@ -179,10 +179,41 @@
 
 .result-main:has(.fpl-result, .glh-result) > .result-preview-header { display: none; }
 .result-preview:has(.glh-result) { margin-top: 1.25rem; padding: 1rem; }
-.fpl-result { padding: 1.25rem; }
 .pair-matrix-readout { font-family: var(--font-mono); padding: .8rem; background: var(--app-soft); width: 100%; overflow-wrap: anywhere; }
 
 /* Preserve readable axes at phone widths. The scientific object pans inside
    its own region instead of shrinking labels into overlapping coordinates. */
 .pair-matrix-view { display: block; max-width: 100%; overflow-x: auto; }
 .pair-matrix-view .pair-matrix-figure { max-width: none; margin: 0; }
+
+/* A scientific bench owns its stage; the workspace supplies identity and navigation. */
+.result-app { width: min(100%, 100rem); padding-top: 1.25rem; }
+.result-header { min-height: 5.5rem; padding-bottom: 1rem; border-bottom: 0; }
+.result-header h1 { font-size: 2rem; line-height: 1.2; margin-top: .25rem; }
+.result-outcome { padding: 0; border: 0; border-radius: 0; font-weight: 400; }
+.result-main { padding-top: .5rem; }
+.result-preview:has(.fpl-result, .glh-result) { border: 0; padding: 0; margin-top: .75rem; overflow: visible; background: transparent; }
+.result-record-disclosure { margin-top: 1rem; border-top: 1px solid var(--result-line); }
+.result-record-disclosure > summary { cursor: pointer; padding-block: 1rem; font-size: .875rem; }
+.result-record { padding-top: .5rem; }
+.result-preview:has(.fpl-result) .structure-viewport { grid-template-rows: minmax(25rem, 44vh) auto; min-height: 0; }
+.result-preview:has(.fpl-result) .structure-host { grid-row: 1; min-height: 25rem; }
+.result-preview:has(.fpl-result) .structure-toolbar { grid-row: 2; border: 0; border-top: 1px solid var(--result-line); padding: .8rem 1rem; background: transparent; }
+.result-preview:has(.fpl-result) .structure-mode-group { background: transparent; }
+.result-preview:has(.fpl-result) .structure-toolbar-actions { margin-left: 0; }
+.fpl-result .fpl-stage .fpl-section { background: color-mix(in srgb, var(--app-soft) 65%, var(--app-stage)); }
+@media (max-width: 760px) { .result-header h1 { font-size: 1.65rem; } .result-preview:has(.fpl-result, .glh-result) { padding: 0; } }
+
+.glh-matrix .pair-matrix-figure { margin-inline: auto; }
+.glh-matrix .pair-matrix-readout { margin: 0; border-top: 1px solid var(--result-line); background: transparent; }
+/* A closed file browser takes no scientific-stage width. */
+.result-workspace { position: relative; }
+.result-app.is-rail-collapsed .result-workspace { grid-template-columns: minmax(0, 1fr); }
+.result-app.is-rail-collapsed .result-main { padding-right: 0; }
+.result-app.is-rail-collapsed .result-tabs { padding-right: 5rem; }
+.result-rail.is-collapsed { position: absolute; top: .5rem; right: 0; padding: 0; border: 0; }
+.result-identity { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .15rem 1rem; align-items: baseline; }
+.result-identity h1 { grid-column: 1; grid-row: 1; }
+.result-method-row { grid-column: 2; grid-row: 1; }
+.result-meta, .result-archive-status { grid-column: 1 / -1; }
+@media(max-width:760px) { .result-identity { display: block; } .result-rail.is-collapsed { position: static; } }

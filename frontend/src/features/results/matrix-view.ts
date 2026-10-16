@@ -203,6 +203,7 @@ export function createMatrixViewRenderer(): ViewRenderer {
       const direction = directionWording(mapping.direction);
       const matrix = new PairMatrix({
         figure, canvas, readout, observe: split, maxElements: MAX_ELEMENTS, minimumWidth: 640,
+        geometry: { width: 800, height: 550, left: 130, top: 30, size: 440, legendX: 604, legendWidth: 16 },
         minimum: range?.minimum, maximum: range?.maximum,
         ramp: () => matrixRamp(mapping.scale),
         // An even tick count keeps a labelled tick on a symmetric diverging midpoint.

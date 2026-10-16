@@ -214,11 +214,16 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .operations-navigation { display: flex; flex-wrap: wrap; gap: .25rem 1.5rem; padding-bottom: .5rem; border-bottom: 1px solid var(--app-line); }
 .operations-navigation a { padding: .65rem 0; color: var(--app-muted); font-size: .875rem; text-decoration: none; border-bottom: 2px solid transparent; }
 .operations-navigation a[aria-current] { color: var(--app-ink); border-bottom-color: var(--app-plum); }
-.admin-toolbar { border-radius: var(--r-control); background: var(--app-soft); }
+.admin-toolbar { border-radius: 0; background: transparent; border-inline: 0; padding-inline: 0; }
 .admin-tabs { gap: 1.5rem; }
 .admin-tabs button[aria-selected="true"]::after { background: var(--app-plum); }
 .admin-badge { border-radius: 3px; }
-.fleet-summary-bands, .admin-stat-strip { background: var(--app-soft); border-radius: var(--r-control); }
+.fleet-summary-bands, .admin-stat-strip { background: transparent; border-radius: 0; }
 .admin-section-heading h2, .placement-policy-section h2 { font-weight: 500; letter-spacing: -.025em; }
 .admin-row-actions button, .admin-table-actions button { min-height: 2.5rem; }
 @media (max-width: 760px) { .admin-page { width: calc(100% - 2.5rem); } .admin-tabs { flex-wrap: wrap; } }
+
+.fleet-evidence-dialog { width: min(58rem, calc(100% - 2rem)); max-height: calc(100dvh - 2rem); overflow: auto; border: 1px solid var(--app-line); border-radius: var(--r-surface); padding: 1.5rem; color: var(--app-ink); background: var(--app-surface); box-shadow: var(--shadow-dialog); }
+.fleet-evidence-dialog::backdrop { background: var(--app-scrim); }
+.fleet-evidence-cell { font: inherit; text-align: left; color: inherit; background: transparent; border: 0; border-bottom: 1px dotted var(--app-line-strong); min-height: 2.75rem; cursor: pointer; }
+.fleet-summary { background: transparent; }

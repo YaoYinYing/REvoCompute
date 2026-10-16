@@ -2,6 +2,10 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 
 const STYLE = `
+.glh-result > details > summary { cursor: pointer; padding-block: .75rem; font-size: .875rem; }
+.glh-inspector { background: var(--app-stage) !important; }
+.glh-result > .glh-section > h3 { font-size: 1.35rem; }
+.glh-result > .glh-section > .glh-question { max-width: 85ch; }
 .glh-bench { display: grid; grid-template-columns: minmax(0, 2.5fr) minmax(16rem, 1fr); border: 1px solid var(--app-line); border-radius: var(--r-control); background: var(--app-surface); overflow: hidden; }
 .glh-result .btn { font: inherit; font-size: .875rem; padding: .55rem .7rem; min-height: 2.5rem; border: 1px solid var(--app-line); border-radius: var(--r-control); color: var(--app-ink); background: var(--app-surface); cursor: pointer; }
 .glh-pair-preview { max-height: 24rem; overflow: auto; border-block: 1px solid var(--app-line); }
@@ -95,13 +99,12 @@ export default {
 
     const root = document.createElement("div"); root.className = "glh-result";
     const style = document.createElement("style"); style.textContent = STYLE;
-    const heading = document.createElement("h2"); heading.textContent = "GREMLIN_LH Potts model";
     const intro = document.createElement("p"); intro.className = "glh-intro";
     intro.textContent = "A regularized Potts/MRF model fitted to the submitted alignment. Every coupling score below " +
       "is a statistical dependency of the fitted model: contact evidence, not proof of a physical contact.";
-    root.append(style, heading, intro);
+    root.append(style);
 
-    const alignmentSection = section("What alignment was modelled?", "The sequences and positions the fit actually consumed, after A3M insertions were stripped.");
+    const alignmentSection = section("Fit evidence", "The alignment actually modelled.");
     const alignmentMetrics = document.createElement("div"); const alignmentActions = document.createElement("div");
     alignmentActions.className = "glh-actions"; alignmentSection.append(alignmentMetrics, alignmentActions); root.append(alignmentSection);
 
@@ -122,9 +125,9 @@ export default {
     if (primaryMatrixAction) couplingActions.append(primaryMatrixAction);
     if (comparisonMatrixAction) couplingActions.append(comparisonMatrixAction);
     couplingSection.append(couplingActions, message("Bounded matrices are rendered by the task's own declared view.", "glh-note"));
-    root.append(couplingSection);
+    const interpretation = document.createElement("details"); const interpretationTitle = document.createElement("summary"); interpretationTitle.textContent = "Scientific interpretation"; interpretation.append(interpretationTitle, intro, couplingSection); root.append(interpretation);
 
-    const pairsSection = section("Which residue pairs carry the strongest statistical coupling?", "Upper-triangle pairs ranked by APC-corrected strength, with raw and APC scores side by side. The top pairs are the strongest dependencies in the fit and need independent validation before being read as contacts.");
+    const pairsSection = section("Ranked residue pairs", "Upper-triangle pairs ranked by APC-corrected strength, with raw and APC scores side by side. The top pairs are the strongest dependencies in the fit and need independent validation before being read as contacts.");
     const pairsActions = document.createElement("div"); pairsActions.className = "glh-actions";
     const pairsAction = openDeclaredView(rankedPairsView) || (pairwiseFile ? fileAction("Open ranked residue pairs", pairwiseFile, context) : null);
     pairsActions.append(pairsAction || message("Ranked residue pairs were not published.", "glh-unavailable"));
@@ -162,7 +165,7 @@ export default {
       else row.append(fileAction("Open", artifact, context));
       provenance.append(row);
     });
-    provenanceSection.append(provenance); root.append(provenanceSection);
+    provenanceSection.append(provenance); const artifacts = document.createElement("details"); const artifactsTitle = document.createElement("summary"); artifactsTitle.textContent = "Model artifacts and provenance"; artifacts.append(artifactsTitle, provenanceSection); root.append(artifacts);
 
     if (primaryMatrixView && context.services.mountView) {
       const bench = document.createElement("div"); bench.className = "glh-bench";
@@ -190,8 +193,8 @@ export default {
       const inspector = document.createElement("aside"); inspector.className = "glh-inspector";
       const more = document.createElement("details"); more.className = "glh-more";
       const summary = document.createElement("summary"); summary.textContent = "Weighting and fitted model";
-      more.append(summary, informationSection, modelSection); inspector.append(alignmentSection, more);
-      bench.append(landscape, inspector); intro.after(bench);
+      more.append(summary, informationSection, modelSection); inspector.append(message("Statistical dependencies of the fitted model; not proof of physical contacts."), alignmentSection, more);
+      bench.append(landscape, inspector); style.after(bench); pairsSection.after(interpretation);
       queueMicrotask(() => { if (!destroyed) void show(primaryMatrixView); });
     }
     host.replaceChildren(root);
@@ -216,7 +219,7 @@ export default {
             { label: "Identity cutoff for weighting", value: statistics.identity_cutoff },
             { label: "Gap cutoff for weighting", value: statistics.gap_cutoff },
           ];
-          fillMetrics(alignmentMetrics, rows.slice(0, 4));
+          fillMetrics(alignmentMetrics, [rows[0], rows[1], rows[5], rows[3]]);
           fillMetrics(informationMetrics, rows.slice(5));
         } catch (error) {
           if (destroyed || error.name === "AbortError") return;

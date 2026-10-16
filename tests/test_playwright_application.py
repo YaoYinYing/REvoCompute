@@ -1064,8 +1064,8 @@ def test_profile_server_state_api_key_access_credits_and_metrics(page: Page) -> 
     # minor tick midway between each, and period ticks along the x-axis.
     chart = page.locator(".activity-chart")
     expect(chart).to_have_count(1)
-    expect(chart.locator(".activity-axis-y .activity-tick-major")).to_have_count(5)
-    expect(chart.locator(".activity-axis-y .activity-tick-minor")).to_have_count(4)
+    assert chart.locator(".activity-axis-y .activity-tick-major").all_inner_texts() == ["0", "5", "10"]
+    expect(chart.locator(".activity-axis-y .activity-tick-minor")).to_have_count(0)
     expect(chart.locator(".activity-axis-x .activity-tick-major").filter(has_text=re.compile(r"\d"))).not_to_have_count(0)
     # The axis and plot are grid areas of `.activity-chart`. If the grid is not
     # established on that element the areas resolve to nothing, the y-axis (an

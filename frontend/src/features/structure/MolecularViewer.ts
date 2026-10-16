@@ -177,7 +177,7 @@ export class MolecularViewer {
       this.reactRoot = createRoot(host);
       this.reactRoot.render(createElement(Plugin, { plugin }));
       try { await plugin.canvas3dInitialized; } catch { /* Mol* reports canvas failures through its UI. */ }
-      plugin.selectionMode = Boolean(options.selectionEnabled);
+      plugin.selectionMode = Boolean(options.selectionEnabled && !options.controlsCollapsed);
       this.setTheme(options.theme || 'light');
       this.selectionSubscription = plugin.managers.structure.selection.events.changed.subscribe(() => {
         const residues = this.selectedResidues();
@@ -260,7 +260,11 @@ export class MolecularViewer {
   setRepresentation(mode: string) {
     if (!REPRESENTATIONS[mode]) return Promise.reject(new Error(`Unknown representation: ${mode}`));
     this.representation = mode;
-    return this.enqueue(() => this.applyPresentation());
+    return this.enqueue(async () => {
+      const camera = this.plugin?.canvas3d?.camera; const snapshot = camera?.getSnapshot();
+      await this.applyPresentation();
+      if (snapshot) camera.setState(snapshot, 0);
+    });
   }
 
   setColor(mode: string) {
@@ -270,6 +274,7 @@ export class MolecularViewer {
   }
 
   select(selection: MolecularSelection) {
+    if (Array.isArray(selection.residues) && !selection.residues.length) { this.plugin.managers.structure.selection.clear(); return true; }
     const loci = this.lociFor(selection);
     if (!loci) return false;
     // One combined loci, one 'set': a multi-residue selection replaces the

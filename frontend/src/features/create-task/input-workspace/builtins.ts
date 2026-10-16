@@ -114,9 +114,20 @@ const filesPlugin: WorkspacePlugin = {
       const input = element('input'); input.id = id; input.type = 'file'; input.multiple = role.cardinality.max > 1; input.accept = role.accept || role.extensions.join(',');
       const hint = element('p', 'ct-help', role.description || t('ct.files.hint', { minimum: role.cardinality.min, maximum: role.cardinality.max, formats: role.formats.join(', ') }));
       const list = element('div', 'ct-file-list');
+      const preview = element('pre', 'ct-input-preview'); preview.hidden = true; preview.setAttribute('aria-label', t('ct.files.preview'));
+      let previewGeneration = 0;
       const error = element('p', 'ct-field-error'); error.hidden = true; input.setAttribute('aria-describedby', `${id}-error`); error.id = `${id}-error`;
       const render = () => {
         const files = context.roleFiles(role.id); list.replaceChildren();
+        const generation = ++previewGeneration; preview.hidden = true; preview.textContent = '';
+        const first = files[0];
+        // A bounded view of the original bytes; no normalization or scientific interpretation.
+        if (first && /\.(?:a3m|aln|fasta|fa|faa|txt|csv|tsv)$/i.test(first.name)) {
+          void first.slice(0, 65536).text().then(source => {
+            if (generation !== previewGeneration || !target.isConnected) return;
+            preview.textContent = source.split(/\r?\n/).slice(0, 12).join('\n'); preview.hidden = false;
+          }).catch(() => { /* Upload remains available when a local preview cannot be read. */ });
+        }
         if (!files.length) list.textContent = t('ct.files.none');
         files.forEach((file, index) => {
           const row = element('div', 'ct-file-row');
@@ -129,7 +140,7 @@ const filesPlugin: WorkspacePlugin = {
         });
       };
       input.addEventListener('change', () => { context.setRoleFiles(role.id, Array.from(input.files || [])); render(); context.filesChanged(); });
-      group.append(label, input, hint, list, error); target.append(group); controls.push({ role, input, list, error });
+      group.append(label, input, hint, list, preview, error); target.append(group); controls.push({ role, input, list, error });
     });
     return {
       readValue: () => Object.fromEntries(roles.map(role => [role.id, context.roleFiles(role.id).map(filePath)])),

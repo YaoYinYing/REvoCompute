@@ -126,7 +126,8 @@ describe('§11 boundary on the Runner catalog', () => {
 
     const readiness = descendants(root).find(node => node.className === 'readiness-state')!;
     // Frontend-authored status copy follows the locale.
-    expect(readiness.textContent).toBe('基础设施就绪');
+    expect(readiness.textContent).toContain('基础设施就绪');
+    expect(readiness.textContent).toContain('由服务器检查提交资格');
     expect(readiness.textContent).not.toBe(translate('en', 'runners.ready'));
 
     // The catalog card renders the server's own display_name verbatim.

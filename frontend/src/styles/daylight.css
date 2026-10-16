@@ -35,7 +35,7 @@ body { container-type: inline-size; }
 .dashboard-page .page-kicker { font: 400 .875rem var(--font-mono); letter-spacing: .1em; text-transform: uppercase; margin-bottom: .6rem; }
 .dashboard-page .page-heading p:not(.page-kicker) { font-size: .875rem; margin-top: .65rem; }
 .dashboard-stats { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); margin: 0 0 1.75rem; background: var(--app-soft); border-block: 1px solid var(--app-line); }
-.dashboard-stats div, .dashboard-stats div:first-child { display: flex; align-items: center; justify-content: space-between; gap: .7rem; padding: 1.25rem 1.5rem; border-bottom: 0; }
+.dashboard-stats div, .dashboard-stats div:first-child { display: flex; align-items: center; justify-content: space-between; gap: .7rem; padding: 1rem 1.5rem; border-bottom: 0; }
 .dashboard-stats div + div { border-left: 1px solid var(--app-line); }
 .dashboard-stats div:first-child { background: color-mix(in srgb, var(--app-accent) 6%, var(--app-soft)); box-shadow: inset 0 -2px var(--app-plum); }
 .dashboard-stats span { font-size: .875rem; font-weight: 400; }
@@ -62,7 +62,7 @@ body { container-type: inline-size; }
 .dashboard-page .task-card[data-status="failed"] { --task-color: #b85371; }
 .dashboard-page .task-card[data-status="finished"] { --task-color: var(--app-success); }
 .dashboard-page .task-card:nth-child(even) { background: color-mix(in srgb, var(--app-soft) 30%, transparent); }
-.dashboard-page .task-list[data-layout] .task-card { display: grid; grid-template-columns: minmax(13rem, 1.3fr) 8rem minmax(13rem, 1fr) minmax(11rem, .8fr); align-items: start; gap: .6rem 1.5rem; padding: 1.2rem 1.4rem; }
+.dashboard-page .task-list[data-layout] .task-card { display: grid; grid-template-columns: minmax(13rem, 1.3fr) 8rem minmax(13rem, 1fr) minmax(11rem, .8fr); align-items: start; gap: .4rem 1.5rem; padding: 1rem 1.4rem; }
 .dashboard-page .task-list[data-layout] .task-card > header { display: contents; }
 .dashboard-page .task-card header > div { grid-column: 1; grid-row: 1; }
 .dashboard-page .task-card header > .status { grid-column: 2; grid-row: 1; justify-self: start; margin-top: .3rem; }

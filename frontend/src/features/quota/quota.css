@@ -50,3 +50,12 @@
 .quota-ledger-table td small { display: block; margin-top: .15rem; color: var(--app-muted); overflow-wrap: anywhere; }
 .quota-unattributed span { color: var(--app-warning, var(--app-accent-2)); font-style: italic; }
 @media (max-width: 48rem) { .quota-bars { gap: .55rem; } }
+
+.quota-position > h3 { font-size: 1.25rem; font-weight: 500; }
+.quota-bars { gap: 1.5rem; padding-block: 1rem; }
+.quota-bar-item { gap: .65rem; }
+.quota-bar-item h4 { color: var(--app-ink); }
+.quota-storage-overview { padding-block: .5rem 1.5rem; border-bottom: 1px solid var(--app-line); }
+.quota-storage-value { font: 500 1.25rem var(--font-mono); }
+.quota-policy { padding-block: 1rem; }
+.quota-policy > summary { cursor: pointer; }

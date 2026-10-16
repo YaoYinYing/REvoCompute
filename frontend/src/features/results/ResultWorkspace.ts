@@ -65,7 +65,7 @@ export class ResultWorkspace {
   private previewGeneration = 0;
   private storyboardStructureGeneration = 0;
   private structureRepresentation = 'cartoon';
-  private structureColor = 'chain';
+  private structureColor = 'rainbow';
   private structureTheme = theme();
   private readonly directoryExpansion = new Map<string, boolean>();
   private readonly listeners = new AbortController();
@@ -146,7 +146,7 @@ export class ResultWorkspace {
     tools.append(search);
     const fileList = element('nav', 'result-file-list'); fileList.setAttribute('aria-label', t('results.fileListLabel'));
     const integrity = element('div'); railDetails.append(summary, tools, fileList, integrity); rail.append(reopen, railDetails);
-    workspace.append(main, rail); const record = element('section', 'result-record'); const limitations = element('div'); const run = element('div'); record.append(limitations, run);
+    workspace.append(main, rail); const record = element('details', 'result-record-disclosure'); const recordSummary = element('summary', '', t('results.run.title')); const recordBody = element('section', 'result-record'); const limitations = element('div'); const run = element('div'); recordBody.append(limitations, run); record.append(recordSummary, recordBody);
     page.append(header, status, workspace, record); this.root.append(page);
     return { status, outcome, title, meta, tabs, previewTitle, previewDescription, preview, download, rail, railDetails, reopen, search, fileList, integrity, artifactSummary, archive, archiveStatus, limitations, run };
   }
@@ -178,10 +178,11 @@ export class ResultWorkspace {
 
   private renderManifest(manifest: ResultManifest): void {
     if (this.poll != null) { clearInterval(this.poll); this.poll = null; }
-    // Identity, not storage: the method word plus the task hash. A published file name is a
-    // storage artifact and a runner's generic output summary repeats what the views already show.
-    this.nodes.title.textContent = manifest.run?.method?.name || manifest.task_type || t('results.scientific');
-    this.nodes.meta.textContent = t('results.taskTitle', { id: manifest.task_id }); this.nodes.meta.title = t('results.taskIdTitle', { id: manifest.task_id });
+    // A single named input is the specimen's identity; multiple inputs keep the method identity.
+    const method = manifest.run?.method?.name || manifest.task_type || t('results.scientific');
+    const input = manifest.run?.inputs?.length === 1 ? manifest.run.inputs[0]?.path.split('/').pop() : null;
+    this.nodes.title.textContent = input || method;
+    this.nodes.meta.textContent = `${input ? method + ' · ' : ''}${t('results.taskTitle', { id: manifest.task_id })}`; this.nodes.meta.title = t('results.taskIdTitle', { id: manifest.task_id });
     const quiet = isQuietOutcome(manifest);
     this.setState(quiet ? manifest.status : manifest.outcome || manifest.status, manifest.error || '', quiet);
     // The summary is rendered by renderFiles(), which owns the filtered view.

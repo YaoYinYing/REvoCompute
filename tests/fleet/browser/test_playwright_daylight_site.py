@@ -28,6 +28,8 @@ def capture(page: Page, directory: Path, name: str) -> None:
     for width in (1440, 390):
         page.set_viewport_size({'width': width, 'height': 1080})
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), (name, page.evaluate("[...document.querySelectorAll('body *')].filter(node => node.getBoundingClientRect().right > innerWidth + 1).slice(0, 12).map(node => [node.tagName, node.className, Math.round(node.getBoundingClientRect().right)])"))
+        page.evaluate('scrollTo(0, 0)')
+        page.screenshot(path=str(directory / f'{name}-{width}-viewport.png'))
         page.screenshot(path=str(directory / f'{name}-{width}.png'), full_page=name != 'api-reference')
     page.set_viewport_size({'width': 1440, 'height': 1080})
 
@@ -64,6 +66,23 @@ def test_whole_site_navigation_with_the_production_frontend(page: Page, monkeypa
     page.locator('[data-nav-group="admin"] a[href="/compute/runner_fleet"]').click()
     expect(page.locator('.admin-page h1')).to_be_visible()
     capture(page, tmp_path, 'fleet')
+    expect(page.locator('.admin-table thead')).to_contain_text('Live test')
+    opener = page.locator('.fleet-open').first
+    family = opener.inner_text()
+    # Existing server fixture has no detail route: use the same server-shaped evidence.
+    rows = _fleet_payload()['runners']
+    row = next(row for row in rows if row['runner_family'] == family)
+    page.route(f'{ORIGIN}/compute/api/auth/admin/runners/{family}', lambda route: route.fulfill(json={**row, 'actions': [
+        {'id': 'runner.promote', 'tier': 'activate', 'summary': 'host only', 'available': True},
+    ]}))
+    page.route(f'{ORIGIN}/compute/api/auth/admin/runners/{family}/history*', lambda route: route.fulfill(json={"history": []}))
+    opener.click()
+    expect(page.locator('.fleet-evidence-dialog')).to_be_visible()
+    expect(page.locator('.fleet-evidence-dialog')).to_contain_text(family)
+    expect(page.get_by_role('button', name='Review and activate')).to_have_count(0)
+    capture(page, tmp_path, 'fleet-evidence')
+    page.keyboard.press('Escape')
+    expect(opener).to_be_focused()
     for path, name in [('/compute/user_control', 'users'), ('/compute/configuration', 'configuration'), ('/compute/logs', 'logs')]:
         page.locator(f'.operations-navigation a[href="{path}"]').click()
         expect(page.locator('.admin-page h1')).to_be_visible()
@@ -94,3 +113,16 @@ def test_public_and_authentication_production_surfaces(page: Page, monkeypatch, 
     page.goto(f'{ORIGIN}/compute/user_control')
     expect(page.locator('.auth-panel')).to_be_visible()
     assert page.evaluate('window.__cspViolations') == []
+
+
+def test_metrics_count_axis_has_no_fractional_or_colliding_minor_labels(page: Page, monkeypatch) -> None:
+    from test_playwright_application import _metrics
+    monkeypatch.setattr(browser_frontend_assets, '_RESULT_DIST', ROOT / 'frontend/dist')
+    _install_app(page)
+    metrics = _metrics()
+    metrics['activity'][0]['count'] = 11
+    page.route(f'{ORIGIN}/compute/api/user-metrics?*', lambda route: route.fulfill(json=metrics))
+    page.goto(f'{ORIGIN}/compute/account/metrics')
+    expect(page.locator('.activity-chart')).to_be_visible()
+    assert page.locator('.activity-axis-y .activity-tick-major').all_inner_texts() == ['0', '5', '10', '15', '20']
+    expect(page.locator('.activity-tick-minor')).to_have_count(0)

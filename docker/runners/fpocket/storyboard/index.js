@@ -2,7 +2,18 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 
 const STYLE = `
-.fpl-result { --muted: var(--app-muted); --accent: var(--app-plum); display: grid; gap: 1rem; padding: 1rem; min-width: 0; }
+.fpl-stage > .fpl-section > h3 { font: 500 1.65rem var(--font-display); }
+.fpl-detail { gap: 1rem; }
+.fpl-detail .fpl-metrics { margin: .5rem 0; }
+.fpl-detail .fpl-actions { align-items: center; }
+.fpl-highlight { font-size: .875rem; display: inline-flex; gap: .3rem; align-items: center; }
+.fpl-highlight input { accent-color: var(--app-plum); }
+.fpl-result .fpl-artifacts > summary { cursor: pointer; font-size: .875rem; padding-block: .75rem; }
+.fpl-result .fpl-layout > .fpl-section { grid-template-columns: 1fr auto; align-items: center; gap: 1rem; }
+.fpl-table-wrap { grid-column: 1 / -1; }
+.fpl-pocket-row[aria-current="true"] td:first-child { box-shadow: inset 3px 0 var(--app-plum); }
+@media(max-width: 760px) { .fpl-result .fpl-layout > .fpl-section { grid-template-columns: minmax(0,1fr); } }
+.fpl-result { --muted: var(--app-muted); --accent: var(--app-plum); display: grid; gap: 1rem; padding: 0; min-width: 0; }
 .fpl-result .btn { font: inherit; font-size: .875rem; padding: .55rem .7rem; min-height: 2.5rem; border: 1px solid var(--app-line); border-radius: var(--r-control); color: var(--app-ink); background: var(--app-surface); cursor: pointer; }
 .fpl-selector-tools { display: flex; flex-wrap: wrap; gap: .75rem; justify-content: end; }
 .fpl-selector-tools input { font: inherit; min-width: 0; max-width: 100%; padding: .55rem; border: 1px solid var(--app-line); background: var(--app-surface); color: var(--app-ink); }
@@ -14,7 +25,7 @@ const STYLE = `
 .fpl-intro, .fpl-note, .fpl-unavailable { color: var(--muted); font-size: .875rem; line-height: 1.5; }
 .fpl-unavailable { font-style: italic; }
 .fpl-layout { display: grid; gap: 1.1rem; grid-template-columns: minmax(0, 1fr); min-width: 0; }
-.fpl-stage { display: grid; grid-template-columns: minmax(0, 1fr); border: 1px solid var(--app-line); background: var(--app-soft); border-radius: var(--r-control); overflow: hidden; }
+.fpl-stage { display: grid; grid-template-columns: minmax(0, 1fr); border: 1px solid var(--app-line); background: var(--app-stage); border-radius: var(--r-control); overflow: hidden; }
 .fpl-stage > section { min-width: 0; }
 .fpl-stage > .fpl-section { padding: 1.25rem; }
 .fpl-stage .fpl-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
@@ -66,9 +77,10 @@ const COLUMNS = [
 const DETAIL = [
   { key: "score", label: "fpocket score" },
   { key: "druggability_score", label: "Druggability score" },
+  { key: "volume_angstrom3", label: "Volume / Å³" },
+  { key: "residue_count", label: "Contact residues" },
   { key: "alpha_spheres", label: "Alpha spheres" },
-  { key: "volume_angstrom3", label: "Volume (A^3)" },
-  { key: "total_sasa_angstrom2", label: "Total SASA (A^2)" },
+  { key: "total_sasa_angstrom2", label: "Total SASA / Å²" },
   { key: "mean_alpha_sphere_radius_angstrom", label: "Mean alpha-sphere radius (A)" },
   { key: "center_x", label: "Centre x (A)" },
   { key: "center_y", label: "Centre y (A)" },
@@ -147,12 +159,7 @@ export default {
 
     const root = document.createElement("div"); root.className = "fpl-result";
     const style = document.createElement("style"); style.textContent = STYLE;
-    const heading = document.createElement("h2"); heading.textContent = "fpocket pockets";
-    const intro = document.createElement("p"); intro.className = "fpl-intro";
-    intro.textContent = "Candidate surface pockets fpocket detected on the submitted structure, in descending fpocket score order. "
-      + "Selecting a pocket shows its fpocket-reported descriptors and the residues its alpha spheres contact; "
-      + "the structure highlights those contacts in context. Focus and geometry are separate controls.";
-    root.append(style, heading, intro);
+    root.append(style);
 
     const layout = document.createElement("div"); layout.className = "fpl-layout";
     const selector = document.createElement("section"); selector.className = "fpl-section";
@@ -191,7 +198,7 @@ export default {
       download.addEventListener("click", () => services.downloadFile?.(pocketsFile));
       genericActions.append(download);
     }
-    generic.append(genericTitle, genericActions); root.append(generic);
+    generic.append(genericTitle, genericActions); const artifacts = document.createElement("details"); artifacts.className = "fpl-artifacts"; const artifactsTitle = document.createElement("summary"); artifactsTitle.textContent = "Associated views and artifacts"; artifacts.append(artifactsTitle, generic); root.append(artifacts);
     host.replaceChildren(root);
 
     // Pocket geometry files are optional: a result whose per-pocket files were
@@ -211,6 +218,8 @@ export default {
 
     let pockets = [];
     let selectedIndex = 0;
+    let pocketFocused = false;
+    let highlightContacts = true;
     let tableLoaded = false;
     if (!pocketsFile) {
       tableWrap.append(message("The ranked pocket table was not published.", "fpl-unavailable"));
@@ -288,20 +297,21 @@ export default {
         contacts.append(message("No contacted residues were reported for this pocket.", "fpl-note"));
       }
 
-      nodes.push(contacts, extra);
+      const resources = document.createElement("details"); const resourcesTitle = document.createElement("summary"); resourcesTitle.textContent = "Pocket artifacts"; resources.append(resourcesTitle);
       const actions = document.createElement("div"); actions.className = "fpl-actions";
       const target = focusSelection(pocket);
       if (target && focusStructure) {
         actions.append(actionButton("Focus this pocket", () => focusOnPocket(pocket, target)));
       }
       if (residueIds.length && selectStructure) {
-        actions.append(actionButton("Select contacted residues", () => selectResidues(residueIds)));
+        const label = document.createElement("label"); label.className = "fpl-highlight"; const toggle = document.createElement("input"); toggle.type = "checkbox"; toggle.checked = highlightContacts; toggle.addEventListener("change", () => { highlightContacts = toggle.checked; if (highlightContacts) selectResidues(residueIds); else selectStructure({ residues: [] }); }); label.append(toggle, " Highlight contacts"); actions.append(label);
       }
-      if (files.contacts) actions.append(actionButton("Download contacted atoms", () => services.downloadFile?.(files.contacts)));
-      if (files.spheres) actions.append(actionButton("Inspect alpha-sphere coordinates", () => services.openGeometry?.(files.spheres, "Alpha-sphere centres from the published PQR artifact. Markers have a fixed display size; they do not show sphere radii or a cavity surface. The protein remains above for context.")));
-      if (structureArtifact) actions.append(actionButton("Full structure", () => services.resetStructure?.()));
+      if (files.contacts) resources.append(actionButton("Download contacted atoms", () => services.downloadFile?.(files.contacts)));
+      if (files.spheres) resources.append(actionButton("Inspect alpha-sphere coordinates", () => services.openGeometry?.(files.spheres, "Alpha-sphere centres from the published PQR artifact. Markers have a fixed display size; they do not show sphere radii or a cavity surface. The protein remains above for context.")));
+      if (structureArtifact) actions.append(actionButton("Full structure", () => { pocketFocused = false; services.resetStructure?.(); }));
 
       if (actions.childElementCount) nodes.push(actions);
+      nodes.push(contacts, extra, resources, message("Candidate site, not a confirmed binding site. No decision threshold is applied to these scores."));
       if (!files.contacts && !files.spheres) {
         nodes.push(message("Pocket geometry files were not published. Reported descriptors and contacts remain available.", "fpl-note"));
       }
@@ -342,12 +352,14 @@ export default {
         try { await services.openFile?.(structureArtifact); } catch (_error) { structureOpened = false; }
       }
       if (destroyed || generation !== selectionGeneration) return;
-      selectResidues(residueIds);
+      if (highlightContacts) selectResidues(residueIds);
+      if (pocketFocused) { const target = focusSelection(pocket); if (target) focusOnPocket(pocket, target); else { pocketFocused = false; services.resetStructure?.(); } }
     }
     // "Focus this pocket" focuses the pocket's own geometric centre; it does not
     // stand in a contacted residue for the centre.
     function focusOnPocket(pocket, target) {
       if (!focusStructure || !target) return false;
+      pocketFocused = true;
       return focusStructure(target) || true;
     }
     // The contacted residues are sent as ONE collection, so the adapter applies a
@@ -358,7 +370,6 @@ export default {
         .map((token) => residueSelection(token))
         .filter((entry) => entry && entry.residue != null)
         .map(toStructureSelection);
-      if (!residues.length) return false;
       return selectStructure({ residues }) || true;
     }
 

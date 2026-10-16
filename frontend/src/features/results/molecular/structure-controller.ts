@@ -15,7 +15,7 @@ export class StructureController {
   private generation = 0;
   private controller: AbortController | null = null;
   private representation = 'cartoon';
-  private color = 'chain';
+  private color = 'rainbow';
   private operation: Promise<void> = Promise.resolve();
   private viewerMount: Promise<MolecularViewer> | null = null;
   private selectionUnsubscribe: (() => void) | null = null;

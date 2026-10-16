@@ -163,6 +163,7 @@ export function quotaBars(envelope: ResourceEntitlement): HTMLElement {
     const item = element('div', 'quota-bar-item');
     item.append(text('h4', `${unitLabel(entry.unit)} · ${entry.resource_class || t('quota.bar.anyClass')}`), barTrack(entry));
     const bar = quotaBar(entry);
+    if (bar.kind === 'text') item.append(text('p', t('quota.bar.recorded', { used: countLabel(entry.used), reserved: countLabel(entry.reserved) }), 'quota-bar-note'));
     if (bar.kind === 'bar') {
       item.append(text(
         'p',
@@ -230,12 +231,12 @@ export function quotaLedgerSection(ledger: ResourceLedger): HTMLElement {
  */
 export function quotaPosition(envelope: ResourceEntitlement, ledger: ResourceLedger): HTMLElement {
   const root = element('div', 'quota-position');
-  root.append(
-    envelopeSection(envelope.period, envelope),
-    text('h3', t('quota.usage.heading')),
-    quotaBars(envelope),
-    quotaLedgerSection(ledger),
-  );
+  const storage = element('section', 'quota-storage-overview');
+  storage.append(text('h3', t('quota.storage.heading')), text('p', `${t('quota.storage.owned')}: ${formatBytes(envelope.storage.logical_owned_bytes)}`, 'quota-storage-value'));
+  storage.append(text('p', envelope.storage.soft_limit_bytes === null ? t('quota.storage.notConfigured') : `${t('quota.storage.ceiling')}: ${formatBytes(envelope.storage.soft_limit_bytes)}`, 'quota-bar-note'));
+  const policy = element('details', 'quota-policy');
+  policy.append(text('summary', t('quota.envelope.heading')), envelopeSection(envelope.period, envelope));
+  root.append(text('h3', t('quota.usage.heading')), quotaBars(envelope), storage, policy, quotaLedgerSection(ledger));
   return root;
 }
 

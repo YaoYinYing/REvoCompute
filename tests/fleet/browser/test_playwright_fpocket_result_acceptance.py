@@ -224,7 +224,7 @@ def test_fpocket_ranked_pockets_render_as_the_primary_view(monkeypatch, tmp_path
     # A storyboard is the primary interpretation: it opens on load and its ranked
     # selector renders the real normalized pockets.csv.
     expect(page.get_by_role("button", name="Scientific result")).to_have_attribute("aria-pressed", "true")
-    expect(page.get_by_role("heading", name="fpocket pockets")).to_be_visible()
+    expect(page.get_by_role("heading", name="Ranked pockets", exact=True)).to_be_visible()
     table = page.locator("table.fpl-pockets")
     expect(table).to_be_visible()
     assert any(call["path"] == "pockets.csv" for call in calls), calls
@@ -247,13 +247,15 @@ def test_fpocket_ranked_pockets_render_as_the_primary_view(monkeypatch, tmp_path
     expect(page.locator(".fpl-detail")).to_contain_text(expected_rows[0]["druggability_score"])
     expect(page.locator("section.storyboard-structure-panel[data-ready='true']")).to_be_visible()
     assert page.evaluate("window.__viewerLoads")[-1] == "1SUO.pdb"
-    page.get_by_role("button", name="Select contacted residues").click()
+    page.get_by_role("checkbox", name="Highlight contacts").uncheck()
+    page.get_by_role("checkbox", name="Highlight contacts").check()
     selects = page.evaluate("window.__viewerSelects")
     assert len(selects) >= 1, selects
     assert set(selects[0]["residues"]) == set(expected_rows[0]["residue_ids"].split())
 
     # The pocket's own geometry files remain reachable from the result: the storyboard
     # hands the contacted-atom artifact to the shared panel, which loads it.
+    page.locator(".fpl-detail summary", has_text="Pocket artifacts").click()
     page.get_by_role("button", name="Inspect alpha-sphere coordinates").click()
     page.wait_for_function("() => (window.__viewerLoads || []).includes('pocket1_vert.pqr')")
     expect(page.locator('.storyboard-structure-panel .structure-host')).to_have_attribute('data-label', '1SUO.pdb')

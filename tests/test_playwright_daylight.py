@@ -111,6 +111,7 @@ def test_production_dashboard_with_real_flask_session_and_owned_tasks(page: Page
         for width in (1440, 1024, 390):
             page.set_viewport_size({'width': width, 'height': 1080})
             assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+            page.screenshot(path=str(tmp_path / f'daylight-real-api-{width}-viewport.png'))
             page.screenshot(path=str(tmp_path / f'daylight-real-api-{width}.png'), full_page=True)
         page.set_viewport_size({'width': 1440, 'height': 1080})
         page.screenshot(path=str(tmp_path / 'daylight-real-api.png'), full_page=True)

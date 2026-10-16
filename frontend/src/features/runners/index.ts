@@ -36,7 +36,7 @@ function accessTerms(access: TaskTypeDetail['access']): HTMLElement | null {
 
 function accessKey(task: TaskTypeSummary | TaskTypeDetail): string { if (!task.access.restricted) return 'runners.access.available'; if (task.access.granted) return 'runners.access.granted'; if (task.access.request_status === 'pending') return 'runners.access.pending'; return 'runners.access.restricted'; }
 function accessLabel(task: TaskTypeSummary | TaskTypeDetail): string { return t(accessKey(task)); }
-function createTaskLink(task: { name: string; access: { restricted: boolean; granted?: boolean; request_status?: string | null } }): HTMLAnchorElement { const link = document.createElement('a'); link.className = 'primary-button'; link.href = `/compute/create_task?task_type=${encodeURIComponent(task.name)}`; link.innerHTML = `<span>${t('runners.createTask')}</span><i data-lucide="arrow-right"></i>`; return link; }
+function createTaskLink(task: { name: string; access: { restricted: boolean; granted?: boolean; request_status?: string | null } }): HTMLAnchorElement { const link = document.createElement('a'); link.className = 'primary-button'; link.href = task.access.restricted && !task.access.granted ? '/compute/account/runner-access' : `/compute/create_task?task_type=${encodeURIComponent(task.name)}`; link.innerHTML = `<span>${task.access.restricted && !task.access.granted ? t('shell.account.runnerAccess') : t('runners.createTask')}</span><i data-lucide="arrow-right"></i>`; return link; }
 
 export async function mountRunnerCatalog(root: HTMLElement): Promise<void> {
   root.replaceChildren(); root.className = 'app-outlet runners-page';
@@ -49,7 +49,7 @@ export async function mountRunnerCatalog(root: HTMLElement): Promise<void> {
   guidedTour.resumeIfActive();
   try {
     const [payload, infrastructure] = await Promise.all([getTaskCatalog(), getReadiness().catch(() => null)]); state.remove();
-    if (infrastructure) { readiness.textContent = infrastructure.status === 'READY' ? t('runners.ready') : t('runners.status', { status: infrastructure.status.toLowerCase() }); readiness.dataset.status = infrastructure.status; }
+    readiness.textContent = infrastructure ? t('runners.infrastructureAdmission', { status: infrastructure.status === 'READY' ? t('runners.ready') : t('runners.status', { status: infrastructure.status.toLowerCase() }) }) : t('runners.infrastructureUnknown'); if (infrastructure) readiness.dataset.status = infrastructure.status;
     // The server-owned category label is what the group heading and the option show, so search
     // has to match it. Indexed for matching only: never routed through t() and never displayed.
     const select = toolbar.querySelector('select')!, labelBySlug = new Map(payload.categories.map(category => [category.name, category.label])); payload.categories.forEach(category => { const option = document.createElement('option'); option.value = category.name; option.textContent = category.label; select.append(option); });
