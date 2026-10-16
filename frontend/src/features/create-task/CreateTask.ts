@@ -150,7 +150,7 @@ export class CreateTask {
     const form = this.definition!; this.workbench.replaceChildren();
     this.pageHeader.hidden = true;
     const header = node('header', 'ct-method-header');
-    const title = node('div'); title.append(node('p', 'ct-category', this.categoryLabel(form.category)), node('h1', '', form.display_name), node('p', 'ct-method-summary', form.summary));
+    const title = node('div'); title.append(node('p', 'ct-category', `${t('ct.title')} / ${this.categoryLabel(form.category)}`), node('h1', '', form.display_name), node('p', 'ct-method-summary', form.summary));
     const change = node('button', 'ct-secondary', t('ct.changeMethod')); change.type = 'button'; change.addEventListener('click', () => this.showChooser(t('ct.chooseAnother'))); this.change = change;
     header.append(title, change);
     const facts = node('details', 'ct-method-context');
@@ -164,13 +164,12 @@ export class CreateTask {
     const access = this.renderAccess();
     const main = node('div', 'ct-workbench-grid');
     const protocol = node('div', 'ct-protocol'); protocol.append(this.workspaceRoot);
-    const snapshotPanel = node('aside', 'ct-snapshot-panel');
-    const label = node('p', 'ct-snapshot-label', t('ct.snapshot')); label.id = 'ct-snapshot-label';
+    const snapshotPanel = node('footer', 'ct-snapshot-panel');
+    const label = node('p', 'sr-only', t('ct.snapshot')); label.id = 'ct-snapshot-label';
     this.feedback.setAttribute('aria-labelledby', label.id);
-    snapshotPanel.append(label);
-    const identity = node('div', 'ct-snapshot-identity'); identity.append(node('p', 'ct-snapshot-method', form.display_name));
+    const review = node('details', 'ct-snapshot-details'); review.append(node('summary', '', t('ct.snapshot')), this.snapshot);
     const actions = node('div', 'ct-actions'); actions.append(this.clear, this.action);
-    snapshotPanel.append(identity, this.snapshot, this.feedback, actions);
+    snapshotPanel.append(label, this.feedback, actions, review);
     main.append(protocol, snapshotPanel); this.workbench.append(header, facts); if (access) this.workbench.append(access); this.workbench.append(main);
   }
 

@@ -1,8 +1,8 @@
+import { DAYLIGHT_MARK } from './assets';
 import { Bell, ChartLine, FileText, Gauge, KeyRound, LayoutDashboard, LogOut, PanelLeft, PanelLeftClose, Plus, Scale, ServerCog, Settings, ShieldCheck, UserCog, UserRound, UsersRound, Workflow, createIcons } from 'lucide';
 import type { CurrentUser } from '../api/app-api';
 import { authorizedJson, clearSessionCredential } from './session';
 import { ADMIN_DESTINATIONS } from './admin-destinations';
-import { appAsset } from './assets';
 import { applyLocale, locale, t } from './i18n';
 import { languageMenu, themeButton } from './localize';
 import { mountSystemNotices } from './system-notices';
@@ -75,8 +75,8 @@ export function mountShell(root: HTMLElement): AppShell {
 
   // The decorative logo and wordmark share one accessible home destination.
   const brand = document.createElement('a'); brand.className = 'app-brand'; brand.href = '/'; brand.setAttribute('aria-label', t('shell.home'));
-  const logo = document.createElement('img'); logo.src = appAsset('logo.svg'); logo.alt = ''; logo.width = 30; logo.height = 30;
-  const brandText = document.createElement('span'); brandText.textContent = 'REvoCompute'; brand.append(logo, brandText);
+  const logo = document.createElement('span'); logo.className = 'bench-mark'; logo.innerHTML = DAYLIGHT_MARK;
+  const brandText = document.createElement('span'); brandText.textContent = 'REvoCompute'; brand.append(brandText, logo);
 
   // The navigation is the product's information architecture: Compute, the current
   // user's own Account, and — for an administrator — the Administration workspaces.

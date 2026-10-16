@@ -31,9 +31,9 @@
 
 .home-page { width: min(100% - 6rem, 90rem); }
 .home-hero { min-height: 38rem; grid-template-columns: minmax(0, 1.2fr) minmax(20rem, .8fr); gap: 2rem 4rem; }
-.home-hero h1 { font-weight: 500; font-size: clamp(2.75rem, 6.5vw, 5.75rem); letter-spacing: -.06em; line-height: 1.05; }
+.home-hero h1 { font-weight: 500; font-size: clamp(2.75rem, 5vw, 4.5rem); letter-spacing: -.06em; line-height: 1.05; }
 .home-offer { font-weight: 500; max-width: 27ch; letter-spacing: -.025em; }
-.evidence-plate { background: var(--app-soft); border-radius: var(--r-control); box-shadow: none; padding: 1.5rem 2rem; }
+.evidence-plate { background: var(--app-surface); border-radius: var(--r-control); box-shadow: none; padding: 1.5rem 2rem; }
 .evidence-plate::before { display: none; }
 .evidence-lanes span { color: var(--app-plum); }
 .evidence-decision { flex-wrap: wrap; }

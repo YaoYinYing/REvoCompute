@@ -208,6 +208,7 @@ export function createMatrixViewRenderer(): ViewRenderer {
         ramp: () => matrixRamp(mapping.scale),
         // An even tick count keeps a labelled tick on a symmetric diverging midpoint.
         ticks: mapping.scale === 'diverging' ? 4 : undefined,
+        onSelect: (cell: Record<string, unknown>) => host.dispatchEvent(new CustomEvent('result-matrix-select', { detail: cell })),
         xTitle, yTitle, unit: mapping.unit, legendTitle: legendTitle(mapping), decimals: 2,
         formatReadout: (cell: Record<string, any>) => {
           const value = Number.isFinite(cell.value) ? cell.value.toFixed(2) : 'N/A';
@@ -216,7 +217,7 @@ export function createMatrixViewRenderer(): ViewRenderer {
         },
       });
       matrix.setData({ values: series.values, xLabels: series.xLabels, yLabels: series.yLabels });
-      return { destroy: () => matrix.destroy() };
+      return { destroy: () => matrix.destroy(), selectCell: (xLabel: string, yLabel: string) => { const x = series.xLabels.indexOf(xLabel), y = series.yLabels.indexOf(yLabel); if (x >= 0 && y >= 0) matrix.setSelection(x, y); } };
     },
   };
 }

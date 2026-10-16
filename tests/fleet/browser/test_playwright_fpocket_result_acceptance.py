@@ -223,20 +223,22 @@ def test_fpocket_ranked_pockets_render_as_the_primary_view(monkeypatch, tmp_path
 
     # A storyboard is the primary interpretation: it opens on load and its ranked
     # selector renders the real normalized pockets.csv.
+    page.locator(".result-view-menu > summary").click()
     expect(page.get_by_role("button", name="Scientific result")).to_have_attribute("aria-pressed", "true")
-    expect(page.get_by_role("heading", name="Ranked pockets", exact=True)).to_be_visible()
+    page.locator(".result-view-menu > summary").click()
+    expect(page.get_by_role("heading", name="Evidence in order", exact=True)).to_be_visible()
     table = page.locator("table.fpl-pockets")
     expect(table).to_be_visible()
     assert any(call["path"] == "pockets.csv" for call in calls), calls
     header = table.locator("thead th").all_inner_texts()
-    assert "Pocket" in header and "Score" in header and "Druggability" in header, header
+    assert "Candidate" in header and "Score" in header and "Druggability" in header, header
     # The rendered rows are the published pockets, in score order, with the pocket
     # identity kept distinct from the rank.
     body = table.locator("tbody tr")
     expect(body).to_have_count(len(expected_rows))
     first_row = body.first.locator("td").all_inner_texts()
-    assert first_row[0] == expected_rows[0]["rank"]
-    assert first_row[1] == expected_rows[0]["pocket"]
+    assert first_row[0] == expected_rows[0]["rank"].zfill(2) + "Pocket 1"
+    assert first_row[1] == expected_rows[0]["score"]
 
     # Selecting a pocket is the real integration boundary: the protein structure
     # mounts once in the shared panel, the pocket stays active, and the contacted
@@ -264,10 +266,11 @@ def test_fpocket_ranked_pockets_render_as_the_primary_view(monkeypatch, tmp_path
     expect(page.locator('.fpl-stage')).to_contain_text('Pocket 2')
     expect(page.locator('.storyboard-geometry-panel')).to_have_count(0)
     page.wait_for_function("() => window.__viewerSelection.includes('" + expected_rows[1]['residue_ids'].split()[0] + "')")
-    page.get_by_role('button', name='Full structure', exact=True).click()
+    page.get_by_role('button', name='Whole structure', exact=True).click()
     assert page.evaluate('window.__viewerResets') >= 1
 
     # The generic views stay reachable as the audit/fallback path.
+    page.locator(".result-view-menu > summary").click()
     for title in ("Ranked pockets", "Detection summary", "Raw fpocket output"):
         expect(page.get_by_role("button", name=title, exact=True)).to_be_visible()
     page.get_by_role("button", name="Detection summary", exact=True).click()

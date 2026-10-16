@@ -114,7 +114,7 @@ const filesPlugin: WorkspacePlugin = {
       const input = element('input'); input.id = id; input.type = 'file'; input.multiple = role.cardinality.max > 1; input.accept = role.accept || role.extensions.join(',');
       const hint = element('p', 'ct-help', role.description || t('ct.files.hint', { minimum: role.cardinality.min, maximum: role.cardinality.max, formats: role.formats.join(', ') }));
       const list = element('div', 'ct-file-list');
-      const preview = element('pre', 'ct-input-preview'); preview.hidden = true; preview.setAttribute('aria-label', t('ct.files.preview'));
+      const preview = element('div', 'ct-input-preview'); preview.hidden = true; preview.setAttribute('aria-label', t('ct.files.preview'));
       let previewGeneration = 0;
       const error = element('p', 'ct-field-error'); error.hidden = true; input.setAttribute('aria-describedby', `${id}-error`); error.id = `${id}-error`;
       const render = () => {
@@ -125,7 +125,15 @@ const filesPlugin: WorkspacePlugin = {
         if (first && /\.(?:a3m|aln|fasta|fa|faa|txt|csv|tsv)$/i.test(first.name)) {
           void first.slice(0, 65536).text().then(source => {
             if (generation !== previewGeneration || !target.isConnected) return;
-            preview.textContent = source.split(/\r?\n/).slice(0, 12).join('\n'); preview.hidden = false;
+            preview.replaceChildren();
+            preview.append(element('p', 'ct-preview-caption', t('ct.files.preview')));
+            if (role.type === 'alignment' && source.startsWith('>')) {
+              const records = source.split(/^>/m).filter(Boolean).slice(0, 8);
+              const rows = element('div', 'ct-alignment-rows'); rows.tabIndex = 0;
+              for (const record of records) { const lines = record.split(/\r?\n/); const name = lines.shift() || ''; const row = element('div', 'ct-alignment-row'); const label = element('span', '', name.split(/\s+/)[0]); label.title = name; const sequence = element('code', '', lines.join('')); row.append(label, sequence); rows.append(row); }
+              preview.append(rows, element('p', 'ct-preview-foot', t('ct.files.previewOriginal')));
+            } else { preview.append(element('pre', '', source.split(/\r?\n/).slice(0, 12).join('\n'))); }
+            preview.hidden = false;
           }).catch(() => { /* Upload remains available when a local preview cannot be read. */ });
         }
         if (!files.length) list.textContent = t('ct.files.none');
@@ -140,7 +148,7 @@ const filesPlugin: WorkspacePlugin = {
         });
       };
       input.addEventListener('change', () => { context.setRoleFiles(role.id, Array.from(input.files || [])); render(); context.filesChanged(); });
-      group.append(label, input, hint, list, preview, error); target.append(group); controls.push({ role, input, list, error });
+      const contract = element('details', 'ct-input-contract'); contract.append(element('summary', '', t('ct.files.contract')), hint); if (roles.length === 1) label.classList.add('sr-only'); group.append(label, input, list, preview, contract, error); target.append(group); controls.push({ role, input, list, error });
     });
     return {
       readValue: () => Object.fromEntries(roles.map(role => [role.id, context.roleFiles(role.id).map(filePath)])),

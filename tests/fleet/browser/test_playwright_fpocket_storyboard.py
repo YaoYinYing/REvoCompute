@@ -130,7 +130,7 @@ def test_storyboard_renders_the_ranked_selector_from_the_real_table(page: Page) 
     assert len(expected) == 40
     _mount(page)
 
-    expect(page.get_by_role("heading", name="Ranked pockets", exact=True)).to_be_visible()
+    expect(page.get_by_role("heading", name="Evidence in order", exact=True)).to_be_visible()
     table = page.locator("table.fpl-pockets")
     expect(table.locator("tbody tr")).to_have_count(40)
     page.get_by_role("button", name="Compare descriptors").click()
@@ -148,7 +148,7 @@ def test_storyboard_selection_updates_the_detail_without_reloading(page: Page) -
     _mount(page)
 
     # The strongest ranked pocket opens in context; explicit selection replaces it.
-    expect(page.locator('.fpl-pocket-row[aria-current="true"] td').first).to_have_text("1")
+    expect(page.locator('.fpl-pocket-row[aria-current="true"]')).to_have_attribute('data-pocket', '1')
     page.locator(".fpl-pocket-row").nth(1).click()
 
     readout = page.locator(".fpl-detail")
@@ -158,7 +158,7 @@ def test_storyboard_selection_updates_the_detail_without_reloading(page: Page) -
     expect(readout).to_contain_text(expected[1]["center_x"])
     # The selected row is marked and the contacted residues are listed.
     expect(page.locator('.fpl-pocket-row[aria-current="true"]')).to_have_count(1)
-    expect(page.locator('.fpl-pocket-row[aria-current="true"] td').first).to_have_text("2")
+    expect(page.locator('.fpl-pocket-row[aria-current="true"]')).to_have_attribute('data-pocket', '2')
     page.locator(".fpl-detail summary", has_text="Contacted residues").click()
     residues = page.locator(".fpl-chip").all_inner_texts()
     assert residues and set(residues) == set(expected[1]["residue_ids"].split())
@@ -166,7 +166,7 @@ def test_storyboard_selection_updates_the_detail_without_reloading(page: Page) -
     # Switching pockets updates in place: the same table and readout, new pocket.
     page.locator(".fpl-pocket-row").nth(4).click()
     expect(readout).to_contain_text(expected[4]["score"])
-    expect(page.locator('.fpl-pocket-row[aria-current="true"] td').first).to_have_text("5")
+    expect(page.locator('.fpl-pocket-row[aria-current="true"]')).to_have_attribute('data-pocket', '5')
 
 
 def test_storyboard_selection_drives_the_structure_focus_boundary(page: Page) -> None:
@@ -306,3 +306,11 @@ def test_storyboard_keeps_the_generic_views_reachable(page: Page) -> None:
     page.get_by_role("button", name="Open Detection summary", exact=True).click()
     assert page.evaluate("window.__fpl.viewed") == ["detection_summary"]
     assert errors == [], errors
+
+
+def test_contact_selection_preserves_negative_author_numbers(page: Page) -> None:
+    _mount(page, pockets_csv=INSERTION_POCKETS.replace('A_42', 'A_-42'))
+    page.get_by_role('checkbox', name='Highlight contacts').uncheck()
+    page.get_by_role('checkbox', name='Highlight contacts').check()
+    collection = page.evaluate("window.__fpl.selected.filter(entry => entry.structure).at(-1).structure.residues")
+    assert any(residue['residue'] == -42 for residue in collection)

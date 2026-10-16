@@ -64,12 +64,11 @@ export class ResultWorkspace {
   private readonly geometry: StructureController;
   private previewGeneration = 0;
   private storyboardStructureGeneration = 0;
-  private structureRepresentation = 'cartoon';
+  private structureRepresentation = 'cartoon_ligand';
   private structureColor = 'rainbow';
   private structureTheme = theme();
   private readonly directoryExpansion = new Map<string, boolean>();
   private readonly listeners = new AbortController();
-  private readonly railMedia = matchMedia('(max-width: 64rem)');
 
   constructor(private readonly root: HTMLElement, createViewer: MolecularViewerFactory) {
     installScientificPrimitives(); this.geometry = new StructureController(createViewer, { controlsCollapsed: true }); this.structure = new StructureController(createViewer, {
@@ -90,7 +89,10 @@ export class ResultWorkspace {
         return this.rendererRegistry.resolve(artifact)?.render(artifact, host, context);
       },
       focusStructure: (selection) => this.structure.focus(selection), selectStructure: (selection) => this.structure.select(selection),
+      describeResult: description => { this.nodes.title.textContent = description.title; if (description.subtitle) this.nodes.meta.textContent = description.subtitle; },
+      setStructureGeometry: artifact => this.structure.setGeometry(artifact),
       resetStructure: () => this.structure.resetCamera(),
+      annotateStructure: annotation => this.structure.annotate(annotation),
       openGeometry: (file, description) => this.openGeometry(file, description),
       closeGeometry: () => { this.geometry.dispose(); this.nodes.preview.querySelector('.storyboard-geometry-panel')?.remove(); },
     });
@@ -126,28 +128,31 @@ export class ResultWorkspace {
     const meta = element('p', 'result-meta', this.taskId); identity.append(methodRow, title, meta);
     const actions = element('div', 'result-header-actions'); const dashboard = element('a', 'result-button', t('shell.nav.dashboard')); dashboard.href = '/compute/dashboard';
     const refresh = element('button', 'result-icon-button') as HTMLButtonElement; refresh.type = 'button'; refresh.title = t('results.refresh'); refresh.setAttribute('aria-label', t('results.refresh')); setButtonIcon(refresh, 'RefreshCw');
-    refresh.addEventListener('click', () => void this.load()); actions.append(dashboard, refresh); header.append(identity, actions);
+    refresh.addEventListener('click', () => void this.load()); actions.append(refresh); header.append(identity, actions);
     const status = element('section', 'result-status'); status.setAttribute('aria-live', 'polite');
     const workspace = element('section', 'result-workspace'); const main = element('article', 'result-main');
     const tabs = element('nav', 'result-tabs'); tabs.setAttribute('aria-label', t('results.viewsLabel'));
     const previewHead = element('header', 'result-preview-header'); const copy = element('div');
     const previewTitle = element('h2', '', t('results.previewTitle')); const previewDescription = element('p', 'result-muted'); copy.append(previewTitle, previewDescription);
     const download = element('a', 'result-button result-button-small', t('results.download')) as HTMLAnchorElement; download.hidden = true; download.download = '';
-    previewHead.append(copy, download); const preview = element('div', 'result-preview'); preview.setAttribute('aria-busy', 'false'); main.append(tabs, previewHead, preview);
-    const rail = element('aside', 'result-rail'); rail.setAttribute('aria-label', t('results.filesLabel'));
-    const reopen = element('button', 'result-rail-reopen', t('results.filesReopen')) as HTMLButtonElement; reopen.type = 'button'; reopen.hidden = true; reopen.setAttribute('aria-label', t('results.filesReopenLabel'));
-    const railDetails = element('details', 'result-files') as HTMLDetailsElement; railDetails.open = true;
+    previewHead.append(copy, download); const preview = element('div', 'result-preview'); preview.setAttribute('aria-busy', 'false'); main.append(previewHead, preview);
+    const viewMenu = element('details', 'result-view-menu'); const viewSummary = element('summary', '', t('results.viewsLabel')); const helpActions = element('div', 'result-help-actions'); const viewPanel = element('div', 'result-view-panel'); viewPanel.append(tabs, dashboard, helpActions); viewMenu.append(viewSummary, viewPanel); actions.append(viewMenu);
+    const rail = element('dialog', 'result-rail'); rail.setAttribute('aria-label', t('results.filesLabel'));
+    const closeFiles = element('button', 'result-button', t('ct.cancel')); closeFiles.type = 'button'; closeFiles.addEventListener('click', () => { rail.close(); });
+    rail.addEventListener('close', () => { railDetails.open = false; });
+    const reopen = element('button', 'result-rail-reopen', t('results.filesLabel')) as HTMLButtonElement; reopen.type = 'button'; reopen.hidden = false; reopen.setAttribute('aria-label', t('results.filesReopenLabel'));
+    const railDetails = element('details', 'result-files') as HTMLDetailsElement; railDetails.open = false;
     const summary = element('summary', '', t('results.filesSummary')); const artifactSummary = element('span', 'result-muted'); summary.append(artifactSummary);
     const tools = element('div', 'result-file-tools'); const search = element('input', 'result-search') as HTMLInputElement;
     search.type = 'search'; search.placeholder = t('results.filter'); search.setAttribute('aria-label', t('results.filterLabel'));
     const archive = element('button', 'result-button result-button-small', t('results.archiveCreate')) as HTMLButtonElement; archive.type = 'button'; archive.hidden = true;
     const archiveStatus = element('p', 'result-archive-status'); archiveStatus.setAttribute('role', 'status');
-    archive.className = 'result-button result-archive-action'; actions.prepend(archive); identity.append(archiveStatus);
+    archive.className = 'result-button result-archive-action'; tools.append(archive); identity.append(archiveStatus);
     tools.append(search);
     const fileList = element('nav', 'result-file-list'); fileList.setAttribute('aria-label', t('results.fileListLabel'));
-    const integrity = element('div'); railDetails.append(summary, tools, fileList, integrity); rail.append(reopen, railDetails);
-    workspace.append(main, rail); const record = element('details', 'result-record-disclosure'); const recordSummary = element('summary', '', t('results.run.title')); const recordBody = element('section', 'result-record'); const limitations = element('div'); const run = element('div'); recordBody.append(limitations, run); record.append(recordSummary, recordBody);
-    page.append(header, status, workspace, record); this.root.append(page);
+    const integrity = element('div'); railDetails.append(summary, tools, fileList, integrity); rail.append(closeFiles, railDetails); actions.prepend(reopen);
+    workspace.append(main); const record = element('dialog', 'result-record-dialog'); record.setAttribute('aria-label', t('results.run.title')); const recordSummary = element('h2', '', t('results.run.title')); const recordClose = element('button', 'result-button', t('ct.cancel')); recordClose.type = 'button'; recordClose.addEventListener('click', () => record.close()); const recordOpen = element('button', 'result-button', t('results.run.title')); recordOpen.type = 'button'; recordOpen.addEventListener('click', () => record.showModal()); actions.insertBefore(recordOpen, viewMenu); const recordBody = element('section', 'result-record'); const limitations = element('div'); const run = element('div'); recordBody.append(limitations, run); record.append(recordClose, recordSummary, recordBody);
+    page.append(header, status, workspace, record, rail); this.root.append(page);
     return { status, outcome, title, meta, tabs, previewTitle, previewDescription, preview, download, rail, railDetails, reopen, search, fileList, integrity, artifactSummary, archive, archiveStatus, limitations, run };
   }
 
@@ -159,7 +164,7 @@ export class ResultWorkspace {
     this.nodes.archive.addEventListener('click', () => void this.archiveAction(), options);
     document.addEventListener('fullscreenchange', this.resize, options); window.addEventListener('resize', this.resize, options);
     window.addEventListener('pagehide', this.pagehide, options); window.addEventListener('pageshow', this.pageshow, options);
-    this.railMedia.addEventListener('change', this.syncRail, options); this.syncRail();
+    this.syncRail();
   }
 
   private readonly resize = (): void => this.structure.resize();
@@ -182,7 +187,7 @@ export class ResultWorkspace {
     const method = manifest.run?.method?.name || manifest.task_type || t('results.scientific');
     const input = manifest.run?.inputs?.length === 1 ? manifest.run.inputs[0]?.path.split('/').pop() : null;
     this.nodes.title.textContent = input || method;
-    this.nodes.meta.textContent = `${input ? method + ' · ' : ''}${t('results.taskTitle', { id: manifest.task_id })}`; this.nodes.meta.title = t('results.taskIdTitle', { id: manifest.task_id });
+    this.nodes.meta.textContent = method; this.nodes.meta.title = t('results.taskIdTitle', { id: manifest.task_id });
     const quiet = isQuietOutcome(manifest);
     this.setState(quiet ? manifest.status : manifest.outcome || manifest.status, manifest.error || '', quiet);
     // The summary is rendered by renderFiles(), which owns the filtered view.
@@ -214,7 +219,7 @@ export class ResultWorkspace {
     const button = element('button', 'result-tab', label) as HTMLButtonElement; button.type = 'button'; button.dataset.view = id;
     button.setAttribute('aria-pressed', 'false'); button.addEventListener('click', action); return button;
   }
-  private markTab(id: string | null): void { this.nodes.tabs.querySelectorAll<HTMLElement>('[data-view]').forEach((tab) => tab.setAttribute('aria-pressed', tab.dataset.view === id ? 'true' : 'false')); }
+  private markTab(id: string | null): void { const menu = this.nodes.tabs.closest('details'); if (menu) menu.open = false; this.nodes.tabs.querySelectorAll<HTMLElement>('[data-view]').forEach((tab) => tab.setAttribute('aria-pressed', tab.dataset.view === id ? 'true' : 'false')); }
 
   private async openView(view: ResultView): Promise<void> {
     const generation = ++this.previewGeneration;
@@ -254,6 +259,7 @@ export class ResultWorkspace {
       return;
     }
     this.storyboardStructureGeneration += 1;
+    if ((this.nodes.rail as HTMLDialogElement).open) (this.nodes.rail as HTMLDialogElement).close();
     this.destroyViewRenderer(); this.geometry.dispose(); this.storyboard.destroy(); this.cancelRender(); this.selectArtifact(artifact); this.markTab(null);
     const fileName = resultFileName(artifact);
     this.nodes.previewTitle.textContent = view.title; this.nodes.previewDescription.textContent = view.description || '';
@@ -295,6 +301,7 @@ export class ResultWorkspace {
     const generation = ++this.storyboardStructureGeneration;
     this.cancelRender(); const controller = new AbortController(); this.renderController = controller;
     this.selectArtifact(file);
+    if (!this.manifest?.run?.inputs?.length) this.nodes.title.textContent = localName(resultFileName(file)).replace(/\.(?:pdb|mmcif|cif)$/i, '');
     const slot = this.nodes.preview.querySelector<HTMLElement>('[data-structure-slot]') || this.nodes.preview;
     let panel = slot.querySelector<HTMLElement>(':scope > .storyboard-structure-panel');
     if (!panel) { panel = element('section', 'storyboard-structure-panel'); slot.append(panel); }
@@ -309,6 +316,7 @@ export class ResultWorkspace {
   async openArtifact(artifact: ResultFile, requestedGeneration?: number): Promise<void> {
     const generation = requestedGeneration ?? ++this.previewGeneration;
     this.storyboardStructureGeneration += 1;
+    if ((this.nodes.rail as HTMLDialogElement).open) (this.nodes.rail as HTMLDialogElement).close();
     this.destroyViewRenderer(); this.geometry.dispose(); this.storyboard.destroy(); this.cancelRender(); this.selectArtifact(artifact); this.markTab(null);
     const fileName = resultFileName(artifact); this.nodes.previewTitle.textContent = localName(fileName); this.nodes.previewDescription.textContent = formatBytes(artifact.size);
     this.nodes.download.hidden = false; this.nodes.download.href = downloadUrl(artifact); this.nodes.download.title = fileName;
@@ -328,33 +336,42 @@ export class ResultWorkspace {
       viewerHost = element('div', 'structure-host'); viewerHost.setAttribute('role', 'img'); viewerHost.setAttribute('aria-label', t('results.structure.viewerLabel'));
       viewport.append(viewerHost); host.replaceChildren(viewport);
     }
-    viewport.querySelector('.structure-toolbar')?.remove(); viewport.prepend(this.structureToolbar(artifact, viewport));
+    viewport.querySelector('.structure-toolbar')?.remove();
+    const shelf = this.nodes.preview.querySelector<HTMLElement>('[data-structure-tools]');
+    if (shelf) shelf.replaceChildren(this.structureToolbar(artifact, viewport));
+    else viewport.prepend(this.structureToolbar(artifact, viewport));
     await this.structure.mount(viewerHost, artifact, this.structureTheme);
   }
 
   private structureToolbar(artifact: ResultFile, viewport: HTMLElement): HTMLElement {
     const toolbar = element('div', 'structure-toolbar'); toolbar.setAttribute('role', 'toolbar'); toolbar.setAttribute('aria-label', t('results.structure.controls'));
     const representations: Array<[string, string]> = [['cartoon', t('results.structure.cartoon')], ['cartoon_ligand', t('results.structure.cartoonLigand')], ['sticks', t('results.structure.sticks')], ['surface_ligand', t('results.structure.surface')]];
-    const representationGroup = element('div', 'structure-mode-group'); representationGroup.setAttribute('role', 'group'); representationGroup.setAttribute('aria-label', t('results.structure.representation'));
-    representations.forEach(([id, label]) => { const button = element('button', 'result-button result-button-small', label) as HTMLButtonElement; button.type = 'button'; button.setAttribute('aria-pressed', String(this.structureRepresentation === id)); button.addEventListener('click', () => { this.structureRepresentation = id; representationGroup.querySelectorAll('button').forEach((node) => node.setAttribute('aria-pressed', String(node === button))); void this.structure.setRepresentation(id); }); representationGroup.append(button); });
-    const colours: Array<[string, string]> = [['chain', t('results.structure.chain')], ['rainbow', t('results.structure.sequence')], ['confidence', t('results.structure.confidence')]];
-    if (this.structureColor === 'confidence' && !('confidence_encoding' in artifact && artifact.confidence_encoding)) this.structureColor = 'chain';
-    const colorGroup = element('div', 'structure-mode-group'); colorGroup.setAttribute('role', 'group'); colorGroup.setAttribute('aria-label', t('results.structure.colour'));
-    colours.forEach(([id, label]) => { if (id === 'confidence' && !('confidence_encoding' in artifact && artifact.confidence_encoding)) return; const button = element('button', 'result-button result-button-small', label) as HTMLButtonElement; button.type = 'button'; button.setAttribute('aria-pressed', String(this.structureColor === id)); button.addEventListener('click', () => { this.structureColor = id; colorGroup.querySelectorAll('button').forEach((node) => node.setAttribute('aria-pressed', String(node === button))); void this.structure.setColor(id); }); colorGroup.append(button); });
+    const selectControl = (label: string, options: Array<[string, string]>, value: string, changed: (value: string) => void): HTMLElement => {
+      const field = element('label', 'structure-tool-field', label); const select = element('select');
+      for (const [id, title] of options) select.append(new Option(title, id, false, id === value));
+      select.addEventListener('change', () => changed(select.value)); field.append(select); return field;
+    };
+    const representationGroup = selectControl(t('results.structure.representation'), representations, this.structureRepresentation, value => { this.structureRepresentation = value; void this.structure.setRepresentation(value); });
+    const colours: Array<[string, string]> = [['rainbow', t('results.structure.sequence')], ['chain', t('results.structure.chain')]];
+    if ('confidence_encoding' in artifact && artifact.confidence_encoding) colours.push(['confidence', t('results.structure.confidence')]);
+    if (this.structureColor === 'confidence' && colours.length === 2) this.structureColor = 'rainbow';
+    const colorGroup = selectControl(t('results.structure.colour'), colours, this.structureColor, value => { this.structureColor = value; void this.structure.setColor(value); const legend = this.nodes.preview.querySelector<HTMLElement>('[data-structure-legend]'); if (legend) legend.textContent = value === 'rainbow' ? 'Sequence N → C' : colours.find(([id]) => id === value)?.[1] || value; });
     const actions = element('div', 'structure-toolbar-actions');
-    const reset = element('button', 'result-icon-button') as HTMLButtonElement; reset.type = 'button'; reset.title = t('results.structure.resetView'); reset.setAttribute('aria-label', t('results.structure.resetView')); setButtonIcon(reset, 'RefreshCw'); reset.addEventListener('click', () => this.structure.resetCamera());
+    const reset = element('button', 'result-button result-button-small', t('results.structure.whole')) as HTMLButtonElement; reset.type = 'button'; reset.title = t('results.structure.whole'); reset.setAttribute('aria-label', t('results.structure.whole')); reset.addEventListener('click', () => { this.structure.resetCamera(); viewport.closest('[data-molecular-workspace]')?.dispatchEvent(new Event('structure-reset')); });
     const themeButton = element('button', 'result-button result-button-small') as HTMLButtonElement; themeButton.type = 'button';
     const syncThemeButton = (): void => { const dark = this.structureTheme === 'dark'; themeButton.textContent = dark ? t('results.structure.lightCanvas') : t('results.structure.darkCanvas'); themeButton.setAttribute('aria-pressed', String(dark)); };
     syncThemeButton(); themeButton.addEventListener('click', () => { this.structureTheme = this.structureTheme === 'dark' ? 'light' : 'dark'; this.structure.setTheme(this.structureTheme); syncThemeButton(); });
     const image = element('button', 'result-button result-button-small', t('results.structure.savePng')) as HTMLButtonElement; image.type = 'button'; image.addEventListener('click', async () => beginDownload(await this.structure.captureImage()));
     const source = element('button', 'result-button result-button-small', t('results.download')) as HTMLButtonElement; source.type = 'button'; source.addEventListener('click', () => beginDownload(downloadUrl(artifact)));
-    const fullscreen = element('button', 'result-icon-button') as HTMLButtonElement; fullscreen.type = 'button';
-    const syncFullscreen = (): void => { const expanded = document.fullscreenElement === viewport; const label = expanded ? t('results.structure.exitFullscreen') : t('results.structure.enterFullscreen'); fullscreen.title = label; fullscreen.setAttribute('aria-label', label); fullscreen.setAttribute('aria-pressed', String(expanded)); setButtonIcon(fullscreen, expanded ? 'Minimize' : 'Expand'); };
+    const fullscreen = element('button', 'result-button result-button-small') as HTMLButtonElement; fullscreen.type = 'button';
+    const syncFullscreen = (): void => { const expanded = document.fullscreenElement === (viewport.closest('[data-molecular-workspace]') || viewport); const label = expanded ? t('results.structure.exitFullscreen') : t('results.structure.enterFullscreen'); fullscreen.title = label; fullscreen.setAttribute('aria-label', label); fullscreen.setAttribute('aria-pressed', String(expanded)); fullscreen.textContent = expanded ? label : t('results.structure.expandStage'); };
     syncFullscreen();
-    fullscreen.addEventListener('click', async () => { if (document.fullscreenElement === viewport) await document.exitFullscreen(); else await viewport.requestFullscreen(); });
+    fullscreen.addEventListener('click', async () => { const surface = viewport.closest<HTMLElement>('[data-molecular-workspace]') || viewport; if (document.fullscreenElement === surface) await document.exitFullscreen(); else await surface.requestFullscreen(); });
     const controller = this.renderController; if (controller) document.addEventListener('fullscreenchange', syncFullscreen, { signal: controller.signal });
-    actions.append(reset, themeButton, image, source, fullscreen);
-    toolbar.append(representationGroup, colorGroup, actions);
+    const secondary = element('div', 'structure-tool-secondary');
+    const native = element('details', 'structure-extra-tools'); native.append(element('summary', '', t('results.structure.advanced')), themeButton, source);
+    secondary.append(native, image, element('span', 'structure-gesture', 'Drag to rotate · scroll to zoom'));
+    actions.append(reset, fullscreen); toolbar.append(representationGroup, colorGroup, actions, secondary);
     return toolbar;
   }
 
@@ -404,7 +421,7 @@ export class ResultWorkspace {
   private renderRecord(): void {
     const manifest = this.manifest; if (!manifest) return; this.nodes.limitations.replaceChildren(); this.nodes.run.replaceChildren();
     if (manifest.limitations?.length) { const title = element('h2', '', t('results.limitations')); const list = element('ul'); manifest.limitations.forEach((text) => list.append(element('li', '', text))); this.nodes.limitations.append(title, list); }
-    const values: Array<[string, string]> = [[t('results.run.submitted'), manifest.run?.submitted_at || '-'], [t('results.run.started'), manifest.run?.started_at || '-'], [t('results.run.finished'), manifest.run?.finished_at || '-']];
+    const values: Array<[string, string]> = [[t('dashboard.card.taskId'), manifest.task_id], [t('results.run.submitted'), manifest.run?.submitted_at || '-'], [t('results.run.started'), manifest.run?.started_at || '-'], [t('results.run.finished'), manifest.run?.finished_at || '-']];
     manifest.run?.inputs?.forEach((input) => values.push([input.role ? t('results.run.inputRole', { role: input.role }) : t('results.run.input'), `${input.path} [${input.sha256.slice(0, 12)}]`]));
     manifest.run?.parameters?.forEach((parameter) => values.push([parameter.label, `${String(parameter.value)}${parameter.unit ? ` ${parameter.unit}` : ''}`]));
     const title = element('h2', '', t('results.run.title')); const list = element('dl', 'result-definition-list');
@@ -478,9 +495,10 @@ export class ResultWorkspace {
   }
 
   private readonly syncRail = (): void => {
-    const narrow = this.railMedia.matches; const collapsed = !narrow && !this.nodes.railDetails.open;
-    this.root.querySelector('.result-app')?.classList.toggle('is-rail-collapsed', collapsed);
-    this.nodes.rail.classList.toggle('is-collapsed', collapsed); this.nodes.railDetails.hidden = collapsed; this.nodes.reopen.hidden = !collapsed; this.structure.resize();
+    const dialog = this.nodes.rail as HTMLDialogElement;
+    if (this.nodes.railDetails.open && dialog.isConnected && !dialog.open) dialog.showModal();
+    if (!this.nodes.railDetails.open && dialog.open) dialog.close();
+    this.structure.resize();
   };
   private selectArtifact(artifact: ResultFile): void {
     this.selected = artifact; const fileName = resultFileName(artifact);

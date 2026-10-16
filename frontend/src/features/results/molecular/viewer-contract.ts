@@ -12,6 +12,8 @@ export interface MolecularViewer {
   resize(): void;
   captureImage(): Promise<string>;
   resetCamera?(): void;
+  setSphereGeometry?(source: string | null): Promise<void>;
+  annotate?(annotation: { point: { x: number; y: number; z: number }; label: string } | null): void;
   clear?(): Promise<void>;
   select?(selection: unknown): boolean;
   focus?(selection: unknown): boolean;

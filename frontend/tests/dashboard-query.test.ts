@@ -31,6 +31,11 @@ describe('dashboard task query', () => {
     expect(queryTasks(tasks, { ...initialTaskQuery(), sort: 'finished' }).tasks.map(item => item.display_name)).toEqual(['Alpha model', 'Docking run']);
   });
 
+  it('filters attention without conflating it with a task lifecycle state', () => {
+    const rows = [task({status:'failed'}),task({status:'cancelled'}),task({status:'running'})];
+    expect(queryTasks(rows, {...initialTaskQuery(),status:'attention'}).tasks.map(item=>item.status).sort()).toEqual(['cancelled','failed']);
+  });
+
   it('defaults to the detailed task layout', () => {
     expect(initialTaskQuery().layout).toBe('detailed');
   });

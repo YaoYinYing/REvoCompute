@@ -7,6 +7,7 @@ import { t } from '../../app/i18n';
 import { guidedTour, recordTourResult } from '../../app/guided-tour';
 import type { AppShell } from '../../app/shell';
 import { initialTaskQuery, queryTasks, type TaskQuery } from './task-query';
+import './dashboard.css';
 
 const pollMilliseconds = 12_000;
 const dashboardIcons = { Archive, Ban, Download, ExternalLink, RefreshCw, Search, Trash2 };
@@ -57,7 +58,7 @@ export class Dashboard {
     const head = document.createElement('header'); head.className = 'page-heading';
     head.innerHTML = `<div><p class="page-kicker">${t('dashboard.register')}</p><h1>${t('dashboard.title')}<span class="heading-stop" aria-hidden="true">.</span></h1><p>${t('dashboard.intro')}</p></div>`;
     const actions = document.createElement('div'); actions.className = 'page-actions';
-    actions.append(guidedTour.launcher());
+    const help = document.createElement("details"); help.className = "dashboard-help"; const helpSummary = textNode("summary", "Help"); help.append(helpSummary, guidedTour.launcher()); actions.append(help);
     const refresh = button(t('dashboard.action.refresh'), 'refresh', 'refresh-cw');
     const create = document.createElement('a'); create.href = '/compute/create_task'; create.className = 'primary-button'; create.textContent = t('dashboard.action.newTask');
     actions.append(refresh, create); head.append(actions);
@@ -66,7 +67,7 @@ export class Dashboard {
     // Filtering answers "which tasks?" and lives in one aligned tool band.
     const controls = document.createElement('section'); controls.className = 'work-toolbar'; controls.setAttribute('aria-label', t('dashboard.filters.label'));
     controls.innerHTML = `<div class="search-control"><label for="dashboard-search"><span>${t('dashboard.filter.search')}</span><span class="input-with-action"><i data-lucide="search" aria-hidden="true"></i><input type="search" id="dashboard-search" data-filter="search" placeholder="${t('dashboard.filter.searchPlaceholder')}" autocomplete="off"></span></label><small data-query-error role="status" aria-live="polite"></small></div>
-      <label><span>${t('dashboard.filter.status')}</span><select data-filter="status"><option value="">${t('dashboard.filter.allStatuses')}</option><option value="pending">${t('dashboard.filter.status.pending')}</option><option value="running">${t('dashboard.filter.status.running')}</option><option value="finished">${t('dashboard.filter.status.finished')}</option><option value="failed">${t('dashboard.filter.status.failed')}</option><option value="cancelled">${t('dashboard.filter.status.cancelled')}</option></select></label>
+      <label><span>${t('dashboard.filter.status')}</span><select data-filter="status"><option value="">${t('dashboard.filter.allStatuses')}</option><option value="pending">${t('dashboard.filter.status.pending')}</option><option value="running">${t('dashboard.filter.status.running')}</option><option value="finished">${t('dashboard.filter.status.finished')}</option><option value="failed">${t('dashboard.filter.status.failed')}</option><option value="cancelled">${t('dashboard.filter.status.cancelled')}</option><option value="attention">${t('dashboard.stats.attention')}</option></select></label>
       <label><span>${t('dashboard.filter.type')}</span><input type="search" data-filter="taskType" placeholder="${t('dashboard.filter.typePlaceholder')}"></label>
       ${this.user.role === 'admin' ? `<label><span>${t('dashboard.filter.owner')}</span><input type="search" data-filter="owner" placeholder="${t('dashboard.filter.ownerPlaceholder')}"></label>` : ''}
       <label><span>${t('dashboard.filter.order')}</span><select data-filter="sort"><option value="submitted">${t('dashboard.filter.newestSubmitted')}</option><option value="finished">${t('dashboard.filter.newestFinished')}</option></select></label>
@@ -83,10 +84,10 @@ export class Dashboard {
     this.filterSummary = textNode('summary', t('dashboard.filters.summary'));
     const filterFields = document.createElement('div'); filterFields.className = 'dashboard-filter-fields';
     filterFields.append(...Array.from(controls.children).slice(1));
+    const method = filterFields.querySelector('[data-filter="taskType"]')!.closest('label')!; const order = filterFields.querySelector('[data-filter="sort"]')!.closest('label')!;
+    controls.append(method, order);
     this.filterDisclosure.append(this.filterSummary, filterFields); controls.append(this.filterDisclosure);
-    const narrow = window.matchMedia('(max-width: 56rem)');
-    this.filterDisclosure.open = !narrow.matches;
-    narrow.addEventListener('change', () => { this.filterDisclosure.open = !narrow.matches; }, { signal: this.controller.signal });
+    this.filterDisclosure.open = false;
     this.error = controls.querySelector('[data-query-error]')!;
     this.advancedToggle = controls.querySelector('[data-advanced]')!;
     this.advancedPanel = controls.querySelector('[data-advanced-panel]')!;
@@ -160,9 +161,11 @@ export class Dashboard {
       [t('dashboard.stats.running'), this.tasks.filter(task => task.status === 'running').length, false], [t('dashboard.stats.finished'), this.tasks.filter(task => task.status === 'finished').length, false],
       [t('dashboard.stats.attention'), this.tasks.filter(task => ['failed', 'cancelled'].includes(task.status)).length, true],
     ];
-    this.stats.replaceChildren(...values.map(([label, value, attention]) => { const item = document.createElement('div'); if (attention) { item.dataset.attention = ''; if (value === 0) item.dataset.empty = ''; } item.innerHTML = `<span>${label}</span><strong>${value}</strong>`; return item; }));
+    const keys = ['', 'pending', 'running', 'finished', 'attention'];
+    this.stats.replaceChildren(...values.map(([label, value, attention], index) => { const item = document.createElement('button'); item.type = 'button'; item.dataset.status = keys[index]; if (attention) item.dataset.attention = ''; item.setAttribute('aria-pressed', String(this.query.status === keys[index])); item.append(textNode('span', label), textNode('strong', String(value))); item.addEventListener('click', () => { this.query.status = keys[index]!; this.page.querySelector<HTMLSelectElement>('[data-filter="status"]')!.value = this.query.status; this.renderList(); }); return item; }));
   }
   private renderList(): void {
+    this.stats.querySelectorAll<HTMLElement>('[data-status]').forEach(node => node.setAttribute('aria-pressed', String(node.dataset.status === this.query.status)));
     this.disposePreviews();
     this.selectionBoxes.clear();
     const result = queryTasks(this.tasks, this.query); this.error.textContent = result.error || '';
@@ -183,24 +186,15 @@ export class Dashboard {
   }
   private taskCard(task: TaskSummary): HTMLElement {
     const card = document.createElement('article'); card.className = 'task-card'; card.dataset.status = task.status;
-    const header = document.createElement('header'); const identity = document.createElement('div');
+    const identity = document.createElement('div'); identity.className = 'task-identity';
     identity.append(textNode('h2', task.display_name), textNode('p', task.task_type, 'task-card-type'));
     const taskId = textNode('p', task.task_id, 'task-identity-id'); taskId.setAttribute('aria-label', `${t('dashboard.card.taskId')}: ${task.task_id}`); identity.append(taskId);
-    const status = document.createElement('span'); status.className = `status status-${task.status.replace(':', '-')}`; status.textContent = statusText(task); header.append(identity, status);
-    // Selection is part of the task's identity, not an action of it: the box opens
-    // the card, beside the name, ahead of anything a reader would press. Only an
-    // administrator can select for a batch, so only an administrator sees it.
-    if (this.user.role === 'admin' && task.actions.delete.allowed) header.prepend(this.selectControl(task, ''));
-    const facts = document.createElement('dl');
-    const factValues: Array<[string, string, boolean]> = [
-      [t('dashboard.card.submitted'), formatDate(task.submitted_at), false],
-      [t('dashboard.card.walltime'), formatDuration(task.walltime_seconds), false],
-    ];
-    if (task.finished_at) factValues.push([t('dashboard.card.finished'), formatDate(task.finished_at), false]);
-    if (this.user.role === 'admin') factValues.push([t('dashboard.card.owner'), task.owner || '-', false]);
-    factValues.forEach(([label, value, machine]) => { const row = document.createElement('div'); row.className = machine ? 'task-id-fact' : ''; const dt = document.createElement('dt'); dt.textContent = label; const dd = document.createElement('dd'); dd.textContent = value; if (machine) dd.classList.add('machine'); row.append(dt, dd); facts.append(row); });
-    if (task.progress != null && !task.terminal) { const progress = document.createElement('p'); progress.className = 'task-progress'; progress.textContent = typeof task.progress === 'string' ? task.progress : JSON.stringify(task.progress); facts.append(progress); }
-    card.append(header, facts);
+    if (this.user.role === 'admin' && task.actions.delete.allowed) identity.prepend(this.selectControl(task, ''));
+    const state = document.createElement('div'); state.className = 'task-state';
+    const status = textNode('span', statusText(task), `status status-${task.status.replace(':', '-')}`); state.append(status);
+    if (task.progress != null && !task.terminal) state.append(textNode('p', typeof task.progress === 'string' ? task.progress : JSON.stringify(task.progress), 'task-progress'));
+    const timing = document.createElement('div'); timing.className = 'task-time'; timing.append(textNode('p', formatDate(task.submitted_at)), textNode('p', formatDuration(task.walltime_seconds), 'task-runtime'));
+    card.append(identity, state, timing);
     if (task.error) { const problem = document.createElement('details'); problem.className = 'task-error'; const summary = document.createElement('summary'); summary.textContent = t('dashboard.card.executionError'); const body = document.createElement('p'); body.textContent = task.error; problem.append(summary, body); card.append(problem); }
     const preview = this.inputPreview(task); if (preview) card.append(preview);
     card.append(this.taskActions(task));
@@ -267,6 +261,10 @@ export class Dashboard {
     }
     if (task.actions.cancel.allowed) actions.append(button(t('dashboard.card.cancel'), 'cancel', 'ban'));
     if (task.actions.delete.allowed) actions.append(button(t('dashboard.card.delete'), 'delete', 'trash-2'));
+    const secondary = [...actions.children].filter(node => !node.classList.contains('primary-action'));
+    const overflow = document.createElement('details'); overflow.className = 'task-overflow'; const summary = textNode('summary', '···'); summary.setAttribute('aria-label', `${t('dashboard.card.details')}: ${task.display_name}`);
+    const menu = document.createElement('div'); menu.className = 'task-overflow-menu'; menu.append(...secondary);
+    const facts = document.createElement('dl'); for (const [label, value] of [[t('dashboard.card.submitted'), formatDate(task.submitted_at)], [t('dashboard.card.finished'), formatDate(task.finished_at)], [t('dashboard.card.owner'), task.owner || '—']]) { facts.append(textNode('dt', label!), textNode('dd', value!)); } menu.append(facts); overflow.append(summary, menu); actions.append(overflow);
     return actions;
   }
   private renderTable(tasks: TaskSummary[]): void {

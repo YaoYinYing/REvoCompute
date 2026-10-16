@@ -1,7 +1,7 @@
 import { createIcons, LogIn, Menu, UserRound } from 'lucide';
 import type { CurrentUser } from '../api/app-api';
 import type { AppShell } from './shell';
-import { appAsset } from './assets';
+import { DAYLIGHT_MARK } from './assets';
 import { t } from './i18n';
 import { languageMenu, themeButton } from './localize';
 
@@ -12,7 +12,7 @@ export function mountPublicShell(root: HTMLElement): AppShell {
   const header = document.createElement('header');
   header.className = 'public-header';
   header.innerHTML = `
-    <a class="public-brand" href="/" aria-label="${t('public.home')}"><img src="${appAsset('logo.svg')}" alt="" width="36" height="36"><span>${t('public.brand')}</span></a>
+    <a class="public-brand" href="/" aria-label="${t('public.home')}"><span>${t('public.brand')}</span><span class="bench-mark">${DAYLIGHT_MARK}</span></a>
     <details class="public-navigation">
       <summary class="icon-button" aria-label="${t('public.nav.open')}"><i data-lucide="menu" aria-hidden="true"></i></summary>
       <nav aria-label="${t('public.nav.label')}">

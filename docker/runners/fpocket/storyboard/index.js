@@ -2,57 +2,68 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 
 const STYLE = `
-.fpl-stage > .fpl-section > h3 { font: 500 1.65rem var(--font-display); }
-.fpl-detail { gap: 1rem; }
-.fpl-detail .fpl-metrics { margin: .5rem 0; }
-.fpl-detail .fpl-actions { align-items: center; }
-.fpl-highlight { font-size: .875rem; display: inline-flex; gap: .3rem; align-items: center; }
-.fpl-highlight input { accent-color: var(--app-plum); }
-.fpl-result .fpl-artifacts > summary { cursor: pointer; font-size: .875rem; padding-block: .75rem; }
-.fpl-result .fpl-layout > .fpl-section { grid-template-columns: 1fr auto; align-items: center; gap: 1rem; }
-.fpl-table-wrap { grid-column: 1 / -1; }
-.fpl-pocket-row[aria-current="true"] td:first-child { box-shadow: inset 3px 0 var(--app-plum); }
-@media(max-width: 760px) { .fpl-result .fpl-layout > .fpl-section { grid-template-columns: minmax(0,1fr); } }
-.fpl-result { --muted: var(--app-muted); --accent: var(--app-plum); display: grid; gap: 1rem; padding: 0; min-width: 0; }
-.fpl-result .btn { font: inherit; font-size: .875rem; padding: .55rem .7rem; min-height: 2.5rem; border: 1px solid var(--app-line); border-radius: var(--r-control); color: var(--app-ink); background: var(--app-surface); cursor: pointer; }
-.fpl-selector-tools { display: flex; flex-wrap: wrap; gap: .75rem; justify-content: end; }
-.fpl-selector-tools input { font: inherit; min-width: 0; max-width: 100%; padding: .55rem; border: 1px solid var(--app-line); background: var(--app-surface); color: var(--app-ink); }
-.fpl-detail details { padding-block: .7rem; border-block: 1px solid var(--app-line); }
-.fpl-detail summary { cursor: pointer; font-size: .875rem; }
-.fpl-detail .fpl-residues { margin-top: .7rem; }
-.fpl-result h2, .fpl-result h3, .fpl-result h4, .fpl-result p { margin: 0; }
-.fpl-result h2 { font-family: var(--font-display); font-size: 1.35rem; font-weight: 600; }
-.fpl-intro, .fpl-note, .fpl-unavailable { color: var(--muted); font-size: .875rem; line-height: 1.5; }
-.fpl-unavailable { font-style: italic; }
-.fpl-layout { display: grid; gap: 1.1rem; grid-template-columns: minmax(0, 1fr); min-width: 0; }
-.fpl-stage { display: grid; grid-template-columns: minmax(0, 1fr); border: 1px solid var(--app-line); background: var(--app-stage); border-radius: var(--r-control); overflow: hidden; }
-.fpl-stage > section { min-width: 0; }
-.fpl-stage > .fpl-section { padding: 1.25rem; }
-.fpl-stage .fpl-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
-.fpl-stage .fpl-pair { display: block; }
-.fpl-stage .fpl-pair dd { text-align: left; font: 500 1.25rem/1.6 var(--font-mono); overflow-wrap: anywhere; }
-.fpl-section > h3 { font: 500 1.5rem/1.3 var(--font-display); letter-spacing: -.035em; }
-@media (min-width: 70rem) { .fpl-stage { grid-template-columns: minmax(0, 2.4fr) minmax(18rem, 1fr); } }
-.fpl-section { display: grid; gap: .55rem; min-width: 0; align-content: start; }
-.fpl-section h3 { font-size: .95rem; font-weight: 650; }
-.fpl-section h4 { font-size: .875rem; font-weight: 600; }
-.fpl-table-wrap { overflow: auto; max-width: 100%; }
-table.fpl-pockets { border-collapse: collapse; width: 100%; font-size: .8rem; }
-table.fpl-pockets th, table.fpl-pockets td { text-align: right; padding: .65rem .55rem; white-space: nowrap; border-bottom: 1px solid color-mix(in srgb, currentColor 15%, transparent); }
-table.fpl-pockets th:first-child, table.fpl-pockets td:first-child { text-align: left; }
-table.fpl-pockets thead th { position: sticky; top: 0; font-weight: 600; }
-.fpl-pocket-row { cursor: pointer; }
-.fpl-pocket-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.fpl-pocket-row[aria-current="true"] { background: color-mix(in srgb, var(--accent) 10%, transparent); }
-.fpl-pocket-row[aria-current="true"] td:first-child { font-weight: 650; }
-.fpl-detail { display: grid; gap: .7rem; }
-.fpl-actions { display: flex; flex-wrap: wrap; gap: .45rem; }
-.fpl-metrics { display: grid; gap: .3rem; }
-.fpl-pair { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .5rem; align-items: baseline; }
-.fpl-pair dt { font-size: .875rem; color: var(--muted); }
-.fpl-pair dd { margin: 0; font-size: .9rem; text-align: right; }
-.fpl-residues { display: flex; flex-wrap: wrap; gap: .25rem; }
-.fpl-chip { padding: .05rem .4rem; border-radius: .5rem; font-size: .875rem; background: color-mix(in srgb, currentColor 10%, transparent); }
+.fpl-result { display:grid; gap:0; min-width:0; color:var(--app-ink); font:14px/1.5 var(--font-sans); }
+.fpl-result .btn { font:12px var(--font-sans); min-height:35px; padding:7px 11px; border:1px solid var(--app-line-strong); border-radius:4px; background:var(--app-raised); color:inherit; cursor:pointer; }
+.fpl-result h2,.fpl-result h3,.fpl-result h4,.fpl-result p { margin:0; }
+.fpl-stage { height:590px; display:grid; grid-template-columns:minmax(0,1fr) 292px; gap:24px; padding-right:24px; border:1px solid var(--app-line); border-radius:8px; background:var(--app-stage); overflow:hidden; }
+.fpl-molecular-region { display:flex; flex-direction:column; min-width:0; min-height:0; background:var(--app-surface); }
+.fpl-scene { position:relative; flex:1; min-height:0; }
+.fpl-scene-label,.fpl-scene-bottom { position:absolute; left:24px; right:24px; display:flex; justify-content:space-between; gap:16px; z-index:3; pointer-events:none; font-size:11px; color:var(--app-muted); }
+.fpl-scene-label { top:22px; } .fpl-scene-bottom { bottom:17px; font-size:10px; }
+.fpl-scene-bottom [role=status] { color:var(--app-plum); }
+.fpl-scene-label .mono { font:10px var(--font-mono); margin-left:12px; }
+.fpl-structure-slot { position:absolute; inset:44px 12px 48px; }
+.fpl-scene .msp-plugin,.fpl-scene .msp-layout-standard,.fpl-scene .msp-viewport { background:transparent; }
+.fpl-inspector { min-width:0; min-height:0; display:flex; flex-direction:column; padding-top:23px; }
+.fpl-inspector-head { flex:none; border-bottom:1px solid var(--app-line-strong); padding-bottom:16px; }
+.fpl-eyebrow { font:10px var(--font-mono); letter-spacing:1.3px; text-transform:uppercase; color:var(--app-muted); }
+.fpl-inspector-head h3 { font:500 25px var(--font-display); letter-spacing:-.5px; margin:8px 0 5px; }
+.fpl-inspector-head .fpl-note { font-size:11px; }
+.fpl-detail { padding:20px 4px 15px 0; overflow:auto; scrollbar-gutter:stable; min-height:0; }
+.fpl-metrics { display:grid; grid-template-columns:1fr 1fr; gap:19px 18px; margin:0; }
+.fpl-pair dt { color:var(--app-muted); font-size:11px; margin-bottom:5px; }
+.fpl-pair dd { margin:0; font:400 20px/1.5 var(--font-mono); }
+.fpl-actions { display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin:20px 0 15px; }
+.fpl-highlight { display:flex; align-items:center; gap:7px; font-size:12px; }
+.fpl-highlight input { accent-color:var(--app-plum); width:15px; height:15px; }
+.fpl-detail details { border-top:1px solid var(--app-line-strong); }
+.fpl-detail summary { cursor:pointer; display:flex; align-items:center; justify-content:space-between; min-height:43px; padding:11px 0; font-size:12px; }
+.fpl-detail summary::after { content:'+'; color:var(--app-muted); } .fpl-detail details[open] summary::after { content:'−'; }
+.fpl-detail details .fpl-metrics { display:block; margin-bottom:16px; }
+.fpl-detail details .fpl-pair { display:flex; align-items:baseline; justify-content:space-between; gap:12px; border-bottom:1px solid var(--app-line); padding:5px 0; }
+.fpl-detail details dd { font-size:11px; }
+.fpl-detail details .btn { margin:4px 0 8px; }
+.fpl-residues { display:flex; flex-wrap:wrap; gap:5px; padding-bottom:16px; }
+.fpl-chip { font:11px var(--font-mono); padding:4px 6px; border:1px solid var(--app-line); border-radius:3px; }
+.fpl-note,.fpl-unavailable { color:var(--app-muted); font-size:11px; line-height:1.7; }
+.fpl-detail > .fpl-note { margin-top:14px; }
+.fpl-layout { padding-top:24px; min-width:0; }
+.fpl-section { min-width:0; }
+.fpl-evidence-head { display:flex; align-items:center; gap:24px; padding-bottom:16px; }
+.fpl-evidence-head h3 { font:500 22px var(--font-display); letter-spacing:-.4px; margin-top:7px; }
+.fpl-selector-tools { display:flex; flex-wrap:wrap; align-items:center; gap:18px; margin-left:auto; }
+.fpl-selector-tools input { width:180px; max-width:100%; padding:8px 0; border:0; border-bottom:1px solid var(--app-line-strong); background:transparent; font:12px var(--font-sans); color:inherit; }
+.fpl-table-wrap { max-height:210px; overflow:auto; border-top:1px solid var(--app-line-strong); }
+.fpl-pockets { width:100%; min-width:730px; border-collapse:collapse; font-size:12px; }
+.fpl-pockets th,.fpl-pockets td { padding:11px 15px; text-align:left; border-bottom:1px solid var(--app-line); white-space:nowrap; }
+.fpl-pockets th { position:sticky; top:0; background:var(--app-bg); color:var(--app-muted); font-size:11px; font-weight:400; }
+.fpl-pockets td { height:42px; font:11px var(--font-mono); }
+.fpl-pockets th:first-child,.fpl-pockets td:first-child { position:sticky; left:0; background:var(--app-bg); }
+.fpl-pockets th:first-child { z-index:3; }
+.fpl-pocket-row { cursor:pointer; }
+.fpl-rank { display:inline-block; width:34px; color:var(--app-muted); font-size:10px; }
+.fpl-pocket-row:focus-visible { outline:2px solid var(--app-plum); outline-offset:-2px; }
+.fpl-pocket-row[aria-current=true],.fpl-pocket-row[aria-current=true] td:first-child { background:var(--app-soft); }
+.fpl-pocket-row[aria-current=true] td:first-child { box-shadow:inset 3px 0 var(--app-plum); }
+.fpl-artifacts { margin-top:12px; } .fpl-artifacts > summary { padding:12px 0; font-size:12px; cursor:pointer; }
+.fpl-scene .msp-layout-standard { border:0; }
+.fpl-scene .msp-viewport-controls { opacity:.45; } .fpl-scene:hover .msp-viewport-controls,.fpl-scene:focus-within .msp-viewport-controls { opacity:1; }
+.fpl-geometry-hint { font-size:10px; color:var(--app-muted); }
+.fpl-result .structure-viewport { border:0; border-radius:0; box-shadow:none; }
+.fpl-stage:fullscreen { width:100vw; height:100vh; }
+@media(max-width:1150px) { .fpl-stage { grid-template-columns:minmax(0,1fr) 267px; gap:18px; padding-right:18px; height:610px; } .fpl-scene-label,.fpl-scene-bottom { left:18px; right:18px; } .fpl-evidence-head { flex-wrap:wrap; } }
+@media(max-width:820px) { .fpl-stage { display:flex; flex-direction:column; height:auto; padding:0; gap:0; } .fpl-scene { height:365px; flex:none; } .fpl-inspector { border-top:1px solid var(--app-line); padding:20px 22px; } .fpl-inspector-head { display:flex; flex-wrap:wrap; align-items:center; gap:8px 15px; } .fpl-inspector-head .fpl-eyebrow { width:100%; } .fpl-detail { overflow:visible; } .fpl-selector-tools { margin-left:0; } .fpl-stage:fullscreen { overflow:auto; } }
+@media(max-width:480px) { .fpl-scene { height:320px; } .fpl-scene-label .mono { display:none; } .fpl-scene-bottom { flex-direction:column; gap:4px; } .fpl-evidence-head { gap:14px; } .fpl-selector-tools { gap:10px; } }
 `;
 
 // The columns the ranked selector exposes: rank and score first, then the
@@ -130,7 +141,7 @@ function residueSelection(token) {
   const split = text.lastIndexOf("_");
   if (split < 0) return null;
   const chain = text.slice(0, split);
-  const match = /^([0-9]+)(.*)$/.exec(text.slice(split + 1));
+  const match = /^(-?[0-9]+)(.*)$/.exec(text.slice(split + 1));
   if (!match) return null;
   // The author residue identity is stated in full: a bare residue is the empty
   // insertion code, not an unspecified one, so "A_42" (bare 42) and "A_42A"
@@ -171,14 +182,22 @@ export default {
     let expanded = false;
     compare.addEventListener("click", () => { expanded = !expanded; compare.setAttribute("aria-expanded", String(expanded)); renderTable(); });
     search.addEventListener("input", () => renderTable());
-    selectorTools.append(search, compare); selector.append(selectorTitle, selectorTools, tableWrap);
-    const detail = document.createElement("section"); detail.className = "fpl-section";
+    const evidenceHead = document.createElement('header'); evidenceHead.className = 'fpl-evidence-head'; const evidenceIdentity = document.createElement('div'); const evidenceKicker = document.createElement('p'); evidenceKicker.className = 'fpl-eyebrow'; evidenceKicker.textContent = 'Ranked pockets'; selectorTitle.textContent = 'Evidence in order'; evidenceIdentity.append(evidenceKicker, selectorTitle); selectorTools.append(search, compare); evidenceHead.append(evidenceIdentity, selectorTools); selector.append(evidenceHead, tableWrap);
+    const detail = document.createElement("aside"); detail.className = "fpl-inspector"; detail.setAttribute("aria-label", "Pocket inspector");
     const detailTitle = document.createElement("h3"); detailTitle.textContent = "Selected pocket";
     const detailBody = document.createElement("div"); detailBody.className = "fpl-detail";
-    detail.append(detailTitle, detailBody);
+    const inspectorHead = document.createElement('header'); inspectorHead.className = 'fpl-inspector-head'; const inspectorKicker = document.createElement('p'); inspectorKicker.className = 'fpl-eyebrow'; inspectorKicker.textContent = 'Pocket inspector'; const inspectorStatus = document.createElement('p'); inspectorStatus.className = 'fpl-note'; inspectorHead.append(inspectorKicker, detailTitle, inspectorStatus); detail.append(inspectorHead, detailBody);
     const stage = document.createElement("div"); stage.className = "fpl-stage";
     const structureSlot = document.createElement("section"); structureSlot.dataset.structureSlot = "true";
-    stage.append(structureSlot, detail); layout.append(selector); root.append(stage, layout);
+    stage.dataset.molecularWorkspace = 'true';
+    const molecularRegion = document.createElement('div'); molecularRegion.className = 'fpl-molecular-region';
+    const scene = document.createElement('div'); scene.className = 'fpl-scene';
+    structureSlot.className = 'fpl-structure-slot';
+    const sceneLabel = document.createElement('div'); sceneLabel.className = 'fpl-scene-label'; const sourceLabel = document.createElement('span'); sourceLabel.textContent = 'Protein structure'; const sceneLegend = document.createElement('span'); sceneLegend.dataset.structureLegend = 'true'; sceneLegend.textContent = 'Sequence N → C'; sceneLabel.append(sourceLabel, sceneLegend);
+    const sceneBottom = document.createElement('div'); sceneBottom.className = 'fpl-scene-bottom'; const spatialStatus = document.createElement('span'); spatialStatus.setAttribute('role','status'); const viewStatus = document.createElement('span'); viewStatus.textContent = 'Whole structure'; sceneBottom.append(spatialStatus, viewStatus);
+    const toolsSlot = document.createElement('div'); toolsSlot.dataset.structureTools = 'true';
+    scene.append(sceneLabel, structureSlot, sceneBottom); molecularRegion.append(scene, toolsSlot); stage.append(molecularRegion, detail); layout.append(selector); root.append(stage, layout);
+    stage.addEventListener('structure-reset', () => { pocketFocused = false; viewStatus.textContent = 'Whole structure'; });
 
     const views = Array.isArray(context.views) ? context.views : [];
     const openView = typeof services.openView === "function" ? services.openView : null;
@@ -194,9 +213,9 @@ export default {
     const pocketsFile = first(context, "pockets");
     if (pocketsFile) {
       const download = document.createElement("button"); download.type = "button"; download.className = "btn btn-soft";
-      download.textContent = "Download pockets.csv"; download.dataset.fileId = pocketsFile.id;
+      download.textContent = "Download table ↓"; download.dataset.fileId = pocketsFile.id;
       download.addEventListener("click", () => services.downloadFile?.(pocketsFile));
-      genericActions.append(download);
+      selectorTools.append(download);
     }
     generic.append(genericTitle, genericActions); const artifacts = document.createElement("details"); artifacts.className = "fpl-artifacts"; const artifactsTitle = document.createElement("summary"); artifactsTitle.textContent = "Associated views and artifacts"; artifacts.append(artifactsTitle, generic); root.append(artifacts);
     host.replaceChildren(root);
@@ -204,6 +223,7 @@ export default {
     // Pocket geometry files are optional: a result whose per-pocket files were
     // not published must still list and describe its pockets.
     const structureArtifact = first(context, "protein_structure");
+    if (structureArtifact) { const source = document.createElement('span'); source.className = 'mono'; source.textContent = '/ ' + (structureArtifact.name || structureArtifact.path || '').split('/').pop(); sourceLabel.append(source); }
     let structureOpened = false;
     let selectionGeneration = 0;
     const geometry = new Map();
@@ -220,6 +240,7 @@ export default {
     let selectedIndex = 0;
     let pocketFocused = false;
     let highlightContacts = true;
+    let geometryShown = false; let geometryToggle = null;
     let tableLoaded = false;
     if (!pocketsFile) {
       tableWrap.append(message("The ranked pocket table was not published.", "fpl-unavailable"));
@@ -236,7 +257,7 @@ export default {
     if (destroyed) return { destroy() { destroyed = true; controller.abort(); } };
     if (pockets.length) renderTable();
     else if (tableLoaded) tableWrap.append(message("fpocket reported no pockets for this structure.", "fpl-unavailable"));
-    if (pockets.length) void selectPocket(0); else renderEmptyDetail();
+    if (pockets.length) void selectPocket(0); else { renderEmptyDetail(); if (structureArtifact) void services.openFile?.(structureArtifact); }
 
     function message(value, className) {
       const node = document.createElement("p"); node.className = className || "fpl-note"; node.textContent = value; return node;
@@ -244,7 +265,7 @@ export default {
     function renderTable() {
       const table = document.createElement("table"); table.className = "fpl-pockets";
       const head = document.createElement("thead"); const headRow = document.createElement("tr");
-      const columns = expanded ? COLUMNS : COLUMNS.filter(column => ["rank", "pocket", "score", "druggability_score", "volume_angstrom3", "residue_count"].includes(column.key));
+      const columns = expanded ? COLUMNS : [{key:"candidate",label:"Candidate"}, ...COLUMNS.filter(column => ["score", "druggability_score", "volume_angstrom3", "residue_count"].includes(column.key))];
       columns.forEach((column) => { const cell = document.createElement("th"); cell.scope = "col"; cell.textContent = column.label; headRow.append(cell); });
       head.append(headRow); table.append(head);
       const body = document.createElement("tbody");
@@ -254,7 +275,7 @@ export default {
         const row = document.createElement("tr"); row.className = "fpl-pocket-row";
         row.dataset.pocket = String(pocketNumber(pocket.pocket) ?? index + 1); row.tabIndex = 0;
         row.setAttribute("role", "button"); row.setAttribute("aria-current", String(index === selectedIndex));
-        columns.forEach((column) => { const cell = document.createElement("td"); cell.textContent = text(pocket[column.key]); row.append(cell); });
+        columns.forEach((column) => { const cell = document.createElement("td"); if (column.key === 'candidate') { const rank = document.createElement('span'); rank.className = 'fpl-rank'; rank.textContent = text(pocket.rank).padStart(2,'0'); cell.append(rank, 'Pocket ' + (pocketNumber(pocket.pocket) ?? index + 1)); } else cell.textContent = text(pocket[column.key]); row.append(cell); });
         row.addEventListener("click", () => selectPocket(index));
         row.addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); selectPocket(index); } });
         body.append(row);
@@ -271,6 +292,8 @@ export default {
     // its alpha spheres contact, and open the contacted-atom / vertex files.
     function renderDetail(pocket, index) {
       detailTitle.textContent = "Pocket " + (pocketNumber(pocket.pocket) ?? index + 1);
+      inspectorStatus.textContent = 'Rank ' + text(pocket.rank || index + 1) + ' · spatial evidence';
+      spatialStatus.textContent = 'Pocket ' + (pocketNumber(pocket.pocket) ?? index + 1) + ' · ' + (highlightContacts ? text(pocket.residue_count) + ' contacts highlighted' : 'contact highlight off');
       const nodes = [];
       const pairList = document.createElement("dl"); pairList.className = "fpl-metrics";
       const extra = document.createElement("details"); const extraTitle = document.createElement("summary"); extraTitle.textContent = "Scientific descriptors";
@@ -304,11 +327,11 @@ export default {
         actions.append(actionButton("Focus this pocket", () => focusOnPocket(pocket, target)));
       }
       if (residueIds.length && selectStructure) {
-        const label = document.createElement("label"); label.className = "fpl-highlight"; const toggle = document.createElement("input"); toggle.type = "checkbox"; toggle.checked = highlightContacts; toggle.addEventListener("change", () => { highlightContacts = toggle.checked; if (highlightContacts) selectResidues(residueIds); else selectStructure({ residues: [] }); }); label.append(toggle, " Highlight contacts"); actions.append(label);
+        const label = document.createElement("label"); label.className = "fpl-highlight"; const toggle = document.createElement("input"); toggle.type = "checkbox"; toggle.checked = highlightContacts; toggle.addEventListener("change", () => { highlightContacts = toggle.checked; if (highlightContacts) selectResidues(residueIds); else selectStructure({ residues: [] }); spatialStatus.textContent = 'Pocket ' + text(pocket.rank) + (highlightContacts ? ' · ' + text(pocket.residue_count) + ' contacts highlighted' : ' · contact highlight off'); }); label.append(toggle, " Highlight contacts"); actions.append(label);
       }
       if (files.contacts) resources.append(actionButton("Download contacted atoms", () => services.downloadFile?.(files.contacts)));
       if (files.spheres) resources.append(actionButton("Inspect alpha-sphere coordinates", () => services.openGeometry?.(files.spheres, "Alpha-sphere centres from the published PQR artifact. Markers have a fixed display size; they do not show sphere radii or a cavity surface. The protein remains above for context.")));
-      if (structureArtifact) actions.append(actionButton("Full structure", () => { pocketFocused = false; services.resetStructure?.(); }));
+
 
       if (actions.childElementCount) nodes.push(actions);
       nodes.push(contacts, extra, resources, message("Candidate site, not a confirmed binding site. No decision threshold is applied to these scores."));
@@ -352,14 +375,27 @@ export default {
         try { await services.openFile?.(structureArtifact); } catch (_error) { structureOpened = false; }
       }
       if (destroyed || generation !== selectionGeneration) return;
+      if (services.setStructureGeometry) {
+        if (!geometryToggle) {
+          const label = document.createElement('label'); label.className = 'fpl-highlight'; geometryToggle = document.createElement('input'); geometryToggle.type = 'checkbox'; label.append(geometryToggle, ' Alpha spheres');
+          const hint = document.createElement('span'); hint.className = 'fpl-geometry-hint'; hint.textContent = 'Recorded centres and radii';
+          toolsSlot.querySelector('.structure-tool-secondary')?.prepend(label, hint);
+          geometryToggle.onchange = async () => { geometryShown = geometryToggle.checked; const current = pockets[selectedIndex]; const file = geometry.get(pocketNumber(current.pocket) ?? selectedIndex + 1)?.spheres; try { await services.setStructureGeometry(geometryShown ? file : null); spatialStatus.textContent = 'Pocket ' + text(current.rank) + (geometryShown ? ' · recorded alpha spheres shown' : ' · whole structure context'); } catch (error) { geometryShown = false; geometryToggle.checked = false; spatialStatus.textContent = error.message; } };
+        }
+        const file = geometry.get(pocketNumber(pocket.pocket) ?? index + 1)?.spheres;
+        geometryToggle.disabled = !file; geometryToggle.checked = geometryShown && !!file;
+        try { await services.setStructureGeometry(geometryShown && file ? file : null); } catch (error) { if (generation === selectionGeneration) { geometryShown = false; geometryToggle.checked = false; spatialStatus.textContent = error.message; } }
+      }
+      if (destroyed || generation !== selectionGeneration) return;
       if (highlightContacts) selectResidues(residueIds);
+      const target = focusSelection(pocket); services.annotateStructure?.(target ? { point: target.focusPoint, label: 'Pocket ' + text(pocket.rank || index + 1) } : null);
       if (pocketFocused) { const target = focusSelection(pocket); if (target) focusOnPocket(pocket, target); else { pocketFocused = false; services.resetStructure?.(); } }
     }
     // "Focus this pocket" focuses the pocket's own geometric centre; it does not
     // stand in a contacted residue for the centre.
     function focusOnPocket(pocket, target) {
       if (!focusStructure || !target) return false;
-      pocketFocused = true;
+      pocketFocused = true; viewStatus.textContent = 'Pocket ' + text(pocket.rank) + ' focus · centroid';
       return focusStructure(target) || true;
     }
     // The contacted residues are sent as ONE collection, so the adapter applies a

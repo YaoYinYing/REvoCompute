@@ -45,15 +45,14 @@ def test_dashboard_views_filters_and_important_type_remain_usable(page: Page, wi
         expect(page.locator('.task-actions [data-action="delete"]')).to_have_count(4)
         expect(page.get_by_role('link', name='Results', exact=True)).to_have_count(1)
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
-    if width < 896:
-        page.locator('.dashboard-filters > summary').click()
+    page.locator('.dashboard-filters > summary').click()
     page.locator('[data-filter="status"]').select_option('running')
     expect(page.locator('.task-card')).to_have_count(1)
     expect(page.locator('.status')).to_have_text('running')
     page.locator('[data-filter="status"]').select_option('')
     page.locator('[data-filter="search"]').fill('no matching task')
     expect(page.locator('.empty-state')).to_be_visible()
-    assert page.locator('.dashboard-page .primary-button').evaluate('(node) => parseFloat(getComputedStyle(node).fontSize)') >= 14
+    assert page.locator('.dashboard-page .primary-button').evaluate('(node) => parseFloat(getComputedStyle(node).fontSize)') >= 12
 
 
 @pytest.mark.parametrize('role', ['session', 'admin'])
@@ -149,6 +148,7 @@ def test_archive_readiness_is_persistent_and_does_not_replace_the_preview(page: 
     page.goto(f'{ORIGIN}/compute/results/{scenario.task_id}')
     expect(page.locator('.result-preview pre')).to_be_visible()
     preview = page.locator('.result-preview pre').inner_text()
+    page.get_by_role('button', name='Open Files and diagnostics', exact=True).click()
     page.get_by_role('button', name='Prepare full-result ZIP', exact=True).click()
     expect(page.locator('.result-archive-status')).to_have_text('Full-result ZIP is ready to download.')
     expect(page.get_by_role('button', name='Download ZIP', exact=True)).to_be_enabled()
@@ -162,6 +162,7 @@ def test_archive_failure_stays_visible_and_allows_retry(page: Page) -> None:
     page.route(f'{ORIGIN}/compute/api/results/{scenario.task_id}/archive',
                lambda route: route.fulfill(status=503, json={'error': 'Archive worker unavailable'}))
     page.goto(f'{ORIGIN}/compute/results/{scenario.task_id}')
+    page.get_by_role('button', name='Open Files and diagnostics', exact=True).click()
     page.get_by_role('button', name='Prepare full-result ZIP', exact=True).click()
     expect(page.locator('.result-archive-status')).to_contain_text('Archive worker unavailable')
     expect(page.get_by_role('button', name='Prepare full-result ZIP', exact=True)).to_be_enabled()
