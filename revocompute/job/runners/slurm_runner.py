@@ -305,6 +305,8 @@ class SlurmJob(Job):
         # database, not the one that owns the task row.
         self._task_store = task_store
         self._diagnostic_attempt: str | None = None
+        # Optional evidence must never prevent a scientific job from being submitted.
+        self._diagnostic_disabled = False
         self._username = username
         self._process: subprocess.Popen | None = None
         self._stdout_lines: list[str] = []
@@ -362,10 +364,18 @@ class SlurmJob(Job):
 
     def submit(self) -> str:
         if self._task_store is not None:
-            self._diagnostic_attempt = uuid.uuid4().hex
-            self._task_store.record_task_diagnostics(
-                self.task_id, {"attempt_id": self._diagnostic_attempt, "stage_id": str(self.tt.name)},
-            )
+            attempt_id = uuid.uuid4().hex
+            try:
+                self._task_store.record_task_diagnostics(
+                    self.task_id, {"attempt_id": attempt_id, "stage_id": str(self.tt.name)},
+                )
+            except Exception:
+                # This is optional evidence, not execution admission or accounting.
+                # Do not publish unscoped logs that a later attempt could inherit.
+                self._diagnostic_disabled = True
+                logging.exception("Could not initialize optional diagnostics for task %s", self.task_id)
+            else:
+                self._diagnostic_attempt = attempt_id
         if self._db is not None and not self._db.slurm_enabled():
             raise RuntimeError("SLURM is disabled — set slurm_enabled=true in admin config")
 
@@ -1603,6 +1613,8 @@ class SlurmJob(Job):
 
     def _persist_output(self) -> None:
         """Drain and preserve captured evidence without replacing the job outcome."""
+        if self._diagnostic_disabled:
+            return
         if self._task_store is not None:
             try:
                 if self._diagnostic_attempt is not None:
