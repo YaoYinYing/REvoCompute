@@ -190,6 +190,11 @@ export class ResultWorkspace {
     this.nodes.meta.textContent = method; this.nodes.meta.title = t('results.taskIdTitle', { id: manifest.task_id });
     const quiet = isQuietOutcome(manifest);
     this.setState(quiet ? manifest.status : manifest.outcome || manifest.status, manifest.error || '', quiet);
+    if (manifest.output_check.state === 'failed') {
+      this.nodes.status.hidden = false;
+      this.nodes.status.replaceChildren(element('strong', '', t('results.outputsIncomplete')),
+        element('span', '', t('results.availableEvidence')));
+    }
     // The summary is rendered by renderFiles(), which owns the filtered view.
     this.renderFiles(); this.renderTabs(); this.renderRecord(); this.syncArchive();
     if (manifest.storyboard) { this.nodes.railDetails.open = false; this.syncRail(); }

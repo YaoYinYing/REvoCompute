@@ -53,6 +53,17 @@ def test_preparation_and_matrix_use_the_production_bundle(page: Page, production
     page.locator('input[type=file]').first.set_input_files({'name': '2KL8.i90c75_aln.a3m', 'mimeType': 'text/plain', 'buffer': payload[0]})
     expect(page.locator('.ct-file-list')).to_contain_text('2KL8.i90c75_aln.a3m')
     expect(page.locator('.ct-input-preview')).to_contain_text(payload[0].decode().splitlines()[0].lstrip('>'))
+    expect(page.locator('.ct-alignment-row')).to_have_count(6)
+    page.locator('[data-ct-parameter="iterations"]').fill('99')
+    page.get_by_role('button', name='Clear selected files', exact=True).click()
+    expect(page.locator('.ct-input-preview')).not_to_be_visible()
+    expect(page.locator('[data-ct-parameter="iterations"]')).to_have_value('99')
+    page.locator('[data-ct-parameter="iterations"]').fill('400')
+    page.locator('input[type=file]').first.set_input_files({'name': '2KL8.i90c75_aln.a3m', 'mimeType': 'text/plain', 'buffer': payload[0]})
+    expect(page.locator('.ct-aa-acid').first).to_be_visible()
+    expect(page.locator('.ct-preview-foot')).to_contain_text('Original A3M preserved')
+    assert page.locator('input[type=file]').first.evaluate("async el => await el.files[0].text()") == payload[0].decode()
+    assert page.locator('.ct-aa').first.evaluate("el => parseFloat(getComputedStyle(el).fontSize)") >= 14
     capture(page, tmp_path, 'create')
     page.locator('.ct-advanced > summary').click()
     expect(page.locator('[data-ct-parameter="seed"]')).to_be_visible()
@@ -145,3 +156,53 @@ def test_original_approved_fpocket_run_with_real_molecular_stage(page: Page, pro
     page.locator('.fpl-pocket-row').first.click()
     page.get_by_role('button', name='Whole structure', exact=True).click()
     expect(page.locator('.storyboard-structure-panel canvas').first).to_be_visible()
+
+
+def test_retained_matrix_without_binary_model_uses_the_real_api(page: Page, monkeypatch, tmp_path: Path) -> None:
+    """Missing model bytes do not erase authentic retained scientific evidence."""
+    import shutil
+    import threading
+    from conftest import _load_fleet_module, _test_client_auth, _upsert_task_for_user
+    from werkzeug.serving import make_server
+
+    module = _load_fleet_module(monkeypatch, tmp_path, extra_env={'RUNNER_UID': '1234', 'RUNNER_GID': '5678'})
+    _test_client_auth(module)
+    replay = ReplayBundle.load(ROOT / 'tests/data/gremlin_lh_replay/2kl8_seed0_944ed43af62e.json')
+    result = tmp_path / 'retained'
+    result.mkdir()
+    for artifact in replay.manifest['artifacts']:
+        payload = replay.payload(artifact['path'])
+        if payload is not None:
+            path = result / artifact['path']
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(payload[0])
+    _upsert_task_for_user(module, replay.task_id, filename='2KL8.i90c75_aln.a3m',
+                          file_path=result / replay.logical_artifact_path('alignment', 0),
+                          result_dir=result, username='tester', task_type='gremlin_lh_fit')
+    task = module.task_store.get_task(replay.task_id)
+    module.task_runtime._finalize_results_manifest(task, execution_state='completed', finished_at=1700000000)
+    static = tmp_path / 'static'
+    shutil.copytree(ROOT / 'frontend/dist', static / 'app')
+    module.app.static_folder = str(static)
+    server = make_server('127.0.0.1', 0, module.app, threaded=True)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    origin = f'http://127.0.0.1:{server.server_port}'
+    try:
+        assert page.context.request.post(f'{origin}/compute/api/auth/login', data={'username':'tester','password':'password'}).status == 200
+        page.set_viewport_size({'width':1440,'height':1080})
+        page.goto(f'{origin}/compute/results/{replay.task_id}')
+        expect(page.locator('.glh-bench canvas')).to_be_visible()
+        expect(page.locator('.result-status')).to_contain_text('Output check incomplete')
+        expect(page.locator('.glh-pair-readout')).to_contain_text('1.5839645')
+        expect(page.locator('.glh-inspector')).to_contain_text('79')
+        page.locator('.glh-result > details > summary').click()
+        expect(page.locator('.glh-artifact-row', has_text='MRF model')).to_contain_text('Not published')
+        manifest = page.context.request.get(f'{origin}/compute/api/results/{replay.task_id}').json()
+        assert manifest['output_check']['state'] == 'failed'
+        assert any('mrf_model' in problem for problem in manifest['output_check']['problems'])
+        page.locator('.glh-result > details > summary').click()
+        page.screenshot(path=str(tmp_path / 'gremlin-real-api.png'))
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)

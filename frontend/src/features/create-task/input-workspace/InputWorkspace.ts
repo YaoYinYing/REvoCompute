@@ -60,8 +60,10 @@ export class InputWorkspace {
       const heading = element('header', 'ct-step-heading');
       const identity = element('div'); const single = step.capabilities.length === 1;
       const input = single && step.capabilities[0]?.plugin === 'files';
+      const parameters = single && step.capabilities[0]?.plugin === 'parameters';
+      const title = parameters ? step.capabilities[0]!.title : step.title;
       const primaryRole = form.inputs.find(role => step.capabilities[0]?.options.roles instanceof Array && step.capabilities[0].options.roles.includes(role.id)) || form.inputs[0];
-      identity.append(element('p', 'ct-section-kicker', step.capabilities.every(capability => capability.plugin === 'parameters') ? t('ct.param.heading') : t('ct.input')), element('h2', 'ct-step-title', input && primaryRole ? primaryRole.title : step.title));
+      identity.append(element('p', 'ct-section-kicker', step.capabilities.every(capability => capability.plugin === 'parameters') ? t('ct.param.heading') : t('ct.scientificInput')), element('h2', 'ct-step-title', input && primaryRole ? primaryRole.title : title));
       heading.append(identity);
       if (input && primaryRole) heading.append(element('span', 'ct-role-id', `role: ${primaryRole.id}`));
       if (step.description) heading.append(element('p', 'ct-step-description', step.description));

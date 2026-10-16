@@ -421,4 +421,4 @@ a { color: var(--app-accent); }
   .public-navigation nav a { padding: .65rem .7rem; border-radius: var(--r-util); }
   .public-navigation nav a:hover { background: var(--app-soft); }
 }
-@media (max-width: 32rem) { .public-brand span, .public-account span { display: none; }.public-account { min-width: 2.45rem; width: 2.45rem; padding: 0; } }
+@media (max-width: 32rem) { .public-brand > span:first-child, .public-account span { display: none; }.public-account { min-width: 2.45rem; width: 2.45rem; padding: 0; } }

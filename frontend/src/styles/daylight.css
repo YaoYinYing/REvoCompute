@@ -1,4 +1,4 @@
-/* Approved Daylight Bench: shared identity and the production Task register. */
+/* Daylight Bench identity and navigation; page compositions stay with their owners. */
 body { container-type: inline-size; }
 .app-shell, .app-shell[data-rail="expanded"] { display: grid; min-height: 100vh; --app-bottom-clearance: 0px; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-rows: auto 1fr; grid-template-areas: "brand nav header" "outlet outlet outlet"; }
 .app-brand, .app-shell[data-rail="expanded"] .app-brand { grid-area: brand; justify-content: start; padding: 0 2rem 0 3rem; min-height: 68px; border: 0; border-bottom: 1px solid var(--app-line); background: var(--app-bg); }
@@ -7,7 +7,7 @@ body { container-type: inline-size; }
 .app-nav, .app-shell[data-rail="collapsed"] .app-nav { grid-area: nav; position: relative; top: auto; align-self: stretch; display: flex; flex-direction: row; align-items: center; gap: 1rem; padding: 0; max-height: none; overflow: visible; border: 0; border-bottom: 1px solid var(--app-line); background: var(--app-bg); z-index: 32; }
 .app-nav-group[data-nav-group="compute"], .app-nav-group[data-nav-group="compute"] .app-nav-group-items { display: flex; align-items: stretch; height: 100%; gap: .9rem; }
 .app-nav-group[data-nav-group="compute"] .app-nav-group-label { display: none; }
-.app-shell[data-rail] .app-nav a { justify-content: start; flex-direction: row; padding: .65rem .7rem; font-size: 12px; font-weight: 400; border-radius: 0; }
+.app-shell[data-rail] .app-nav a { justify-content: start; flex-direction: row; padding: .65rem .7rem; font-size: 14px; font-weight: 400; border-radius: 0; }
 .app-shell[data-rail] .app-nav a > span { display: inline; }
 .app-nav-group[data-nav-group="compute"] a[aria-current] { background: transparent; color: var(--app-ink); box-shadow: inset 0 -2px var(--app-plum); }
 .app-nav-group[data-nav-group="compute"] svg { display: none; }
@@ -27,13 +27,12 @@ body { container-type: inline-size; }
 .app-user { max-width: 8rem; }
 .app-outlet { padding-bottom: 0; }
 .app-shell .app-feedback { max-height: calc(100dvh - var(--app-chrome-height, 4.25rem) - 2rem); }
-.primary-button, .secondary-button, .task-action, .tour-launcher, .ghost-button, .danger-button { font-size: .875rem; min-height: 2.5rem; }
+.primary-button, .secondary-button, .task-action, .tour-launcher, .ghost-button, .danger-button { font-size: .875rem; font-weight:400; min-height: 2.5rem; }
 
 body { font-size:14px; }
 .app-nav .app-rail-toggle svg { display:none; }
 .app-shell .app-brand { gap:4px; }
 .app-shell .app-header-actions .icon-button { border-color:transparent; background:transparent; }
-.primary-button,.secondary-button,.task-action,.tour-launcher,.ghost-button,.danger-button { font-size:12px; font-weight:400; min-height:36px; }
 .page-heading h1,.runner-detail-heading h1 { font-weight:500; font-size:38px; letter-spacing:-1.2px; }
 .page-heading p:not(.page-kicker) { font-size:13px; }
 .page-kicker { font:10px var(--font-mono); letter-spacing:1.2px; text-transform:uppercase; }

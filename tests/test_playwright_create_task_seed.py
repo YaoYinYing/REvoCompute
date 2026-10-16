@@ -207,4 +207,8 @@ def test_the_dice_is_keyboard_operable_and_keeps_the_field_within_its_cell(page:
         }"""
         )
         assert offenders == [], f"a seed field paints past its cell at {width}px: {offenders}"
-        assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+        assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth"), page.evaluate(
+            "[...document.querySelectorAll('body *')]"
+            ".filter(el => el.getBoundingClientRect().right > innerWidth + 1)"
+            ".slice(0,12).map(el => [el.className, el.getBoundingClientRect().right])"
+        )

@@ -97,7 +97,9 @@
    sets the touch targets a reader meets first; this raises the panel's
    disclosure to the same floor so the two affordances read as one control set.
    44px is the WCAG 2.5.8 minimum target. */
-.result-app .structure-host .msp-viewport-controls-buttons button { min-height: 2.75rem; width: 2.75rem; }
+.result-app .structure-host .msp-viewport-controls-buttons button { min-height:2.75rem; width:2.75rem; color:var(--app-ink); background:var(--app-raised); border:1px solid var(--app-line); }
+.result-app .structure-host .msp-viewport-controls-buttons button svg { fill:currentColor; }
+.result-app .structure-host .msp-viewport-top-left-controls .msp-btn-icon { color:var(--app-ink); background:var(--app-raised); }
 .result-app .structure-host .msp-viewport-controls { width: 2.75rem; }
 /* The panel's own scroll container is `overflow-y: auto` with no inline axis.
    Containing it keeps a focused row's radio inside the panel at any width, and

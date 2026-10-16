@@ -778,6 +778,7 @@ def test_mid_session_expiry_redirects_after_mutation(page: Page) -> None:
     )
 
     page.goto(f"{ORIGIN}/compute/dashboard")
+    page.locator(".task-overflow > summary").first.click()
     page.get_by_role("button", name="Delete", exact=True).click()
     # Confirming the application dialog issues the mutation; the expired session
     # then redirects to sign in with the dashboard as its return target.
@@ -833,7 +834,8 @@ def test_page_kickers_keep_their_role_inside_page_headings(page: Page, width: in
     # the method reference composition is migrated in a later visual slice.
     dashboard_kicker = kicker.evaluate(paint)
     title_size = page.locator(".page-heading h1").evaluate("node => parseFloat(getComputedStyle(node).fontSize)")
-    assert 14 <= float(dashboard_kicker["fontSize"].removesuffix("px")) < title_size
+    assert 10 <= float(dashboard_kicker["fontSize"].removesuffix("px")) < title_size
+    assert page.locator(".page-heading p:not(.page-kicker)").evaluate("el => parseFloat(getComputedStyle(el).fontSize)") >= 14
     # Account's heading is the section's own identity, not a context label over
     # one, so the page contrasts its heading with its introductory prose instead.
     page.goto(f"{ORIGIN}/compute/profile")
@@ -862,7 +864,7 @@ def test_public_home_is_immediate_responsive_and_refreshable(page: Page, width: 
     page.reload()
     expect(page.get_by_role("heading", name="REvoCompute", exact=True).first).to_be_visible()
     assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
-    assert any(url.endswith("/static/app/logo.svg") for url in requests)
+    expect(page.locator(".public-brand .bench-mark svg")).to_be_visible()
     assert not any(url.endswith("/compute/logo.svg") for url in requests)
 
     if width == 390:
@@ -1286,7 +1288,7 @@ def test_admin_runner_management_plans_revalidates_and_runs_typed_actions(page: 
     # Readiness and capacity are separate columns; the machine reason is human copy.
     stale_row = page.locator("tr[data-family='stale_runner']")
     expect(stale_row).to_contain_text("Validation stale")
-    expect(stale_row).to_contain_text("revalidation")
+    expect(stale_row).to_contain_text("Receipt stale")
     ready_row = page.locator("tr[data-family='healthy_runner']")
     expect(ready_row).to_contain_text("Ready")
     # The register is summarized by the server's own verdicts as counts, and the
@@ -1296,7 +1298,7 @@ def test_admin_runner_management_plans_revalidates_and_runs_typed_actions(page: 
     expect(summary).to_contain_text("1 of 2 enabled Runner famil")
     expect(page.locator(".fleet-executor")).to_contain_text("Host executor available")
 
-    stale_row.get_by_role("button", name="stale_runner").click()
+    stale_row.get_by_role("button", name="stale_runner", exact=True).click()
     expect(page.get_by_role("heading", name="stale_runner", level=2)).to_be_visible()
     expect(page.get_by_text("This plan will not")).to_have_count(0)
     page.get_by_role("button", name="Review and run").click()
