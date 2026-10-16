@@ -209,8 +209,8 @@
 .structure-extra-tools[open] { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .structure-gesture { font-size: 10px; color: var(--result-muted); }
 .structure-toolbar .result-button { font-size: 12px; font-weight: 400; min-height: 34px; padding: 6px 10px; }
-.storyboard-structure-panel, .storyboard-structure-panel .structure-viewport { height: 100%; min-height: 0; display: block; }
-.storyboard-structure-panel .structure-host { height: 100%; min-height: 0; }
+[data-structure-slot] > .storyboard-structure-panel, [data-structure-slot] .storyboard-structure-panel .structure-viewport { height: 100%; min-height: 0; display: block; }
+[data-structure-slot] .storyboard-structure-panel .structure-host { height: 100%; min-height: 0; }
 .storyboard-geometry-panel { padding: 16px; border-top: 1px solid var(--result-line); }
 .molecular-annotation { position: absolute; pointer-events: none; z-index: 6; color: var(--app-plum); font: 11px var(--font-sans); }
 .molecular-annotation span { position: absolute; left: 12px; bottom: 8px; padding: 3px 7px; white-space: nowrap; border-bottom: 1px solid var(--app-plum); background: var(--app-raised); }

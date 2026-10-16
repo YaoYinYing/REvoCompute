@@ -25,7 +25,7 @@
 .runner-facts { border: 0; }
 .runner-facts div:last-child { border-bottom: 0; }
 .runner-facts dt, .runner-facts dd, .method-runtime > summary, .method-index a, .parameter-list code, .parameter-list dl div, .stage-list small, .stage-list li > span, .input-role-list code, .back-link, .access-banner, .access-terms { font-size: 14px; }
-.method-index { top: 1rem; }
+.method-index { top: calc(var(--app-chrome-height, 4rem) + 1rem); }
 .method-index a { padding-left: .7rem; border-left: 2px solid var(--app-line); }
 .method-index a:hover { border-left-color: var(--app-plum); }
 .detail-section h2 { font-weight: 500; letter-spacing: -.025em; }

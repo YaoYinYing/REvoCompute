@@ -263,7 +263,7 @@ export class PairMatrix {
     const base = this.options.geometry || { width: 800, height: 600, left: 78, top: 30, size: 500, legendX: 604, legendWidth: 24 };
     const available = (this.options.observe || this.options.figure.parentElement)?.clientWidth || base.width;
     const width = Math.max(this.options.minimumWidth || 1, Math.min(base.width, available)), scale = width / base.width;
-    return { width, height: Math.round(base.height * scale), left: base.left * scale, top: base.top * scale, size: base.size * scale, legendX: base.legendX * scale, legendWidth: Math.max(8, base.legendWidth * scale), scale };
+    return { width, height: Math.ceil(Math.max(base.height * scale, (base.top + base.size) * scale + 48)), left: base.left * scale, top: base.top * scale, size: base.size * scale, legendX: base.legendX * scale, legendWidth: Math.max(8, base.legendWidth * scale), scale };
   }
   private cellFromEvent(event: MouseEvent | PointerEvent): { x: number; y: number } | null {
     const canvas = this.options.canvas as HTMLCanvasElement, box = canvas.getBoundingClientRect(), geometry = this.geometry();
@@ -321,8 +321,8 @@ export class PairMatrix {
       label((minimum + span * tick / ticks).toFixed(this.options.decimals ?? 1), { left: `${geometry.legendX + geometry.legendWidth + 7 * geometry.scale}px`, top: `${geometry.top + geometry.size - geometry.size * tick / ticks}px` }, 'pair-matrix-label-y');
     }
     label(this.options.xTitle || 'Column', { left: `${geometry.left + geometry.size / 2}px`, top: `${geometry.top + geometry.size + 36}px` }, 'pair-matrix-title pair-matrix-label-x');
-    label(this.options.yTitle || 'Row', { left: `${20 * geometry.scale}px`, top: `${geometry.top + geometry.size / 2}px` }, 'pair-matrix-title pair-matrix-title-y');
-    label(this.options.legendTitle || 'Scale', { left: `${geometry.legendX}px`, top: `${geometry.top - 18 * geometry.scale}px` }, 'pair-matrix-title');
+    label(this.options.yTitle || 'Row', { left: `${Math.max(12, 20 * geometry.scale)}px`, top: `${geometry.top + geometry.size / 2}px` }, 'pair-matrix-title pair-matrix-title-y');
+    label(this.options.legendTitle || 'Scale', { left: `${geometry.legendX}px`, top: `${Math.max(10, geometry.top - 18 * geometry.scale)}px` }, 'pair-matrix-title');
   }
   destroy(): void { this.observer?.disconnect(); this.themeObserver?.disconnect(); const canvas = this.options.canvas as HTMLCanvasElement;
     canvas.removeEventListener('click', this.click); canvas.removeEventListener('pointermove', this.pointer); canvas.removeEventListener('keydown', this.keydown); (this.options.figure as HTMLElement).querySelectorAll('.pair-matrix-label').forEach((node) => node.remove()); }

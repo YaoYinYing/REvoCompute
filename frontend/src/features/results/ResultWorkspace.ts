@@ -89,7 +89,7 @@ export class ResultWorkspace {
         return this.rendererRegistry.resolve(artifact)?.render(artifact, host, context);
       },
       focusStructure: (selection) => this.structure.focus(selection), selectStructure: (selection) => this.structure.select(selection),
-      describeResult: description => { this.nodes.title.textContent = description.title; if (description.subtitle) this.nodes.meta.textContent = description.subtitle; },
+      describeResult: description => { this.nodes.title.textContent = description.title; if (description.subtitle) this.nodes.meta.textContent = `${description.subtitle} · ${this.taskId}`; },
       setStructureGeometry: artifact => this.structure.setGeometry(artifact),
       resetStructure: () => this.structure.resetCamera(),
       annotateStructure: annotation => this.structure.annotate(annotation),
@@ -187,12 +187,13 @@ export class ResultWorkspace {
     const method = manifest.run?.method?.name || manifest.task_type || t('results.scientific');
     const input = manifest.run?.inputs?.length === 1 ? manifest.run.inputs[0]?.path.split('/').pop() : null;
     this.nodes.title.textContent = input || method;
-    this.nodes.meta.textContent = method; this.nodes.meta.title = t('results.taskIdTitle', { id: manifest.task_id });
+    this.nodes.meta.textContent = `${method} · ${manifest.task_id}`; this.nodes.meta.title = t('results.taskIdTitle', { id: manifest.task_id });
     const quiet = isQuietOutcome(manifest);
     this.setState(quiet ? manifest.status : manifest.outcome || manifest.status, manifest.error || '', quiet);
     if (manifest.output_check.state === 'failed') {
       this.nodes.status.hidden = false;
-      this.nodes.status.replaceChildren(element('strong', '', t('results.outputsIncomplete')),
+      if (quiet) this.nodes.status.replaceChildren();
+      this.nodes.status.append(element('strong', '', t('results.outputsIncomplete')),
         element('span', '', t('results.availableEvidence')));
     }
     // The summary is rendered by renderFiles(), which owns the filtered view.
@@ -338,7 +339,7 @@ export class ResultWorkspace {
     let viewport = host.querySelector<HTMLElement>('.structure-viewport'); let viewerHost = viewport?.querySelector<HTMLElement>('.structure-host');
     if (!viewport || !viewerHost) {
       viewport = element('section', 'structure-viewport');
-      viewerHost = element('div', 'structure-host'); viewerHost.setAttribute('role', 'img'); viewerHost.setAttribute('aria-label', t('results.structure.viewerLabel'));
+      viewerHost = element('div', 'structure-host'); viewerHost.setAttribute('role', 'region'); viewerHost.setAttribute('aria-label', t('results.structure.viewerLabel'));
       viewport.append(viewerHost); host.replaceChildren(viewport);
     }
     viewport.querySelector('.structure-toolbar')?.remove();

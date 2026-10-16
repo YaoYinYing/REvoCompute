@@ -137,8 +137,9 @@ def test_replayed_result_mounts_the_declared_fpocket_views(page: Page) -> None:
     page.set_viewport_size({"width": 1280, "height": 900})
     _open(page)
 
-    expect(page.locator(".result-meta")).to_contain_text(replay.task_id)
+    expect(page.locator(".result-meta")).to_have_attribute("title", f"Task ID {replay.task_id}")
     # The storyboard owns the primary surface; each declared view keeps a tab.
+    page.locator(".result-view-menu > summary").click()
     expect(page.locator(".result-tab", has_text="Scientific result")).to_be_visible()
     for title in ("Ranked pockets", "Detection summary", "Raw fpocket output"):
         expect(page.locator(".result-tab", has_text=title)).to_be_visible()
@@ -150,6 +151,7 @@ def test_replayed_ranked_pockets_table_consumes_the_real_normalized_table(page: 
     page.set_viewport_size({"width": 1280, "height": 900})
     _open(page)
 
+    page.locator(".result-view-menu > summary").click()
     page.locator(".result-tab", has_text="Ranked pockets").click()
     table = page.locator(".result-preview table").first
     expect(table).to_be_visible()
@@ -176,6 +178,7 @@ def test_replayed_detection_summary_renders_the_real_scalar_values(page: Page) -
     page.set_viewport_size({"width": 1280, "height": 900})
     _open(page)
 
+    page.locator(".result-view-menu > summary").click()
     page.locator(".result-tab", has_text="Detection summary").click()
     summary = json.loads(replay.payload("summary.json")[0])
     preview = page.locator(".result-preview")
@@ -198,6 +201,7 @@ def test_replayed_evidence_bundle_exposes_the_raw_fpocket_output(page: Page) -> 
     page.set_viewport_size({"width": 1280, "height": 900})
     _open(page)
 
+    page.locator(".result-view-menu > summary").click()
     page.locator(".result-tab", has_text="Raw fpocket output").click()
     # The evidence-bundle view has no dedicated view renderer, so it falls back to
     # the generic renderer for its first resolved source: fpocket's own global
@@ -237,6 +241,7 @@ def test_replayed_result_raises_no_console_or_csp_error(page: Page) -> None:
     _mount(page)
     page.set_viewport_size({"width": 1280, "height": 900})
     _open(page)
+    page.locator(".result-view-menu > summary").click()
     expect(page.locator(".result-tab", has_text="Ranked pockets")).to_be_visible()
     violations = page.evaluate("window.__cspViolations || []")
     assert errors == [], errors
