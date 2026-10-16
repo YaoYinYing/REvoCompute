@@ -524,5 +524,140 @@
         "sha256": "af5a7c51c13aa1b4196e83faa40657b8f91ae7625d4d10ec9151cde63f719a72"
       }
     ]
+  },
+  "composition_reconstruction": {
+    "implementation_commit": "db29d3ca045b55044a8665fa0b1771208d3467b6",
+    "captured_at": "2026-10-16T01:21:52.740850+00:00",
+    "design_authority": "/Users/yyy/Documents/protein_design/REvoCompute-visual-exploration-20261014",
+    "build_manifest_sha256": "019e84629fb764ee6a5efe5966b9aa822dff2db577d3b60f06f3085a233d3aa2",
+    "captures": [
+      {
+        "path": "docs/assets/daylight/recovered/dashboard-reference.png",
+        "sha256": "ad9fa11b769f70cee19c237e739ef2d7e6a2ea61c5fe357a229a3f09f9a5ace2",
+        "source": "/Users/yyy/Documents/protein_design/REvoCompute-visual-exploration-20261014/public/screenshots/propagation-dashboard-viewport.png"
+      },
+      {
+        "path": "docs/assets/daylight/recovered/dashboard-production.png",
+        "sha256": "3898dede0fb8efe283719dbcba9401ab5edb364ad50c596a45033f200bf1e629",
+        "source": "/Users/yyy/.codex/worktrees/daylight-production-ui/REvoCompute/.codex-tmp/recovered-final/test_production_dashboard_with0/daylight-real-api-1440-viewport.png"
+      },
+      {
+        "path": "docs/assets/daylight/recovered/create-reference.png",
+        "sha256": "437f455c79f72610e20bfdfa1a3a01e1a9b0a28b825bb6735f3a3e27738b6e6c",
+        "source": "/Users/yyy/Documents/protein_design/REvoCompute-visual-exploration-20261014/public/screenshots/propagation-create-viewport.png"
+      },
+      {
+        "path": "docs/assets/daylight/recovered/create-production.png",
+        "sha256": "6997a931d27cc2a09cd87b41c77135572cc3769ceb920aba8262495c4117cd69",
+        "source": "/Users/yyy/.codex/worktrees/daylight-production-ui/REvoCompute/.codex-tmp/recovered-final/test_preparation_and_matrix_us0/create-1440-viewport.png"
+      },
+      {
+        "path": "docs/assets/daylight/recovered/fpocket-reference.png",
+        "sha256": "96dc7643f884e60061b0ed57c729fad4f5b4fbd07b40fd225ee5f4018a39e50e",
+        "source": "/Users/yyy/Documents/protein_design/REvoCompute-visual-exploration-20261014/public/screenshots/consolidated-desktop.png"
+      },
+      {
+        "path": "docs/assets/daylight/recovered/fpocket-production.png",
+        "sha256": "a6315bc36407440692df77da4d3895cebdfd954eff6e7f0d8c1924049a23a33c",
+        "source": "/Users/yyy/.codex/worktrees/daylight-production-ui/REvoCompute/.codex-tmp/recovered-final/test_original_approved_fpocket0/fpocket-approved-run-1440-viewport.png"
+      },
+      {
+        "path": "docs/assets/daylight/recovered/gremlin-reference.png",
+        "sha256": "5b476542fde251a22a356ec2b7e325e17462a4c2f9b1df2917b4ed28c6740d25",
+        "source": "/Users/yyy/Documents/protein_design/REvoCompute-visual-exploration-20261014/public/screenshots/propagation-matrix-viewport.png"
+      },
+      {
+        "path": "docs/assets/daylight/recovered/gremlin-production.png",
+        "sha256": "3486940cdb7661444d72273ec4df043cd668347336d021e338d3baffc881f5b2",
+        "source": "/Users/yyy/.codex/worktrees/daylight-production-ui/REvoCompute/.codex-tmp/recovered-final/test_preparation_and_matrix_us0/gremlin-raw-1440-viewport.png"
+      },
+      {
+        "path": "docs/assets/daylight/recovered/catalog-production.png",
+        "sha256": "b663faab602d4b64a68c26fadee707ae614d5c4c29d901e699862cc22a608e0a",
+        "source": "/Users/yyy/.codex/worktrees/daylight-production-ui/REvoCompute/.codex-tmp/recovered-final/test_whole_site_navigation_wit0/catalog-1440-viewport.png"
+      },
+      {
+        "path": "docs/assets/daylight/recovered/fleet-production.png",
+        "sha256": "06ca44a4cd6215e9ad24a57bc72cab27f8e0695a689f1111d315c6ebabd5dbbd",
+        "source": "/Users/yyy/.codex/worktrees/daylight-production-ui/REvoCompute/.codex-tmp/recovered-final/test_whole_site_navigation_wit0/fleet-1440-viewport.png"
+      },
+      {
+        "path": "docs/assets/daylight/recovered/quota-production.png",
+        "sha256": "c230e14a9fbfd80c9da8450d5645960081487f9481b525b0bedd0122715a3db7",
+        "source": "/Users/yyy/.codex/worktrees/daylight-production-ui/REvoCompute/.codex-tmp/recovered-final/test_whole_site_navigation_wit0/quota-1440-viewport.png"
+      },
+      {
+        "path": "docs/assets/daylight/recovered/profile-production.png",
+        "sha256": "c14485ed5f5d4e5803839b4e1da4c8a48febe7700a874287beb5234e9711bbd1",
+        "source": "/Users/yyy/.codex/worktrees/daylight-production-ui/REvoCompute/.codex-tmp/recovered-final/test_whole_site_navigation_wit0/profile-1440-viewport.png"
+      },
+      {
+        "path": "docs/assets/daylight/recovered/home-production.png",
+        "sha256": "f870fb29d60d73182a698337d4736e83c588b2513ff63fdc302e380bf9c50968",
+        "source": "/Users/yyy/.codex/worktrees/daylight-production-ui/REvoCompute/.codex-tmp/recovered-final/test_public_and_authentication0/home-1440-viewport.png"
+      },
+      {
+        "path": "docs/assets/daylight/recovered/fleet-evidence-production.png",
+        "sha256": "4dd7d46a1d5493c8db9aa09e180f59e88f724902cec6d712234113a88ee17df4",
+        "source": "/Users/yyy/.codex/worktrees/daylight-production-ui/REvoCompute/.codex-tmp/recovered-final/test_whole_site_navigation_wit0/fleet-evidence-1440-viewport.png"
+      },
+      {
+        "path": "docs/assets/daylight/recovered/fpocket-spheres-production.png",
+        "sha256": "6108b2f7fbd2ff89894d692ac33bd2a4d17290da91bc80a07acf602a4ca82a8e",
+        "source": "/Users/yyy/.codex/worktrees/daylight-production-ui/REvoCompute/.codex-tmp/recovered-final/test_original_approved_fpocket0/fpocket-recorded-spheres-1440-viewport.png"
+      },
+      {
+        "path": "docs/assets/daylight/recovered/create-mobile-production.png",
+        "sha256": "a91092a6c4dfd950b817c8a2e91f90604a614e05cec11d2a9adb5de2198685e6",
+        "source": "/Users/yyy/.codex/worktrees/daylight-production-ui/REvoCompute/.codex-tmp/recovered-final/test_preparation_and_matrix_us0/create-390-viewport.png"
+      },
+      {
+        "path": "docs/assets/daylight/recovered/gremlin-mobile-production.png",
+        "sha256": "f094f6cece1ead3054dd6ee42a498433719992e80a801986627e1edb29e37367",
+        "source": "/Users/yyy/.codex/worktrees/daylight-production-ui/REvoCompute/.codex-tmp/recovered-final/test_preparation_and_matrix_us0/gremlin-raw-390-viewport.png"
+      },
+      {
+        "path": "docs/assets/daylight/recovered/fpocket-mobile-production.png",
+        "sha256": "a699edf39eee12f951cf371103c2c103ab9a8f76af1a40693596ee4ffd1f243a",
+        "source": "/Users/yyy/.codex/worktrees/daylight-production-ui/REvoCompute/.codex-tmp/recovered-final/test_original_approved_fpocket0/fpocket-approved-run-390-viewport.png"
+      }
+    ],
+    "validation": [
+      "162 frontend unit tests passed",
+      "29 focused browser checks passed including 280px, 320px and 768px native molecular controls",
+      "TypeScript, API types, Vite build, lock/provenance/build verification passed"
+    ],
+    "restored": [
+      "Unified open molecular stage, persistent Pocket Inspector, linked compact ranked evidence",
+      "Separate original scientific input preparation and model configuration with bounded authentic alignment preview",
+      "Dashboard identity, interactive count rail, filter strip and task register",
+      "GREMLIN matrix with statistical inspector and synchronized ranked pair evidence"
+    ],
+    "scientific_changes": [
+      "Optional alpha-sphere overlay reads exact PQR centres and radii from selected pocket artifact",
+      "Spatial annotations and contact highlighting retain original protein coordinates",
+      "GREMLIN matrix and ranked table share exact one-based pair and raw/APC values"
+    ],
+    "preserved": [
+      "API and authorization contracts, canonical Task inputs and parameters, lifecycle actions, files, downloads, archives, run records, native Mol* capabilities",
+      "Existing #82-85 access, lifecycle evidence, Metrics and resource accounting improvements"
+    ],
+    "remaining_deviations": [
+      "Native Mol* tools and vertical matrix legend retained",
+      "Production actions and evidence remain in utility disclosures",
+      "Input preview preserves A3M insertions and original uploaded bytes",
+      "Synthetic Dashboard contains four Tasks, prototype contains eight"
+    ],
+    "deferred": [
+      "Figma synchronization",
+      "#86 Local Result Workspace",
+      "GPU-credit waterfall without authoritative opening balance and complete ordered history",
+      "Backend catalog readiness projection and security-sensitive admission rewrite"
+    ],
+    "boundaries": [
+      "PR #88 only; Draft maintained; no merge, deployment or force push",
+      "PR #87 untouched; no subagents or Campaign",
+      "No new backend privileges, readiness authority or resource-accounting algorithms"
+    ]
   }
 }
