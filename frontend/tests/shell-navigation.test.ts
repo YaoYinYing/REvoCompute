@@ -64,12 +64,11 @@ describe('shell navigation structure', () => {
     }
   });
 
-  it('names both secondary navigation regions on mobile', () => {
+  it('keeps the shared group captions available for the sidebar and drawer', () => {
     const { root } = shellWithPageHeading();
     const caption = (region: string): HarnessNode => captionOf(root.querySelector(`div.app-nav-group[data-nav-group="${region}"]`)!);
-    // Compute sits on the top bar. Account and Administration live in the same
-    // expandable menu, where their captions name the two regions.
-    expect(caption('compute').hidden).toBe(true);
+    // All three groups retain captions in the shared desktop/sidebar drawer.
+    expect(caption('compute').hidden).toBe(false);
     expect(caption('account').hidden).toBe(false);
     expect(caption('admin').hidden).toBe(false);
     expect(caption('admin').textContent).toBe('Administration');

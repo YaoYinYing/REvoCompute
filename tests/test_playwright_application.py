@@ -20,6 +20,12 @@ ORIGIN = "https://revocompute.example"
 TASK_ID = "0123456789abcdef0123456789abcdef"
 
 
+def _open_navigation(page: Page) -> None:
+    opener = page.get_by_role('button', name='Open navigation', exact=True)
+    if opener.is_visible():
+        opener.click()
+
+
 def _catalog() -> dict:
     access = {"restricted": False, "granted": True, "request_status": None}
     return {
@@ -730,8 +736,8 @@ def test_admin_dashboard_batch_action_uses_authorized_api(page: Page) -> None:
     page.on("dialog", lambda dialog: dialog.accept())
 
     page.goto(f"{ORIGIN}/compute/dashboard")
-    # Administration retains its authorized destinations in the named secondary menu.
-    page.get_by_role("button", name="Account & more: Expand navigation", exact=True).click()
+    # Administration retains its authorized destinations in the shared navigation.
+    _open_navigation(page)
     expect(page.locator("[data-nav-group='admin']").get_by_role("link", name="Server logs")).to_have_attribute("href", "/compute/logs")
     assert page.locator(".app-header").get_by_label("Administration").count() == 0
     page.keyboard.press("Escape")
@@ -763,7 +769,7 @@ def test_anonymous_shell_offers_no_forbidden_administration_links(page: Page, wi
     assert page.locator(".app-header").get_by_label("Administration").count() == 0
     # Account is the only other region, and it is a sign-in affordance: the
     # region's own links are hidden behind the one visible sign-in destination.
-    page.get_by_role("button", name="Account & more: Expand navigation", exact=True).click()
+    _open_navigation(page)
     expect(page.locator("[data-nav-group='account']")).to_be_visible()
     account = page.locator("[data-nav-group='account'] a:visible")
     expect(account).to_have_count(1)
@@ -1016,7 +1022,7 @@ def test_profile_server_state_api_key_access_credits_and_metrics(page: Page) -> 
     expect(page.get_by_label("Affiliation", exact=True)).to_have_value("New Institute")
 
     # Every Account section is a direct destination in the shell's Account region.
-    page.get_by_role("button", name="Account & more: Expand navigation", exact=True).click()
+    _open_navigation(page)
     account_nav = page.locator("[data-nav-group='account']")
     expect(account_nav.get_by_role("link", name="Security", exact=True)).to_have_attribute(
         "href", "/compute/account/security")
@@ -1133,7 +1139,7 @@ def test_auth_profile_and_admin_views_are_responsive_under_production_csp(page: 
     # The Account sections are the shell's own Account region, one page each: there
     # is no nested tab strip inside the page, so the section controls are the
     # navigation and never appear twice.
-    page.get_by_role("button", name="Account & more: Expand navigation", exact=True).click()
+    _open_navigation(page)
     expect(page.locator("[data-nav-group='account']").get_by_role("link", name="GPU credits", exact=True)).to_be_visible()
     expect(page.get_by_role("tab")).to_have_count(0)
 
@@ -1347,8 +1353,11 @@ def test_save_feedback_and_system_notices_clear_each_other_and_navigation(page: 
     assert stack is not None and feedback is not None and feedback["height"] > 0
     assert stack["y"] >= 56, stack
     assert stack["y"] + stack["height"] < feedback["y"], (stack, feedback)
-    navigation = page.locator(".app-nav").bounding_box()
-    assert navigation is not None and stack["y"] > navigation["y"] + navigation["height"]
+    header = page.locator(".app-header").bounding_box()
+    assert header is not None and stack["y"] >= header["y"] + header["height"]
+    sidebar = page.locator(".app-sidebar").bounding_box()
+    if sidebar:
+        assert stack["x"] >= sidebar["x"] + sidebar["width"]
     assert feedback["y"] + feedback["height"] <= page.viewport_size["height"]
 
 

@@ -61,9 +61,9 @@ const STYLE = `
 .fpl-geometry-hint { font-size:10px; color:var(--app-muted); }
 .fpl-result .structure-viewport { border:0; border-radius:0; box-shadow:none; }
 .fpl-stage:fullscreen { width:100vw; height:100vh; }
-@media(max-width:1150px) { .fpl-stage { grid-template-columns:minmax(0,1fr) 267px; gap:18px; padding-right:18px; height:610px; } .fpl-scene-label,.fpl-scene-bottom { left:18px; right:18px; } .fpl-evidence-head { flex-wrap:wrap; } }
-@media(max-width:820px) { .fpl-stage { display:flex; flex-direction:column; height:auto; padding:0; gap:0; } .fpl-scene { height:365px; flex:none; } .fpl-inspector { border-top:1px solid var(--app-line); padding:20px 22px; } .fpl-inspector-head { display:flex; flex-wrap:wrap; align-items:center; gap:8px 15px; } .fpl-inspector-head .fpl-eyebrow { width:100%; } .fpl-detail { overflow:visible; } .fpl-selector-tools { margin-left:0; } .fpl-stage:fullscreen { overflow:auto; } }
-@media(max-width:480px) { .fpl-scene { height:320px; } .fpl-scene-label .mono { display:none; } .fpl-scene-bottom { flex-direction:column; gap:4px; } .fpl-evidence-head { gap:14px; } .fpl-selector-tools { gap:10px; } }
+@container(max-width:1150px) { .fpl-stage { grid-template-columns:minmax(0,1fr) 267px; gap:18px; padding-right:18px; height:610px; } .fpl-scene-label,.fpl-scene-bottom { left:18px; right:18px; } .fpl-evidence-head { flex-wrap:wrap; } }
+@container(max-width:820px) { .fpl-stage { display:flex; flex-direction:column; height:auto; padding:0; gap:0; } .fpl-scene { height:365px; flex:none; } .fpl-inspector { border-top:1px solid var(--app-line); padding:20px 22px; } .fpl-inspector-head { display:flex; flex-wrap:wrap; align-items:center; gap:8px 15px; } .fpl-inspector-head .fpl-eyebrow { width:100%; } .fpl-detail { overflow:visible; } .fpl-selector-tools { margin-left:0; } .fpl-stage:fullscreen { overflow:auto; } }
+@container(max-width:480px) { .fpl-scene { height:320px; } .fpl-scene-label .mono { display:none; } .fpl-scene-bottom { flex-direction:column; gap:4px; } .fpl-evidence-head { gap:14px; } .fpl-selector-tools { gap:10px; } }
 `;
 
 // The columns the ranked selector exposes: rank and score first, then the

@@ -1,5 +1,5 @@
 import { DAYLIGHT_MARK } from './assets';
-import { Bell, ChartLine, FileText, Gauge, KeyRound, LayoutDashboard, LogOut, PanelLeft, PanelLeftClose, Plus, Scale, ServerCog, Settings, ShieldCheck, UserCog, UserRound, UsersRound, Workflow, createIcons } from 'lucide';
+import { Bell, ChartLine, FileText, Gauge, KeyRound, LayoutDashboard, LogOut, Menu, X, PanelLeft, PanelLeftClose, Plus, Scale, ServerCog, Settings, ShieldCheck, UserCog, UserRound, UsersRound, Workflow, createIcons } from 'lucide';
 import type { CurrentUser } from '../api/app-api';
 import { authorizedJson, clearSessionCredential } from './session';
 import { ADMIN_DESTINATIONS } from './admin-destinations';
@@ -22,11 +22,11 @@ export interface AppShell {
 const railKey = 'revocompute-rail';
 type RailState = 'collapsed' | 'expanded';
 const shellIcons = {
-  Bell, ChartLine, FileText, Gauge, KeyRound, LayoutDashboard, LogOut, PanelLeft, PanelLeftClose, Plus,
+  Bell, ChartLine, FileText, Gauge, KeyRound, LayoutDashboard, LogOut, Menu, X, PanelLeft, PanelLeftClose, Plus,
   Scale, ServerCog, Settings, ShieldCheck, UserCog, UserRound, UsersRound, Workflow,
 };
 
-function storedRail(): RailState { return localStorage.getItem(railKey) === 'expanded' ? 'expanded' : 'collapsed'; }
+function storedRail(): RailState { return localStorage.getItem(railKey) === 'collapsed' ? 'collapsed' : 'expanded'; }
 
 /** A destination the navigation can reach. */
 type NavDestination = [href: string, icon: string, label: string];
@@ -52,18 +52,6 @@ const ACCOUNT_DESTINATIONS: ReadonlyArray<NavDestination> = [
  * session semantics: signed out, the region collapses to one sign-in affordance.
  */
 const QUOTA_DESTINATION: NavDestination = ['/compute/quota', 'scale', 'shell.account.quota'];
-
-/** In-page workspace navigation shares the shell's destination vocabulary. */
-export function accountNavigation(): HTMLElement {
-  const navigation = document.createElement('nav'); navigation.className = 'account-navigation';
-  navigation.setAttribute('aria-label', t('shell.nav.account'));
-  for (const [href, , label] of [...ACCOUNT_DESTINATIONS, QUOTA_DESTINATION]) {
-    const link = document.createElement('a'); link.href = href; link.textContent = t(label);
-    if (location.pathname === href || (href === '/compute/profile' && location.pathname === '/compute/account/account')) link.setAttribute('aria-current', 'page');
-    navigation.append(link);
-  }
-  return navigation;
-}
 
 export function mountShell(root: HTMLElement): AppShell {
   root.replaceChildren();
@@ -114,41 +102,54 @@ export function mountShell(root: HTMLElement): AppShell {
   for (const destination of ADMIN_DESTINATIONS) {
     const link = navLink(destination.path, destination.icon, t(destination.label)); groups.admin.items.append(link);
   }
-  const secondaryNav = document.createElement('div'); secondaryNav.className = 'app-secondary-nav'; secondaryNav.id = 'app-secondary-nav';
-  secondaryNav.append(groups.account.element, groups.admin.element);
-  nav.append(groups.compute.element, secondaryNav);
-
-  // A named disclosure exposes the user's Account and authorized Admin destinations.
-  const railToggle = document.createElement('button');
-  railToggle.type = 'button'; railToggle.className = 'app-rail-toggle'; railToggle.setAttribute('aria-controls', 'app-secondary-nav');
-  const foot = document.createElement('div'); foot.className = 'app-nav-foot'; foot.append(railToggle);
-  nav.append(foot, secondaryNav);
-
+  nav.id = 'app-navigation';
+  nav.append(groups.compute.element, groups.account.element, groups.admin.element);
+  const sidebar = document.createElement('aside'); sidebar.className = 'app-sidebar';
+  const sidebarHead = document.createElement('div'); sidebarHead.className = 'app-sidebar-head';
+  const railToggle = document.createElement('button'); railToggle.type = 'button'; railToggle.className = 'app-rail-toggle'; railToggle.setAttribute('aria-controls', nav.id);
+  const drawerClose = document.createElement('button'); drawerClose.type = 'button'; drawerClose.className = 'icon-button app-nav-close';
+  drawerClose.setAttribute('aria-label', t('shell.nav.close')); drawerClose.innerHTML = '<i data-lucide="x" aria-hidden="true"></i>';
+  sidebarHead.append(brand, railToggle, drawerClose); sidebar.append(sidebarHead, nav);
+  const drawer = document.createElement('dialog'); drawer.className = 'app-nav-drawer'; drawer.id = 'app-nav-drawer'; drawer.setAttribute('aria-label', t('shell.nav.primary'));
+  const mobileToggle = document.createElement('button'); mobileToggle.type = 'button'; mobileToggle.className = 'icon-button app-nav-open';
+  mobileToggle.setAttribute('aria-controls', drawer.id); mobileToggle.setAttribute('aria-expanded', 'false'); mobileToggle.setAttribute('aria-label', t('shell.nav.open'));
+  mobileToggle.innerHTML = '<i data-lucide="menu" aria-hidden="true"></i>';
+  const narrow = window.matchMedia('(max-width: 64rem)');
   const syncRailToggle = (): void => {
     const expanded = shell.dataset.rail === 'expanded';
     railToggle.title = t(expanded ? 'shell.nav.collapse' : 'shell.nav.expand');
-    railToggle.setAttribute('aria-label', `${t('shell.nav.more')}: ${railToggle.title}`);
+    railToggle.setAttribute('aria-label', railToggle.title);
     railToggle.setAttribute('aria-expanded', String(expanded));
-    railToggle.innerHTML = `<i data-lucide="${expanded ? 'panel-left-close' : 'panel-left'}" aria-hidden="true"></i><span>${t('shell.nav.more')}</span>`;
+    railToggle.innerHTML = `<i data-lucide="${expanded ? 'panel-left-close' : 'panel-left'}" aria-hidden="true"></i>`;
     createIcons({ icons: shellIcons, root: railToggle });
   };
   const onRailToggle = (): void => {
     shell.dataset.rail = shell.dataset.rail === 'expanded' ? 'collapsed' : 'expanded';
-    localStorage.setItem(railKey, shell.dataset.rail);
-    syncRailToggle();
+    localStorage.setItem(railKey, shell.dataset.rail); syncRailToggle();
   };
   railToggle.addEventListener('click', onRailToggle);
-  const closeNavigation = (): void => {
-    if (shell.dataset.rail !== 'expanded') return;
-    shell.dataset.rail = 'collapsed'; localStorage.setItem(railKey, 'collapsed'); syncRailToggle();
+  const closeNavigation = (): void => { if (drawer.open) drawer.close(); };
+  const syncNavigationMode = (): void => {
+    const navigationFocused = nav.contains(document.activeElement) || sidebarHead.contains(document.activeElement);
+    closeNavigation();
+    (narrow.matches ? drawer : sidebar).append(sidebarHead, nav);
+    if (navigationFocused) (narrow.matches ? mobileToggle : railToggle).focus();
   };
-  const onNavigationKey = (event: KeyboardEvent): void => { if (event.key === 'Escape' && shell.dataset.rail === 'expanded') { closeNavigation(); railToggle.focus(); } };
-  const onNavigationOutside = (event: PointerEvent): void => { if (!nav.contains(event.target as Node)) closeNavigation(); };
-  document.addEventListener('keydown', onNavigationKey);
-  document.addEventListener('pointerdown', onNavigationOutside);
-
-  groups.compute.caption.hidden = true;
-  groups.account.caption.hidden = false;
+  mobileToggle.addEventListener('click', () => {
+    if (!narrow.matches) return;
+    drawer.showModal(); mobileToggle.setAttribute('aria-expanded', 'true');
+    (nav.querySelector<HTMLAnchorElement>('a[aria-current]') || drawerClose).focus();
+  });
+  drawerClose.addEventListener('click', closeNavigation);
+  drawer.addEventListener('close', () => { mobileToggle.setAttribute('aria-expanded', 'false'); });
+  drawer.addEventListener('click', event => {
+    if (event.target !== drawer) return;
+    const bounds = drawer.getBoundingClientRect();
+    if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) closeNavigation();
+  });
+  narrow.addEventListener('change', syncNavigationMode);
+  groups.compute.caption.hidden = false;
+  let locationLabel: HTMLElement;
 
   function navLink(href: string, icon: string, label: string): HTMLAnchorElement {
     const link = document.createElement('a'); link.href = href; link.title = label; link.innerHTML = `<i data-lucide="${icon}" aria-hidden="true"></i><span>${label}</span>`;
@@ -160,9 +161,12 @@ export function mountShell(root: HTMLElement): AppShell {
   function currentDestination(href: string): boolean {
     if (!href) return false;
     const path = new URL(href, location.origin).pathname;
-    if (location.pathname === path) return true;
+    const current = location.pathname.replace(/\/+$/, '') || '/';
+    if (current === path) return true;
     // A method reference is a detail of the catalog: the catalog stays current.
-    return path === '/runners' && location.pathname.startsWith('/runners/');
+    return (path === '/runners' && current.startsWith('/runners/'))
+      || (path === '/compute/dashboard' && current.startsWith('/compute/results/'))
+      || (path === '/compute/profile' && current === '/compute/account/account');
   }
   const allLinks = (): HTMLAnchorElement[] => [
     ...[...groups.compute.items.children, ...groups.account.items.children, ...groups.admin.items.children] as HTMLAnchorElement[],
@@ -171,6 +175,11 @@ export function mountShell(root: HTMLElement): AppShell {
     for (const link of allLinks()) {
       if (currentDestination(link.getAttribute('href') || '')) link.setAttribute('aria-current', 'page');
       else link.removeAttribute('aria-current');
+    }
+    if (locationLabel) {
+      const current = allLinks().find(link => link.hasAttribute('aria-current'));
+      const detail = location.pathname.startsWith('/compute/results/') ? t('shell.nav.results') : location.pathname.startsWith('/runners/') ? t('shell.nav.method') : '';
+      locationLabel.textContent = [current?.title, detail].filter(Boolean).join(' / ');
     }
   }
 
@@ -187,7 +196,8 @@ export function mountShell(root: HTMLElement): AppShell {
     finally { clearSessionCredential(); location.assign('/compute/login'); }
   });
   actions.append(languageMenu(), noticesButton, userLink, logout, themeButton());
-  header.append(actions);
+  locationLabel = document.createElement('p'); locationLabel.className = 'app-location';
+  header.append(mobileToggle, locationLabel, actions);
   // Create Task is reachable from every authenticated application route.
   const newTask = document.createElement('a'); newTask.href = '/compute/create_task'; newTask.className = 'app-new-task'; newTask.title = t('shell.nav.newTask'); newTask.innerHTML = `<i data-lucide="plus" aria-hidden="true"></i><span>${t('shell.nav.newTask')}</span>`;
   groups.compute.items.append(newTask);
@@ -206,17 +216,17 @@ export function mountShell(root: HTMLElement): AppShell {
   // once focused, and its target is the persistent main region.
   const skip = document.createElement('a'); skip.className = 'skip-link'; skip.href = '#main-content'; skip.textContent = t('shell.skipToContent');
 
-  shell.append(skip, brand, header, nav, outlet, feedback);
+  shell.append(skip, sidebar, header, outlet, feedback, drawer);
   root.append(shell);
   createIcons({ icons: shellIcons, root: shell });
-  syncRailToggle();
+  syncRailToggle(); syncNavigationMode();
 
   // The notice stack clears wrapping/translated navigation at every content size.
   const chromeResize = new ResizeObserver(() => {
-    const height = Math.max(...[brand, nav, header].map(node => node.offsetTop + node.offsetHeight));
+    const height = header.offsetHeight;
     shell.style.setProperty('--app-chrome-height', `${height}px`);
   });
-  [brand, nav, header].forEach(node => chromeResize.observe(node));
+  chromeResize.observe(header);
   const systemNotices = mountSystemNotices({ button: noticesButton, host: feedback });
 
   const syncAccount = (user: CurrentUser | null): void => {
@@ -270,8 +280,8 @@ export function mountShell(root: HTMLElement): AppShell {
     destroy() {
       chromeResize.disconnect();
       railToggle.removeEventListener('click', onRailToggle);
-      document.removeEventListener('keydown', onNavigationKey);
-      document.removeEventListener('pointerdown', onNavigationOutside);
+      narrow.removeEventListener('change', syncNavigationMode);
+      closeNavigation();
     },
   };
 }

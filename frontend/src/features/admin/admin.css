@@ -151,16 +151,16 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .fleet-history-list { display: grid; gap: .35rem; }
 .fleet-history-row { padding: .5rem .6rem; border: 1px solid var(--app-line); border-radius: var(--r-util); }
 .fleet-history-row small { display: block; margin-top: .2rem; color: var(--app-muted); font-size: 12px; }
-@media (max-width: 70rem) { .fleet-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); } .fleet-summary-bands { grid-template-columns: repeat(2, minmax(0, 1fr)); } .fleet-band:nth-child(2) { border-right: 0; } .fleet-band:nth-child(-n+2) { border-bottom: 1px solid var(--app-line); } }
-@media (max-width: 48rem) { .fleet-action { align-items: start; flex-direction: column; } }
-@media (max-width: 30rem) { .fleet-facts { grid-template-columns: 1fr; } .fleet-summary-bands { grid-template-columns: 1fr; } .fleet-band { border-right: 0; border-bottom: 1px solid var(--app-line); } .fleet-band:last-child { border-bottom: 0; } }
+@container (max-width: 70rem) { .fleet-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); } .fleet-summary-bands { grid-template-columns: repeat(2, minmax(0, 1fr)); } .fleet-band:nth-child(2) { border-right: 0; } .fleet-band:nth-child(-n+2) { border-bottom: 1px solid var(--app-line); } }
+@container (max-width: 48rem) { .fleet-action { align-items: start; flex-direction: column; } }
+@container (max-width: 30rem) { .fleet-facts { grid-template-columns: 1fr; } .fleet-summary-bands { grid-template-columns: 1fr; } .fleet-band { border-right: 0; border-bottom: 1px solid var(--app-line); } .fleet-band:last-child { border-bottom: 0; } }
 
-@media (max-width: 70rem) {
+@container (max-width: 70rem) {
   .config-field-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .infrastructure-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .policy-row { grid-template-columns: minmax(12rem, 1fr) minmax(15rem, 1fr); }.policy-row > button { grid-column: 2; justify-self: end; }
 }
-@media (max-width: 48rem) {
+@container (max-width: 48rem) {
   .admin-page { padding-top: 1rem; }
   .admin-toolbar > .admin-field { min-width: calc(50% - .4rem); flex: 1; }
   .admin-table-scroll { border-right: 0; border-left: 0; }
@@ -171,7 +171,7 @@ button:disabled { cursor: not-allowed; opacity: .55; }
   .admin-event-feed article { grid-template-columns: 8rem 1fr; }.admin-event-feed span, .admin-event-feed b { grid-column: 2; }
   .resource-policy-controls { grid-template-columns: 1fr; }.infrastructure-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
-@media (max-width: 30rem) {
+@container (max-width: 30rem) {
   .admin-page { width: min(100% - 1rem, 96rem); }
   .admin-tabs { gap: .8rem; overflow-x: auto; }.admin-tabs button { flex: none; }
   .admin-toolbar > .admin-field, .admin-toolbar > .admin-field:first-child { width: 100%; min-width: 0; flex-basis: 100%; }
@@ -202,7 +202,7 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .placement-pager { display: flex; align-items: center; gap: .7rem; padding-top: .7rem; }
 .placement-pager[hidden] { display: none; }
 .placement-pager span { color: var(--app-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
-@media (max-width: 48rem) {
+@container (max-width: 48rem) {
   .placement-policy-section h2 { font-size: 1.15rem; }
   .placement-pager { flex-wrap: wrap; }
   .placement-pager button { min-height: 2.4rem; }
@@ -211,9 +211,6 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .admin-page { width: min(100% - 4rem, 100rem); padding-top: 2rem; }
 .admin-page > .page-heading { padding-bottom: 1.5rem; border-bottom: 0; margin-bottom: 0; }
 .admin-page .page-heading h1 { font-size: 34px; font-weight: 500; letter-spacing: -.04em; }
-.operations-navigation { display: flex; flex-wrap: wrap; gap: .25rem 1.5rem; padding-bottom: .5rem; border-bottom: 1px solid var(--app-line); }
-.operations-navigation a { padding: .65rem 0; color: var(--app-muted); font-size: 12px; text-decoration: none; border-bottom: 2px solid transparent; }
-.operations-navigation a[aria-current] { color: var(--app-ink); border-bottom-color: var(--app-plum); }
 .admin-toolbar { border-radius: 0; background: transparent; border-inline: 0; padding-inline: 0; }
 .admin-tabs { gap: 1.5rem; }
 .admin-tabs button[aria-selected="true"]::after { background: var(--app-plum); }
@@ -221,7 +218,7 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .fleet-summary-bands, .admin-stat-strip { background: transparent; border-radius: 0; }
 .admin-section-heading h2, .placement-policy-section h2 { font-weight: 500; letter-spacing: -.025em; }
 .admin-row-actions button, .admin-table-actions button { min-height: 2.5rem; }
-@media (max-width: 760px) { .admin-page { width: calc(100% - 2.5rem); } .admin-tabs { flex-wrap: wrap; } }
+@container (max-width: 760px) { .admin-page { width: calc(100% - 2.5rem); } .admin-tabs { flex-wrap: wrap; } }
 
 .fleet-evidence-dialog { width: min(58rem, calc(100% - 2rem)); max-height: calc(100dvh - 2rem); overflow: auto; border: 1px solid var(--app-line); border-radius: var(--r-surface); padding: 1.5rem; color: var(--app-ink); background: var(--app-surface); box-shadow: var(--shadow-dialog); }
 .fleet-evidence-dialog::backdrop { background: var(--app-scrim); }

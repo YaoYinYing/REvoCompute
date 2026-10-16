@@ -341,32 +341,6 @@ a { color: var(--app-accent); }
 }
 
 @media (max-width: 56rem) {
-
-  /* Narrow chrome keeps the logo and icon-only controls so the top bar cannot
-     force the document wider than the viewport. */
-
-  /* The bottom bar has no room for region separation, so the Compute and Account
-     destinations sit directly on it (their wrappers dissolve; their headings are
-     removed from the tree in script). Administration is a different navigation
-     level, so on mobile it becomes a deliberate secondary surface just above the
-     bar rather than three more items competing inside the primary bar. The rail's
-     width control is a desktop column affordance: on the bar it has no column to
-     govern, so it leaves the bar entirely. */
-
-  /* Only the regions whose links merge into the bar lose their heading; the
-     Administration heading names its own secondary surface and must paint. */
-
-  /* The secondary surface carries its destinations by name, like the bar does. */
-
-  .app-header { grid-area: header; min-width: 0; --app-bar: 3.5rem; padding: 0 .6rem; background: var(--app-surface); backdrop-filter: none; }
-  .app-header-actions { gap: .3rem; min-width: 0; }
-  .app-header .app-new-task { width: 2.15rem; min-width: 2.15rem; justify-content: center; padding: 0; }
-  .app-header .app-new-task span { display: none; }
-  .app-user span { display: none; }
-  .app-header #lang-menu-value, .lang-menu .lang-menu-value { display: none; }
-  /* When the Administration surface is present it stands above the bar, so the page
-     clears it too — the surface never covers the end of the page. */
-  .app-outlet { padding-bottom: var(--app-bottom-clearance); }
   .page-heading, .runner-detail-heading { grid-template-columns: 1fr; align-items: start; gap: 1rem; }
 
   .runner-group { grid-template-columns: 1fr; gap: .8rem; }

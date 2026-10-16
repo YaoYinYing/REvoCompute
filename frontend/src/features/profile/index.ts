@@ -1,14 +1,14 @@
 import { createIcons } from 'lucide';
 import type { CurrentUser } from '../../api/app-api';
 import type { AccountSection } from '../../app/router';
-import { accountNavigation, type AppShell } from '../../app/shell';
+import type { AppShell } from '../../app/shell';
 import { accountIcons, accountPanelFor, errorMessage } from './sections';
 import './account.css';
 
 /**
  * The user's own Account, one page per section.
  *
- * The shell and local index share one destination vocabulary: the sections are
+ * The shared navigation owns the destination vocabulary: the sections are
  * direct destinations in the personal workspace, and each one is its own
  * route with its own document title. The page owns its single `h1`; the shell
  * owns the `main` landmark it mounts into. A section that cannot load reports the
@@ -18,8 +18,7 @@ export async function mountAccount(root: HTMLElement, shell: AppShell, user: Cur
   const page = document.createElement('main');
   page.className = 'account-page';
   page.append(accountPanelFor(section, shell, user));
-  const layout = document.createElement('div'); layout.className = 'account-layout';
-  layout.append(accountNavigation(), page); root.replaceChildren(layout);
+  root.replaceChildren(page);
   const heading = page.querySelector('h1');
   document.title = `${heading?.textContent || 'Account'} | REvoCompute`;
   createIcons({ icons: accountIcons, root: page });

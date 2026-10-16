@@ -34,9 +34,12 @@ def test_dashboard_views_filters_and_important_type_remain_usable(page: Page, wi
     open_tasks(page)
     expect(page.get_by_role('heading', name='Tasks', exact=True)).to_be_visible()
     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
-    nav = page.locator('.app-nav').bounding_box()
-    toggle = page.locator('.app-rail-toggle').bounding_box()
-    assert nav and toggle and toggle['y'] + toggle['height'] <= nav['y'] + nav['height'] + 1
+    if width <= 1024:
+        expect(page.get_by_role('button', name='Open navigation', exact=True)).to_be_visible()
+        expect(page.locator('.app-sidebar')).not_to_be_visible()
+    else:
+        expect(page.locator('.app-sidebar')).to_be_visible()
+        expect(page.get_by_role('button', name='Collapse navigation', exact=True)).to_be_visible()
     assert page.evaluate("document.fonts.check('400 14px \"DM Sans\"') && document.fonts.check('500 40px \"Instrument Sans\"')")
     for layout in ('compact', 'table', 'detailed'):
         page.locator(f'[data-layout="{layout}"]').first.click()
@@ -56,15 +59,15 @@ def test_dashboard_views_filters_and_important_type_remain_usable(page: Page, wi
 
 
 @pytest.mark.parametrize('role', ['session', 'admin'])
-def test_secondary_navigation_keeps_authorized_destinations_and_escape(page: Page, role: str) -> None:
+def test_drawer_keeps_authorized_destinations_and_escape(page: Page, role: str) -> None:
     page.set_viewport_size({'width': 390, 'height': 844})
     open_tasks(page, role=role)
-    toggle = page.get_by_role('button', name='Account & more: Expand navigation', exact=True)
+    toggle = page.get_by_role('button', name='Open navigation', exact=True)
     toggle.focus()
     page.keyboard.press('Enter')
     expect(page.get_by_role('link', name='Security', exact=True)).to_be_visible()
     page.keyboard.press('Tab')
-    expect(page.locator('[data-nav-group="account"] a').first).to_be_focused()
+    assert page.evaluate("document.querySelector('.app-nav-drawer').contains(document.activeElement)")
     admin = page.locator('.app-nav-group[data-nav-group="admin"]')
     if role == 'admin':
         expect(admin).to_be_visible()

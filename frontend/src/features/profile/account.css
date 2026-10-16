@@ -36,14 +36,9 @@
 @container (max-width: 64rem) { .metrics-summary { grid-template-columns: repeat(3, 1fr); }.metrics-summary div:nth-child(4) { padding-left: 0; border-left: 0; } }
 @container (max-width: 48rem) { .credit-summary { grid-template-columns: 1fr 1fr; }.credit-summary div:nth-child(3) { padding-left: 0; border-left: 0; }.access-request { grid-template-columns: 1fr; }.access-request .form-status { grid-column: auto; } }
 @container (max-width: 34rem) { .account-section { padding: 1rem; }.profile-details, .account-form .form-columns { grid-template-columns: 1fr; }.profile-details div:nth-child(even) { padding-left: 0; border-left: 0; }.segmented-control { display: grid; grid-template-columns: 1fr 1fr; }.segmented-control button + button { margin: -1px 0 0 -1px; }.metrics-summary { grid-template-columns: 1fr 1fr; }.metrics-summary div:nth-child(odd) { padding-left: 0; border-left: 0; }.metrics-distribution > div { grid-template-columns: minmax(5rem, 8rem) minmax(0, 1fr) auto; } }
-@media (max-width: 34rem) { .account-page { width: min(100% - 1rem, 64rem); padding-top: 1rem; } }
+@container (max-width: 34rem) { .account-page { width: min(100% - 1rem, 64rem); padding-top: 1rem; } }
 
-/* A personal workbench with a stable section index and a generous reading area. */
-.account-layout { width: min(100% - 6rem, 90rem); margin: 2rem auto 4rem; display: grid; grid-template-columns: 12rem minmax(0, 1fr); gap: 3rem; }
-.account-navigation { display: grid; align-content: start; position: sticky; top: 1rem; align-self: start; }
-.account-navigation a { min-width: 0; padding: .85rem 1rem; border-left: 1px solid var(--app-line); color: var(--app-muted); font-size: 12px; text-decoration: none; }
-.account-navigation a[aria-current] { background: var(--app-soft); color: var(--app-ink); border-left-color: var(--app-plum); }
-.account-layout .account-page { width: 100%; min-width: 0; padding: 0; margin: 0; }
+/* Account pages share the application navigation and retain a generous reading area. */
 .account-section { padding: 0; background: transparent; border: 0; box-shadow: none; }
 .account-section > header { padding-bottom: 1.5rem; margin-bottom: 1.5rem; }
 .account-section > header h1 { font-size: 34px; font-weight: 500; letter-spacing: -.045em; }
@@ -59,12 +54,7 @@
 .activity-plot { border-radius: 0; height: 14rem; background: var(--app-surface); }
 .access-heading { flex-wrap: wrap; }
 .access-request { max-width: none; padding: 1rem; }
-@media (max-width: 1000px) { .account-layout { width: calc(100% - 3rem); grid-template-columns: 10rem minmax(0, 1fr); gap: 1.5rem; } }
-@media (max-width: 760px) {
-  .account-layout { width: calc(100% - 2.5rem); grid-template-columns: minmax(0, 1fr); gap: 1.5rem; margin-top: 1.5rem; }
-  .account-navigation { position: static; display: flex; flex-wrap: wrap; gap: .25rem; border-bottom: 1px solid var(--app-line); padding-bottom: .75rem; }
-  .account-navigation a { padding: .6rem .65rem; border-left: 0; border-bottom: 2px solid transparent; }
-  .account-navigation a[aria-current] { border-bottom-color: var(--app-plum); }
+@container (max-width: 760px) {
   .account-section > header h1 { font-size: 2rem; }
   .profile-form, .api-key-workspace { padding: 1rem; }
 }

@@ -37,7 +37,6 @@ import type { AppShell } from '../../app/shell';
 import { countLabel, envelopeSection, unitLabel } from './envelope';
 import { adminApi } from '../admin/api';
 import { element, empty, formatBytes, formatDate, text } from '../../components/dom';
-import { accountNavigation } from '../../app/shell';
 import '../profile/account.css';
 import './quota.css';
 
@@ -260,7 +259,7 @@ export class QuotaView {
     section.append(element('header', '', [text('h1', t('quota.title')), text('p', t('quota.description'))]));
     this.body = element('div', 'quota-body', [empty(t('quota.loading'))]);
     section.append(this.body);
-    this.root = element('div', 'account-layout', [accountNavigation(), element('main', 'account-page quota-page', [section])]);
+    this.root = element('main', 'account-page quota-page', [section]);
   }
 
   /** Build the page and read this account's own position into it. */

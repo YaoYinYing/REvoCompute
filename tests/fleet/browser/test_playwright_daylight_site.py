@@ -52,17 +52,15 @@ def test_whole_site_navigation_with_the_production_frontend(page: Page, monkeypa
     _install_app(page)
     page.route(f'{ORIGIN}/compute/api/auth/me', lambda route: route.fulfill(json=_current_user('admin')))
     page.route(f'{ORIGIN}/compute/api/auth/admin/runners', lambda route: route.fulfill(json=_fleet_payload()))
-    page.locator('.app-rail-toggle').click()
     page.locator('[data-nav-group="account"] a[href="/compute/profile"]').click()
     expect(page.locator('.account-page h1')).to_have_text('Account')
     capture(page, tmp_path, 'profile')
     for path, name in [('/compute/account/security', 'security'), ('/compute/account/api-key', 'api-key'), ('/compute/account/runner-access', 'runner-access'), ('/compute/account/gpu-credits', 'gpu-credits'), ('/compute/account/metrics', 'metrics'), ('/compute/quota', 'quota')]:
-        page.locator(f'.account-navigation a[href="{path}"]').click()
-        expect(page.locator('.account-navigation a[aria-current="page"]')).to_have_attribute('href', path)
+        page.locator(f'[data-nav-group="account"] a[href="{path}"]').click()
+        expect(page.locator('[data-nav-group="account"] a[aria-current="page"]')).to_have_attribute('href', path)
         expect(page.locator('.account-page h1')).to_be_visible()
         capture(page, tmp_path, name)
         assert page.evaluate('window.__daylightDocument') == 1
-    page.locator('.app-rail-toggle').click()
     page.locator('[data-nav-group="admin"] a[href="/compute/runner_fleet"]').click()
     expect(page.locator('.admin-page h1')).to_be_visible()
     capture(page, tmp_path, 'fleet')
@@ -84,12 +82,12 @@ def test_whole_site_navigation_with_the_production_frontend(page: Page, monkeypa
     page.keyboard.press('Escape')
     expect(opener).to_be_focused()
     for path, name in [('/compute/user_control', 'users'), ('/compute/configuration', 'configuration'), ('/compute/logs', 'logs')]:
-        page.locator(f'.operations-navigation a[href="{path}"]').click()
+        page.locator(f'[data-nav-group="admin"] a[href="{path}"]').click()
         expect(page.locator('.admin-page h1')).to_be_visible()
         capture(page, tmp_path, name)
         assert page.evaluate('window.__daylightDocument') == 1
     page.go_back()
-    expect(page.locator('.operations-navigation a[aria-current="page"]')).to_have_attribute('href', '/compute/configuration')
+    expect(page.locator('[data-nav-group="admin"] a[aria-current="page"]')).to_have_attribute('href', '/compute/configuration')
     assert page.evaluate('window.__daylightDocument') == 1
     page.evaluate("document.documentElement.dataset.theme = 'dark'")
     capture(page, tmp_path, 'configuration-dark')

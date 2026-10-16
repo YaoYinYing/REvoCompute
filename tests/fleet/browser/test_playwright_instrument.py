@@ -59,6 +59,11 @@ def test_compare_installed_methods_preserves_contracts_and_access(page: Page, in
     page.set_viewport_size({'width': 1440, 'height': 1080})
     page.goto(f'{origin}/runners')
     expect(page.locator('.runner-card')).to_have_count(len(catalog['task_types']))
+    for width in (1136, 1440):
+        page.set_viewport_size({'width': width, 'height': 1080})
+        density = page.locator('.density-switch').bounding_box()
+        count = page.locator('.catalog-count').bounding_box()
+        assert density['x'] + density['width'] <= count['x']
     names = ['fpocket', 'gremlin_lh_fit', 'alphafold3', 'autodock_vina']
     search = page.get_by_role('searchbox', name='Search methods')
     for name in names:
