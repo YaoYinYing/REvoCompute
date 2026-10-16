@@ -21,7 +21,7 @@ export function queryTasks(tasks: TaskSummary[], query: TaskQuery): TaskQueryRes
   if (!name) return { tasks: [], error: 'Invalid regular expression' };
   const filtered = tasks.filter(task => {
     const submitted = day(task.submitted_at), finished = day(task.finished_at);
-    return name(task.display_name) && type!(task.task_type) && owner!(task.owner) && (!query.status || task.status === query.status)
+    return (name(task.display_name) || name(task.task_id)) && type!(task.task_type) && owner!(task.owner) && (!query.status || (query.status === 'attention' ? ['failed', 'cancelled'].includes(task.status) : task.status === query.status))
       && (!query.submittedFrom || submitted >= query.submittedFrom) && (!query.submittedTo || submitted <= query.submittedTo)
       && (!query.finishedFrom || (finished && finished >= query.finishedFrom)) && (!query.finishedTo || (finished && finished <= query.finishedTo));
   });

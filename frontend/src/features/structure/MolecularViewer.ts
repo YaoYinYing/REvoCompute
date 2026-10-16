@@ -1,3 +1,9 @@
+import { MeshBuilder } from 'molstar/lib/mol-geo/geometry/mesh/mesh-builder.js';
+import { Mesh } from 'molstar/lib/mol-geo/geometry/mesh/mesh.js';
+import { addSphere } from 'molstar/lib/mol-geo/geometry/mesh/builder/sphere.js';
+import { Shape } from 'molstar/lib/mol-model/shape.js';
+import { ShapeRepresentation } from 'molstar/lib/mol-repr/shape/representation.js';
+import { parseRecordedSpheres } from './sphere-geometry';
 import { OrderedSet } from 'molstar/lib/mol-data/int.js';
 import { Sphere3D } from 'molstar/lib/mol-math/geometry.js';
 import { Vec3 } from 'molstar/lib/mol-math/linear-algebra/3d/vec3.js';
@@ -20,6 +26,7 @@ const REPRESENTATIONS: Record<string, string> = {
   cartoon: 'cartoon',
   cartoon_ligand: 'polymer-and-ligand',
   sticks: 'ball-and-stick',
+  points: 'spacefill',
   surface_ligand: 'molecular-surface',
 };
 
@@ -31,11 +38,11 @@ const COLORS: Record<string, string> = {
   plddt: 'plddt-confidence',
 };
 
-const BACKGROUNDS = { light: 0xf8faf7, dark: 0x111318 } as const;
+const BACKGROUNDS = { light: 0xfcfdfb, dark: 0x111318 } as const;
 
 export interface StructureSource {
   data: string;
-  format: 'pdb' | 'mmcif';
+  format: 'pdb' | 'mmcif' | 'pqr';
   label?: string;
 }
 
@@ -153,6 +160,9 @@ export class MolecularViewer {
   private selectionListeners = new Set<SelectionListener>();
   private resizeObserver: ResizeObserver | null = null;
   private disposed = false;
+  private sphereRepresentation: any = null;
+  private annotationSubscription: { unsubscribe(): void } | null = null;
+  private annotation: HTMLElement | null = null;
 
   static async mount(host: HTMLElement, options: MolecularViewerOptions = {}) {
     const viewer = new MolecularViewer();
@@ -176,7 +186,7 @@ export class MolecularViewer {
       this.reactRoot = createRoot(host);
       this.reactRoot.render(createElement(Plugin, { plugin }));
       try { await plugin.canvas3dInitialized; } catch { /* Mol* reports canvas failures through its UI. */ }
-      plugin.selectionMode = Boolean(options.selectionEnabled);
+      plugin.selectionMode = Boolean(options.selectionEnabled && !options.controlsCollapsed);
       this.setTheme(options.theme || 'light');
       this.selectionSubscription = plugin.managers.structure.selection.events.changed.subscribe(() => {
         const residues = this.selectedResidues();
@@ -196,6 +206,7 @@ export class MolecularViewer {
   loadStructure(source: StructureSource) {
     return this.enqueue(async () => {
       this.assertMounted();
+      this.removeSphereGeometry();
       await this.plugin.clear();
       const raw = await this.plugin.builders.data.rawData({ data: source.data, label: source.label || 'structure' });
       const trajectory = await this.plugin.builders.structure.parseTrajectory(raw, source.format);
@@ -213,6 +224,7 @@ export class MolecularViewer {
   }) {
     return this.enqueue(async () => {
       this.assertMounted();
+      this.removeSphereGeometry();
       await this.plugin.clear();
       if (source.coordinateFormat === 'pdb') {
         const raw = await this.plugin.builders.data.rawData({ data: source.coordinates, label: source.label || 'trajectory' });
@@ -251,6 +263,7 @@ export class MolecularViewer {
   clear() {
     return this.enqueue(async () => {
       this.assertMounted();
+      this.removeSphereGeometry();
       await this.plugin.clear();
       this.appliedRepresentation = null;
     });
@@ -259,7 +272,11 @@ export class MolecularViewer {
   setRepresentation(mode: string) {
     if (!REPRESENTATIONS[mode]) return Promise.reject(new Error(`Unknown representation: ${mode}`));
     this.representation = mode;
-    return this.enqueue(() => this.applyPresentation());
+    return this.enqueue(async () => {
+      const camera = this.plugin?.canvas3d?.camera; const snapshot = camera?.getSnapshot();
+      await this.applyPresentation();
+      if (snapshot) camera.setState(snapshot, 0);
+    });
   }
 
   setColor(mode: string) {
@@ -269,6 +286,7 @@ export class MolecularViewer {
   }
 
   select(selection: MolecularSelection) {
+    if (Array.isArray(selection.residues) && !selection.residues.length) { this.plugin.managers.structure.selection.clear(); return true; }
     const loci = this.lociFor(selection);
     if (!loci) return false;
     // One combined loci, one 'set': a multi-residue selection replaces the
@@ -303,7 +321,7 @@ export class MolecularViewer {
   setTheme(theme: 'light' | 'dark') {
     this.options.theme = theme === 'dark' ? 'dark' : 'light';
     if (this.plugin?.canvas3d) {
-      this.plugin.canvas3d.setProps({ renderer: { backgroundColor: BACKGROUNDS[this.options.theme] } });
+      this.plugin.canvas3d.setProps({ renderer: { backgroundColor: BACKGROUNDS[this.options.theme], selectColor: 0xa6406c }, marking: { selectEdgeColor: 0xa6406c } });
     }
   }
 
@@ -320,6 +338,37 @@ export class MolecularViewer {
     return helper.getImageDataUri();
   }
 
+  private removeSphereGeometry(): void {
+    if (!this.sphereRepresentation) return;
+    this.plugin?.canvas3d?.remove(this.sphereRepresentation); this.sphereRepresentation.destroy(); this.sphereRepresentation = null;
+  }
+
+  setSphereGeometry(source: string | null): Promise<void> {
+    return this.enqueue(async () => {
+      this.removeSphereGeometry(); if (source == null) return;
+      this.assertMounted(); const spheres = parseRecordedSpheres(source);
+      const mesh = MeshBuilder.createState(2048, 2048);
+      spheres.forEach((sphere, index) => { mesh.currentGroup = index; addSphere(mesh, Vec3.create(...sphere.center), sphere.radius, 2); });
+      const shape = Shape.create('Recorded alpha spheres', spheres, MeshBuilder.getMesh(mesh), () => 0xb5964c as any, () => 1, index => `Alpha sphere ${index + 1} · radius ${spheres[index]!.radius} Å`);
+      const representation = ShapeRepresentation(() => shape, Mesh.Utils);
+      try { await representation.createOrUpdate({ alpha: .23, doubleSided: true }, spheres).run(); this.plugin.canvas3d.add(representation); this.sphereRepresentation = representation; }
+      catch (error) { representation.destroy(); throw error; }
+    });
+  }
+
+  annotate(annotation: { point: { x: number; y: number; z: number }; label: string } | null): void {
+    this.annotationSubscription?.unsubscribe(); this.annotationSubscription = null; this.annotation?.remove(); this.annotation = null;
+    if (!annotation || !this.host || !this.plugin?.canvas3d || !Object.values(annotation.point).every(Number.isFinite)) return;
+    const marker = document.createElement('div'); marker.className = 'molecular-annotation'; const label = document.createElement('span'); label.textContent = annotation.label; marker.append(label); this.host.append(marker); this.annotation = marker;
+    const update = () => {
+      const camera = this.plugin.canvas3d.camera, point = Vec3(); camera.project(point, Vec3.create(annotation.point.x, annotation.point.y, annotation.point.z));
+      const x = (point[0]! - camera.viewport.x) * this.host!.clientWidth / camera.viewport.width;
+      const y = (camera.viewport.height - point[1]! + camera.viewport.y) * this.host!.clientHeight / camera.viewport.height;
+      marker.style.left = `${x}px`; marker.style.top = `${y}px`; marker.hidden = point[2]! < 0 || point[2]! > 1 || x < 0 || x > this.host!.clientWidth || y < 0 || y > this.host!.clientHeight;
+    };
+    this.annotationSubscription = this.plugin.canvas3d.didDraw.subscribe(update); update();
+  }
+
   onSelectionChanged(listener: SelectionListener) {
     this.selectionListeners.add(listener);
     return () => this.selectionListeners.delete(listener);
@@ -332,6 +381,8 @@ export class MolecularViewer {
   }
 
   private releaseResources() {
+    this.removeSphereGeometry();
+    this.annotationSubscription?.unsubscribe(); this.annotationSubscription = null; this.annotation?.remove(); this.annotation = null;
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
     this.selectionSubscription?.unsubscribe();
@@ -382,7 +433,7 @@ export class MolecularViewer {
           const existing = this.components();
           if (existing.length) await this.plugin.managers.structure.component.removeRepresentations(existing);
           for (const component of this.components()) {
-            await this.plugin.builders.structure.representation.addRepresentation(component.cell, { type: provider });
+            await this.plugin.builders.structure.representation.addRepresentation(component.cell, { type: provider, ...(this.representation === 'points' ? { size: 'uniform', sizeParams: { value: 0.25 } } : {}) });
           }
         }, { canUndo: 'Structure representation' });
       }

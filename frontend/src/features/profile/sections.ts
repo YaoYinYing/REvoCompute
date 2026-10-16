@@ -319,16 +319,11 @@ function runtime(seconds: number | null): string { if (seconds == null) return '
 
 const ACTIVITY_PERIOD_LABELS: Record<string, string> = { daily: 'day', weekly: 'week', quarterly: 'quarter', yearly: 'year' };
 
-function niceStep(value: number): number {
-  const magnitude = 10 ** Math.floor(Math.log10(value));
-  const normalized = value / magnitude;
-  return (normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10) * magnitude;
-}
-
-/** A count axis with four major intervals and a minor tick midway between them. */
+/** Integer task counts with a readable, rounded upper bound. */
 function chartScale(peak: number): { max: number; major: number } {
-  const major = Math.max(1, niceStep(Math.max(peak, 1) / 4));
-  return { max: Math.max(major * 4, peak), major };
+  const max = Math.max(10, Math.ceil(peak / 10) * 10);
+  const major = max % 4 === 0 ? max / 4 : max / 2;
+  return { max, major };
 }
 
 function periodLabel(period: string, window: string): string {
@@ -339,9 +334,7 @@ function periodLabel(period: string, window: string): string {
 }
 
 /**
- * Render the Tasks-over-time chart: a labelled count axis with major ticks at
- * four intervals and a minor tick midway between each, plus period ticks on the
- * x-axis (thinned so the labels stay legible at 30 buckets).
+ * Render integer task counts with a rounded upper bound and thinned period labels.
  */
 function activityChart(data: UserMetrics): HTMLElement {
   const counts = data.activity.map(point => point.count);
@@ -356,19 +349,12 @@ function activityChart(data: UserMetrics): HTMLElement {
   const yAxis = document.createElement('div');
   yAxis.className = 'activity-axis-y';
   yAxis.setAttribute('aria-hidden', 'true');
-  for (let step = 0; step <= 4; step += 1) {
-    const major_tick = document.createElement('span');
-    major_tick.className = 'activity-tick-major';
-    major_tick.style.top = `${100 - (step / 4) * 100}%`;
-    major_tick.textContent = String(step * major);
-    yAxis.append(major_tick);
-    if (step < 4) {
-      const minor_tick = document.createElement('span');
-      minor_tick.className = 'activity-tick-minor';
-      minor_tick.style.top = `${100 - ((step + 0.5) / 4) * 100}%`;
-      minor_tick.textContent = String(Math.round((step + 0.5) * major));
-      yAxis.append(minor_tick);
-    }
+  for (let value = 0; value <= max; value += major) {
+    const tick = document.createElement('span');
+    tick.className = 'activity-tick-major';
+    tick.style.top = `${100 - value / max * 100}%`;
+    tick.textContent = String(value);
+    yAxis.append(tick);
   }
 
   const plot = document.createElement('div');
@@ -394,7 +380,7 @@ function activityChart(data: UserMetrics): HTMLElement {
     const xTick = document.createElement('span');
     xTick.className = 'activity-tick-major';
     // Anchor the label to the last bucket so the series always ends labelled.
-    const labelled = index % stride === 0 || index === counts.length - 1;
+    const labelled = (index % stride === 0 && index < counts.length - Math.ceil(stride / 2)) || index === counts.length - 1;
     xTick.textContent = labelled ? periodLabel(point.period, data.window) : '';
     xAxis.append(xTick);
   });

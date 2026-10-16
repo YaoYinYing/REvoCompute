@@ -242,6 +242,7 @@ def test_real_api_failure_evidence_from_dashboard_and_result(task_context, page,
     shutil.copytree(bundle, static_root / "app")
     monkeypatch.setattr(module.app, "static_folder", str(static_root))
     if published:
+        (root / "partial.txt").write_text("Retained partial scientific output")
         publish_evidence(task_context)
     else:
         module.task_store.record_task_diagnostics(task_id, {"reason_code": "publication_failed", "exit_code": 0})
@@ -258,6 +259,9 @@ def test_real_api_failure_evidence_from_dashboard_and_result(task_context, page,
         page.goto(f"{origin}/compute/dashboard")
         action = page.get_by_role("button", name="View error", exact=True)
         expect(action).to_be_visible()
+        for layout in ("compact", "table", "detailed"):
+            page.locator(f'[data-layout="{layout}"]').first.click()
+            expect(action).to_be_visible()
         action.focus()
         page.keyboard.press("Enter")
         panel = page.get_by_role("dialog").locator(".task-diagnostics")
@@ -270,6 +274,17 @@ def test_real_api_failure_evidence_from_dashboard_and_result(task_context, page,
         page.goto(f"{origin}/compute/results/{task_id}")
         panel = page.locator(".task-diagnostics")
         expect(panel).to_be_visible()
+        page.get_by_role("button", name="View error", exact=True).click()
+        expect(panel).to_be_focused()
+        expect(page.locator(".app-sidebar")).to_have_count(1)
+        if published:
+            page.get_by_role("button", name="Open Files and diagnostics", exact=True).click()
+            expect(page.locator("dialog.result-rail")).to_be_visible()
+            page.keyboard.press("Escape")
+            expect(page.get_by_role("button", name="Open Files and diagnostics", exact=True)).to_be_focused()
+            page.get_by_role("button", name="Open Files and diagnostics", exact=True).click()
+            page.locator('[data-artifact-path="partial.txt"]').click()
+            expect(page.locator(".result-preview")).to_contain_text("Retained partial scientific output")
         expect(panel).to_contain_text("nonzero_exit" if published else "publication_failed")
         for width in (1440, 1024, 390):
             page.set_viewport_size({"width": width, "height": 900})
@@ -377,3 +392,55 @@ def test_workflow_submission_failure_cannot_inherit_previous_stage_evidence(task
     assert payload["exit_code_source"] is None
     assert payload["stage"] == "second"
     assert payload["logs"] == []
+
+
+@pytest.mark.parametrize("fault", [None, "metadata", "publication"])
+def test_diagnostic_failures_preserve_terminal_ownership_accounting_and_cleanup(task_context, monkeypatch, fault):
+    """Publication is best effort after allocation settlement; it cannot own execution."""
+    import time
+
+    module, client, task_id, root, owner, *_ = task_context
+    store = module.task_store
+    runtime = module.task_runtime
+    store.update_task(task_id, status="running")
+    task = store.get_task(task_id)
+    user_id = task["submitted_by_user_id"]
+    started = time.time() - 10
+    decision = store.reserve_compute_admission(user_id=user_id, task_id=task_id, at=started)
+    assert decision["allowed"]
+    store.record_allocation_start(
+        slurm_job_id="diagnostic-fault-job", task_id=task_id, user_id=user_id, stage_id="fit",
+        gpu_count=1, cpu_cores=1, started_at=started,
+    )
+    store.settle_allocation_elapsed("diagnostic-fault-job", elapsed_seconds=5, finished_at=started + 5)
+    allocations = store.list_task_allocations(task_id)
+    reservations = store.list_task_reservations(task_id)
+    ledger = store.list_compute_ledger(user_id)
+    assert allocations and reservations and ledger
+    input_root = Path(module.app.config["storage_resolver"].get_input_root(task))
+    for directory in ("inputs", "scratch", "prepared"):
+        (input_root / directory).mkdir(parents=True, exist_ok=True)
+        (input_root / directory / "sample.txt").write_text(directory)
+
+    def refuse(*args, **kwargs):
+        raise OSError("diagnostic storage unavailable")
+
+    if fault == "metadata":
+        monkeypatch.setattr(store, "record_task_diagnostics", refuse)
+    elif fault == "publication":
+        monkeypatch.setattr(runtime, "publish_result_text", refuse)
+    runtime._record_failure(task_id, task, started, "fit", "Execution failed")
+    after = store.get_task(task_id)
+    assert after["status"] == "failed"
+    assert after["error"] == "Execution failed"
+    assert after["walltime"] == after["finished_at"] - started
+    assert (after["username"], after["submitted_by_user_id"], after["storage_key"]) == (
+        task["username"], user_id, task["storage_key"],
+    )
+    assert store.list_task_allocations(task_id) == allocations
+    assert store.list_task_reservations(task_id) == reservations
+    assert store.list_compute_ledger(user_id) == ledger
+    assert (input_root / "inputs" / "sample.txt").read_text() == "inputs"
+    assert not (input_root / "scratch").exists()
+    assert not (input_root / "prepared").exists()
+    assert client.get(f"/compute/api/tasks/{task_id}/diagnostics", headers=owner).status_code == 200

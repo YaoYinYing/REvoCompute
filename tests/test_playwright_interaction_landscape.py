@@ -371,8 +371,8 @@ def test_pinned_sticky_layer_keeps_its_content_reachable(page: Page) -> None:
             f"{name}: the method index is not pinned at its sticky offset; scrollY={sample['scrollY']}, "
             f"position={sample['position']}, top={sample['pinned']['top']}, offsetTop={sample['offsetTop']}"
         )
-        assert sample["pinned"]["top"] < sample["headerBottom"], (
-            f"{name}: the pinned index does not reach the header band, so the occlusion contract was "
+        assert sample["pinned"]["top"] >= sample["headerBottom"], (
+            f"{name}: the pinned index is hidden by the header band; reachability was "
             f"never exercised; scrollY={sample['scrollY']}, pinnedTop={sample['pinned']['top']}, "
             f"headerBottom={sample['headerBottom']}"
         )
@@ -603,12 +603,12 @@ def test_persistent_rail_stays_reachable_while_the_page_scrolls(page: Page) -> N
         fresh.goto(f"{ORIGIN}/compute/account/metrics")
         fresh.wait_for_timeout(700)
         before = fresh.evaluate(
-            "() => { const r = document.querySelector('.app-nav').getBoundingClientRect();"
-            " return {top: r.top, height: r.height, position: getComputedStyle(document.querySelector('.app-nav')).position}; }"
+            "() => { const r = document.querySelector('.app-sidebar').getBoundingClientRect();"
+            " return {top: r.top, height: r.height, position: getComputedStyle(document.querySelector('.app-sidebar')).position}; }"
         )
         assert before["position"] == "sticky", before
         reached = wheel_scroll(fresh, 640, 400, 400, 12)
-        sample = fresh.evaluate(STICKY_PROBE, ".app-nav")
+        sample = fresh.evaluate(STICKY_PROBE, ".app-sidebar")
     finally:
         fresh.close()
     assert reached > 0 and sample["scrollY"] > 0, (
@@ -817,6 +817,7 @@ def test_dense_table_overflow_reaches_its_last_cell_by_wheel(page: Page) -> None
         assert start["scrollLeft"] == 0, (
             f"the scroller did not start at its origin; scrollLeft={start['scrollLeft']}"
         )
+        fresh.locator(TABLE_SCROLLER).scroll_into_view_if_needed()
         box = fresh.locator(TABLE_SCROLLER).bounding_box()
         fresh.mouse.move(box["x"] + 60, box["y"] + 20)
         for _ in range(8):
@@ -863,6 +864,7 @@ def test_touch_drag_reaches_the_end_of_the_dense_table(page: Page) -> None:
         origin = fresh.evaluate(TABLE_PROBE)
         assert origin["scrollLeft"] == 0, f"the scroller did not return to its origin; {origin}"
 
+        fresh.locator(TABLE_SCROLLER).scroll_into_view_if_needed()
         box = fresh.locator(TABLE_SCROLLER).bounding_box()
         cdp: CDPSession = fresh.context.new_cdp_session(fresh)
         cdp.send("Emulation.setTouchEmulationEnabled", {"enabled": True, "maxTouchPoints": 1})

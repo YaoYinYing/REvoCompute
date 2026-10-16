@@ -64,15 +64,12 @@ describe('shell navigation structure', () => {
     }
   });
 
-  it('keeps the mobile Administration caption while the bar regions drop theirs', () => {
+  it('keeps the shared group captions available for the sidebar and drawer', () => {
     const { root } = shellWithPageHeading();
     const caption = (region: string): HarnessNode => captionOf(root.querySelector(`div.app-nav-group[data-nav-group="${region}"]`)!);
-    // On the mobile bar the Compute and Account destinations sit directly on the bar,
-    // so their captions leave the tree. Administration is a separate surface whose
-    // caption names it above the bar and must stay, even while its group is hidden
-    // until an administrator signs in.
-    expect(caption('compute').hidden).toBe(true);
-    expect(caption('account').hidden).toBe(true);
+    // All three groups retain captions in the shared desktop/sidebar drawer.
+    expect(caption('compute').hidden).toBe(false);
+    expect(caption('account').hidden).toBe(false);
     expect(caption('admin').hidden).toBe(false);
     expect(caption('admin').textContent).toBe('Administration');
     expect(root.querySelector('div.app-nav-group[data-nav-group="admin"]')!.hidden).toBe(true);

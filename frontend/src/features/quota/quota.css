@@ -1,3 +1,4 @@
+@import '../../components/data-register.css';
 /*
  * The Quota position's own presentation.
  *
@@ -20,7 +21,7 @@
 .quota-position h3 { margin: 1.1rem 0 .5rem; font: 600 .95rem/1.2 var(--font-display); }
 .quota-bars { display: grid; gap: .7rem; margin: 0 0 1rem; }
 .quota-bar-item { display: grid; gap: .3rem; min-width: 0; }
-.quota-bar-item h4 { margin: 0; color: var(--app-muted); font-size: .7rem; font-weight: 650; }
+.quota-bar-item h4 { margin: 0; color: var(--app-muted); font-size: .875rem; font-weight: 650; }
 /* The row holds the allowance track and, when the account is over, the overage
    band past it. The row's own width is the position: the track is the allowance's
    share of it and the overage band is the excess, so together they span the true
@@ -43,9 +44,18 @@
 .quota-bar.is-over .quota-bar-used { background: var(--app-danger); }
 .quota-bar.is-over .quota-bar-reserved { background: repeating-linear-gradient(45deg, color-mix(in srgb, var(--app-danger) 45%, transparent) 0 4px, transparent 4px 8px); }
 .quota-bar-overage { flex: 0 0 calc(100% - 100% / var(--quota-total, 1)); height: 100%; border-left: 2px solid var(--app-surface); border-radius: var(--r-pill); background: repeating-linear-gradient(-45deg, color-mix(in srgb, var(--app-danger) 70%, transparent) 0 4px, transparent 4px 8px); }
-.quota-bar-note { margin: 0; color: var(--app-muted); font-size: .68rem; line-height: 1.45; font-variant-numeric: tabular-nums; }
-.quota-window-note { margin: .5rem 0 0; color: var(--app-muted); font-size: .68rem; }
+.quota-bar-note { margin: 0; color: var(--app-muted); font-size: .875rem; line-height: 1.45; font-variant-numeric: tabular-nums; }
+.quota-window-note { margin: .5rem 0 0; color: var(--app-muted); font-size: .875rem; }
 .quota-ledger-table td:last-child { min-width: 14rem !important; }
 .quota-ledger-table td small { display: block; margin-top: .15rem; color: var(--app-muted); overflow-wrap: anywhere; }
 .quota-unattributed span { color: var(--app-warning, var(--app-accent-2)); font-style: italic; }
 @media (max-width: 48rem) { .quota-bars { gap: .55rem; } }
+
+.quota-position > h3 { font-size: 1.25rem; font-weight: 500; }
+.quota-bars { gap: 1.5rem; padding-block: 1rem; }
+.quota-bar-item { gap: .65rem; }
+.quota-bar-item h4 { color: var(--app-ink); }
+.quota-storage-overview { padding-block: .5rem 1.5rem; border-bottom: 1px solid var(--app-line); }
+.quota-storage-value { font: 500 1.25rem var(--font-mono); }
+.quota-policy { padding-block: 1rem; }
+.quota-policy > summary { cursor: pointer; }

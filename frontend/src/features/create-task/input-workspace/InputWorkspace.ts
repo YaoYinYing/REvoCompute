@@ -45,7 +45,6 @@ export class InputWorkspace {
     if (generation !== this.generation || host !== this.host) { host.destroy(); return; }
     const displayed = new Set(displaySteps(form.input_workspace.steps));
     const stepTargets = new Map<string, HTMLElement>();
-    let index = 0;
     form.input_workspace.steps.forEach(step => {
       if (!displayed.has(step)) {
         // Contract-only step (e.g. the terminal review anchor): keep it mounted so
@@ -54,9 +53,17 @@ export class InputWorkspace {
         stepTargets.set(step.id, element('div'));
         return;
       }
-      index += 1;
       const section = element('section', 'ct-protocol-step'); section.dataset.stepId = step.id;
-      const heading = element('header', 'ct-step-heading'); heading.append(element('span', 'ct-step-number', String(index).padStart(2, '0')), element('h2', 'ct-step-title', step.title));
+      section.dataset.content = step.capabilities.every(capability => capability.plugin === 'parameters') ? 'parameters' : 'input';
+      const heading = element('header', 'ct-step-heading');
+      const identity = element('div'); const single = step.capabilities.length === 1;
+      const input = single && step.capabilities[0]?.plugin === 'files';
+      const parameters = single && step.capabilities[0]?.plugin === 'parameters';
+      const title = parameters ? step.capabilities[0]!.title : step.title;
+      const primaryRole = form.inputs.find(role => step.capabilities[0]?.options.roles instanceof Array && step.capabilities[0].options.roles.includes(role.id)) || form.inputs[0];
+      identity.append(element('p', 'ct-section-kicker', step.capabilities.every(capability => capability.plugin === 'parameters') ? t('ct.param.heading') : t('ct.scientificInput')), element('h2', 'ct-step-title', input && primaryRole ? primaryRole.title : title));
+      heading.append(identity);
+      if (input && primaryRole) heading.append(element('span', 'ct-role-id', `role: ${primaryRole.id}`));
       if (step.description) heading.append(element('p', 'ct-step-description', step.description));
       const body = element('div', 'ct-step-body'); section.append(heading, body); this.root.append(section); stepTargets.set(step.id, body);
     });
@@ -95,8 +102,8 @@ export class InputWorkspace {
     host.mount(definitions, context, definition => {
       const target = stepTargets.get(definition.stepId); if (!target) throw new Error(t('ct.workspace.missingStep', { step: definition.stepId }));
       const section = element('section', 'ct-workspace-component'); section.dataset.capabilityId = definition.id;
-      if (definition.title) section.append(element('h3', 'ct-component-title', definition.title));
-      if (definition.description) section.append(element('p', 'ct-component-description', definition.description));
+      if (form.input_workspace.steps.find(step => step.id === definition.stepId)!.capabilities.length > 1 && definition.title) section.append(element('h3', 'ct-component-title', definition.title));
+      if (form.input_workspace.steps.find(step => step.id === definition.stepId)!.capabilities.length > 1 && definition.description) section.append(element('p', 'ct-component-description', definition.description));
       const body = element('div', 'ct-component-body'); section.append(body); target.append(section); return body;
     });
     host.refresh();

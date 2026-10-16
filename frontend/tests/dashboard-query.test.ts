@@ -27,8 +27,18 @@ describe('dashboard task query', () => {
     expect(queryTasks(tasks, { ...initialTaskQuery(), search: '[', regex: true })).toEqual({ tasks: [], error: 'Invalid regular expression' });
   });
 
+  it('finds an exact Task ID without requiring its display name', () => {
+    expect(queryTasks(tasks, { ...initialTaskQuery(), search: 'b'.repeat(32) }).tasks.map(item => item.display_name)).toEqual(['Docking run']);
+    expect(queryTasks(tasks, { ...initialTaskQuery(), search: '^a{32}$', regex: true }).tasks.map(item => item.display_name)).toEqual(['Alpha model']);
+  });
+
   it('sorts missing finish dates deterministically', () => {
     expect(queryTasks(tasks, { ...initialTaskQuery(), sort: 'finished' }).tasks.map(item => item.display_name)).toEqual(['Alpha model', 'Docking run']);
+  });
+
+  it('filters attention without conflating it with a task lifecycle state', () => {
+    const rows = [task({status:'failed'}),task({status:'cancelled'}),task({status:'running'})];
+    expect(queryTasks(rows, {...initialTaskQuery(),status:'attention'}).tasks.map(item=>item.status).sort()).toEqual(['cancelled','failed']);
   });
 
   it('defaults to the detailed task layout', () => {

@@ -112,6 +112,7 @@ def _reading(page: Page) -> dict:
             host: box(host),
             toolbar: box(document.querySelector('.structure-toolbar')),
             fullscreen: Boolean(document.fullscreenElement && document.fullscreenElement.classList.contains('structure-viewport')),
+            overflowing: [...document.querySelectorAll("body *")].filter(n=>n.getBoundingClientRect().right>innerWidth+1).slice(0,12).map(n=>[n.className,Math.round(n.getBoundingClientRect().right)]),
             documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
           };
         }""",
@@ -193,14 +194,17 @@ def test_advanced_controls_toggle_is_discoverable_and_operable(page: Page, monke
     page.evaluate("() => { try { document.exitFullscreen(); } catch (error) {} }")
 
 
-@pytest.mark.parametrize(("width", "height"), [(768, 900), (320, 900)])
+@pytest.mark.parametrize(("width", "height"), [(768, 900), (320, 900), (280, 900)])
 def test_advanced_controls_reach_every_reader_at_narrow_widths(page: Page, monkeypatch: pytest.MonkeyPatch, width: int, height: int) -> None:
     """No width strands the disclosure, covers the science, or traps a scroll."""
     errors = _open_result(page, monkeypatch, width=width, height=height)
+    # The complete molecular toolbar can place the stage below the initial
+    # viewport on a phone. Measure reachability after ordinary page scrolling.
+    page.locator(_DISCLOSURE).first.scroll_into_view_if_needed()
     closed = _reading(page)
     assert closed["disclosure"]["inside"], closed
     assert closed["disclosure"]["hittable"], closed
-    assert closed["documentOverflow"] <= 0, closed
+    assert closed["documentOverflow"] <= 0, closed["overflowing"]
 
     opened = _click_disclosure(page)
     assert opened["panel"]["visible"] is True, f"the panel did not open at {width}px"

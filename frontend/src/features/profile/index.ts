@@ -8,8 +8,8 @@ import './account.css';
 /**
  * The user's own Account, one page per section.
  *
- * The shell's navigation is the only navigation owner here: the sections are
- * direct destinations reached from the left navigation, and each one is its own
+ * The shared navigation owns the destination vocabulary: the sections are
+ * direct destinations in the personal workspace, and each one is its own
  * route with its own document title. The page owns its single `h1`; the shell
  * owns the `main` landmark it mounts into. A section that cannot load reports the
  * failure in place rather than replacing the shell.

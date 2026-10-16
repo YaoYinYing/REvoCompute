@@ -142,12 +142,12 @@ type Theme = 'light' | 'dark';
 
 /** Diverging ramps run negative → neutral → positive, with a theme-selected neutral. */
 const DIVERGING_RAMPS: Record<Theme, string[]> = {
-  light: ['#2166ac', '#92c5de', '#f0efec', '#f4a582', '#b2182b'],
-  dark: ['#4fa3d1', '#2c5a72', '#26343a', '#6b4340', '#e08a76'],
+  light: ['#8c4874', '#cfb6ca', '#f0f4eb', '#a4c2b3', '#2f6955'],
+  dark: ['#d99dc5', '#72536a', '#26342d', '#4f7964', '#a0ceb1'],
 };
 const SEQUENTIAL_RAMPS: Record<Theme, string[]> = {
-  light: ['#eef7fb', '#7db9dc', '#155b8a'],
-  dark: ['#1d2b33', '#3d7d99', '#9ed6ea'],
+  light: ['#edf3e7', '#aac6b5', '#2f6955'],
+  dark: ['#202e27', '#517b65', '#b0d6b9'],
 };
 
 function currentTheme(): Theme {
@@ -202,11 +202,13 @@ export function createMatrixViewRenderer(): ViewRenderer {
       host.replaceChildren(split);
       const direction = directionWording(mapping.direction);
       const matrix = new PairMatrix({
-        figure, canvas, readout, observe: split, maxElements: MAX_ELEMENTS,
+        figure, canvas, readout, observe: split, maxElements: MAX_ELEMENTS, minimumWidth: 640,
+        geometry: { width: 800, height: 550, left: 130, top: 30, size: 440, legendX: 604, legendWidth: 16 },
         minimum: range?.minimum, maximum: range?.maximum,
         ramp: () => matrixRamp(mapping.scale),
         // An even tick count keeps a labelled tick on a symmetric diverging midpoint.
         ticks: mapping.scale === 'diverging' ? 4 : undefined,
+        onSelect: (cell: Record<string, unknown>) => host.dispatchEvent(new CustomEvent('result-matrix-select', { detail: cell })),
         xTitle, yTitle, unit: mapping.unit, legendTitle: legendTitle(mapping), decimals: 2,
         formatReadout: (cell: Record<string, any>) => {
           const value = Number.isFinite(cell.value) ? cell.value.toFixed(2) : 'N/A';
@@ -215,7 +217,7 @@ export function createMatrixViewRenderer(): ViewRenderer {
         },
       });
       matrix.setData({ values: series.values, xLabels: series.xLabels, yLabels: series.yLabels });
-      return { destroy: () => matrix.destroy() };
+      return { destroy: () => matrix.destroy(), selectCell: (xLabel: string, yLabel: string) => { const x = series.xLabels.indexOf(xLabel), y = series.yLabels.indexOf(yLabel); if (x >= 0 && y >= 0) matrix.setSelection(x, y); } };
     },
   };
 }
