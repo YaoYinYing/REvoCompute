@@ -38,6 +38,7 @@ This is the canonical change-impact matrix:
 | Task input/output execution contract | No | Yes |
 | Result-view source selectors or acceptance-relevant mapping | No | Yes |
 | `expected_files.yaml` logical-output contract | No | Yes |
+| Which directory owns a Task's result contract (its `expected_files.yaml` and `storyboard/`) | No | Yes |
 | Runtime entrypoint declaration or `runner.yaml` mounts/env/limits | No | Yes |
 | Effective resource policy | No | Yes |
 | Access-policy identification or entitlement requirement | No | Yes |
@@ -171,12 +172,55 @@ Example Runner. The shared module reaches the container through
 `runtime.runtime_overlay`, not through the image.
 
 Declare Result Workspace views in `task.yaml`. Add `expected_files.yaml` and a
-family-owned `storyboard/` only when the results benefit from stable logical
+`storyboard/` only when the results benefit from stable logical
 file identities or task-specific composition. Storyboards receive only
 manifest-approved artifacts and should delegate file rendering to server
 services. Register a view that presents structures through the declared
 confidence metadata rather than a filename heuristic; see
 [Structure Presentation Contract](structure-presentation.md).
+
+### Where a Task's result contract lives
+
+A Task's result contract is owned by exactly one directory, and that directory
+is decided by what the Task's own deployment directory ships — never by the
+shape, name, or count of any published result file:
+
+```text
+docker/runners/<family>/expected_files.yaml                    family-scoped contract
+docker/runners/<family>/storyboard/                            family-scoped Storyboard
+docker/runners/<family>/tasks/<task-id>/expected_files.yaml    Task-scoped contract
+docker/runners/<family>/tasks/<task-id>/storyboard/            Task-scoped Storyboard
+```
+
+A Task whose own `tasks/<task-id>/` directory ships an `expected_files.yaml` is
+resolved **entirely** from that directory, its Storyboard included. Every other
+Task — one that ships no `expected_files.yaml` of its own — is resolved from the
+family root. A Task never takes its logical files from one directory and its
+Storyboard from another, and a family-scoped Storyboard is never applied to a
+Task that declares its own tree. A task directory that ships a `storyboard/`
+without its own `expected_files.yaml` is a contract error, not a fallback:
+Storyboard assets are deployment-controlled trusted code that must be declared
+beside the tree they present.
+
+Use the **family scope** while every Task in the family publishes the same
+output tree, and move one Task to its **own scope** when its outputs diverge —
+that is the whole migration:
+
+```bash
+git mv docker/runners/<family>/expected_files.yaml docker/runners/<family>/tasks/<task-id>/
+git mv docker/runners/<family>/storyboard          docker/runners/<family>/tasks/<task-id>/
+```
+
+A family may therefore mix scopes: `docker/runners/foundry/` keeps its
+family-scoped fold contract while
+`docker/runners/foundry/tasks/foundry_rfd3_design/` (and the RFD3NA twin) own a
+compressed-design contract, because that TaskType writes `<example_id>_model_<n>.cif.gz`
+where its sibling writes `<example_id>_model.cif`. Migrate a Task only when its
+own declared outputs prove the difference — never widen a family pattern to
+cover a task whose real output was not observed. The other Tasks in the family
+keep their routing, their output identity, and their scientific replay
+unchanged: this is a positional rule, so nothing is inferred from a filename at
+result time.
 
 ## 5. Define `test.yaml`
 

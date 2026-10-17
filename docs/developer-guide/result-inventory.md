@@ -12,7 +12,11 @@ Across every run, `debug/submission.json` and `debug/inputs/**` are provenance,
 diagnostics, and citations are provenance. A runner may override the
 presentation role of its own files by declaring `role:` (`evidence`,
 `provenance`, `diagnostic`, or `artifact`) on the entry in its
-`expected_files.yaml`; the primary view's sources stay `primary`, and an
+`expected_files.yaml`; that file is the family-root contract, or the owning
+Task's `tasks/<task-id>/expected_files.yaml` when that Task publishes a
+different tree; see
+[Where a Task's result contract lives](../runner-guide/adding-a-runner.md#where-a-tasks-result-contract-lives).
+The primary view's sources stay `primary`, and an
 artifact already published as provenance or diagnostic is never downgraded to
 evidence. The runner's terminal
 `task_finished` sentinel is the execution's success marker, not a result: the

@@ -152,7 +152,12 @@ from revocompute.storage import (
     PUBLICATION_NOT_FINALIZED,
     PUBLICATION_UNANCHORED,
 )
-from revocompute.result_storyboard import ResultContractError, expected_file_tree, runner_root, storyboard_declaration
+from revocompute.result_storyboard import (
+    ResultContractError,
+    expected_file_tree,
+    storyboard_asset_root,
+    storyboard_declaration,
+)
 from revocompute import runtime_bundle
 from revocompute.schemas import (
     AccessDecisionRequest,
@@ -2604,6 +2609,46 @@ def run_gremlin(md5sum):
     )
 
 
+def _diagnostics_for_task(task: dict[str, Any]) -> dict[str, Any]:
+    from revocompute.execution_diagnostics import diagnostic_payload
+
+    lifecycle = task_store.get_data_lifecycle(task["md5sum"])
+    data_owned = lifecycle is None or lifecycle["state"] in {"ACTIVE", "ARCHIVED"}
+    return diagnostic_payload(
+        current_app.config["storage_resolver"], task, data_owned=data_owned,
+        evidence=task_store.get_task_diagnostics(task["md5sum"]),
+    )
+
+
+@app.route("/compute/api/tasks/<md5sum>/diagnostics", methods=["GET"])
+@app.route("/compute/api/tasks/<md5sum>/diagnostics/<stream_name>", methods=["GET"])
+@optional_user
+def task_diagnostics(md5sum: str, stream_name: str | None = None):
+    """Task-owned, bounded diagnostic context with no filesystem path parameter."""
+    md5sum = _normalize_task_id(md5sum)
+    if md5sum is None:
+        return jsonify({"error": "Invalid task id"}), 400
+    task = task_store.get_task(md5sum)
+    if task is None or not _task_full_results_allowed(task):
+        return _task_not_found(md5sum)
+    if stream_name is not None and stream_name not in {"stdout", "stderr"}:
+        return jsonify({"error": "Diagnostic stream not found"}), 404
+    payload = _diagnostics_for_task(task)
+    if stream_name:
+        log = next((item for item in payload["logs"] if item["stream"] == stream_name), None)
+        if log is None:
+            return jsonify({"error": "Diagnostic stream not available"}), 404
+        response = current_app.response_class(log["text"], mimetype="text/plain")
+        response.headers.set("Content-Disposition", "attachment", filename=f"{md5sum}.{stream_name}.excerpt.log")
+        response.headers["Content-Security-Policy"] = "sandbox"
+    else:
+        for log in payload["logs"]:
+            log.pop("text", None)
+        response = jsonify(payload)
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
+
+
 @app.route("/compute/api/results/<md5sum>", methods=["GET"])
 @optional_user
 def get_results(md5sum):
@@ -2770,7 +2815,7 @@ def get_result_storyboard_asset(md5sum: str, asset: str):
         declaration = storyboard_declaration(
             task_type, CONFIG.server_dir, set(expected_file_tree(task_type, CONFIG.server_dir))
         )
-        root = runner_root(task_type, CONFIG.server_dir) / "storyboard"
+        root = storyboard_asset_root(task_type, CONFIG.server_dir)
         requested = asset.replace("\\", "/").strip("/")
         if (
             not declaration

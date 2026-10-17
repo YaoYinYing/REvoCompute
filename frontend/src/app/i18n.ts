@@ -21,6 +21,24 @@ const fallback: Locale = 'en';
 export type Dictionary = Record<string, string>;
 
 const en: Dictionary = {
+  "diagnostics.title": "Failure evidence",
+  "diagnostics.loading": "Loading execution evidence…",
+  "diagnostics.classification": "Confirmed classification",
+  "diagnostics.stage": "Execution stage",
+  "diagnostics.exit": "Process exit status",
+  "diagnostics.scheduler": "Scheduler state",
+  "diagnostics.unknown": "Not available",
+  "diagnostics.expired": "Task diagnostic data is no longer retained.",
+  "diagnostics.noLogs": "No readable diagnostic-log preview is available.",
+  "diagnostics.log": "{stream} · diagnostic context",
+  "diagnostics.download": "Download bounded {stream} excerpt",
+  "diagnostics.truncated": "This preview is truncated. The download contains the retained bounded excerpt.",
+  "diagnostics.context": "Log context does not establish a definitive root cause. When retained, original authorized artifacts can also be opened in Files & diagnostics.",
+  "diagnostics.retry": "Retry evidence",
+  "diagnostics.loadFailed": "Execution evidence could not be loaded.",
+  "diagnostics.viewError": "View error",
+  "diagnostics.close": "Close",
+
   // Shell chrome
   'shell.home': 'REvoCompute home',
   'shell.nav.primary': 'Primary',
@@ -614,6 +632,7 @@ const en: Dictionary = {
   'results.structure.representationUnavailable': 'Unknown structure representation: {target}',
   'results.structure.tooLarge': 'This structure exceeds the safe inline preview limit.',
   'results.structure.downloadFailed': 'Structure download failed (HTTP {status}).',
+  'results.structure.compressedUnsupported': 'This browser cannot decompress the published structure.',
   'results.structure.notReady': 'The structure viewer is not ready.',
   'results.noInlinePreview': 'No inline preview is available.',
   'results.noResultUrl': 'This Result URL does not contain a valid task identity.',
@@ -690,6 +709,24 @@ const en: Dictionary = {
 };
 
 const zhCN: Dictionary = {
+  "diagnostics.title": "失败证据",
+  "diagnostics.loading": "正在加载执行证据…",
+  "diagnostics.classification": "已确认的分类",
+  "diagnostics.stage": "执行阶段",
+  "diagnostics.exit": "进程退出状态",
+  "diagnostics.scheduler": "调度器状态",
+  "diagnostics.unknown": "不可用",
+  "diagnostics.expired": "此任务的诊断数据已不再保留。",
+  "diagnostics.noLogs": "没有可读取的诊断日志预览。",
+  "diagnostics.log": "{stream} · 诊断上下文",
+  "diagnostics.download": "下载有大小限制的 {stream} 日志片段",
+  "diagnostics.truncated": "此预览已截断。下载包含保留的有大小限制的日志片段。",
+  "diagnostics.context": "日志上下文不能确定根本原因。数据仍被保留时，也可通过“文件与诊断”访问已授权的原始文件。",
+  "diagnostics.retry": "重试加载证据",
+  "diagnostics.loadFailed": "无法加载执行证据。",
+  "diagnostics.viewError": "查看错误",
+  "diagnostics.close": "关闭",
+
   'shell.home': 'REvoCompute 首页',
   'shell.nav.primary': '主导航',
   'shell.nav.compute': '计算',
@@ -1262,6 +1299,7 @@ const zhCN: Dictionary = {
   'results.structure.representationUnavailable': '未知的结构表示方式：{target}',
   'results.structure.tooLarge': '此结构超出安全的内联预览上限。',
   'results.structure.downloadFailed': '结构下载失败（HTTP {status}）。',
+  'results.structure.compressedUnsupported': '此浏览器无法解压已发布的结构。',
   'results.structure.notReady': '结构查看器尚未就绪。',
   'results.noInlinePreview': '没有可用的内联预览。',
   'results.noResultUrl': '此结果地址不包含有效的任务标识。',

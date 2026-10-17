@@ -145,8 +145,10 @@ A bundle is a test-only, sanitized capture of one completed result, served
 through the same router at the captured task id. Capture it with
 `frontend_fixtures.capture_replay_bundle(task_id=..., result_root=..., provenance=...)`
 — it verifies the manifest's identity, resolves every payload inside the result
-root, re-hashes each from disk, reads the storyboard from the *runner deployment
-tree* (`result_storyboard.runner_root`, never the result root), sanitizes
+root, re-hashes each from disk, reads the storyboard from the Task's own contract
+directory in the *runner deployment tree* (the family root, or the owning
+`tasks/<task-id>/` directory when that Task declares its own tree — never the
+result root), sanitizes
 secret-bearing metadata and host-local paths, and fails on a required view source
 it cannot resolve. Required view sources win the bundle byte budget; an optional
 payload is admitted only from what remains and is otherwise recorded in

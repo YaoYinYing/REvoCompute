@@ -158,6 +158,8 @@ def test_public_openapi_exposes_the_client_contract(monkeypatch, tmp_path):
         "/compute/api/post": {"post"},
         "/compute/api/preflight/{task_type}": {"post"},
         "/compute/api/tasks": {"get"},
+        "/compute/api/tasks/{task_id}/diagnostics": {"get"},
+        "/compute/api/tasks/{task_id}/diagnostics/{stream}": {"get"},
         "/compute/api/running/{task_id}": {"get"},
         "/compute/api/cancel/{task_id}": {"post"},
         "/compute/api/delete/{task_id}": {"delete"},
@@ -1800,7 +1802,9 @@ def test_failed_status_masks_host_paths_in_api_error(monkeypatch, tmp_path):
     assert response.status_code == 200
     payload = response.get_json()
     assert payload["status"] == "failed"
-    assert "/srv/REvoDesign/compute/upload/2KL8.fasta" in payload["error"]
+    assert "Unable to read sequence" in payload["error"]
+    assert "[path redacted]" in payload["error"]
+    assert "/srv/REvoDesign/compute" not in payload["error"]
     assert "/home/server-user/REvoDesign" not in payload["error"]
 
 

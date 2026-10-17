@@ -23,6 +23,110 @@
     {"name": "Administration reports", "description": "Bounded, read-only Admin reports over facts the canonical stores already own, and the placement dry run. Every unknown is reported as unknown rather than as zero."}
   ],
   "paths": {
+    "/compute/api/tasks/{task_id}/diagnostics": {
+      "get": {
+        "operationId": "getTaskDiagnostics",
+        "summary": "Read bounded safe execution failure evidence for an owned Task",
+        "security": [
+          {
+            "cookieAuth": []
+          },
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-fA-F0-9]{32}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Confirmed execution facts and bounded redacted log context; unavailable or expired evidence is explicit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskDiagnostics"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/compute/api/tasks/{task_id}/diagnostics/{stream}": {
+      "get": {
+        "operationId": "downloadTaskDiagnosticExcerpt",
+        "summary": "Download an authorized redacted bounded stdout or stderr excerpt",
+        "security": [
+          {
+            "cookieAuth": []
+          },
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-fA-F0-9]{32}$"
+            }
+          },
+          {
+            "name": "stream",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "stdout",
+                "stderr"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "At most 64 KiB of redacted execution context, delivered as a text attachment",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
     "/openapi.json": {
       "get": {
         "tags": ["Service discovery"],
@@ -1472,6 +1576,119 @@
       "Unavailable": {"description": "Server, queue, or task policy unavailable", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}}
     },
     "schemas": {
+      "TaskDiagnostics": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "task_id",
+          "availability",
+          "summary",
+          "reason_code",
+          "exit_code",
+          "exit_code_source",
+          "scheduler_state",
+          "stage",
+          "logs"
+        ],
+        "properties": {
+          "task_id": {
+            "type": "string"
+          },
+          "availability": {
+            "type": "string",
+            "enum": [
+              "available",
+              "unavailable",
+              "expired"
+            ]
+          },
+          "summary": {
+            "type": "string"
+          },
+          "reason_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "timeout",
+              "out_of_memory",
+              "allocation_failed",
+              "nonzero_exit",
+              "missing_result",
+              "submission_failed",
+              "job_id_unavailable",
+              "allocation_unrecorded",
+              "admission_failed",
+              "execution_exception",
+              "publication_failed",
+              "runner_validation_failed",
+              null
+            ]
+          },
+          "exit_code": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "exit_code_source": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "srun",
+              null
+            ]
+          },
+          "scheduler_state": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stage": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "logs": {
+            "type": "array",
+            "maxItems": 2,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "stream",
+                "preview",
+                "truncated",
+                "download_url"
+              ],
+              "properties": {
+                "stream": {
+                  "type": "string",
+                  "enum": [
+                    "stdout",
+                    "stderr"
+                  ]
+                },
+                "preview": {
+                  "type": "string",
+                  "maxLength": 8192
+                },
+                "truncated": {
+                  "type": "boolean"
+                },
+                "download_url": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
       "TaskId": {"type": "string", "pattern": "^[0-9a-f]{32}$", "example": "0123456789abcdef0123456789abcdef"},
       "LoginRequest": {
         "type": "object",
