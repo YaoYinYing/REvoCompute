@@ -224,6 +224,10 @@ class TaskType:
     runtime: RuntimeFamily
     inputs: tuple[TaskInputRole, ...]
 
+    #: Family-relative directory of this Task manifest, recorded by discovery.
+    #: It is the position a Task-scoped result contract resolves from, so the
+    #: owning directory is never re-derived from a task name or a result file.
+    task_dir: str = ""
     # Optional fields with defaults
     runner_args: tuple[str, ...] = ()
     gpus: bool = False
@@ -623,6 +627,9 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
                 display_name=str(raw.get("display_name", task_id)),
                 runtime=runtime,
                 inputs=task_inputs,
+                # The manifest's own directory, relative to the family root: the
+                # position this Task's result contract is resolved from.
+                task_dir=ref_path.parent.as_posix() if ref_path.parent != Path(".") else "",
                 gpus=bool(raw.get("gpus", False)),
                 requires_network=bool(raw.get("requires_network", False)),
                 stage_markers=dict(raw.get("stage_markers", {})),

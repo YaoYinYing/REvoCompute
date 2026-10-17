@@ -22,6 +22,9 @@ its upstream tool. The pattern, first used by `docker/runners/gremlin_lh/`:
   behaviour, deliberate deviations, and what a user may and may not infer;
 - per-file artifact `role:` declarations in `expected_files.yaml`, so the result
   manifest classifies files by the Runner's own judgement instead of by filename.
+  The tree is family-scoped at the family root, or Task-scoped under
+  `tasks/<task-id>/` for a Task whose outputs differ from its siblings; see
+  [Where a Task's result contract lives](adding-a-runner.md#where-a-tasks-result-contract-lives).
 
 Keep this a per-family record, not a shared library: the family owns the
 science, and the guide owns only the expectation that the record exists.

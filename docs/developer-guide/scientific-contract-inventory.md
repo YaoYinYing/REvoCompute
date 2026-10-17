@@ -45,10 +45,10 @@ publish an `expected_files.yaml` while declaring no view (`no_views`, e.g. the
 PSSM-GREMLIN family); conversely a view may declare every one of its sources
 optional.
 
-Coverage and defect status are independent. `tree_audited` Tasks can still carry a
-concrete defect: the two Foundry design Tasks ship a tree and are defective (see
-[Known defects](#known-defects)). The report always exposes both, so it can never
-be read as "the whole fleet passed".
+Coverage and defect status are independent. A `tree_audited` Task can carry a
+concrete defect, and the report always exposes both, so a clean defect set can
+never be read as "the whole fleet passed": the defect set is currently empty
+while 36 Tasks remain unaudited (see [Known defects](#known-defects)).
 
 ## Evidence levels
 
@@ -132,25 +132,33 @@ Two caveats are load-bearing and are carried in the report itself:
 
 ## Known defects
 
-The audit's defect set is orthogonal to its coverage partition. As of the recorded
-base there are two concrete defects, both in the Foundry family, both reported by
-the audit rather than allowlisted:
+The audit's defect set is orthogonal to its coverage partition, and it is
+currently **empty**: `defective: []`, `ok: true`, with the coverage partition
+unchanged at 20 covered / 36 unaudited. An empty defect set is not a clean bill
+of health — all 36 unaudited Tasks still report
+`result.required_source_undeclared_tree`, because no shipped tree exists to check
+their required sources against.
 
-- **`foundry_rfd3_design` / `foundry_rfd3na_design`: primary candidates have no
+The one concrete defect recorded on this base is now **resolved**, and the
+resolution is a declaration change rather than an allowlist entry:
+
+- **`foundry_rfd3_design` / `foundry_rfd3na_design`: primary candidates had no
   declared identity.** Both design Tasks publish a `candidate-collection` primary
-  view over `*.cif.gz`, but the family's single shared `expected_files.yaml`
-  declares only the RF3 fold spelling (`*_model.cif`) under `structures`. The
-  design Tasks' primary candidates therefore match no declared logical file and
-  the shared storyboard resolves no structures for them. Resolving it means giving
-  the design Tasks their own result tree and storyboard, which is a family
-  redesign; that work is owned by the task-scoped result-tree follow-on, not by
-  this audit.
+  view over `*.cif.gz`, while the family's single shared `expected_files.yaml`
+  declared only the RF3 fold spelling (`*_model.cif`) under `structures`, so the
+  design Tasks' primary candidates matched no declared logical file and the shared
+  storyboard resolved no structures for them. The task-scoped result contract
+  resolves it: each design Task now ships its own `expected_files.yaml` declaring
+  the compressed `*.cif.gz` design tree, beside its own `storyboard/`. The
+  `result.required_source_unaddressed` finding is absent for both, neither is
+  defective, and both remain `tree_audited` and covered.
 
-A third discrepancy is recorded as a **parameter** finding rather than a result
-contract defect and belongs to the parameter-semantics follow-on:
-`foundry_rfd3na_design.num_recycles` is declared, range-validated and recorded in
-the run's provenance, but the launcher forwards it only for the RFD3 model, and
-the live-test plan's smoke case does not distinguish the two.
+A second discrepancy was recorded as a **parameter** finding rather than a result
+contract defect, and the parameter-semantics follow-on closed it:
+`foundry_rfd3na_design.num_recycles` was declared, range-validated and recorded in
+the run's provenance, but the launcher forwards it only for the RFD3 model; the
+follow-on removed the control and made the launcher fail closed, so the two no
+longer diverge.
 
 ## Regenerating this page
 

@@ -86,7 +86,7 @@ def test_rf3_ranks_samples_and_loads_exact_matching_confidence(page: Page) -> No
     }
     responses.update([_page("/confidence-1", "atom_plddts", [2], [0.7, 0.8])])
     responses.update([_page("/confidence-1", "pae", [2, 2], [1, 2, 2, 1])])
-    source = (ROOT / "docker/runners/foundry/storyboard/index.js").read_text(encoding="utf-8")
+    source = (ROOT / "docker/runners/foundry/tasks/foundry_rf3_fold/storyboard/index.js").read_text(encoding="utf-8")
     page.set_viewport_size({"width": 1200, "height": 1100})
     page.set_content("<div id='host'></div>")
     install_scientific_assets(page)
@@ -119,7 +119,7 @@ def test_rf3_early_stop_mounts_without_a_structure(page: Page) -> None:
         "run_record": [{"url": "/run", "name": "foundry-run.json"}],
         "model_assets": [{"url": "/assets", "name": "foundry-model-assets.json"}],
     }
-    source = (ROOT / "docker/runners/foundry/storyboard/index.js").read_text(encoding="utf-8")
+    source = (ROOT / "docker/runners/foundry/tasks/foundry_rf3_fold/storyboard/index.js").read_text(encoding="utf-8")
     page.set_content("<div id='host'></div>")
     install_scientific_assets(page)
     page.evaluate(MOUNT, {"source": source, "files": files, "responses": {"/ranking": "early_stopped\ntrue\n"}})

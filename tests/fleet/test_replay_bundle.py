@@ -458,6 +458,44 @@ def test_storyboard_source_is_read_from_the_runner_tree_not_the_result_root(tmp_
     assert ReplayBundle(bundle).storyboard_source("index.js") == body
 
 
+def test_a_task_scoped_storyboard_is_read_from_the_task_directory(tmp_path: Path) -> None:
+    """A Task that ships its own contract answers from its own directory.
+
+    The Server resolves a result contract by position: the Task's manifest
+    directory when it ships an ``expected_files.yaml`` there, the family root
+    otherwise. A capture that read the family module here would replay a
+    different module than a deployment serves for that Task -- which is exactly
+    the drift this mirrors.
+    """
+    runner_tree = _storyboard_runner_tree(tmp_path, "sequence_demo", "gremlin_lh_fit", "FAMILY\n")
+    task_directory = runner_tree / "sequence_demo" / "tasks" / "gremlin_lh_fit"
+    (task_directory / "storyboard").mkdir()
+    (task_directory / "storyboard" / "index.js").write_text("TASK-SCOPED\n", encoding="utf-8")
+    (task_directory / "expected_files.yaml").write_text(
+        "result:\n  files:\n    items:\n      path: out.txt\n      required: false\n", encoding="utf-8"
+    )
+    root = _write_result_root(tmp_path, _storyboard_fixture())
+    bundle = capture_replay_bundle(require_finished=False, task_id=TASK_ID, result_root=root, storyboard_dirs=[runner_tree])
+
+    assert bundle["storyboard"]["source"] == "TASK-SCOPED\n"
+    assert ReplayBundle(bundle).storyboard_source("index.js") == "TASK-SCOPED\n"
+
+
+def test_a_task_without_its_own_tree_still_reads_the_family_storyboard(tmp_path: Path) -> None:
+    """The family-scoped module answers unless the Task declares its own contract."""
+    runner_tree = _storyboard_runner_tree(tmp_path, "sequence_demo", "gremlin_lh_fit", "FAMILY\n")
+    task_directory = runner_tree / "sequence_demo" / "tasks" / "gremlin_lh_fit"
+    # A module beside the Task WITHOUT its own tree is not the Task's contract:
+    # the Server refuses that declaration outright rather than answering from the
+    # family tree, and a capture must not resolve it either.
+    (task_directory / "storyboard").mkdir()
+    (task_directory / "storyboard" / "index.js").write_text("STRAY\n", encoding="utf-8")
+    root = _write_result_root(tmp_path, _storyboard_fixture())
+    bundle = capture_replay_bundle(require_finished=False, task_id=TASK_ID, result_root=root, storyboard_dirs=[runner_tree])
+
+    assert bundle["storyboard"]["source"] == "FAMILY\n"
+
+
 def test_a_missing_storyboard_in_the_runner_tree_fails_the_capture(tmp_path: Path) -> None:
     runner_tree = _storyboard_runner_tree(tmp_path, "sequence_demo", "gremlin_lh_fit", "export default {};\n")
     root = _write_result_root(tmp_path, _storyboard_fixture())

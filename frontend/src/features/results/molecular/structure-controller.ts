@@ -4,9 +4,29 @@ import type { MolecularViewer, MolecularViewerFactory } from './viewer-contract'
 
 const MAX_STRUCTURE_BYTES = 64 * 1024 * 1024;
 
+// A runner may publish a compressed structure (`*.cif.gz` is what RFdiffusion3
+// writes). The viewer parses the decompressed bytes, so the compression suffix
+// is peeled before the format is read and the payload is gunzipped on the way
+// in; without that, a `.cif.gz` name selected the PDB parser and the gzip
+// payload was handed to it verbatim.
+const GZIPPED = /\.gz$/i;
+
 function structureFormat(path: string): 'pdb' | 'mmcif' | 'pqr' {
-  if (/\.pqr$/i.test(path)) return 'pqr';
-  return /\.(?:cif|mmcif)$/i.test(path) ? 'mmcif' : 'pdb';
+  if (/\.pqr(?:\.gz)?$/i.test(path)) return 'pqr';
+  return /\.(?:cif|mmcif)(?:\.gz)?$/i.test(path) ? 'mmcif' : 'pdb';
+}
+
+async function readSource(path: string, response: Response): Promise<string> {
+  if (!GZIPPED.test(path)) return response.text();
+  if (typeof DecompressionStream === 'undefined') throw new Error(t('results.structure.compressedUnsupported'));
+  // `response.body` is already the raw bytes; the stream inflates them without
+  // ever materializing the whole compressed file as a buffer.
+  if (!response.body) return gunzip(await response.arrayBuffer());
+  return new Response(response.body.pipeThrough(new DecompressionStream('gzip'))).text();
+}
+
+async function gunzip(buffer: ArrayBuffer): Promise<string> {
+  return new Response(new Blob([buffer]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
 }
 
 export class StructureController {
@@ -63,9 +83,10 @@ export class StructureController {
       }
       const response = await fetch(artifact.url, { credentials: 'same-origin', signal: controller.signal });
       if (!response.ok) throw new Error(t('results.structure.downloadFailed', { status: response.status }));
-      const data = await response.text();
+      const name = resultFileName(artifact);
+      const data = await readSource(name, response);
       if (generation !== this.generation) return;
-      const viewer = this.viewer; const name = resultFileName(artifact);
+      const viewer = this.viewer;
       const apply = async (): Promise<void> => {
         if (generation !== this.generation || viewer !== this.viewer) return;
         await viewer.setRepresentation(this.representation);

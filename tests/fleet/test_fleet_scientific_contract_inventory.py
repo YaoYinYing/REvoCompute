@@ -134,23 +134,35 @@ def test_coverage_states_partition_the_fleet_and_reconcile_with_the_audit(invent
             assert row["declares_result_tree"] is False and row["view_count"] > 0
 
 
-def test_the_recorded_foundry_defect_survives_as_a_concrete_finding(inventory):
-    """A coverage boundary is not a clean bill of health, and the defect is present.
+def test_the_recorded_foundry_defect_is_resolved_not_silenced(inventory):
+    """The design Tasks now carry a tree of their own, so the old defect is gone.
 
-    The audit's defect set is orthogonal to its coverage partition. The two Foundry
-    design Tasks ship a result tree (covered) and still carry a concrete
-    unaddressed-required-source finding. This asserts the finding is genuinely
-    reported — not merely tolerated by an allowlist — and that the defective set is
-    a subset of the covered set rather than a third coverage bucket.
+    The audit's defect set is orthogonal to its coverage partition, and the two
+    Foundry design Tasks used to be *both*: they shipped a tree (covered) and still
+    carried a concrete unaddressed-required-source finding, because the family tree
+    spelled RF3's uncompressed `<example_id>_model.cif` while RFD3/RFD3NA publish
+    `<example_id>_model_<n>.cif.gz`. Resolving each design Task to its own
+    task-scoped tree fixes the finding instead of allowlisting it, so the assertion
+    is that the finding is genuinely absent — not merely tolerated — while the two
+    Tasks stay covered and keep their declared trees.
     """
     codes = {(finding["task"], finding["code"]) for finding in inventory["findings"]}
-    assert ("foundry_rfd3_design", "result.required_source_unaddressed") in codes
-    assert ("foundry_rfd3na_design", "result.required_source_unaddressed") in codes
+    assert ("foundry_rfd3_design", "result.required_source_unaddressed") not in codes
+    assert ("foundry_rfd3na_design", "result.required_source_unaddressed") not in codes
 
     defective = set(inventory["coverage"]["defective"])
-    assert defective == {"foundry_rfd3_design", "foundry_rfd3na_design"}
+    assert defective == set()
     assert defective <= set(inventory["coverage"]["covered"])
-    assert inventory["coverage"]["ok"] is False
+    assert inventory["coverage"]["ok"] is True
+
+    # Resolving the defect did not drop the Tasks out of coverage: they still
+    # declare a tree, still have views, and the partition is unchanged at 20/36.
+    states = {row["task"]: row for row in inventory["tasks"]}
+    for task in ("foundry_rfd3_design", "foundry_rfd3na_design"):
+        assert states[task]["coverage_state"] == "tree_audited"
+        assert states[task]["declares_result_tree"] is True and states[task]["view_count"] > 0
+    assert len(inventory["coverage"]["covered"]) == 20
+    assert len(inventory["coverage"]["unaudited"]) == 36
 
 
 def test_every_input_role_is_classified_by_a_real_semantic_validator_registry(inventory):
