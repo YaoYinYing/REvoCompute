@@ -1195,6 +1195,15 @@ def task_demo_file(name: str, demo_id: str, asset: str):
     undeclared file simply is not a member and is refused.  Serving re-reads the
     same directory the declaration validated, and the response carries the
     declared media type rather than a type guessed from the request.
+
+    The catalog and this route deliberately read the manifest at different scope,
+    and a caller should read the two together.  ``task_demo_catalog`` validates the
+    manifest whole and publishes nothing at all if *any* demo in it is invalid, so
+    a caller that saw a ``503`` there has no catalog.  This route resolves only the
+    demo the request names, so a demo that is itself valid is still served while a
+    sibling declared beside it is not.  An asset request is therefore not a claim
+    that the Task's catalog is publishable; it is a claim about the one declaration
+    the request names.
     """
     tt, refusal = _enabled_task_type_or_404(name)
     if refusal is not None:

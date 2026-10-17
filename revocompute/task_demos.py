@@ -327,6 +327,14 @@ def _parse_file(raw: Any, *, role: Any, root: Path, demo_id: str) -> DemoFile:
         raise DemoContractError(
             f"Demo {demo_id!r} fixture {relative!r} exceeds the {MAX_DEMO_FILE_BYTES} byte limit"
         )
+    # The digest is verified here, once, at declaration time, over the bytes this
+    # read returns.  The download route serves the declared pathname from the
+    # contained root rather than the inode this check read, so it does not re-verify
+    # the digest; the client that serves the fixture does, against the declaration's
+    # own sha256 (frontend/src/features/create-task/demo.ts).  Replacing a fixture
+    # between this read and a serve requires write access inside the demo root,
+    # which the single-regular-file, unlinked-inode, world-unwritable, and
+    # containment checks are what keep scarce.
     if _sha256_of(target) != digest:
         raise DemoContractError(f"Demo {demo_id!r} fixture {relative!r} does not match its declared digest")
     format_name = os.path.splitext(relative)[1].lower().removeprefix(".")
@@ -350,10 +358,15 @@ def _assert_regular_fixture(target: Path, *, root: Path, relative: str, demo_id:
 
     Containment is decided on resolved paths rather than on the spelling of
     ``relative``: a path that looks relative and carries no ``..`` can still leave
-    the demo directory through a symbolic *parent* component, and then the bytes
-    the digest and the format check described are not the bytes the download route
-    would serve.  Resolving both sides and requiring the target to stay under the
-    resolved root is what makes the declaration and the serve agree.
+    the demo directory through a symbolic *parent* component.  Resolving both
+    sides and requiring the target to stay under the resolved root is what makes
+    the declaration and the serve resolve the same directory, so this reader can
+    never validate a file the download route would refuse - or, worse, serve a
+    path outside the demo root while the declaration describes it as inside.
+
+    Containment is not a guarantee that the bytes are unchanged between this read
+    and a later serve: see ``_parse_file``, where the digest is verified once, at
+    declaration time.
 
     A symbolic final component is refused outright, because the served bytes would
     be whatever that link points at, and a hard-linked, world-writable, or set-id
