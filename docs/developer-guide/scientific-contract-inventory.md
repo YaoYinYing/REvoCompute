@@ -62,16 +62,19 @@ real CLI run, and a real local run is not target-host Slurm+Apptainer acceptance
 | `static_contract` | The Task's declarations are internally satisfiable and the loader accepts them | that any Runner executed |
 | `fake_runner_contract` | A family test runs the real adapter (executes `run.sh`/`predict.py`) against a fake executable and asserts behavior | that the real upstream program ran |
 | `declared_scientific_acceptance` | A family scientific module carries the `scientific_acceptance` marker | that anything executed — a marker is a declaration, and a module that replaces the upstream program with a fake declares an intention, not a run |
-| `real_runner_cli` | A checked-in replay bundle of a real run exists, or a family acceptance module both contains an execution primitive and does not mock the adapter | that the cluster scheduled it |
+| `real_runner_cli` | A checked-in replay bundle covers the family and its provenance re-verifies | that the cluster scheduled it — a family that really runs the program but ships no bundle is deliberately under-claimed |
 | `target_host_slurm_apptainer` | A result captured from the canonical finished task store whose production API acceptance receipt re-verifies through the canonical receipt parser | that the science is correct, or that the recorded run was *complete* — the receipt's own `complete` flag is not part of the predicate, so a successful but partial run reaches this label |
 
-The scanner's honest limit is that it **reads** test files; it never runs them. Only
-a replay bundle is an artifact whose provenance can be re-verified, so only that path
-is decision-grade. The `real_runner_cli` path additionally requires an execution
-primitive and the *absence* of a mocking primitive, which is why a module like
-`evosplit`'s — marker set, upstream `infer_features` replaced by a fake — is reported
-at `declared_scientific_acceptance` and not one level higher. That split exists so a
-pytest marker can never stand in for a real CLI run.
+`real_runner_cli` is decided by **one class of artifact only**: a re-verified replay
+bundle. The scanner *reads* test files and never runs them, so no fact it extracts
+from test text can decide that a real program ran. A substring is not a call — a
+comment or docstring naming `subprocess.run` proves nothing — and the *absence* of a
+substitution is not establishable by a token scan either, because `MagicMock`,
+`mocker.patch.object`, and a plain lambda assignment all replace the upstream program
+without naming a mocking library. A marked family that mocks upstream is therefore
+reported at `declared_scientific_acceptance` and never one level higher, and a family
+that genuinely runs the program but ships no bundle is under-claimed rather than
+over-claimed. The level never claims more than a re-verifiable artifact proves.
 
 Two families currently reach `real_runner_cli`: one through the same re-verified
 bundle that reaches the strongest level, one through a capture recorded without a

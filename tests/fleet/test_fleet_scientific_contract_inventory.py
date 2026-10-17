@@ -273,60 +273,62 @@ def test_evidence_levels_are_recorded_separately_and_never_summed(inventory):
         assert levels["families_at_level"][name], f"level {name!r} has no member on this fleet"
 
 
-def test_a_declared_scientific_marker_is_a_level_of_its_own_and_not_a_run(inventory):
-    """A pytest marker is a declaration; only execution evidence is a CLI run.
+def test_real_runner_cli_is_decided_by_a_bundle_never_by_test_text(inventory):
+    """`real_runner_cli` is exactly the set of families a re-verified bundle covers.
 
-    The scanner reads test files and never executes them, so the only decision-grade
-    ``real_runner_cli`` basis is a replay bundle whose provenance re-verifies. The
-    weaker ``declared_scientific_acceptance`` level exists so a marker cannot be
-    promoted by itself: a family whose scientific module sets the marker and replaces
-    the upstream program with a fake must be recorded at the declaration level and
-    NOT at ``real_runner_cli``.
+    The scanner reads test files and never executes them, so a bundle whose
+    provenance re-verifies is the only decision-grade CLI basis. The weaker
+    ``declared_scientific_acceptance`` level exists so a marker cannot be promoted
+    by itself -- and no test-text fact may promote anything either, because a
+    comment naming `subprocess.run` is not a call and a substitution cannot be
+    detected by token scan (`MagicMock`, `mocker.patch.object` and a lambda
+    assignment all mock silently).
 
-    The distinction is read from the family's own test text, not restated here, so a
-    marker-plus-mock family cannot silently re-earn the stronger level and no family
-    name is written into this file.
+    The equality below is total: it holds for EVERY family, so there is no skip a
+    mock-slipped family could hide behind. A family the tool calls ``real_runner_cli``
+    without a covering bundle fails here, whether the extra flag came from a marker,
+    a comment, or a denylist miss.
     """
     levels = inventory["evidence_levels"]
     by_family = levels["by_family"]
     rows = {row["family"]: row for row in inventory["families"]}
+    corpus_items = inventory["evidence_corpus"]["items"]
+    decision_grade = {"real_target_host_slurm_apptainer", "real_runner_local_no_scheduler"}
 
-    # A re-verified replay bundle is the one decision-grade basis for the CLI level,
-    # so the family set that reaches it that way is read from the corpus labels.
-    replay_families = {
+    # A family is bundle-covered when a decision-grade bundle names one of its Tasks.
+    bundle_covered = {
         family
         for family, row in rows.items()
         if any(
-            item["label"]
-            in {"real_target_host_slurm_apptainer", "real_runner_local_no_scheduler"}
-            and item.get("task_type") in row["tasks"]
-            for item in inventory["evidence_corpus"]["items"]
+            item["label"] in decision_grade and item.get("task_type") in row["tasks"] for item in corpus_items
         )
     }
+    assert bundle_covered, "the fleet ships at least one re-verified replay bundle"
 
+    for family, record in by_family.items():
+        assert record["real_runner_cli"] is (family in bundle_covered), (
+            f"{family} has real_runner_cli={record['real_runner_cli']} with a bundle basis of "
+            f"{family in bundle_covered}; the CLI level is only ever a re-verified bundle"
+        )
+
+    # The declaration level is not a renaming of the CLI level, and it is not a
+    # stepping stone to it: a marked family without a bundle stays below the CLI level.
     marked = [family for family, record in by_family.items() if record["declared_scientific_acceptance"]]
     assert marked, "the fleet ships at least one family that declares a scientific acceptance"
     for family in marked:
-        row = rows[family]
-        assert row["declares_scientific_acceptance"] is True
-        if row["scientific_executes_program"] or family in replay_families:
+        assert rows[family]["declares_scientific_acceptance"] is True
+        if family in bundle_covered:
             continue
-        # Marker set, no execution evidence and no replay bundle: the declaration
-        # level is true and the stronger CLI level MUST be false. This is the
-        # regression that a marker-plus-mock module cannot re-earn.
         assert by_family[family]["real_runner_cli"] is False, (
-            f"{family} reaches real_runner_cli from a scientific marker alone"
+            f"{family} reaches real_runner_cli without a re-verified bundle"
         )
 
-    # The marker and the run are different predicates, so a family whose acceptance
-    # module mocks the upstream program is at the declaration level and below the CLI
-    # level; the two levels are never the same fact under two names.
-    if marked:
-        assert any(
-            by_family[family]["declared_scientific_acceptance"]
-            and not by_family[family]["real_runner_cli"]
-            for family in marked
-        )
+    # The split is observable: at least one marked family sits at the declaration
+    # level alone, so the two levels are never the same fact under two names.
+    assert any(
+        by_family[family]["declared_scientific_acceptance"] and not by_family[family]["real_runner_cli"]
+        for family in marked
+    )
 
 
 def test_evidence_corpus_real_items_are_verified_and_mocks_never_claim_science(inventory):

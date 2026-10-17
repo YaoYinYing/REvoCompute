@@ -38,8 +38,9 @@ Three things this tool deliberately does NOT claim:
   ``run.sh`` against a fake executable and asserts the exact argv.
 * **Evidence-level interchangeability.** The five levels are recorded as separate
   booleans per family and are never summed into one score. A pytest marker is its
-  own level, so it can never stand in for a run: this scanner reads test files and
-  never executes them.
+  own level, and the CLI level is decided by a re-verified replay bundle rather
+  than by test text: this scanner reads test files and never executes them, so no
+  scan-derived fact can claim that a real program ran.
 
 Usage::
 
@@ -93,15 +94,14 @@ EVIDENCE_LEVELS = (
     "target_host_slurm_apptainer",
 )
 
-#: Test primitive that actually spawns a program. This is the basis of both
-#: ``fake_runner_contract`` and ``real_runner_cli``: an evidence level that claims
-#: execution has to be decided by a test that executes something.
+#: Test primitive that spawns a program, matched against a family's ``tests/fast``
+#: text. It decides ``fake_runner_contract`` only -- deliberately the weakest claim
+#: text can carry. A substring in unstripped source (a comment, a docstring, a
+#: literal) is not a call, and no token scan can establish the ABSENCE of a
+#: substitution: ``MagicMock``, ``mocker.patch.object`` and a plain lambda
+#: assignment all replace the upstream program without naming a mocking library.
+#: ``real_runner_cli`` is therefore decided by a re-verified replay bundle alone.
 _EXECUTION_PATTERNS = ("run_with_manifest", "subprocess.run", "Popen")
-
-#: Test primitive that substitutes part of the adapter for a fake, which is how a
-#: test that does not run the real upstream program signals itself. Code text is
-#: evidence of a mocking INTENT, not proof that the real program ran.
-_MOCK_PATTERNS = ("monkeypatch.setattr", "monkeypatch.setenv", "mock.", "patch(", "fake_")
 
 #: Test pattern that marks a family-owned scientific validation. The marker is a
 #: *declaration*: alone it is a distinct, weaker level
@@ -393,17 +393,11 @@ def build_inventory(runners_dir: str | Path, repo_root: str | Path) -> dict[str,
                     "has_fast_tests": (family_root / "tests" / "fast").is_dir(),
                     "has_scientific_tests": (family_root / "tests" / "scientific").is_dir(),
                     "fast_contract_executes_adapter": any(pattern in fast_text for pattern in _EXECUTION_PATTERNS),
+                    # Reading a test file is not running it, so a family's scientific
+                    # acceptance is recorded as a DECLARATION only. No text scan can
+                    # decide that a real program ran, so nothing scan-derived feeds
+                    # ``real_runner_cli`` and no ``executes_program`` fact is published.
                     "declares_scientific_acceptance": _SCIENTIFIC_PATTERN in scientific_text,
-                    # Reading a test file is not running it, so the strongest level a
-                    # scanner can honestly justify is "a declared acceptance that also
-                    # also contains an execution primitive and no mocking primitive.
-                    # A module that mocks the upstream program is reported at
-                    # ``declared_scientific_acceptance``, never ``real_runner_cli``.
-                    "scientific_executes_program": (
-                        _SCIENTIFIC_PATTERN in scientific_text
-                        and any(pattern in scientific_text for pattern in _EXECUTION_PATTERNS)
-                        and not any(pattern in scientific_text for pattern in _MOCK_PATTERNS)
-                    ),
                     "forwarding_candidates": [
                         name
                         for name in sorted(
@@ -494,10 +488,14 @@ def build_inventory(runners_dir: str | Path, repo_root: str | Path) -> dict[str,
             # The marker is a declaration. It is recorded as its own level so a
             # pytest marker can never stand in for execution.
             "declared_scientific_acceptance": bool(row["declares_scientific_acceptance"]),
-            # Real CLI evidence that a scanner can justify: a checked-in replay
-            # bundle of a real run, or an acceptance module that both runs a program
-            # and does not mock it. A marker alone does NOT reach this level.
-            "real_runner_cli": bool(family_task_names & cli_tasks) or bool(row["scientific_executes_program"]),
+            # Real CLI evidence is decided by ONE class of artifact: a checked-in
+            # replay bundle whose provenance re-verifies. Test text is not evidence
+            # here -- a comment naming subprocess.run is not a call, and the absence
+            # of a substitution cannot be established by a token scan (MagicMock,
+            # mocker.patch.object and a lambda assignment all mock silently). A
+            # family that genuinely runs the program but ships no bundle is
+            # deliberately under-claimed rather than over-claimed.
+            "real_runner_cli": bool(family_task_names & cli_tasks),
             "target_host_slurm_apptainer": bool(family_task_names & real_tasks),
         }
 
