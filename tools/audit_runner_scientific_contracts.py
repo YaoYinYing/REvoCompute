@@ -10,18 +10,18 @@ it does not restate the manifests. It *consumes* the loaders production already
 uses -- ``task_types.isolated_discovery`` for Task/ResultView/input-role/parameter
 declarations, ``result_audit.audit_fleet`` for the result contract,
 ``result_storyboard`` for the result tree and storyboard, ``live_tests`` for the
-family test plan, and the ``input_validators`` registries for the input-format and
+family test plan, and the ``input_validators`` dispatch for the input-format and
 logical-type lifecycle -- so a row can never disagree with what the Server
 accepts, and the inventory reruns against another fleet revision without editing
 a roster.
 
 Two of the loaders it reads are addressed through module-private names --
-``result_audit._required_sources`` and ``input_validators.profiles._DIALECTS``.
-Neither has a public accessor today, and each is the exact predicate production
-dispatches on, so re-deriving it here would be the second source of truth this
-tool exists to avoid. The reads are inspect-only: the tool never mutates a
-registry, and the one shared entry point ``validate_input_file`` stays the
-Server's own dispatch.
+``result_audit._required_sources`` and
+``input_validators.profiles._SPECIFICATION_VALIDATORS``. Neither has a public
+accessor today, and each is the exact predicate production dispatches on, so
+re-deriving it here would be the second source of truth this tool exists to
+avoid. The reads are inspect-only: the tool never mutates a registry, and the one
+shared entry point ``validate_input_file`` stays the Server's own dispatch.
 
 The logical-type lifecycle is decided by *probing that same dispatch*, not by
 naming a registry: each ``(logical type, format)`` pair a Task declares is
@@ -295,9 +295,9 @@ def _classify_declared_pairs(pairs: set[tuple[str, str]], probe_directory: Path)
     """Lifecycle per declared ``(logical type, format)`` pair.
 
     The pair is the unit Core dispatches on -- ``_DIALECTS`` is keyed by
-    ``(format, logical type)``, and the ``_SPECIFICATION_VALIDATORS`` arm is
-    reached only under the ``json`` format -- so a per-type label alone drops the
-    dimension the two registries are keyed by.
+    ``(format, logical type)``, and the specification arm is keyed by logical
+    type -- so a per-type label alone drops the dimension the registries are
+    keyed by.
     """
     return {
         _pair_key(logical_type, format_name): _input_dispatch_class(logical_type, format_name, probe_directory)
