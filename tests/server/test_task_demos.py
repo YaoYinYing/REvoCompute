@@ -34,7 +34,7 @@ from revocompute.task_types import get as get_task_type
 
 SYNTHETIC_TASK = "cpu_runner"
 TASK_DIR = "tasks/predict"
-FIXTURE_NAME = "example.fasta"
+FIXTURE_NAME = "records.fasta"
 
 
 def _module(monkeypatch, tmp_path):
@@ -57,9 +57,9 @@ def _task_type(module, name: str = SYNTHETIC_TASK):
 def _declaration(**overrides) -> dict:
     """One syntactically complete declaration the tests then break one field at a time."""
     demo = {
-        "id": "example",
-        "title": "Example preset",
-        "purpose": "Load a working example.",
+        "id": "records",
+        "title": "Records preset",
+        "purpose": "Load a working preset.",
         "source": {"name": "Synthetic corpus", "url": "https://example.invalid/synthetic"},
         "license": {"id": "cc0-1.0", "name": "CC0 1.0", "url": "https://example.invalid/cc0"},
         "inputs": {"sequence": [{"path": f"files/{FIXTURE_NAME}", "sha256": "", "media_type": "text/x-fasta"}]},
@@ -123,9 +123,9 @@ def test_a_complete_declaration_loads_with_its_provenance_and_roles(monkeypatch,
     root = _demo_dir(tmp_path)
     loaded = _load(root, module, _complete(root, _declaration()))
 
-    assert [demo.id for demo in loaded] == ["example"]
+    assert [demo.id for demo in loaded] == ["records"]
     demo = loaded[0]
-    assert demo.title == "Example preset"
+    assert demo.title == "Records preset"
     assert demo.license_name == "CC0 1.0"
     # The fixture is bound to the role its declaration named, not to a position.
     assert [(item.role, item.path) for item in demo.files] == [("sequence", f"files/{FIXTURE_NAME}")]
@@ -140,7 +140,7 @@ def test_a_complete_declaration_loads_with_its_provenance_and_roles(monkeypatch,
         (
             "traversal",
             lambda d, r: d["demos"][0]["inputs"]["sequence"][0].update(
-                path="../files/example.fasta", sha256="0" * 64
+                path="../files/records.fasta", sha256="0" * 64
             ),
         ),
         ("media_type", lambda d, r: d["demos"][0]["inputs"]["sequence"][0].update(media_type="not a media type")),

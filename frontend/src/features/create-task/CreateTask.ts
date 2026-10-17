@@ -163,7 +163,7 @@ export class CreateTask {
     // Loading an example is a second, non-destructive way to fill the form, so it
     // sits with the method control rather than among the submit actions: reaching
     // it is never one keystroke away from running the task.
-    const demo = node('button', 'ct-secondary', t('ct.demo.load')); demo.type = 'button'; demo.addEventListener('click', () => void this.openDemoPicker()); this.demo = demo;
+    const demo = node('button', 'ct-secondary', t('ct.demo.load')); demo.type = 'button'; demo.dataset.ctDemoOpen = ''; demo.addEventListener('click', () => void this.openDemoPicker()); this.demo = demo;
     const controls = node('div', 'ct-method-controls'); controls.append(demo, change);
     header.append(title, controls);
     const facts = node('details', 'ct-method-context');
@@ -306,7 +306,7 @@ export class CreateTask {
     const form = node('form'); form.method = 'dialog';
     form.append(node('h2', '', t('ct.demo.heading')), node('p', 'ct-help', t('ct.demo.intro')));
     const list = node('div', 'ct-demo-list'); form.append(list);
-    const empty = node('p', 'ct-help', t('ct.demo.empty')); empty.hidden = true; form.append(empty);
+    const empty = node('p', 'ct-help', t('ct.demo.empty')); empty.hidden = true; empty.dataset.ctDemoEmpty = ''; form.append(empty);
     const status = node('p', 'ct-status'); form.append(status);
     const close = node('button', 'ct-secondary', t('ct.cancel')); close.type = 'button'; close.addEventListener('click', () => dialog.close('cancel'));
     const actions = node('div', 'ct-actions'); actions.append(close); form.append(actions);
@@ -335,7 +335,7 @@ export class CreateTask {
 
   private demoOption(demo: TaskDemo, dialog: HTMLDialogElement): HTMLElement {
     const card = node('article', 'ct-demo');
-    const choose = node('button', 'ct-secondary', t('ct.demo.load')); choose.type = 'button';
+    const choose = node('button', 'ct-secondary', t('ct.demo.load')); choose.type = 'button'; choose.dataset.ctDemoChoose = '';
     choose.addEventListener('click', () => { dialog.close('load'); void this.applyDemo(demo); });
     card.append(node('h3', '', demo.title), node('p', '', demo.purpose));
     if (demo.context) card.append(node('p', 'ct-help', demo.context));

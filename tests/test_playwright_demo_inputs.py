@@ -63,7 +63,9 @@ def _mount(page: Page, scenario):
 
 
 def _header_demo_button(page: Page):
-    return page.locator(".ct-method-controls").get_by_role("button", name="Load example", exact=True)
+    # Addressed by the hook the surface publishes, not by its copy: the label is
+    # reader-facing text and may be reworded without breaking this contract.
+    return page.locator("[data-ct-demo-open]")
 
 
 def _open_picker(page: Page):
@@ -83,7 +85,7 @@ def _choose(page: Page, dialog, title: str = LOADABLE.title) -> str:
     card = dialog.locator(".ct-demo", has_text=title)
     expect(card).to_be_visible()
     text = card.inner_text()
-    card.get_by_role("button", name="Load example", exact=True).click()
+    card.locator("[data-ct-demo-choose]").click()
     expect(dialog).to_have_count(0)
     return text
 
@@ -112,11 +114,12 @@ def test_the_demo_button_fills_the_named_roles_and_parameters_in_one_action(page
     expect(_parameter(page, "iterations")).to_have_value("4")
     well = page.locator(".ct-file-role", has_text="Protein sequence")
     expect(well.locator(".ct-file-well")).to_have_class("ct-file-well has-file")
-    expect(well.locator("strong").first).to_have_text("example.fasta")
+    expect(well.locator("strong").first).to_have_text("records.fasta")
 
     # The reader is told the example was applied and what it filled, and the
     # form stays theirs: the submission control is still the reader's to press.
-    expect(page.locator(".ct-status")).to_contain_text("Loaded the example")
+    expect(page.locator(".ct-status")).to_have_class("ct-status ok")
+    expect(page.locator(".ct-status")).to_contain_text(LOADABLE.title)
     applied = page.locator(".ct-demo-applied")
     expect(applied).to_be_visible()
     expect(applied).to_contain_text("Filled 1 of 1 input files")
@@ -149,15 +152,15 @@ def test_loading_an_example_never_preflights_or_submits(page: Page) -> None:
     _open_create_task(page)
 
     _choose(page, _open_picker(page))
-    expect(page.locator(".ct-status")).to_contain_text("Loaded the example")
+    expect(page.locator(".ct-status")).to_have_class("ct-status ok")
 
     catalog = requests.demo_catalog(mount.runner.name)
     files = requests.demo_files(mount.runner.name)
     assert len(catalog) == 1, requests.urls()
     assert len(files) == 1, requests.urls()
-    assert requests.preflight() == (), "loading an example must not preflight"
-    assert requests.submit() == (), "loading an example must not submit"
-    assert requests.status_polls() == (), "loading an example must not create job identity"
+    assert requests.preflight() == (), "loading a preset must not preflight"
+    assert requests.submit() == (), "loading a preset must not submit"
+    assert requests.status_polls() == (), "loading a preset must not create job identity"
 
 
 def test_an_edited_form_is_only_replaced_after_the_reader_confirms(page: Page) -> None:
@@ -220,7 +223,7 @@ def test_a_method_without_a_declared_example_says_so(page: Page) -> None:
     _open_create_task(page)
 
     dialog = _open_picker(page)
-    expect(dialog).to_contain_text("declares no example inputs")
+    expect(dialog.locator("[data-ct-demo-empty]")).to_be_visible()
     expect(dialog.locator(".ct-demo")).to_have_count(0)
     dialog.get_by_role("button", name="Cancel", exact=True).click()
     expect(dialog).to_have_count(0)
@@ -281,17 +284,17 @@ def test_a_file_the_declaration_cannot_serve_reports_the_failure_and_changes_not
         title=LOADABLE.title,
         purpose=LOADABLE.purpose,
         files=(
-            DemoFileSpec(role="sequence", path="files/example.fasta", body=">x\nACDE\n", media_type="text/x-fasta"),
+            DemoFileSpec(role="sequence", path="files/records.fasta", body=">x\nACDE\n", media_type="text/x-fasta"),
         ),
         parameters={"iterations": 4},
-        unavailable_asset="files/example.fasta",
+        unavailable_asset="files/records.fasta",
     )
     mount = _scenario((unavailable,))
     requests = _mount(page, mount)
     _open_create_task(page)
 
     _choose(page, _open_picker(page))
-    expect(page.locator(".ct-status")).to_contain_text("Could not load an example input file")
+    expect(page.locator(".ct-status")).to_have_class("ct-status error")
     expect(_parameter(page, "iterations")).to_have_value("2")
     expect(page.locator(".ct-file-well.has-file")).to_have_count(0)
     assert requests.preflight() == ()
@@ -313,7 +316,7 @@ def test_the_demo_controls_are_full_targets_and_keep_the_page_within_its_width(p
         assert button.evaluate("node => node === document.activeElement")
 
         dialog = _open_picker(page)
-        choose = dialog.get_by_role("button", name="Load example", exact=True)
+        choose = dialog.locator("[data-ct-demo-choose]")
         choose.focus()
         assert choose.evaluate("node => node === document.activeElement")
         page.keyboard.press("Escape")

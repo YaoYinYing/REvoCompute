@@ -131,8 +131,8 @@ def test_a_declared_demo_catalog_matches_the_published_contract() -> None:
     assert payload["version"] == 1 and payload["task_type"] == scenario.runner.name
     demo = payload["demos"][0]
     assert demo["inputs"]["sequence"][0]["sha256"]
-    assert demo["inputs"]["sequence"][0]["download_url"].endswith("/demos/two_records/files/files/example.fasta")
-    assert scenario.demo_body(scenario.runner.name, "two_records", "files/example.fasta") is not None
+    assert demo["inputs"]["sequence"][0]["download_url"].endswith("/demos/two_records/files/files/records.fasta")
+    assert scenario.demo_body(scenario.runner.name, "two_records", "files/records.fasta") is not None
     assert scenario.demo_body(scenario.runner.name, "two_records", "files/other.fasta") is None
     assert scenario.demo_catalog("missing") is None
     assert scenario.with_disabled(scenario.runner.name).demo_catalog(scenario.runner.name) is None

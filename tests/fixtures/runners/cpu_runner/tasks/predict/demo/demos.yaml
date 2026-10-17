@@ -17,7 +17,7 @@ demos:
     url: https://creativecommons.org/licenses/by/4.0/
   inputs:
     sequence:
-    - path: files/example.fasta
+    - path: files/records.fasta
       sha256: 384eff993eeab4bccc182a1e044de50eb4ebe5584d215ff95d160e7ea77fd379
       media_type: text/x-fasta
   parameters:

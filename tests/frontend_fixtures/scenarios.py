@@ -530,7 +530,7 @@ def controlled_scenario(**overrides: Any) -> RunnerScenario:
 # One small synthetic alignment the sequence Runner's own role accepts. It is
 # deliberately tiny and obviously synthetic: a demo fixture is a preset the Task
 # supports, never a stand-in for a scientific result.
-DEMO_FASTA = ">example\nACDEFGHIKL\n>second\nMNPQRSTVWY\n"
+DEMO_FASTA = ">records\nACDEFGHIKL\n>second\nMNPQRSTVWY\n"
 
 
 def sequence_demo(
@@ -549,7 +549,7 @@ def sequence_demo(
         purpose=purpose,
         context=context,
         files=(
-            DemoFileSpec(role="sequence", path="files/example.fasta", body=DEMO_FASTA, media_type="text/x-fasta"),
+            DemoFileSpec(role="sequence", path="files/records.fasta", body=DEMO_FASTA, media_type="text/x-fasta"),
         ),
         parameters=dict(parameters) if parameters is not None else {"iterations": 3},
         **overrides,
