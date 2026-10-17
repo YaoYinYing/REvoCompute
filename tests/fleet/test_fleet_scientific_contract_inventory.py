@@ -17,9 +17,10 @@ property of values the tool obtained from the production loaders
 (``isolated_discovery``, ``audit_fleet``, ``result_storyboard``, ``live_tests``,
 the ``input_validators`` registries).
 
-The four evidence levels are asserted to be *separately recorded and never
+The five evidence levels are asserted to be *separately recorded and never
 summed*. A family at ``static_contract`` is not thereby at ``real_runner_cli``,
-and no test may collapse the levels into a single score.
+no test may collapse the levels into a single score, and a declared
+``scientific_acceptance`` marker is its own level rather than a stand-in for a run.
 """
 
 from __future__ import annotations
@@ -228,7 +229,7 @@ def test_forwarding_candidates_are_candidates_never_verdicts(inventory):
 
 
 def test_evidence_levels_are_recorded_separately_and_never_summed(inventory):
-    """The four levels are a per-family record, not a score.
+    """The five levels are a per-family record, not a score.
 
     Levels are ordered weakest to strongest and each family's record is a subset
     of the ordered list; no aggregation is computed, and a stronger level never
@@ -237,7 +238,13 @@ def test_evidence_levels_are_recorded_separately_and_never_summed(inventory):
     """
     levels = inventory["evidence_levels"]
     ordered = list(levels["levels"])
-    assert ordered == ["static_contract", "fake_runner_contract", "real_runner_cli", "target_host_slurm_apptainer"]
+    assert ordered == [
+        "static_contract",
+        "fake_runner_contract",
+        "declared_scientific_acceptance",
+        "real_runner_cli",
+        "target_host_slurm_apptainer",
+    ]
 
     by_family = levels["by_family"]
     assert set(by_family) == {row["family"] for row in inventory["families"]}
@@ -259,6 +266,67 @@ def test_evidence_levels_are_recorded_separately_and_never_summed(inventory):
         assert record == sorted(record, key=ordered.index) or record == []
         assert set(record) <= set(ordered)
         assert "static_contract" in record
+
+    # Every published level has a member on this fleet, so a merger cannot leave a
+    # dead level behind and a level cannot be removed without failing here.
+    for name in ordered:
+        assert levels["families_at_level"][name], f"level {name!r} has no member on this fleet"
+
+
+def test_a_declared_scientific_marker_is_a_level_of_its_own_and_not_a_run(inventory):
+    """A pytest marker is a declaration; only execution evidence is a CLI run.
+
+    The scanner reads test files and never executes them, so the only decision-grade
+    ``real_runner_cli`` basis is a replay bundle whose provenance re-verifies. The
+    weaker ``declared_scientific_acceptance`` level exists so a marker cannot be
+    promoted by itself: a family whose scientific module sets the marker and replaces
+    the upstream program with a fake must be recorded at the declaration level and
+    NOT at ``real_runner_cli``.
+
+    The distinction is read from the family's own test text, not restated here, so a
+    marker-plus-mock family cannot silently re-earn the stronger level and no family
+    name is written into this file.
+    """
+    levels = inventory["evidence_levels"]
+    by_family = levels["by_family"]
+    rows = {row["family"]: row for row in inventory["families"]}
+
+    # A re-verified replay bundle is the one decision-grade basis for the CLI level,
+    # so the family set that reaches it that way is read from the corpus labels.
+    replay_families = {
+        family
+        for family, row in rows.items()
+        if any(
+            item["label"]
+            in {"real_target_host_slurm_apptainer", "real_runner_local_no_scheduler"}
+            and item.get("task_type") in row["tasks"]
+            for item in inventory["evidence_corpus"]["items"]
+        )
+    }
+
+    marked = [family for family, record in by_family.items() if record["declared_scientific_acceptance"]]
+    assert marked, "the fleet ships at least one family that declares a scientific acceptance"
+    for family in marked:
+        row = rows[family]
+        assert row["declares_scientific_acceptance"] is True
+        if row["scientific_executes_program"] or family in replay_families:
+            continue
+        # Marker set, no execution evidence and no replay bundle: the declaration
+        # level is true and the stronger CLI level MUST be false. This is the
+        # regression that a marker-plus-mock module cannot re-earn.
+        assert by_family[family]["real_runner_cli"] is False, (
+            f"{family} reaches real_runner_cli from a scientific marker alone"
+        )
+
+    # The marker and the run are different predicates, so a family whose acceptance
+    # module mocks the upstream program is at the declaration level and below the CLI
+    # level; the two levels are never the same fact under two names.
+    if marked:
+        assert any(
+            by_family[family]["declared_scientific_acceptance"]
+            and not by_family[family]["real_runner_cli"]
+            for family in marked
+        )
 
 
 def test_evidence_corpus_real_items_are_verified_and_mocks_never_claim_science(inventory):

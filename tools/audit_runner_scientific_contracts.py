@@ -36,9 +36,10 @@ Three things this tool deliberately does NOT claim:
   ``forwarding_candidates`` and carries that caveat; the only executable
   forward-path verdict is a family's own ``tests/fast`` case that runs the real
   ``run.sh`` against a fake executable and asserts the exact argv.
-* **Evidence-level interchangeability.** ``static_contract``, ``fake_runner``,
-  ``real_cli``, and ``target_host_slurm_apptainer`` are recorded as separate
-  booleans per row and are never summed into one score.
+* **Evidence-level interchangeability.** The five levels are recorded as separate
+  booleans per family and are never summed into one score. A pytest marker is its
+  own level, so it can never stand in for a run: this scanner reads test files and
+  never executes them.
 
 Usage::
 
@@ -82,19 +83,29 @@ _ADAPTER_SUFFIXES = frozenset({".sh", ".bash", ".py"})
 _INLINE_LOGICAL_TYPES = frozenset({"protein_structure", "alignment"})
 
 #: Evidence levels. Never interchangeable, never summed.
+#: An evidence level is only ever in this tuple if it is *reachable*: every member
+#: is produced by some fleet family today, so the tuple carries no dead merger.
 EVIDENCE_LEVELS = (
     "static_contract",
     "fake_runner_contract",
+    "declared_scientific_acceptance",
     "real_runner_cli",
     "target_host_slurm_apptainer",
 )
 
-#: Test pattern a family must have under ``tests/fast`` for its evidence level to
-#: include ``fake_runner_contract``: it runs the real adapter and asserts behavior.
-_FAKE_RUNNER_PATTERNS = ("run_with_manifest", "subprocess.run", "Popen")
+#: Test primitive that actually spawns a program. This is the basis of both
+#: ``fake_runner_contract`` and ``real_runner_cli``: an evidence level that claims
+#: execution has to be decided by a test that executes something.
+_EXECUTION_PATTERNS = ("run_with_manifest", "subprocess.run", "Popen")
 
-#: Test pattern that marks a family-owned scientific validation, which is what the
-#: ``real_runner_cli`` level records when a checked-in replay bundle is absent.
+#: Test primitive that substitutes part of the adapter for a fake, which is how a
+#: test that does not run the real upstream program signals itself. Code text is
+#: evidence of a mocking INTENT, not proof that the real program ran.
+_MOCK_PATTERNS = ("monkeypatch.setattr", "monkeypatch.setenv", "mock.", "patch(", "fake_")
+
+#: Test pattern that marks a family-owned scientific validation. The marker is a
+#: *declaration*: alone it is a distinct, weaker level
+#: (``declared_scientific_acceptance``) and never evidence that a real program ran.
 _SCIENTIFIC_PATTERN = "scientific_acceptance"
 
 #: Labels for an evidence-corpus item, decided by the item's own verified
@@ -297,15 +308,21 @@ def _corpus_label_reason(label: str) -> str:
     return {
         "real_target_host_slurm_apptainer": (
             "a real result captured from the canonical finished task store whose production API "
-            "acceptance receipt re-verifies through the canonical receipt parser"
+            "acceptance receipt re-verifies through the canonical receipt parser. The receipt's own "
+            "``complete`` flag is not part of the predicate, so a successful but partial run reaches "
+            "this label; the level establishes provenance, never completeness"
         ),
         "real_runner_local_no_scheduler": (
             "a real Runner result produced by the pinned SIF through the family run.sh/normalizer, "
             "captured with no batch-scheduler allocation"
         ),
+        # No fleet bundle reaches this label today, so it is declared for the class
+        # rather than claimed by an artifact. A synthetic capture is the one path
+        # that can produce it: ``capture_replay_bundle(require_finished=False)`` is
+        # the only capture that stands in for a result instead of reproducing one.
         "synthetic_mock": (
-            "fixture bytes that exercise rendering. Carries no scientific claim and must never be "
-            "presented as validation"
+            "fixture bytes captured with require_finished=False, which stand in for a result rather "
+            "than reproduce one. Carries no scientific claim and must never be presented as validation"
         ),
         "unverified_declaration": "a declaration whose provenance could not be re-verified",
     }[label]
@@ -375,8 +392,18 @@ def build_inventory(runners_dir: str | Path, repo_root: str | Path) -> dict[str,
                     "smoke_missing_tasks": smoke_missing,
                     "has_fast_tests": (family_root / "tests" / "fast").is_dir(),
                     "has_scientific_tests": (family_root / "tests" / "scientific").is_dir(),
-                    "fast_contract_executes_adapter": any(pattern in fast_text for pattern in _FAKE_RUNNER_PATTERNS),
+                    "fast_contract_executes_adapter": any(pattern in fast_text for pattern in _EXECUTION_PATTERNS),
                     "declares_scientific_acceptance": _SCIENTIFIC_PATTERN in scientific_text,
+                    # Reading a test file is not running it, so the strongest level a
+                    # scanner can honestly justify is "a declared acceptance that also
+                    # also contains an execution primitive and no mocking primitive.
+                    # A module that mocks the upstream program is reported at
+                    # ``declared_scientific_acceptance``, never ``real_runner_cli``.
+                    "scientific_executes_program": (
+                        _SCIENTIFIC_PATTERN in scientific_text
+                        and any(pattern in scientific_text for pattern in _EXECUTION_PATTERNS)
+                        and not any(pattern in scientific_text for pattern in _MOCK_PATTERNS)
+                    ),
                     "forwarding_candidates": [
                         name
                         for name in sorted(
@@ -464,9 +491,13 @@ def build_inventory(runners_dir: str | Path, repo_root: str | Path) -> dict[str,
             # A fake-runner contract requires a family test that actually executes
             # the adapter (a subprocess run), not merely a test directory.
             "fake_runner_contract": bool(row["fast_contract_executes_adapter"]),
-            # Real CLI evidence comes from a checked-in replay bundle of a real run
-            # OR a family-owned scientific acceptance that pins real execution.
-            "real_runner_cli": bool(family_task_names & cli_tasks) or bool(row["declares_scientific_acceptance"]),
+            # The marker is a declaration. It is recorded as its own level so a
+            # pytest marker can never stand in for execution.
+            "declared_scientific_acceptance": bool(row["declares_scientific_acceptance"]),
+            # Real CLI evidence that a scanner can justify: a checked-in replay
+            # bundle of a real run, or an acceptance module that both runs a program
+            # and does not mock it. A marker alone does NOT reach this level.
+            "real_runner_cli": bool(family_task_names & cli_tasks) or bool(row["scientific_executes_program"]),
             "target_host_slurm_apptainer": bool(family_task_names & real_tasks),
         }
 
@@ -511,7 +542,8 @@ def build_inventory(runners_dir: str | Path, repo_root: str | Path) -> dict[str,
                 "The levels are ordered from weakest to strongest and are NEVER summed or "
                 "substituted: a static contract is not a fake-runner contract, a fake-runner "
                 "contract is not a real CLI run, and a real local CLI run is not target-host "
-                "Slurm+Apptainer acceptance."
+                "Slurm+Apptainer acceptance. ``declared_scientific_acceptance`` is a marker, "
+                "which is a declaration rather than execution, so it is not the CLI level."
             ),
         },
         "evidence_corpus": {
@@ -520,7 +552,7 @@ def build_inventory(runners_dir: str | Path, repo_root: str | Path) -> dict[str,
             "note": (
                 "Each label is decided by the item's own re-verified provenance. Synthetic fixtures and "
                 "unverified declarations carry scientific_claim=none and are never presented as validation. "
-                "The four evidence levels are recorded separately and are never summed."
+                "The five evidence levels are recorded separately and are never summed."
             ),
         },
         "parameter_forwarding": {

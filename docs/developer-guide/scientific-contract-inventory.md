@@ -61,8 +61,17 @@ real CLI run, and a real local run is not target-host Slurm+Apptainer acceptance
 |---|---|---|
 | `static_contract` | The Task's declarations are internally satisfiable and the loader accepts them | that any Runner executed |
 | `fake_runner_contract` | A family test runs the real adapter (executes `run.sh`/`predict.py`) against a fake executable and asserts behavior | that the real upstream program ran |
-| `real_runner_cli` | A real run of the pinned SIF through the family's own `run.sh`/normalizer produced the captured bytes, or a family-owned scientific acceptance pins real execution | that the cluster scheduled it |
-| `target_host_slurm_apptainer` | A result captured from the canonical finished task store whose production API acceptance receipt re-verifies through the canonical receipt parser | that the science is correct |
+| `declared_scientific_acceptance` | A family scientific module carries the `scientific_acceptance` marker | that anything executed — a marker is a declaration, and a module that replaces the upstream program with a fake declares an intention, not a run |
+| `real_runner_cli` | A checked-in replay bundle of a real run exists, or a family acceptance module both contains an execution primitive and does not mock the adapter | that the cluster scheduled it |
+| `target_host_slurm_apptainer` | A result captured from the canonical finished task store whose production API acceptance receipt re-verifies through the canonical receipt parser | that the science is correct, or that the recorded run was *complete* — the receipt's own `complete` flag is not part of the predicate, so a successful but partial run reaches this label |
+
+The scanner's honest limit is that it **reads** test files; it never runs them. Only
+a replay bundle is an artifact whose provenance can be re-verified, so only that path
+is decision-grade. The `real_runner_cli` path additionally requires an execution
+primitive and the *absence* of a mocking primitive, which is why a module like
+`evosplit`'s — marker set, upstream `infer_features` replaced by a fake — is reported
+at `declared_scientific_acceptance` and not one level higher. That split exists so a
+pytest marker can never stand in for a real CLI run.
 
 Only one family currently reaches `target_host_slurm_apptainer`. That is the
 point of the table: most of the fleet's strongest available evidence is static or
@@ -79,9 +88,9 @@ therefore cannot drift into claiming more than the artifact proves.
 
 | Label | Decided by | Scientific claim |
 |---|---|---|
-| `real_target_host_slurm_apptainer` | The bundle's `production_receipt` pointer re-verifies through `frontend_fixtures.provenance.production_receipt_pointer` against the cited receipt | replayed Runner output |
+| `real_target_host_slurm_apptainer` | The bundle's `production_receipt` pointer re-verifies through `frontend_fixtures.provenance.production_receipt_pointer` against the cited receipt. The receipt's own `complete` flag is not part of the predicate, so a successful but partial run reaches this label | replayed Runner output |
 | `real_runner_local_no_scheduler` | The capture records a real Runner run with no batch-scheduler allocation | replayed Runner output |
-| `synthetic_mock` | Fixture bytes that stand in for a result rather than reproducing one | **none** |
+| `synthetic_mock` | Fixture bytes captured with `require_finished=False`, which stand in for a result rather than reproduce one. No fleet bundle reaches this label today; it is declared for the class | **none** |
 | `unverified_declaration` | A declaration whose provenance could not be re-verified | **none** |
 
 A replay bundle proves **frontend compatibility with authentic Runner output**. It
