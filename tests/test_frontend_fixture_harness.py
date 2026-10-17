@@ -38,6 +38,7 @@ from frontend_fixtures import (
     controlled_scenario,
     openapi_spec,
     result_fixture,
+    sequence_demo,
     structure_scenario,
     validate_manifest,
     validate_payload,
@@ -114,6 +115,27 @@ def test_catalog_detail_and_parameter_payloads_match_their_schemas() -> None:
     validate_payload("TaskCatalog", build_catalog([definition]))
     validate_payload("TaskTypeDetail", build_detail(definition))
     validate_payload("TaskParameterSchema", build_parameter_schema(definition))
+
+
+def test_a_declared_demo_catalog_matches_the_published_contract() -> None:
+    """A demo fixture is the client contract's own shape, not the harness's idea.
+
+    ``demo_catalog`` validates against ``TaskDemoCatalog`` as it builds, so this
+    case pins the guarantees a browser test relies on: one catalog per enabled
+    Task, the declared digest on every file, and no catalog at all for a Task the
+    deployment has disabled.
+    """
+    scenario = controlled_scenario().with_demos((sequence_demo(),))
+    payload = scenario.demo_catalog(scenario.runner.name)
+    assert payload is not None
+    assert payload["version"] == 1 and payload["task_type"] == scenario.runner.name
+    demo = payload["demos"][0]
+    assert demo["inputs"]["sequence"][0]["sha256"]
+    assert demo["inputs"]["sequence"][0]["download_url"].endswith("/demos/two_records/files/files/records.fasta")
+    assert scenario.demo_body(scenario.runner.name, "two_records", "files/records.fasta") is not None
+    assert scenario.demo_body(scenario.runner.name, "two_records", "files/other.fasta") is None
+    assert scenario.demo_catalog("missing") is None
+    assert scenario.with_disabled(scenario.runner.name).demo_catalog(scenario.runner.name) is None
 
 
 def test_scenario_catalog_keeps_runner_order_and_category_projection() -> None:
