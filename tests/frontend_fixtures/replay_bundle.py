@@ -531,26 +531,32 @@ def _storyboard_source(
 ) -> str | None:
     """Resolve the entrypoint in a runner tree, mirroring the Server's lookup.
 
-    The Server resolves a storyboard through the *runner family* directory
-    (``runner_root``), not the task id: the task type's plugin declares the
-    family root, and the asset is ``<family>/storyboard/<entrypoint>``. This
-    mirrors that: each candidate is a runner *root* (``docker/runners``), and the
-    family is found by scanning its ``plugin.yaml`` manifests for the one whose
-    ``tasks`` list declares the task. When no candidate declares the task the
-    storyboard cannot be resolved from the served source, so this returns
-    ``None`` and the capture fails closed.
+    The Server resolves a storyboard by *position*, not by task id: the owning
+    Task's manifest directory answers when it ships its own
+    ``expected_files.yaml`` (its ``storyboard/`` is then that Task's), and every
+    other Task keeps the family root's ``storyboard/``. This mirrors that: each
+    candidate is a runner *root* (``docker/runners``), the family is found by
+    scanning its ``plugin.yaml`` manifests for the one whose ``tasks`` list
+    declares the task, and the Task's own directory is preferred exactly when it
+    ships the tree that makes the module's bindings its own. When no candidate
+    declares the task the storyboard cannot be resolved from the served source,
+    so this returns ``None`` and the capture fails closed.
     """
     if not task_type:
         return None
     safe = _safe_relative(entrypoint)
     assert safe is not None  # caller checked
     for runner_root in _storyboard_roots(storyboard_dirs):
-        family = _family_declaring_task(runner_root, str(task_type))
-        if family is None:
+        located = _task_declaring_family(runner_root, str(task_type))
+        if located is None:
             continue
-        candidate = family.joinpath("storyboard", *safe.split("/"))
-        if candidate.is_file():
-            return str(candidate)
+        family, task_directory = located
+        for base in (task_directory, family):
+            if base is None:
+                continue
+            candidate = base.joinpath("storyboard", *safe.split("/"))
+            if candidate.is_file():
+                return str(candidate)
     return None
 
 
@@ -584,13 +590,16 @@ def _storyboard_roots(storyboard_dirs: Sequence[str | Path] | None) -> list[Path
     return roots
 
 
-def _family_declaring_task(runner_root: Path, task_type: str) -> Path | None:
-    """The family directory whose ``plugin.yaml`` declares ``task_type``.
+def _task_declaring_family(runner_root: Path, task_type: str) -> tuple[Path, Path | None] | None:
+    """The family declaring ``task_type`` and, when it has one, its Task contract dir.
 
-    Mirrors ``result_storyboard.runner_root``'s ``root``: the family root is the
-    plugin manifest's directory, and the manifest's ``tasks`` list names the task
-    YAML files it owns. Reading the manifest keeps the family -> task mapping in
-    its single source of truth rather than duplicating it here.
+    The family root is the plugin manifest's directory and the manifest's
+    ``tasks`` list names the task YAML files it owns, so the family -> task
+    mapping comes from its single source of truth rather than being duplicated
+    here. The second element is the Task's own manifest directory when it ships
+    an ``expected_files.yaml`` there -- the position the Server resolves that
+    Task's result contract and Storyboard from -- and ``None`` when the Task
+    keeps the family-scoped contract.
     """
     import yaml
 
@@ -611,8 +620,20 @@ def _family_declaring_task(runner_root: Path, task_type: str) -> Path | None:
             except (OSError, ValueError):
                 continue
             if isinstance(task_document, dict) and str(task_document.get("id")) == str(task_type):
-                return manifest.parent
+                task_directory = task_path.parent
+                scoped = (
+                    task_directory
+                    if (task_directory / "expected_files.yaml").is_file() and task_directory != manifest.parent
+                    else None
+                )
+                return manifest.parent, scoped
     return None
+
+
+def _family_declaring_task(runner_root: Path, task_type: str) -> Path | None:
+    """The family directory declaring ``task_type``, or ``None``."""
+    located = _task_declaring_family(runner_root, task_type)
+    return located[0] if located is not None else None
 
 
 # ---------------------------------------------------------------------------

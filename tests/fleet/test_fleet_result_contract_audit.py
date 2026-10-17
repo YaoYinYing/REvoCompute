@@ -14,15 +14,17 @@ ROOT = Path(__file__).resolve().parents[2]
 
 RUNNERS = ROOT / "docker" / "runners"
 
-KNOWN_DEFECTS: dict[tuple[str, str], str] = {
+#: Defects the audit used to record and no longer does, kept as an explicit
+#: record rather than deleted: the assertion below proves they are *resolved*,
+#: not that the finding was silenced.
+RESOLVED_DEFECTS: dict[tuple[str, str], str] = {
     ("foundry_rfd3_design", "result.required_source_unaddressed"): (
         "RFD3 design writes '<name>_model_<n>.cif.gz' (pinned upstream "
-        "rfd3/engine.py), but the foundry family's single shared expected_files.yaml "
-        "declares only the RF3 fold spelling '*_model.cif' under 'structures', so the "
-        "design tasks' primary candidates have no declared logical identity and the "
-        "shared storyboard resolves no structures for them. Resolving it means giving "
-        "the design tasks their own result tree/storyboard, which is a family "
-        "redesign outside this audit."
+        "rfd3/engine.py); the foundry family's one shared expected_files.yaml "
+        "declared only the RF3 fold spelling '*_model.cif' under 'structures', "
+        "so the design Tasks' primary candidates had no declared logical "
+        "identity. Resolved by the Task-scoped result contract: each Task now "
+        "resolves the tree beside its own manifest."
     ),
     ("foundry_rfd3na_design", "result.required_source_unaddressed"): (
         "Same shared-foundry-tree defect as foundry_rfd3_design."
@@ -38,45 +40,66 @@ def test_real_fleet_is_discovered_and_audited_end_to_end():
         assert representative in report.tasks
 
 def test_real_fleet_reports_no_unrecorded_contract_defect():
-    """Every finding beyond the recorded defects is either a defect or a coverage gap.
+    """Every remaining finding is the explicit coverage boundary, nothing else.
 
-    The fleet is NOT claimed clean. Three categories are asserted separately:
-    the covered Tasks whose declarations the audit could evaluate, the unaudited
-    Tasks that require a view source but ship no ``expected_files.yaml``, and the
-    recorded known defects. The test fails if any finding appears that is not one
-    of the recorded defects or the explicit ``result.required_source_undeclared_tree``
-    coverage boundary, so the reported state cannot drift into looking greener
-    than it is.
+    The fleet is still NOT claimed clean: the 36 Tasks that require a view
+    source and ship no ``expected_files.yaml`` are reported as
+    ``result.required_source_undeclared_tree`` (unaudited, not green). The test
+    fails if any *other* finding appears, so the reported state cannot drift
+    into looking greener than it is.
     """
     report = audit_fleet(str(RUNNERS), server_dir=str(ROOT))
 
     unrecorded = [
         finding
         for finding in report.findings
-        if (finding.task, finding.code) not in KNOWN_DEFECTS
-        and finding.code != "result.required_source_undeclared_tree"
+        if finding.code != "result.required_source_undeclared_tree"
+        and (finding.task, finding.code) not in RESOLVED_DEFECTS
     ]
     assert unrecorded == [], "\n".join(str(finding) for finding in unrecorded)
     for finding in report.findings:
         assert finding.task and finding.task != "-"
         if finding.code in {"result.required_source_unaddressed", "result.required_source_undeclared_tree"}:
             assert finding.view
-    # Positive control: the recorded foundry defect is genuinely *present*, not
-    # merely allowed. If the audit stopped reporting it, the allowlist above would
-    # silently stop covering anything and the fleet would look cleaner than it is.
-    assert ("foundry_rfd3_design", "result.required_source_unaddressed") in {
+
+def test_the_recorded_foundry_design_defect_is_resolved_not_silenced():
+    """The formerly-recorded foundry defect is *absent*, and provably so.
+
+    A defect that disappears when an allowlist is edited is indistinguishable
+    from a defect that was fixed, so this asserts the fix's own signature: the
+    design Tasks resolve the compressed design structures their own tree
+    declares, and no finding at all names them. If the Task-scoped resolution
+    regressed -- or the design Tasks silently fell back to the family tree --
+    this fails.
+    """
+    from revocompute.result_storyboard import expected_file_tree
+    from revocompute.task_types import isolated_discovery
+
+    report = audit_fleet(str(RUNNERS), server_dir=str(ROOT))
+
+    assert {
         (finding.task, finding.code) for finding in report.findings
-    }
+    }.isdisjoint({task for task, _code in RESOLVED_DEFECTS})
+    with isolated_discovery(str(RUNNERS)) as manager:
+        design = manager.contributions.resolve("tasks", "foundry_rfd3_design")
+        fold = manager.contributions.resolve("tasks", "foundry_rf3_fold")
+        design_tree = expected_file_tree(design, str(ROOT))
+        fold_tree = expected_file_tree(fold, str(ROOT))
+    # Each Task resolves its own tree: the design identifier is present in one
+    # and the RF3 seed/sample shape in the other, so they are not one contract.
+    assert design_tree != fold_tree
+    assert "designs" in design_tree and design_tree["designs"]["pattern"] == "*.cif.gz"
+    assert "structures" in fold_tree and fold_tree["structures"]["pattern"].endswith("_model.cif")
 
 def test_fleet_report_separates_covered_unaudited_and_defective():
     """Coverage (a partition) and defect status (orthogonal) are both reported.
 
-    The audit's claim is bounded. Coverage asks whether a Task's declarations
-    could be evaluated at all: covered (a declared result tree) versus unaudited
-    (no tree), which partition the fleet. Defect status is orthogonal -- the two
-    Foundry design Tasks are covered (they ship a tree) and still defective. The
-    report exposes both so it can never be read as "the whole fleet passed", and
-    never forces the defect set to fit the coverage partition.
+    Coverage asks whether a Task's declarations could be evaluated at all:
+    covered (a declared result tree) versus unaudited (no tree), which partition
+    the fleet. Defect status stays orthogonal and is now empty -- the two
+    Foundry design Tasks ship a Task-scoped tree and no longer carry the defect
+    that the shared family tree forced. The report still exposes both statuses
+    separately so coverage can never be read as "the whole fleet passed".
     """
     report = audit_fleet(str(RUNNERS), server_dir=str(ROOT))
 
@@ -84,13 +107,12 @@ def test_fleet_report_separates_covered_unaudited_and_defective():
     assert report.covered | report.unaudited == frozenset(report.tasks)
     assert not (report.covered & report.unaudited)
     assert len(report.covered) == 20 and len(report.unaudited) == 36
-    # ... and defect status is orthogonal: the defective foundry Tasks are covered,
-    # not a third coverage bucket.
-    assert set(report.defective) == {"foundry_rfd3_design", "foundry_rfd3na_design"}
+    # ... and defect status is orthogonal: it is empty here, while 36 Tasks are
+    # still unaudited, so a clean defect set is not a clean coverage set.
+    assert set(report.defective) == set()
     assert report.defective <= report.covered
-    # A concrete defect means the report is not "ok" even though the only other
-    # findings are coverage-boundary notices.
-    assert report.ok is False
+    assert report.ok is True
+    assert report.unaudited
     summary = report.as_text().splitlines()[0]
     assert "covered" in summary and "unaudited" in summary and "defect" in summary
 
