@@ -120,7 +120,13 @@ def _mount(page: Page) -> ReplayBundle:
 
 def _open(page: Page) -> None:
     page.goto(f"{ORIGIN}/compute/results/{_task_id()}")
-    expect(page.locator(".result-workspace, .fpl-result, .result-status").first).to_be_visible()
+    # The scientific surface is the one root these tests then exercise, and the only
+    # one whose visibility is stable once the manifest arrives. A union over the
+    # workspace, the storyboard root and the lifecycle band resolves ``.first`` to
+    # whichever of them the DOM happens to hold first, and the lifecycle band is
+    # appended ahead of the workspace and then hidden for a quiet outcome -- so the
+    # wait passed or failed on which side of that transition the retry landed.
+    expect(page.locator(".fpl-result")).to_be_visible()
     # Wait for layout to settle before any interaction. The result tabs are laid
     # out under the app's web font; until the font loads, the tab strip reflows
     # and Playwright's stability gate for a click never opens on a slow load.
