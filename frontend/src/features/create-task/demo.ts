@@ -7,28 +7,13 @@ import { CreateTaskApiError } from './api';
  *
  * The catalog is public and read-only: fetching it creates, reserves, and
  * authorizes nothing. A demo names the fixture files to bind and the parameter
- * values to set; loading it into the workbench is a local form operation.
+ * values to set; loading it into the workbench is a local form operation. Its
+ * shape is the server's own OpenAPI declaration, read from the generated client
+ * rather than restated here, so the client cannot describe a demo the API does
+ * not publish.
  */
-export interface TaskDemoFile {
-  role: string;
-  path: string;
-  sha256: string;
-  size: number;
-  media_type: string;
-  download_url: string;
-}
-
-export interface TaskDemo {
-  id: string;
-  title: string;
-  purpose: string;
-  context: string;
-  source: { name: string; url: string };
-  license: { id: string; name: string; url: string };
-  inputs: Record<string, TaskDemoFile[]>;
-  parameters: Record<string, unknown>;
-}
-
+export type TaskDemoFile = components['schemas']['TaskDemoFile'];
+export type TaskDemo = components['schemas']['TaskDemo'];
 type DemoCatalog = components['schemas']['TaskDemoCatalog'];
 
 function fail(message: string): never {
@@ -68,11 +53,5 @@ export async function getTaskDemos(name: string, signal?: AbortSignal): Promise<
   if (!payload || payload.version !== 1 || !Array.isArray(payload.demos)) {
     fail(t('ct.demo.failed', { message: 'payload' }));
   }
-  return payload.demos.map(demo => ({
-    id: demo.id, title: demo.title, purpose: demo.purpose, context: demo.context,
-    source: { name: demo.source.name, url: demo.source.url },
-    license: { id: demo.license.id, name: demo.license.name, url: demo.license.url },
-    inputs: Object.fromEntries(Object.entries(demo.inputs).map(([role, files]) => [role, files as TaskDemoFile[]])),
-    parameters: { ...demo.parameters } as Record<string, unknown>,
-  }));
+  return payload.demos;
 }

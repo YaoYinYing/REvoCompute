@@ -312,7 +312,7 @@ def test_the_demo_controls_are_full_targets_and_keep_the_page_within_its_width(p
     mount = _scenario()
     _mount(page, mount)
 
-    for width in (390, 320):
+    for width in (390, 320, 280):
         page.set_viewport_size({"width": width, "height": 900})
         _open_create_task(page)
         button = _header_demo_button(page)
@@ -320,6 +320,18 @@ def test_the_demo_controls_are_full_targets_and_keep_the_page_within_its_width(p
         assert box is not None and box["height"] >= MIN_TARGET_PX, (width, box)
         button.focus()
         assert button.evaluate("node => node === document.activeElement")
+
+        # A second control beside the first must not widen the header past its
+        # own box: a row that forbids shrinking by its content's width overflows
+        # the viewport at the widths the smallest supported screens use, and a
+        # container's own scrollWidth is what says so independently of whether
+        # the platform reserves scrollbar space inside the viewport.
+        assert page.evaluate(
+            """() => ['.ct-method-header', '.ct-method-controls'].every(selector => {
+                const el = document.querySelector(selector);
+                return el && el.scrollWidth <= el.clientWidth;
+            })"""
+        ), f"the method control row overflows its own box at {width}px"
 
         dialog = _open_picker(page)
         choose = dialog.locator("[data-ct-demo-choose]")
