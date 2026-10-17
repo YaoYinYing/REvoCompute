@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import os
+import re
 from functools import partial
 
 from runner_protocol import ROOT, run_with_manifest
@@ -68,3 +69,20 @@ def test_esm_extract_scopes_cache_and_temporary_files_to_scratch(tmp_path):
     assert locations[3] == str(checkpoints)
     assert not any(path.startswith(str(output_dir)) for path in locations[:3])
     assert (output_dir / "task_finished").is_file()
+
+
+def test_esm_reads_only_parameters_its_tasks_declare():
+    """No adapter read may name a parameter no esm TaskType declares.
+
+    ``_parse_param`` is total: an undeclared name silently yields its default,
+    so a read for a name that appears in no ``task.yaml`` is a control the user
+    was never offered.  This is what caught the write-only ``num_recycles``,
+    ``max_tokens_per_batch`` and ``chunk_size`` reads.
+    """
+    declared: set[str] = set()
+    for task_yaml in (ESM_RUNNER_SCRIPT.parent / "tasks").glob("*/task.yaml"):
+        declared.update(re.findall(r"^\s+([a-z_][a-z_0-9]*):", task_yaml.read_text(encoding="utf-8"), re.MULTILINE))
+    reads = set(re.findall(r"_parse_param\s+([a-z_][a-z_0-9]*)", ESM_RUNNER_SCRIPT.read_text(encoding="utf-8")))
+
+    assert reads, "the adapter reads no parameters at all"
+    assert reads <= declared, f"adapter reads undeclared parameters: {sorted(reads - declared)}"

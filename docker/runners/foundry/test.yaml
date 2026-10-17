@@ -9,7 +9,7 @@ collections:
     - id: minimal-foundry-rfd3na
       task: foundry_rfd3na_design
       input: {roles: {specification: [tests/data/foundry/rfd3na_unconditional.json], assets: [tests/data/foundry/rfd3na_motif_template.pdb]}}
-      parameters: {num_designs: 1, diffusion_steps: 2, num_recycles: 1, seed: 0, low_memory_mode: true, dump_trajectories: false}
+      parameters: {num_designs: 1, diffusion_steps: 2, seed: 0, low_memory_mode: true, dump_trajectories: false}
     - id: minimal-foundry-rf3
       task: foundry_rf3_fold
       input: {roles: {specification: [tests/data/foundry/rf3_monomer.json]}}

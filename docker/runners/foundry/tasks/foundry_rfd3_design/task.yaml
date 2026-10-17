@@ -6,7 +6,7 @@ use_when: Use this for de novo protein, binder, motif-scaffolding, or all-atom i
 input_summary: One RFD3 JSON specification and any local structure or alignment files it references.
 output_summary: Designed compressed mmCIF structures, resolved specifications, and immutable run provenance.
 considerations:
-- Runtime and GPU memory increase with system size, diffusion steps, and design count.
+- Runtime and GPU memory increase with system size, diffusion steps, design count, and recycling iterations.
 - Hydrogen-bond conditioning that depends on the separately licensed HBPLUS program is not enabled.
 - Outputs are computational designs and require independent validation.
 gpus: true
