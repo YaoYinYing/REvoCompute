@@ -99,6 +99,8 @@ def test_public_openapi_exposes_the_client_contract(monkeypatch, tmp_path):
         "/skills.md": {"get"},
         "/compute/api/types": {"get"},
         "/compute/api/types/{name}": {"get"},
+        "/compute/api/types/{name}/demos": {"get"},
+        "/compute/api/types/{name}/demos/{demo_id}/files/{asset}": {"get"},
         "/compute/api/workspace/plugins/{owner}/{plugin_id}": {"get"},
         "/compute/api/workspace/assets/{owner}/{plugin_id}/{asset}": {"get"},
         "/compute/api/task-parameters/{task_type}": {"get"},

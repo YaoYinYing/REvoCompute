@@ -58,6 +58,21 @@
 .ct-snapshot-details { grid-column:1/-1; font-size:14px; color:var(--ct-muted); }.ct-snapshot-details summary { cursor:pointer; }.ct-snapshot { display:grid; grid-template-columns:auto 1fr; gap:7px 20px; margin:15px 0 0; font-size:14px; }.ct-snapshot dd { margin:0; overflow-wrap:anywhere; }
 .ct-sequence { min-height:140px; }.ct-sequence-preview { white-space:pre-wrap; overflow-wrap:anywhere; font:14px var(--font-mono); background:var(--app-stage); padding:14px; }.ct-structure-viewer { height:400px; position:relative; overflow:hidden; }
 .ct-dialog { width:min(32rem,calc(100% - 32px)); max-height:90dvh; overflow:auto; background:var(--ct-raised); color:var(--ct-ink); padding:24px; border:1px solid var(--ct-line); border-radius:8px; }.ct-dialog::backdrop { background:var(--app-scrim); }
+.ct-method-controls { display:flex; gap:10px; align-items:center; flex:none; }
+.ct-demo-dialog { width:min(48rem,calc(100% - 32px)); }
+.ct-demo-list { display:grid; gap:0; margin:18px 0; }
+.ct-demo { display:grid; gap:7px; padding:16px 0; border-top:1px solid var(--ct-line); }
+.ct-demo h3 { font:500 18px var(--font-display); margin:0; }
+.ct-demo p { margin:0; font-size:14px; color:var(--ct-muted); }
+.ct-demo-provenance { overflow-wrap:anywhere; }
+.ct-demo-provenance a { color:var(--ct-accent); }
+.ct-demo-summary { display:grid; grid-template-columns:auto 1fr; gap:5px 18px; margin:0; font:14px var(--font-mono); }
+.ct-demo-summary dd { margin:0; overflow-wrap:anywhere; }
+.ct-demo button { justify-self:start; }
+.ct-demo-applied { display:grid; gap:8px; padding:14px 16px; border:1px solid var(--ct-line); border-radius:4px; background:var(--app-soft); font-size:14px; }
+.ct-demo-applied p { margin:0; }
+.ct-demo-changes { margin:0; padding-left:20px; display:grid; gap:4px; overflow-wrap:anywhere; }
+.ct-demo-applied button { justify-self:start; }
 .ct-access-panel { padding:18px 0; border-bottom:1px solid var(--ct-line); font-size:14px; }
 .ct-catalog-controls { display:grid; grid-template-columns:1fr 220px; gap:16px; margin:24px 0; }.ct-method-group { border-top:1px solid var(--ct-line); padding:20px 0; }.ct-method-group h3 { font:500 21px var(--font-display); }.ct-method-grid { display:grid; gap:0; }.ct-method { display:grid; gap:7px; text-align:left; border:0; border-bottom:1px solid var(--ct-line); border-radius:0; padding:16px 0; background:transparent; color:inherit; cursor:pointer; }.ct-method strong { font:500 18px var(--font-display); }.ct-method span,.ct-method small { font-size:14px; color:var(--ct-muted); }
 @container(max-width:1150px) { .create-task { padding-inline:28px; }.ct-workspace { gap:28px; }.ct-protocol-step { padding:20px; } }

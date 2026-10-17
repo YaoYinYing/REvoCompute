@@ -375,6 +375,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/compute/api/types/{name}/demos": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List a task type's declared demo inputs
+         * @description Returns the deployment-controlled demo presets the enabled TaskType declares in its own demo manifest. A demo is a redistributable fixture plus the named input roles and typed parameters that make it a working example; reading the catalog creates, reserves, and authorizes nothing. An unknown or disabled TaskType is a 404, exactly as for the canonical parameter schema.
+         */
+        get: operations["getTaskDemos"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/compute/api/types/{name}/demos/{demo_id}/files/{asset}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download one declared demo fixture
+         * @description Serves one fixture file a demo declaration already validated for an enabled TaskType. The request is resolved by allowlist membership only: only a path the declaration names can be served, so a traversal, an absolute path, or an undeclared file is concealed as not found. The server never fetches a remote dataset.
+         */
+        get: operations["getTaskDemoFile"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/compute/api/workspace/plugins/{owner}/{plugin_id}": {
         parameters: {
             query?: never;
@@ -2359,6 +2399,44 @@ export interface components {
             };
             allocations: components["schemas"]["GPUAllocationReview"][];
         };
+        TaskDemoCatalog: {
+            /** @constant */
+            version: 1;
+            task_type: string;
+            demos: components["schemas"]["TaskDemo"][];
+        };
+        TaskDemo: {
+            id: string;
+            title: string;
+            purpose: string;
+            context: string;
+            source: components["schemas"]["TaskDemoSource"];
+            license: components["schemas"]["TaskDemoLicense"];
+            /** @description Named input roles to bind, keyed by the role ID the owning task.yaml declares. */
+            inputs: {
+                [key: string]: components["schemas"]["TaskDemoFile"][];
+            };
+            parameters: {
+                [key: string]: unknown;
+            };
+        };
+        TaskDemoSource: {
+            name: string;
+            url: string;
+        };
+        TaskDemoLicense: {
+            id: string;
+            name: string;
+            url: string;
+        };
+        TaskDemoFile: {
+            role: string;
+            path: string;
+            sha256: string;
+            size: number;
+            media_type: string;
+            download_url: string;
+        };
         TaskCatalog: {
             /** @constant */
             version: 3;
@@ -3879,6 +3957,57 @@ export interface operations {
             };
             404: components["responses"]["NotFound"];
             503: components["responses"]["Unavailable"];
+        };
+    };
+    getTaskDemos: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @example gremlin */
+                name: components["parameters"]["TaskTypeName"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The TaskType's declared demo presets, empty when it declares none */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskDemoCatalog"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    getTaskDemoFile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @example gremlin */
+                name: components["parameters"]["TaskTypeName"];
+                demo_id: string;
+                asset: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The declared demo fixture bytes, served with the declared media type */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            404: components["responses"]["NotFound"];
         };
     };
     getWorkspacePlugin: {

@@ -79,3 +79,57 @@ alter scientific interpretation.
 Cardinality counts files. One sequence FASTA may carry many records, and when a
 family declares that each record is an independent work item, the Runner
 normalizes them itself — see [Persistent Execution](persistent-execution.md).
+
+## Demo inputs
+
+A family may declare supported, scientist-facing **example inputs** beside a task
+manifest: `tasks/<task-id>/demo/demos.yaml` plus a `files/` directory of
+fixtures. A demo is a small redistributable fixture bound to named input roles
+with typed parameter values, so a reader can fill the Create Task form in one
+action. It is *not* the operator/CI acceptance contract — that stays `test.yaml`
+and `tests/data` — and loading a demo never creates, reserves, submits, or
+pre-authorizes a Task: it fills the same controls a reader fills by hand.
+
+```yaml
+demos:
+- id: multi_record                # stable, unique per Task: [a-z][a-z0-9_]{0,63}
+  title: Two short protein sequences
+  purpose: One sentence on what this preset demonstrates.
+  context: >-                    # optional scientific framing
+    Both records are synthetic ten-residue peptides.
+  source:                        # where the fixture came from
+    name: REvoCompute Example Runner demo corpus
+    url: https://example.org/corpus
+  license:                       # why this deployment may redistribute it
+    id: cc0-1.0
+    name: CC0 1.0 Universal (public domain dedication)
+    url: https://creativecommons.org/publicdomain/zero/1.0/
+  inputs:                        # role ID -> declared fixture files
+    sequence:
+    - path: files/multi_record.fasta
+      sha256: e2773b5a98b4b7531d5f06843e651aae83d2f33a2f92b279cfcad57776acd764
+      media_type: text/x-fasta
+  parameters:                    # typed parameter values, in the task's own grammar
+    mass_precision: 2
+```
+
+Every declared role must be one the task's own `inputs` declares, cardinality is
+enforced per role, and `parameters` is validated against the task's canonical
+parameter schema — a demo is checked with the same parsers and grammar an
+uploaded file and a typed parameter meet. `sha256` is the digest of the fixture
+beside the manifest; a fixture may be at most a few MiB and must be a single
+regular file. Fixtures live in Git only when they are genuinely small; keep PDB
+structures, MSAs, and model weights out of the repository.
+
+Provenance is required, not decorative: a demo is offered to anonymous callers,
+so a family that cannot state a redistribution basis declares **no** demo rather
+than declaring one under a placeholder licence. Declaring no demo is a supported
+answer — the Create Task picker reports the absence.
+
+The server publishes the catalog anonymously at
+`GET /compute/api/types/<task-type>/demos` and serves each declared fixture at
+`GET /compute/api/types/<task-type>/demos/<demo-id>/files/<path>`. The server
+never fetches a remote dataset on a caller's behalf and never executes a demo
+script: only fixtures the declaration already validated are served, by
+allowlist membership.
+

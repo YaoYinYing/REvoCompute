@@ -302,6 +302,43 @@
         }
       }
     },
+    "/compute/api/types/{name}/demos": {
+      "get": {
+        "tags": ["Task types"],
+        "summary": "List a task type's declared demo inputs",
+        "description": "Returns the deployment-controlled demo presets the enabled TaskType declares in its own demo manifest. A demo is a redistributable fixture plus the named input roles and typed parameters that make it a working example; reading the catalog creates, reserves, and authorizes nothing. An unknown or disabled TaskType is a 404, exactly as for the canonical parameter schema.",
+        "operationId": "getTaskDemos",
+        "parameters": [{"$ref": "#/components/parameters/TaskTypeName"}],
+        "responses": {
+          "200": {
+            "description": "The TaskType's declared demo presets, empty when it declares none",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TaskDemoCatalog"}}}
+          },
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "503": {"$ref": "#/components/responses/Unavailable"}
+        }
+      }
+    },
+    "/compute/api/types/{name}/demos/{demo_id}/files/{asset}": {
+      "get": {
+        "tags": ["Task types"],
+        "summary": "Download one declared demo fixture",
+        "description": "Serves one fixture file a demo declaration already validated for an enabled TaskType. The request is resolved by allowlist membership only: only a path the declaration names can be served, so a traversal, an absolute path, or an undeclared file is concealed as not found. The server never fetches a remote dataset.",
+        "operationId": "getTaskDemoFile",
+        "parameters": [
+          {"$ref": "#/components/parameters/TaskTypeName"},
+          {"name": "demo_id", "in": "path", "required": true, "schema": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"}},
+          {"name": "asset", "in": "path", "required": true, "schema": {"type": "string"}}
+        ],
+        "responses": {
+          "200": {
+            "description": "The declared demo fixture bytes, served with the declared media type",
+            "content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}}
+          },
+          "404": {"$ref": "#/components/responses/NotFound"}
+        }
+      }
+    },
     "/compute/api/workspace/plugins/{owner}/{plugin_id}": {
       "get": {
         "tags": ["Task types"],
@@ -2110,6 +2147,60 @@
             ]
           },
           "allocations": {"type": "array", "items": {"$ref": "#/components/schemas/GPUAllocationReview"}}
+        },
+        "additionalProperties": false
+      },
+      "TaskDemoCatalog": {
+        "type": "object",
+        "required": ["version", "task_type", "demos"],
+        "properties": {
+          "version": {"type": "integer", "const": 1},
+          "task_type": {"type": "string"},
+          "demos": {"type": "array", "items": {"$ref": "#/components/schemas/TaskDemo"}}
+        },
+        "additionalProperties": false
+      },
+      "TaskDemo": {
+        "type": "object",
+        "required": ["id", "title", "purpose", "context", "source", "license", "inputs", "parameters"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"},
+          "title": {"type": "string"},
+          "purpose": {"type": "string"},
+          "context": {"type": "string"},
+          "source": {"$ref": "#/components/schemas/TaskDemoSource"},
+          "license": {"$ref": "#/components/schemas/TaskDemoLicense"},
+          "inputs": {
+            "type": "object",
+            "description": "Named input roles to bind, keyed by the role ID the owning task.yaml declares.",
+            "additionalProperties": {"type": "array", "items": {"$ref": "#/components/schemas/TaskDemoFile"}}
+          },
+          "parameters": {"type": "object", "additionalProperties": true}
+        },
+        "additionalProperties": false
+      },
+      "TaskDemoSource": {
+        "type": "object",
+        "required": ["name", "url"],
+        "properties": {"name": {"type": "string"}, "url": {"type": "string"}},
+        "additionalProperties": false
+      },
+      "TaskDemoLicense": {
+        "type": "object",
+        "required": ["id", "name", "url"],
+        "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "url": {"type": "string"}},
+        "additionalProperties": false
+      },
+      "TaskDemoFile": {
+        "type": "object",
+        "required": ["role", "path", "sha256", "size", "media_type", "download_url"],
+        "properties": {
+          "role": {"type": "string"},
+          "path": {"type": "string"},
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "size": {"type": "integer", "minimum": 1},
+          "media_type": {"type": "string"},
+          "download_url": {"type": "string"}
         },
         "additionalProperties": false
       },

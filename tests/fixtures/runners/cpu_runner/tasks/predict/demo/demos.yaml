@@ -1,0 +1,25 @@
+# Demo inputs for this Task, declared by the owning family.
+#
+# See the example family's `tasks/sequence_statistics/demo/demos.yaml` for the
+# full contract. In short: a demo is a supported input preset (a small
+# redistributable fixture plus named-role bindings and typed parameters), never
+# a Task, and every demo states its source and redistribution basis.
+demos:
+- id: default_controls
+  title: Two sequences with the default control values
+  purpose: Load a ready-to-run preset that leaves every synthetic control at its declared default.
+  source:
+    name: Synthetic demo corpus
+    url: https://example.invalid/synthetic
+  license:
+    id: cc-by-4.0
+    name: Creative Commons Attribution 4.0 International
+    url: https://creativecommons.org/licenses/by/4.0/
+  inputs:
+    sequence:
+    - path: files/example.fasta
+      sha256: 384eff993eeab4bccc182a1e044de50eb4ebe5584d215ff95d160e7ea77fd379
+      media_type: text/x-fasta
+  parameters:
+    iter: 100
+    mass_precision: 2

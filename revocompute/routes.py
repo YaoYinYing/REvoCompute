@@ -208,6 +208,7 @@ from revocompute.task_types import (
     list_types,
     workspace_plugin_descriptor,
 )
+from revocompute.task_demos import DemoContractError, demo_root, load_task_demos, resolve_demo_file
 from revocompute.workspace_contracts import WorkspaceValidationError, normalize_capability, validate_capability
 from revocompute.task_types import workspace_backend
 from revocompute.tool_calls import ToolAdmissionError, new_tool_call_id, normalize_tool_call_id
@@ -798,14 +799,9 @@ def task_types_list():
 @app.route("/compute/api/task-parameters/<task_type>", methods=["GET"])
 def task_parameter_schema(task_type: str):
     """Return the canonical task.yaml-owned JSON Schema for one enabled TaskType."""
-    try:
-        tt, _runner = _get_task_type(task_type)
-    except KeyError:
-        return jsonify({"error": f"Unknown task type: {task_type!r}"}), 404
-
-    manage_db = current_app.config.get("manage_db")
-    if manage_db is not None and manage_db.task_type_is_enabled(tt.name) is False:
-        return jsonify({"error": f"Task type {task_type!r} is disabled"}), 404
+    tt, refusal = _enabled_task_type_or_404(task_type)
+    if refusal is not None:
+        return refusal
     return jsonify(tt.schema)
 
 
@@ -1101,6 +1097,122 @@ def task_type_form(name: str):
             "input_workspace": workspace_payload,
         }
     )
+
+
+def _enabled_task_type_or_404(name: str):
+    """Resolve one enabled TaskType, or the response that refuses it.
+
+    Demo reads are public like ``/compute/api/task-parameters``, so they make the
+    same admission decision with the same code: an unknown name and a disabled
+    TaskType are both a 404, and demo loading never discloses a method the
+    catalog would not have offered.
+    """
+    try:
+        tt, _runner = _get_task_type(name)
+    except KeyError:
+        return None, (jsonify({"error": f"Unknown task type: {name!r}"}), 404)
+    manage_db = current_app.config.get("manage_db")
+    if manage_db is not None and manage_db.task_type_is_enabled(tt.name) is False:
+        return None, (jsonify({"error": f"Task type {name!r} is disabled"}), 404)
+    return tt, None
+
+
+def _demo_payload(tt: Any, demo: Any) -> dict[str, Any]:
+    """Project one declared demo into the client contract.
+
+    A demo is a preset, not a Task: the payload carries the named-role files to
+    bind, the typed parameters to set, and the provenance a scientist needs to
+    judge the fixture.  Nothing here reserves, submits, or authorizes.
+    """
+    inputs: dict[str, list[dict[str, Any]]] = {}
+    for item in demo.files:
+        inputs.setdefault(item.role, []).append(
+            {
+                "role": item.role,
+                "path": item.path,
+                "sha256": item.sha256,
+                "size": item.size,
+                "media_type": item.media_type,
+                "download_url": url_for(
+                    "task_demo_file", name=tt.name, demo_id=demo.id, asset=item.path
+                ),
+            }
+        )
+    return {
+        "id": demo.id,
+        "title": demo.title,
+        "purpose": demo.purpose,
+        "context": demo.context,
+        "source": {"name": demo.source, "url": demo.source_url},
+        "license": {"id": demo.license_id, "name": demo.license_name, "url": demo.license_url},
+        "inputs": inputs,
+        "parameters": demo.parameters,
+    }
+
+
+@app.route("/compute/api/types/<name>/demos", methods=["GET"])
+@optional_user
+def task_demo_catalog(name: str):
+    """Return the deployment-owned demo presets declared by one enabled Task.
+
+    Demos are read-only input presets: the response names the fixture files and
+    the parameter values a client may load into the preparation form.  No demo
+    is created, reserved, or submitted here, and the server resolves nothing
+    from a caller-supplied location -- every fixture is one the Task's own
+    declaration already validated.
+    """
+    tt, refusal = _enabled_task_type_or_404(name)
+    if refusal is not None:
+        return refusal
+    try:
+        demos = load_task_demos(tt)
+    except DemoContractError:
+        # A malformed declaration is an operator problem, not a client one: fail
+        # closed without echoing the declaration's own paths back to the caller.
+        logging.exception("Task %r declares an invalid demo manifest", tt.name)
+        return jsonify({"error": "Demo declarations are unavailable for this task"}), 503
+    return jsonify(
+        {
+            "version": 1,
+            "task_type": tt.name,
+            "demos": [_demo_payload(tt, demo) for demo in demos],
+        }
+    )
+
+
+@app.route("/compute/api/types/<name>/demos/<demo_id>/files/<path:asset>", methods=["GET"])
+@optional_user
+def task_demo_file(name: str, demo_id: str, asset: str):
+    """Serve one file an enabled Task's demo declaration already validated.
+
+    The request is resolved by allowlist membership only: the declared fixture
+    list is the sole source of paths, so a traversal, an absolute path, or an
+    undeclared file simply is not a member and is refused.  Serving re-reads the
+    same directory the declaration validated, and the response carries the
+    declared media type rather than a type guessed from the request.
+    """
+    tt, refusal = _enabled_task_type_or_404(name)
+    if refusal is not None:
+        return refusal
+    try:
+        demos = load_task_demos(tt)
+    except DemoContractError:
+        logging.exception("Task %r declares an invalid demo manifest", tt.name)
+        abort(404)
+    demo = next((item for item in demos if item.id == demo_id), None)
+    if demo is None:
+        abort(404)
+    declared = resolve_demo_file(demo, asset)
+    if declared is None:
+        abort(404)
+    root = demo_root(tt)
+    if root is None:
+        abort(404)
+    response = send_from_directory(root, declared.path, mimetype=declared.media_type, conditional=True)
+    # The fixture is a public, digest-declared sample, so it is cacheable; the
+    # declaration's own identity is what the client verifies it against.
+    response.headers["Cache-Control"] = "public, max-age=300"
+    return response
 
 
 @app.route("/compute/api/types/<name>/workspace/normalize", methods=["POST"])
