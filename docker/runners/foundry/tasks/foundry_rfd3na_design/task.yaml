@@ -7,7 +7,7 @@ input_summary: One RFD3NA JSON specification and any local structure or alignmen
 output_summary: Designed compressed mmCIF structures, resolved specifications, and immutable run provenance.
 considerations:
 - Runtime and GPU memory increase with system size, diffusion steps, and design count.
-- RFD3NA fixes network recycling in its checkpoint; the `num_recycles` parameter applies to RFD3 only.
+- RFD3NA fixes network recycling in its checkpoint, so this task exposes no recycling control; recycling is not adjustable here.
 - Hydrogen-bond conditioning that depends on the separately licensed HBPLUS program is not enabled.
 - Outputs are computational designs and require independent validation.
 gpus: true
@@ -89,7 +89,6 @@ parameters:
   properties:
     num_designs: {type: integer, description: Number of independent structures generated., default: 1, minimum: 1, maximum: 8}
     diffusion_steps: {type: integer, description: Number of reverse-diffusion denoising steps., default: 50, minimum: 1, maximum: 200}
-    num_recycles: {type: integer, description: Network recycling iterations per diffusion step., default: 2, minimum: 1, maximum: 20}
     seed: {type: integer, x-ui-control: {kind: seed}, description: Random seed for reproducible sampling., default: 0, minimum: 0, maximum: 2147483647}
     low_memory_mode: {type: boolean, description: Use memory-efficient tokenization at reduced throughput., default: false}
     dump_trajectories: {type: boolean, description: Save large intermediate diffusion trajectories., default: false}

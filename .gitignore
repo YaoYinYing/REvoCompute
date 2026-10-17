@@ -55,3 +55,6 @@ manage.sqlit*
 manage.sqlite
 HANDOFF.md
 .pytest-tmp/
+
+# Runtime startup lock created by the server process
+revocompute.sqlite3.startup.lock

@@ -152,7 +152,12 @@ from revocompute.storage import (
     PUBLICATION_NOT_FINALIZED,
     PUBLICATION_UNANCHORED,
 )
-from revocompute.result_storyboard import ResultContractError, expected_file_tree, runner_root, storyboard_declaration
+from revocompute.result_storyboard import (
+    ResultContractError,
+    expected_file_tree,
+    storyboard_asset_root,
+    storyboard_declaration,
+)
 from revocompute import runtime_bundle
 from revocompute.schemas import (
     AccessDecisionRequest,
@@ -2698,7 +2703,7 @@ def get_result_storyboard_asset(md5sum: str, asset: str):
         declaration = storyboard_declaration(
             task_type, CONFIG.server_dir, set(expected_file_tree(task_type, CONFIG.server_dir))
         )
-        root = runner_root(task_type, CONFIG.server_dir) / "storyboard"
+        root = storyboard_asset_root(task_type, CONFIG.server_dir)
         requested = asset.replace("\\", "/").strip("/")
         if (
             not declaration

@@ -2,7 +2,39 @@
 # Distributed under the terms of the GNU General Public License v3.0.
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Runner-declared result files and trusted storyboard assets."""
+"""Runner-declared result files and trusted storyboard assets.
+
+A Runner family declares one *result contract* per Task: the logical identities
+its published files resolve to (``expected_files.yaml``) and, optionally, the
+trusted Storyboard module that gives a result its task-level meaning.  A
+contract is owned either
+
+* **Task-scoped** -- ``expected_files.yaml`` and ``storyboard/`` beside the
+  owning Task manifest, inside that family's ``tasks/<task-id>/`` directory, or
+* **family-scoped** -- the same two names directly under the family directory,
+  shared by every Task of that family which ships no contract of its own.
+
+Precedence is positional and total, never inferred:
+
+* A Task whose own manifest directory ships ``expected_files.yaml`` is resolved
+  entirely from that directory -- its Storyboard comes from there too.  One
+  family may host TaskTypes whose result trees are mutually incompatible:
+  ``foundry`` folds with RF3 (``<example_id>_seed-<n>_sample-<n>_model.cif``
+  beside a ``seed,sample,ranking_score`` table) and designs with RFD3/RFD3NA
+  (``<example_id>_model_<n>.cif.gz``), so one shared tree can only
+  under-describe at least one of them.
+* Every other Task keeps the family-scoped contract, unchanged.
+
+The Task's own directory is the one discovery recorded on the TaskType
+(``task_dir``, family-relative) from a manifest path the Server already
+validated, so ownership never comes from a result filename, a task name, or
+anything a task's own output can influence.  It is still re-checked here
+against traversal and symlinks, and a Task directory shipping a ``storyboard/``
+without its own ``expected_files.yaml`` is refused rather than answered from
+the family tree: that declaration means "this Storyboard binds to logical files
+this Task declares", and another Task's tree would bind the module to
+identities it never declared.
+"""
 
 from __future__ import annotations
 
@@ -41,6 +73,40 @@ def runner_root(task_type: Any, server_dir: str) -> Path:
     if not root.is_relative_to(runners):
         raise ResultContractError("Runner assets must live under docker/runners")
     return root
+
+
+def contract_directory(family_root: str | Path, task_dir: str) -> Path:
+    """The one directory that owns a Task's result contract.
+
+    ``family_root`` is the family directory and ``task_dir`` the owning Task's
+    manifest directory relative to it (empty when the family declares the Task
+    at its own root).  The family's own directory answers only when the Task
+    ships no contract of its own, so a Task can never take its logical files
+    from one directory and its Storyboard from another.
+
+    This is the single precedence rule: ``contract_dir`` resolves the family
+    root to reach it, and a caller that already holds the family directory --
+    the live-test validation identity -- uses it directly rather than
+    re-deriving the rule.
+    """
+    root = Path(family_root)
+    if not task_dir:
+        return root
+    if Path(task_dir).is_absolute() or any(part in {"", ".", ".."} for part in task_dir.split("/")):
+        raise ResultContractError("Task result contract must live beneath its runner family")
+    directory = (root / task_dir).resolve()
+    if not directory.is_dir() or not directory.is_relative_to(root.resolve()):
+        raise ResultContractError("Task result contract must live beneath its runner family")
+    if (directory / "expected_files.yaml").is_file():
+        return directory
+    if (directory / "storyboard").is_dir():
+        raise ResultContractError("A Task Storyboard needs its own expected_files.yaml")
+    return root
+
+
+def contract_dir(task_type: Any, server_dir: str) -> Path:
+    """The contract directory of one discovered Task."""
+    return contract_directory(runner_root(task_type, server_dir), str(getattr(task_type, "task_dir", "") or ""))
 
 
 def _safe_relative(value: Any) -> str:
@@ -98,8 +164,8 @@ def load_expected_file_tree(path: str | Path) -> dict[str, dict[str, Any]]:
 
 
 def expected_file_tree(task_type: Any, server_dir: str) -> dict[str, dict[str, Any]]:
-    """Load the small logical-file contract owned by a runner."""
-    return load_expected_file_tree(runner_root(task_type, server_dir) / "expected_files.yaml")
+    """Load the small logical-file contract owned by one Task's runner family."""
+    return load_expected_file_tree(contract_dir(task_type, server_dir) / "expected_files.yaml")
 
 
 def resolve_expected_files(
@@ -168,10 +234,32 @@ def declared_file_roles(tree: dict[str, dict[str, Any]], paths: list[str]) -> di
     return roles
 
 
+def declared_result_contracts(family_root: str | Path, task_dirs: dict[str, str]) -> dict[str, Any]:
+    """The logical-output contract each owner of a family declares.
+
+    ``task_dirs`` maps each Task id the family declares to that Task's manifest
+    directory relative to ``family_root``.  A family whose Tasks all resolve to
+    one logical-output contract records that one contract -- the shape every
+    family-scoped family had before Task-scoped contracts existed, and the shape
+    a family declaring no tree at all still has -- so a family that adopts no
+    Task-scoped contract keeps an identical record and its live-test receipt
+    stays current.  Once Tasks differ, each one records its own, because from
+    then on each Task's accepted outputs are decided by its own declaration.
+    """
+    root = Path(family_root)
+    shared = load_expected_file_tree(root / "expected_files.yaml")
+    resolved = {
+        task_id: load_expected_file_tree(contract_directory(root, task_dir) / "expected_files.yaml")
+        for task_id, task_dir in sorted(task_dirs.items())
+    }
+    if all(tree == shared for tree in resolved.values()):
+        return shared
+    return resolved
+
+
 def storyboard_declaration(task_type: Any, server_dir: str, file_ids: set[str]) -> dict[str, Any] | None:
     """Read a trusted, local runner declaration; never discover task output code."""
-    root = runner_root(task_type, server_dir)
-    path = root / "storyboard" / "storyboard.yaml"
+    path = contract_dir(task_type, server_dir) / "storyboard" / "storyboard.yaml"
     if not path.is_file():
         return None
     raw = _load_yaml(path)
@@ -195,3 +283,29 @@ def storyboard_declaration(task_type: Any, server_dir: str, file_ids: set[str]) 
     if set(requires) & set(optional) or not set(requires + optional).issubset(file_ids):
         raise ResultContractError("Storyboard references unknown logical files")
     return {"identifier": identifier, "entrypoint": entrypoint, "requires": requires, "optional": optional}
+
+
+def storyboard_asset_root(task_type: Any, server_dir: str) -> Path:
+    """The directory the Storyboard route serves from.
+
+    It is the ``storyboard`` directory inside the very contract directory
+    ``storyboard_declaration`` read the declaration from, so the module the
+    Server serves is the module it validated, not a second resolution that
+    could name a different file.
+    """
+    return contract_dir(task_type, server_dir) / "storyboard"
+
+
+__all__ = [
+    "ResultContractError",
+    "contract_dir",
+    "contract_directory",
+    "declared_file_roles",
+    "declared_result_contracts",
+    "expected_file_tree",
+    "load_expected_file_tree",
+    "resolve_expected_files",
+    "runner_root",
+    "storyboard_asset_root",
+    "storyboard_declaration",
+]

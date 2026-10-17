@@ -42,13 +42,19 @@ export class ViewRendererRegistry {
 }
 
 const STRUCTURES = new Set(['chemical/x-pdb', 'chemical/x-cif', 'chemical/x-mmcif']);
+// A gzipped structure keeps the underlying format's media type (the server
+// guesses `chemical/x-cif` from `*.cif.gz`), so the media type alone already
+// routes one to the structure renderer. The name test has to allow the
+// compression suffix too, because an artifact served without a media type must
+// still preview rather than fall through to download-only.
+const STRUCTURE_NAME = /\.(?:pdb|cif|mmcif)(?:\.gz)?$/i;
 const PREVIEWS = new Set<PreviewCapability>(['structure', 'molecular_structure', 'table', 'plot', 'image', 'text', 'archive', 'download_only']);
 
 export function artifactCapability(artifact: ResultFile): PreviewCapability {
   const declared = artifact.capability !== 'unknown' ? artifact.capability : artifact.preview;
   if (declared && PREVIEWS.has(declared as PreviewCapability)) return declared as PreviewCapability;
   const name = resultFileName(artifact);
-  if (STRUCTURES.has(artifact.media_type || '') || /\.(?:pdb|cif|mmcif)$/i.test(name)) return 'structure';
+  if (STRUCTURES.has(artifact.media_type || '') || STRUCTURE_NAME.test(name)) return 'structure';
   if ((artifact.media_type || '').startsWith('image/') || /\.(?:png|jpe?g|webp|gif)$/i.test(name)) return 'image';
   if (/\.(?:csv|tsv|xlsx?)$/i.test(name)) return 'table';
   if ((artifact.media_type || '').startsWith('text/') || /\.(?:txt|log|json|ya?ml|a3m|fasta?)$/i.test(name)) return 'text';

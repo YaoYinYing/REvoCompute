@@ -93,6 +93,7 @@ nav:
       - Result View Plugin Contract: developer-guide/result-view-plugins.md
       - Result View Protocols: developer-guide/result-view-protocols.md
       - Scientific Result Inventory: developer-guide/result-inventory.md
+      - Runner Scientific Contract Audit: developer-guide/scientific-contract-inventory.md
       - Input and Result Workspace: developer-guide/input-result-workspace.md
       - Levin Structure-View Notes: developer-guide/levin-structure-view-notes.md
       - Frontend Design Language: developer-guide/frontend-design-language.md

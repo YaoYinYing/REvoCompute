@@ -324,7 +324,7 @@ export class ResultWorkspace {
     const generation = ++this.storyboardStructureGeneration;
     this.cancelRender(); const controller = new AbortController(); this.renderController = controller;
     this.selectArtifact(file);
-    if (!this.manifest?.run?.inputs?.length) this.nodes.title.textContent = localName(resultFileName(file)).replace(/\.(?:pdb|mmcif|cif)$/i, '');
+    if (!this.manifest?.run?.inputs?.length) this.nodes.title.textContent = localName(resultFileName(file)).replace(/\.(?:pdb|mmcif|cif)(?:\.gz)?$/i, '');
     const slot = this.nodes.preview.querySelector<HTMLElement>('[data-structure-slot]') || this.nodes.preview;
     let panel = slot.querySelector<HTMLElement>(':scope > .storyboard-structure-panel');
     if (!panel) { panel = element('section', 'storyboard-structure-panel'); slot.append(panel); }

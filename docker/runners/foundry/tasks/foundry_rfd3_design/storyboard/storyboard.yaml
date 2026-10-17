@@ -1,0 +1,9 @@
+identifier: foundry-rfd3-result
+entrypoint: ./index.js
+requires:
+  - designs
+  - run_record
+  - model_assets
+optional:
+  - model_metadata
+  - normalized_inputs
