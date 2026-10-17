@@ -61,9 +61,6 @@ mkdir -p "$output_dir"
 
 # Read the immutable effective parameter set projected from task.yaml.
 MSA_SAMPLES="$(_parse_param msa_samples)"
-NUM_RECYCLES="$(_parse_param num_recycles)"
-MAX_TOKENS_PER_BATCH="$(_parse_param max_tokens_per_batch)"
-CHUNK_SIZE="$(_parse_param chunk_size)"
 MODEL="$(_parse_param model)"
 REPR_LAYERS="$(_parse_param repr_layers)"
 TEMPERATURE="$(_parse_param temperature)"
