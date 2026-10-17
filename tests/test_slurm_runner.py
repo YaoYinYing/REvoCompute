@@ -1890,6 +1890,7 @@ def test_finish_callback_failure_never_escapes_poll():
     job = SlurmJob.__new__(SlurmJob)
     job._allocation_finished_notified = False
     job._allocation_tracking_started = True
+    job._allocation_finished_at = None
     job._slurm_job_id = "42"
     job._allocation_finished_callback = lambda *_args: (_ for _ in ()).throw(
         RuntimeError("accounting database is locked")
@@ -1910,6 +1911,9 @@ class _RecordingTaskStore:
     def __init__(self) -> None:
         self.progress: list[tuple[str, dict | None, str | None]] = []
         self.observations: list[dict] = []
+
+    def record_task_diagnostics(self, task_id, evidence, **kwargs):
+        pass
 
     def record_task_progress(self, task_id, *, progress=None, outcome=None):
         self.progress.append((task_id, progress, outcome))
@@ -2136,3 +2140,153 @@ def test_capture_log_omits_protocol_lines_and_keeps_runner_diagnostics(tmp_path)
 
     stdout = tmp_path / "out" / "execution" / "slurm-alice-cpu_runner-task-1.stdout.log"
     assert stdout.read_text(encoding="utf-8") == "REVODESIGN_JOB_ID=42\nmodel loaded\n"
+
+
+@pytest.mark.parametrize("ending", ["timeout", "unrecorded", "exception"])
+def test_terminal_exception_paths_preserve_captured_execution_output(tmp_path, ending):
+    """Evidence must survive every wait outcome, not just the ordinary return path."""
+    job = SlurmJob("task-1", _make_task_type(), _make_runner(), _make_entities(), str(tmp_path / "out"))
+    process = _FakeSrunProcess(
+        stdout="REVODESIGN_JOB_ID=4217\nanalysis began\n",
+        stderr="diagnostic context\n",
+        returncode=None if ending == "timeout" else 1,
+        timeout_once=ending == "timeout",
+    )
+    with patch("subprocess.Popen", return_value=process):
+        job.submit()
+        if ending == "unrecorded":
+            job._dispatched_notified = False
+        if ending == "exception":
+            job._admission_error = RuntimeError("admission recording unavailable")
+            with pytest.raises(RuntimeError, match="admission recording unavailable"):
+                job.poll()
+        else:
+            assert job.poll() == JobState.FAILED
+    execution = tmp_path / "out" / "execution"
+    assert next(execution.glob("*.stdout.log")).read_text().endswith("analysis began\n")
+    assert next(execution.glob("*.stderr.log")).read_text() == "diagnostic context\n"
+
+
+
+def test_diagnostic_initialization_failure_does_not_block_slurm_submission(tmp_path, caplog):
+    """Transient optional evidence-store failures cannot change job admission."""
+
+    class _UnavailableDiagnostics(_RecordingTaskStore):
+        def record_task_diagnostics(self, task_id, evidence, **kwargs):
+            raise OSError("database is locked")
+
+    store = _UnavailableDiagnostics()
+    job = SlurmJob(
+        "task-1", _make_task_type(), _make_runner(), _make_entities(),
+        str(tmp_path / "out"), task_store=store,
+    )
+    process = _FakeSrunProcess(stdout="REVODESIGN_JOB_ID=42\n", returncode=0)
+    with patch("subprocess.Popen", return_value=process) as spawn:
+        assert job.submit() == "42"
+    assert spawn.call_count == 1
+    assert job._diagnostic_disabled is True
+    assert job._diagnostic_attempt is None
+    assert "Could not initialize optional diagnostics" in caplog.text
+
+    # Without a server-owned attempt, later log publication must stay disabled:
+    # reusing this task ID may otherwise surface a prior stage's evidence.
+    job._persist_output()
+    assert not (tmp_path / "out" / "execution").exists()
+
+
+
+def test_submission_without_job_identity_preserves_output(tmp_path):
+    job = SlurmJob("task-1", _make_task_type(), _make_runner(), _make_entities(), str(tmp_path / "out"))
+    process = _FakeSrunProcess(stdout="", stderr="allocation request refused\n", returncode=1)
+    with patch("subprocess.Popen", return_value=process):
+        with pytest.raises(RuntimeError, match="did not return a scheduler job ID"):
+            job.submit()
+    execution = tmp_path / "out" / "execution"
+    assert next(execution.glob("*.stderr.log")).read_text() == "allocation request refused\n"
+
+
+def test_preserving_diagnostics_cannot_replace_the_execution_failure(tmp_path, monkeypatch):
+    job = SlurmJob("task-1", _make_task_type(), _make_runner(), _make_entities(), str(tmp_path / "out"))
+    process = _FakeSrunProcess(stdout="REVODESIGN_JOB_ID=4217\n", stderr="failure context\n", returncode=2)
+    def refuse_write(*args, **kwargs):
+        raise OSError("evidence storage unavailable")
+    monkeypatch.setattr("revocompute.job.runners.slurm_runner.publish_result_text", refuse_write)
+    with patch("subprocess.Popen", return_value=process):
+        job.submit()
+        assert job.poll() == JobState.FAILED
+
+
+def test_adapter_evidence_redacts_key_blocks_before_bounding_and_confirms_scheduler_state(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from revocompute.execution_diagnostics import STATUS_PATH
+
+    root = tmp_path / "out"
+    root.mkdir()
+    job = SlurmJob("task-1", _make_task_type(), _make_runner(), _make_entities(), str(root))
+    captured = []
+    job._task_store = SimpleNamespace(record_task_diagnostics=lambda task_id, evidence, **kwargs: captured.append(evidence))
+    job._process = SimpleNamespace(returncode=137)
+    job._slurm_job_id = "42"
+    job._stderr_lines = ["-----BEGIN PRIVATE KEY-----\n", *("unlabelled-key-body\n" for _ in range(10000)), "killed\n"]
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/scontrol")
+    with patch("subprocess.run", return_value=SimpleNamespace(stdout="JobId=42 JobState=OUT_OF_MEMORY")):
+        job._persist_execution_evidence()
+    assert captured[0]["reason_code"] == "out_of_memory"
+    assert captured[0]["exit_code"] == 137
+    record = (root / STATUS_PATH).read_text()
+    assert "unlabelled-key-body" not in record
+    assert len(record.encode()) < 264 * 1024
+    assert captured[0]["record_sha256"] == hashlib.sha256(record.encode()).hexdigest()
+
+
+def test_owner_log_artifacts_withhold_credentials_and_private_host_context(tmp_path):
+    job = SlurmJob("task-1", _make_task_type(), _make_runner(), _make_entities(), str(tmp_path / "out"))
+    job._stderr_lines = [
+        'API_TOKEN="private-token"\n', 'srun: error: private-node: failed\n',
+        'file /srv/private/run.py\n', '-----BEGIN PRIVATE KEY-----\n', 'private-body\n',
+        '-----END PRIVATE KEY-----\n', 'useful diagnostic context\n',
+    ]
+    job._save_output()
+    output = next((tmp_path / "out" / "execution").glob("*.stderr.log")).read_text()
+    for private in ("private-token", "private-node", "/srv/private", "private-body"):
+        assert private not in output
+    assert "useful diagnostic context" in output
+
+
+def test_execution_environment_credentials_are_redacted_without_labels(tmp_path):
+    from revocompute.execution_diagnostics import STATUS_PATH
+
+    job = SlurmJob("task-1", _make_task_type(), _make_runner(), _make_entities(), str(tmp_path / "out"))
+    secrets = {"AUTHORIZATION": "opaque-auth-fixture", "DB_PASSWD": "opaque-db-fixture"}
+    job.execution_plan = replace(job.execution_plan, environment=secrets)
+    job._stdout_lines = job._stderr_lines = [value + "\n" for value in secrets.values()]
+    job._persist_output()
+    execution = tmp_path / "out" / "execution"
+    for path in [*execution.glob("*.log"), tmp_path / "out" / STATUS_PATH]:
+        assert all(value not in path.read_text() for value in secrets.values())
+        assert "[redacted]" in path.read_text()
+
+
+def test_admission_exception_settlement_excludes_diagnostic_io(tmp_path, monkeypatch):
+    clock = [100.0]
+    finishes = []
+
+    def deny(job_id, started_at):
+        raise RuntimeError("admission refused")
+
+    job = SlurmJob(
+        "task-1", _make_task_type(), _make_runner(), _make_entities(), str(tmp_path / "out"),
+        allocation_started_callback=deny,
+        allocation_finished_callback=lambda job_id, at: finishes.append(at),
+    )
+    process = _FakeSrunProcess(
+        stdout="REVODESIGN_JOB_ID=4217\nREVODESIGN_ALLOCATION_LIVE=4217\n", returncode=1,
+    )
+    with patch("subprocess.Popen", return_value=process):
+        job.submit()
+    monkeypatch.setattr("revocompute.job.runners.slurm_runner.time.time", lambda: clock[0])
+    monkeypatch.setattr(job, "_persist_output", lambda: clock.__setitem__(0, clock[0] + 3.0))
+    with pytest.raises(RuntimeError, match="admission refused"):
+        job.poll()
+    assert finishes == [100.0]
+    assert clock[0] == 103.0

@@ -168,8 +168,15 @@ export async function loadAuthorizedResult(taskId: string, signal?: AbortSignal)
   await getCurrentUser(signal);
   const status = await getTaskStatus(taskId, signal);
   if (!status.result_available) return status;
-  const manifest = await getResultManifest(taskId, signal);
-  return { ...manifest, filename: status.display_name };
+  try {
+    const manifest = await getResultManifest(taskId, signal);
+    return { ...manifest, filename: status.display_name };
+  } catch (error) {
+    // A failed Task can retain execution evidence even when publication is
+    // unavailable. Keep its failure workspace addressable through that race.
+    if (status.status === 'failed' && error instanceof ApiError && [404, 409].includes(error.status)) return status;
+    throw error;
+  }
 }
 
 export function requestResultArchive(url: string): Promise<Record<string, unknown>> {

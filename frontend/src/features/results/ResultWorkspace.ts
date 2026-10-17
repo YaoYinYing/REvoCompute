@@ -10,6 +10,7 @@ import type { MolecularViewerFactory } from './molecular/viewer-contract';
 import { StructureController } from './molecular/structure-controller';
 import { installScientificPrimitives } from './scientific';
 import { StoryboardHost } from './storyboard-host';
+import { mountTaskDiagnostics } from '../tasks/diagnostics';
 
 function element<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, text?: string): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag); if (className) node.className = className; if (text != null) node.textContent = text; return node;
@@ -41,7 +42,7 @@ interface WorkspaceNodes {
   previewTitle: HTMLElement; previewDescription: HTMLElement; preview: HTMLElement; download: HTMLAnchorElement;
   rail: HTMLElement; railDetails: HTMLDetailsElement; reopen: HTMLButtonElement; search: HTMLInputElement;
   fileList: HTMLElement; integrity: HTMLElement; artifactSummary: HTMLElement; archive: HTMLButtonElement; archiveStatus: HTMLElement;
-  limitations: HTMLElement; run: HTMLElement;
+  limitations: HTMLElement; run: HTMLElement; diagnostics: HTMLElement; viewError: HTMLButtonElement;
 }
 
 export class ResultWorkspace {
@@ -56,6 +57,7 @@ export class ResultWorkspace {
   private viewRenderer: { destroy(): void } | null = null;
   private renderController: AbortController | null = null;
   private loadController: AbortController | null = null;
+  private diagnosticController: AbortController | null = null;
   private poll: number | null = null;
   private disposed = false;
   private archiveBusy = false;
@@ -104,6 +106,7 @@ export class ResultWorkspace {
 
   async load(): Promise<this> {
     this.loadController?.abort(); this.loadController = new AbortController();
+    this.renderDiagnostics(false);
     this.setState(t('results.loadingTitle'), t('results.loadingBody'));
     try {
       const result = await loadAuthorizedResult(this.taskId, this.loadController.signal);
@@ -130,6 +133,9 @@ export class ResultWorkspace {
     const refresh = element('button', 'result-icon-button') as HTMLButtonElement; refresh.type = 'button'; refresh.title = t('results.refresh'); refresh.setAttribute('aria-label', t('results.refresh')); setButtonIcon(refresh, 'RefreshCw');
     refresh.addEventListener('click', () => void this.load()); actions.append(refresh); header.append(identity, actions);
     const status = element('section', 'result-status'); status.setAttribute('aria-live', 'polite');
+    const diagnostics = element('section'); diagnostics.hidden = true; diagnostics.tabIndex = -1;
+    const viewError = element('button', 'result-button', t('diagnostics.viewError')); viewError.type = 'button'; viewError.hidden = true;
+    viewError.addEventListener('click', () => { diagnostics.scrollIntoView({ block: 'start' }); diagnostics.focus(); }); actions.prepend(viewError);
     const workspace = element('section', 'result-workspace'); const main = element('article', 'result-main');
     const tabs = element('nav', 'result-tabs'); tabs.setAttribute('aria-label', t('results.viewsLabel'));
     const previewHead = element('header', 'result-preview-header'); const copy = element('div');
@@ -152,8 +158,8 @@ export class ResultWorkspace {
     const fileList = element('nav', 'result-file-list'); fileList.setAttribute('aria-label', t('results.fileListLabel'));
     const integrity = element('div'); railDetails.append(summary, tools, fileList, integrity); rail.append(closeFiles, railDetails); actions.prepend(reopen);
     workspace.append(main); const record = element('dialog', 'result-record-dialog'); record.setAttribute('aria-label', t('results.run.title')); const recordSummary = element('h2', '', t('results.run.title')); const recordClose = element('button', 'result-button', t('ct.cancel')); recordClose.type = 'button'; recordClose.addEventListener('click', () => record.close()); const recordOpen = element('button', 'result-button', t('results.run.title')); recordOpen.type = 'button'; recordOpen.addEventListener('click', () => record.showModal()); actions.insertBefore(recordOpen, viewMenu); const recordBody = element('section', 'result-record'); const limitations = element('div'); const run = element('div'); recordBody.append(limitations, run); record.append(recordClose, recordSummary, recordBody);
-    page.append(header, status, workspace, record, rail); this.root.append(page);
-    return { status, outcome, title, meta, tabs, previewTitle, previewDescription, preview, download, rail, railDetails, reopen, search, fileList, integrity, artifactSummary, archive, archiveStatus, limitations, run };
+    page.append(header, status, diagnostics, workspace, record, rail); this.root.append(page);
+    return { status, outcome, title, meta, tabs, previewTitle, previewDescription, preview, download, rail, railDetails, reopen, search, fileList, integrity, artifactSummary, archive, archiveStatus, limitations, run, diagnostics, viewError };
   }
 
   private bind(): void {
@@ -173,6 +179,7 @@ export class ResultWorkspace {
 
   private renderPending(payload: TaskStatus): void {
     const terminal = payload.terminal === true; const status = payload.status || 'running';
+    this.renderDiagnostics(status === 'failed');
     if (terminal && this.poll != null) { clearInterval(this.poll); this.poll = null; }
     this.nodes.title.textContent = payload.display_name || t('results.taskTitle', { id: this.taskId });
     this.setState(status, terminal ? (payload.error || payload.message || t('results.noManifest')) : (payload.message || t('results.running')));
@@ -189,6 +196,7 @@ export class ResultWorkspace {
     this.nodes.title.textContent = input || method;
     this.nodes.meta.textContent = `${method} · ${manifest.task_id}`; this.nodes.meta.title = t('results.taskIdTitle', { id: manifest.task_id });
     const quiet = isQuietOutcome(manifest);
+    this.renderDiagnostics(manifest.status === 'failed');
     this.setState(quiet ? manifest.status : manifest.outcome || manifest.status, manifest.error || '', quiet);
     if (manifest.output_check.state === 'failed') {
       this.nodes.status.hidden = false;
@@ -206,6 +214,15 @@ export class ResultWorkspace {
       const primary = (manifest.views || []).find((view) => view.role === 'primary');
       if (primary) void this.openView(primary);
       else { const artifact = this.primaryArtifact(); if (artifact) void this.openArtifact(artifact); else this.renderEmpty(); }
+    }
+  }
+
+  private renderDiagnostics(failed: boolean): void {
+    this.diagnosticController?.abort(); this.diagnosticController = null;
+    this.nodes.diagnostics.replaceChildren(); this.nodes.diagnostics.hidden = !failed; this.nodes.viewError.hidden = !failed;
+    if (failed) {
+      this.diagnosticController = new AbortController();
+      mountTaskDiagnostics(this.nodes.diagnostics, this.taskId, this.diagnosticController.signal);
     }
   }
 
@@ -529,6 +546,7 @@ export class ResultWorkspace {
 
   destroy(): void {
     if (this.disposed) return; this.disposed = true; this.destroyViewRenderer(); this.cancelRender(); this.loadController?.abort(); this.storyboard.destroy(); this.structure.dispose(); this.geometry.dispose();
+    this.diagnosticController?.abort();
     if (this.poll != null) clearInterval(this.poll); if (this.archiveTimer != null) clearTimeout(this.archiveTimer); this.listeners.abort(); this.root.replaceChildren();
   }
 }

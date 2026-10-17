@@ -456,6 +456,17 @@ class FrontendFixtureRouter:
 
     # -- results ------------------------------------------------------------
 
+    def _task_diagnostics(self, route: Any, query: Any, task_id: str = "", **_: str) -> None:
+        if self.scenario.runner_for_task(task_id) is None:
+            return route.fulfill(status=404, json={"error": "Task not found"})
+        manifest = self.scenario.result_for(task_id) or {}
+        return route.fulfill(json={
+            "task_id": task_id, "availability": "unavailable",
+            "summary": manifest.get("error") or "Diagnostic evidence is unavailable.",
+            "reason_code": None, "exit_code": None, "exit_code_source": None,
+            "scheduler_state": None, "stage": None, "logs": [],
+        })
+
     def _result_manifest(self, route: Any, query: Any, task_id: str = "", **_: str) -> None:
         manifest = self.scenario.result_for(task_id)
         if manifest is None:
@@ -557,6 +568,7 @@ _API_ROUTES: tuple[tuple[re.Pattern[str], Any], ...] = (
     (re.compile(r"/compute/api/preflight/(?P<name>[^/]+)"), FrontendFixtureRouter._preflight),
     (re.compile(r"/compute/api/post"), FrontendFixtureRouter._submit),
     (re.compile(r"/compute/api/tasks"), FrontendFixtureRouter._task_list),
+    (re.compile(r"/compute/api/tasks/(?P<task_id>[0-9a-fA-F]+)/diagnostics"), FrontendFixtureRouter._task_diagnostics),
     (re.compile(r"/compute/api/running/(?P<task_id>[0-9a-fA-F]+)"), FrontendFixtureRouter._status),
     (re.compile(r"/compute/api/results/(?P<task_id>[0-9a-fA-F]+)/archive"), FrontendFixtureRouter._archive_action),
     (re.compile(r"/compute/api/results/(?P<task_id>[0-9a-fA-F]+)/tables/(?P<path>.+)"), FrontendFixtureRouter._result_table),
