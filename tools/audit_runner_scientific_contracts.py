@@ -490,15 +490,19 @@ def _corpus_label_reason(label: str) -> str:
             "this label; the level establishes provenance, never completeness"
         ),
         "real_runner_local_no_scheduler": (
-            "a real Runner result produced by the pinned SIF through the family run.sh/normalizer, "
-            "captured with no batch-scheduler allocation"
+            "a capture whose own persisted mode says it reproduced a real finished result with no "
+            "batch-scheduler allocation (capture_replay_bundle, require_finished=True)"
         ),
         "synthetic_mock": (
             "fixture bytes from a capture whose own persisted mode says it stood in for a result "
             "rather than reproduced one (capture_replay_bundle(require_finished=False)). Carries no "
             "scientific claim and must never be presented as validation"
         ),
-        "unverified_declaration": "a declaration whose provenance could not be re-verified",
+        "unverified_declaration": (
+            "a declaration whose provenance could not be re-verified: no stored capture mode, a mode "
+            "the capture cannot write, a receipt pointer that disagrees with the receipt it cites, or "
+            "a bundle that fails the canonical load"
+        ),
     }[label]
 
 
