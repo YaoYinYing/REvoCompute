@@ -94,6 +94,7 @@ nav:
       - Result View Protocols: developer-guide/result-view-protocols.md
       - Scientific Result Inventory: developer-guide/result-inventory.md
       - Input and Result Workspace: developer-guide/input-result-workspace.md
+      - Local Result Workspace (Future Requirement): developer-guide/local-result-workspace.md
       - Levin Structure-View Notes: developer-guide/levin-structure-view-notes.md
       - Frontend Design Language: developer-guide/frontend-design-language.md
       - Frontend Art Direction: developer-guide/frontend-art-direction.md
