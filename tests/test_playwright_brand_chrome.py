@@ -94,6 +94,12 @@ def test_tour_callout_clears_the_notices_and_toast_column(page: Page, width: int
     page.route(f"{ORIGIN}/compute/api/system/notices", lambda route: route.fulfill(json={"notices": [NOTICE]}))
     page.goto(f"{ORIGIN}/compute/dashboard")
     expect(page.locator(".task-card").first).to_be_visible()
+    # #88 mounted the launcher inside a help disclosure on the register, so the
+    # entry is reachable but not painted until the reader opens it - the step this
+    # case takes before the tour, exactly as the guided-tour cases do. The
+    # disclosure is present at this width too: below the container breakpoint #88
+    # withdrew it entirely, which this PR restores.
+    page.locator(".dashboard-help > summary").click()
     page.locator(".tour-launcher").click()
     expect(page.locator(".tour-callout")).to_be_visible()
     expect(page.locator(".sys-notice")).to_have_count(1)

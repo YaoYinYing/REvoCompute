@@ -89,6 +89,40 @@ def _mount_dense_admin_dashboard(page: Page, width: int, tasks: int) -> None:
     expect(page.locator(".task-card")).to_have_count(tasks)
 
 
+def _reveal_navigation(page: Page, width: int) -> None:
+    """Put the navigation where the reader reaches it at this width.
+
+    Above the desktop breakpoint the sidebar is the column the shell lays out.
+    Below it #88 withdraws the sidebar and one control reveals the same
+    navigation, regions included, in a modal drawer.
+    """
+    if width >= 1024:
+        expect(page.locator(".app-sidebar")).to_be_visible()
+        return
+    opener = page.locator(".app-shell .app-nav-open")
+    expect(opener).to_be_visible()
+    opener.click()
+    expect(page.locator(".app-nav-drawer")).to_be_visible()
+
+
+def _centre_is_reachable(page: Page, locator) -> bool:
+    """Whether the element's own centre point resolves back to it."""
+    return bool(locator.evaluate(
+        """node => { const box = node.getBoundingClientRect();
+             if (!box.width || !box.height) return false;
+             const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+             return !!(hit && (node === hit || node.contains(hit))); }"""
+    ))
+
+
+def _content_inset(card) -> tuple[float, float]:
+    """The card's own left and right content inset, in px."""
+    return tuple(card.evaluate(
+        "node => [parseFloat(getComputedStyle(node).paddingLeft),"
+        " parseFloat(getComputedStyle(node).paddingRight)]"
+    ))
+
+
 @pytest.mark.parametrize("width", [1024, 1440])
 @pytest.mark.parametrize("role", ["user", "admin"])
 def test_detailed_task_preview_uses_the_register_measure_and_keeps_actions_reachable(
@@ -104,24 +138,35 @@ def test_detailed_task_preview_uses_the_register_measure_and_keeps_actions_reach
     expanded = preview.bounding_box()
     host = preview.locator(".input-preview-host").bounding_box()
     actions = card.locator(".task-actions").bounding_box()
-    facts = card.locator("dl").bounding_box()
-    assert row and expanded and host and actions and facts
-    assert abs(expanded["x"] - row["x"]) <= 1
-    assert abs(expanded["width"] - row["width"]) <= 1
-    assert host["width"] >= row["width"] - 2
-    assert actions["y"] >= expanded["y"] + expanded["height"] - 1
-    assert abs(actions["x"] - facts["x"]) <= 1
+    identity = card.locator(".task-identity").bounding_box()
+    assert row and expanded and host and actions and identity
+    # #88 made the card a ruled register row rather than a closed grid card, so the
+    # measure the preview takes is the row's own content box — from its left inset
+    # to its right inset — and the preview host fills that measure rather than
+    # opening a second, narrower column inside the row.
+    left_inset, right_inset = _content_inset(card)
+    assert abs(expanded["x"] - (row["x"] + left_inset)) <= 1, (expanded, row, left_inset)
+    assert abs(expanded["width"] - (row["width"] - left_inset - right_inset)) <= 1, (expanded, row, left_inset, right_inset)
+    assert abs(host["width"] - expanded["width"]) <= 1, (host, expanded)
+    # The preview is a band below the identity, and the row's own action cluster stays
+    # on the row's first line: expanding one Task's input does not displace its
+    # actions, and it consumes no neighbouring Task's column because it takes the
+    # full measure of its own row.
+    assert expanded["y"] >= identity["y"] + identity["height"] - 1, (expanded, identity)
+    assert actions["y"] + actions["height"] <= expanded["y"] + 1, (actions, expanded)
     # Deletion is confirmed through the application's own dialog, which names the
     # Task it is about to destroy. Dismissing it leaves the Task untouched.
-    card.get_by_role("button", name="Delete", exact=True).click()
+    card.locator(".task-overflow > summary").click()
+    card.locator(".task-overflow-menu").get_by_role("button", name="Delete", exact=True).click()
     confirm = page.locator("#app-dialog")
     expect(confirm).to_be_visible()
     expect(confirm).to_contain_text("With input preview")
     confirm.get_by_role("button", name="Cancel", exact=True).click()
     expect(confirm).to_be_hidden()
     preview.locator("summary").click()
+    expect(preview).not_to_have_attribute("open", "")
     collapsed = card.bounding_box()
-    assert collapsed and collapsed["height"] < row["height"] - 250
+    assert collapsed and collapsed["height"] < row["height"] - 250, (collapsed, row)
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
 
@@ -134,12 +179,20 @@ def test_detailed_task_without_preview_has_no_empty_grid_slot(page: Page, role: 
         const box = child.getBoundingClientRect();
         return !child.children.length && !child.textContent.trim() && box.width > 0 && box.height > 0;
     })""")
-    header = card.locator("header").bounding_box()
-    facts = card.locator("dl").bounding_box()
-    actions = card.locator(".task-actions").bounding_box()
-    assert header and facts and actions
-    assert abs(actions["x"] - facts["x"]) <= 1
-    assert abs(actions["y"] - max(header["y"] + header["height"], facts["y"] + facts["height"])) <= 1
+    # A Task with no input preview is a single register row: it reserves no band for
+    # the preview it does not have, so it is far shorter than its neighbour whose
+    # preview is open, and every part of it is laid out inside its own row.
+    row = card.bounding_box()
+    with_preview = page.locator(".task-card").filter(
+        has=page.get_by_role("heading", name="With input preview", exact=True)
+    )
+    plain_height = card.evaluate("node => node.getBoundingClientRect().height")
+    assert with_preview.bounding_box() is not None and plain_height < 400, (plain_height, row)
+    assert row and row["height"] == pytest.approx(plain_height, abs=1)
+    for selector in (".task-identity", ".task-state", ".task-time", ".task-actions"):
+        part = card.locator(selector).bounding_box()
+        assert part, selector
+        assert part["y"] >= row["y"] - 1 and part["y"] + part["height"] <= row["y"] + row["height"] + 1, (selector, part, row)
     expect(card.get_by_role("link", name="Results", exact=True)).to_be_visible()
 
 
@@ -149,10 +202,18 @@ def test_preview_tasks_preserve_mobile_compact_and_table_views(page: Page, width
     if width == 390:
         preview = page.locator(".input-preview")
         preview.locator("summary").click()
-        row = page.locator(".task-card").first.bounding_box()
+        card = page.locator(".task-card").first
+        row = card.bounding_box()
         expanded = preview.bounding_box()
-        assert row and expanded and abs(expanded["width"] - row["width"]) <= 1
+        left_inset, right_inset = _content_inset(card)
+        assert row and expanded
+        # The register row carries its own horizontal inset at this width, so the
+        # measure the preview takes is the row's content box: the band spans the
+        # row from inset to inset rather than only part of it.
+        assert abs(expanded["x"] - (row["x"] + left_inset)) <= 1, (expanded, row, left_inset)
+        assert abs(expanded["width"] - (row["width"] - left_inset - right_inset)) <= 1, (expanded, row)
         preview.locator("summary").click()
+        expect(preview).not_to_have_attribute("open", "")
     page.get_by_role("button", name="Compact", exact=True).click()
     expect(page.locator(".task-card")).to_have_count(2)
     expect(page.locator(".input-preview")).to_be_hidden()
@@ -177,17 +238,38 @@ def test_dashboard_opens_on_task_identity_and_keeps_machine_facts_readable(page:
     expect(card).to_be_visible()
     heading = card.get_by_role("heading").bounding_box()
     assert heading
+    # The register opens on the work: the first Task identity is at the head of the
+    # register, the first thing inside the list itself rather than the last of a
+    # column of page chrome. #88 gives the register its own stats band, filter band
+    # and view toolbar above the list, so the identity sits below them at a phone
+    # width rather than above the fixed navigation the pre-#88 bottom bar was; what
+    # is asserted is that the work leads the register, not where a bar sits.
+    identity = card.locator(".task-identity-id")
+    first_row = card.bounding_box()
+    assert first_row and 0 < heading["y"] - first_row["y"] < 40, (heading, first_row)
+    # The navigation never covers it: above the desktop breakpoint it is the
+    # sidebar column beside the outlet, and below it #88 withdraws the sidebar
+    # entirely, so the work is unobstructed until the reader opens the drawer,
+    # which is modal and is therefore not painted over the register.
     if width <= 834:
-        selector = ".app-nav-group[data-nav-group='admin']" if role == "admin" else ".app-nav"
-        navigation = page.locator(selector).bounding_box()
-        assert navigation
-        assert heading["y"] + heading["height"] <= navigation["y"]
+        expect(page.locator(".app-sidebar")).to_be_hidden()
+        expect(page.locator(".app-nav-drawer")).to_be_hidden()
+        opener = page.locator(".app-shell .app-nav-open")
+        assert opener.bounding_box() is not None
+        expect(opener).to_have_attribute("aria-expanded", "false")
+        # The navigation is genuinely reachable from this width, in one control.
+        _reveal_navigation(page, width)
+        expect(page.locator(".app-nav-drawer .app-nav")).to_be_visible()
+        page.keyboard.press("Escape")
+        expect(page.locator(".app-nav-drawer")).to_be_hidden()
     else:
-        assert heading["y"] + heading["height"] <= 780
-    identity = card.locator("dd.machine")
-    # The ID is usable at every width, including a complete selection/copy.
+        expect(page.locator(".app-sidebar")).to_be_visible()
+    expect(identity).to_have_count(1)
+    # The ID is usable at every width: it stays complete inside its own box rather
+    # than being clipped, and it is selectable as the machine value it is.
     assert identity.evaluate("node => node.scrollWidth <= node.clientWidth")
-    assert identity.evaluate("node => getComputedStyle(node).userSelect") == "all"
+    assert identity.evaluate("node => getComputedStyle(node).userSelect") != "none"
+    assert identity.evaluate("node => getComputedStyle(node).overflowWrap") in ("anywhere", "break-word")
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
 
@@ -197,23 +279,32 @@ def test_mobile_filters_keep_their_effect_when_closed_and_survive_view_changes(p
     mount_scenario(page, controlled_scenario())
     page.goto(f"{ORIGIN}/compute/dashboard")
     summary = page.locator(".dashboard-filters > summary")
+    fields = page.locator(".dashboard-filter-fields")
     expect(page.locator("[data-filter='status']")).to_be_hidden()
     summary.focus()
     page.keyboard.press("Enter")
     expect(page.locator("[data-filter='status']")).to_be_visible()
+    # #88 anchors the fields to the disclosure as an absolute panel, so the open
+    # panel overlays the register instead of pushing it: what must hold is that the
+    # fields are painted, inside the viewport, and that their own controls are
+    # reachable at their centres.
+    assert fields.bounding_box() and _centre_is_reachable(page, page.locator("[data-filter='status']")), fields
     page.locator("[data-filter='status']").select_option("running")
     expect(page.locator(".task-card")).to_have_count(0)
     expect(summary).to_have_text("Filters & order · active")
+    for control in ("[data-filter='status']", "[data-filter='sort']"):
+        box = page.locator(control).bounding_box()
+        assert box and box["x"] >= 0 and box["x"] + box["width"] <= width, (control, box)
     summary.click()
-    closed = page.locator(".dashboard-filters").bounding_box()
+    expect(fields).to_be_hidden()
     page.get_by_role("button", name="Compact", exact=True).click()
     expect(page.locator(".task-card")).to_have_count(0)
     summary.click()
-    opened = page.locator(".dashboard-filters").bounding_box()
-    assert opened and closed and opened["height"] > closed["height"] + 44
+    expect(fields).to_be_visible()
     expect(page.locator("[data-filter='status']")).to_have_value("running")
     page.locator("[data-filter='status']").select_option("")
     summary.click()
+    expect(fields).to_be_hidden()
     expect(summary).to_have_text("Filters & order")
     expect(page.locator(".task-card")).to_have_count(1)
 
@@ -276,14 +367,25 @@ def test_narrow_admin_register_tolerates_wider_font_metrics(page: Page, tour_com
     page.add_style_tag(content=":root { --font-sans: monospace; }")
     actions = page.locator(".dashboard-page .page-actions")
     box = actions.bounding_box()
-    navigation = page.locator(".app-nav-group[data-nav-group='admin']").bounding_box()
     heading = page.locator(".task-card h2").bounding_box()
-    assert box and navigation and heading
-    assert heading["y"] + heading["height"] <= navigation["y"]
+    assert box and heading
+    # Wider font metrics re-lay the masthead, but the register still leads with the
+    # work: the first Task identity is the head of the first register row, and every
+    # page action stays inside its own group rather than spilling out of the page.
+    row = page.locator(".task-card").first.bounding_box()
+    assert row
+    assert heading["y"] >= row["y"] and heading["y"] - row["y"] < 40, (heading, row)
     for control in actions.locator(":scope > *").all():
+        if not control.is_visible():
+            # #88 withdraws the register's tour entry below the container breakpoint
+            # rather than reflowing it, so an invisible action is not a target a
+            # reader can reach or miss; the entry itself is asserted reachable at
+            # every width by the register's own navigation and tour cases.
+            assert control.evaluate("node => getComputedStyle(node).display") == "none"
+            continue
         target = control.bounding_box()
-        assert target and target["height"] >= 44
-        assert target["x"] >= box["x"] and target["x"] + target["width"] <= box["x"] + box["width"] + 1
+        assert target and target["height"] >= 44, (control, target)
+        assert target["x"] >= box["x"] and target["x"] + target["width"] <= box["x"] + box["width"] + 1, target
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
 

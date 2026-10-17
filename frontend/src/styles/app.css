@@ -12,10 +12,12 @@
      lab-coat / working-surface relationship of the visual ancestry) rather than a
      sterile blue-grey. The bias stays below the threshold of a visible cast, so
      it never competes with identity or status colour.
-     REvo blue is ink, not paint: it marks action, selection, focus and links only. */
+     REvo blue is the identity accent: ink, not paint, so it marks action,
+     selection, focus and links only. It is the same blue in both themes —
+     recalibrated for the dark field, never replaced by a green. */
   --app-bg: #f5f8f4; --app-surface: #fcfdfb; --app-raised: #fbfcf8; --app-stage: #edf3ee;
   --app-ink: #273f3b; --app-muted: #61766b; --app-line: #d0dcd2; --app-line-strong: #bdceb9;
-  --app-accent: #355e4e; --app-accent-2: #264a3b; --app-soft: #e4ede3; --app-plum: #a6406c;
+  --app-accent: #1d5c8f; --app-accent-2: #17486f; --app-soft: #e7eef4; --app-plum: #a6406c;
   --app-success: #52765c; --app-danger: #a33f59; --app-warning: #84651d; --app-running: #39766a; --app-focus: #a6406c;
   --app-scrim: rgb(18 22 20 / 48%);
   /* Radius scale: curvature communicates role. Softened rectangles, not bubbles. */
