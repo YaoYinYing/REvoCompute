@@ -30,12 +30,20 @@ The cases fail for different reasons, which is why they are separate:
 
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 
 from playwright.sync_api import Page, expect
 import pytest
 
-from frontend_fixtures import controlled_scenario, mount_scenario
+from frontend_fixtures import (
+    WorkspaceCapability,
+    WorkspaceStep,
+    controlled_runner,
+    controlled_scenario,
+    mount_scenario,
+    runner_scenario,
+)
 
 pytestmark = pytest.mark.browser
 
@@ -328,10 +336,53 @@ def test_profile_account_form_stays_behind_its_own_edge_at_text_only_resize(page
 # are the same class of run under the 1.4.4 case below: a name the layout may not
 # widen past the page it was given.
 BADGE_RUN_SPACING = TEXT_SPACING + ".readiness-state{letter-spacing:.3em !important;}"
+# The 200% text-only resize of the create-task component headings. A root font
+# that doubles reaches a manifest-length capability name the way a reader's own
+# resize does; the canonical fixture's single-word names are too short for the
+# resize alone to overflow a desktop-measure track, so the case below supplies
+# names of the length a real task manifest declares.
 TITLE_RUN_ZOOM = (
     f"html{{font-size:{TEXT_ZOOM_ROOT_PX}px !important;}}"
     ".ct-component-title{letter-spacing:.4em !important;}"
 )
+
+
+def _manifest_length_names_scenario():
+    """The canonical Runner with capability names of the length a manifest declares.
+
+    Real task manifests name capabilities descriptively ("Alignment and
+    references", "AlphaFold 3 JSON input"), and the fixture harness projects
+    whatever the manifest declares. The 1.4.4 case is about a server-supplied name
+    of that length yielding to its column at 200% text-only resize.
+    """
+    return runner_scenario(replace(controlled_runner(), workspace_steps=(
+        WorkspaceStep(
+            id="input",
+            title="Provide input",
+            description="Choose one source.",
+            capabilities=(
+                WorkspaceCapability("files", "source_files", "Files", "Upload FASTA."),
+                WorkspaceCapability(
+                    "sequence", "sequence_editor",
+                    "Alignment and residue-level sequence validation",
+                    "Paste FASTA.",
+                    (("role", "sequence"),),
+                ),
+            ),
+        ),
+        WorkspaceStep(
+            id="settings",
+            title="Settings",
+            description="Configure the run.",
+            capabilities=(WorkspaceCapability("parameters", "parameters", "Parameters", "Method controls."),),
+        ),
+        WorkspaceStep(
+            id="review",
+            title="Review",
+            description="Check the snapshot.",
+            capabilities=(WorkspaceCapability("review", "review", "Review", "Submission summary."),),
+        ),
+    )))
 
 
 def test_runner_catalog_masthead_keeps_its_rollup_inside_the_viewport(page: Page) -> None:
@@ -374,9 +425,14 @@ def test_runner_catalog_masthead_keeps_its_label_on_one_line_when_it_fits(page: 
     row when it fits beside the identity.
 
     The witness is the same measurement's other half: here the unwrapped label is
-    no wider than the box, so the one-line reading is the expected one.
+    no wider than the box, so the one-line reading is the expected one. The width
+    is the first one at which the shipped masthead row gives the roll-up its full
+    label: #88 sets the runner identity in a 38px display face and the roll-up in
+    a 14px system face, so the row's remaining measure passes the label's own run
+    between 1440px and 1600px. Below that the label wraps, which the sibling case
+    above is the one that asserts.
     """
-    page.set_viewport_size({"width": 1280, "height": 640})
+    page.set_viewport_size({"width": 1600, "height": 640})
     mount_scenario(page, controlled_scenario())
     _install_condition(page, BADGE_RUN_SPACING)
     page.goto(f"{ORIGIN}/runners")
@@ -415,8 +471,8 @@ def test_create_task_component_headings_stay_inside_their_step(page: Page) -> No
     is wider on one line than the box that box can hold, so what is asserted is
     the heading yielding to its track, not an empty measurement.
     """
-    page.set_viewport_size({"width": 768, "height": 900})
-    mount_scenario(page, controlled_scenario())
+    page.set_viewport_size({"width": 320, "height": 900})
+    mount_scenario(page, _manifest_length_names_scenario())
     _install_condition(page, TITLE_RUN_ZOOM)
     page.goto(f"{ORIGIN}/compute/create_task?task_type=sequence_demo")
 
@@ -438,7 +494,7 @@ def test_create_task_component_headings_stay_inside_their_step(page: Page) -> No
         f"not exercised: every heading's label fits its track ({measured})"
     )
 
-    _assert_no_horizontal_page_scroll(page, "create task @768px with 200% text-only resize")
+    _assert_no_horizontal_page_scroll(page, "create task @320px with 200% text-only resize")
 
 
 def test_create_task_component_headings_keep_their_names_readable(page: Page) -> None:

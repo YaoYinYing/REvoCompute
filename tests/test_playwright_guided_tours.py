@@ -149,6 +149,43 @@ def _admin_api(page: Page) -> None:
     )
 
 
+def _open_register_help(page: Page) -> None:
+    """Reveal the register's tour entry, which #88 moved into its help disclosure.
+
+    The Dashboard used to append the launcher to its page actions. It now mounts it
+    inside a closed ``<details class="dashboard-help">``, so the entry is present and
+    reachable but not painted until the reader opens the disclosure - the reader's
+    own step, and the same disclosure the persistent-navigation cases already open.
+    """
+    page.locator(".dashboard-help > summary").click()
+
+
+def _open_result_actions(page: Page) -> None:
+    """Reveal a result's actions, which #88 moved into its views disclosure.
+
+    The result page used to put the view tabs, the Dashboard link and the tour entry
+    in its header actions. They now live in a closed ``details.result-view-menu``, so
+    the entry is reachable from the result but only once its disclosure is open.
+    """
+    page.locator(".result-view-menu > summary").click()
+
+
+def _read_run_record(page: Page) -> None:
+    """Prove the run record is reachable, which is what the results tour walks to.
+
+    #88 made the record a modal opened from the result header rather than a block
+    rendered inline on the page, so the claim is no longer "it is always on the page"
+    but "the result hands the reader its own record": it opens, it is this Task's, and
+    it closes again so the tour - which is not a modal - stays operable.
+    """
+    page.get_by_role("button", name="Run setup and reproducibility", exact=True).click()
+    record = page.locator(".result-record")
+    expect(record).to_be_visible()
+    expect(record).to_contain_text(DEFAULT_TASK_ID)
+    page.locator(".result-record-dialog").get_by_role("button", name="Cancel", exact=True).click()
+    expect(record).to_be_hidden()
+
+
 # ── create flow: the register owns it, and it never submits ───────────────────
 
 
@@ -158,6 +195,7 @@ def test_create_tour_is_offered_on_the_register_and_never_submits_a_task(page: P
     page.goto(f"{ORIGIN}/compute/dashboard")
     expect(page.locator(".task-card").first).to_be_visible()
 
+    _open_register_help(page)
     page.get_by_role("button", name="Guided tour").click()
     callout = page.locator(".tour-callout")
     expect(callout).to_contain_text("Step 1 of 5")
@@ -185,6 +223,7 @@ def test_skipping_the_create_tour_leaves_the_register_entry_for_next_time(page: 
     mount_scenario(page, controlled_scenario())
     page.goto(f"{ORIGIN}/compute/dashboard")
     expect(page.locator(".task-card").first).to_be_visible()
+    _open_register_help(page)
     page.get_by_role("button", name="Guided tour").click()
     page.locator(".tour-callout").get_by_role("button", name="Skip").click()
     expect(page.locator(".tour-callout")).to_have_count(0)
@@ -210,6 +249,7 @@ def test_a_reader_navigation_ends_the_flow_and_back_leaves_no_orphan(page: Page)
     mount_scenario(page, controlled_scenario())
     page.goto(f"{ORIGIN}/compute/dashboard")
     expect(page.locator(".task-card").first).to_be_visible()
+    _open_register_help(page)
     page.get_by_role("button", name="Guided tour").click()
     expect(page.locator(".tour-callout")).to_contain_text("Step 1 of 5")
     assert _stored(page, CREATE_STEP) == "0"
@@ -277,6 +317,7 @@ def test_a_tour_survives_a_reader_leg_into_the_second_route_that_owns_an_overlay
     )
     page.goto(f"{ORIGIN}/compute/dashboard")
     expect(page.locator(".task-card").first).to_be_visible()
+    _open_register_help(page)
     page.get_by_role("button", name="Guided tour").click()
     expect(page.locator(".tour-callout")).to_contain_text("Step 1 of 5")
     assert _stored(page, CREATE_STEP) == "0"
@@ -307,6 +348,7 @@ def test_a_tour_step_across_routes_resumes_with_its_progress_intact(page: Page) 
     mount_scenario(page, controlled_scenario())
     page.goto(f"{ORIGIN}/compute/dashboard")
     expect(page.locator(".task-card").first).to_be_visible()
+    _open_register_help(page)
     page.get_by_role("button", name="Guided tour").click()
     callout = page.locator(".tour-callout")
     expect(callout).to_contain_text("Step 1 of 5")
@@ -338,6 +380,7 @@ def test_no_finished_result_means_no_result_tour_and_no_fabricated_id(page: Page
     assert _stored(page, "revocompute-tour-result") is None
 
     # No step of the create flow can land on a result route without an id.
+    _open_register_help(page)
     page.get_by_role("button", name="Guided tour").click()
     for _ in range(4):
         page.locator(".tour-callout").get_by_role("button", name="Next").click()
@@ -359,7 +402,8 @@ def test_result_tour_is_offered_only_on_the_real_result_and_keeps_its_own_progre
     expect(page.get_by_role("button", name="Tour this result")).to_have_count(0)
 
     page.goto(f"{ORIGIN}{RESULT_URL}")
-    expect(page.locator(".result-record")).to_be_visible()
+    _read_run_record(page)
+    _open_result_actions(page)
     page.get_by_role("button", name="Tour this result").click()
     callout = page.locator(".tour-callout")
     expect(callout).to_contain_text("Step 1 of 3")
@@ -388,11 +432,12 @@ def test_a_different_result_is_not_treated_as_already_seen(page: Page) -> None:
     mount_scenario(page, controlled_scenario().with_result("minimal_success"))
     other = "f" * 32
     page.goto(f"{ORIGIN}{RESULT_URL}")
-    expect(page.locator(".result-record")).to_be_visible()
+    _read_run_record(page)
     # A completion recorded for another result must not mark this one finished.
     page.evaluate("(id) => localStorage.setItem('revocompute-tour-results-done', id)", other)
     page.reload()
-    expect(page.locator(".result-record")).to_be_visible()
+    _read_run_record(page)
+    _open_result_actions(page)
     page.get_by_role("button", name="Tour this result").click()
     expect(page.locator(".tour-callout")).to_contain_text("Step 1 of 3")
 
@@ -467,6 +512,7 @@ def test_the_admin_tour_is_not_offered_on_an_ordinary_readers_own_surfaces(page:
     # the administration flow belongs to the administration surfaces.
     page.goto(f"{ORIGIN}/compute/dashboard")
     expect(page.locator(".task-card").first).to_be_visible()
+    _open_register_help(page)
     expect(page.get_by_role("button", name="Guided tour")).to_be_visible()
     expect(page.get_by_role("button", name="Tour the admin console")).to_have_count(0)
 

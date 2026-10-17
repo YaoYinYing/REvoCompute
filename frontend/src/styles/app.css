@@ -12,10 +12,12 @@
      lab-coat / working-surface relationship of the visual ancestry) rather than a
      sterile blue-grey. The bias stays below the threshold of a visible cast, so
      it never competes with identity or status colour.
-     Deep green marks action; plum distinguishes selection and focus. */
+     REvo blue is the identity accent: ink, not paint, so it marks action,
+     selection, focus and links only. It is the same blue in both themes —
+     recalibrated for the dark field, never replaced by a green. */
   --app-bg: #f5f8f4; --app-surface: #fcfdfb; --app-raised: #fbfcf8; --app-stage: #edf3ee;
   --app-ink: #273f3b; --app-muted: #61766b; --app-line: #d0dcd2; --app-line-strong: #bdceb9;
-  --app-accent: #355e4e; --app-accent-2: #264a3b; --app-soft: #e4ede3; --app-plum: #a6406c;
+  --app-accent: #1d5c8f; --app-accent-2: #17486f; --app-soft: #e7eef4; --app-plum: #a6406c;
   --app-success: #52765c; --app-danger: #a33f59; --app-warning: #84651d; --app-running: #39766a; --app-focus: #a6406c;
   --app-scrim: rgb(18 22 20 / 48%);
   /* Radius scale: curvature communicates role. Softened rectangles, not bubbles. */
@@ -42,10 +44,12 @@
 :root[data-theme="dark"] {
   color-scheme: dark;
   /* Dark mode is its own calibrated surface system: neutral, no green/teal wash,
-     no pure-white text, softer boundaries, preserved accent and status distinction. */
+     no pure-white text, softer boundaries, preserved accent and status distinction.
+     The accent is recalibrated for the dark field but stays REvo blue: dark mode
+     must not inherit a green cast, and full-strength ink would not read on it. */
   --app-bg: #101216; --app-surface: #16191d; --app-raised: #1c2025; --app-stage: #0c0e11;
   --app-ink: #e7e9ec; --app-muted: #98a1aa; --app-line: #282d33; --app-line-strong: #394047;
-  --app-accent: #a4c5a1; --app-accent-2: #c0d9b9; --app-soft: #24382d; --app-plum: #dc91af;
+  --app-accent: #74aad8; --app-accent-2: #93bde3; --app-soft: #1b2731; --app-plum: #dc91af;
   --app-success: #9dbca0; --app-danger: #e39bb1; --app-warning: #d9bb78; --app-running: #94c6b9; --app-focus: #dc91af;
   --app-scrim: rgb(0 0 0 / 62%);
   --shadow-surface: 0 1px 2px rgb(0 0 0 / 26%);
