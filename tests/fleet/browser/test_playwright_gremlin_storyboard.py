@@ -5,13 +5,19 @@
 
 The storyboard is Runner-owned JavaScript executed by the result page. This test
 loads the real module, mounts it with the documented context API, and verifies
-that it composes a question-ordered scientific narrative: alignment metrics,
-effective-information metrics, model identity, and navigation to the task's own
-declared result views rather than a re-implemented matrix renderer.
+that it composes the approved coupling landscape: the fitted model's own
+statistics beside the matrix it declares, the ranked residue pairs read from the
+real normalized table, and navigation to the task's own declared result views
+rather than a re-implemented matrix renderer.
+
+The fit facts and the ranked pairs are read from the pinned replay bundle
+(``tests/data/gremlin_lh_replay``), so the narrative is asserted against the
+bytes a real GREMLIN_LH run published rather than against hand-written numbers.
 """
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from playwright.sync_api import Page, expect
@@ -23,6 +29,10 @@ pytestmark = pytest.mark.browser
 
 ROOT = Path(__file__).resolve().parents[3]
 STORYBOARD = ROOT / "docker" / "runners" / "gremlin_lh" / "storyboard" / "index.js"
+REPLAY_BUNDLE = ROOT / "tests" / "data" / "gremlin_lh_replay" / "2kl8_seed0_944ed43af62e.json"
+
+if not REPLAY_BUNDLE.is_file():
+    pytest.skip("the captured GREMLIN_LH replay bundle is not present", allow_module_level=True)
 
 # Mirrors the logical-file record the server returns for a storyboard
 # (`revocompute/routes.py`): `preview` is the declared expected-file type and
@@ -44,36 +54,33 @@ ARTIFACTS = {
     "summary": {"id": "summary", "path": "summary.json", "preview": "json", "media_type": "application/json"},
 }
 
-# The small JSON evidence files the narrative reads directly. Their `url` is
-# replaced with a data URL so the module can fetch them in the browser test.
-STATISTICS = {
-    "sequence_count": 8,
-    "alignment_length": 8,
-    "query_length": 8,
-    "columns_excluded_by_gap_cutoff": 8,
-    "mean_gap_fraction": 0.05,
-    "effective_sequence_count": 6.5,
-    "identity_cutoff": 0.8,
-    "gap_cutoff": 0.5,
+# The label the provenance list gives each durable scientific object.
+OBJECT_LABELS = {
+    "mrf_model": "MRF model (NPZ)",
+    "model_metadata": "Model metadata",
+    "profile": "Position profile",
+    "pairwise_scores": "Ranked residue pairs",
 }
-METADATA = {
-    "positions": 8,
-    "states": 21,
-    "regularization": "LH",
-    "arrays": {"couplings": {"shape": [8, 21, 8, 21]}},
-    "parameters": {"use_bias": True},
-}
+
+
+def recorded(name: str) -> str:
+    """One payload exactly as the pinned real GREMLIN_LH run published it."""
+    return json.loads(REPLAY_BUNDLE.read_text(encoding="utf-8"))["payloads"][name]["payload"]
+
+
+SUMMARY = json.loads(recorded("summary.json"))
+PAIRS_TSV = recorded("couplings/pairwise_scores.tsv")
 
 # The views this task declares in its own task.yaml; the storyboard may only
 # navigate to these, never render them itself. The raw Frobenius matrix is the
 # declared primary (contact-oriented) view; APC is the comparison.
 MATRIX_VIEWS = [
     {
-        "id": "raw_couplings", "plugin": "matrix", "role": "primary", "title": "Raw coupling strengths",
+        "id": "raw_couplings", "plugin": "matrix", "role": "primary", "title": "Coupling strength (raw Frobenius)",
         "sources": {"matrices": [{"path": "couplings/raw_scores.csv"}]},
     },
     {
-        "id": "apc_couplings", "plugin": "matrix", "role": "evidence", "title": "APC-corrected coupling strengths",
+        "id": "apc_couplings", "plugin": "matrix", "role": "evidence", "title": "Coupling strength (average-product corrected)",
         "sources": {"matrices": [{"path": "couplings/apc_scores.csv"}]},
     },
 ]
@@ -90,9 +97,14 @@ OTHER_VIEWS = [
     {"id": "fit_summary", "plugin": "scalar-summary", "role": "evidence", "title": "Model fit summary", "sources": {"data": [{"path": "summary.json"}]}},
 ]
 VIEWS = MATRIX_VIEWS + OTHER_VIEWS
-# A workspace that declared no matrix view at all, so the coupling section has to
-# fall back to the generic artifact preview for both matrices.
+# A workspace that declared no matrix view at all, so the landscape has no
+# declared matrix to render and must not substitute one of its own.
 VIEWS_WITHOUT_MATRIX = OTHER_VIEWS
+
+# The tab label each declared view is offered under. A matrix keeps its declared
+# id as the label only when the workspace declares a title the panel cannot
+# shorten; the two coupling views name the correction instead.
+TAB_LABELS = {"raw_couplings": "Raw couplings", "apc_couplings": "APC corrected", "filtered_alignment": "Alignment"}
 
 MOUNT = """
 async (payload) => {
@@ -103,9 +115,13 @@ async (payload) => {
     url: "/compute/api/results/abc/files/" + id + "?index=0",
     size: 1024,
   }, artifact)]));
-  const asDataUrl = (value) => "data:application/json," + encodeURIComponent(JSON.stringify(value));
-  files.set("alignment_statistics", Object.assign({}, files.get("alignment_statistics"), { url: asDataUrl(payload.statistics) }));
-  files.set("model_metadata", Object.assign({}, files.get("model_metadata"), { url: asDataUrl(payload.metadata) }));
+  // The two artifacts the narrative reads directly are served as the bytes the
+  // pinned real run published, so a wrong label or a fixture value cannot pass.
+  files.set("summary", Object.assign({}, files.get("summary"),
+    { url: "data:application/json," + encodeURIComponent(payload.summary) }));
+  files.set("pairwise_scores", Object.assign({}, files.get("pairwise_scores"),
+    { url: "data:text/plain," + encodeURIComponent(payload.pairs) }));
+  const mounted = [];
   const opened = [];
   const downloaded = [];
   const viewed = [];
@@ -114,6 +130,8 @@ async (payload) => {
     metadata: { taskType: "gremlin_lh_fit" },
     views: payload.views,
     services: {
+      // The task's own renderer mounts a declared view into the host it is given.
+      mountView: async (viewId, host) => { mounted.push(viewId); host.replaceChildren(); return { destroy() {} }; },
       openFile: (artifact) => { opened.push(artifact.id || artifact.path); },
       downloadFile: (artifact) => { downloaded.push(artifact.id || artifact.path); },
       openView: async (viewId) => { viewed.push(viewId); },
@@ -126,34 +144,50 @@ async (payload) => {
     if (node) node.click();
     return Boolean(node);
   };
-  const clickFile = (fileId, prefix) => {
-    const node = Array.from(host.querySelectorAll("button[data-file-id]")).find(
-      (item) => item.dataset.fileId === fileId && (!prefix || item.textContent.startsWith(prefix)),
-    );
+  // The provenance list names each durable object by its own label; its action
+  // is the row's button, so the row is located by label and then by its verb.
+  const clickObject = (label, verb) => {
+    const row = Array.from(host.querySelectorAll(".glh-artifact-row")).find(
+      (item) => item.firstElementChild && item.firstElementChild.textContent === label);
+    const node = row && Array.from(row.querySelectorAll("button")).find(
+      (item) => !verb || item.textContent.startsWith(verb));
     if (node) node.click();
     return Boolean(node);
   };
-  const metrics = Array.from(host.querySelectorAll(".scalar-grid")).map((grid) => {
-    const values = {};
-    grid.querySelectorAll("dt").forEach((term) => {
-      values[term.textContent] = term.nextElementSibling ? term.nextElementSibling.textContent : null;
-    });
-    return values;
+  const facts = {};
+  host.querySelectorAll(".glh-fit-facts div").forEach((row) => {
+    const term = row.querySelector("dt"), value = row.querySelector("dd");
+    if (term && value) facts[term.textContent] = value.textContent;
   });
   const clicked = {
-    rawMatrix: clickFile("raw_matrix", "Open"),
-    mrfModel: clickFile("mrf_model", "Download"),
-    modelMetadata: clickFile("model_metadata", "Open"),
+    rawMatrix: clickObject(payload.labels.mrf_model, "Download"),
+    modelMetadata: clickObject(payload.labels.model_metadata, "Open"),
   };
   clickView("apc_couplings");
-  clickView("ranked_pairs");
   await new Promise((resolve) => setTimeout(resolve, 0));
+  // Kept live so a test can click another declared view and assert the result.
+  window.__glh = {
+    mounted, opened, downloaded, viewed,
+    pressed: () => Array.from(host.querySelectorAll(".glh-actions button[aria-pressed=true]")).map((node) => node.dataset.viewId),
+  };
+  const table = host.querySelector(".glh-pair-preview table");
   return {
-    clicked, opened, downloaded, viewed, metrics,
-    sections: Array.from(host.querySelectorAll(".glh-section h3")).map((node) => node.textContent),
-    buttons: Array.from(host.querySelectorAll("button")).map((node) => node.textContent),
+    clicked, opened, downloaded, viewed, mounted, facts,
+    order: Array.from(host.querySelector(".glh-result").children).map((node) => node.tagName + "." + node.className),
+    headings: Array.from(host.querySelectorAll(".glh-result h2, .glh-result h3, .glh-result h4")).map((node) => node.textContent),
+    kickers: Array.from(host.querySelectorAll(".glh-kicker")).map((node) => node.textContent),
+    tabs: Array.from(host.querySelectorAll(".glh-actions button")).map((node) => node.textContent),
     viewButtons: Array.from(host.querySelectorAll("button[data-view-id]")).map((node) => node.dataset.viewId),
+    pressed: Array.from(host.querySelectorAll(".glh-actions button[aria-pressed=true]")).map((node) => node.dataset.viewId),
+    tableHead: table ? Array.from(table.querySelectorAll("th")).map((node) => node.textContent) : [],
+    firstRow: table ? Array.from(table.querySelectorAll("tbody tr:first-child td")).map((node) => node.textContent) : [],
+    rowCount: table ? table.querySelectorAll("tbody tr").length : 0,
+    foot: (host.querySelector(".glh-table-foot span") || {}).textContent || null,
+    readout: (host.querySelector(".glh-pair-readout") || {}).textContent || null,
+    provenance: Array.from(host.querySelectorAll(".glh-artifact-row")).map((node) => node.textContent),
     unavailable: Array.from(host.querySelectorAll(".glh-unavailable")).map((node) => node.textContent),
+    canvas: host.querySelectorAll(".glh-matrix canvas").length,
+    groupLabels: Array.from(host.querySelectorAll("[role=group]")).map((node) => node.getAttribute("aria-label")),
   };
 }
 """
@@ -166,80 +200,108 @@ def _mount(page: Page, files: dict[str, dict[str, str]], *, views: list | None =
         "source": STORYBOARD.read_text(encoding="utf-8"),
         "files": files,
         "views": VIEWS if views is None else views,
-        "statistics": STATISTICS,
-        "metadata": METADATA,
+        "summary": json.dumps(SUMMARY),
+        "pairs": PAIRS_TSV,
+        "labels": OBJECT_LABELS,
     })
 
 
-def test_storyboard_presents_the_scientific_narrative_in_order(page: Page) -> None:
+def test_storyboard_presents_the_fitted_statistics_beside_the_landscape(page: Page) -> None:
     result = _mount(page, dict(ARTIFACTS))
 
-    assert result["sections"] == [
-        "What alignment was modelled?",
-        "How much independent evolutionary information was present?",
-        "What model was fit?",
-        "What coupling landscape was inferred?",
-        "Which residue pairs carry the strongest statistical coupling?",
-        "What model and provenance artifacts are available for downstream analysis?",
-    ]
+    # The bench is the primary surface: the declared matrix landscape beside the
+    # model's own fitted statistics, then the ranked-pair evidence, then the
+    # durable artifacts.
+    assert result["order"] == ["STYLE.", "SECTION.glh-bench", "SECTION.", "DETAILS."]
+    assert result["headings"] == ["Fit statistics", "Ranked residue pairs"]
+    assert result["kickers"] == ["Model fit", "Comparison evidence"]
+    assert result["groupLabels"] == ["Scientific view"]
+
+    # The fit facts are the real captured values, converted by the module's own
+    # number formatting, not the fixture's guesses.
+    alignment = SUMMARY["alignment"]
+    assert result["facts"] == {
+        "MSA rows": str(alignment["sequence_count"]),
+        "Alignment width": str(alignment["alignment_length"]),
+        "Effective rows": "2.8666666",
+        "Regularization": SUMMARY["model"]["regularization"],
+        "Optimization updates": str(SUMMARY["optimization"]["iterations"]),
+        "Final loss": "42.961807",
+    }
     assert result["unavailable"] == []
 
-    # Alignment and effective-information metrics come from the declared statistics file.
-    alignment = result["metrics"][0]
-    assert alignment["Modelled sequences"] == "8 rows"
-    assert alignment["Alignment width"] == "8 positions"
-    information = result["metrics"][1]
-    assert information["Effective sequence count (Neff)"] == "6.5 sequences"
-    assert information["Identity cutoff for weighting"] == "0.8"
 
-    # Model identity comes from the declared metadata file.
-    model = result["metrics"][2]
-    assert model["Regularization"] == "LH"
-    assert model["Coupling tensor"] == "8 x 21 x 8 x 21"
-    assert model["One-site fields"] == "fitted"
+def test_storyboard_pairs_table_carries_the_real_normalized_table(page: Page) -> None:
+    result = _mount(page, dict(ARTIFACTS))
+
+    header = PAIRS_TSV.strip().splitlines()[0].split("\t")
+    first = PAIRS_TSV.strip().splitlines()[1].split("\t")
+    row = dict(zip(header, first))
+
+    # The table's columns are the storyboard's declared reading order, and its
+    # first row is the first data row of the published TSV -- identity, query
+    # residues and both score columns, not a fixture's values.
+    assert result["tableHead"] == ["Rank", "Alignment pair", "Query residues", "Raw score", "APC score ↓", "Separation"]
+    assert result["firstRow"] == [
+        row["rank"],
+        f'{row["alignment_i"]} ↔ {row["alignment_j"]}',
+        f'{row["query_residue_i"]} / {row["query_residue_j"]}',
+        row["raw_score"],
+        row["apc_score"],
+        row["sequence_separation"],
+    ]
+    # The upper-triangle pair the fit ranks first opens in the readout.
+    assert result["readout"].endswith(f'Raw  {row["raw_score"]}APC  {row["apc_score"]}')
+    # The table is bounded, and the foot states the real published pair count.
+    published = len(PAIRS_TSV.strip().splitlines()) - 1
+    assert result["rowCount"] == 20
+    assert result["foot"] == f"20 of {published} pairs · ordered by APC score"
 
 
 def test_storyboard_navigates_to_declared_views_instead_of_rendering_couplings(page: Page) -> None:
     result = _mount(page, dict(ARTIFACTS), views=VIEWS_WITHOUT_MATRIX)
 
-    # The declared entity-table view is offered by title; the task's own renderer
-    # opens it, so no second table or matrix renderer is implemented here.
-    assert "Open Ranked residue pairs" in result["buttons"]
-    assert "ranked_pairs" in result["viewed"]
+    # The workspace declared no matrix view, so the landscape offers no coupling
+    # tab and renders no matrix of its own: it does not substitute a renderer for
+    # a view the task never declared.
+    assert result["viewButtons"] == ["filtered_alignment"]
+    assert result["canvas"] == 0
 
-    # With no declared matrix view, both coupling matrices fall back to the
-    # generic artifact preview the server already owns.
-    assert result["clicked"]["rawMatrix"] is True
-    assert "raw_matrix" in result["opened"]
-    assert "Open coupling matrix (raw)" in result["buttons"]
-    assert "Open coupling matrix (APC)" in result["buttons"]
+    # The alignment view is the declared one, and navigating opens that view id
+    # through the task's own renderer.
+    assert TAB_LABELS["filtered_alignment"] in result["tabs"]
+    page.locator('.glh-landscape [data-view-id="filtered_alignment"]').click()
+    assert page.evaluate("window.__glh.mounted") == ["filtered_alignment"]
+    assert page.evaluate("window.__glh.pressed()") == ["filtered_alignment"]
 
-    # Provenance entries route the durable model to download and metadata to preview.
-    assert result["clicked"]["mrfModel"] is True
-    assert result["clicked"]["modelMetadata"] is True
-    assert "mrf_model" in result["downloaded"]
-    assert "model_metadata" in result["opened"]
+    # A durable object routes to download and a metadata object to preview.
+    assert result["downloaded"] == ["mrf_model"]
+    assert result["opened"] == ["model_metadata"]
 
 
 def test_storyboard_offers_the_declared_primary_matrix_view(page: Page) -> None:
     result = _mount(page, dict(ARTIFACTS), views=VIEWS)
 
-    # The raw matrix is the declared primary view, so the narrative offers it by
-    # title and opens it through the server's own renderer instead of the
-    # generic preview. APC remains the explicit comparison beside it.
-    assert "Open Raw coupling strengths" in result["buttons"]
-    assert "Open APC-corrected coupling strengths" in result["buttons"]
-    assert "Open raw coupling matrix" not in result["buttons"]
-    assert "raw_couplings" in result["viewButtons"]
-    assert "apc_couplings" in result["viewButtons"]
+    # The raw Frobenius matrix is the declared primary view, so the landscape
+    # opens it through the server's own renderer; APC keeps its tab beside it.
+    assert result["viewButtons"] == ["raw_couplings", "apc_couplings", "filtered_alignment"]
+    assert result["tabs"] == ["Raw couplings", "APC corrected", "Alignment"]
+    # The declared primary opens the landscape on mount; the comparison is a click.
+    assert result["mounted"] == ["raw_couplings", "apc_couplings"]
+    # Clicking the comparison tab mounts that declared view and marks it pressed.
+    assert result["pressed"] == ["apc_couplings"]
+    assert "ranked_pairs" not in result["viewButtons"]
 
 
-def test_storyboard_marks_unresolved_logical_files_unavailable(page: Page) -> None:
+def test_storyboard_marks_an_unpublished_object_instead_of_offering_it(page: Page) -> None:
     files = {key: value for key, value in ARTIFACTS.items() if key != "mrf_model"}
     result = _mount(page, files, views=[])
 
-    expect(page.locator(".glh-unavailable")).to_have_count(1)
-    assert "Durable MRF model (NPZ) unavailable" in result["unavailable"]
-
-    # Without declared views the coupling section still names the raw matrix it can open.
-    assert "Open coupling matrix (raw)" in result["buttons"]
+    # An object the run did not publish is stated as such and offers no action,
+    # while the published ones keep theirs.
+    assert any(item == "MRF model (NPZ)Not published" for item in result["provenance"]), result["provenance"]
+    assert "Model metadataOpen" in result["provenance"]
+    assert result["clicked"]["rawMatrix"] is False
+    assert result["unavailable"] == []
+    # With no declared views the landscape offers no view tab at all.
+    assert result["tabs"] == []
