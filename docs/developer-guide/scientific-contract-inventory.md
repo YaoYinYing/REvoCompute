@@ -73,8 +73,10 @@ primitive and the *absence* of a mocking primitive, which is why a module like
 at `declared_scientific_acceptance` and not one level higher. That split exists so a
 pytest marker can never stand in for a real CLI run.
 
-Only one family currently reaches `target_host_slurm_apptainer`. That is the
-point of the table: most of the fleet's strongest available evidence is static or
+Two families currently reach `real_runner_cli`: one through the same re-verified
+bundle that reaches the strongest level, one through a capture recorded without a
+scheduler allocation. Only one family reaches `target_host_slurm_apptainer`. That is
+the point of the table: most of the fleet's strongest available evidence is static or
 fake-runner, and the report says so instead of implying uniform validation.
 
 ## Evidence corpus
