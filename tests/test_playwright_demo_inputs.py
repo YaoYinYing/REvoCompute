@@ -232,12 +232,18 @@ def test_a_method_without_a_declared_example_says_so(page: Page) -> None:
 def test_the_demo_catalog_is_a_public_read_that_grants_nothing(page: Page) -> None:
     """The catalog is published input: an anonymous caller reads it, and gains nothing.
 
-    Create Task itself requires a session, so the read is issued from the page's
-    own network stack under the anonymous session the harness projects. That is
-    the point: neither the catalog nor the fixture it names carries a credential
-    or an entitlement, and reaching either authorizes, reserves, and creates
-    nothing at all. Reading the same method as a signed-in user is not different
-    behavior - the endpoint has no session-dependent branch to reach.
+    The read is issued with the page's own ``fetch`` rather than
+    ``page.request.get`` because a Playwright APIRequestContext request is not
+    routed through ``page.route``: it resolves the host itself and so can never
+    reach the fixture origin. Driving the page's own network stack keeps the
+    request covered by the harness, exactly as production would issue it.
+
+    Create Task itself requires a session, so this read runs under the anonymous
+    session the harness projects. That is the point: neither the catalog nor the
+    fixture it names carries a credential or an entitlement, and reaching either
+    authorizes, reserves, and creates nothing at all. Reading the same method as
+    a signed-in user is not different behavior - the endpoint has no
+    session-dependent branch to reach.
     """
     mount = _scenario()
     _mount(page, mount.with_session(ANONYMOUS_AUTH))
