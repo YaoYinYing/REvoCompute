@@ -15,6 +15,14 @@ logical-type lifecycle -- so a row can never disagree with what the Server
 accepts, and the inventory reruns against another fleet revision without editing
 a roster.
 
+Three of the loaders it reads are addressed through module-private names --
+``result_audit._required_sources``, ``input_validators._DIALECTS``, and
+``input_validators.profiles._SPECIFICATION_VALIDATORS``. None has a public
+accessor today, and each is the exact predicate production dispatches on, so
+re-deriving it here would be the second source of truth this tool exists to
+avoid. The reads are inspect-only: the tool never mutates a registry, and the
+one shared entry point ``validate_input_file`` stays the Server's own dispatch.
+
 Three things this tool deliberately does NOT claim:
 
 * **Scientifically validated.** A row records which declarations exist and which
