@@ -55,4 +55,41 @@ describe('compressed structure results', () => {
     expect((load.mock.calls[0]![0] as { format: string }).format).toBe('pdb');
     expect((load.mock.calls[0]![0] as { data: string }).data).toContain('ATOM');
   });
+
+  it('refuses a compressed structure whose inflated bytes pass the preview limit', async () => {
+    // The manifest's `size` is the gzip envelope, so a small high-ratio payload
+    // passes the pre-fetch guard and inflates past the limit. The bound has to
+    // apply to the decompressed bytes: `loadStructure` must never be reached.
+    const load = vi.fn();
+    const fake = { ...viewer(), loadStructure: async (source: unknown) => { load(source); } };
+    const bomb = `data_test\n${'A'.repeat(64 * 1024 * 1024 + 1)}\n`;
+    // Well under the declared compressed size, so only the inflated bound bites.
+    const envelope = await gzip(bomb);
+    expect(envelope.byteLength).toBeLessThan(64 * 1024 * 1024);
+    const artifact = { ...file('design_0_model_0.cif.gz', 'chemical/x-cif'), size: envelope.byteLength };
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(envelope)));
+    const controller = new StructureController(async () => fake as unknown as MolecularViewer);
+
+    await expect(controller.mount({} as HTMLElement, artifact, 'light')).rejects.toThrow(
+      'This structure exceeds the safe inline preview limit.',
+    );
+    expect(load).not.toHaveBeenCalled();
+  });
+
+  it('refuses a structure whose bytes are handed back whole without a stream', async () => {
+    // `Response.body` is nullable, so the controller cannot assume a stream to
+    // bound while it reads; the bytes it hands back are measured once instead of
+    // trusting the declared size.
+    const load = vi.fn();
+    const fake = { ...viewer(), loadStructure: async (source: unknown) => { load(source); } };
+    const body = 'data_test\n' + 'A'.repeat(64 * 1024 * 1024 + 1) + '\n';
+    const artifact = { ...file('model.cif', 'chemical/x-cif'), size: 8 };
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, body: null, text: async () => body })));
+    const controller = new StructureController(async () => fake as unknown as MolecularViewer);
+
+    await expect(controller.mount({} as HTMLElement, artifact, 'light')).rejects.toThrow(
+      'This structure exceeds the safe inline preview limit.',
+    );
+    expect(load).not.toHaveBeenCalled();
+  });
 });

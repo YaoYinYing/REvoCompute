@@ -537,10 +537,13 @@ def _storyboard_source(
     other Task keeps the family root's ``storyboard/``. This mirrors that: each
     candidate is a runner *root* (``docker/runners``), the family is found by
     scanning its ``plugin.yaml`` manifests for the one whose ``tasks`` list
-    declares the task, and the Task's own directory is preferred exactly when it
-    ships the tree that makes the module's bindings its own. When no candidate
-    declares the task the storyboard cannot be resolved from the served source,
-    so this returns ``None`` and the capture fails closed.
+    declares the task, and a Task that ships the tree owns the module. The
+    resolution is total in both directions, exactly as the Server's
+    ``contract_directory`` is: a Task-scoped contract that does not carry the
+    entrypoint answers *nothing* rather than the family module, because the
+    Server serves task-scoped Tasks from the Task directory alone and would
+    refuse the family asset with a 404. A capture that fell back would embed --
+    and checksum -- a module no deployment serves for that Task.
     """
     if not task_type:
         return None
@@ -551,12 +554,12 @@ def _storyboard_source(
         if located is None:
             continue
         family, task_directory = located
-        for base in (task_directory, family):
-            if base is None:
-                continue
-            candidate = base.joinpath("storyboard", *safe.split("/"))
-            if candidate.is_file():
-                return str(candidate)
+        if task_directory is not None:
+            candidate = task_directory.joinpath("storyboard", *safe.split("/"))
+            return str(candidate) if candidate.is_file() else None
+        candidate = family.joinpath("storyboard", *safe.split("/"))
+        if candidate.is_file():
+            return str(candidate)
     return None
 
 
@@ -628,12 +631,6 @@ def _task_declaring_family(runner_root: Path, task_type: str) -> tuple[Path, Pat
                 )
                 return manifest.parent, scoped
     return None
-
-
-def _family_declaring_task(runner_root: Path, task_type: str) -> Path | None:
-    """The family directory declaring ``task_type``, or ``None``."""
-    located = _task_declaring_family(runner_root, task_type)
-    return located[0] if located is not None else None
 
 
 # ---------------------------------------------------------------------------

@@ -17,16 +17,51 @@ function structureFormat(path: string): 'pdb' | 'mmcif' | 'pqr' {
 }
 
 async function readSource(path: string, response: Response): Promise<string> {
-  if (!GZIPPED.test(path)) return response.text();
+  if (!response.body) {
+    // An environment that exposes no readable stream cannot be bounded while it
+    // reads; the bytes it hands back are checked once, before they are parsed.
+    const text = await response.text();
+    if (new TextEncoder().encode(text).byteLength > MAX_STRUCTURE_BYTES) throw new Error(t('results.structure.tooLarge'));
+    return text;
+  }
+  return boundedText(GZIPPED.test(path) ? inflate(response) : response.body, MAX_STRUCTURE_BYTES);
+}
+
+/** The response's bytes, inflated when the published structure is compressed. */
+function inflate(response: Response): ReadableStream<Uint8Array> {
   if (typeof DecompressionStream === 'undefined') throw new Error(t('results.structure.compressedUnsupported'));
   // `response.body` is already the raw bytes; the stream inflates them without
   // ever materializing the whole compressed file as a buffer.
-  if (!response.body) return gunzip(await response.arrayBuffer());
-  return new Response(response.body.pipeThrough(new DecompressionStream('gzip'))).text();
+  return response.body!.pipeThrough(new DecompressionStream('gzip'));
 }
 
-async function gunzip(buffer: ArrayBuffer): Promise<string> {
-  return new Response(new Blob([buffer]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
+/**
+ * Read a byte stream into text, refusing anything past `limit`.
+ *
+ * The manifest's declared `size` bounds the bytes a Runner *published*, which for
+ * a compressed structure is the gzip envelope, not the payload the parser reads:
+ * a small high-ratio `.cif.gz` inflates to something arbitrarily larger. The
+ * bound therefore applies to the bytes as they arrive, before the text is
+ * materialized -- checking the compressed size alone would let the preview limit
+ * be exceeded by whatever the compression ratio allows.
+ */
+async function boundedText(stream: ReadableStream<Uint8Array>, limit: number): Promise<string> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let text = '';
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > limit) throw new Error(t('results.structure.tooLarge'));
+      text += decoder.decode(value, { stream: true });
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+  return text + decoder.decode();
 }
 
 export class StructureController {

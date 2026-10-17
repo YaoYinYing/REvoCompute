@@ -77,9 +77,10 @@ def test_the_recorded_foundry_design_defect_is_resolved_not_silenced():
 
     report = audit_fleet(str(RUNNERS), server_dir=str(ROOT))
 
-    assert {
-        (finding.task, finding.code) for finding in report.findings
-    }.isdisjoint({task for task, _code in RESOLVED_DEFECTS})
+    assert RESOLVED_DEFECTS  # a like-shaped control: the absence below is not vacuous
+    assert not (
+        {(finding.task, finding.code) for finding in report.findings} & set(RESOLVED_DEFECTS)
+    ), "a resolved defect is reported again"
     with isolated_discovery(str(RUNNERS)) as manager:
         design = manager.contributions.resolve("tasks", "foundry_rfd3_design")
         fold = manager.contributions.resolve("tasks", "foundry_rf3_fold")
@@ -90,6 +91,46 @@ def test_the_recorded_foundry_design_defect_is_resolved_not_silenced():
     assert design_tree != fold_tree
     assert "designs" in design_tree and design_tree["designs"]["pattern"] == "*.cif.gz"
     assert "structures" in fold_tree and fold_tree["structures"]["pattern"].endswith("_model.cif")
+
+
+def test_the_shared_tree_defect_is_still_detected_when_the_split_is_undone(tmp_path, monkeypatch):
+    """The regression above can fail: undo the split and the finding comes back.
+
+    An absence is only evidence if the check producing it fires on the defect it
+    is meant to catch. This rebuilds the pre-split tree out of the *real* family
+    -- the fold Task's contract back at the family root, the design Tasks' own
+    contracts removed, every other byte identical -- and audits it through the
+    production loader. Each design Task's ``*.cif.gz`` candidates are again
+    disjoint from the only declared spelling, so the exact ``(task, code)`` pairs
+    the fleet no longer reports must return. That is what makes the allowlist the
+    absence is compared against a like-shaped, non-empty control.
+    """
+    import shutil
+
+    runners = tmp_path / "docker" / "runners"
+    runners.mkdir(parents=True)
+    shutil.copytree(RUNNERS / "foundry", runners / "foundry")
+    shutil.copytree(RUNNERS / "common", runners / "common")
+    monkeypatch.setenv("RUNNERS_DIR", str(runners))
+    family = runners / "foundry"
+    shutil.move(str(family / "tasks" / "foundry_rf3_fold" / "expected_files.yaml"), str(family / "expected_files.yaml"))
+    shutil.move(str(family / "tasks" / "foundry_rf3_fold" / "storyboard"), str(family / "storyboard"))
+    for task_id in sorted({task for task, _code in RESOLVED_DEFECTS}):
+        task_directory = family / "tasks" / task_id
+        (task_directory / "expected_files.yaml").unlink()
+        shutil.rmtree(task_directory / "storyboard")
+
+    report = audit_fleet(str(runners), server_dir=str(ROOT))
+
+    assert set(report.tasks) == {"foundry_rfd3_design", "foundry_rfd3na_design", "foundry_rf3_fold"}
+    assert {
+        (finding.task, finding.code) for finding in report.findings
+    } == set(RESOLVED_DEFECTS)
+    assert report.defective == {task for task, _code in RESOLVED_DEFECTS}
+    assert report.ok is False
+    # Coverage and defect status stay independent: the design Tasks still declare
+    # a tree (the family's), so they are covered AND defective at once.
+    assert report.defective <= report.covered
 
 def test_fleet_report_separates_covered_unaudited_and_defective():
     """Coverage (a partition) and defect status (orthogonal) are both reported.
