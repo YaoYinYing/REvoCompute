@@ -94,16 +94,17 @@ def test_the_recorded_foundry_design_defect_is_resolved_not_silenced():
 
 
 def test_the_shared_tree_defect_is_still_detected_when_the_split_is_undone(tmp_path, monkeypatch):
-    """The regression above can fail: undo the split and the finding comes back.
+    """A control for the absence above: the audit still fires on the defect.
 
-    An absence is only evidence if the check producing it fires on the defect it
-    is meant to catch. This rebuilds the pre-split tree out of the *real* family
-    -- the fold Task's contract back at the family root, the design Tasks' own
-    contracts removed, every other byte identical -- and audits it through the
-    production loader. Each design Task's ``*.cif.gz`` candidates are again
-    disjoint from the only declared spelling, so the exact ``(task, code)`` pairs
-    the fleet no longer reports must return. That is what makes the allowlist the
-    absence is compared against a like-shaped, non-empty control.
+    A control for the assertion above, not a regression against ``main``: it
+    reconstructs the pre-split tree itself, so it passes there too and does not
+    by itself distinguish the two heads. What it pins is that the ``(task, code)``
+    pairs the fleet no longer reports are ones the audit *does* produce when the
+    Task-scoped split is undone -- the exact pre-split family, built out of the
+    real one (the fold Task's contract back at the family root, the design Tasks'
+    own contracts removed, every other byte identical) and audited through the
+    production loader. Without it, an emptied ``RESOLVED_DEFECTS`` or a broken
+    required-source check would leave the absence above looking green.
     """
     import shutil
 
@@ -128,8 +129,11 @@ def test_the_shared_tree_defect_is_still_detected_when_the_split_is_undone(tmp_p
     } == set(RESOLVED_DEFECTS)
     assert report.defective == {task for task, _code in RESOLVED_DEFECTS}
     assert report.ok is False
-    # Coverage and defect status stay independent: the design Tasks still declare
-    # a tree (the family's), so they are covered AND defective at once.
+    # The design Tasks still declare a tree here -- the family's -- which is what
+    # makes this line say something: a Task can be covered by the partition and
+    # still be reported defective, because coverage asks whether a declaration
+    # could be evaluated, not whether it passed. (It is a tautology for the report
+    # shapes below, where the defect set is empty; that is the comment's job.)
     assert report.defective <= report.covered
 
 def test_fleet_report_separates_covered_unaudited_and_defective():

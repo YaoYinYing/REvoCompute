@@ -16,23 +16,31 @@ function structureFormat(path: string): 'pdb' | 'mmcif' | 'pqr' {
   return /\.(?:cif|mmcif)(?:\.gz)?$/i.test(path) ? 'mmcif' : 'pdb';
 }
 
-async function readSource(path: string, response: Response): Promise<string> {
-  if (!response.body) {
-    // An environment that exposes no readable stream cannot be bounded while it
-    // reads; the bytes it hands back are checked once, before they are parsed.
-    const text = await response.text();
-    if (new TextEncoder().encode(text).byteLength > MAX_STRUCTURE_BYTES) throw new Error(t('results.structure.tooLarge'));
-    return text;
-  }
-  return boundedText(GZIPPED.test(path) ? inflate(response) : response.body, MAX_STRUCTURE_BYTES);
+function readSource(path: string, response: Response): Promise<string> {
+  const compressed = GZIPPED.test(path);
+  if (response.body) return boundedText(compressed ? inflate(response.body) : response.body, MAX_STRUCTURE_BYTES);
+  // No readable stream: the platform hands the body back whole, so the bytes are
+  // measured once rather than trusted from the declared size, and a compressed
+  // payload is still bounded as it inflates.
+  return boundedWhole(compressed, response);
 }
 
-/** The response's bytes, inflated when the published structure is compressed. */
-function inflate(response: Response): ReadableStream<Uint8Array> {
+/** Bound a whole body the platform handed back without a stream. */
+async function boundedWhole(compressed: boolean, response: Response): Promise<string> {
+  const payload = await response.arrayBuffer();
+  if (payload.byteLength > MAX_STRUCTURE_BYTES) throw new Error(t('results.structure.tooLarge'));
+  if (compressed) return boundedText(inflate(new Blob([payload]).stream()), MAX_STRUCTURE_BYTES);
+  const text = new TextDecoder().decode(payload);
+  // Decoding invalid bytes emits U+FFFD, so the text can be larger than the
+  // bytes it came from; measure what the parser would actually receive.
+  if (new TextEncoder().encode(text).byteLength > MAX_STRUCTURE_BYTES) throw new Error(t('results.structure.tooLarge'));
+  return text;
+}
+
+/** A byte stream whose gzip payload is inflated as it is read. */
+function inflate(bytes: ReadableStream<Uint8Array<ArrayBuffer>>): ReadableStream<Uint8Array> {
   if (typeof DecompressionStream === 'undefined') throw new Error(t('results.structure.compressedUnsupported'));
-  // `response.body` is already the raw bytes; the stream inflates them without
-  // ever materializing the whole compressed file as a buffer.
-  return response.body!.pipeThrough(new DecompressionStream('gzip'));
+  return bytes.pipeThrough(new DecompressionStream('gzip'));
 }
 
 /**
