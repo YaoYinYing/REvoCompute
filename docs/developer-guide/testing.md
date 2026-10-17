@@ -152,9 +152,15 @@ result root), sanitizes
 secret-bearing metadata and host-local paths, and fails on a required view source
 it cannot resolve. Required view sources win the bundle byte budget; an optional
 payload is admitted only from what remains and is otherwise recorded in
-`excluded` with its hash and reason, never as a partial file. A bundle carries a
-pointer to the machine-generated production receipt for the same task, so its
-provenance is the receipt's, not a second record.
+`excluded` with its hash and reason, never as a partial file. The capture also
+writes `provenance.capture.mode` from its own `require_finished` argument and its
+own verified outcome — `reproduced_real_result` or `synthetic` — overwriting
+anything a caller passed under that key, and it is that mode (not any free-form
+scheduler prose) that decides the evidence label the audit reports. A bundle is
+not required to carry a mode, so one captured before the mode existed keeps
+loading; it is read at the unverified level rather than promoted or failed. A
+bundle carries a pointer to the machine-generated production receipt for the same
+task, so its provenance is the receipt's, not a second record.
 
 Mount one in a browser test with
 `replay_scenario(gremlin_lh_runner(), ReplayBundle.load(path))`; a mismatched

@@ -428,6 +428,60 @@ def test_evidence_corpus_real_items_are_verified_and_mocks_never_claim_science(i
     assert all(item["scientific_claim"] in {"none", "runner_output_replayed"} for item in items)
 
 
+def test_the_auditors_capture_mode_vocabulary_is_the_captures_own(inventory):
+    """The auditor branches on the capture's words, not on a copy of them.
+
+    The two modes decide the two evidence labels, so a second copy of the
+    vocabulary is exactly the drift this audit exists to expose: rename the
+    capture's mode and the auditor would silently stop recognising every bundle.
+    The assertion is an equality between the tool's constants and the capture
+    module's exported tuple, not a check that either says a particular string.
+    """
+    from frontend_fixtures import CAPTURE_MODES
+
+    tool = _load_tool()
+    assert (tool._CAPTURE_MODE_REPRODUCED, tool._CAPTURE_MODE_SYNTHETIC) == tuple(CAPTURE_MODES)
+
+
+def test_a_synthetic_capture_cannot_reach_the_real_runner_label(tmp_path):
+    """A mock is labeled a mock even when its provenance prose claims a real run.
+
+    The label used to be decided from ``provenance.capture.scheduler``, a
+    free-form mapping the *caller* supplies -- so a ``require_finished=False``
+    capture whose caller wrote ``"none"`` into that field was promoted to
+    ``real_runner_local_no_scheduler`` and its family to ``real_runner_cli``, while
+    no branch could ever emit the declared ``synthetic_mock`` label. The capture now
+    writes the mode from its own argument and its own verified outcome, so this
+    drives the real capture and the real auditor together and requires that the
+    promotion is not reproducible.
+    """
+    import sys
+
+    from frontend_fixtures import capture_replay_bundle, write_bundle
+
+    # The real capture test module owns the canonical synthetic result fixture;
+    # reuse it rather than building a second one that could drift from it.
+    sys.path.insert(0, str(ROOT / "tests" / "fleet"))
+    from test_replay_bundle import TASK_ID, _synthetic_fixture, _write_result_root
+
+    repo = tmp_path / "repo"
+    result = repo / "tests" / "data" / "demo_replay"
+    result.mkdir(parents=True)
+    root = _write_result_root(repo, _synthetic_fixture())
+    bundle = capture_replay_bundle(
+        require_finished=False,
+        task_id=TASK_ID,
+        result_root=root,
+        # The caller's own claim: prose naming a real local run with no scheduler.
+        provenance={"capture": {"scheduler": "none - executed locally, no Slurm allocation"}},
+    )
+    assert bundle["provenance"]["capture"]["mode"] == "synthetic"
+    path = write_bundle(result / "synthetic.json", bundle)
+
+    item = _load_tool()._label_corpus_item(repo, path)
+    assert item["label"] == "synthetic_mock"
+
+
 def test_a_stale_production_receipt_pointer_is_not_promoted(tmp_path):
     """A stored pointer that disagrees with its own receipt must not reach the top label.
 

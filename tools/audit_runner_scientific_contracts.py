@@ -122,6 +122,15 @@ _LOGICAL_VERBATIM_KINDS = ("protein structure", "alignment", "Boltz specificatio
 _SPECIFICATION_LOGICAL_TYPES = ("alphafold3_specification", "foundry_specification", "opendde_specification")
 
 
+#: The two modes a capture persists on itself, from ``frontend_fixtures``' own
+#: vocabulary: ``reproduced_real_result`` for a capture that reproduced a real
+#: finished result, ``synthetic`` for one that stood in for a result. The auditor
+#: branches on these and nothing else -- not on scheduler prose, which a caller
+#: supplies. ``test_fleet_scientific_contract_inventory`` asserts these two equal
+#: the capture module's ``CAPTURE_MODES``, so the vocabulary cannot drift here.
+_CAPTURE_MODE_REPRODUCED = "reproduced_real_result"
+_CAPTURE_MODE_SYNTHETIC = "synthetic"
+
 #: Evidence levels. Never interchangeable, never summed.
 #: An evidence level is only ever in this tuple if it is *reachable*: every member
 #: is produced by some fleet family today, so the tuple carries no dead merger.
@@ -396,14 +405,14 @@ def _label_corpus_item(repo_root: Path, path: Path) -> dict[str, Any]:
     if isinstance(pointer, dict):
         return _label_receipt_pointer(repo_root, relative, bundle, pointer)
     capture = provenance.get("capture") if isinstance(provenance.get("capture"), dict) else {}
-    if capture.get("mode") == "reproduced_real_result":
+    if capture.get("mode") == _CAPTURE_MODE_REPRODUCED:
         return {
             "path": relative,
             "label": "real_runner_local_no_scheduler",
             "task_type": str(bundle.get("task", {}).get("type") or ""),
             "detail": str(capture.get("scheduler") or ""),
         }
-    if capture.get("mode") == "synthetic":
+    if capture.get("mode") == _CAPTURE_MODE_SYNTHETIC:
         return {
             "path": relative,
             "label": "synthetic_mock",
