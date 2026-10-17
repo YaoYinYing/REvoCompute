@@ -23,7 +23,6 @@ export default { mount(host, context) {
   const designsSection = section("Designed structures", "One gzipped mmCIF per diffusion batch member; the published name keeps the specification key and the model index explicit.");
   const designHost = element("div", "rfd3-designs"); const actions = element("div", "rfd3-actions");
   designsSection.append(designHost, actions); root.append(designsSection);
-  const idle = "Select a design to open it, and its per-design metadata when one was published.";
   function choose(index) {
     const artifact = designs[index]; if (!artifact) return;
     const item = identity(artifact.name || artifact.path);
@@ -43,7 +42,7 @@ export default { mount(host, context) {
     node.addEventListener("click", () => choose(index)); designHost.append(node);
   });
   if (designs.length) choose(0);
-  else { const note = element("p", "preview-message", "No design structure was published."); designHost.replaceChildren(note); actions.replaceChildren(note.cloneNode(true)); }
+  else designHost.replaceChildren(element("p", "preview-message", "No design structure was published."));
   host.replaceChildren(root);
   return { destroy() { host.replaceChildren(); } };
 } };
