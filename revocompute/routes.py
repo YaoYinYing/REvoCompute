@@ -213,7 +213,7 @@ from revocompute.task_types import (
     list_types,
     workspace_plugin_descriptor,
 )
-from revocompute.task_demos import DemoContractError, demo_root, load_task_demos, resolve_demo_file
+from revocompute.task_demos import DemoContractError, demo_root, load_task_demo, load_task_demos, resolve_demo_file
 from revocompute.workspace_contracts import WorkspaceValidationError, normalize_capability, validate_capability
 from revocompute.task_types import workspace_backend
 from revocompute.tool_calls import ToolAdmissionError, new_tool_call_id, normalize_tool_call_id
@@ -1200,11 +1200,10 @@ def task_demo_file(name: str, demo_id: str, asset: str):
     if refusal is not None:
         return refusal
     try:
-        demos = load_task_demos(tt)
+        demo = load_task_demo(tt, demo_id)
     except DemoContractError:
         logging.exception("Task %r declares an invalid demo manifest", tt.name)
         abort(404)
-    demo = next((item for item in demos if item.id == demo_id), None)
     if demo is None:
         abort(404)
     declared = resolve_demo_file(demo, asset)

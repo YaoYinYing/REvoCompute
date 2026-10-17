@@ -58,14 +58,15 @@ function defaultParameterValue(parameter: ParameterDefinition): string {
  * A `select` that does not offer the declared value gains the option rather than
  * silently discarding the assignment: a value the owning Task declares must be
  * visible in the form that is about to be submitted, not dropped between the
- * preset and the control.
+ * preset and the control. An empty value is never added as an option, because a
+ * control reset to "no value" is a state, not a declared choice.
  */
 function writeParameter(parameter: ParameterDefinition, control: HTMLInputElement | HTMLSelectElement, value: string): void {
   if (parameter.type === 'bool' && control instanceof HTMLInputElement) {
     control.checked = value === 'true';
     return;
   }
-  if (control instanceof HTMLSelectElement && !Array.from(control.options).some(option => option.value === value)) {
+  if (value !== '' && control instanceof HTMLSelectElement && !Array.from(control.options).some(option => option.value === value)) {
     control.append(new Option(value, value));
   }
   control.value = value;
@@ -206,17 +207,22 @@ export class InputWorkspace {
   apply(preset: WorkspacePreset): PresetApplication {
     const before = this.snapshot(); const form = this.mounted; const context = this.context;
     if (!form || !context) throw new Error(t('ct.workspace.pluginScope'));
+    // A preset is a complete state, not a patch: the confirmation a reader
+    // answers says their inputs are being *replaced*, so a role the preset does
+    // not bind ends up empty and a parameter it does not declare returns to the
+    // value a fresh control holds. Writing only the preset's own entries would
+    // leave two examples' inputs combined in one form, or retain a file the
+    // reader believes was replaced.
     const roles: PresetApplication['files'] = [];
-    preset.files.forEach((files, role) => {
-      const declared = form.inputs.find(item => item.id === role); if (!declared) return;
-      context.setRoleFiles(role, files); context.setPrimaryIndex(role, 0);
-      roles.push({ role, title: declared.title, names: files.map(filePath) });
+    form.inputs.forEach(role => {
+      const declared = preset.files.get(role.id) || [];
+      context.setRoleFiles(role.id, [...declared]); context.setPrimaryIndex(role.id, 0);
+      roles.push({ role: role.id, title: role.title, names: declared.map(filePath) });
     });
     const parameters: PresetApplication['parameters'] = [];
     form.params.forEach(parameter => {
-      const declared = preset.parameters[parameter.name]; if (declared === undefined) return;
       const control = inputByParameter(parameter.name); if (!control) return;
-      writeParameter(parameter, control, declared);
+      writeParameter(parameter, control, preset.parameters[parameter.name] ?? defaultParameterValue(parameter));
       parameters.push({ name: parameter.name, label: parameter.label, value: parameterValue(parameter, control) });
     });
     const changes: PresetChange[] = [];

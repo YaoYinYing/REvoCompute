@@ -18,6 +18,8 @@ through ``tests/frontend_fixtures/`` and asserts only what a reader meets.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from playwright.sync_api import Page, expect
 import pytest
 
@@ -25,6 +27,8 @@ from frontend_fixtures import (
     ANONYMOUS_AUTH,
     DemoFileSpec,
     DemoSpec,
+    InputRole,
+    ParameterSpec,
     controlled_runner,
     mount_scenario,
     runner_scenario,
@@ -41,6 +45,35 @@ MIN_TARGET_PX = 44
 # One demo whose declared parameter differs from the Task's own default, so a
 # load has something to change and something to report.
 LOADABLE = sequence_demo(parameters={"iterations": 4})
+
+# A Task that binds two named roles and declares two parameters, so an example
+# that fills one of each has something to leave out. The extra role and control
+# are the archetype's own vocabulary - a second sequence role and a second
+# bounded integer - never a production Runner's identity.
+REFERENCE_ROLE = InputRole(
+    id="reference",
+    title="Reference sequence",
+    logical_type="protein_sequence",
+    formats=("fasta",),
+    extensions=(".fasta", ".fa"),
+    description="One reference FASTA record.",
+)
+TWO_ROLE_RUNNER = replace(
+    controlled_runner(),
+    inputs=(*controlled_runner().inputs, REFERENCE_ROLE),
+    parameters=(
+        ParameterSpec.integer("iterations", default=2, has_default=True, minimum=1, maximum=4),
+        ParameterSpec.integer("mass_precision", default=2, has_default=True, minimum=0, maximum=6),
+        # A declared choice with no declared default: the control starts with
+        # nothing chosen, and only the two choices the Task declares are ever
+        # offered, however a preset that does not set it leaves the field.
+        ParameterSpec.enumeration("mode", ("fast", "exact"), required=True),
+    ),
+)
+# The same example, declared by the two-role Task: it binds the primary role and
+# sets one of the two controls, so loading it must empty the role it does not
+# bind and return the control it does not declare to its own declared default.
+PARTIAL = sequence_demo(parameters={"iterations": 4})
 
 
 def _pin_locale(page: Page) -> None:
@@ -92,6 +125,13 @@ def _choose(page: Page, dialog, title: str = LOADABLE.title) -> str:
 
 def _parameter(page: Page, name: str):
     return page.locator(f'[data-ct-parameter="{name}"]')
+
+
+def _bind(page: Page, role_title: str, name: str) -> None:
+    """Choose one local FASTA for a named role, exactly as a reader uploads one."""
+    page.locator(".ct-file-role", has_text=role_title).locator("input[type=file]").set_input_files(
+        {"name": name, "mimeType": "text/x-fasta", "buffer": f">{name.split('.')[0]}\nACDEFGHIKL\n".encode()}
+    )
 
 
 def test_the_demo_button_fills_the_named_roles_and_parameters_in_one_action(page: Page) -> None:
@@ -281,6 +321,108 @@ def test_the_demo_catalog_is_a_public_read_that_grants_nothing(page: Page) -> No
         "task_type": mount.runner.name,
         "demos": [],
     }
+
+
+def test_loading_an_example_replaces_the_whole_form_it_replaces(page: Page) -> None:
+    """A replacement is a replacement: what the example omits does not survive it.
+
+    The confirmation a reader answers says their inputs and settings are being
+    replaced. A form that kept a file bound to a role the example does not name,
+    and a value on a control the example does not declare, would be two examples
+    combined in one form - and the panel would claim the fields were replaced
+    while a submission still carried them.
+    """
+    mount = runner_scenario(TWO_ROLE_RUNNER).with_demos((PARTIAL,))
+    _mount(page, mount)
+    _open_create_task(page, TWO_ROLE_RUNNER)
+
+    # The reader fills both roles and moves both controls off their defaults.
+    _bind(page, "Protein sequence", "primary.fasta")
+    _bind(page, "Reference sequence", "reference.fasta")
+    expect(page.locator(".ct-file-well.has-file")).to_have_count(2)
+    _parameter(page, "mass_precision").fill("5")
+
+    _choose(page, _open_picker(page))
+    confirm = page.locator("dialog.ct-dialog:not(.ct-demo-dialog)")
+    expect(confirm).to_be_visible()
+    confirm.get_by_role("button", name="Replace current inputs", exact=True).click()
+
+    # The example's own bindings are in the form, and nothing it did not declare
+    # is: the unnamed role is empty, the undeclared control is back at its default.
+    expect(_parameter(page, "iterations")).to_have_value("4")
+    sequence = page.locator(".ct-file-role", has_text="Protein sequence")
+    expect(sequence.locator(".ct-file-well")).to_have_class("ct-file-well has-file")
+    expect(page.locator(".ct-file-well.has-file")).to_have_count(1)
+    expect(page.locator(".ct-demo-applied")).to_contain_text("Filled 1 of 2 input files")
+    # The control the example did not declare is still the reader's own: it holds
+    # the Task's declared default and takes an edit exactly as an untouched one does.
+    expect(_parameter(page, "mass_precision")).to_have_value("2")
+    _parameter(page, "mass_precision").fill("3")
+    expect(_parameter(page, "mass_precision")).to_have_value("3")
+    # Resetting a control the example does not declare to "nothing chosen" is a
+    # state, not a choice: the replacement can only ever offer the two values the
+    # Task declares, so it never turns an unanswered required field into an
+    # answerable empty one.
+    expect(_parameter(page, "mode")).to_have_value("")
+    expect(_parameter(page, "mode").locator("option")).to_have_count(2)
+
+
+def test_an_undo_puts_back_the_whole_state_the_example_replaced(page: Page) -> None:
+    """The undo restores what the reader had, including what the example emptied."""
+    mount = runner_scenario(TWO_ROLE_RUNNER).with_demos((PARTIAL,))
+    _mount(page, mount)
+    _open_create_task(page, TWO_ROLE_RUNNER)
+
+    _bind(page, "Protein sequence", "primary.fasta")
+    _bind(page, "Reference sequence", "reference.fasta")
+    _parameter(page, "mass_precision").fill("5")
+
+    _choose(page, _open_picker(page))
+    confirm = page.locator("dialog.ct-dialog:not(.ct-demo-dialog)")
+    confirm.get_by_role("button", name="Replace current inputs", exact=True).click()
+    # The example binds one role, so exactly one well carries a file now.
+    expect(page.locator(".ct-file-well.has-file")).to_have_count(1)
+
+    # Undo returns the state the replacement replaced, not a partial echo of it:
+    # the reference file the example cleared is bound again and the control the
+    # example moved back to its default holds the value the reader had set.
+    page.locator(".ct-demo-applied").get_by_role("button", name="Put my inputs back", exact=True).click()
+    expect(page.locator(".ct-file-well.has-file")).to_have_count(2)
+    expect(page.locator(".ct-file-role", has_text="Reference sequence").locator("strong").first).to_have_text("reference.fasta")
+    expect(_parameter(page, "iterations")).to_have_value("2")
+    expect(_parameter(page, "mass_precision")).to_have_value("5")
+
+
+def test_a_cleared_workspace_is_not_refilled_by_an_example_already_in_flight(page: Page) -> None:
+    """Clearing is the state the reader asked for; a slower load may not undo it.
+
+    Obtaining an example is a network read. A reader who clears the form while
+    one is still arriving has asked for an empty form; the load that lands
+    afterwards must not paint the example into it, and must not report that it
+    did. The delayed fixture is the harness's own declared asset, held open by
+    the test rather than by a sleep in the frontend.
+    """
+    mount = _scenario()
+    _mount(page, mount)
+    _open_create_task(page)
+
+    held: list = []
+    page.route(f"{ORIGIN}/compute/api/types/**/demos/**/files/**", lambda route: held.append(route))
+    _choose(page, _open_picker(page))
+    expect(page.locator(".ct-status")).to_have_class("ct-status busy")
+    assert held, "the declared fixture was never requested"
+
+    page.get_by_role("button", name="Clear", exact=True).click()
+    expect(page.locator(".ct-status")).to_contain_text("Workspace cleared")
+    for route in held:
+        route.fallback()
+    # The load resolves against a workspace that was cleared after it started.
+    page.wait_for_timeout(600)
+
+    expect(page.locator(".ct-status")).not_to_contain_text(LOADABLE.title)
+    expect(page.locator(".ct-demo-applied")).to_have_count(0)
+    expect(page.locator(".ct-file-well.has-file")).to_have_count(0)
+    expect(_parameter(page, "iterations")).to_have_value("2")
 
 
 def test_a_file_the_declaration_cannot_serve_reports_the_failure_and_changes_nothing(page: Page) -> None:

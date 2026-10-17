@@ -354,7 +354,12 @@ export class CreateTask {
 
   private async applyDemo(demo: TaskDemo): Promise<void> {
     const definition = this.definition; if (!definition) return;
-    const generation = this.generation;
+    // Choosing an example is the one load a slower earlier one may not overwrite:
+    // each selection takes the next generation, so a download that finishes after
+    // a later selection - or after the workspace was cleared - observes a mismatch
+    // and applies nothing. The picker's own controls stay enabled while a load is
+    // in flight because the load is cancellable this way rather than by waiting.
+    const generation = ++this.generation;
     // A non-empty form is not replaced silently: the reader either confirms the
     // replacement or keeps what they entered. The prior state is captured after
     // that decision, so it is what the replacement actually replaced, and it is
@@ -409,7 +414,10 @@ export class CreateTask {
   private async clearWorkspace(): Promise<void> {
     this.closeDemoDialog();
 
-    if (!this.definition) return; const generation = this.generation; this.preflight = null; this.actionFailed = false; this.revision++; await this.workspace.mount(this.definition);
+    // Clearing invalidates any demo load still in flight exactly as leaving the
+    // method does: the cleared form is the state the reader asked for, and an
+    // older download must not be able to fill it back in afterwards.
+    if (!this.definition) return; this.generation++; const generation = this.generation; this.preflight = null; this.actionFailed = false; this.revision++; await this.workspace.mount(this.definition);
     if (generation !== this.generation) return; this.setStatus(t('ct.cleared'), 'ok'); this.refreshValidation();
   }
 

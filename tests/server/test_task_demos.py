@@ -20,15 +20,20 @@ path the declaration does not name is concealed.
 
 from __future__ import annotations
 
+from dataclasses import replace
+import hashlib
 import os
 from pathlib import Path
 import shutil
 
+from pydantic import ValidationError
 import pytest
 import yaml
 
+import conftest
 from conftest import _load_pssm_module, _test_client_auth
 
+from revocompute.schemas import TaskSubmissionRequest
 from revocompute.task_demos import DemoContractError, demo_root, load_task_demos
 from revocompute.task_types import get as get_task_type
 
@@ -69,15 +74,19 @@ def _declaration(**overrides) -> dict:
     return {"demos": [demo]}
 
 
+#: The fixture the synthetic family ships, which every case here copies or
+#: points at rather than restating.
+FIXTURE_SOURCE = (
+    Path(__file__).resolve().parents[1] / "fixtures" / "runners" / SYNTHETIC_TASK / "tasks" / "predict"
+    / "demo" / "files" / FIXTURE_NAME
+)
+
+
 def _demo_dir(tmp_path: Path) -> Path:
     """A Task directory carrying its own demo fixture, owned by the test."""
     root = tmp_path / "family" / TASK_DIR / "demo"
     (root / "files").mkdir(parents=True)
-    shutil.copyfile(
-        Path(__file__).resolve().parents[1] / "fixtures" / "runners" / SYNTHETIC_TASK / "tasks" / "predict"
-        / "demo" / "files" / FIXTURE_NAME,
-        root / "files" / FIXTURE_NAME,
-    )
+    shutil.copyfile(FIXTURE_SOURCE, root / "files" / FIXTURE_NAME)
     return root
 
 
@@ -111,8 +120,6 @@ def _load(root: Path, module, declaration: dict, name: str = SYNTHETIC_TASK):
 
 def _complete(root: Path, declaration: dict) -> dict:
     """Fill in the real digest of the fixture the test copied."""
-    import hashlib
-
     digest = hashlib.sha256((root / "files" / FIXTURE_NAME).read_bytes()).hexdigest()
     declaration["demos"][0]["inputs"]["sequence"][0]["sha256"] = digest
     return declaration
@@ -179,9 +186,7 @@ def test_a_fixture_that_is_not_a_single_regular_file_is_refused(monkeypatch, tmp
     target = root / "files" / FIXTURE_NAME
     os.link(target, root / "files" / "second.fasta")
     declaration["demos"][0]["inputs"]["sequence"][0]["path"] = "files/second.fasta"
-    declaration["demos"][0]["inputs"]["sequence"][0]["sha256"] = __import__("hashlib").sha256(
-        target.read_bytes()
-    ).hexdigest()
+    declaration["demos"][0]["inputs"]["sequence"][0]["sha256"] = hashlib.sha256(target.read_bytes()).hexdigest()
 
     with pytest.raises(DemoContractError):
         _load(root, module, declaration)
@@ -214,6 +219,85 @@ def test_a_task_without_a_declared_directory_declares_no_demos(monkeypatch, tmp_
     object.__setattr__(task_type, "task_dir", "")
     assert demo_root(task_type) is None
     assert load_task_demos(task_type) == ()
+
+
+def test_a_fixture_reached_through_a_symlinked_parent_is_refused(monkeypatch, tmp_path):
+    """A path that looks relative can still leave the demo directory.
+
+    ``files`` here is not a directory the Task owns: it is a symbolic link to a
+    tree beside the family, so the bytes the digest and the format check
+    described are not the bytes the download route would serve. A check on the
+    spelling of the declared path cannot see that, because the spelling is
+    exactly what a well-formed relative path looks like.
+    """
+    module = _module(monkeypatch, tmp_path)
+    root = tmp_path / "family" / TASK_DIR / "demo"
+    root.mkdir(parents=True)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    shutil.copyfile(FIXTURE_SOURCE, elsewhere / FIXTURE_NAME)
+    os.symlink(elsewhere, root / "files")
+    declaration = _declaration()
+    declaration["demos"][0]["inputs"]["sequence"][0]["sha256"] = hashlib.sha256(
+        (elsewhere / FIXTURE_NAME).read_bytes()
+    ).hexdigest()
+
+    with pytest.raises(DemoContractError):
+        _load(root, module, declaration)
+
+
+#: A Task whose parameter contract declares one calendar-date field, and the
+#: value the submission boundary refuses for it. Registered under its own name so
+#: both readers resolve the same declared schema from the same registry entry.
+DATED_TASK = "dated_runner"
+DATED_SCHEMA = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "max_template_date": {
+            "type": "string",
+            "format": "date",
+            "default": "2021-09-30",
+            "description": "Latest structure release date permitted when selecting prediction templates.",
+        }
+    },
+}
+UNPARSEABLE_DATE = {"max_template_date": "2026-99-99"}
+DECLARED_DATE = {"max_template_date": "2021-09-30"}
+
+
+def _dated_module(monkeypatch, tmp_path):
+    """The isolated application with a synthetic Task carrying a dated schema."""
+    module = _module(monkeypatch, tmp_path)
+    import revocompute.routes  # noqa: F401  (installs the runner registry snapshot)
+
+    base, runner = module.task_runtime._get_task_type(SYNTHETIC_TASK)
+    conftest._inject_task_type(module, replace(base, name=DATED_TASK, schema=DATED_SCHEMA), runner)
+    return module
+
+
+def test_a_demo_parameter_the_submission_boundary_refuses_is_refused(monkeypatch, tmp_path):
+    """The demo declaration is judged by the grammar the submission is judged by.
+
+    The owning schema is the single parameter grammar, so a value the Task's own
+    submission boundary refuses - ``2026-99-99`` is not a calendar date - cannot
+    be a supported preset the declaration publishes. Both are read here through
+    the same registry entry, and both refuse the same value.
+    """
+    module = _dated_module(monkeypatch, tmp_path)
+    root = _demo_dir(tmp_path)
+
+    with pytest.raises(DemoContractError):
+        _load(root, module, _complete(root, _declaration(parameters=UNPARSEABLE_DATE)), DATED_TASK)
+    with pytest.raises(ValidationError):
+        TaskSubmissionRequest.model_validate({"task_type": DATED_TASK, "params": UNPARSEABLE_DATE})
+
+    # The refusal is the calendar-date format, not the parameter or its name: the
+    # value the owning schema declares as its own default is admitted by both.
+    loaded = _load(root, module, _complete(root, _declaration(parameters=DECLARED_DATE)), DATED_TASK)
+    assert loaded[0].parameters == DECLARED_DATE
+    assert TaskSubmissionRequest.model_validate({"task_type": DATED_TASK, "params": DECLARED_DATE})
 
 
 # ---------------------------------------------------------------------------

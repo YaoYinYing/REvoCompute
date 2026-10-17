@@ -30,8 +30,8 @@ import stat as stat_module
 from typing import Any
 
 import yaml
+from jsonschema import Draft202012Validator, FormatChecker
 from jsonschema import ValidationError as JSONSchemaValidationError
-from jsonschema import validate as validate_json_schema
 
 from revocompute.input_validators import validate_input_file, validate_logical_input
 from revocompute.io_contracts import ROLE_ID_PATTERN
@@ -120,7 +120,12 @@ def demo_root(task_type: Any) -> Path | None:
         return None
     if relative.startswith("/") or "\\" in relative or any(part in {"", ".", ".."} for part in relative.split("/")):
         raise DemoContractError("A Task demo directory must be relative to the runner family")
-    return Path(str(task_type.runtime.root)) / relative / "demo"
+    # The root is resolved once, here, so every consumer anchors on the directory
+    # the declaration was actually read from.  A symbolic link anywhere in the
+    # family path is therefore followed exactly once, when the root is
+    # established, rather than being re-followed by a consumer that is deciding
+    # whether a fixture is inside it.
+    return (Path(str(task_type.runtime.root)) / relative / "demo").resolve()
 
 
 def demo_manifest_path(task_type: Any) -> Path | None:
@@ -137,19 +142,10 @@ def load_task_demos(task_type: Any) -> tuple[TaskDemo, ...]:
     presenting a demo is about to hand a scientist a supported input, so a
     half-validated fixture must not reach it.
     """
-    manifest = demo_manifest_path(task_type)
-    if manifest is None or not manifest.is_file():
+    declared = declared_demos(task_type)
+    if declared is None:
         return ()
-    try:
-        raw = yaml.safe_load(manifest.read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError) as exc:
-        raise DemoContractError(f"Could not read {manifest.name}") from exc
-    if not isinstance(raw, dict) or set(raw) != {"demos"}:
-        raise DemoContractError("demos.yaml must declare exactly one top-level 'demos' list")
-    declared = raw["demos"]
-    if not isinstance(declared, list) or len(declared) > MAX_DEMOS_PER_TASK:
-        raise DemoContractError(f"demos must be a list of at most {MAX_DEMOS_PER_TASK} demos")
-    root = manifest.parent
+    root = _declaration_root(task_type)
     demos: list[TaskDemo] = []
     seen: set[str] = set()
     for entry in declared:
@@ -159,6 +155,53 @@ def load_task_demos(task_type: Any) -> tuple[TaskDemo, ...]:
         seen.add(demo.id)
         demos.append(demo)
     return tuple(demos)
+
+
+def load_task_demo(task_type: Any, demo_id: str) -> TaskDemo | None:
+    """Parse and validate the one demo a request names, or ``None``.
+
+    The declaration is the same one ``load_task_demos`` reads and each demo is
+    validated by the same ``_parse_demo``, so there is no second grammar here:
+    the difference is that serving one fixture resolves only the demo that binds
+    it instead of every demo the Task declares.  The asset route is anonymous, so
+    re-validating an unrelated demo on each of up to ``MAX_DEMO_FILES`` requests
+    would make one form fill cost a whole catalog's worth of reads.
+    """
+    declared = declared_demos(task_type)
+    if declared is None:
+        return None
+    root = _declaration_root(task_type)
+    entry = next((item for item in declared if isinstance(item, dict) and item.get("id") == demo_id), None)
+    return None if entry is None else _parse_demo(entry, task_type=task_type, root=root)
+
+
+def declared_demos(task_type: Any) -> list[Any] | None:
+    """The raw demo list one Task's manifest declares, or ``None``.
+
+    ``None`` means the Task declares no demo directory, no manifest, and so no
+    demos.  The surrounding document shape is checked here, once, for every
+    reader; each demo entry is then parsed by ``_parse_demo``.
+    """
+    manifest = demo_manifest_path(task_type)
+    if manifest is None or not manifest.is_file():
+        return None
+    try:
+        raw = yaml.safe_load(manifest.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        raise DemoContractError(f"Could not read {manifest.name}") from exc
+    if not isinstance(raw, dict) or set(raw) != {"demos"}:
+        raise DemoContractError("demos.yaml must declare exactly one top-level 'demos' list")
+    declared = raw["demos"]
+    if not isinstance(declared, list) or len(declared) > MAX_DEMOS_PER_TASK:
+        raise DemoContractError(f"demos must be a list of at most {MAX_DEMOS_PER_TASK} demos")
+    return declared
+
+
+def _declaration_root(task_type: Any) -> Path:
+    """The resolved directory a manifest was read from; its reader guarantees it exists."""
+    root = demo_root(task_type)
+    assert root is not None  # a manifest exists only under a declared Task directory
+    return root
 
 
 def _parse_demo(entry: Any, *, task_type: Any, root: Path) -> TaskDemo:
@@ -278,7 +321,7 @@ def _parse_file(raw: Any, *, role: Any, root: Path, demo_id: str) -> DemoFile:
     if not isinstance(media_type, str) or not _MEDIA_TYPE_PATTERN.fullmatch(media_type.lower()):
         raise DemoContractError(f"Demo {demo_id!r} fixture {relative!r} needs a type/subtype media type")
     target = root / relative
-    _assert_regular_fixture(target, relative=relative, demo_id=demo_id)
+    _assert_regular_fixture(target, root=root, relative=relative, demo_id=demo_id)
     size = target.stat().st_size
     if size > MAX_DEMO_FILE_BYTES:
         raise DemoContractError(
@@ -302,13 +345,25 @@ def _parse_file(raw: Any, *, role: Any, root: Path, demo_id: str) -> DemoFile:
     return DemoFile(role=role.name, path=relative, sha256=digest, size=size, media_type=media_type.lower())
 
 
-def _assert_regular_fixture(target: Path, *, relative: str, demo_id: str) -> None:
-    """Refuse a fixture that is not one deployment-owned regular file.
+def _assert_regular_fixture(target: Path, *, root: Path, relative: str, demo_id: str) -> None:
+    """Refuse a fixture that is not one regular file inside its own demo root.
 
-    A symlink (or a hard-linked inode) would let the bytes served differ from the
-    bytes the digest was verified against, and a world-writable or set-id file
-    could be rewritten after validation, so neither can be a public fixture.
+    Containment is decided on resolved paths rather than on the spelling of
+    ``relative``: a path that looks relative and carries no ``..`` can still leave
+    the demo directory through a symbolic *parent* component, and then the bytes
+    the digest and the format check described are not the bytes the download route
+    would serve.  Resolving both sides and requiring the target to stay under the
+    resolved root is what makes the declaration and the serve agree.
+
+    A symbolic final component is refused outright, because the served bytes would
+    be whatever that link points at, and a hard-linked, world-writable, or set-id
+    inode could be replaced after validation; none of those can be a public
+    fixture.
     """
+    if not target.resolve().is_relative_to(root.resolve()):
+        raise DemoContractError(
+            f"Demo {demo_id!r} fixture {relative!r} must resolve inside its Task's demo directory"
+        )
     try:
         if os.path.islink(target):
             raise DemoContractError(f"Demo {demo_id!r} fixture {relative!r} must not be a symbolic link")
@@ -342,7 +397,7 @@ def _parse_parameters(raw: Any, *, task_type: Any, demo_id: str) -> dict[str, An
     if not isinstance(raw, dict):
         raise DemoContractError(f"Demo {demo_id!r} parameters must be a mapping")
     try:
-        validate_json_schema(raw, task_type.schema)
+        Draft202012Validator(task_type.schema, format_checker=FormatChecker()).validate(raw)
     except JSONSchemaValidationError as exc:
         raise DemoContractError(
             f"Demo {demo_id!r} parameters do not satisfy the Task contract: {exc.message}"
