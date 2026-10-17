@@ -1,14 +1,74 @@
-import type { InputFile, TaskFormDefinition, WorkspaceCapability, WorkspaceStep, WorkspaceSummary, WorkspaceValues } from '../types';
+import type { InputFile, ParameterDefinition, TaskFormDefinition, WorkspaceCapability, WorkspaceStep, WorkspaceSummary, WorkspaceValues } from '../types';
 import { authorizedFetch } from '../../../app/session';
+import { parameterValue } from '../parameter-controls';
 import { t } from '../../../app/i18n';
 import { builtinPlugins } from './builtins';
+import { inputByParameter } from './builtins';
 import { PluginHost } from './PluginHost';
 import type { WorkspaceContext } from './plugin-contract';
-import { element } from './utils';
+import { element, filePath } from './utils';
 
 export interface InputWorkspaceOptions {
   onChange(): void;
   onError(message: string): void;
+}
+
+/**
+ * One complete local form state: the raw files bound to each named role and the
+ * parameter values as the controls hold them.
+ *
+ * A preset is what a demo load applies and what an undo restores, so the two are
+ * the same operation with different contents rather than two mechanisms.
+ */
+export interface WorkspacePreset {
+  files: Map<string, File[]>;
+  parameters: Record<string, string>;
+}
+
+/** One value the application changed, described against the state it replaced. */
+export interface PresetChange {
+  label: string;
+  before: string;
+  after: string;
+}
+
+/** What one preset application actually put into the form. */
+export interface PresetApplication {
+  /** The form's own roles, in its own order, with the files the preset bound. */
+  files: Array<{ role: string; title: string; names: string[] }>;
+  /** The parameter values the preset itself declared, in the form's own order. */
+  parameters: Array<{ name: string; label: string; value: string }>;
+  /** Everything the application changed relative to the state it replaced. */
+  changes: PresetChange[];
+}
+
+/**
+ * The value a control holds when the form has not been touched: what the owning
+ * parameter contract's own default projects to, which is exactly the state a
+ * fresh control is rendered in.
+ */
+function defaultParameterValue(parameter: ParameterDefinition): string {
+  if (parameter.type === 'bool') return String(parameter.defaultValue === true);
+  return parameter.defaultValue == null ? '' : String(parameter.defaultValue);
+}
+
+/**
+ * Write one parameter value into its live control.
+ *
+ * A `select` that does not offer the declared value gains the option rather than
+ * silently discarding the assignment: a value the owning Task declares must be
+ * visible in the form that is about to be submitted, not dropped between the
+ * preset and the control.
+ */
+function writeParameter(parameter: ParameterDefinition, control: HTMLInputElement | HTMLSelectElement, value: string): void {
+  if (parameter.type === 'bool' && control instanceof HTMLInputElement) {
+    control.checked = value === 'true';
+    return;
+  }
+  if (control instanceof HTMLSelectElement && !Array.from(control.options).some(option => option.value === value)) {
+    control.append(new Option(value, value));
+  }
+  control.value = value;
 }
 
 /**
@@ -26,6 +86,7 @@ function displaySteps(steps: WorkspaceStep[]): WorkspaceStep[] {
 export class InputWorkspace {
   private host = this.createHost();
   private context: WorkspaceContext | null = null;
+  private mounted: TaskFormDefinition | null = null;
   private generation = 0;
 
   constructor(private readonly root: HTMLElement, private readonly options: InputWorkspaceOptions) {}
@@ -99,6 +160,10 @@ export class InputWorkspace {
       filesChanged: () => { host.refresh(); this.options.onChange(); },
     };
     this.context = context;
+    // The context serves one mount only; the form it was built for travels with
+    // it, so a later preset application mutates the nodes this mount created and
+    // never a control left over from the previous method.
+    this.mounted = form;
     host.mount(definitions, context, definition => {
       const target = stepTargets.get(definition.stepId); if (!target) throw new Error(t('ct.workspace.missingStep', { step: definition.stepId }));
       const section = element('section', 'ct-workspace-component'); section.dataset.capabilityId = definition.id;
@@ -114,6 +179,66 @@ export class InputWorkspace {
   }
 
   private refreshSnapshot(): void { queueMicrotask(() => this.host.refresh()); }
+
+  /** The form's state as a preset: every role's files and every parameter value. */
+  snapshot(): WorkspacePreset {
+    const files = new Map<string, File[]>();
+    this.mounted?.inputs.forEach(role => files.set(role.id, this.context?.roleFiles(role.id) || []));
+    const parameters: Record<string, string> = {};
+    this.mounted?.params.forEach(parameter => {
+      const control = inputByParameter(parameter.name);
+      if (control) parameters[parameter.name] = parameterValue(parameter, control);
+    });
+    return { files, parameters };
+  }
+
+  /**
+   * Whether the form holds anything a preset application would destroy: a bound
+   * file, or a parameter a user moved off its own declared default.
+   */
+  isModified(): boolean {
+    const current = this.snapshot();
+    for (const files of current.files.values()) if (files.length) return true;
+    return Boolean(this.mounted?.params.some(parameter => current.parameters[parameter.name] !== defaultParameterValue(parameter)));
+  }
+
+  /** Apply one preset to the live form and report exactly what changed. */
+  apply(preset: WorkspacePreset): PresetApplication {
+    const before = this.snapshot(); const form = this.mounted; const context = this.context;
+    if (!form || !context) throw new Error(t('ct.workspace.pluginScope'));
+    const roles: PresetApplication['files'] = [];
+    preset.files.forEach((files, role) => {
+      const declared = form.inputs.find(item => item.id === role); if (!declared) return;
+      context.setRoleFiles(role, files); context.setPrimaryIndex(role, 0);
+      roles.push({ role, title: declared.title, names: files.map(filePath) });
+    });
+    const parameters: PresetApplication['parameters'] = [];
+    form.params.forEach(parameter => {
+      const declared = preset.parameters[parameter.name]; if (declared === undefined) return;
+      const control = inputByParameter(parameter.name); if (!control) return;
+      writeParameter(parameter, control, declared);
+      parameters.push({ name: parameter.name, label: parameter.label, value: parameterValue(parameter, control) });
+    });
+    const changes: PresetChange[] = [];
+    roles.forEach(entry => {
+      const previous = (before.files.get(entry.role) || []).map(filePath).join(', ');
+      const next = entry.names.join(', ');
+      if (previous !== next) changes.push({ label: entry.title, before: previous, after: next });
+    });
+    parameters.forEach(entry => {
+      const previous = before.parameters[entry.name] ?? '';
+      if (previous !== entry.value) changes.push({ label: entry.label, before: previous, after: entry.value });
+    });
+    // One edit, one change notification: the plugins and the form's own change
+    // hook see the preset exactly as they would see the same values typed in.
+    context.filesChanged();
+    return { files: roles, parameters, changes };
+  }
+
+  /** Restore a preset and report what changed, exactly as applying one does. */
+  restore(preset: WorkspacePreset): PresetApplication {
+    return this.apply(preset);
+  }
   inputFiles(): InputFile[] { return this.context?.inputFiles() || []; }
   sequence(): string { return this.context?.sequence() || ''; }
   sequenceName(): string { return this.context?.sequenceName() || ''; }
@@ -122,5 +247,5 @@ export class InputWorkspace {
   collect(): WorkspaceValues { return this.host.collect(); }
   summaries(): WorkspaceSummary[] { return this.context ? this.context.summaries() : []; }
   validate(): string[] { return this.host.validate(); }
-  destroy(): void { this.generation++; this.host.destroy(); this.context = null; this.root.replaceChildren(); }
+  destroy(): void { this.generation++; this.host.destroy(); this.context = null; this.mounted = null; this.root.replaceChildren(); }
 }

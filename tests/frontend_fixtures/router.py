@@ -148,6 +148,20 @@ class RequestCapture:
             return records
         return tuple(record for record in records if record.path == f"/compute/api/types/{name}")
 
+    def demo_catalog(self, name: str | None = None) -> tuple[RequestRecord, ...]:
+        """Catalog reads for one Task, or for every Task when unnamed."""
+        suffix = f"/{name}/demos" if name is not None else "/demos"
+        return tuple(record for record in self._records if record.path.endswith(suffix))
+
+    def demo_files(self, name: str | None = None) -> tuple[RequestRecord, ...]:
+        """Obtain reads for one Task's declared demo fixtures."""
+        prefix = f"/compute/api/types/{name}/demos/" if name is not None else "/compute/api/types/"
+        return tuple(
+            record
+            for record in self._records
+            if record.path.startswith(prefix) and "/demos/" in record.path and "/files/" in record.path
+        )
+
     def navigation(self) -> tuple[RequestRecord, ...]:
         """Requests for application pages rather than API or static assets."""
         return tuple(
@@ -416,6 +430,19 @@ class FrontendFixtureRouter:
             return route.fulfill(status=404, json={"error": f"Unknown task type: {name!r}"})
         return route.fulfill(json=builders.build_parameter_schema(definition))
 
+    def _demo_catalog(self, route: Any, query: Any, name: str = "", **_: str) -> None:
+        payload = self.scenario.demo_catalog(name)
+        if payload is None:
+            return route.fulfill(status=404, json={"error": f"Unknown task type: {name!r}"})
+        return route.fulfill(json=payload)
+
+    def _demo_file(self, route: Any, query: Any, name: str = "", demo_id: str = "", asset: str = "", **_: str) -> None:
+        body = self.scenario.demo_body(name, demo_id, asset)
+        if body is None:
+            return route.fulfill(status=404, json={"error": "Demo file not found"})
+        content, media_type = body
+        return route.fulfill(status=200, content_type=media_type, body=content)
+
     def _workspace_normalize(self, route: Any, query: Any, name: str = "", **_: str) -> None:
         payload = _json_object(route.request.post_data) or {}
         definition = self.scenario.runner_or_none(name)
@@ -563,6 +590,8 @@ _API_ROUTES: tuple[tuple[re.Pattern[str], Any], ...] = (
     (re.compile(r"/compute/api/infrastructure"), lambda self, route, query: route.fulfill(json=builders.build_infrastructure(self.scenario.readiness()))),
     (re.compile(r"/compute/api/types"), lambda self, route, query: route.fulfill(json=self.scenario.catalog())),
     (re.compile(r"/compute/api/types/(?P<name>[^/]+)/workspace/normalize"), FrontendFixtureRouter._workspace_normalize),
+    (re.compile(r"/compute/api/types/(?P<name>[^/]+)/demos/(?P<demo_id>[^/]+)/files/(?P<asset>.+)"), FrontendFixtureRouter._demo_file),
+    (re.compile(r"/compute/api/types/(?P<name>[^/]+)/demos"), FrontendFixtureRouter._demo_catalog),
     (re.compile(r"/compute/api/types/(?P<name>[^/]+)"), FrontendFixtureRouter._runner_detail),
     (re.compile(r"/compute/api/task-parameters/(?P<name>[^/]+)"), FrontendFixtureRouter._parameter_schema),
     (re.compile(r"/compute/api/preflight/(?P<name>[^/]+)"), FrontendFixtureRouter._preflight),
