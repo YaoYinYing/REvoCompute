@@ -28,14 +28,38 @@ def _dashboard(page: Page):
     return router
 
 
+def _reveal_navigation(page: Page, width: int) -> None:
+    """Put the navigation where the reader can reach it at this width.
+
+    Above the desktop breakpoint the sidebar is the column the shell lays out;
+    below it #88 withdraws the sidebar and one control reveals the same navigation
+    in a drawer. A case that reads the navigation states which of the two it is
+    looking at, so the assertion lands on the surface that is actually painted.
+    The opener is located by its own role in the shell rather than by its label,
+    because the shell's labels are localized.
+    """
+    if width >= 1024:
+        expect(page.locator(".app-sidebar")).to_be_visible()
+        return
+    opener = page.locator(".app-shell .app-nav-open")
+    expect(opener).to_be_visible()
+    expect(opener).to_have_attribute("aria-expanded", "false")
+    opener.click()
+    expect(page.locator(".app-nav-drawer")).to_be_visible()
+    expect(opener).to_have_attribute("aria-expanded", "true")
+
+
 @pytest.mark.parametrize("width", [1280, 360])
 def test_shell_brand_link_has_an_accessible_name_in_the_collapsed_rail(page: Page, width: int) -> None:
-    # The collapsed rail hides the wordmark and the logo is decorative, so the brand
-    # link's name can only come from the link itself, at every width.
+    # The brand link's name can only come from the link itself: the wordmark is
+    # hidden in a collapsed rail, and below the desktop breakpoint #88 moved the
+    # whole brand into the navigation drawer, where it is off-canvas until opened.
     _dashboard(page)
     page.set_viewport_size({"width": width, "height": 900})
     page.reload()
     brand = page.locator("a.app-brand")
+    if not brand.is_visible():
+        page.get_by_role("button", name="Open navigation", exact=True).click()
     expect(brand).to_be_visible()
     label = brand.get_attribute("aria-label")
     assert label and label.strip() == label, f"the brand link carries no accessible name at {width}px: {label!r}"
@@ -86,36 +110,41 @@ def test_desktop_rail_has_one_explicit_toggle_that_never_navigates(page: Page) -
     page.set_viewport_size({"width": 1280, "height": 900})
     page.reload()
     shell = page.locator(".app-shell")
+    # #88 ships the rail expanded by default; the reader's choice is what persists.
+    expect(shell).to_have_attribute("data-rail", "expanded")
+    # The rail's width is governed by one explicit control in its head, not by
+    # re-activating a destination: the control exists, states its own state, and
+    # is the only one of its kind.
+    collapse = page.get_by_role("button", name="Collapse navigation", exact=True)
+    expect(collapse).to_have_count(1)
+    expect(collapse).to_have_attribute("aria-expanded", "true")
+
+    collapse.click()
     expect(shell).to_have_attribute("data-rail", "collapsed")
-    # The rail's width is governed by one explicit control at its foot, not by
-    # re-activating a destination: the control exists and states its own state.
     expand = page.get_by_role("button", name="Expand navigation", exact=True)
     expect(expand).to_have_count(1)
     expect(expand).to_have_attribute("aria-expanded", "false")
 
-    expand.click()
-    expect(shell).to_have_attribute("data-rail", "expanded")
-    collapse = page.get_by_role("button", name="Collapse navigation", exact=True)
-    expect(collapse).to_have_attribute("aria-expanded", "true")
-
     # Activating a destination is navigation, never a rail toggle: the rail keeps
     # the width the reader chose, and the destination is reached.
     page.get_by_role("link", name="Dashboard", exact=True).click()
-    expect(shell).to_have_attribute("data-rail", "expanded")
+    expect(shell).to_have_attribute("data-rail", "collapsed")
     expect(page).to_have_url(f"{ORIGIN}/compute/dashboard")
 
-    collapse.click()
-    expect(shell).to_have_attribute("data-rail", "collapsed")
+    expand.click()
+    expect(shell).to_have_attribute("data-rail", "expanded")
 
 
 def test_rail_preference_persists_across_reload(page: Page) -> None:
     _dashboard(page)
     page.set_viewport_size({"width": 1280, "height": 900})
-    page.get_by_role("button", name="Expand navigation", exact=True).click()
+    # #88 ships expanded, so the preference under test is the collapsed one.
     expect(page.locator(".app-shell")).to_have_attribute("data-rail", "expanded")
-    assert page.evaluate("localStorage.getItem('revocompute-rail')") == "expanded"
+    page.get_by_role("button", name="Collapse navigation", exact=True).click()
+    expect(page.locator(".app-shell")).to_have_attribute("data-rail", "collapsed")
+    assert page.evaluate("localStorage.getItem('revocompute-rail')") == "collapsed"
     page.reload()
-    expect(page.locator(".app-shell")).to_have_attribute("data-rail", "expanded")
+    expect(page.locator(".app-shell")).to_have_attribute("data-rail", "collapsed")
 
 
 def test_navigation_regions_are_labelled_and_hide_the_admin_group_from_ordinary_users(page: Page) -> None:
@@ -137,11 +166,13 @@ def test_navigation_regions_are_labelled_and_hide_the_admin_group_from_ordinary_
 
 
 def test_administrator_navigation_region_is_present_in_the_left_navigation(page: Page) -> None:
+    # Administration is a region of the navigation itself: it lives beside Compute
+    # and Account in the sidebar, and is authorized per session, not visually hidden.
     mount_scenario(page, controlled_scenario(session=ADMIN_AUTH))
     page.set_viewport_size({"width": 1280, "height": 900})
     page.goto(f"{ORIGIN}/compute/dashboard")
-    expect(page.get_by_role("heading", name="Dashboard", exact=True)).to_be_visible()
-    admin_group = page.locator(".app-nav [data-nav-group='admin']")
+    expect(page.get_by_role("heading", name="Tasks", exact=True)).to_be_visible()
+    admin_group = page.locator(".app-sidebar .app-nav [data-nav-group='admin']")
     expect(admin_group).to_be_visible()
     expect(admin_group.locator(".app-nav-group-label")).to_have_text("Administration")
     expect(admin_group.get_by_role("link", name="User control")).to_have_attribute("href", "/compute/user_control")
@@ -153,33 +184,53 @@ def test_administrator_navigation_region_is_present_in_the_left_navigation(page:
     expect(page.locator(".app-header").get_by_label("Administration")).to_have_count(0)
 
 
-def test_mobile_navigation_is_bottom_anchored_not_a_thin_rail(page: Page) -> None:
+def test_mobile_navigation_is_a_drawer_not_a_thin_rail(page: Page) -> None:
+    # #88 replaced the bottom bar with one off-canvas drawer: below the desktop
+    # breakpoint the sidebar is withdrawn and a single control opens the same
+    # navigation, which keeps the whole information architecture at any width.
     _dashboard(page)
     page.set_viewport_size({"width": 360, "height": 780})
     page.reload()
-    expect(page.get_by_role("heading", name="Dashboard", exact=True)).to_be_visible()
-    position = page.locator(".app-nav").evaluate("node => getComputedStyle(node).position")
-    assert position == "fixed"
-    # Compute and Account sit directly on the bar; their region headings would name
-    # groups a bottom bar cannot group, so they are absent from the rendered bar.
-    assert page.locator(".app-nav-group:not([data-nav-group='admin']) .app-nav-group-label:visible").count() == 0
+    expect(page.get_by_role("heading", name="Tasks", exact=True)).to_be_visible()
+    expect(page.locator(".app-sidebar")).to_be_hidden()
+    opener = page.get_by_role("button", name="Open navigation", exact=True)
+    expect(opener).to_be_visible()
+    expect(opener).to_have_attribute("aria-expanded", "false")
+    drawer = page.locator(".app-nav-drawer")
+    expect(drawer).to_be_hidden()
+    opener.click()
+    expect(drawer).to_be_visible()
+    expect(opener).to_have_attribute("aria-expanded", "true")
+    # The drawer carries the regions, named, with the current destination marked.
+    expect(drawer.locator("[data-nav-group='compute'] .app-nav-group-label")).to_have_text("Compute")
+    expect(drawer.locator("[data-nav-group='account'] .app-nav-group-label")).to_have_text("Account")
     expect(page.locator(".app-nav [data-nav-group='compute'] a[aria-current='page']")).to_have_attribute("href", "/compute/dashboard")
     assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+    page.keyboard.press("Escape")
+    expect(drawer).to_be_hidden()
+    expect(opener).to_be_focused()
 
 
-def test_mobile_administration_is_a_secondary_surface_above_the_bar(page: Page) -> None:
+def test_mobile_administration_is_inside_the_named_drawer(page: Page) -> None:
     # For an administrator the Administration destinations do not crowd the primary
-    # bar: they form one bounded surface standing just above it, named by its heading.
+    # surface: they are the third region of the one drawer, and the reader reaches
+    # them only through it.
     mount_scenario(page, controlled_scenario(session=ADMIN_AUTH))
     page.set_viewport_size({"width": 360, "height": 780})
     page.goto(f"{ORIGIN}/compute/dashboard")
-    expect(page.get_by_role("heading", name="Dashboard", exact=True)).to_be_visible()
-    admin_surface = page.locator(".app-nav-group[data-nav-group='admin']")
-    expect(admin_surface).to_be_visible()
-    # The heading must genuinely paint, not merely "be visible" as a clipped sr-only
-    # sliver: it has a non-zero box and it is the topmost element at its own centre.
-    heading = admin_surface.locator(".app-nav-group-label")
+    expect(page.get_by_role("heading", name="Tasks", exact=True)).to_be_visible()
+    # Nothing administrative is reachable before the drawer is opened.
+    surface = page.locator(".app-nav-group[data-nav-group='admin']")
+    expect(surface).to_be_hidden()
+    page.get_by_role("button", name="Open navigation", exact=True).click()
+    drawer = page.locator(".app-nav-drawer")
+    expect(drawer).to_be_visible()
+    surface = drawer.locator(".app-nav-group[data-nav-group='admin']")
+    expect(surface).to_be_visible()
+    heading = surface.locator(".app-nav-group-label")
     expect(heading).to_have_text("Administration")
+    # The label is painted chrome, not a clipped sr-only sliver: it has a non-zero
+    # box and it is the topmost element at its own centre.
     painted = heading.evaluate(
         "node => { const r = node.getBoundingClientRect();"
         " const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);"
@@ -188,24 +239,23 @@ def test_mobile_administration_is_a_secondary_surface_above_the_bar(page: Page) 
     )
     assert painted["width"] > 0 and painted["height"] > 0, painted
     assert painted["topmost"], painted
-    expect(admin_surface.get_by_role("link", name="User control")).to_have_attribute("href", "/compute/user_control")
-    box = admin_surface.bounding_box()
-    bar = page.locator(".app-nav").bounding_box()
-    assert box is not None and bar is not None
-    # The surface sits above the bar (never inside or behind it) and within the page.
-    assert box["y"] + box["height"] <= bar["y"] + 1
-    assert box["x"] >= 0 and box["x"] + box["width"] <= 361
-    # The primary bar still carries Compute and Account, uncluttered.
-    bar_labels = page.locator(".app-nav [aria-current='page']").first.inner_text()
+    expect(surface.get_by_role("link", name="User control")).to_have_attribute("href", "/compute/user_control")
+    box = surface.bounding_box()
+    assert box is not None
+    assert box["x"] >= 0 and box["x"] + box["width"] <= 361, box
+    # The primary region is still current and uncluttered: Dashboard marks itself.
+    bar_labels = drawer.locator(".app-nav [aria-current='page']").first.inner_text()
     assert bar_labels.strip() == "Dashboard"
     assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
 
 
-def test_ordinary_user_has_no_mobile_administration_surface(page: Page) -> None:
+def test_ordinary_user_has_no_mobile_administration_region(page: Page) -> None:
     _dashboard(page)
     page.set_viewport_size({"width": 360, "height": 780})
     page.reload()
-    expect(page.get_by_role("heading", name="Dashboard", exact=True)).to_be_visible()
+    expect(page.get_by_role("heading", name="Tasks", exact=True)).to_be_visible()
+    page.get_by_role("button", name="Open navigation", exact=True).click()
+    expect(page.locator(".app-nav-drawer")).to_be_visible()
     expect(page.locator(".app-nav-group[data-nav-group='admin']")).to_be_hidden()
     assert page.get_by_role("link", name="User control").count() == 0
     assert page.get_by_role("link", name="Server logs").count() == 0
@@ -216,12 +266,16 @@ def test_desktop_rail_states_regions_with_a_visible_label(page: Page) -> None:
     _dashboard(page)
     page.set_viewport_size({"width": 1280, "height": 900})
     page.reload()
-    # Above the bottom-bar band the rail is a column, so each region is named. The
-    # collapsed icon rail keeps the rule and hides the word; expanding it reveals the
-    # label as painted chrome, not the 1px sr-only form.
+    # The expanded rail is a column, so each region is named. Collapsing it keeps
+    # the rule and hides the word; expanding reveals the label as painted chrome,
+    # not the 1px sr-only form.
+    page.get_by_role("button", name="Collapse navigation", exact=True).click()
+    expect(page.locator(".app-shell")).to_have_attribute("data-rail", "collapsed")
+    narrow = page.locator(".app-sidebar .app-nav .app-nav-group-label")
+    assert narrow.first.bounding_box() is None or narrow.first.evaluate("node => node.getBoundingClientRect().width") <= 1
     page.get_by_role("button", name="Expand navigation", exact=True).click()
     expect(page.locator(".app-shell")).to_have_attribute("data-rail", "expanded")
-    labels = page.locator(".app-nav .app-nav-group-label:visible")
+    labels = page.locator(".app-sidebar .app-nav .app-nav-group-label:visible")
     assert labels.count() >= 2
     expect(labels.filter(has_text="Compute")).to_have_count(1)
     expect(labels.filter(has_text="Account")).to_have_count(1)
@@ -233,9 +287,11 @@ def test_tablet_navigation_reflows_and_toolbar_wraps_without_overflow(page: Page
     _dashboard(page)
     page.set_viewport_size({"width": 834, "height": 1112})
     page.reload()
-    expect(page.get_by_role("heading", name="Dashboard", exact=True)).to_be_visible()
-    # Tablet sits in the mobile navigation band: a bottom-anchored bar, not the desktop rail.
-    assert page.locator(".app-nav").evaluate("node => getComputedStyle(node).position") == "fixed"
+    expect(page.get_by_role("heading", name="Tasks", exact=True)).to_be_visible()
+    # Tablet sits in the navigation drawer band (the breakpoint is 64rem): the
+    # sidebar is withdrawn and one opener stands in for it.
+    expect(page.locator(".app-sidebar")).to_be_hidden()
+    expect(page.get_by_role("button", name="Open navigation", exact=True)).to_be_visible()
     # The filter band and the view switch remain two separate control groups after reflow.
     assert page.locator("[aria-label='Task filters']").evaluate("node => getComputedStyle(node).display") != "none"
     expect(page.locator(".view-toolbar .layout-switch")).to_be_visible()
@@ -251,11 +307,11 @@ def test_language_switch_localizes_frontend_copy_and_persists(page: Page) -> Non
     page.locator(".lang-menu > summary").click()
     page.locator('[data-locale="zh-CN"]').click()
     expect(page.locator("html")).to_have_attribute("lang", "zh-CN")
-    expect(page.get_by_role("heading", name="任务面板", exact=True)).to_be_visible()
+    expect(page.get_by_role("heading", name="任务", exact=True)).to_be_visible()
     assert page.evaluate("localStorage.getItem('revocompute-locale')") == "zh-CN"
     page.reload()
     expect(page.locator("html")).to_have_attribute("lang", "zh-CN")
-    expect(page.get_by_role("heading", name="任务面板", exact=True)).to_be_visible()
+    expect(page.get_by_role("heading", name="任务", exact=True)).to_be_visible()
     # Server-owned vocabulary (the Runner's own display name) is not translated.
     expect(page.locator(".task-card-type").first).to_have_text("sequence_demo")
 
@@ -294,6 +350,9 @@ def test_account_destinations_match_session_semantics(
     # section navigation plus the account's Quota destination; signed out the
     # seven destination slots are unreachable and the region is a single sign-in
     # affordance, so no link ever offers a signed-out reader a protected page.
+    # Below the desktop breakpoint #88 withdraws the whole navigation into one
+    # drawer, so the region is read where the reader reaches it.
+    _reveal_navigation(page, width)
     account = page.locator("[data-nav-group='account'] a:visible")
     expect(account).to_have_count(7 if signed_in else 1)
     if not signed_in:
@@ -304,7 +363,7 @@ def test_account_destinations_match_session_semantics(
     identity_name = f"{profile}: {session.full_name}" if signed_in else label
     expect(identity).to_have_accessible_name(identity_name)
     expect(identity.locator("span")).to_have_text(session.full_name if signed_in else label)
-    # The anonymous destination must actually navigate, including on the mobile bar.
+    # The anonymous destination must actually navigate, including in the drawer.
     if not signed_in:
         expect(account.first).to_have_attribute("href", destination)
         expect(account.first).to_have_attribute("title", sign_in)
@@ -328,15 +387,30 @@ def test_mobile_system_notice_stack_clears_navigation(page: Page, width: int, se
     for summary in page.locator(".sys-notice summary").all():
         summary.click()
 
+    # The notice stack is fixed chrome the reader reads over the page. #88 replaced
+    # the narrow bottom bar with one modal drawer, so the clearance claim is now
+    # stated against the chrome that is actually concurrent with the notices: the
+    # sticky top bar, and the requirement that no notice control is buried under
+    # anything the reader did not open on purpose.
+    drawer = page.locator(".app-nav-drawer")
+
     def assert_clearance() -> None:
         stack = page.locator(".sys-notices").bounding_box()
-        navigation = page.locator(
-            "[data-nav-group='admin']" if session.role == "admin" else ".app-nav"
-        ).bounding_box()
-        assert stack is not None and navigation is not None
-        assert stack["y"] >= 56, stack  # Global actions remain reachable with long/multiple notices.
-        assert stack["y"] + stack["height"] < navigation["y"], (stack, navigation)
+        header = page.locator(".app-header").bounding_box()
+        assert stack is not None and header is not None
+        assert stack["y"] >= header["y"] + header["height"] - 1, (stack, header)
         assert stack["x"] >= 0 and stack["x"] + stack["width"] <= width, stack
+        # Every notice control is reachable at its own centre point: no persistent
+        # chrome and no other column of the stack is sitting on top of it.
+        covered = page.evaluate(
+            """() => [...document.querySelectorAll('.sys-notice button, .sys-notice summary')]
+                 .filter(node => { const r = node.getBoundingClientRect();
+                     if (!r.width || !r.height) return false;
+                     const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+                     return !(hit && (node === hit || node.contains(hit))); })
+                 .map(node => node.getAttribute('aria-label') || (node.textContent || '').trim().slice(0, 40))"""
+        )
+        assert covered == [], (stack, covered)
 
     assert_clearance()
     # Hide, reopen, then collapse the restored notices back to the visible subset.
@@ -354,13 +428,31 @@ def test_mobile_system_notice_stack_clears_navigation(page: Page, width: int, se
     assert_clearance()
     page.locator(".sys-notice").first.get_by_role("button", name="Hide notice").click()
     expect(page.locator(".sys-notice")).to_have_count(0)
+    # Opening the navigation takes the surface over by design - the drawer is modal
+    # and the page behind it is inert - and closing it returns the notices intact
+    # and operable rather than leaving them buried under it.
+    page.get_by_role("button", name="System notices").click()
+    expect(page.locator(".sys-notice")).to_have_count(3)
+    _reveal_navigation(page, width)
+    page.keyboard.press("Escape")
+    expect(drawer).to_be_hidden()
+    page.wait_for_timeout(50)
+    assert_clearance()
+    # With the drawer closed the reader can still scroll the register to its end:
+    # no persistent chrome at this width is laid over the working surface, so the
+    # page behaves as one column the reader scrolls rather than as a list whose
+    # tail is trapped behind a fixed layer.
+    assert page.evaluate("getComputedStyle(document.querySelector('.app-sidebar')).display") == "none"
+    assert page.evaluate("getComputedStyle(document.querySelector('.app-nav-drawer')).position") != "fixed"
     page.evaluate("window.scrollTo(0, document.documentElement.scrollHeight)")
-    outlet = page.locator(".app-outlet")
-    last_content_bottom = outlet.evaluate("node => node.lastElementChild.getBoundingClientRect().bottom")
-    navigation = page.locator(
-        "[data-nav-group='admin']" if session.role == "admin" else ".app-nav"
-    ).bounding_box()
-    assert navigation is not None and last_content_bottom <= navigation["y"] + 1, (last_content_bottom, navigation)
+    page.wait_for_timeout(50)
+    assert page.evaluate("window.scrollY") > 0, "the page below the drawer does not scroll"
+    scrolled_bottom = page.evaluate(
+        "() => { const de = document.documentElement;"
+        " return { y: window.scrollY, max: de.scrollHeight - innerHeight }; }"
+    )
+    assert scrolled_bottom["max"] <= 0 or scrolled_bottom["y"] >= scrolled_bottom["max"] - 1, scrolled_bottom
+    assert_clearance()
 
 
 
@@ -395,12 +487,25 @@ def test_notice_disclosure_preserves_reading_state_and_returns_space(page: Page,
     assert opened is not None and opened["height"] > collapsed["height"], (collapsed, opened)
     body.evaluate("node => node.scrollTop = node.scrollHeight")
     assert body.evaluate("node => node.scrollTop") > 0
-    navigation = page.locator("[data-nav-group='admin']" if width == 320 else ".app-header").bounding_box()
+    # The stack must not sit under the chrome it would be read past. Above the
+    # breakpoint that chrome is the sticky top bar and the stack is fixed to the
+    # bottom right; below it the navigation is a modal drawer, so the stack is read
+    # with the drawer open and must clear the panel the reader navigates from.
+    _reveal_navigation(page, width)
+    navigation = (
+        page.locator(".app-nav-drawer .app-nav") if width < 1024 else page.locator(".app-header")
+    ).bounding_box()
     assert navigation is not None
-    if width == 320:
-        assert opened["y"] + opened["height"] < navigation["y"], (opened, navigation)
+    if width < 1024:
+        assert opened["y"] + opened["height"] < navigation["y"] + navigation["height"] + 1, (opened, navigation)
     else:
         assert opened["y"] >= navigation["y"] + navigation["height"], (opened, navigation)
+    # Restore the un-drawned state the rest of the reading-state contract walks in.
+    if width < 1024:
+        page.keyboard.press("Escape")
+        expect(page.locator(".app-nav-drawer")).to_be_hidden()
+        page.wait_for_timeout(50)
+    assert body.evaluate("node => node.scrollTop") > 0
     # Hiding/restoring a neighbour must not collapse the notice currently being read.
     page.locator("[data-notice-id='update']").get_by_role("button", name="Hide notice").click()
     expect(body).to_be_visible()
@@ -414,7 +519,7 @@ def test_notice_disclosure_preserves_reading_state_and_returns_space(page: Page,
     expect(body).to_be_hidden()
     returned = stack.bounding_box()
     assert returned is not None and returned["height"] < opened["height"], (returned, opened)
-    heading = page.get_by_role("heading", name="Dashboard", exact=True)
+    heading = page.get_by_role("heading", name="Tasks", exact=True)
     assert heading.evaluate("""node => {
         const box = node.getBoundingClientRect();
         return node.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2));
@@ -469,10 +574,28 @@ def test_notice_affordance_is_absent_with_nothing_to_announce(page: Page) -> Non
 # ── guided tour ───────────────────────────────────────────────────────────────
 
 
+def _open_register_help(page: Page) -> None:
+    """Reveal the register's tour entry, which #88 moved into its help disclosure.
+
+    The Dashboard used to append the launcher to its page actions, where it was
+    painted on arrival. It now mounts it inside a closed
+    <details class="dashboard-help">, so the entry is present and reachable but is
+    not painted until the reader opens the disclosure - the reader's own step.
+    The launcher is then asserted through the disclosure it lives in, not through
+    its (localized, and restart-dependent) own label.
+    """
+    help_disclosure = page.locator(".dashboard-help")
+    expect(help_disclosure).to_be_visible()
+    if not help_disclosure.evaluate("node => node.open"):
+        page.locator(".dashboard-help > summary").click()
+    expect(help_disclosure).to_have_attribute("open", "")
+    expect(page.locator(".dashboard-help .tour-launcher")).to_be_visible()
+
+
 def test_guided_tour_starts_progresses_and_is_restartable(page: Page) -> None:
     router = _dashboard(page)
-    launcher = page.get_by_role("button", name="Guided tour")
-    expect(launcher).to_be_visible()
+    _open_register_help(page)
+    launcher = page.locator(".dashboard-help .tour-launcher")
     launcher.click()
     callout = page.locator(".tour-callout")
     expect(callout).to_be_visible()
@@ -500,9 +623,11 @@ def test_guided_tour_starts_progresses_and_is_restartable(page: Page) -> None:
     result_page_requests = [record.path for record in router.requests.navigation() if record.path.startswith("/compute/results")]
     assert result_page_requests == [], result_page_requests
 
-    # The Dashboard keeps a durable restart entry: re-launching begins at step 1 again.
+    # The Dashboard keeps a durable restart entry, in the same disclosure: a
+    # re-launch begins at step 1 again.
     page.goto(f"{ORIGIN}/compute/dashboard")
     expect(page.locator(".task-card").first).to_be_visible()
+    _open_register_help(page)
     launcher = page.locator(".tour-launcher")
     expect(launcher).to_be_visible()
     launcher.click()
@@ -520,7 +645,8 @@ def test_guided_tour_clears_a_stale_result_target_and_skips_the_step(page: Page)
     expect(page.locator(".task-card").first).to_be_visible()
     assert page.evaluate("localStorage.getItem('revocompute-tour-result')") is None
 
-    page.get_by_role("button", name="Guided tour").click()
+    _open_register_help(page)
+    page.locator(".dashboard-help .tour-launcher").click()
     expect(page.locator(".tour-callout")).to_contain_text("Step 1 of 5")
     for _ in range(4):
         page.locator(".tour-callout").get_by_role("button", name="Next").click()
@@ -545,7 +671,8 @@ def test_guided_tour_result_step_visits_a_real_result_and_localizes_its_copy(pag
     page.locator(".lang-menu > summary").click()
     page.locator('[data-locale="zh-CN"]').click()
     expect(page.locator("html")).to_have_attribute("lang", "zh-CN")
-    page.get_by_role("button", name="引导教程").click()
+    _open_register_help(page)
+    page.locator(".dashboard-help .tour-launcher").click()
     callout = page.locator(".tour-callout")
     expect(callout).to_contain_text("第 1 步，共 5 步")
 
@@ -569,6 +696,10 @@ def test_guided_tour_result_step_visits_a_real_result_and_localizes_its_copy(pag
 
 def test_advanced_search_is_subordinate_and_obviously_active(page: Page) -> None:
     _dashboard(page)
+    # #88 put the whole secondary filter set - including the Advanced search
+    # reveal - behind one disclosure the reader opens, so the register opens on
+    # the work rather than on a row of filter controls.
+    page.locator(".dashboard-filters > summary").click()
     toggle = page.get_by_role("button", name="Advanced search")
     expect(toggle).to_have_attribute("aria-expanded", "false")
     expect(page.locator("[data-advanced-panel]")).to_be_hidden()
@@ -616,14 +747,21 @@ def test_task_card_has_no_decorative_status_rail_and_states_status_as_text(page:
 def test_task_card_metadata_uses_machine_text_for_identity_only(page: Page) -> None:
     _dashboard(page)
     card = page.locator(".task-card").first
-    id_value = card.locator("dd.machine")
+    # #88 moved the identity onto the card's own identity block: the Task ID is a
+    # machine value stated in machine text, named for assistive technology, and it
+    # stays complete and selectable rather than being clipped into a tooltip.
+    id_value = card.locator(".task-identity-id")
     expect(id_value).to_have_count(1)
-    # The identity field is a definition value rendering the task ID itself.
-    assert id_value.evaluate("node => node.tagName").lower() == "dd"
+    # The machine value is a paragraph of the card's identity block, and its
+    # accessible name states which fact it carries rather than leaving a bare hash.
+    assert id_value.evaluate("node => node.tagName").lower() == "p"
     assert id_value.inner_text().strip()
     assert "mono" in id_value.evaluate("node => getComputedStyle(node).fontFamily").lower()
+    expect(id_value).to_have_attribute("aria-label", f"Task ID: {id_value.inner_text().strip()}")
     # Task ID remains fully inspectable — selectable, not destroyed by truncation.
-    assert id_value.evaluate("node => getComputedStyle(node).textOverflow") in ("clip", "ellipsis")
+    assert id_value.evaluate("node => getComputedStyle(node).userSelect") != "none"
+    assert id_value.evaluate("node => node.scrollWidth <= node.clientWidth")
+    assert id_value.evaluate("node => getComputedStyle(node).overflowWrap") in ("anywhere", "break-word")
 
 
 # ── accessibility ─────────────────────────────────────────────────────────────
@@ -632,7 +770,10 @@ def test_task_card_metadata_uses_machine_text_for_identity_only(page: Page) -> N
 def test_primary_controls_show_visible_focus_and_carry_accessible_names(page: Page) -> None:
     _dashboard(page)
     # Visible focus: a keyboard-reachable primary action paints a focus indicator.
-    run = page.locator(".app-header a.app-new-task")
+    # #88 moved Create Task from the top bar into the Compute region: it is still
+    # offered from every authenticated route, from the navigation itself.
+    run = page.locator(".app-nav a.app-new-task")
+    expect(run).to_have_count(1)
     run.focus()
     outline = run.evaluate("node => [getComputedStyle(node).outlineStyle, getComputedStyle(node).outlineWidth]")
     assert outline[0] != "none" and float(outline[1].replace("px", "")) > 0
@@ -640,6 +781,7 @@ def test_primary_controls_show_visible_focus_and_carry_accessible_names(page: Pa
     # affordance is only mounted when a notice exists; the notice lifecycle test
     # asserts its accessible name in that state.)
     expect(page.get_by_role("button", name="Theme: Auto")).to_have_count(1)
+    _open_register_help(page)
     expect(page.get_by_role("button", name="Guided tour")).to_have_count(1)
     assert page.locator(".lang-menu > summary").get_attribute("aria-label")
 
@@ -704,13 +846,25 @@ def test_mobile_targets_are_touch_sized_and_motion_is_reducible(page: Page) -> N
     _dashboard(page)
     page.set_viewport_size({"width": 360, "height": 780})
     page.reload()
-    nav_link = page.locator(".app-nav a").first
+    # #88 withdraws the navigation into one drawer below the desktop breakpoint:
+    # the destinations are read, and their touch size measured, where the reader
+    # actually reaches them.
+    page.get_by_role("button", name="Open navigation", exact=True).click()
+    drawer = page.locator(".app-nav-drawer")
+    expect(drawer).to_be_visible()
+    nav_link = drawer.locator(".app-nav a").first
     expect(nav_link).to_be_visible()
     box = nav_link.bounding_box()
     assert box is not None and box["height"] >= 44 and box["width"] >= 44, box
+    # The one control that opens that navigation is touch-sized too.
+    opener = page.get_by_role("button", name="Open navigation", exact=True)
+    opener_box = opener.bounding_box()
+    assert opener_box is not None and opener_box["height"] >= 44 and opener_box["width"] >= 44, opener_box
+    page.keyboard.press("Escape")
+    expect(drawer).to_be_hidden()
     # A reduced-motion preference removes ornamental transition timing.
     page.emulate_media(reduced_motion="reduce")
-    duration = page.locator(".app-header a.app-new-task").evaluate("node => getComputedStyle(node).transitionDuration")
+    duration = drawer.locator("a.app-new-task").evaluate("node => getComputedStyle(node).transitionDuration")
     for part in duration.split(","):
         part = part.strip()
         assert part == "0s" or float(part.replace("s", "")) <= 0.001, duration
