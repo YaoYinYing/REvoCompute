@@ -55,4 +55,85 @@ describe('compressed structure results', () => {
     expect((load.mock.calls[0]![0] as { format: string }).format).toBe('pdb');
     expect((load.mock.calls[0]![0] as { data: string }).data).toContain('ATOM');
   });
+
+  it('refuses a compressed structure whose inflated bytes pass the preview limit', async () => {
+    // The manifest's `size` is the gzip envelope, so a small high-ratio payload
+    // passes the pre-fetch guard and inflates past the limit. The bound has to
+    // apply to the decompressed bytes: `loadStructure` must never be reached.
+    const load = vi.fn();
+    const fake = { ...viewer(), loadStructure: async (source: unknown) => { load(source); } };
+    const bomb = `data_test\n${'A'.repeat(64 * 1024 * 1024 + 1)}\n`;
+    // Well under the declared compressed size, so only the inflated bound bites.
+    const envelope = await gzip(bomb);
+    expect(envelope.byteLength).toBeLessThan(64 * 1024 * 1024);
+    const artifact = { ...file('design_0_model_0.cif.gz', 'chemical/x-cif'), size: envelope.byteLength };
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(envelope)));
+    const controller = new StructureController(async () => fake as unknown as MolecularViewer);
+
+    await expect(controller.mount({} as HTMLElement, artifact, 'light')).rejects.toThrow(
+      'This structure exceeds the safe inline preview limit.',
+    );
+    expect(load).not.toHaveBeenCalled();
+  });
+
+  it('inflates a gzipped mmCIF the platform hands back whole without a stream', async () => {
+    // `Response.body` is nullable, so the streamless branch is reachable; the gzip
+    // envelope used to be inflated there and must still be, whether or not the
+    // platform exposes a stream to read it through.
+    const load = vi.fn();
+    const fake = { ...viewer(), loadStructure: async (source: { format: string; data: string }) => { load(source); } };
+    const payload = 'data_test\n_cell.length_a 1\n';
+    const envelope = await gzip(payload);
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, body: null, text: async () => { throw new Error("response.text is not a function"); }, arrayBuffer: async () => envelope })));
+    const controller = new StructureController(async () => fake as unknown as MolecularViewer);
+    await controller.mount({} as HTMLElement, file('design_0_model_0.cif.gz', 'chemical/x-cif'), 'light');
+
+    const source = load.mock.calls[0]![0] as { format: string; data: string };
+    expect(source.format).toBe('mmcif');
+    expect(source.data).toBe(payload);
+  });
+
+  it('refuses a compressed streamless body whose inflated bytes pass the preview limit', async () => {
+    // The streamless path materializes the envelope before it can inflate, so the
+    // bound has to reach the inflated bytes -- the compressed size alone is what
+    // the high-ratio payload was designed to slip past.
+    const load = vi.fn();
+    const fake = { ...viewer(), loadStructure: async (source: unknown) => { load(source); } };
+    const bomb = `data_test\n${'A'.repeat(64 * 1024 * 1024 + 1)}\n`;
+    const envelope = await gzip(bomb);
+    expect(envelope.byteLength).toBeLessThan(64 * 1024 * 1024);
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, body: null, text: async () => { throw new Error("response.text is not a function"); }, arrayBuffer: async () => envelope })));
+    const controller = new StructureController(async () => fake as unknown as MolecularViewer);
+
+    await expect(controller.mount({} as HTMLElement, file('design_0_model_0.cif.gz', 'chemical/x-cif'), 'light')).rejects.toThrow(
+      'This structure exceeds the safe inline preview limit.',
+    );
+    expect(load).not.toHaveBeenCalled();
+  });
+
+  it('refuses a streamless body whose declared size is honest but whose encoded text is not', async () => {
+    // A whole-body branch cannot stream, so it materializes the bytes before the
+    // bound can be applied -- the reason the compressed test below exists. It is
+    // still bounded: a 64 MiB body of invalid bytes decodes to 64 MiB of
+    // replacement characters, whose UTF-8 encoding is 192 MiB, so the text the
+    // parser would receive is measured rather than assumed.
+    const load = vi.fn();
+    const fake = { ...viewer(), loadStructure: async (source: unknown) => { load(source); } };
+    const payload = new Uint8Array(64 * 1024 * 1024).fill(0xff);
+    const artifact = { ...file('model.cif', 'chemical/x-cif'), size: payload.byteLength };
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, body: null, arrayBuffer: async () => payload.buffer })));
+    const controller = new StructureController(async () => fake as unknown as MolecularViewer);
+
+    await expect(controller.mount({} as HTMLElement, artifact, 'light')).rejects.toThrow(
+      'This structure exceeds the safe inline preview limit.',
+    );
+    expect(load).not.toHaveBeenCalled();
+    // The same body is accepted once the text it decodes to fits, so the rejection
+    // is the encoded text and not the byte-level bound alone.
+    const fit = new Uint8Array(1024).fill(0xff);
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, body: null, arrayBuffer: async () => fit.buffer })));
+    await new StructureController(async () => fake as unknown as MolecularViewer)
+      .mount({} as HTMLElement, { ...artifact, size: fit.byteLength }, 'light');
+    expect((load.mock.calls[0]![0] as { data: string }).data).toBe('�'.repeat(fit.byteLength));
+  });
 });
