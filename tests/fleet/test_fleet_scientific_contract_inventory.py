@@ -145,55 +145,101 @@ def test_the_recorded_foundry_defect_is_resolved_not_silenced(inventory):
     task-scoped tree fixes the finding instead of allowlisting it, so the assertion
     is that the finding is genuinely absent — not merely tolerated — while the two
     Tasks stay covered and keep their declared trees.
+
+    The assertions are relational rather than literal: the defect set, the
+    coverage partition, and ``ok`` are all read off the same audit report, so a
+    fleet that grows or shrinks moves them together instead of failing on a count
+    that only records today's fleet size.
     """
     codes = {(finding["task"], finding["code"]) for finding in inventory["findings"]}
     assert ("foundry_rfd3_design", "result.required_source_unaddressed") not in codes
     assert ("foundry_rfd3na_design", "result.required_source_unaddressed") not in codes
 
-    defective = set(inventory["coverage"]["defective"])
+    coverage = inventory["coverage"]
+    defective = set(coverage["defective"])
+    covered = set(coverage["covered"])
+    unaudited = set(coverage["unaudited"])
+    tasks = {row["task"] for row in inventory["tasks"]}
+
+    # Defect and coverage are orthogonal *statuses*, not one set: the two
+    # partitions must each be a subset of the fleet, and ``ok`` is exactly
+    # "no concrete defect" rather than "everything covered".
     assert defective == set()
-    assert defective <= set(inventory["coverage"]["covered"])
-    assert inventory["coverage"]["ok"] is True
+    assert coverage["ok"] is (defective == set())
+    assert covered <= tasks and unaudited <= tasks
+    assert covered | unaudited <= tasks
+    # A coverage-boundary finding is not a defect, so the two never name the same
+    # Task -- the invariant ``result_audit._defective_tasks`` implements.
+    assert defective.isdisjoint(unaudited)
 
     # Resolving the defect did not drop the Tasks out of coverage: they still
-    # declare a tree, still have views, and the partition is unchanged at 20/36.
+    # declare a tree, still have views, and the partition still reconciles.
     states = {row["task"]: row for row in inventory["tasks"]}
     for task in ("foundry_rfd3_design", "foundry_rfd3na_design"):
         assert states[task]["coverage_state"] == "tree_audited"
         assert states[task]["declares_result_tree"] is True and states[task]["view_count"] > 0
-    assert len(inventory["coverage"]["covered"]) == 20
-    assert len(inventory["coverage"]["unaudited"]) == 36
+    assert covered == {task for task in tasks if task not in unaudited}
 
 
 def test_every_input_role_is_classified_by_a_real_semantic_validator_registry(inventory):
     """Every declared logical input type resolves to one lifecycle class.
 
-    The classes are decided by the real ``input_validators`` registries, not by a
-    list in this file: types ``profiles.validate_logical_input`` checks inline, the
-    types with a ``_SPECIFICATION_VALIDATORS`` entry, the types with a format
-    dialect, and the remainder — which have no semantic validator and are reported
-    as such rather than silently assumed validated. Every declared format must also
-    fall inside the Core upload security boundary, or the Server would reject the
-    Task's own live-test fixture.
+    The classes are decided by the real Core dispatch, not by a list in this file:
+    the tool probes ``validate_input_file`` and ``validate_logical_input`` for each
+    declared ``(logical type, format)`` pair and reports which validator refused.
+    A role therefore carries the *set* of classes its formats occupy rather than a
+    single label that has to pick one of several true answers. Every declared
+    format must also fall inside the Core upload security boundary, or the Server
+    would reject the Task's own live-test fixture.
     """
-    lifecycle = _load_tool()._input_type_lifecycle()
-    allowed = {
-        "inline_logical_validation",
-        "specification_validation",
-        "format_dialect_validation",
-        "no_semantic_validator",
-    }
+    tool = _load_tool()
+    allowed = set(tool.LIFECYCLE_CLASSES)
+    order = list(tool.LIFECYCLE_CLASSES)
 
     roles = [role for row in inventory["tasks"] for role in row["input_roles"]]
     assert roles, "the fleet declares at least one named input role"
     for role in roles:
-        assert role["lifecycle"] in allowed
-        # A dialect or specification entry is authoritative; an unregistered type
-        # must be exactly the reported fallback, never a missing key.
-        if role["lifecycle"] != "no_semantic_validator":
-            assert str(role["type"]) in lifecycle
+        classes = role["lifecycles"]
+        assert classes, f"{role['name']} declares no lifecycle at all"
+        assert set(classes) <= allowed
+        # Ordered and de-duplicated, so the record reads the same every run.
+        assert classes == [name for name in order if name in set(classes)]
         assert role["formats_inside_core_boundary"] is True
         assert role["cardinality"][0] <= role["cardinality"][1]
+
+
+def test_the_lifecycle_probe_distinguishes_a_format_dialect_from_a_logical_arm(inventory, tmp_path):
+    """The Boltz type is the case a per-type label cannot express.
+
+    ``boltz_specification`` reuses two serializations of one logical contract: a
+    header-framed FASTA handled by a registered physical *dialect*, and a YAML
+    document handled by a logical arm and registered nowhere. Probing Core for
+    both must give two different answers, because reporting one class for the type
+    was exactly the misclassification this replaces. The assertion runs the same
+    probe the inventory runs, so it cannot drift from the report it explains.
+    """
+    tool = _load_tool()
+    fasta = tool._input_dispatch_class("boltz_specification", "fasta", tmp_path)
+    yaml = tool._input_dispatch_class("boltz_specification", "yaml", tmp_path)
+    assert fasta == "format_dialect_validation"
+    assert yaml != fasta
+
+    boltz = [
+        role
+        for row in inventory["tasks"]
+        for role in row["input_roles"]
+        if str(role["type"]) == "boltz_specification"
+    ]
+    assert boltz, "the fleet declares a boltz_specification role"
+    for role in boltz:
+        assert "format_dialect_validation" in role["lifecycles"]
+
+    # A type the registries know nothing about is reported as having no semantic
+    # validator rather than being given the nearest-sounding class.
+    assert tool._input_dispatch_class("alignment", "pqt", tmp_path) == "no_semantic_validator"
+    assert tool._input_dispatch_class("protein_structure", "pdb", tmp_path) == "inline_logical_validation"
+    assert tool._input_dispatch_class("alphafold3_specification", "json", tmp_path) == "specification_validation"
+
 
 
 def test_every_family_live_test_plan_the_loader_accepts_covers_its_own_tasks(inventory):
@@ -348,8 +394,9 @@ def test_evidence_corpus_real_items_are_verified_and_mocks_never_claim_science(i
 
     The corpus is discovered from disk and labeled from each bundle's re-verified
     provenance, so a synthetic fixture can never be presented as scientific
-    validation: only a bundle whose production receipt re-verifies is target-host
-    evidence, and every synthetic or unverified item must carry
+    validation: only a bundle whose *stored* production receipt pointer re-verifies
+    field for field is target-host evidence, only a bundle whose capture recorded a
+    reproduced result is local-CLI evidence, and every other item must carry
     ``scientific_claim == "none"``.
     """
     corpus = inventory["evidence_corpus"]
@@ -379,3 +426,63 @@ def test_evidence_corpus_real_items_are_verified_and_mocks_never_claim_science(i
     # No item in the corpus is allowed to claim a scientific result that the
     # frontend replay boundary explicitly does not establish.
     assert all(item["scientific_claim"] in {"none", "runner_output_replayed"} for item in items)
+
+
+def test_a_stale_production_receipt_pointer_is_not_promoted(tmp_path):
+    """A stored pointer that disagrees with its own receipt must not reach the top label.
+
+    The strongest label used to be decided by "did ``production_receipt_pointer``
+    raise", with the recomputed pointer discarded -- so a stored pointer whose
+    digest, deployment, or runtime SIF had drifted from the receipt it cites still
+    earned ``real_target_host_slurm_apptainer``. This drives the real checked-in
+    bundle and the real checked-in receipt through the auditor, perturbs ONE stored
+    field per case, re-digests so only that field is at fault, and requires the
+    downgrade that names the field. The unperturbed pair is the control: it stays at
+    the top label.
+    """
+    import json
+    import shutil
+    import sys
+
+    from frontend_fixtures import bundle_digest, load_bundle
+
+    sys.path.insert(0, str(ROOT / "tests" / "fleet"))
+    from test_replay_bundle import GREMLIN_RECEIPT, REAL_BUNDLE
+
+    if not REAL_BUNDLE.is_file() or not GREMLIN_RECEIPT.is_file():
+        pytest.skip("the checked-in GREMLIN_LH replay bundle or its receipt is absent")
+
+    tool = _load_tool()
+    # The control: the shipped pair is target-host evidence.
+    assert tool._label_corpus_item(ROOT, REAL_BUNDLE)["label"] == "real_target_host_slurm_apptainer"
+
+    # Rebuild the same relative layout in a scratch root so the perturbed copies
+    # live beside a byte-identical copy of the receipt they cite.
+    stored = json.loads(json.dumps(load_bundle(REAL_BUNDLE)))
+    receipt_relative = str(stored["provenance"]["production_receipt"]["receipt_path"])
+    scratch = tmp_path / "repo"
+    copied_receipt = scratch / receipt_relative
+    copied_receipt.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(GREMLIN_RECEIPT, copied_receipt)
+
+    for field, stale in (("receipt_digest", "sha256:" + "0" * 64), ("deployment_commit", "0" * 40)):
+        bundle = json.loads(json.dumps(stored))
+        bundle["provenance"]["production_receipt"][field] = stale
+        bundle["bundle_digest"] = bundle_digest(bundle)
+        destination = scratch / "tests" / "data" / "gremlin_lh_replay" / f"stale-{field}.json"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(json.dumps(bundle), encoding="utf-8")
+
+        item = tool._label_corpus_item(scratch, destination)
+        assert item["label"] == "unverified_declaration", field
+        assert field in item["detail"], item["detail"]
+
+    # A pointer with no resolvable receipt at all is downgraded for that reason.
+    bundle = json.loads(json.dumps(stored))
+    bundle["provenance"]["production_receipt"]["receipt_path"] = "docker/runners/gremlin_lh/receipts/absent.json"
+    bundle["bundle_digest"] = bundle_digest(bundle)
+    missing = scratch / "tests" / "data" / "gremlin_lh_replay" / "absent-receipt.json"
+    missing.write_text(json.dumps(bundle), encoding="utf-8")
+    item = tool._label_corpus_item(scratch, missing)
+    assert item["label"] == "unverified_declaration"
+    assert "is not present" in item["detail"]
