@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 from frontend_fixtures import (
+    CAPTURE_MODES,
     PROVENANCE_SOURCE,
     REPLAY_BUNDLE_KIND,
     REPLAY_BUNDLE_VERSION,
@@ -182,6 +183,62 @@ def test_capture_is_deterministic_for_the_same_result(tmp_path: Path) -> None:
     first = capture_replay_bundle(require_finished=False, task_id=TASK_ID, result_root=root)
     second = capture_replay_bundle(require_finished=False, task_id=TASK_ID, result_root=root)
     assert first == second
+
+
+def test_capture_records_its_own_mode_and_a_caller_cannot_forge_it(tmp_path: Path) -> None:
+    """The capture's own observation is the persisted mode, whatever a caller passes.
+
+    The evidence label a bundle earns downstream is decided from this mode, so it
+    must be the capture's verified outcome rather than a string the caller chose.
+    A synthetic capture that *claims* a real local run in its own metadata -- the
+    exact shape that used to reach ``real_runner_local_no_scheduler`` -- still
+    persists the synthetic mode, because the capture overwrites that key.
+    """
+    root = _write_result_root(tmp_path, _synthetic_fixture())
+    forged = capture_replay_bundle(
+        require_finished=False,
+        task_id=TASK_ID,
+        result_root=root,
+        provenance={"capture": {"mode": CAPTURE_MODES[0], "scheduler": "none"}},
+    )
+    assert forged["provenance"]["capture"]["mode"] == "synthetic"
+    assert forged["provenance"]["capture"]["scheduler"] == "none"
+    # The other metadata the caller supplied is preserved; only the mode is owned.
+    assert load_bundle(forged)["provenance"]["capture"]["mode"] == "synthetic"
+
+    # A real capture persists the other mode from the same code path, so the two
+    # labels are the two outcomes of one function rather than two callers' words.
+    real_root = tmp_path / "real"
+    real_root.mkdir()
+    real = capture_replay_bundle(
+        task_id=TASK_ID,
+        result_root=_write_result_root(real_root, _synthetic_fixture()),
+        task_row={"md5sum": TASK_ID, "status": "finished", "task_type": "sequence_demo"},
+    )
+    assert real["provenance"]["capture"]["mode"] == "reproduced_real_result"
+
+
+def test_load_refuses_a_capture_mode_outside_the_captures_vocabulary(tmp_path: Path) -> None:
+    """A mode the capture cannot write fails on load rather than being trusted.
+
+    Validating only "is a mode present" would let a hand-authored bundle assert
+    an arbitrary mode; validating membership in the capture's own vocabulary
+    keeps the mode a capture-owned fact. The mode is not *required* -- bundles
+    captured before the mode existed must keep loading -- so an absent mode is
+    accepted and recorded on the bundle, while an invented one is refused.
+    """
+    from frontend_fixtures import bundle_digest
+
+    root = _write_result_root(tmp_path, _synthetic_fixture())
+    bundle = capture_replay_bundle(require_finished=False, task_id=TASK_ID, result_root=root)
+    bundle["provenance"]["capture"]["mode"] = "declared_real_run"
+    bundle["bundle_digest"] = bundle_digest(bundle)
+    with pytest.raises(ReplayBundleError, match="unsupported capture mode"):
+        load_bundle(bundle)
+
+    del bundle["provenance"]["capture"]["mode"]
+    bundle["bundle_digest"] = bundle_digest(bundle)
+    assert load_bundle(bundle)["provenance"]["capture"] == {}
 
 
 # ── round-trip: capture -> bundle -> served projection ───────────────────────
@@ -525,7 +582,7 @@ def test_secret_bearing_metadata_is_sanitized_before_persistence(tmp_path: Path)
             "note": "Authorization: Bearer abcdefghijklmnopqrstuvwxyz012345",
         },
     )
-    assert bundle["provenance"] == {"submitted_by": "tester", "note": "[redacted]"}
+    assert bundle["provenance"] == {"submitted_by": "tester", "note": "[redacted]", "capture": {"mode": "synthetic"}}
     assert "rvk_" not in json.dumps(bundle)
     assert "Bearer" not in json.dumps(bundle)
 

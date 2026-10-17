@@ -38,6 +38,14 @@ from . import builders
 REPLAY_BUNDLE_VERSION = 1
 REPLAY_BUNDLE_KIND = "real_runner_result_replay"
 
+#: The capture modes ``capture_replay_bundle`` writes from its own
+#: ``require_finished`` argument and its own verified outcome. One owner: the
+#: auditor promotes a bundle only on the mode the capture persisted, so the
+#: vocabulary cannot drift into a second, caller-supplied claim.
+CAPTURE_MODE_REPRODUCED = "reproduced_real_result"
+CAPTURE_MODE_SYNTHETIC = "synthetic"
+CAPTURE_MODES = (CAPTURE_MODE_REPRODUCED, CAPTURE_MODE_SYNTHETIC)
+
 #: The privacy/robustness envelope a bundle is authored within. A payload at or
 #: under the per-file budget may be checked in when it materially supports
 #: browser acceptance; anything larger keeps hash/size/provenance only. The
@@ -256,6 +264,11 @@ def capture_replay_bundle(
     misidentified task. Only a synthetic fixture capture, which stands in for a
     result rather than reproducing one, passes ``require_finished=False``.
 
+    The capture records its own ``provenance.capture.mode`` from
+    ``require_finished`` and its own verified outcome, overwriting anything the
+    caller passed under that key: the mode is the capture's observation, and a
+    caller cannot declare it.
+
     Every payload is resolved only inside the result root and re-hashed from the
     bytes on disk, and every required view source must resolve. The result is
     deterministic for a fixed input.
@@ -284,6 +297,17 @@ def capture_replay_bundle(
     _capture_payloads(root, response, max_payload_bytes, max_bundle_bytes, payloads, excluded)
     storyboard_source = _capture_storyboard(response, storyboard_dirs)
 
+    capture_provenance = sanitize(dict(provenance or {}))
+    if not isinstance(capture_provenance, dict):
+        raise ReplayBundleError("capture provenance must be a JSON object")
+    # The mode is the capture's own observation, so it is written last and
+    # overwrites anything the caller supplied under that key.
+    capture_block = capture_provenance.get("capture")
+    if not isinstance(capture_block, dict):
+        capture_block = {}
+        capture_provenance["capture"] = capture_block
+    capture_block["mode"] = CAPTURE_MODE_REPRODUCED if require_finished else CAPTURE_MODE_SYNTHETIC
+
     bundle: dict[str, Any] = {
         "bundle_version": REPLAY_BUNDLE_VERSION,
         "kind": REPLAY_BUNDLE_KIND,
@@ -292,7 +316,7 @@ def capture_replay_bundle(
             "type": response.get("task_type"),
             "display_name": _display_name(task_row) or display_name,
         },
-        "provenance": sanitize(dict(provenance or {})),
+        "provenance": capture_provenance,
         "response": sanitize(response),
         "logical_files": _logical_file_map(manifest),
         "payloads": payloads,
@@ -708,12 +732,24 @@ def _verify_provenance_task_identity(bundle: Mapping[str, Any]) -> None:
     task, carries a receipt digest the canonical parser re-verifies, and records
     that verification as true. Anything else fails on load rather than citing
     provenance the reader cannot trust.
+
+    A persisted ``capture.mode`` is validated the same way -- refused unless it
+    is one of the two modes the capture writes. It is *not* required: two bundles
+    were checked in before the capture recorded a mode, and the reader must keep
+    loading them (at the unverified level) rather than failing or promoting
+    them. A reader that invented a mode for them would be deciding provenance,
+    which is exactly what the mode exists to prevent.
     """
     from .provenance import PROVENANCE_SOURCE
 
     provenance = bundle.get("provenance")
     if not isinstance(provenance, Mapping):
         return
+    capture = provenance.get("capture")
+    if isinstance(capture, Mapping) and "mode" in capture:
+        mode = capture.get("mode")
+        if mode not in CAPTURE_MODES:
+            raise ReplayBundleError(f"unsupported capture mode: {mode!r}")
     pointer = provenance.get("production_receipt")
     if not isinstance(pointer, Mapping):
         return
