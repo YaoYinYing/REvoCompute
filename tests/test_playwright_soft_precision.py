@@ -759,8 +759,26 @@ def test_task_card_metadata_uses_machine_text_for_identity_only(page: Page) -> N
     assert id_value.inner_text().strip()
     assert "mono" in id_value.evaluate("node => getComputedStyle(node).fontFamily").lower()
     expect(id_value).to_have_attribute("aria-label", f"Task ID: {id_value.inner_text().strip()}")
-    # Task ID remains fully inspectable — selectable, not destroyed by truncation.
-    assert id_value.evaluate("node => getComputedStyle(node).userSelect") != "none"
+    # Task ID remains fully inspectable — selectable and copyable, not destroyed by
+    # truncation. #88 replaced the card's definition list with the identity block, so
+    # the ID is a paragraph whose selection behaviour is the platform default
+    # (measured: the shipped bundle computes ``user-select: auto``); the pre-#88
+    # ``user-select: all`` rule (``.task-card dd.machine``, app.css:227) no longer
+    # matches any element. The witness is the copy itself: selecting the node hands
+    # back every character of the ID. A ``none`` here or on any ancestor yields an
+    # empty selection, so the assertion cannot be satisfied by the default.
+    assert id_value.evaluate(
+        """node => {
+            const selection = window.getSelection();
+            selection.removeAllRanges();
+            const range = document.createRange();
+            range.selectNodeContents(node);
+            selection.addRange(range);
+            const copied = selection.toString();
+            selection.removeAllRanges();
+            return copied;
+        }"""
+    ) == id_value.inner_text().strip()
     assert id_value.evaluate("node => node.scrollWidth <= node.clientWidth")
     assert id_value.evaluate("node => getComputedStyle(node).overflowWrap") in ("anywhere", "break-word")
 

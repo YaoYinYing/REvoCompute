@@ -267,9 +267,27 @@ def test_dashboard_opens_on_task_identity_and_keeps_machine_facts_readable(page:
         expect(page.locator(".app-sidebar")).to_be_visible()
     expect(identity).to_have_count(1)
     # The ID is usable at every width: it stays complete inside its own box rather
-    # than being clipped, and it is selectable as the machine value it is.
+    # than being clipped, and it is genuinely copyable as the machine value it is.
+    # #88 replaced the card's definition list with the identity block, so the ID is a
+    # paragraph whose selection behaviour is the platform default (measured: the
+    # shipped bundle computes ``user-select: auto``); the rule that pinned ``all``
+    # (``.task-card dd.machine``, app.css:227) no longer matches any element. The
+    # requirement is that a reader can copy the value, so the witness is the copy
+    # itself: selecting the node hands back every character of the ID. A ``none``
+    # here - on this node or on any ancestor - yields an empty selection and fails.
     assert identity.evaluate("node => node.scrollWidth <= node.clientWidth")
-    assert identity.evaluate("node => getComputedStyle(node).userSelect") != "none"
+    assert identity.evaluate(
+        """node => {
+            const selection = window.getSelection();
+            selection.removeAllRanges();
+            const range = document.createRange();
+            range.selectNodeContents(node);
+            selection.addRange(range);
+            const copied = selection.toString();
+            selection.removeAllRanges();
+            return copied;
+        }"""
+    ) == identity.inner_text().strip()
     assert identity.evaluate("node => getComputedStyle(node).overflowWrap") in ("anywhere", "break-word")
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
