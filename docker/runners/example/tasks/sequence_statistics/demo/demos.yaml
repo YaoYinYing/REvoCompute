@@ -1,0 +1,37 @@
+# Demo inputs for this Task, declared by the owning family.
+#
+# A demo is a *supported, scientist-facing input preset*: a small redistributable
+# fixture plus the named input role bindings and typed parameter values that make
+# it a working example a user can load into Create Task in one action. It is NOT
+# the operator/CI acceptance contract - that is the family's `test.yaml` and
+# `tests/data` - and loading a demo never creates, reserves, or submits a Task.
+#
+# Every demo must state where its fixture came from and the basis on which the
+# deployment may redistribute it: a demo is offered to anonymous callers, so a
+# family that cannot state a redistribution basis declares no demo rather than
+# declaring one under a placeholder licence. Fixture files live beside this
+# manifest under `files/`, are bounded (see MAX_DEMO_FILE_BYTES), and are
+# validated by the same Core parsers an uploaded file meets.
+demos:
+- id: multi_record
+  title: Two short protein sequences
+  purpose: Inspect the per-record statistics path with two independent work items in one FASTA.
+  context: >-
+    Both records are ten-residue synthetic peptides. Because one FASTA record is
+    one work item, this demo produces two per-sequence results plus one
+    task-level rollup, so it shows the persistent multi-item lifecycle without a
+    database, model, or accelerator.
+  source:
+    name: REvoCompute Example Runner demo corpus
+    url: https://github.com/YaoYinYing/REvoCompute
+  license:
+    id: cc0-1.0
+    name: CC0 1.0 Universal (public domain dedication)
+    url: https://creativecommons.org/publicdomain/zero/1.0/
+  inputs:
+    sequence:
+    - path: files/multi_record.fasta
+      sha256: e2773b5a98b4b7531d5f06843e651aae83d2f33a2f92b279cfcad57776acd764
+      media_type: text/x-fasta
+  parameters:
+    mass_precision: 2

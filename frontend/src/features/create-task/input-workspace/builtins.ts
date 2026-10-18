@@ -6,7 +6,7 @@ import { t } from '../../../app/i18n';
 import type { WorkspaceContext, WorkspacePlugin, WorkspacePluginInstance } from './plugin-contract';
 import { element, filePath, formatBytes, matchesExtension, parseSequence } from './utils';
 
-function inputByParameter(name: string): HTMLInputElement | HTMLSelectElement | null {
+export function inputByParameter(name: string): HTMLInputElement | HTMLSelectElement | null {
   return document.querySelector(`[data-ct-parameter="${CSS.escape(name)}"]`);
 }
 
@@ -105,7 +105,7 @@ function validateParameters(parameters: ParameterDefinition[]): string[] {
 const filesPlugin: WorkspacePlugin = {
   id: 'files',
   mount(target, definition, context) {
-    const controls: Array<{ role: TaskFormRole; input: HTMLInputElement; list: HTMLElement; error: HTMLElement }> = [];
+    const controls: Array<{ role: TaskFormRole; input: HTMLInputElement; list: HTMLElement; error: HTMLElement; render: () => void }> = [];
     const requestedRoles = Array.isArray(definition.options.roles) ? definition.options.roles.filter(value => typeof value === 'string') : [];
     const roles = requestedRoles.length ? context.form.inputs.filter(role => requestedRoles.includes(role.id)) : context.form.inputs;
     const primaryRole = typeof definition.options.primary_role === 'string' ? definition.options.primary_role : roles.find(role => role.cardinality.max > 1)?.id;
@@ -185,9 +185,13 @@ const filesPlugin: WorkspacePlugin = {
       };
       remove.addEventListener('click', () => { context.setRoleFiles(role.id, []); input.value = ''; render(); context.filesChanged(); });
       input.addEventListener('change', () => { context.setRoleFiles(role.id, Array.from(input.files || [])); render(); context.filesChanged(); });
-      const contract = element('details', 'ct-input-contract'); contract.append(element('summary', '', t('ct.files.contract')), hint); if (roles.length === 1) label.classList.add('sr-only'); group.append(label, well, remove, list, preview, contract, error); target.append(group); render(); controls.push({ role, input, list, error });
+      const contract = element('details', 'ct-input-contract'); contract.append(element('summary', '', t('ct.files.contract')), hint); if (roles.length === 1) label.classList.add('sr-only'); group.append(label, well, remove, list, preview, contract, error); target.append(group); render(); controls.push({ role, input, list, error, render });
     });
     return {
+      // A role binding changed by something other than this element - a preset
+      // application, for one - is redrawn from the same state the element handler
+      // reads, so the well, the file list, and the preview never show it stale.
+      refresh: () => controls.forEach(control => control.render()),
       readValue: () => Object.fromEntries(roles.map(role => [role.id, context.roleFiles(role.id).map(filePath)])),
       summarize: () => {
         const files = context.inputFiles(); if (!files.length) return null;
