@@ -668,6 +668,28 @@ def test_a_task_scoped_storyboard_is_read_from_the_task_directory(tmp_path: Path
     assert ReplayBundle(bundle).storyboard_source("index.js") == "TASK-SCOPED\n"
 
 
+def test_a_task_scoped_contract_missing_its_entrypoint_does_not_fall_back(tmp_path: Path) -> None:
+    """A Task-scoped Task answers from its own directory or not at all.
+
+    The Server's ``contract_directory`` is total in both directions: a Task that
+    ships its own ``expected_files.yaml`` is served from that directory alone, so
+    its route returns 404 for an entrypoint only the family tree holds. Capturing
+    the family module here would embed -- and checksum -- a source no deployment
+    ever serves for this Task, which is precisely the drift the replay boundary
+    exists to exclude. The regression this pins is the fallback that used to run
+    after the Task directory was already selected.
+    """
+    runner_tree = _storyboard_runner_tree(tmp_path, "sequence_demo", "gremlin_lh_fit", "FAMILY\n")
+    task_directory = runner_tree / "sequence_demo" / "tasks" / "gremlin_lh_fit"
+    (task_directory / "expected_files.yaml").write_text(
+        "result:\n  files:\n    items:\n      path: out.txt\n      required: false\n", encoding="utf-8"
+    )
+    root = _write_result_root(tmp_path, _storyboard_fixture())
+
+    with pytest.raises(ReplayBundleError, match="storyboard entrypoint does not resolve"):
+        capture_replay_bundle(require_finished=False, task_id=TASK_ID, result_root=root, storyboard_dirs=[runner_tree])
+
+
 def test_a_task_without_its_own_tree_still_reads_the_family_storyboard(tmp_path: Path) -> None:
     """The family-scoped module answers unless the Task declares its own contract."""
     runner_tree = _storyboard_runner_tree(tmp_path, "sequence_demo", "gremlin_lh_fit", "FAMILY\n")

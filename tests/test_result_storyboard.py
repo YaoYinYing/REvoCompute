@@ -222,3 +222,45 @@ def test_an_unsplit_family_records_one_shared_contract(tmp_path, monkeypatch) ->
 
     assert contracts == result_storyboard.load_expected_file_tree(family / "expected_files.yaml")
     assert contracts["outputs"]["pattern"] == "*.cif"
+
+
+def test_moving_an_identical_contract_to_every_task_keeps_the_same_record(tmp_path, monkeypatch) -> None:
+    """The recorded contract reflects the accepted outputs, not where they sit.
+
+    A family whose Tasks all resolve to one tree records that tree and nothing
+    else. Migrating the declaration from the family root into each owner's
+    directory -- the move #93 documents, and the move a single-Task family such
+    as ``example`` actually took -- leaves every Task's accepted outputs exactly
+    as they were, so the record (and the live-test receipt digest computed from
+    it) must be identical. Reading the position instead of the trees would
+    invalidate a current receipt for a change no Runner can observe.
+    """
+    family = _family(tmp_path, monkeypatch)
+    task_dirs = {"synthetic_fold": "tasks/fold", "synthetic_design": "tasks/design"}
+    # Family scope: one tree at the root, which both Tasks resolve.
+    _drop_task_contract(family)
+    shared = declared_result_contracts(family, task_dirs)
+    # Task scope: the same declaration in every owner's directory, and the root
+    # empty -- `contract_directory`'s state after the documented `git mv`.
+    (family / "expected_files.yaml").unlink()
+    for task_dir in task_dirs.values():
+        (family / task_dir / "expected_files.yaml").write_text(_TREE.format(pattern="*.cif"), encoding="utf-8")
+    relocated = declared_result_contracts(family, task_dirs)
+
+    assert shared == result_storyboard.load_expected_file_tree(family / "tasks" / "fold" / "expected_files.yaml")
+    assert relocated == shared
+
+
+def test_a_contract_that_genuinely_differs_is_still_recorded_per_owner(tmp_path, monkeypatch) -> None:
+    """Collapsing identical owners must not collapse owners that actually differ.
+
+    The move above is only a move. A family whose Tasks really publish different
+    outputs still records one contract per owner, so the comparison is between
+    the resolved trees and never against the family root alone.
+    """
+    family = _family(tmp_path, monkeypatch)
+    contracts = declared_result_contracts(family, {"synthetic_fold": "tasks/fold", "synthetic_design": "tasks/design"})
+
+    assert sorted(contracts) == ["synthetic_design", "synthetic_fold"]
+    assert contracts["synthetic_fold"]["outputs"]["pattern"] == "*.cif"
+    assert contracts["synthetic_design"]["outputs"]["pattern"] == "*.cif.gz"
