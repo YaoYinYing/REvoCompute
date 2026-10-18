@@ -687,7 +687,7 @@ def test_a_task_scoped_contract_missing_its_entrypoint_does_not_fall_back(tmp_pa
     root = _write_result_root(tmp_path, _storyboard_fixture())
 
     with pytest.raises(ReplayBundleError, match="storyboard entrypoint does not resolve"):
-        capture_replay_bundle(require_finished=False, task_id=TASK_ID, result_root=root, storyboard_dirs=[runner_tree])
+        capture_replay_bundle(task_id=TASK_ID, result_root=root, storyboard_dirs=[runner_tree])
 
 
 def test_a_task_without_its_own_tree_still_reads_the_family_storyboard(tmp_path: Path) -> None:
