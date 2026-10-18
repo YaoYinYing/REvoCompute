@@ -71,6 +71,7 @@ from .models import (
 from .provenance import PROVENANCE_SOURCE, ProvenanceError, production_receipt_pointer
 from .replay import ReplayBundle
 from .replay_bundle import (
+    CAPTURE_MODES,
     DEFAULT_MAX_BUNDLE_BYTES,
     DEFAULT_MAX_PAYLOAD_BYTES,
     REPLAY_BUNDLE_KIND,
@@ -135,6 +136,7 @@ __all__ = [
     "DEFAULT_MAX_PAYLOAD_BYTES",
     "DEFAULT_ORIGIN",
     "DEFAULT_TASK_ID",
+    "CAPTURE_MODES",
     "EXPIRED_AUTH",
     "PREFLIGHT_FIXTURES",
     "PROVENANCE_SOURCE",

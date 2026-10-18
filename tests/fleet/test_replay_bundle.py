@@ -14,10 +14,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from pathlib import Path
 
 import pytest
 from frontend_fixtures import (
+    CAPTURE_MODES,
     PROVENANCE_SOURCE,
     REPLAY_BUNDLE_KIND,
     REPLAY_BUNDLE_VERSION,
@@ -166,7 +168,7 @@ def _storyboard_fixture() -> ResultFixture:
 
 def test_capture_produces_a_versioned_bounded_bundle(tmp_path: Path) -> None:
     root = _write_result_root(tmp_path, _synthetic_fixture())
-    bundle = capture_replay_bundle(require_finished=False, task_id=TASK_ID, result_root=root, display_name="alignment.a3m")
+    bundle = capture_replay_bundle(task_id=TASK_ID, result_root=root, display_name="alignment.a3m")
     assert bundle["bundle_version"] == REPLAY_BUNDLE_VERSION
     assert bundle["kind"] == REPLAY_BUNDLE_KIND
     assert bundle["task"] == {"id": TASK_ID, "type": "sequence_demo", "display_name": "alignment.a3m"}
@@ -179,9 +181,167 @@ def test_capture_produces_a_versioned_bounded_bundle(tmp_path: Path) -> None:
 
 def test_capture_is_deterministic_for_the_same_result(tmp_path: Path) -> None:
     root = _write_result_root(tmp_path, _synthetic_fixture())
-    first = capture_replay_bundle(require_finished=False, task_id=TASK_ID, result_root=root)
-    second = capture_replay_bundle(require_finished=False, task_id=TASK_ID, result_root=root)
+    first = capture_replay_bundle(task_id=TASK_ID, result_root=root)
+    second = capture_replay_bundle(task_id=TASK_ID, result_root=root)
     assert first == second
+
+
+def test_capture_records_its_own_mode_and_a_caller_cannot_forge_it(tmp_path: Path) -> None:
+    """The capture's observation is the persisted mode, whatever a caller passes.
+
+    The evidence label a bundle earns downstream is decided from this mode, so it
+    must be what the capture *resolved* rather than a string the caller chose. A
+    capture that resolves no canonical publication persists the synthetic mode
+    even when the caller supplies the whole promoted record -- the mode, a task
+    source, and a publication anchor -- because the keys the capture owns are
+    rewritten from its own observation.
+    """
+    root = _write_result_root(tmp_path, _synthetic_fixture())
+    forged = capture_replay_bundle(
+        task_id=TASK_ID,
+        result_root=root,
+        provenance={
+            "capture": {
+                "mode": CAPTURE_MODES[0],
+                "task_source": "a canonical finished task row resolved from the deployment task database",
+                "publication_anchor": {"manifest_sha256": "0" * 64, "manifest_size": 1, "revision": 1},
+                "scheduler": "none",
+            }
+        },
+    )
+    capture = forged["provenance"]["capture"]
+    assert capture["mode"] == "synthetic"
+    # The keys the capture owns are its own record; the rest of the caller's
+    # metadata is preserved.
+    assert "publication_anchor" not in capture
+    assert capture["task_source"] == "none - no canonical finished task row resolved for this task"
+    assert capture["scheduler"] == "none"
+    assert load_bundle(forged)["provenance"]["capture"] == capture
+
+
+def test_a_real_capture_is_decided_by_the_store_anchor_not_by_the_caller(tmp_path: Path) -> None:
+    """A caller can fabricate a finished row; only the store can anchor a publication.
+
+    This is the finding the mode exists to close. The explicit promoted marker is
+    the *server-owned publication anchor* that only the canonical task store's
+    finalization writes. The test drives the real ``TaskDatabase`` and the real
+    capture: a fabricated ``task_row`` mapping is not an input at all, a store row
+    with no anchor resolves no publication, and the identical capture becomes
+    ``reproduced_real_result`` -- carrying the exact manifest digest it read --
+    only once the store anchors those bytes. Rewriting the manifest under the same
+    path withdraws the promotion again, so the mode tracks the observed bytes.
+    """
+    from revocompute.db import TaskDatabase
+
+    root = _write_result_root(tmp_path, _synthetic_fixture())
+    store_path = str(tmp_path / "tasks.sqlite3")
+    store = TaskDatabase(store_path)
+    store.upsert_task(
+        TASK_ID,
+        filename="alignment.a3m",
+        file_path=str(root / "alignment" / "filtered_alignment.a3m"),
+        uploaded_at=time.time(),
+        status="finished",
+        is_binary=0,
+        task_type="sequence_demo",
+        storage_key="0123456789abcdef0123456789abcdef",
+        submitted_by_user_id=1,
+    )
+
+    # A finished row alone is not a publication: the anchor is what Core's
+    # finalization writes, and without it the capture records the weaker mode.
+    unanchored = capture_replay_bundle(task_id=TASK_ID, result_root=root, task_store=store_path)
+    assert unanchored["provenance"]["capture"]["mode"] == "synthetic"
+
+    # The caller's own claim about the row is not an input: the capture takes the
+    # canonical store, and a mapping handed in under the old name is refused.
+    with pytest.raises(TypeError):
+        capture_replay_bundle(
+            task_id=TASK_ID,
+            result_root=root,
+            task_row={"md5sum": TASK_ID, "status": "finished", "task_type": "sequence_demo"},
+        )
+
+    manifest_bytes = (root / "manifest.json").read_bytes()
+    store.record_result_publication(
+        TASK_ID,
+        manifest_sha256=hashlib.sha256(manifest_bytes).hexdigest(),
+        manifest_size=len(manifest_bytes),
+        published_at=time.time(),
+    )
+    real = capture_replay_bundle(task_id=TASK_ID, result_root=root, task_store=store_path)
+    capture = real["provenance"]["capture"]
+    assert capture["mode"] == "reproduced_real_result"
+    assert capture["publication_anchor"] == {
+        "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+        "manifest_size": len(manifest_bytes),
+        "revision": 1,
+    }
+    assert real["task"]["display_name"] == "alignment.a3m"
+    assert load_bundle(real)["provenance"]["capture"] == capture
+
+    # The anchored bytes are the manifest's identity: a manifest rewritten in
+    # place no longer matches the anchor, so the promotion is withdrawn.
+    (root / "manifest.json").write_text(json.dumps(json.loads(manifest_bytes), indent=2), encoding="utf-8")
+    rewritten = capture_replay_bundle(task_id=TASK_ID, result_root=root, task_store=store_path)
+    assert rewritten["provenance"]["capture"]["mode"] == "synthetic"
+
+
+def test_load_refuses_a_promoted_mode_without_the_captures_observation(tmp_path: Path) -> None:
+    """The strongest mode must carry the record of what the capture observed.
+
+    A hand-authored bundle can write ``mode`` and re-digest; what it cannot
+    produce is the capture's own observation that the result was published. The
+    loader therefore refuses a ``reproduced_real_result`` mode with no task source
+    and no publication anchor rather than trusting the claim on its own.
+    """
+    from frontend_fixtures import bundle_digest
+
+    root = _write_result_root(tmp_path, _synthetic_fixture())
+    bundle = capture_replay_bundle(task_id=TASK_ID, result_root=root)
+    bundle["provenance"]["capture"] = {"mode": "reproduced_real_result", "scheduler": "none"}
+    bundle["bundle_digest"] = bundle_digest(bundle)
+    with pytest.raises(ReplayBundleError, match="records no canonical task source"):
+        load_bundle(bundle)
+
+    bundle["provenance"]["capture"]["task_source"] = "a canonical finished task row resolved from the store"
+    bundle["bundle_digest"] = bundle_digest(bundle)
+    with pytest.raises(ReplayBundleError, match="records no publication anchor"):
+        load_bundle(bundle)
+
+    bundle["provenance"]["capture"]["publication_anchor"] = {
+        "manifest_sha256": "not-a-digest",
+        "manifest_size": 1,
+        "revision": 1,
+    }
+    bundle["bundle_digest"] = bundle_digest(bundle)
+    with pytest.raises(ReplayBundleError, match="carries no manifest digest"):
+        load_bundle(bundle)
+
+
+def test_load_refuses_a_capture_mode_outside_the_captures_vocabulary(tmp_path: Path) -> None:
+    """A mode the capture cannot write fails on load rather than being trusted.
+
+    Validating only "is a mode present" would let a hand-authored bundle assert
+    an arbitrary mode; validating membership in the capture's own vocabulary
+    keeps the mode a capture-owned fact. The mode is not *required* -- bundles
+    captured before the mode existed must keep loading -- so an absent mode is
+    accepted and recorded on the bundle, while an invented one is refused.
+    """
+    from frontend_fixtures import bundle_digest
+
+    root = _write_result_root(tmp_path, _synthetic_fixture())
+    bundle = capture_replay_bundle(task_id=TASK_ID, result_root=root)
+    bundle["provenance"]["capture"]["mode"] = "declared_real_run"
+    bundle["bundle_digest"] = bundle_digest(bundle)
+    with pytest.raises(ReplayBundleError, match="unsupported capture mode"):
+        load_bundle(bundle)
+
+    del bundle["provenance"]["capture"]["mode"]
+    bundle["bundle_digest"] = bundle_digest(bundle)
+    # An absent mode is accepted -- a bundle checked in before the mode existed
+    # keeps loading -- and nothing else in the provenance is read as a mode.
+    assert "mode" not in load_bundle(bundle)["provenance"]["capture"]
 
 
 # ── round-trip: capture -> bundle -> served projection ───────────────────────
@@ -190,7 +350,7 @@ def test_capture_is_deterministic_for_the_same_result(tmp_path: Path) -> None:
 def test_round_trip_preserves_the_served_manifest_after_normalization(tmp_path: Path) -> None:
     root = _write_result_root(tmp_path, _synthetic_fixture())
     published = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
-    bundle = capture_replay_bundle(require_finished=False, task_id=TASK_ID, result_root=root)
+    bundle = capture_replay_bundle(task_id=TASK_ID, result_root=root)
     served = ReplayBundle(bundle).served_manifest()
     assert normalize(served) == normalize(project_manifest_for_serve(published, task_id=TASK_ID))
     # Identity, views, and per-file projection survive the round trip verbatim.
@@ -204,7 +364,7 @@ def test_round_trip_preserves_the_served_manifest_after_normalization(tmp_path: 
 
 def test_round_trip_serves_the_exact_captured_artifact_bytes(tmp_path: Path) -> None:
     root = _write_result_root(tmp_path, _synthetic_fixture())
-    bundle = capture_replay_bundle(require_finished=False, task_id=TASK_ID, result_root=root)
+    bundle = capture_replay_bundle(task_id=TASK_ID, result_root=root)
     replay = ReplayBundle(bundle)
     for path in bundle["payloads"]:
         body = replay.payload(path)
@@ -215,7 +375,7 @@ def test_round_trip_serves_the_exact_captured_artifact_bytes(tmp_path: Path) -> 
 
 def test_round_trip_serves_a_bounded_table_page(tmp_path: Path) -> None:
     root = _write_result_root(tmp_path, _synthetic_fixture())
-    replay = ReplayBundle(capture_replay_bundle(require_finished=False, task_id=TASK_ID, result_root=root))
+    replay = ReplayBundle(capture_replay_bundle(task_id=TASK_ID, result_root=root))
     page = replay.table_page("tables/pairs.tsv")
     assert page == {
         "columns": ["alignment_i", "alignment_j", "apc_score"],
@@ -232,7 +392,7 @@ def test_round_trip_serves_a_bounded_table_page(tmp_path: Path) -> None:
 
 def test_logical_file_identity_resolves_to_the_captured_payload(tmp_path: Path) -> None:
     root = _write_result_root(tmp_path, _synthetic_fixture())
-    bundle = capture_replay_bundle(require_finished=False, task_id=TASK_ID, result_root=root)
+    bundle = capture_replay_bundle(task_id=TASK_ID, result_root=root)
     replay = ReplayBundle(bundle)
     assert replay.logical_artifact_path("raw_matrix", 0) == "couplings/raw_scores.csv"
     assert replay.logical_artifact_path("raw_matrix", 5) is None
@@ -244,7 +404,7 @@ def test_logical_file_identity_resolves_to_the_captured_payload(tmp_path: Path) 
 
 def test_a_mismatched_task_id_does_not_resolve(tmp_path: Path) -> None:
     root = _write_result_root(tmp_path, _synthetic_fixture())
-    replay = ReplayBundle(capture_replay_bundle(require_finished=False, task_id=TASK_ID, result_root=root))
+    replay = ReplayBundle(capture_replay_bundle(task_id=TASK_ID, result_root=root))
     assert replay.served_manifest(TASK_ID) is not None
     assert replay.served_manifest("f" * 32) is None
     with pytest.raises(ReplayBundleError):
@@ -257,36 +417,63 @@ def test_capture_refuses_a_manifest_whose_identity_disagrees(tmp_path: Path) -> 
     manifest["task_id"] = "f" * 32
     (root / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     with pytest.raises(ReplayBundleError, match="task identity"):
-        capture_replay_bundle(require_finished=False, task_id=TASK_ID, result_root=root)
-
-
-def test_capture_refuses_a_non_terminal_task_row(tmp_path: Path) -> None:
-    root = _write_result_root(tmp_path, _synthetic_fixture())
-    with pytest.raises(ReplayBundleError, match="not a finished success"):
-        capture_replay_bundle(
-            task_id=TASK_ID, result_root=root,
-            task_row={"md5sum": TASK_ID, "status": "running", "task_type": "sequence_demo"},
-        )
-
-
-def test_a_real_capture_requires_a_finished_task_row(tmp_path: Path) -> None:
-    # A real capture (the default) must prove the result came from a finished
-    # task; without the canonical store row it fails closed rather than trusting
-    # the manifest alone. A synthetic fixture capture may relax only this.
-    root = _write_result_root(tmp_path, _synthetic_fixture())
-    with pytest.raises(ReplayBundleError, match="requires the canonical finished task store row"):
         capture_replay_bundle(task_id=TASK_ID, result_root=root)
-    # With a finished row it succeeds; with a non-finished row it still refuses.
-    ok = capture_replay_bundle(
-        task_id=TASK_ID, result_root=root,
-        task_row={"md5sum": TASK_ID, "status": "finished", "task_type": "sequence_demo"},
+
+
+def test_a_capture_resolves_the_task_row_from_the_store_not_from_a_mapping(tmp_path: Path) -> None:
+    """Task identity and terminal state are resolved canonically, not supplied.
+
+    A capture used to accept a caller's ``task_row`` mapping and promote on it. The
+    store is the authority, so the row is read from it: a finished row whose type
+    agrees with the manifest, plus the store's publication anchor, is what makes a
+    capture a real one; a store that disagrees -- a different type, a non-terminal
+    status, no row at all -- resolves no publication and the capture stays
+    synthetic rather than trusting a second, caller-owned copy of the row.
+    """
+    from revocompute.db import TaskDatabase
+
+    root = _write_result_root(tmp_path, _synthetic_fixture())
+    store_path = str(tmp_path / "tasks.sqlite3")
+    store = TaskDatabase(store_path)
+
+    def write_row(**overrides) -> None:
+        fields = {
+            "filename": "alignment.a3m",
+            "file_path": str(root / "alignment" / "filtered_alignment.a3m"),
+            "uploaded_at": time.time(),
+            "status": "finished",
+            "is_binary": 0,
+            "task_type": "sequence_demo",
+            "storage_key": "0123456789abcdef0123456789abcdef",
+            "submitted_by_user_id": 1,
+        }
+        fields.update(overrides)
+        store.upsert_task(TASK_ID, **fields)
+
+    def capture():
+        return capture_replay_bundle(task_id=TASK_ID, result_root=root, task_store=store_path)
+
+    # No row at all, and a row that disagrees on the task type: neither is a
+    # publication, so neither is promoted.
+    assert capture()["provenance"]["capture"]["mode"] == "synthetic"
+    write_row(task_type="cpu_runner")
+    assert capture()["provenance"]["capture"]["mode"] == "synthetic"
+    write_row()
+    assert capture()["provenance"]["capture"]["mode"] == "synthetic"  # still unanchored
+
+    # A non-terminal row is not a finished success, so it is not promoted even
+    # once the store anchors the bytes.
+    manifest_bytes = (root / "manifest.json").read_bytes()
+    store.record_result_publication(
+        TASK_ID,
+        manifest_sha256=hashlib.sha256(manifest_bytes).hexdigest(),
+        manifest_size=len(manifest_bytes),
+        published_at=time.time(),
     )
-    assert ok["task"]["id"] == TASK_ID
-    with pytest.raises(ReplayBundleError, match="not a finished success"):
-        capture_replay_bundle(
-            task_id=TASK_ID, result_root=root,
-            task_row={"md5sum": TASK_ID, "status": "running", "task_type": "sequence_demo"},
-        )
+    write_row(status="running")
+    assert capture()["provenance"]["capture"]["mode"] == "synthetic"
+    write_row()
+    assert capture()["provenance"]["capture"]["mode"] == "reproduced_real_result"
 
 
 # ── path containment ──────────────────────────────────────────────────────────
@@ -303,7 +490,7 @@ def test_capture_refuses_an_artifact_path_that_escapes_the_result_root(tmp_path:
     })
     (root / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     with pytest.raises(ReplayBundleError, match="safe relative path"):
-        capture_replay_bundle(require_finished=False, task_id=TASK_ID, result_root=root)
+        capture_replay_bundle(task_id=TASK_ID, result_root=root)
 
 
 def test_a_symlinked_artifact_is_not_captured(tmp_path: Path) -> None:
@@ -314,7 +501,7 @@ def test_a_symlinked_artifact_is_not_captured(tmp_path: Path) -> None:
     target.unlink()
     target.symlink_to(real)
     with pytest.raises(ReplayBundleError, match="required view source"):
-        capture_replay_bundle(require_finished=False, task_id=TASK_ID, result_root=root)
+        capture_replay_bundle(task_id=TASK_ID, result_root=root)
 
 
 # ── size policy ───────────────────────────────────────────────────────────────
@@ -332,7 +519,7 @@ def test_an_oversized_optional_artifact_is_excluded_with_its_hash(tmp_path: Path
         "role": "artifact", "url": f"/compute/api/results/{TASK_ID}/artifacts/models/weights.bin",
     })
     (root / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
-    bundle = capture_replay_bundle(require_finished=False, task_id=TASK_ID, result_root=root, max_payload_bytes=1024)
+    bundle = capture_replay_bundle(task_id=TASK_ID, result_root=root, max_payload_bytes=1024)
     excluded = {entry["path"]: entry for entry in bundle["excluded"]}
     assert excluded["models/weights.bin"]["sha256"] == _sha(big)
     assert excluded["models/weights.bin"]["reason"] == "exceeds the per-file payload budget"
@@ -342,7 +529,7 @@ def test_an_oversized_optional_artifact_is_excluded_with_its_hash(tmp_path: Path
 def test_an_oversized_required_view_source_fails_the_capture(tmp_path: Path) -> None:
     root = _write_result_root(tmp_path, _synthetic_fixture())
     with pytest.raises(ReplayBundleError):
-        capture_replay_bundle(require_finished=False, task_id=TASK_ID, result_root=root, max_payload_bytes=16)
+        capture_replay_bundle(task_id=TASK_ID, result_root=root, max_payload_bytes=16)
 
 
 def test_the_bundle_budget_excludes_the_optional_largest_payload_first(tmp_path: Path) -> None:
@@ -350,7 +537,7 @@ def test_the_bundle_budget_excludes_the_optional_largest_payload_first(tmp_path:
     # A budget that fits every required view source but not the 4 KiB optional
     # diagnostic: the diagnostic must drop out (with its hash) instead of a view
     # source, so a tight budget can never silently break a declared view.
-    bundle = capture_replay_bundle(require_finished=False, task_id=TASK_ID, result_root=root, max_bundle_bytes=2800)
+    bundle = capture_replay_bundle(task_id=TASK_ID, result_root=root, max_bundle_bytes=2800)
     excluded = {entry["path"]: entry for entry in bundle["excluded"]}
     assert "execution/slurm.stdout" in excluded
     assert excluded["execution/slurm.stdout"]["reason"] == "exceeds the bundle payload budget"
@@ -361,7 +548,7 @@ def test_the_bundle_budget_excludes_the_optional_largest_payload_first(tmp_path:
 def test_a_required_view_source_that_exceeds_the_bundle_budget_fails_the_capture(tmp_path: Path) -> None:
     root = _write_result_root(tmp_path, _synthetic_fixture())
     with pytest.raises(ReplayBundleError, match="required view sources exceed the bundle payload budget"):
-        capture_replay_bundle(require_finished=False, task_id=TASK_ID, result_root=root, max_bundle_bytes=32)
+        capture_replay_bundle(task_id=TASK_ID, result_root=root, max_bundle_bytes=32)
 
 
 # ── checksum and drift ────────────────────────────────────────────────────────
@@ -371,14 +558,14 @@ def test_capture_refuses_bytes_that_disagree_with_the_manifest_hash(tmp_path: Pa
     root = _write_result_root(tmp_path, _synthetic_fixture())
     (root / "summary.json").write_text('{"tampered": true}\n', encoding="utf-8")
     with pytest.raises(ReplayBundleError, match="disagree with the manifest sha256"):
-        capture_replay_bundle(require_finished=False, task_id=TASK_ID, result_root=root)
+        capture_replay_bundle(task_id=TASK_ID, result_root=root)
 
 
 def test_load_refuses_a_corrupted_payload(tmp_path: Path) -> None:
     from frontend_fixtures import bundle_digest
 
     root = _write_result_root(tmp_path, _synthetic_fixture())
-    bundle = capture_replay_bundle(require_finished=False, task_id=TASK_ID, result_root=root)
+    bundle = capture_replay_bundle(task_id=TASK_ID, result_root=root)
     bundle["payloads"]["summary.json"]["payload"] = '{"changed": true}\n'
     # Re-digest so the tamper is only in the payload bytes, not the bundle digest.
     bundle["bundle_digest"] = bundle_digest(bundle)
@@ -390,7 +577,7 @@ def test_load_refuses_a_missing_required_view_source(tmp_path: Path) -> None:
     from frontend_fixtures import bundle_digest
 
     root = _write_result_root(tmp_path, _synthetic_fixture())
-    bundle = capture_replay_bundle(require_finished=False, task_id=TASK_ID, result_root=root)
+    bundle = capture_replay_bundle(task_id=TASK_ID, result_root=root)
     del bundle["payloads"]["couplings/raw_scores.csv"]
     bundle["bundle_digest"] = bundle_digest(bundle)
     with pytest.raises(ReplayBundleError, match="required view source is not captured"):
@@ -399,7 +586,7 @@ def test_load_refuses_a_missing_required_view_source(tmp_path: Path) -> None:
 
 def test_load_refuses_a_tampered_digest(tmp_path: Path) -> None:
     root = _write_result_root(tmp_path, _synthetic_fixture())
-    bundle = capture_replay_bundle(require_finished=False, task_id=TASK_ID, result_root=root)
+    bundle = capture_replay_bundle(task_id=TASK_ID, result_root=root)
     bundle["response"]["task_type"] = "something_else"
     with pytest.raises(ReplayBundleError, match="bundle_digest"):
         load_bundle(bundle)
@@ -407,7 +594,7 @@ def test_load_refuses_a_tampered_digest(tmp_path: Path) -> None:
 
 def test_load_refuses_a_manifest_that_violates_the_canonical_contract(tmp_path: Path) -> None:
     root = _write_result_root(tmp_path, _synthetic_fixture())
-    bundle = capture_replay_bundle(require_finished=False, task_id=TASK_ID, result_root=root)
+    bundle = capture_replay_bundle(task_id=TASK_ID, result_root=root)
     # Remove a field the contract requires, then re-digest so only the schema fails.
     del bundle["response"]["output_check"]
     from frontend_fixtures import bundle_digest
@@ -419,7 +606,7 @@ def test_load_refuses_a_manifest_that_violates_the_canonical_contract(tmp_path: 
 
 def test_persisted_bundle_round_trips_through_disk(tmp_path: Path) -> None:
     root = _write_result_root(tmp_path, _synthetic_fixture())
-    bundle = capture_replay_bundle(require_finished=False, task_id=TASK_ID, result_root=root)
+    bundle = capture_replay_bundle(task_id=TASK_ID, result_root=root)
     destination = write_bundle(tmp_path / "bundle.json", bundle)
     loaded = ReplayBundle.load(destination)
     assert loaded.bundle["bundle_digest"] == bundle["bundle_digest"]
@@ -452,7 +639,7 @@ def test_storyboard_source_is_read_from_the_runner_tree_not_the_result_root(tmp_
     root = _write_result_root(tmp_path, _storyboard_fixture())
     # A stale storyboard under the result root must be ignored.
     (root / "storyboard" / "index.js").write_text("STALE\n", encoding="utf-8")
-    bundle = capture_replay_bundle(require_finished=False, task_id=TASK_ID, result_root=root, storyboard_dirs=[runner_tree])
+    bundle = capture_replay_bundle(task_id=TASK_ID, result_root=root, storyboard_dirs=[runner_tree])
     assert bundle["storyboard"]["entrypoint"] == "index.js"
     assert bundle["storyboard"]["source"] == body
     assert ReplayBundle(bundle).storyboard_source("index.js") == body
@@ -475,7 +662,7 @@ def test_a_task_scoped_storyboard_is_read_from_the_task_directory(tmp_path: Path
         "result:\n  files:\n    items:\n      path: out.txt\n      required: false\n", encoding="utf-8"
     )
     root = _write_result_root(tmp_path, _storyboard_fixture())
-    bundle = capture_replay_bundle(require_finished=False, task_id=TASK_ID, result_root=root, storyboard_dirs=[runner_tree])
+    bundle = capture_replay_bundle(task_id=TASK_ID, result_root=root, storyboard_dirs=[runner_tree])
 
     assert bundle["storyboard"]["source"] == "TASK-SCOPED\n"
     assert ReplayBundle(bundle).storyboard_source("index.js") == "TASK-SCOPED\n"
@@ -500,7 +687,7 @@ def test_a_task_scoped_contract_missing_its_entrypoint_does_not_fall_back(tmp_pa
     root = _write_result_root(tmp_path, _storyboard_fixture())
 
     with pytest.raises(ReplayBundleError, match="storyboard entrypoint does not resolve"):
-        capture_replay_bundle(require_finished=False, task_id=TASK_ID, result_root=root, storyboard_dirs=[runner_tree])
+        capture_replay_bundle(task_id=TASK_ID, result_root=root, storyboard_dirs=[runner_tree])
 
 
 def test_a_task_without_its_own_tree_still_reads_the_family_storyboard(tmp_path: Path) -> None:
@@ -513,7 +700,7 @@ def test_a_task_without_its_own_tree_still_reads_the_family_storyboard(tmp_path:
     (task_directory / "storyboard").mkdir()
     (task_directory / "storyboard" / "index.js").write_text("STRAY\n", encoding="utf-8")
     root = _write_result_root(tmp_path, _storyboard_fixture())
-    bundle = capture_replay_bundle(require_finished=False, task_id=TASK_ID, result_root=root, storyboard_dirs=[runner_tree])
+    bundle = capture_replay_bundle(task_id=TASK_ID, result_root=root, storyboard_dirs=[runner_tree])
 
     assert bundle["storyboard"]["source"] == "FAMILY\n"
 
@@ -523,14 +710,14 @@ def test_a_missing_storyboard_in_the_runner_tree_fails_the_capture(tmp_path: Pat
     root = _write_result_root(tmp_path, _storyboard_fixture())
     (runner_tree / "sequence_demo" / "storyboard" / "index.js").unlink()
     with pytest.raises(ReplayBundleError, match="storyboard entrypoint does not resolve"):
-        capture_replay_bundle(require_finished=False, task_id=TASK_ID, result_root=root, storyboard_dirs=[runner_tree])
+        capture_replay_bundle(task_id=TASK_ID, result_root=root, storyboard_dirs=[runner_tree])
 
 
 def test_a_storyboard_family_that_does_not_declare_the_task_fails_closed(tmp_path: Path) -> None:
     runner_tree = _storyboard_runner_tree(tmp_path, "some_other_task", "gremlin_lh_fit", "export default {};\n")
     root = _write_result_root(tmp_path, _storyboard_fixture())
     with pytest.raises(ReplayBundleError, match="storyboard entrypoint does not resolve"):
-        capture_replay_bundle(require_finished=False, task_id=TASK_ID, result_root=root, storyboard_dirs=[runner_tree])
+        capture_replay_bundle(task_id=TASK_ID, result_root=root, storyboard_dirs=[runner_tree])
 
 
 # ── secret sanitization ───────────────────────────────────────────────────────
@@ -538,7 +725,7 @@ def test_a_storyboard_family_that_does_not_declare_the_task_fails_closed(tmp_pat
 
 def test_secret_bearing_metadata_is_sanitized_before_persistence(tmp_path: Path) -> None:
     root = _write_result_root(tmp_path, _synthetic_fixture())
-    bundle = capture_replay_bundle(require_finished=False, 
+    bundle = capture_replay_bundle(
         task_id=TASK_ID,
         result_root=root,
         provenance={
@@ -547,7 +734,15 @@ def test_secret_bearing_metadata_is_sanitized_before_persistence(tmp_path: Path)
             "note": "Authorization: Bearer abcdefghijklmnopqrstuvwxyz012345",
         },
     )
-    assert bundle["provenance"] == {"submitted_by": "tester", "note": "[redacted]"}
+    assert bundle["provenance"] == {
+        "submitted_by": "tester",
+        "note": "[redacted]",
+        "capture": {
+            "mode": "synthetic",
+            "captured_from": "a result root with no canonical task-store publication",
+            "task_source": "none - no canonical finished task row resolved for this task",
+        },
+    }
     assert "rvk_" not in json.dumps(bundle)
     assert "Bearer" not in json.dumps(bundle)
 
@@ -557,14 +752,14 @@ def test_a_secret_shaped_value_under_an_ordinary_key_is_redacted(tmp_path: Path)
     manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
     manifest["run"]["method"]["summary"] = "token rvk_abcdefghijklmnop leaked"
     (root / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
-    bundle = capture_replay_bundle(require_finished=False, task_id=TASK_ID, result_root=root)
+    bundle = capture_replay_bundle(task_id=TASK_ID, result_root=root)
     assert "rvk_" not in json.dumps(bundle)
     assert "[redacted]" in bundle["response"]["run"]["method"]["summary"]
 
 
 def test_a_host_local_path_in_metadata_is_scrubbed(tmp_path: Path) -> None:
     root = _write_result_root(tmp_path, _synthetic_fixture())
-    bundle = capture_replay_bundle(require_finished=False, 
+    bundle = capture_replay_bundle(
         task_id=TASK_ID,
         result_root=root,
         provenance={"backup": "/mnt/hdd/revocompute/backups/config-20260101", "keep": "relative/ok"},
@@ -585,7 +780,7 @@ def test_a_host_local_path_inside_an_artifact_payload_is_not_checked_in(tmp_path
             artifact["size"] = len(payload.encode("utf-8"))
             artifact["sha256"] = _sha(payload.encode("utf-8"))
     (root / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
-    bundle = capture_replay_bundle(require_finished=False, task_id=TASK_ID, result_root=root)
+    bundle = capture_replay_bundle(task_id=TASK_ID, result_root=root)
     assert "execution/slurm.stdout" not in bundle["payloads"]
     excluded = {entry["path"]: entry for entry in bundle["excluded"]}
     assert excluded["execution/slurm.stdout"]["reason"] == "payload embeds a host-local path"
@@ -663,7 +858,7 @@ def _pointer_bundle(tmp_path: Path, *, name: str = "result", **overrides) -> dic
     root = tmp_path / name
     root.mkdir()
     root = _write_result_root(root, _synthetic_fixture())
-    bundle = capture_replay_bundle(require_finished=False, task_id=TASK_ID, result_root=root)
+    bundle = capture_replay_bundle(task_id=TASK_ID, result_root=root)
     pointer = {
         "source": "production_api_acceptance_receipt",
         "task_id": TASK_ID,
@@ -690,7 +885,7 @@ def test_load_refuses_a_provenance_pointer_for_a_different_task(tmp_path: Path) 
     empty_root = tmp_path / "c"
     empty_root.mkdir()
     empty = capture_replay_bundle(
-        require_finished=False, task_id=TASK_ID, result_root=_write_result_root(empty_root, _synthetic_fixture())
+        task_id=TASK_ID, result_root=_write_result_root(empty_root, _synthetic_fixture())
     )
     empty["provenance"] = {}
     empty["bundle_digest"] = bundle_digest(empty)

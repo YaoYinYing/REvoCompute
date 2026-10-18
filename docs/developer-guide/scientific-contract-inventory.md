@@ -13,9 +13,31 @@ tool consumes the loaders production already uses — `task_types.isolated_disco
 for task, input-role, parameter and view declarations; `result_audit.audit_fleet`
 for the result contract; `result_storyboard` for the result tree and storyboard;
 `live_tests.load_live_test_plan` for each family plan; and the `input_validators`
-registries for the format and logical-type lifecycle. It is therefore not a second
+dispatch for the format and logical-type lifecycle. It is therefore not a second
 semantic registry: a row cannot disagree with what the Server accepts, and it
 reruns against another fleet revision without editing a roster.
+
+The logical-type lifecycle is decided by **which dispatch arm Core sends the pair
+to**, read from the registries Core itself dispatches on — `_DIALECTS` (keyed by
+`(format, logical type)`), the specification registry (keyed by logical type), and
+the logical-type identifiers whose only enforcement is the inline logical arm. The
+classes are `format_dialect_validation` (a registered dialect replaced the strict
+physical validator), `specification_validation` (the parsed-document registry for
+an `*_specification` type), `inline_logical_validation` (the inline logical arm for
+protein structure, alignment, and the Boltz YAML specification), and
+`no_semantic_validator`. A role carries the *ordered set* of classes its formats
+occupy, because a single class per type would have to pick one of several true
+answers — `boltz_specification` is dialect-validated as FASTA and logically
+validated as YAML.
+
+Each declared `(type, format)` pair is additionally validated once with a payload
+Core is guaranteed to refuse (a single NUL byte), but that probe is only a
+**reachability guard**: it establishes that a semantic validator observed the pair
+at all, so a registry identity is never reported for a pair Core does not inspect
+(`alignment|pqt` and a registered-but-logically-unhandled pair both report
+`no_semantic_validator`). The refusal's *wording* is not read, so rewording a Core
+validator's `kind=` subject cannot move a row; only a change to the dispatch itself
+can.
 
 ```bash
 python tools/audit_runner_scientific_contracts.py          # human table
@@ -76,11 +98,26 @@ reported at `declared_scientific_acceptance` and never one level higher, and a f
 that genuinely runs the program but ships no bundle is under-claimed rather than
 over-claimed. The level never claims more than a re-verifiable artifact proves.
 
-Two families currently reach `real_runner_cli`: one through the same re-verified
-bundle that reaches the strongest level, one through a capture recorded without a
-scheduler allocation. Only one family reaches `target_host_slurm_apptainer`. That is
-the point of the table: most of the fleet's strongest available evidence is static or
-fake-runner, and the report says so instead of implying uniform validation.
+The fleet currently records one family at `real_runner_cli`: GREMLIN_LH, through
+the same re-verified bundle that reaches the strongest level. Only one family
+reaches `target_host_slurm_apptainer`. That is the point of the table: most of the
+fleet's strongest available evidence is static or fake-runner, and the report says
+so instead of implying uniform validation.
+
+The fpocket bundle is a real local fpocket run through the pinned SIF, but it was
+captured before the capture recorded what it observed, so it currently labels
+`unverified_declaration` rather than `reproduced_published_result`. That is the
+conservative reading: the level is a re-verifiable artifact's claim, and a bundle
+with no capture-recorded observation does not carry one. A re-capture against the
+deployment's canonical task store makes it `provenance.capture.mode =
+reproduced_real_result` with the publication anchor it resolved, and the family
+reaches `real_runner_cli` again, with no change to the auditor.
+
+That downgrade is the **decided disposition** for this fork, not an open question:
+the original bundle is preserved as captured, no allowlist or grandfathering
+promotes it, its JSON is never hand-edited to make a label come out right, and no
+SIF re-capture is attempted on a host that no longer holds the pinned runtime
+image.
 
 ## Evidence corpus
 
@@ -91,12 +128,34 @@ through the production frontend. It is **derived from disk** — every
 *that item's own re-verified provenance*, never by a list on this page. The label
 therefore cannot drift into claiming more than the artifact proves.
 
+One consequence is visible on the current fleet: the fpocket bundle is a real
+local fpocket run, but it predates the capture-recorded observation, so it is held
+at `unverified_declaration` rather than promoted on its scheduler prose. A
+re-capture against the canonical task store writes the mode and the publication
+anchor it resolved, and lifts it. The level an artifact earns is always the level
+its own bytes support.
+
 | Label | Decided by | Scientific claim |
 |---|---|---|
-| `real_target_host_slurm_apptainer` | The bundle's `production_receipt` pointer re-verifies through `frontend_fixtures.provenance.production_receipt_pointer` against the cited receipt. The receipt's own `complete` flag is not part of the predicate, so a successful but partial run reaches this label | replayed Runner output |
-| `real_runner_local_no_scheduler` | The capture records a real Runner run with no batch-scheduler allocation | replayed Runner output |
-| `synthetic_mock` | Fixture bytes captured with `require_finished=False`, which stand in for a result rather than reproduce one. No fleet bundle reaches this label today; it is declared for the class | **none** |
-| `unverified_declaration` | A declaration whose provenance could not be re-verified | **none** |
+| `real_target_host_slurm_apptainer` | The bundle's stored `production_receipt` pointer re-verifies **field for field** against the pointer `frontend_fixtures.provenance.production_receipt_pointer` recomputes from the cited receipt. The receipt's own `complete` flag is not part of the predicate, so a successful but partial run reaches this label | replayed Runner output |
+| `reproduced_published_result` | The capture's **own persisted** `provenance.capture.mode` is `reproduced_real_result`, meaning the capture resolved the canonical finished task row and the server-owned publication anchor for the exact manifest bytes it read, and carried that anchor on the bundle. Neither the mode nor the anchor is a caller-supplied string: `capture_replay_bundle` writes both from what it resolved against the deployment's task database, and `load_bundle` refuses a promoted mode with no observation behind it. **No scheduler field is read anywhere in the auditor**, so no label names one | replayed Runner output |
+| `synthetic_mock` | The capture's persisted mode is `synthetic` — a capture that resolved no canonical publication and so stands in for a result rather than reproducing one. No fleet bundle reaches this label today; it is declared for the class | **none** |
+| `unverified_declaration` | A declaration whose provenance could not be re-verified — including a bundle whose stored pointer disagrees with the receipt it cites, and a bundle carrying no capture mode at all (captured before the observation was recorded) | **none** |
+
+The promotion is a fact the **capture observed**. `capture_replay_bundle` resolves
+the finished row and the publication anchor in the canonical task store — the
+deployment's `TaskDatabase`, which the capture reads read-only — and writes
+`provenance.capture.mode` together with the `task_source` and `publication_anchor`
+it found, overwriting anything the caller passed under those keys. A caller can
+hand the capture a manifest and a mapping; it cannot hand it the anchor row, and a
+manifest rewritten under the same path no longer matches the anchor, so the
+promotion is withdrawn. `load_bundle` refuses a mode outside the capture's
+vocabulary, refuses a promoted mode whose observation is missing or malformed, and
+does **not** require a mode — a bundle checked in before the observation was
+recorded keeps loading rather than failing or being promoted. The strongest label is
+likewise re-verified rather than assumed: the recomputed canonical pointer is
+compared against the stored one, so a pointer whose digest or deployment drifted
+from the receipt it cites is downgraded instead of trusted.
 
 A replay bundle proves **frontend compatibility with authentic Runner output**. It
 does not prove the science, and it is not an acceptance receipt; the
@@ -111,10 +170,11 @@ for what owns scientific acceptance.
 ## Parameters and inputs
 
 The audit reports, per Task, the declared parameter vocabulary, the named input
-roles with their logical type, the Core lifecycle class that enforces each type's
-semantics, and whether each declared format falls inside the Core upload security
-boundary. It also reports **parameter-forwarding candidates**: declared parameters
-whose name appears nowhere in the family's executable adapter assets.
+roles with their logical type, the ordered set of Core lifecycle classes that
+enforce each declared `(type, format)` pair's semantics, and whether each declared
+format falls inside the Core upload security boundary. It also reports
+**parameter-forwarding candidates**: declared parameters whose name appears
+nowhere in the family's executable adapter assets.
 
 Two caveats are load-bearing and are carried in the report itself:
 
@@ -137,7 +197,9 @@ currently **empty**: `defective: []`, `ok: true`, with the coverage partition
 unchanged at 20 covered / 36 unaudited. An empty defect set is not a clean bill
 of health — all 36 unaudited Tasks still report
 `result.required_source_undeclared_tree`, because no shipped tree exists to check
-their required sources against.
+their required sources against. The partition and the defect set are read off the
+same audit report, so a fleet that grows or shrinks moves them together; the
+inventory's own tests assert that relation rather than a Task count.
 
 The one concrete defect recorded on this base is now **resolved**, and the
 resolution is a declaration change rather than an allowlist entry:
