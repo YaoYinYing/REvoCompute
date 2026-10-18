@@ -77,9 +77,10 @@ def test_the_recorded_foundry_design_defect_is_resolved_not_silenced():
 
     report = audit_fleet(str(RUNNERS), server_dir=str(ROOT))
 
-    assert {
-        (finding.task, finding.code) for finding in report.findings
-    }.isdisjoint({task for task, _code in RESOLVED_DEFECTS})
+    assert RESOLVED_DEFECTS  # a like-shaped control: the absence below is not vacuous
+    assert not (
+        {(finding.task, finding.code) for finding in report.findings} & set(RESOLVED_DEFECTS)
+    ), "a resolved defect is reported again"
     with isolated_discovery(str(RUNNERS)) as manager:
         design = manager.contributions.resolve("tasks", "foundry_rfd3_design")
         fold = manager.contributions.resolve("tasks", "foundry_rf3_fold")
@@ -90,6 +91,50 @@ def test_the_recorded_foundry_design_defect_is_resolved_not_silenced():
     assert design_tree != fold_tree
     assert "designs" in design_tree and design_tree["designs"]["pattern"] == "*.cif.gz"
     assert "structures" in fold_tree and fold_tree["structures"]["pattern"].endswith("_model.cif")
+
+
+def test_the_shared_tree_defect_is_still_detected_when_the_split_is_undone(tmp_path, monkeypatch):
+    """A control for the absence above: the audit still fires on the defect.
+
+    A control for the assertion above, not a regression against ``main``: it
+    reconstructs the pre-split tree itself, so it passes there too and does not
+    by itself distinguish the two heads. What it pins is that the ``(task, code)``
+    pairs the fleet no longer reports are ones the audit *does* produce when the
+    Task-scoped split is undone -- the exact pre-split family, built out of the
+    real one (the fold Task's contract back at the family root, the design Tasks'
+    own contracts removed, every other byte identical) and audited through the
+    production loader. Without it, an emptied ``RESOLVED_DEFECTS`` or a broken
+    required-source check would leave the absence above looking green.
+    """
+    import shutil
+
+    runners = tmp_path / "docker" / "runners"
+    runners.mkdir(parents=True)
+    shutil.copytree(RUNNERS / "foundry", runners / "foundry")
+    shutil.copytree(RUNNERS / "common", runners / "common")
+    monkeypatch.setenv("RUNNERS_DIR", str(runners))
+    family = runners / "foundry"
+    shutil.move(str(family / "tasks" / "foundry_rf3_fold" / "expected_files.yaml"), str(family / "expected_files.yaml"))
+    shutil.move(str(family / "tasks" / "foundry_rf3_fold" / "storyboard"), str(family / "storyboard"))
+    for task_id in sorted({task for task, _code in RESOLVED_DEFECTS}):
+        task_directory = family / "tasks" / task_id
+        (task_directory / "expected_files.yaml").unlink()
+        shutil.rmtree(task_directory / "storyboard")
+
+    report = audit_fleet(str(runners), server_dir=str(ROOT))
+
+    assert set(report.tasks) == {"foundry_rfd3_design", "foundry_rfd3na_design", "foundry_rf3_fold"}
+    assert {
+        (finding.task, finding.code) for finding in report.findings
+    } == set(RESOLVED_DEFECTS)
+    assert report.defective == {task for task, _code in RESOLVED_DEFECTS}
+    assert report.ok is False
+    # The design Tasks still declare a tree here -- the family's -- which is what
+    # makes this line say something: a Task can be covered by the partition and
+    # still be reported defective, because coverage asks whether a declaration
+    # could be evaluated, not whether it passed. (It is a tautology for the report
+    # shapes below, where the defect set is empty; that is the comment's job.)
+    assert report.defective <= report.covered
 
 def test_fleet_report_separates_covered_unaudited_and_defective():
     """Coverage (a partition) and defect status (orthogonal) are both reported.

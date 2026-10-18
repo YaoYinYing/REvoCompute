@@ -11,22 +11,123 @@ const MAX_STRUCTURE_BYTES = 64 * 1024 * 1024;
 // payload was handed to it verbatim.
 const GZIPPED = /\.gz$/i;
 
+// A structure is ASCII, so the size of its text and the size of its UTF-8
+// encoding are the same number; the test makes that the common case cheap and
+// leaves the character-by-character measure for text that has to be measured.
+const NON_ASCII = /[^\x00-\x7f]/;
+
 function structureFormat(path: string): 'pdb' | 'mmcif' | 'pqr' {
   if (/\.pqr(?:\.gz)?$/i.test(path)) return 'pqr';
   return /\.(?:cif|mmcif)(?:\.gz)?$/i.test(path) ? 'mmcif' : 'pdb';
 }
 
-async function readSource(path: string, response: Response): Promise<string> {
-  if (!GZIPPED.test(path)) return response.text();
-  if (typeof DecompressionStream === 'undefined') throw new Error(t('results.structure.compressedUnsupported'));
-  // `response.body` is already the raw bytes; the stream inflates them without
-  // ever materializing the whole compressed file as a buffer.
-  if (!response.body) return gunzip(await response.arrayBuffer());
-  return new Response(response.body.pipeThrough(new DecompressionStream('gzip'))).text();
+function readSource(path: string, response: Response): Promise<string> {
+  const compressed = GZIPPED.test(path);
+  if (response.body) return boundedText(compressed ? inflate(response.body) : response.body, MAX_STRUCTURE_BYTES);
+  // No readable stream: the platform hands the body back whole, so the bytes are
+  // measured once rather than trusted from the declared size, and a compressed
+  // payload is still bounded as it inflates.
+  return boundedWhole(compressed, response);
 }
 
-async function gunzip(buffer: ArrayBuffer): Promise<string> {
-  return new Response(new Blob([buffer]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
+/** Bound a whole body the platform handed back without a stream. */
+async function boundedWhole(compressed: boolean, response: Response): Promise<string> {
+  const payload = await response.arrayBuffer();
+  if (payload.byteLength > MAX_STRUCTURE_BYTES) throw new Error(t('results.structure.tooLarge'));
+  if (compressed) return boundedText(inflate(new Blob([payload]).stream()), MAX_STRUCTURE_BYTES);
+  const text = new TextDecoder().decode(payload);
+  // Decoding invalid bytes emits U+FFFD, so the text can be larger than the bytes
+  // it came from; measure what the parser would actually receive, with the same
+  // measure the streamed path applies.
+  if (encodedLength(text) > MAX_STRUCTURE_BYTES) throw new Error(t('results.structure.tooLarge'));
+  return text;
+}
+
+/** A byte stream whose gzip payload is inflated as it is read. */
+function inflate(bytes: ReadableStream<Uint8Array<ArrayBuffer>>): ReadableStream<Uint8Array> {
+  if (typeof DecompressionStream === 'undefined') throw new Error(t('results.structure.compressedUnsupported'));
+  return bytes.pipeThrough(new DecompressionStream('gzip'));
+}
+
+/**
+ * The UTF-8 byte length of `text` -- what the parser receives, and what
+ * `new TextEncoder().encode(text).byteLength` returns -- without materializing
+ * the encoded bytes.
+ *
+ * A character outside ASCII encodes to two, three, or four bytes instead of one,
+ * and `TextDecoder` replaces every undecodable byte with a three-byte U+FFFD. The
+ * text a body decodes to is therefore never smaller than the body and can be
+ * three times larger: 64 MiB of `0xff` decodes to one replacement character per
+ * byte, 192 MiB of UTF-8. Counting the incoming bytes alone does not bound what
+ * is parsed.
+ *
+ * `NON_ASCII` is a whole-string scan, so an ordinary ASCII structure costs one
+ * pass over its text and only text that needs measuring is measured per character.
+ */
+function encodedLength(text: string): number {
+  if (!NON_ASCII.test(text)) return text.length;
+  let bytes = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index);
+    if (code < 0x80) bytes += 1;
+    else if (code < 0x800) bytes += 2;
+    // A well-formed pair is two surrogate code units and one four-byte
+    // character; a lone surrogate, or a pair's high half with no low half, is one
+    // three-byte U+FFFD.
+    else if (code >= 0xd800 && code <= 0xdbff && index + 1 < text.length
+      && text.charCodeAt(index + 1) >= 0xdc00 && text.charCodeAt(index + 1) <= 0xdfff) {
+      bytes += 4;
+      index += 1;
+    } else bytes += 3;
+  }
+  return bytes;
+}
+
+/**
+ * Read a byte stream into text, refusing anything past `limit`.
+ *
+ * The manifest's declared `size` bounds the bytes a Runner *published*, which for
+ * a compressed structure is the gzip envelope, not the payload the parser reads:
+ * a small high-ratio `.cif.gz` inflates to something arbitrarily larger. The
+ * decompressed bytes are therefore counted as they arrive, before the text is
+ * materialized -- checking the compressed size alone would let the preview limit
+ * be exceeded by whatever the compression ratio allows.
+ *
+ * The decompressed byte count is not by itself a bound on the parse, because the
+ * text a stream of invalid bytes decodes to is up to three times larger. The text
+ * is therefore measured against the same `limit` as it is built -- every chunk, and
+ * the flush that ends the stream, which can emit a pending multi-byte sequence no
+ * chunk produced -- so the streamed path and `boundedWhole` bound what the parser
+ * receives by one identical rule rather than two drifting ones.
+ *
+ * The accepted-input envelope is unchanged for a structure that is really a
+ * structure: valid text encodes to no more bytes than it occupies, so anything
+ * whose decoded size is under `limit` -- every payload that was accepted before
+ * -- is accepted now. What the text check additionally refuses is input whose
+ * decode expands past the limit, which is not a structure at all.
+ */
+async function boundedText(stream: ReadableStream<Uint8Array>, limit: number): Promise<string> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let text = '';
+  let received = 0;
+  let encoded = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      received += value.byteLength;
+      const chunk = decoder.decode(value, { stream: true });
+      encoded += encodedLength(chunk);
+      if (received > limit || encoded > limit) throw new Error(t('results.structure.tooLarge'));
+      text += chunk;
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+  const tail = decoder.decode();
+  if (encoded + encodedLength(tail) > limit) throw new Error(t('results.structure.tooLarge'));
+  return text + tail;
 }
 
 export class StructureController {

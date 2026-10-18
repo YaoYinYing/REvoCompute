@@ -245,6 +245,16 @@ def declared_result_contracts(family_root: str | Path, task_dirs: dict[str, str]
     Task-scoped contract keeps an identical record and its live-test receipt
     stays current.  Once Tasks differ, each one records its own, because from
     then on each Task's accepted outputs are decided by its own declaration.
+
+    "One contract" is decided by the resolved trees, not by where they are
+    spelled: the owners are compared with *each other*, and the record is the
+    common tree whenever they agree -- whether it sits at the family root or in
+    each owner's own directory.  Comparing each owner against the family-root
+    position instead answers a different question: after the documented
+    ``git mv`` of a single-Task family such as ``example`` the root holds no
+    tree at all, so one unchanged contract would be recorded under its task id,
+    changing the live-test configuration digest for a move no Runner can
+    observe.
     """
     root = Path(family_root)
     shared = load_expected_file_tree(root / "expected_files.yaml")
@@ -252,9 +262,9 @@ def declared_result_contracts(family_root: str | Path, task_dirs: dict[str, str]
         task_id: load_expected_file_tree(contract_directory(root, task_dir) / "expected_files.yaml")
         for task_id, task_dir in sorted(task_dirs.items())
     }
-    if all(tree == shared for tree in resolved.values()):
-        return shared
-    return resolved
+    owners = list(resolved.values())
+    common = owners[0] if owners else shared
+    return common if all(tree == common for tree in owners) else resolved
 
 
 def storyboard_declaration(task_type: Any, server_dir: str, file_ids: set[str]) -> dict[str, Any] | None:
