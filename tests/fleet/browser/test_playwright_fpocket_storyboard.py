@@ -130,7 +130,7 @@ def test_storyboard_renders_the_ranked_selector_from_the_real_table(page: Page) 
     assert len(expected) == 40
     _mount(page)
 
-    expect(page.get_by_role("heading", name="Evidence in order", exact=True)).to_be_visible()
+    expect(page.get_by_role("heading", name="Detected pockets", exact=True)).to_be_visible()
     table = page.locator("table.fpl-pockets")
     expect(table.locator("tbody tr")).to_have_count(40)
     page.get_by_role("button", name="Compare descriptors").click()

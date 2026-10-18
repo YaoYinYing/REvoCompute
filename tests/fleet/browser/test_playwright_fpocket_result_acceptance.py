@@ -226,7 +226,7 @@ def test_fpocket_ranked_pockets_render_as_the_primary_view(monkeypatch, tmp_path
     page.locator(".result-view-menu > summary").click()
     expect(page.get_by_role("button", name="Scientific result")).to_have_attribute("aria-pressed", "true")
     page.locator(".result-view-menu > summary").click()
-    expect(page.get_by_role("heading", name="Evidence in order", exact=True)).to_be_visible()
+    expect(page.get_by_role("heading", name="Detected pockets", exact=True)).to_be_visible()
     table = page.locator("table.fpl-pockets")
     expect(table).to_be_visible()
     assert any(call["path"] == "pockets.csv" for call in calls), calls

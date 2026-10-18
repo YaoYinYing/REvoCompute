@@ -21,7 +21,7 @@
 .ct-step-title { font:500 24px/1.25 var(--font-display); letter-spacing:-.6px; margin:0; }
 .ct-role-id { margin-left:auto; color:var(--ct-muted); font:10px var(--font-mono); }
 .ct-step-description { width:100%; font-size:14px; color:var(--ct-muted); margin:0; line-height:1.7; }
-.ct-component-title { font:500 17px var(--font-display); margin:16px 0 8px; }
+.ct-component-title { overflow-wrap:anywhere; font:500 17px var(--font-display); margin:16px 0 8px; }
 .ct-component-description,.ct-help { font-size:14px; color:var(--ct-muted); line-height:1.65; margin:8px 0 0; }
 .ct-workspace-component+.ct-workspace-component { margin-top:20px; }
 .ct-parameter-grid { display:grid; grid-template-columns:1fr 1fr; gap:24px 20px; }

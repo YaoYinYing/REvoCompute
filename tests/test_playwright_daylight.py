@@ -48,7 +48,18 @@ def test_dashboard_views_filters_and_important_type_remain_usable(page: Page, wi
         expect(page.locator('.task-actions [data-action="delete"]')).to_have_count(4)
         expect(page.get_by_role('link', name='Results', exact=True)).to_have_count(1)
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
-    page.locator('.dashboard-filters > summary').click()
+    # The register's filter disclosure is synchronized to the 56rem boundary, so the
+    # shipped product takes a different branch per width: at 1024 and 1440 the fields
+    # are laid out inline in the tool band and the summary is withdrawn, while at 390
+    # they stay behind the closed disclosure. The branch is asserted before it is
+    # taken, so a regression that moves a width across the boundary fails here
+    # instead of silently changing which branch this case exercises.
+    if width <= 896:
+        expect(page.locator('[data-filter="status"]')).to_be_hidden()
+        page.locator('.dashboard-filters > summary').click()
+    else:
+        expect(page.locator('[data-filter="status"]')).to_be_visible()
+    expect(page.locator('[data-filter="status"]')).to_be_visible()
     page.locator('[data-filter="status"]').select_option('running')
     expect(page.locator('.task-card')).to_have_count(1)
     expect(page.locator('.status')).to_have_text('running')

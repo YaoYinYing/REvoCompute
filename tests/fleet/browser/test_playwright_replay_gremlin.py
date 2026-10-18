@@ -58,7 +58,13 @@ def _mount(page: Page) -> ReplayBundle:
 
 def _open(page: Page) -> None:
     page.goto(f"{ORIGIN}/compute/results/{TASK_ID}")
-    expect(page.locator(".result-workspace, .glh-result, .result-status").first).to_be_visible()
+    # The scientific surface is the one root these tests then exercise, and the only
+    # one whose visibility is stable once the manifest arrives. A union over the
+    # workspace, the storyboard root and the lifecycle band resolves ``.first`` to
+    # whichever of them the DOM happens to hold first, and the lifecycle band is
+    # appended ahead of the workspace and then hidden for a quiet outcome -- so the
+    # wait passed or failed on which side of that transition the retry landed.
+    expect(page.locator(".glh-result")).to_be_visible()
 
 
 def test_replayed_result_mounts_every_declared_view(page: Page) -> None:

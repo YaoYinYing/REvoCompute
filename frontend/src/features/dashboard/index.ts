@@ -80,7 +80,10 @@ export class Dashboard {
         <label><span>${t('dashboard.filter.finishedTo')}</span><input type="date" data-filter="finishedTo"></label>
         <label class="advanced-regex"><span>${t('dashboard.filter.regex')}</span><button type="button" data-toggle-regex aria-pressed="false" title="${t('dashboard.filter.regex')}">.*</button></label>
       </div>`;
-    // A phone opens on the work, with secondary filters available in one disclosure.
+    // A phone opens on the work, with the secondary filters behind one disclosure; a
+    // desktop exposes those same controls directly. The disclosure state and the layout
+    // share one breakpoint, so a resize can never leave the fields closed at a width that
+    // paints them inline.
     this.filterDisclosure = document.createElement('details'); this.filterDisclosure.className = 'dashboard-filters';
     this.filterSummary = textNode('summary', t('dashboard.filters.summary'));
     const filterFields = document.createElement('div'); filterFields.className = 'dashboard-filter-fields';
@@ -88,7 +91,9 @@ export class Dashboard {
     const method = filterFields.querySelector('[data-filter="taskType"]')!.closest('label')!; const order = filterFields.querySelector('[data-filter="sort"]')!.closest('label')!;
     controls.append(method, order);
     this.filterDisclosure.append(this.filterSummary, filterFields); controls.append(this.filterDisclosure);
-    this.filterDisclosure.open = false;
+    const narrow = window.matchMedia('(max-width: 56rem)');
+    const syncFilters = (): void => { this.filterDisclosure.open = !narrow.matches; };
+    syncFilters(); narrow.addEventListener('change', syncFilters, { signal: this.controller.signal });
     this.error = controls.querySelector('[data-query-error]')!;
     this.advancedToggle = controls.querySelector('[data-advanced]')!;
     this.advancedPanel = controls.querySelector('[data-advanced-panel]')!;
