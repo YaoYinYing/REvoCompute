@@ -96,6 +96,8 @@ from .scenarios import (
     CONTROLLED_ACCESS_POLICY,
     CONTROLLED_RUNNER_NAME,
     SEQUENCE_ROLE,
+    DemoFileSpec,
+    DemoSpec,
     RunnerScenario,
     controlled_runner,
     controlled_scenario,
@@ -103,6 +105,7 @@ from .scenarios import (
     pssm_gremlin_scenario,
     replay_scenario,
     runner_scenario,
+    sequence_demo,
     structure_scenario,
 )
 
@@ -144,6 +147,8 @@ __all__ = [
     "AccessState",
     "ArchiveSpec",
     "Citation",
+    "DemoFileSpec",
+    "DemoSpec",
     "FrontendFixtureRouter",
     "InputRole",
     "LifecycleSpec",
@@ -207,6 +212,7 @@ __all__ = [
     "results",
     "runner_scenario",
     "scenarios",
+    "sequence_demo",
     "structure_scenario",
     "subject_id_for",
     "validate_manifest",
