@@ -95,9 +95,10 @@ function encodedLength(text: string): number {
  *
  * The decompressed byte count is not by itself a bound on the parse, because the
  * text a stream of invalid bytes decodes to is up to three times larger. The text
- * is therefore measured against the same `limit` as it is built, so the streamed
- * path and `boundedWhole` both bound what the parser receives by one identical
- * rule rather than two drifting ones.
+ * is therefore measured against the same `limit` as it is built -- every chunk, and
+ * the flush that ends the stream, which can emit a pending multi-byte sequence no
+ * chunk produced -- so the streamed path and `boundedWhole` bound what the parser
+ * receives by one identical rule rather than two drifting ones.
  *
  * The accepted-input envelope is unchanged for a structure that is really a
  * structure: valid text encodes to no more bytes than it occupies, so anything
@@ -124,7 +125,9 @@ async function boundedText(stream: ReadableStream<Uint8Array>, limit: number): P
   } finally {
     await reader.cancel().catch(() => undefined);
   }
-  return text + decoder.decode();
+  const tail = decoder.decode();
+  if (encoded + encodedLength(tail) > limit) throw new Error(t('results.structure.tooLarge'));
+  return text + tail;
 }
 
 export class StructureController {

@@ -232,6 +232,39 @@ describe('compressed structure results', () => {
     expect(source.data).toBe(payload);
   });
 
+  it('counts the flush that ends the stream, not only the chunks before it', async () => {
+    // A decoder holds back an incomplete multi-byte sequence, so the text it emits
+    // at end of stream is not in any chunk: `decoder.decode()` with no arguments
+    // emits one U+FFFD for a trailing lead byte, and that text reaches the parser.
+    // Measuring only the per-chunk sums leaves a one-flush hole in the same bound.
+    // This body's chunks each stay under the limit; the flush crosses it.
+    const load = vi.fn();
+    const fake = { ...viewer(), loadStructure: async (source: unknown) => { load(source); } };
+    const head = new Uint8Array(PREVIEW_LIMIT - 1).fill(0x41);
+    const lead = new Uint8Array([0xe2]);
+    const artifact = { ...file('model.cif', 'chemical/x-cif'), size: PREVIEW_LIMIT };
+    const streamOf = (chunks: Uint8Array[]) => new ReadableStream<Uint8Array<ArrayBuffer>>({
+      start(controller) { for (const chunk of chunks) controller.enqueue(chunk as Uint8Array<ArrayBuffer>); controller.close(); },
+    });
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, body: streamOf([head, lead]) } as unknown as Response)));
+    const controller = new StructureController(async () => fake as unknown as MolecularViewer);
+
+    await expect(controller.mount({} as HTMLElement, artifact, 'light')).rejects.toThrow(
+      'This structure exceeds the safe inline preview limit.',
+    );
+    expect(load).not.toHaveBeenCalled();
+
+    // Same size, same chunking, one byte different: a trailing ASCII byte flushes
+    // nothing, so the decoded text is exactly the limit and is accepted. The
+    // rejection above is the flush crossing the limit, not the byte count.
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true, body: streamOf([head, new Uint8Array([0x41])]),
+    } as unknown as Response)));
+    await new StructureController(async () => fake as unknown as MolecularViewer)
+      .mount({} as HTMLElement, artifact, 'light');
+    expect((load.mock.calls[0]![0] as { data: string }).data).toBe('A'.repeat(PREVIEW_LIMIT));
+  });
+
   it('keeps the accepted text envelope at the limit for both paths', async () => {
     // One rule, measured the same way: content whose text is exactly the limit is
     // accepted, and one byte more is refused -- streamed and whole-body alike.
