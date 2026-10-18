@@ -238,15 +238,16 @@ def test_dashboard_opens_on_task_identity_and_keeps_machine_facts_readable(page:
     expect(card).to_be_visible()
     heading = card.get_by_role("heading").bounding_box()
     assert heading
-    # The register opens on the work: the first Task identity is at the head of the
-    # register, the first thing inside the list itself rather than the last of a
-    # column of page chrome. #88 gives the register its own stats band, filter band
-    # and view toolbar above the list, so the identity sits below them at a phone
-    # width rather than above the fixed navigation the pre-#88 bottom bar was; what
-    # is asserted is that the work leads the register, not where a bar sits.
+    # The register opens on the work: the first Task identity is inside the opening
+    # viewport, not below a column of page chrome the reader has to scroll past. #88
+    # gives the register its own stats band, filter band and view toolbar above the
+    # list, so at a phone width the identity sits below them where the pre-#88 fixed
+    # bottom bar used to be; what is asserted is that the work leads the register,
+    # which is a bound against the viewport the reader opened, not against a bar.
     identity = card.locator(".task-identity-id")
     first_row = card.bounding_box()
     assert first_row and 0 < heading["y"] - first_row["y"] < 40, (heading, first_row)
+    assert heading["y"] + heading["height"] <= 780, (width, role, heading)
     # The navigation never covers it: above the desktop breakpoint it is the
     # sidebar column beside the outlet, and below it #88 withdraws the sidebar
     # entirely, so the work is unobstructed until the reader opens the drawer,
@@ -370,11 +371,12 @@ def test_narrow_admin_register_tolerates_wider_font_metrics(page: Page, tour_com
     heading = page.locator(".task-card h2").bounding_box()
     assert box and heading
     # Wider font metrics re-lay the masthead, but the register still leads with the
-    # work: the first Task identity is the head of the first register row, and every
-    # page action stays inside its own group rather than spilling out of the page.
+    # work: the first Task identity is the head of the first register row, every page
+    # action stays inside its own group rather than spilling out of the page, and the
+    # reflowed masthead still fits above the first row.
     row = page.locator(".task-card").first.bounding_box()
     assert row
-    assert heading["y"] >= row["y"] and heading["y"] - row["y"] < 40, (heading, row)
+    assert 0 < heading["y"] - row["y"] < 40, (heading, row)
     for control in actions.locator(":scope > *").all():
         if not control.is_visible():
             # #88 withdraws the register's tour entry below the container breakpoint

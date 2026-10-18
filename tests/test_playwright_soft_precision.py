@@ -696,18 +696,19 @@ def test_guided_tour_result_step_visits_a_real_result_and_localizes_its_copy(pag
 
 def test_advanced_search_is_subordinate_and_obviously_active(page: Page) -> None:
     _dashboard(page)
-    # #88 put the whole secondary filter set - including the Advanced search
-    # reveal - behind one disclosure the reader opens, so the register opens on
-    # the work rather than on a row of filter controls.
-    page.locator(".dashboard-filters > summary").click()
+    # The register opens at desktop width, where the design language reserves the
+    # filter disclosure for phones and requires the desktop to expose the secondary
+    # filters and the Advanced search reveal directly. Reaching the reveal without
+    # opening anything is the assertion: a low-frequency control is revealed, not
+    # appended as noise to the search field.
     toggle = page.get_by_role("button", name="Advanced search")
+    expect(toggle).to_be_visible()
     expect(toggle).to_have_attribute("aria-expanded", "false")
     expect(page.locator("[data-advanced-panel]")).to_be_hidden()
     toggle.click()
     expect(toggle).to_have_attribute("aria-expanded", "true")
     panel = page.locator("[data-advanced-panel]")
     expect(panel).to_be_visible()
-    # A low-frequency control is revealed, not appended as noise to the search field.
     panel.get_by_label("Submitted from").fill("2026-01-01")
     panel.get_by_label("Regular expression").click()
     expect(page.get_by_role("button", name="Advanced search, 2 active")).to_be_visible()

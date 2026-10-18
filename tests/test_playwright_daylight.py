@@ -48,7 +48,8 @@ def test_dashboard_views_filters_and_important_type_remain_usable(page: Page, wi
         expect(page.locator('.task-actions [data-action="delete"]')).to_have_count(4)
         expect(page.get_by_role('link', name='Results', exact=True)).to_have_count(1)
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
-    page.locator('.dashboard-filters > summary').click()
+    if not page.locator('[data-filter="status"]').is_visible():
+        page.locator('.dashboard-filters > summary').click()
     page.locator('[data-filter="status"]').select_option('running')
     expect(page.locator('.task-card')).to_have_count(1)
     expect(page.locator('.status')).to_have_text('running')
