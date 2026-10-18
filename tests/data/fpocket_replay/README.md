@@ -48,11 +48,16 @@ is absent.
 
 ## Capture mode
 
-The bundle was captured before `capture_replay_bundle` recorded its own
-`provenance.capture.mode`, so it carries no mode and the scientific-contract
-inventory labels it `unverified_declaration` rather than
-`real_runner_local_no_scheduler`. That is deliberate: the label is a fact the
-capture must have written, not a string a bundle can assert, and the pinned SIF
-and result root this bundle came from are no longer present, so it cannot be
-re-captured here to acquire the mode. `provenance.capture.scheduler` is the
-record of how the run was scheduled; it is not the discriminator.
+The bundle was captured before `capture_replay_bundle` resolved and recorded the
+observation that decides its mode — the canonical finished task row and the
+server-owned publication anchor — so it carries no mode and the
+scientific-contract inventory labels it `unverified_declaration` rather than
+`reproduced_published_result`. That is deliberate: the label is a fact the
+capture must have *observed* against the deployment's task store, not a string a
+bundle can assert, and the pinned SIF and result root this bundle came from are no
+longer present, so it cannot be re-captured here to acquire the mode. The
+disposition is decided, not open: the bundle is preserved as captured, no
+allowlist or grandfathering promotes it, its JSON is never hand-edited to make a
+label come out right, and no re-capture is attempted. `provenance.capture.scheduler`
+is the record of how the run was scheduled; it is not the discriminator, and no
+label names one.

@@ -21,6 +21,14 @@ A bundle is deterministic and inspectable: it holds only what the frontend
 reads, every byte is re-hashed from the source, and a payload that cannot be
 checked in for size or encoding reasons keeps its hash and provenance with the
 reason recorded rather than being silently dropped or truncated.
+
+The capture's own ``provenance.capture.mode`` is written from what the capture
+*observed*, never from an argument it was handed. A capture that resolves the
+finished canonical task store row for the task and the server-owned publication
+anchor that describes the exact manifest bytes it read records
+``reproduced_real_result``; a capture that resolves no such publication stands in
+for a result and records ``synthetic``. A caller can therefore fabricate a task
+row or a manifest, but not the recorded observation that promotes a bundle.
 """
 
 from __future__ import annotations
@@ -29,6 +37,7 @@ import hashlib
 import json
 import os
 import re
+import sqlite3
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -38,10 +47,13 @@ from . import builders
 REPLAY_BUNDLE_VERSION = 1
 REPLAY_BUNDLE_KIND = "real_runner_result_replay"
 
-#: The capture modes ``capture_replay_bundle`` writes from its own
-#: ``require_finished`` argument and its own verified outcome. One owner: the
-#: auditor promotes a bundle only on the mode the capture persisted, so the
-#: vocabulary cannot drift into a second, caller-supplied claim.
+#: The capture modes ``capture_replay_bundle`` writes from what it *observed*.
+#: ``reproduced_real_result`` requires the capture itself to have resolved a
+#: finished canonical task row and the server-owned publication anchor for the
+#: exact manifest bytes it read; ``synthetic`` is a capture that resolved no
+#: publication and so stands in for a result rather than reproducing one. One
+#: owner: the auditor promotes a bundle only on the mode the capture persisted,
+#: so the vocabulary cannot drift into a second, caller-supplied claim.
 CAPTURE_MODE_REPRODUCED = "reproduced_real_result"
 CAPTURE_MODE_SYNTHETIC = "synthetic"
 CAPTURE_MODES = (CAPTURE_MODE_REPRODUCED, CAPTURE_MODE_SYNTHETIC)
@@ -246,28 +258,36 @@ def capture_replay_bundle(
     *,
     task_id: str,
     result_root: str | Path,
-    task_row: Mapping[str, Any] | None = None,
+    task_store: Any | None = None,
     provenance: Mapping[str, Any] | None = None,
     display_name: str | None = None,
     storyboard_dirs: Sequence[str | Path] | None = None,
     max_payload_bytes: int = DEFAULT_MAX_PAYLOAD_BYTES,
     max_bundle_bytes: int = DEFAULT_MAX_BUNDLE_BYTES,
-    require_finished: bool = True,
 ) -> dict[str, Any]:
     """Capture one bounded, sanitized replay bundle from a canonical result root.
 
-    Starts from a real completed result and reads through canonical ownership:
-    the manifest's task identity must agree with the requested task, and, for a
-    real capture (``require_finished``, the default), the canonical task store
-    row must exist and prove a finished success whose type agrees with the
-    manifest, so a replay can never be captured from a running, failed, or
-    misidentified task. Only a synthetic fixture capture, which stands in for a
-    result rather than reproducing one, passes ``require_finished=False``.
+    The manifest's task identity must agree with the requested task, and the
+    capture resolves the *publication* through the canonical task store: a real
+    capture passes the deployment's ``TaskDatabase`` path as *task_store* and
+    records ``provenance.capture.mode = reproduced_real_result`` only when the
+    finished row exists, its type agrees with the manifest, and the store's own
+    publication anchor describes the exact manifest bytes read from disk. A
+    synthetic fixture capture, which stands in for a result rather than
+    reproducing one, passes no store and records ``synthetic``.
 
-    The capture records its own ``provenance.capture.mode`` from
-    ``require_finished`` and its own verified outcome, overwriting anything the
-    caller passed under that key: the mode is the capture's observation, and a
-    caller cannot declare it.
+    Nothing is resolved from the environment: the store is an explicit argument,
+    so a capture cannot be promoted by ambient state a caller did not name.
+
+    The mode is therefore an observation, not an argument: nothing a caller
+    *supplies* can promote a bundle, because a caller can hand over a manifest
+    and a mapping but not the server-owned anchor row that only Core's
+    finalization writes.
+
+    ``provenance.capture.mode`` is written last and overwrites anything the
+    caller passed under that key, and the keys the capture owns -- ``mode``,
+    ``captured_from``, ``task_source``, ``publication_anchor`` -- are the whole
+    record of that observation.
 
     Every payload is resolved only inside the result root and re-hashed from the
     bytes on disk, and every required view source must resolve. The result is
@@ -288,7 +308,8 @@ def capture_replay_bundle(
     if not isinstance(manifest, Mapping):
         raise ReplayBundleError("ResultManifest is not a JSON object")
 
-    _verify_identity(manifest, task_id, task_row, require_finished=require_finished)
+    _verify_manifest_identity(manifest, task_id)
+    publication = _resolve_publication(task_id, manifest, task_store, manifest_path)
     response = project_manifest_for_serve(manifest, task_id=task_id)
     _validate_served(response)
 
@@ -300,13 +321,28 @@ def capture_replay_bundle(
     capture_provenance = sanitize(dict(provenance or {}))
     if not isinstance(capture_provenance, dict):
         raise ReplayBundleError("capture provenance must be a JSON object")
-    # The mode is the capture's own observation, so it is written last and
-    # overwrites anything the caller supplied under that key.
+    # The observation is written last and overwrites anything the caller supplied
+    # under these keys: a caller may hand the capture a manifest, never the fact
+    # that promotes it.
     capture_block = capture_provenance.get("capture")
     if not isinstance(capture_block, dict):
         capture_block = {}
         capture_provenance["capture"] = capture_block
-    capture_block["mode"] = CAPTURE_MODE_REPRODUCED if require_finished else CAPTURE_MODE_SYNTHETIC
+    for owned in ("mode", "captured_from", "task_source", "publication_anchor"):
+        capture_block.pop(owned, None)
+    if publication is None:
+        capture_block["mode"] = CAPTURE_MODE_SYNTHETIC
+        capture_block["captured_from"] = "a result root with no canonical task-store publication"
+        capture_block["task_source"] = "none - no canonical finished task row resolved for this task"
+    else:
+        capture_block["mode"] = CAPTURE_MODE_REPRODUCED
+        capture_block["captured_from"] = "canonical finished task and its server-owned publication anchor"
+        capture_block["task_source"] = publication["task_source"]
+        capture_block["publication_anchor"] = {
+            "manifest_sha256": publication["manifest_sha256"],
+            "manifest_size": publication["manifest_size"],
+            "revision": publication["revision"],
+        }
 
     bundle: dict[str, Any] = {
         "bundle_version": REPLAY_BUNDLE_VERSION,
@@ -314,7 +350,7 @@ def capture_replay_bundle(
         "task": {
             "id": task_id,
             "type": response.get("task_type"),
-            "display_name": _display_name(task_row) or display_name,
+            "display_name": _display_name(publication) or display_name,
         },
         "provenance": capture_provenance,
         "response": sanitize(response),
@@ -340,43 +376,106 @@ def _assert_no_host_paths(bundle: Mapping[str, Any]) -> None:
         raise ReplayBundleError(f"a host-local path leaked into the bundle: {leaked[0].strip()!r}")
 
 
-def _verify_identity(
-    manifest: Mapping[str, Any],
-    task_id: str,
-    task_row: Mapping[str, Any] | None,
-    *,
-    require_finished: bool,
-) -> None:
-    """The manifest must be the intended, terminal result of the requested task.
+def _verify_manifest_identity(manifest: Mapping[str, Any], task_id: str) -> None:
+    """The manifest must be the intended, manifest-declared result of this task.
 
-    The manifest is the sole artifact-identity source. A real capture
-    (``require_finished``) additionally demands the canonical task store row: it
-    proves the task is a finished success whose type agrees with the manifest, so
-    a capture cannot persist a non-terminal or misidentified result. A synthetic
-    fixture capture, which stands in for a result rather than reproducing one,
-    relaxes only the requirement that the row exist; the manifest identity check
-    still applies.
+    The manifest is the sole artifact-identity source: it names the task it
+    belongs to and the schema it is written in, and nothing else may stand in for
+    it. Whether the result is *published* is a different question, answered by
+    the canonical task store in :func:`_resolve_publication`.
     """
     if manifest.get("schema_version") != 3:
         raise ReplayBundleError(f"unsupported ResultManifest schema_version: {manifest.get('schema_version')!r}")
     if str(manifest.get("task_id") or "").lower() != task_id:
         raise ReplayBundleError("ResultManifest task identity disagrees with the requested task")
-    if task_row is None:
-        if require_finished:
-            raise ReplayBundleError("a real capture requires the canonical finished task store row")
-        return
-    if str(task_row.get("md5sum") or "").lower() != task_id:
-        raise ReplayBundleError("task store row disagrees with the requested task identity")
-    if str(task_row.get("status") or "") != "finished":
-        raise ReplayBundleError(f"task is not a finished success: {task_row.get('status')!r}")
-    if str(task_row.get("task_type") or "") != str(manifest.get("task_type") or ""):
-        raise ReplayBundleError("task store and ResultManifest disagree on the task type")
 
 
-def _display_name(task_row: Mapping[str, Any] | None) -> str | None:
-    if task_row is None:
+def _resolve_publication(
+    task_id: str,
+    manifest: Mapping[str, Any],
+    task_store: Any | None,
+    manifest_path: str,
+) -> dict[str, Any] | None:
+    """Resolve the canonical publication this result root claims, or ``None``.
+
+    A result directory is a set of files; whether those files are a *published
+    task result* is a fact only the canonical task store owns. The capture
+    resolves, in the store, the finished row for this task and the publication
+    anchor Core recorded for it, and accepts the publication only when the row is
+    a finished success whose type agrees with the manifest and the anchored
+    digest and size are the digest and size of the manifest bytes on disk.
+
+    ``None`` means "no canonical publication resolved": a synthetic fixture
+    capture passes no store, a deployment with no store configured resolves none,
+    and any disagreement between row, anchor, and bytes resolves none. The
+    capture then records the synthetic mode, which is the weaker claim, rather
+    than asserting a real-run provenance it did not observe.
+
+    Only ``TaskDatabase`` writes ``result_publications`` (Core's finalization
+    path), so this is an observation a caller cannot mint from the result tree.
+    """
+    if not isinstance(task_store, str) or not task_store:
         return None
-    return str(task_row.get("filename") or "") or None
+    if not os.path.isfile(task_store):
+        return None
+    try:
+        digest = _sha256_hex(Path(manifest_path).read_bytes())
+    except OSError:
+        return None
+    size = os.path.getsize(manifest_path)
+    try:
+        connection = sqlite3.connect(f"file:{task_store}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return None
+    try:
+        connection.row_factory = sqlite3.Row
+        return _publication_from_store(connection, task_id, manifest, digest, size)
+    except sqlite3.Error:
+        return None
+    finally:
+        connection.close()
+
+
+def _publication_from_store(
+    connection: sqlite3.Connection,
+    task_id: str,
+    manifest: Mapping[str, Any],
+    digest: str,
+    size: int,
+) -> dict[str, Any] | None:
+    row = connection.execute("SELECT * FROM tasks WHERE md5sum = ?", (task_id,)).fetchone()
+    if row is None:
+        return None
+    row = dict(row)
+    if str(row.get("md5sum") or "").lower() != task_id:
+        return None
+    if str(row.get("status") or "") != "finished":
+        return None
+    if str(row.get("task_type") or "") != str(manifest.get("task_type") or ""):
+        return None
+    anchor = connection.execute(
+        "SELECT * FROM result_publications WHERE task_id = ?", (task_id,)
+    ).fetchone()
+    if anchor is None:
+        return None
+    anchor = dict(anchor)
+    if str(anchor.get("manifest_sha256") or "").lower() != digest:
+        return None
+    if int(anchor.get("manifest_size") or -1) != size:
+        return None
+    return {
+        "filename": str(row.get("filename") or ""),
+        "task_source": "canonical task store row resolved from the deployment task database",
+        "manifest_sha256": digest,
+        "manifest_size": size,
+        "revision": int(anchor.get("revision") or 1),
+    }
+
+
+def _display_name(publication: Mapping[str, Any] | None) -> str | None:
+    if publication is None:
+        return None
+    return str(publication.get("filename") or "") or None
 
 
 def _logical_file_map(manifest: Mapping[str, Any]) -> dict[str, list[dict[str, Any]]]:
@@ -734,11 +833,14 @@ def _verify_provenance_task_identity(bundle: Mapping[str, Any]) -> None:
     provenance the reader cannot trust.
 
     A persisted ``capture.mode`` is validated the same way -- refused unless it
-    is one of the two modes the capture writes. It is *not* required: two bundles
-    were checked in before the capture recorded a mode, and the reader must keep
-    loading them (at the unverified level) rather than failing or promoting
-    them. A reader that invented a mode for them would be deciding provenance,
-    which is exactly what the mode exists to prevent.
+    is one of the two modes the capture writes -- and a promotion carries the
+    capture's own record of *what it observed*, so the strongest mode is refused
+    when that record is absent or malformed rather than trusted on its own. The
+    mode is *not* required: two bundles were checked in before the capture
+    recorded one, and the reader must keep loading them (at the unverified level)
+    rather than failing or promoting them. A reader that invented a mode for them
+    would be deciding provenance, which is exactly what the mode exists to
+    prevent.
     """
     from .provenance import PROVENANCE_SOURCE
 
@@ -750,6 +852,8 @@ def _verify_provenance_task_identity(bundle: Mapping[str, Any]) -> None:
         mode = capture.get("mode")
         if mode not in CAPTURE_MODES:
             raise ReplayBundleError(f"unsupported capture mode: {mode!r}")
+        if mode == CAPTURE_MODE_REPRODUCED:
+            _verify_publication_anchor(capture)
     pointer = provenance.get("production_receipt")
     if not isinstance(pointer, Mapping):
         return
@@ -766,6 +870,33 @@ def _verify_provenance_task_identity(bundle: Mapping[str, Any]) -> None:
     digest = str(pointer.get("receipt_digest") or "")
     if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
         raise ReplayBundleError("the production-receipt pointer carries no receipt digest")
+
+
+def _verify_publication_anchor(capture: Mapping[str, Any]) -> None:
+    """The strongest mode must carry the capture's record of what it observed.
+
+    ``reproduced_real_result`` asserts that this bundle came from a published
+    result, so the loader requires the capture's own observation to be present and
+    self-consistent: a named task source, the exact manifest digest and size the
+    capture read, and a publication revision. A bundle whose strongest mode is
+    asserted without that record is refused rather than trusted -- the mode is a
+    claim, and the record is the observation behind it.
+    """
+    source = capture.get("task_source")
+    if not isinstance(source, str) or not source:
+        raise ReplayBundleError("a reproduced-real-result capture records no canonical task source")
+    anchor = capture.get("publication_anchor")
+    if not isinstance(anchor, Mapping):
+        raise ReplayBundleError("a reproduced-real-result capture records no publication anchor")
+    digest = str(anchor.get("manifest_sha256") or "")
+    if not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise ReplayBundleError("the capture's publication anchor carries no manifest digest")
+    size = anchor.get("manifest_size")
+    if not isinstance(size, int) or isinstance(size, bool) or size < 0:
+        raise ReplayBundleError("the capture's publication anchor carries no manifest size")
+    revision = anchor.get("revision")
+    if not isinstance(revision, int) or isinstance(revision, bool) or revision < 1:
+        raise ReplayBundleError("the capture's publication anchor carries no publication revision")
 
 
 def _verify_payloads(bundle: Mapping[str, Any]) -> None:

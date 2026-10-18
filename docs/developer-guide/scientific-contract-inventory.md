@@ -17,18 +17,27 @@ dispatch for the format and logical-type lifecycle. It is therefore not a second
 semantic registry: a row cannot disagree with what the Server accepts, and it
 reruns against another fleet revision without editing a roster.
 
-The logical-type lifecycle is decided by **probing that dispatch**, not by naming
-a registry: each `(logical type, format)` pair a Task declares is validated once
-with a payload Core is guaranteed to refuse, and classified by *which* validator
-refused. The classes are `format_dialect_validation` (a registered
-`(format, logical_type)` dialect replaced the strict validator in the physical
-pass), `specification_validation` (the parsed-document registry for an
-`*_specification` type), `inline_logical_validation` (the inline logical arm for
+The logical-type lifecycle is decided by **which dispatch arm Core sends the pair
+to**, read from the registries Core itself dispatches on — `_DIALECTS` (keyed by
+`(format, logical type)`), the specification registry (keyed by logical type), and
+the logical-type identifiers whose only enforcement is the inline logical arm. The
+classes are `format_dialect_validation` (a registered dialect replaced the strict
+physical validator), `specification_validation` (the parsed-document registry for
+an `*_specification` type), `inline_logical_validation` (the inline logical arm for
 protein structure, alignment, and the Boltz YAML specification), and
 `no_semantic_validator`. A role carries the *ordered set* of classes its formats
 occupy, because a single class per type would have to pick one of several true
 answers — `boltz_specification` is dialect-validated as FASTA and logically
 validated as YAML.
+
+Each declared `(type, format)` pair is additionally validated once with a payload
+Core is guaranteed to refuse (a single NUL byte), but that probe is only a
+**reachability guard**: it establishes that a semantic validator observed the pair
+at all, so a registry identity is never reported for a pair Core does not inspect
+(`alignment|pqt` and a registered-but-logically-unhandled pair both report
+`no_semantic_validator`). The refusal's *wording* is not read, so rewording a Core
+validator's `kind=` subject cannot move a row; only a change to the dispatch itself
+can.
 
 ```bash
 python tools/audit_runner_scientific_contracts.py          # human table
@@ -96,12 +105,19 @@ fleet's strongest available evidence is static or fake-runner, and the report sa
 so instead of implying uniform validation.
 
 The fpocket bundle is a real local fpocket run through the pinned SIF, but it was
-captured before the capture recorded its own mode, so it currently labels
-`unverified_declaration` rather than `real_runner_local_no_scheduler`. That is the
+captured before the capture recorded what it observed, so it currently labels
+`unverified_declaration` rather than `reproduced_published_result`. That is the
 conservative reading: the level is a re-verifiable artifact's claim, and a bundle
-with no capture-recorded mode does not carry one. A re-capture on a host holding
-the pinned SIF makes it `provenance.capture.mode = reproduced_real_result` and the
-family reaches `real_runner_cli` again, with no change to the auditor.
+with no capture-recorded observation does not carry one. A re-capture against the
+deployment's canonical task store makes it `provenance.capture.mode =
+reproduced_real_result` with the publication anchor it resolved, and the family
+reaches `real_runner_cli` again, with no change to the auditor.
+
+That downgrade is the **decided disposition** for this fork, not an open question:
+the original bundle is preserved as captured, no allowlist or grandfathering
+promotes it, its JSON is never hand-edited to make a label come out right, and no
+SIF re-capture is attempted on a host that no longer holds the pinned runtime
+image.
 
 ## Evidence corpus
 
@@ -113,26 +129,33 @@ through the production frontend. It is **derived from disk** — every
 therefore cannot drift into claiming more than the artifact proves.
 
 One consequence is visible on the current fleet: the fpocket bundle is a real
-local fpocket run, but it predates the capture-recorded mode, so it is held at
-`unverified_declaration` rather than promoted on its scheduler prose. A re-capture
-that owns the pinned SIF writes the mode and lifts it. The level an artifact earns
-is always the level its own bytes support.
+local fpocket run, but it predates the capture-recorded observation, so it is held
+at `unverified_declaration` rather than promoted on its scheduler prose. A
+re-capture against the canonical task store writes the mode and the publication
+anchor it resolved, and lifts it. The level an artifact earns is always the level
+its own bytes support.
 
 | Label | Decided by | Scientific claim |
 |---|---|---|
 | `real_target_host_slurm_apptainer` | The bundle's stored `production_receipt` pointer re-verifies **field for field** against the pointer `frontend_fixtures.provenance.production_receipt_pointer` recomputes from the cited receipt. The receipt's own `complete` flag is not part of the predicate, so a successful but partial run reaches this label | replayed Runner output |
-| `real_runner_local_no_scheduler` | The capture's **own persisted** `provenance.capture.mode` is `reproduced_real_result`, which `capture_replay_bundle` writes from its own `require_finished` argument and its own verified outcome. Scheduler prose is context, never the deciding fact | replayed Runner output |
-| `synthetic_mock` | The capture's persisted mode is `synthetic` — a `require_finished=False` capture, which stands in for a result rather than reproducing one. No fleet bundle reaches this label today; it is declared for the class | **none** |
-| `unverified_declaration` | A declaration whose provenance could not be re-verified — including a bundle whose stored pointer disagrees with the receipt it cites, and a bundle carrying no capture mode at all (captured before the mode existed) | **none** |
+| `reproduced_published_result` | The capture's **own persisted** `provenance.capture.mode` is `reproduced_real_result`, meaning the capture resolved the canonical finished task row and the server-owned publication anchor for the exact manifest bytes it read, and carried that anchor on the bundle. Neither the mode nor the anchor is a caller-supplied string: `capture_replay_bundle` writes both from what it resolved against the deployment's task database, and `load_bundle` refuses a promoted mode with no observation behind it. **No scheduler field is read anywhere in the auditor**, so no label names one | replayed Runner output |
+| `synthetic_mock` | The capture's persisted mode is `synthetic` — a capture that resolved no canonical publication and so stands in for a result rather than reproducing one. No fleet bundle reaches this label today; it is declared for the class | **none** |
+| `unverified_declaration` | A declaration whose provenance could not be re-verified — including a bundle whose stored pointer disagrees with the receipt it cites, and a bundle carrying no capture mode at all (captured before the observation was recorded) | **none** |
 
-The discriminator is a fact the **capture owns**. `capture_replay_bundle` writes
-`provenance.capture.mode` last, from `require_finished` and its own verified
-outcome, so a caller cannot forge it; `load_bundle` refuses a mode outside the
-capture's vocabulary but does **not** require one, so a bundle checked in before
-the mode existed keeps loading rather than failing or being promoted. The
-strongest label is likewise re-verified rather than assumed: the recomputed
-canonical pointer is compared against the stored one, so a pointer whose digest
-or deployment drifted from the receipt it cites is downgraded instead of trusted.
+The promotion is a fact the **capture observed**. `capture_replay_bundle` resolves
+the finished row and the publication anchor in the canonical task store — the
+deployment's `TaskDatabase`, which the capture reads read-only — and writes
+`provenance.capture.mode` together with the `task_source` and `publication_anchor`
+it found, overwriting anything the caller passed under those keys. A caller can
+hand the capture a manifest and a mapping; it cannot hand it the anchor row, and a
+manifest rewritten under the same path no longer matches the anchor, so the
+promotion is withdrawn. `load_bundle` refuses a mode outside the capture's
+vocabulary, refuses a promoted mode whose observation is missing or malformed, and
+does **not** require a mode — a bundle checked in before the observation was
+recorded keeps loading rather than failing or being promoted. The strongest label is
+likewise re-verified rather than assumed: the recomputed canonical pointer is
+compared against the stored one, so a pointer whose digest or deployment drifted
+from the receipt it cites is downgraded instead of trusted.
 
 A replay bundle proves **frontend compatibility with authentic Runner output**. It
 does not prove the science, and it is not an acceptance receipt; the

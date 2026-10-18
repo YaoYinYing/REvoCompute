@@ -17,19 +17,24 @@ a roster.
 
 Two of the loaders it reads are addressed through module-private names --
 ``result_audit._required_sources`` and
-``input_validators.profiles._SPECIFICATION_VALIDATORS``. Neither has a public
-accessor today, and each is the exact predicate production dispatches on, so
-re-deriving it here would be the second source of truth this tool exists to
-avoid. The reads are inspect-only: the tool never mutates a registry, and the one
-shared entry point ``validate_input_file`` stays the Server's own dispatch.
+``input_validators._DIALECTS``/``input_validators.profiles._SPECIFICATION_VALIDATORS``.
+Neither has a public accessor today, and each is the exact predicate production
+dispatches on, so re-deriving it here would be the second source of truth this
+tool exists to avoid. The reads are inspect-only: the tool never mutates a
+registry, and the one shared entry point ``validate_input_file`` stays the
+Server's own dispatch.
 
-The logical-type lifecycle is decided by *probing that same dispatch*, not by
-naming a registry: each ``(logical type, format)`` pair a Task declares is
-validated once with a payload Core is guaranteed to refuse (a single NUL byte,
-which reads as binary content for every text validator and as an undecodable
-document for every JSON one) and classified by *which* Core validator refused
-it. A class therefore cannot be asserted by this file; it is whatever the
-Server's own code does.
+The logical-type lifecycle is decided by *which dispatch arm the pair is
+dispatched to*, read from the registries Core itself dispatches on:
+``_DIALECTS`` (keyed by ``(format, logical type)``), the specification registry
+(keyed by logical type), and the logical-type identifiers whose only enforcement
+is the inline logical pass. Each ``(logical type, format)`` pair a Task declares
+is additionally *probed* once with a payload Core is guaranteed to refuse (a
+single NUL byte, which reads as binary content for every text validator and as an
+undecodable document for every JSON one) -- not to classify the pair, but as a
+**reachability guard**: it establishes that a semantic validator observed the pair
+at all. A class cannot be asserted by a refusal's wording here; the wording is not
+read.
 
 Three things this tool deliberately does NOT claim:
 
@@ -73,9 +78,13 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from revocompute.input_validators import profiles as _input_profiles
-from revocompute.input_validators import supported_input_formats
-from revocompute.input_validators import validate_input_file, validate_logical_input
+from revocompute.input_validators import (
+    _DIALECTS,
+    profiles as _input_profiles,
+    supported_input_formats,
+    validate_input_file,
+    validate_logical_input,
+)
 from revocompute.live_tests import LiveTestConfigurationError, load_live_test_plan
 from revocompute.result_audit import _required_sources, audit_fleet
 from revocompute.result_storyboard import expected_file_tree
@@ -102,24 +111,17 @@ LIFECYCLE_CLASSES = (
 )
 
 #: One NUL byte: no text validator accepts it, so every branch of the dispatch
-#: refuses it and the refusal names the branch that ran.
+#: refuses it. It is used as a *reachability guard* only -- a pair whose probe is
+#: refused by no semantic validator is reported as unvalidated, so a class is
+#: never reported for a pair Core does not actually inspect. The refusal's
+#: *wording* is deliberately not read: the classes below come from the registries.
 _PROBE_PAYLOAD = bytes([0])
 
-#: Wording Core's validators use for the *subject* of a refusal, i.e. the
-#: ``kind=`` each validator is called with. These are refusal provenance, not
-#: file content: they say which validator ran, which is exactly the fact being
-#: classified. The pair matters: a dialect replaces the PASS-ONE validator with
-#: registry wording, while the Boltz YAML serialization keeps the generic YAML
-#: validator in pass one and is enforced by the logical arm in pass two. The
-#: same wording in the two passes is therefore a different lifecycle, and the
-#: classification below reads the pass, not just the wording.
-_PHYSICAL_DIALECT_KINDS = ("Boltz specification", "Chai entity FASTA")
-_LOGICAL_VERBATIM_KINDS = ("protein structure", "alignment", "Boltz specification")
-
-#: The logical types whose remaining arm is the specification registry. Listed so
-#: the registry read below is an identification of the arm that refused, not a
-#: second place a lifecycle is asserted from.
-_SPECIFICATION_LOGICAL_TYPES = ("alphafold3_specification", "foundry_specification", "opendde_specification")
+#: The logical-type identifiers whose only semantic enforcement is the inline
+#: logical arm of ``validate_logical_input``. Read from that function's own
+#: branches, not restated: the read below is a membership test against the
+#: dispatch's own predicate, and the probe establishes that the arm is reached.
+_INLINE_LOGICAL_TYPES = ("protein_structure", "alignment", "boltz_specification")
 
 
 #: The two modes a capture persists on itself, from ``frontend_fixtures``' own
@@ -157,10 +159,14 @@ _EXECUTION_PATTERNS = ("run_with_manifest", "subprocess.run", "Popen")
 _SCIENTIFIC_PATTERN = "scientific_acceptance"
 
 #: Labels for an evidence-corpus item, decided by the item's own verified
-#: provenance rather than by a hand-maintained list.
+#: provenance rather than by a hand-maintained list. Each label names a fact the
+#: item's bytes establish: ``reproduced_published_result`` is the capture's own
+#: observation that the result it reproduced is anchored as published by the
+#: canonical task store. Whether a *scheduler* ran it is deliberately not in any
+#: label -- the auditor reads no scheduler field, so no label may name one.
 CORPUS_LABELS = (
     "real_target_host_slurm_apptainer",
-    "real_runner_local_no_scheduler",
+    "reproduced_published_result",
     "synthetic_mock",
     "unverified_declaration",
 )
@@ -228,25 +234,36 @@ def _family_test_text(family_root: Path, name: str) -> str:
 
 
 def _input_dispatch_class(logical_type: str, format_name: str, probe_directory: Path) -> str:
-    """Classify one ``(logical type, format)`` pair by probing Core's dispatch.
+    """Classify one ``(logical type, format)`` pair by dispatch identity.
 
-    The probe runs the Server's own validation -- the physical pass
-    (``validate_input_file``, given the logical type so a registered dialect can
-    replace the strict validator) and the logical pass
-    (``validate_logical_input``), which are the two calls the upload path makes --
-    over a one-byte binary payload that every branch refuses. Which validator
-    refused is therefore the dispatch's own behaviour; this reads the refusal
-    instead of carrying a roster of type names that could drift from Core.
+    The class is decided by *which arm Core dispatches the pair to*, read from the
+    registries Core itself dispatches on. There are three, and each is read where
+    Core keys it:
 
-    ``boltz_specification`` is the pair this keeps apart: its ``fasta``/``fa``/
-    ``fas`` serializations are a registered physical *dialect*, so the physical
-    pass refuses them under the dialect's own name, while its ``yaml``/``yml``
-    serializations are handled by a logical arm and are not a dialect at all.
-    Classifying the pair, rather than the type, is what lets those be reported as
-    the two different things they are.
+    * ``_DIALECTS`` -- keyed by ``(format, logical type)`` -- replaces the strict
+      physical validator, so that pair is ``format_dialect_validation``;
+    * ``_SPECIFICATION_VALIDATORS`` -- keyed by logical type, reached from the
+      ``json`` arm -- is ``specification_validation``;
+    * the logical-type identifiers whose enforcement lives in
+      ``validate_logical_input``'s own branches are ``inline_logical_validation``.
+
+    The pair, not the type, is the unit: ``boltz_specification`` is a registered
+    FASTA dialect *and* an inline logical type, so classifying the pair is what
+    lets its two serializations be reported as the two different things they are.
+    The format gate on the inline alignment branch is Core's, not this file's: the
+    probe below decides whether that arm observed the pair at all, so
+    ``(alignment, pqt)`` -- where the format arm does not apply -- is not reported
+    as inline-validated.
+
+    The one-byte probe is a **reachability guard**, not the classifier: it
+    establishes that a semantic validator observed the pair at all, so a registry
+    identity is never reported for a pair Core does not inspect. No refusal's
+    *wording* is read, so rewording a Core validator's ``kind=`` subject cannot
+    move a row; only a change to the dispatch itself can.
     """
     suffix = f".{format_name}"
-    if format_name.lower().removeprefix(".") not in supported_input_formats():
+    normalized = format_name.lower().removeprefix(".")
+    if normalized not in supported_input_formats():
         # The upload path fails closed on an unregistered extension, so no
         # semantic validator can observe the pair. The row records that fact
         # separately as ``formats_inside_core_boundary``.
@@ -254,25 +271,23 @@ def _input_dispatch_class(logical_type: str, format_name: str, probe_directory: 
     probe = _probe_payload(probe_directory, suffix)
     try:
         physical = validate_input_file(str(probe), probe.name, logical_type=logical_type)
-        if physical is not None and any(kind in physical for kind in _PHYSICAL_DIALECT_KINDS):
-            return _LIFECYCLE_DIALECT
         logical = validate_logical_input(str(probe), format_name, logical_type)
     except Exception:  # noqa: BLE001 - a validator that cannot classify its own input
         return _LIFECYCLE_ABSENT
-    if logical is None:
+    if physical is None and logical is None:
         # Both passes accepted this payload, so no semantic validator observed
-        # the pair -- whatever the physical pass happens to be named.
+        # the pair at all.
         return _LIFECYCLE_ABSENT
-    if any(kind in logical for kind in _LOGICAL_VERBATIM_KINDS):
+    if (normalized, logical_type) in _DIALECTS:
+        return _LIFECYCLE_DIALECT
+    # The logical pass accepted the probe, so no logical arm observed the pair:
+    # whatever the physical pass refused it for is not a registered dialect.
+    if logical is None:
+        return _LIFECYCLE_ABSENT
+    if logical_type in _input_profiles._SPECIFICATION_VALIDATORS:
+        return _LIFECYCLE_SPECIFICATION
+    if logical_type in _INLINE_LOGICAL_TYPES:
         return _LIFECYCLE_INLINE
-    if logical_type in _SPECIFICATION_LOGICAL_TYPES:
-        # The last document-level arm: the specification registry, which runs on
-        # the parsed JSON document and returns the profile's own wording. The read
-        # below is the *identification* of the arm that produced a refusal the
-        # probe already observed, not an independent reason to assert one.
-        specifications = {str(key) for key in _input_profiles._SPECIFICATION_VALIDATORS}
-        if logical_type in specifications:
-            return _LIFECYCLE_SPECIFICATION
     return _LIFECYCLE_ABSENT
 
 
@@ -379,22 +394,22 @@ def _label_corpus_item(repo_root: Path, path: Path) -> dict[str, Any]:
     """Label one replay bundle from its OWN verified provenance.
 
     The label is decided, not declared. Three facts are read off the artifact,
-    each of which the *capture* wrote and the canonical loader re-validated:
+    each of which the *capture* observed and the canonical loader re-validated:
 
     * a production-receipt pointer whose fields agree, field for field, with the
       pointer the canonical receipt parser recomputes from the cited receipt --
       target-host evidence;
-    * otherwise a capture whose persisted mode says it reproduced a real result
-      rather than standing in for one -- real-CLI evidence;
+    * otherwise a capture whose persisted mode says it reproduced a published
+      result, carrying the publication anchor it resolved from the canonical task
+      store -- ``reproduced_published_result``;
     * otherwise a synthetic capture -- ``synthetic_mock``, which carries no
-      scientific claim. This is the only branch a ``require_finished=False``
-      capture can reach, so a mock can never be presented as validation.
+      scientific claim. This is the only branch a capture that resolved no
+      publication can reach, so a mock can never be presented as validation.
 
     A bundle that fails the canonical load is downgraded to
     ``unverified_declaration`` rather than trusted. A caller-supplied string is
-    never the deciding fact: the capture mode is written by the capture function
-    from its own argument and its own verified outcome, and the scheduler prose
-    the capture records is context, not proof.
+    never the deciding fact: the mode is written by the capture from what it
+    resolved, and the loader refuses a promoted mode with no observation behind it.
     """
     relative = path.relative_to(repo_root).as_posix()
     bundle = _load_bundle(repo_root, path)
@@ -408,9 +423,9 @@ def _label_corpus_item(repo_root: Path, path: Path) -> dict[str, Any]:
     if capture.get("mode") == _CAPTURE_MODE_REPRODUCED:
         return {
             "path": relative,
-            "label": "real_runner_local_no_scheduler",
+            "label": "reproduced_published_result",
             "task_type": str(bundle.get("task", {}).get("type") or ""),
-            "detail": str(capture.get("scheduler") or ""),
+            "detail": str(capture.get("task_source") or ""),
         }
     if capture.get("mode") == _CAPTURE_MODE_SYNTHETIC:
         return {
@@ -489,13 +504,17 @@ def _corpus_label_reason(label: str) -> str:
             "``complete`` flag is not part of the predicate, so a successful but partial run reaches "
             "this label; the level establishes provenance, never completeness"
         ),
-        "real_runner_local_no_scheduler": (
-            "a capture whose own persisted mode says it reproduced a real finished result with no "
-            "batch-scheduler allocation (capture_replay_bundle, require_finished=True)"
+        "reproduced_published_result": (
+            "a capture whose own persisted mode says it reproduced a real finished result, and which "
+            "carries the publication anchor the capture observed -- the canonical task store's own "
+            "record of the exact manifest bytes it read (capture_replay_bundle against the deployment "
+            "task database). The label names that observation and says nothing about how the run was "
+            "scheduled: the auditor reads no scheduler field"
         ),
         "synthetic_mock": (
             "fixture bytes from a capture whose own persisted mode says it stood in for a result "
-            "rather than reproduced one (capture_replay_bundle(require_finished=False)). Carries no "
+            "rather than reproduced one -- one that resolved no canonical publication against the "
+            "deployment task store. Carries no "
             "scientific claim and must never be presented as validation"
         ),
         "unverified_declaration": (
@@ -651,13 +670,17 @@ def build_inventory(runners_dir: str | Path, repo_root: str | Path) -> dict[str,
             "none" if item["label"] in {"synthetic_mock", "unverified_declaration"} else "runner_output_replayed"
         )
 
+    # The strongest levels are the two a bundle's own re-verified provenance can
+    # reach; the two weaker labels (a mock, an unverified declaration) are never
+    # a CLI basis.
+    decision_grade_labels = {"real_target_host_slurm_apptainer", "reproduced_published_result"}
     real_tasks = {
         str(item.get("task_type") or "") for item in corpus_items if item["label"] == "real_target_host_slurm_apptainer"
     }
     cli_tasks = {
         str(item.get("task_type") or "")
         for item in corpus_items
-        if item["label"] in {"real_target_host_slurm_apptainer", "real_runner_local_no_scheduler"}
+        if item["label"] in decision_grade_labels
     }
     evidence_levels: dict[str, dict[str, bool]] = {}
     for row in rows:

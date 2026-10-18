@@ -143,8 +143,10 @@ frontend render the manifest and the artifact bytes a *real* Runner published?
 
 A bundle is a test-only, sanitized capture of one completed result, served
 through the same router at the captured task id. Capture it with
-`frontend_fixtures.capture_replay_bundle(task_id=..., result_root=..., provenance=...)`
-— it verifies the manifest's identity, resolves every payload inside the result
+`frontend_fixtures.capture_replay_bundle(task_id=..., result_root=..., task_store=...)`
+— the `task_store` path is the real capture's canonical task database, and a
+synthetic fixture capture omits it. The capture verifies the manifest's identity,
+resolves every payload inside the result
 root, re-hashes each from disk, reads the storyboard from the Task's own contract
 directory in the *runner deployment tree* (the family root, or the owning
 `tasks/<task-id>/` directory when that Task declares its own tree — never the
@@ -153,14 +155,21 @@ secret-bearing metadata and host-local paths, and fails on a required view sourc
 it cannot resolve. Required view sources win the bundle byte budget; an optional
 payload is admitted only from what remains and is otherwise recorded in
 `excluded` with its hash and reason, never as a partial file. The capture also
-writes `provenance.capture.mode` from its own `require_finished` argument and its
-own verified outcome — `reproduced_real_result` or `synthetic` — overwriting
-anything a caller passed under that key, and it is that mode (not any free-form
-scheduler prose) that decides the evidence label the audit reports. A bundle is
-not required to carry a mode, so one captured before the mode existed keeps
-loading; it is read at the unverified level rather than promoted or failed. A
-bundle carries a pointer to the machine-generated production receipt for the same
-task, so its provenance is the receipt's, not a second record.
+resolves the canonical finished task row and the server-owned publication anchor
+for the manifest it read through the deployment's `TaskDatabase` (read-only), and
+writes `provenance.capture.mode` — `reproduced_real_result` when that observation
+resolved, `synthetic` otherwise — together with the `task_source` and
+`publication_anchor` it found, overwriting anything a caller passed under those
+keys. It is that *observation* (not any free-form scheduler prose, and not a
+caller-supplied mapping) that decides the evidence label the audit reports: a
+caller can hand the capture a manifest, but not the anchor row only Core's
+finalization writes, and a manifest rewritten under the same path no longer
+matches the anchor. `load_bundle` refuses a promoted mode with no observation
+behind it. A bundle is not required to carry a mode, so one captured before the
+observation was recorded keeps loading; it is read at the unverified level rather
+than promoted or failed. A bundle carries a pointer to the machine-generated
+production receipt for the same task, so its provenance is the receipt's, not a
+second record.
 
 Mount one in a browser test with
 `replay_scenario(gremlin_lh_runner(), ReplayBundle.load(path))`; a mismatched
