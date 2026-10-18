@@ -7,9 +7,7 @@ from __future__ import annotations
 import os
 from functools import partial
 from pathlib import Path
-
-from revocompute.schemas import TaskSubmissionRequest
-from revocompute.task_types import isolated_discovery, list_types
+from typing import NamedTuple
 
 from runner_protocol import ROOT, run_with_manifest
 
@@ -18,6 +16,45 @@ ESM_TASK_CONTEXT = ROOT / "docker/runners/common/runtime/task_context.sh"
 PARAM_LOG_VARIABLE = "ESM_PARAM_LOG"
 
 _run_with_manifest = partial(run_with_manifest, role="sequence")
+
+
+class EsmInput(NamedTuple):
+    """One Task's named input role, as its owning ``task.yaml`` declares it."""
+
+    name: str
+    formats: tuple[str, ...]
+
+
+#: The resolved Runner inputs for every ESM Task: the named input role, its
+#: declared format, and the parameter set the Server materializes into the
+#: dispatched ``task.json``.
+#:
+#: This is a fixture rather than a Server projection, deliberately: this is a
+#: Runner unit lane observing the adapter's own reads, so it owns the inputs it
+#: drives the adapter with and no Server schema or discovery change can fail it
+#: before an adapter defect exists.  The owning ``task.yaml`` remains the single
+#: source of the vocabulary, and the Server's projection of it has its own
+#: coverage off this lane.
+ESM_TASKS: dict[str, tuple[EsmInput, dict[str, object]]] = {
+    "esm_1v": (EsmInput("sequence", ("fasta",)), {}),
+    "esm_extract": (
+        EsmInput("sequence", ("fasta",)),
+        {
+            "model": "esm2_t33_650M_UR50D",
+            "repr_layers": "33",
+            "include": "mean per_tok",
+            "toks_per_batch": 4096,
+            "truncation_seq_length": 1022,
+        },
+    ),
+    "esm_if1": (EsmInput("structure", ("pdb",)), {"temperature": 1.0, "num_samples": 1, "chain": "A"}),
+    "esm_msa": (EsmInput("alignment", ("a3m",)), {"msa_samples": 32}),
+}
+
+#: Every parameter name any ESM Task declares.
+ESM_DECLARED_PARAMETERS: frozenset[str] = frozenset(
+    name for _input_role, params in ESM_TASKS.values() for name in params
+)
 
 # ``_parse_param`` is total: an undeclared name silently resolves to its default,
 # so the only way to observe which names an adapter asks for is to wrap the real
@@ -104,18 +141,16 @@ def test_esm_reads_only_parameters_its_tasks_declare(tmp_path):
 
     A read naming a parameter no Task declares is a control the user was
     never offered — what caught the write-only ``num_recycles``,
-    ``max_tokens_per_batch`` and ``chunk_size`` reads.  The declared vocabulary
-    and the manifest are the registry's and the Server's own projection of the
-    owning ``task.yaml``; the reads are observed by running the adapter for every
-    ESM Task over its manifest boundary.
+    ``max_tokens_per_batch`` and ``chunk_size`` reads.  The reads are observed by
+    running the adapter for every ESM Task, each over the resolved Runner inputs
+    the Server would project for it.
     """
-    declared, contract = _esm_contract()
     reads: set[str] = set()
-    for task_type, (input_role, params) in sorted(contract.items()):
+    for task_type, (input_role, params) in sorted(ESM_TASKS.items()):
         reads |= _esm_reads(ESM_RUNNER_SCRIPT, task_type, input_role, params, tmp_path / task_type)
 
     assert reads, "the adapter reads no parameters at all"
-    undeclared = _undeclared_reads(reads, declared)
+    undeclared = reads - ESM_DECLARED_PARAMETERS
     assert not undeclared, f"adapter reads undeclared parameters: {sorted(undeclared)}"
 
 
@@ -126,8 +161,7 @@ def test_esm_parameter_probe_flags_a_read_no_task_declares(tmp_path):
     adapter reading ``UNDECLARED_PROBE_PARAMETER`` is reported while the declared
     name it reads alongside is not.
     """
-    declared, contract = _esm_contract()
-    task_type, (input_role, params) = sorted(contract.items())[0]
+    task_type, (input_role, params) = sorted(ESM_TASKS.items())[0]
     probe = tmp_path / "probe_adapter.sh"
     probe.write_text(
         "#!/usr/bin/env bash\n"
@@ -140,37 +174,7 @@ def test_esm_parameter_probe_flags_a_read_no_task_declares(tmp_path):
     reads = _esm_reads(probe, task_type, input_role, params, tmp_path / "probe")
 
     assert reads == {"model", UNDECLARED_PROBE_PARAMETER}
-    assert _undeclared_reads(reads, declared) == {UNDECLARED_PROBE_PARAMETER}
-
-
-def _esm_contract():
-    """The declared parameters, input role and server-materialized params per Task.
-
-    Both halves come from the registry, which parses the owning ``task.yaml``: the
-    schema is the declaration the Server validates against, and
-    ``TaskSubmissionRequest(...).coerce_params`` is the projection the Server
-    materializes into the dispatched manifest.
-    """
-    with isolated_discovery(str(ROOT / "docker/runners"), {"esm"}):
-        tasks = list_types()
-        declared = {task.name: frozenset(task.schema.get("properties", {})) for task in tasks}
-        materialized = {
-            task.name: TaskSubmissionRequest(task_type=task.name, params={}).coerce_params() for task in tasks
-        }
-        contract = {task.name: (task.inputs[0], materialized[task.name]) for task in tasks}
-    return declared, contract
-
-
-def _undeclared_reads(reads: set[str], declared: dict[str, frozenset[str]]) -> set[str]:
-    """Reads naming a parameter no ESM Task declares.
-
-    A name counts as declared when any Task declares it: ``run.sh`` reads its
-    whole vocabulary in one preamble before the ``TASK_TYPE`` dispatch, so a
-    branch-foreign read is the empty default for the Task at hand, while a name a
-    sibling Task declares is a real control on that sibling.
-    """
-    vocabulary = {name for names in declared.values() for name in names}
-    return reads - vocabulary
+    assert reads - ESM_DECLARED_PARAMETERS == {UNDECLARED_PROBE_PARAMETER}
 
 
 def _write_recorder(directory: Path) -> Path:
@@ -185,7 +189,7 @@ def _write_recorder(directory: Path) -> Path:
     return recorder
 
 
-def _esm_reads(script: Path, task_type: str, input_role, params: dict, case: Path) -> set[str]:
+def _esm_reads(script: Path, task_type: str, input_role: EsmInput, params: dict, case: Path) -> set[str]:
     """Run one adapter for one Task and return the parameter names it read.
 
     The model executables are stubs: this observes the adapter's parameter
