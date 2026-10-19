@@ -6,6 +6,7 @@ From: nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
     foundry/launch.py /app/revocompute/launch.py
     foundry/validate_assets.py /app/revocompute/validate_assets.py
     foundry/checkpoint-registry.json /app/revocompute/checkpoint-registry.json
+    foundry/upstream.json /app/revocompute/upstream.json
     foundry/requirements.lock /opt/foundry-requirements.lock
 
 %post
@@ -23,10 +24,11 @@ From: nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
       --extra-index-url https://pypi.org/simple --index-strategy unsafe-best-match \
       /opt/foundry-requirements.lock
     git clone https://github.com/RosettaCommons/foundry.git /opt/foundry
-    git -C /opt/foundry checkout b02eed6a6bdf8f44d14a80cc36e3da13c9f2291c
+    git -C /opt/foundry checkout --detach d078b24d6d0e6f8607e9a0311128f4a897f83953
     git -C /opt/foundry remote remove origin
     /opt/venv/bin/uv pip install --python /opt/venv/bin/python --no-cache \
       --no-build-isolation --no-deps /opt/foundry
+    /opt/venv/bin/uv pip check --python /opt/venv/bin/python
     rm -rf /opt/foundry/.git /opt/foundry-requirements.lock /root/.cache
     chmod +x /app/revocompute/run.sh /app/revocompute/launch.py /app/revocompute/validate_assets.py
     # Reserved Runtime Bundle mount point.  This image is the *environment*;
@@ -41,6 +43,7 @@ From: nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
     export PATH=/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
     export PYTHONNOUSERSITE=1
     export FOUNDRY_SOURCE_ROOT=/opt/foundry
+    export FOUNDRY_UPSTREAM_MANIFEST=/app/revocompute/upstream.json
     export FOUNDRY_CHECKPOINT_DIRS=/mnt/db/weights/revocompute/foundry
     export HF_HUB_OFFLINE=1
     export TRANSFORMERS_OFFLINE=1
@@ -54,7 +57,14 @@ From: nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
     test -x /app/revocompute/launch.py
     test -x /app/revocompute/validate_assets.py
     test -f /app/revocompute/checkpoint-registry.json
+    test -f /app/revocompute/upstream.json
     test -x /opt/venv/bin/rfd3
     test -x /opt/venv/bin/rfd3na
     test -x /opt/venv/bin/rf3
+    /opt/venv/bin/python -c 'import atomworks, rf3, rfd3, rfd3na'
+    /opt/venv/bin/uv pip check --python /opt/venv/bin/python
     test -d /opt/revocompute/runtime
+
+%labels
+    org.revocompute.foundry.commit d078b24d6d0e6f8607e9a0311128f4a897f83953
+    org.revocompute.foundry.distribution rc-foundry==1.0.0

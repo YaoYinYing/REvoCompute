@@ -148,3 +148,6 @@ parameters:
     seed: {type: integer, x-ui-control: {kind: seed}, description: Random seed for reproducible sampling., default: 0, minimum: 0, maximum: 2147483647}
     early_stopping_plddt_threshold: {type: number, description: Stop low-confidence predictions early below this pLDDT threshold., default: 0.5, minimum: 0.0, maximum: 1.0}
     dump_trajectories: {type: boolean, description: Save large noisy and denoised trajectory structures., default: false}
+    template_noise_scale: {type: number, description: Coordinate noise scale applied to structural templates before RF3 inference., default: 0.00001, minimum: 0.0}
+    add_missing_atoms: {type: boolean, description: Add atoms absent from an uploaded structure before RF3 feature construction., default: true}
+    annotate_b_factor_with_plddt: {type: boolean, description: Store atom-level pLDDT in the predicted mmCIF B-factor field., default: true}
