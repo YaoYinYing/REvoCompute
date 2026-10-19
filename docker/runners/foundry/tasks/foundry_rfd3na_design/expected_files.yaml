@@ -4,9 +4,9 @@ result:
     # (pinned upstream rfd3/engine.py) writes
     # to_cif_file(atom_array, f"{out_dir}/{example_id}", file_type="cif.gz"),
     # where the dumped example_id is f"{pipeline example_id}_model_{idx}"
-    # (`_model_forward`), and atomworks v2.2.1 `_to_cif_file` really gzips and
+    # (`_model_forward`), and AtomWorks 3 `_to_cif_file` really gzips and
     # appends `.cif.gz`. launch.py runs with a single normalized input and
-    # n_batches=1, and foundry.common.exists is "is not None", so the pipeline's
+    # n_batches=1, and rfd3._core exists handling is "is not None", so the pipeline's
     # example_id is exactly the specification prefix
     # f"{name}_{example}" from `_canonicalize_inputs`
     # (name = input.json stem, example = the JSON's single key). The observed
