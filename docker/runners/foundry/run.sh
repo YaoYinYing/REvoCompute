@@ -28,6 +28,11 @@ checkpoint=$(python3 "$validator" --asset-id "$asset_id" --asset-root "$asset_ro
 
 export FOUNDRY_CHECKPOINT_DIRS="$asset_root"
 export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 WANDB_MODE=disabled
+# RF3 imports cuEquivariance/Triton, which compiles kernels and creates a cache
+# on first use.  Apptainer runs with --no-home, so the service user's home is
+# read-only; the task scratch is the writable /tmp bind and is disposable per
+# execution.
+export HOME=/tmp XDG_CACHE_HOME=/tmp/.cache TRITON_CACHE_DIR=/tmp/.triton
 unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy
 echo "REVODESIGN_STAGE:${TASK_TYPE}"
 python3 "${FOUNDRY_LAUNCHER:-/app/revocompute/launch.py}" --task-type "$TASK_TYPE" --manifest "$task_manifest" --output-dir "$output_dir" --checkpoint "$checkpoint"
