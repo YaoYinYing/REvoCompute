@@ -1,27 +1,30 @@
 {
   "schema_version": 1,
-  "source_commit": "b02eed6a6bdf8f44d14a80cc36e3da13c9f2291c",
+  "source_commit": "d078b24d6d0e6f8607e9a0311128f4a897f83953",
   "assets": [
     {
       "id": "rfd3",
       "filename": "rfd3_latest.ckpt",
       "url": "https://files.ipd.uw.edu/pub/rfd3/rfd3_foundry_2025_12_01_remapped.ckpt",
-      "sha256": null,
-      "license": null
+      "size": 2690316669,
+      "sha256": "9b3f85923e0d51e9453e15cdd2f8c666e7ce096a60577f57d11bbc54ae6d67c1",
+      "license": "BSD-3-Clause"
     },
     {
       "id": "rfd3na",
       "filename": "rfd3na_1190.ckpt",
       "url": "https://files.ipd.uw.edu/pub/rfdiffusion3na/rfd3na-1190.ckpt",
-      "sha256": null,
-      "license": null
+      "size": 2690139762,
+      "sha256": "e8802fbc008cb4cf5a9a04985a331fb068288bdd9a5fcc6deb0861b09699039a",
+      "license": "BSD-3-Clause"
     },
     {
       "id": "rf3",
       "filename": "rf3_foundry_01_24_latest_remapped.ckpt",
       "url": "https://files.ipd.uw.edu/pub/rf3/rf3_foundry_01_24_latest_remapped.ckpt",
-      "sha256": null,
-      "license": null
+      "size": 3038876446,
+      "sha256": "364ef592fd8042a9cf4176d045015190f8322f961ccca38d891b20ca578d3bb0",
+      "license": "BSD-3-Clause"
     }
   ]
 }

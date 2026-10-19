@@ -9,6 +9,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -16,6 +17,7 @@ from typing import Any
 
 TASK_MODELS = {"foundry_rfd3_design": "rfd3", "foundry_rfd3na_design": "rfd3na", "foundry_rf3_fold": "rf3"}
 PATH_KEYS = {"input", "path", "msa_path", "template_path"}
+SHA1_RE = re.compile(r"[0-9a-f]{40}")
 
 #: The one place a declared parameter becomes an upstream Hydra override.  The
 #: keys are exactly the owning ``task.yaml`` parameter vocabulary, which the
@@ -32,6 +34,11 @@ PARAM_OVERRIDES: dict[str, dict[str, tuple[str, str]]] = {
         "seed": ("seed", "int"),
         "low_memory_mode": ("low_memory_mode", "bool"),
         "dump_trajectories": ("dump_trajectories", "bool"),
+        "inference_mode": ("inference_mode", "str"),
+        "sampler_step_scale": ("inference_sampler.step_scale", "float"),
+        "sampler_gamma_0": ("inference_sampler.gamma_0", "float"),
+        "classifier_free_guidance": ("inference_sampler.use_classifier_free_guidance", "bool"),
+        "centering": ("inference_sampler.center_option", "str"),
     },
     # RFD3NA's ``SampleDiffusionConfig`` has no ``n_recycle`` field and its
     # checkpoint fixes recycling, so RFD3NA declares no recycling control and
@@ -44,6 +51,10 @@ PARAM_OVERRIDES: dict[str, dict[str, tuple[str, str]]] = {
         "seed": ("seed", "int"),
         "low_memory_mode": ("low_memory_mode", "bool"),
         "dump_trajectories": ("dump_trajectories", "bool"),
+        "sampler_step_scale": ("inference_sampler.step_scale", "float"),
+        "sampler_gamma_0": ("inference_sampler.gamma_0", "float"),
+        "classifier_free_guidance": ("inference_sampler.use_classifier_free_guidance", "bool"),
+        "centering": ("inference_sampler.center_option", "str"),
     },
     "rf3": {
         "num_designs": ("diffusion_batch_size", "int"),
@@ -52,6 +63,9 @@ PARAM_OVERRIDES: dict[str, dict[str, tuple[str, str]]] = {
         "seed": ("seed", "int"),
         "early_stopping_plddt_threshold": ("early_stopping_plddt_threshold", "float"),
         "dump_trajectories": ("dump_trajectories", "bool"),
+        "template_noise_scale": ("template_noise_scale", "float"),
+        "add_missing_atoms": ("add_missing_atoms", "bool"),
+        "annotate_b_factor_with_plddt": ("annotate_b_factor_with_plddt", "bool"),
     },
 }
 
@@ -95,9 +109,28 @@ def override_value(params: dict[str, Any], name: str, kind: str) -> str:
         if not isinstance(value, bool):
             die(f"{name} must be a boolean")
         return str(value)
+    if kind == "str":
+        if not isinstance(value, str):
+            die(f"{name} must be a string")
+        return value
     if not isinstance(value, (int, float)) or isinstance(value, bool):
         die(f"{name} must be a number")
     return f"{float(value):g}"
+
+
+def load_upstream_identity(path: Path) -> dict[str, str]:
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        die(f"Invalid Foundry upstream identity: {exc}")
+    commit = document.get("upstream_commit")
+    distribution = document.get("upstream_distribution")
+    version = document.get("upstream_version")
+    if not isinstance(commit, str) or not SHA1_RE.fullmatch(commit):
+        die("Foundry upstream identity has no immutable commit")
+    if not all(isinstance(value, str) and value for value in (distribution, version)):
+        die("Foundry upstream identity has no distribution version")
+    return {"commit": commit, "distribution": distribution, "version": version}
 
 
 def normalize_paths(value: Any, files: dict[str, Path]) -> Any:
@@ -165,6 +198,9 @@ def main() -> None:
     normalized, params, inputs = load_manifest(args.manifest, args.output_dir)
     model = TASK_MODELS[args.task_type]
     overrides = PARAM_OVERRIDES[model]
+    upstream = load_upstream_identity(
+        Path(os.environ.get("FOUNDRY_UPSTREAM_MANIFEST", "/app/revocompute/upstream.json"))
+    )
     unknown_params = sorted(set(params) - set(overrides))
     if unknown_params:
         die(f"Unsupported {args.task_type} parameters: {', '.join(unknown_params)}")
@@ -173,15 +209,20 @@ def main() -> None:
     command.extend(FIXED_OVERRIDES[model])
     # Every declared parameter becomes exactly one override, so the invocation
     # cannot drift from the schema the user was shown.
+    parameter_overrides = []
     for name, (key, kind) in overrides.items():
-        command.append(f"{key}={override_value(params, name, kind)}")
+        parameter_overrides.append(f"{key}={override_value(params, name, kind)}")
+    command.extend(parameter_overrides)
     provenance = {
         "task_type": args.task_type,
         "model": model,
-        "upstream_commit": "b02eed6a6bdf8f44d14a80cc36e3da13c9f2291c",
+        "upstream": upstream,
         "checkpoint": {"name": args.checkpoint.name, "sha256": sha256(args.checkpoint)},
         "inputs": inputs,
         "parameters": params,
+        "upstream_overrides": dict(
+            item.split("=", 1) for item in (*FIXED_OVERRIDES[model], *parameter_overrides)
+        ),
         "runtime_network": False,
     }
     (args.output_dir / "foundry-run.json").write_text(

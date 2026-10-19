@@ -92,3 +92,7 @@ parameters:
     seed: {type: integer, x-ui-control: {kind: seed}, description: Random seed for reproducible sampling., default: 0, minimum: 0, maximum: 2147483647}
     low_memory_mode: {type: boolean, description: Use memory-efficient tokenization at reduced throughput., default: false}
     dump_trajectories: {type: boolean, description: Save large intermediate diffusion trajectories., default: false}
+    sampler_step_scale: {type: number, description: Diffusion step scale; larger values favor more probable and generally less diverse designs., default: 1.5, exclusiveMinimum: 0.0}
+    sampler_gamma_0: {type: number, description: Initial churn factor; smaller values reduce sampling diversity., default: 0.6, minimum: 0.0, maximum: 1.0}
+    classifier_free_guidance: {type: boolean, description: Apply classifier-free guidance to the checkpoint-supported conditioning features., default: false}
+    centering: {type: string, description: Coordinate set used to center each diffusion sample., default: all, enum: [all, motif, diffuse]}
