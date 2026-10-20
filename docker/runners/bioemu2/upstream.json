@@ -1,0 +1,32 @@
+{
+  "repository": "https://github.com/microsoft/bioemu2",
+  "upstream_version": "0.1.0rc0",
+  "upstream_tag": "v0.1.0rc0",
+  "upstream_commit": "0d58383376d717fa0192ac02629256f8aeda095a",
+  "release_date": "2026-10-20",
+  "code_license": "MIT",
+  "model_weights_license": "MIT (stated by the microsoft/bioemu2 model card)",
+  "citation_doi": null,
+  "runtime_network": true,
+  "runtime_network_endpoints": [
+    "https://api.colabfold.com (MMseqs2 MSA search; upstream get_msa default source)"
+  ],
+  "python_requires": ">=3.12",
+  "cuda_minor": "12.6",
+  "gpu_compute_capability_minimum": "7.5 (CUDA 13 extra); the cuda12 extra also supports 7.0",
+  "gpu_memory_tested_by_upstream": "80 GB A100 is the smallest device upstream tested",
+  "weights": {
+    "channel": "https://huggingface.co/microsoft/bioemu2",
+    "checkpoint": "checkpoints/bioemu2-preview/checkpoint.ckpt",
+    "checkpoint_size": 2047661181,
+    "checkpoint_sha256": "3b4ba9236b7b458f47b40b694847b6bb4110c744becd6d2c53de7b1d04c07a81",
+    "config": "checkpoints/bioemu2-preview/config.yaml",
+    "config_size": 1672,
+    "config_sha256": "90326e3b77e524420f5aad68a777355ecbbbe07bc006ddf88f7ee921b0f772e3"
+  },
+  "pypi": {
+    "name": "bioemu2",
+    "version": "0.1.0rc0",
+    "wheel_sha256": "4f87583ec03fac0119acb96e1f6302c5800442452d3520f2017f034e62b0990b"
+  }
+}

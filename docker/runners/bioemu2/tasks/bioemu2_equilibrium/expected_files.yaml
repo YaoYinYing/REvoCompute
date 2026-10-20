@@ -1,0 +1,44 @@
+# Logical result files published by the BioEmu2 equilibrium Task.
+#
+# The Runner owns this judgement. Allowed `role:` values are evidence |
+# provenance | diagnostic | artifact. `topology.pdb` is the adapter's PDB form of
+# upstream `topology.cif` (the trajectory view parses its topology as PDB);
+# `samples.xtc`, `physicality.json`, and `system.yaml` are written by upstream
+# `sample_equilibrium`; `sequence.fasta` echoes the named input sequence.
+result:
+  files:
+    topology:
+      path: topology.pdb
+      cardinality: one
+      required: true
+      type: structure
+      role: artifact
+    coordinates:
+      path: samples.xtc
+      cardinality: one
+      required: true
+      role: evidence
+    upstream_topology:
+      path: topology.cif
+      cardinality: one
+      required: true
+      type: structure
+      role: evidence
+    sequence:
+      path: sequence.fasta
+      cardinality: one
+      required: true
+      type: fasta
+      role: artifact
+    physicality:
+      path: physicality.json
+      cardinality: one
+      required: true
+      type: json
+      role: diagnostic
+    system:
+      path: system.yaml
+      cardinality: one
+      required: true
+      type: text
+      role: provenance
