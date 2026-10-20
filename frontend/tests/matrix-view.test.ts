@@ -163,7 +163,7 @@ describe('matrix view renderer', () => {
       documentElement: { dataset: {} },
     });
     const host = new TestElement();
-    const destroy = await renderer.render(view as never, table as never, host as unknown as HTMLElement, {
+    const destroy = await renderer.render(view as never, { matrices: [table] } as never, host as unknown as HTMLElement, {
       signal: new AbortController().signal, taskId: 'a'.repeat(32),
     });
     const split = host.children[0] as TestElement;
@@ -172,7 +172,7 @@ describe('matrix view renderer', () => {
     expect((destroy as { destroy(): void }).destroy).toBeTypeOf('function');
 
     servePages([], ['position', '1'], 500);
-    await expect(renderer.render(view as never, table as never, host as unknown as HTMLElement, {
+    await expect(renderer.render(view as never, { matrices: [table] } as never, host as unknown as HTMLElement, {
       signal: new AbortController().signal, taskId: 'a'.repeat(32),
     })).rejects.toThrow('empty');
   });
@@ -182,7 +182,7 @@ describe('matrix view renderer', () => {
     const view = { id: 'm', plugin: 'matrix', role: 'evidence', title: 'M', sources: { matrices: ['m.csv'] }, mapping: {} };
     const artifact = { path: 'm.csv', size: 1, sha256: 'a'.repeat(64), url: '/artifacts/m', media_type: 'text/csv',
       preview: 'text', capability: 'text', role: 'evidence' };
-    await expect(renderer.render(view as never, artifact as never, new TestElement() as unknown as HTMLElement, {
+    await expect(renderer.render(view as never, { matrices: [artifact] } as never, new TestElement() as unknown as HTMLElement, {
       signal: new AbortController().signal, taskId: 'a'.repeat(32),
     })).rejects.toThrow('no bounded table URL');
   });

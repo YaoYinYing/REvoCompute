@@ -4,7 +4,9 @@ import { resultFileName, type ArtifactRole, type LogicalResultFile, type ResultA
 import { setButtonIcon } from '../../components/icons';
 import { t } from '../../app/i18n';
 import { buildArtifactTree, filterArtifacts, localName, type ArtifactTreeNode } from './artifact-tree';
-import { artifactCapability, createBasicRenderers, RendererRegistry, ViewRendererRegistry } from './renderer-registry';
+import { artifactCapability, createBasicRenderers, firstViewSource, RendererRegistry, ViewRendererRegistry,
+  type ResolvedViewSources } from './renderer-registry';
+import { createTrajectoryViewRenderer } from './trajectory-view';
 import { createMatrixViewRenderer } from './matrix-view';
 import type { MolecularViewerFactory } from './molecular/viewer-contract';
 import { StructureController } from './molecular/structure-controller';
@@ -83,11 +85,12 @@ export class ResultWorkspace {
       mountView: async (viewId, host, signal) => {
         const view = this.manifest?.views?.find(item => item.id === viewId);
         if (!view) throw new Error(t('results.viewNoArtifact'));
-        const artifact = this.artifactForView(view);
+        const sources = this.sourcesForView(view);
+        const artifact = firstViewSource(sources);
         if (!artifact) throw new Error(t('results.viewNoArtifact'));
         const context = { signal, taskId: this.taskId };
         const renderer = this.viewRenderers.resolve(view);
-        if (renderer) return renderer.render(view, artifact, host, context);
+        if (renderer) return renderer.render(view, sources, host, context);
         return this.rendererRegistry.resolve(artifact)?.render(artifact, host, context);
       },
       focusStructure: (selection) => this.structure.focus(selection), selectStructure: (selection) => this.structure.select(selection),
@@ -101,6 +104,7 @@ export class ResultWorkspace {
     createBasicRenderers().forEach((renderer) => this.rendererRegistry.register(renderer));
     this.rendererRegistry.register({ id: 'structure', render: (artifact, host) => this.renderStructure(artifact, host) });
     this.viewRenderers.register(createMatrixViewRenderer());
+    this.viewRenderers.register(createTrajectoryViewRenderer(createViewer, theme));
     this.bind();
   }
 
@@ -229,7 +233,8 @@ export class ResultWorkspace {
   private primaryArtifact(): ResultArtifact | null {
     const artifacts = this.manifest?.artifacts || [];
     const view = this.manifest?.views?.find((item) => item.role === 'primary');
-    const path = view ? this.artifactForView(view)?.path : null;
+    const source = view ? firstViewSource(this.sourcesForView(view)) : null;
+    const path = source && 'path' in source ? source.path : null;
     return artifacts.find((artifact) => artifact.path === path) || artifacts.find((artifact) => artifact.role === 'primary') || artifacts[0] || null;
   }
 
@@ -246,7 +251,8 @@ export class ResultWorkspace {
 
   private async openView(view: ResultView): Promise<void> {
     const generation = ++this.previewGeneration;
-    const artifact = this.artifactForView(view);
+    const sources = this.sourcesForView(view);
+    const artifact = firstViewSource(sources);
     if (!artifact) {
       // Leave no previous renderer observing above the error message.
       this.destroyViewRenderer(); this.storyboard.destroy();
@@ -255,13 +261,26 @@ export class ResultWorkspace {
       this.renderPreviewError(t('results.viewNoArtifact'));
       return;
     }
-    await this.renderView(view, artifact, generation); if (generation !== this.previewGeneration) return;
+    await this.renderView(view, sources, artifact, generation); if (generation !== this.previewGeneration) return;
     this.markTab(view.id);
   }
 
-  private artifactForView(view: ResultView): ResultArtifact | null {
-    const path = Object.values(view.sources || {}).flat()[0];
-    return this.manifest?.artifacts.find((item) => item.path === path) || null;
+  /**
+   * Resolve every declared source of a view, in declared order.
+   *
+   * The Server already resolved each selector to published paths; the browser
+   * only joins those paths to the manifest artifacts. A source whose paths are
+   * absent resolves to an empty list so a renderer can say which source is
+   * missing instead of silently receiving a different one.
+   */
+  private sourcesForView(view: ResultView): ResolvedViewSources {
+    const artifacts = this.manifest?.artifacts || [];
+    const byPath = new Map(artifacts.map((artifact) => [artifact.path, artifact]));
+    const sources: ResolvedViewSources = {};
+    for (const [name, paths] of Object.entries(view.sources || {})) {
+      sources[name] = (paths || []).flatMap((path) => byPath.get(path) || []);
+    }
+    return sources;
   }
 
   private openViewById(viewId: string): Promise<void> {
@@ -273,7 +292,7 @@ export class ResultWorkspace {
   // (no table, malformed data, over budget, request failure) states the reason and falls back
   // to the generic artifact renderer, so a view is never blanker than its source artifact.
   // Every declared view keeps its own title and description, including on that fallback.
-  private async renderView(view: ResultView, artifact: ResultFile, generation: number): Promise<void> {
+  private async renderView(view: ResultView, sources: ResolvedViewSources, artifact: ResultFile, generation: number): Promise<void> {
     const renderer = this.viewRenderers.resolve(view);
     if (!renderer) {
       await this.openArtifact(artifact, generation);
@@ -289,7 +308,7 @@ export class ResultWorkspace {
     this.nodes.download.hidden = false; this.nodes.download.href = downloadUrl(artifact); this.nodes.download.title = fileName;
     this.nodes.download.textContent = t('results.downloadNamed', { name: localName(fileName) });
     const controller = new AbortController(); this.renderController = controller; this.nodes.preview.setAttribute('aria-busy', 'true');
-    try { this.viewRenderer = (await renderer.render(view, artifact, this.nodes.preview, { signal: controller.signal, taskId: this.taskId })) || null; }
+    try { this.viewRenderer = (await renderer.render(view, sources, this.nodes.preview, { signal: controller.signal, taskId: this.taskId })) || null; }
     catch (error) {
       if ((error as Error).name === 'AbortError' || generation !== this.previewGeneration) return;
       this.destroyViewRenderer();
@@ -353,7 +372,10 @@ export class ResultWorkspace {
   }
 
   private async renderStructure(artifact: ResultFile, host: HTMLElement): Promise<void> {
-    let viewport = host.querySelector<HTMLElement>('.structure-viewport'); let viewerHost = viewport?.querySelector<HTMLElement>('.structure-host');
+    // A stage left by another view renderer (the trajectory stage shares these
+    // classes) is not reused: the new renderer starts from its own viewport.
+    let viewport = host.querySelector<HTMLElement>('.structure-viewport:not(.trajectory-viewport)');
+    let viewerHost = viewport?.querySelector<HTMLElement>('.structure-host');
     if (!viewport || !viewerHost) {
       viewport = element('section', 'structure-viewport');
       viewerHost = element('div', 'structure-host'); viewerHost.setAttribute('role', 'region'); viewerHost.setAttribute('aria-label', t('results.structure.viewerLabel'));

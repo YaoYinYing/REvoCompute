@@ -52,6 +52,50 @@ def _sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _trajectory_fixture() -> ResultFixture:
+    """A declared trajectory view whose coordinates are binary (XTC)."""
+    return ResultFixture(
+        name="replay_trajectory",
+        task_type="bioemu",
+        output_check=OutputCheckSpec(
+            state="passed",
+            checks=(
+                (("view_id", "conformational_ensemble"), ("source", "topology"), ("required", True), ("status", "passed"), ("matched", 1)),
+                (("view_id", "conformational_ensemble"), ("source", "coordinates"), ("required", True), ("status", "passed"), ("matched", 1)),
+            ),
+        ),
+        artifacts=(
+            ResultArtifactSpec(
+                "topology.pdb", role="artifact", capability="molecular_structure",
+                media_type="chemical/x-pdb", body="ATOM      1  CA  ALA A   1       0.000   0.000   0.000\n",
+            ),
+            ResultArtifactSpec(
+                "samples.xtc", role="evidence", capability="download_only",
+                media_type="application/octet-stream",
+            ),
+            ResultArtifactSpec(
+                "diagnostic.bin", role="diagnostic", capability="download_only",
+                media_type="application/octet-stream",
+            ),
+        ),
+        logical_files=(("topology", ("topology.pdb",)), ("coordinates", ("samples.xtc",))),
+        views=(
+            view_entry(
+                "trajectory", "conformational_ensemble", "Sampled conformational ensemble",
+                {"topology": ["topology.pdb"], "coordinates": ["samples.xtc"]},
+                role="primary", coordinate_format="xtc", frame_unit="sample", timestep=1, association="single",
+            ),
+        ),
+    )
+
+
+def _trajectory_root(tmp_path: Path) -> tuple[Path, bytes]:
+    coordinates = bytes(range(256)) * 4  # not UTF-8 decodable
+    return _write_result_root(tmp_path, _trajectory_fixture(), binary={
+        "samples.xtc": coordinates, "diagnostic.bin": b"\x00\xff" * 8,
+    }), coordinates
+
+
 def _synthetic_fixture() -> ResultFixture:
     """A small canonical result fixture spanning matrix, table, text, JSON.
 
@@ -108,12 +152,19 @@ def _synthetic_fixture() -> ResultFixture:
     )
 
 
-def _write_result_root(tmp_path: Path, fixture: ResultFixture, *, task_id: str = TASK_ID) -> Path:
+def _write_result_root(
+    tmp_path: Path,
+    fixture: ResultFixture,
+    *,
+    task_id: str = TASK_ID,
+    binary: dict[str, bytes] | None = None,
+) -> Path:
     """Persist a canonical manifest plus real artifact bytes at a result root.
 
     The manifest's per-artifact ``size``/``sha256`` are recomputed from the
     bytes actually written, because the capture re-hashes them and refuses a
-    bundle whose declared hash disagrees with disk.
+    bundle whose declared hash disagrees with disk. ``binary`` supplies the bytes
+    of artifacts whose payload is not UTF-8 text.
     """
     root = tmp_path / "result"
     root.mkdir()
@@ -121,7 +172,9 @@ def _write_result_root(tmp_path: Path, fixture: ResultFixture, *, task_id: str =
     by_path = {artifact["path"]: artifact for artifact in manifest["artifacts"]}
     for artifact in manifest["artifacts"]:
         spec = fixture.artifact_for(artifact["path"])
-        body = (spec.body or "").encode("utf-8")
+        body = (binary or {}).get(artifact["path"])
+        if body is None:
+            body = (spec.body or "").encode("utf-8")
         target = root / artifact["path"]
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(body)
@@ -397,6 +450,75 @@ def test_logical_file_identity_resolves_to_the_captured_payload(tmp_path: Path) 
     assert replay.logical_artifact_path("raw_matrix", 0) == "couplings/raw_scores.csv"
     assert replay.logical_artifact_path("raw_matrix", 5) is None
     assert replay.payload(replay.logical_artifact_path("raw_matrix", 0))[0] == (root / "couplings/raw_scores.csv").read_bytes()
+
+
+# ── binary view sources ───────────────────────────────────────────────────────
+
+
+def test_a_required_binary_view_source_round_trips_as_decoded_bytes(tmp_path: Path) -> None:
+    """An XTC coordinate stream is checked in as base64 and served as its bytes.
+
+    A trajectory view's coordinates are binary, so a text-only payload model
+    could not carry them. The payload is base64 with the decoded byte count and
+    sha256; the route hands the renderer the decoded bytes, byte for byte.
+    """
+    root, coordinates = _trajectory_root(tmp_path)
+    bundle = capture_replay_bundle(task_id=TASK_ID, result_root=root, storyboard_dirs=())
+    entry = bundle["payloads"]["samples.xtc"]
+    assert entry["encoding"] == "base64"
+    assert entry["size"] == len(coordinates)
+    assert entry["sha256"] == _sha(coordinates)
+    assert "encoding" not in bundle["payloads"]["topology.pdb"]
+    replay = ReplayBundle.load(write_bundle(tmp_path / "bundle.json", bundle))
+    body = replay.payload("samples.xtc")
+    assert body is not None and body[0] == coordinates
+    assert body[1] == "application/octet-stream"
+
+
+def test_an_optional_binary_artifact_is_still_excluded(tmp_path: Path) -> None:
+    """Only a view source the renderer needs earns a checked-in binary payload."""
+    root, _ = _trajectory_root(tmp_path)
+    bundle = capture_replay_bundle(task_id=TASK_ID, result_root=root)
+    excluded = {entry["path"]: entry for entry in bundle["excluded"]}
+    assert excluded["diagnostic.bin"]["reason"] == "binary payload is not checked in"
+    assert excluded["diagnostic.bin"]["sha256"] == _sha(b"\x00\xff" * 8)
+    assert "diagnostic.bin" not in bundle["payloads"]
+
+
+def test_load_refuses_an_undecodable_base64_payload(tmp_path: Path) -> None:
+    from frontend_fixtures import bundle_digest
+
+    root, _ = _trajectory_root(tmp_path)
+    bundle = capture_replay_bundle(task_id=TASK_ID, result_root=root)
+    bundle["payloads"]["samples.xtc"]["payload"] = "not base64!!!"
+    bundle["bundle_digest"] = bundle_digest(bundle)
+    with pytest.raises(ReplayBundleError, match="not decodable"):
+        load_bundle(bundle)
+
+
+def test_load_refuses_an_unknown_payload_encoding(tmp_path: Path) -> None:
+    from frontend_fixtures import bundle_digest
+
+    root, _ = _trajectory_root(tmp_path)
+    bundle = capture_replay_bundle(task_id=TASK_ID, result_root=root)
+    bundle["payloads"]["topology.pdb"]["encoding"] = "rot13"
+    bundle["bundle_digest"] = bundle_digest(bundle)
+    with pytest.raises(ReplayBundleError, match="unknown replay payload encoding"):
+        load_bundle(bundle)
+
+
+def test_a_binary_payload_that_decodes_to_other_bytes_is_refused(tmp_path: Path) -> None:
+    """The decoded bytes, not the base64 text, are what the artifact hash proves."""
+    import base64
+
+    from frontend_fixtures import bundle_digest
+
+    root, coordinates = _trajectory_root(tmp_path)
+    bundle = capture_replay_bundle(task_id=TASK_ID, result_root=root)
+    bundle["payloads"]["samples.xtc"]["payload"] = base64.b64encode(coordinates[:-8]).decode("ascii")
+    bundle["bundle_digest"] = bundle_digest(bundle)
+    with pytest.raises(ReplayBundleError, match="does not match its own sha256"):
+        load_bundle(bundle)
 
 
 # ── task scoping ──────────────────────────────────────────────────────────────

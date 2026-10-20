@@ -23,7 +23,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from .replay_bundle import ReplayBundleError, load_bundle
+from .replay_bundle import ReplayBundleError, load_bundle, payload_bytes
 
 
 class ReplayBundle:
@@ -60,8 +60,7 @@ class ReplayBundle:
         entry = self.bundle.get("payloads", {}).get(path)
         if not isinstance(entry, Mapping):
             return None
-        data = str(entry.get("payload") or "").encode("utf-8")
-        return data, str(entry.get("media_type") or "application/octet-stream")
+        return payload_bytes(entry), str(entry.get("media_type") or "application/octet-stream")
 
     def logical_artifact_path(self, file_id: str, index: int) -> str | None:
         """Return the artifact path behind one logical file entry, or ``None``.

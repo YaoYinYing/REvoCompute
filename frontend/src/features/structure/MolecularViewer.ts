@@ -231,7 +231,7 @@ export class MolecularViewer {
         const trajectory = await this.plugin.builders.structure.parseTrajectory(raw, 'pdb');
         await this.plugin.builders.structure.hierarchy.applyPreset(trajectory, 'default');
       } else {
-        await loadPluginTrajectory(this.plugin, {
+        const loaded = await loadPluginTrajectory(this.plugin, {
           model: { kind: 'model-data', data: source.topology, format: 'pdb' },
           modelLabel: 'Declared topology',
           coordinates: {
@@ -242,8 +242,16 @@ export class MolecularViewer {
           coordinatesLabel: source.label || 'coordinates',
           preset: 'default',
         } as any);
+        // Mol* resolves the preset to nothing when the coordinate stream fails to
+        // parse; without this check the topology's own single-frame model would
+        // be reported as a one-frame trajectory instead of an explicit error.
+        if (!(loaded.preset as { model?: unknown } | undefined)?.model) throw new Error(t('results.trajectory.corrupted'));
       }
-      return this.trajectoryInfo();
+      this.appliedRepresentation = null;
+      await this.applyPresentation();
+      const info = this.trajectoryInfo();
+      if (!info) throw new Error('Mol* did not create a trajectory');
+      return { frame: info.frame, frameCount: info.frameCount };
     });
   }
 
@@ -531,14 +539,17 @@ export class MolecularViewer {
   private trajectoryInfo() {
     if (!this.plugin) return null;
     const state = this.plugin.state.data;
-    const models = state.selectQ((query: any) => query.ofTransformer(StateTransforms.Model.ModelFromTrajectory));
-    if (!models.length) return null;
-    const model = models[0];
-    const trajectory = state.cells.get(model.transform.parent);
+    let best: { model: any; frameCount: number } | null = null;
+    for (const model of state.selectQ((query: any) => query.ofTransformer(StateTransforms.Model.ModelFromTrajectory))) {
+      const trajectory = state.cells.get(model.transform.parent);
+      const frames = Number(trajectory?.obj?.data?.frameCount || 0);
+      if (!best || frames > best.frameCount) best = { model, frameCount: frames };
+    }
+    if (!best || best.frameCount < 1) return null;
     return {
-      model,
-      frame: Number(model.params.values.modelIndex || 0),
-      frameCount: Number(trajectory?.obj?.data?.frameCount || 1),
+      model: best.model,
+      frame: Number(best.model.params.values.modelIndex || 0),
+      frameCount: best.frameCount,
     };
   }
 }

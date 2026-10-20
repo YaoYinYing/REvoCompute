@@ -33,6 +33,8 @@ row or a manifest, but not the recorded observation that promotes a bundle.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import json
 import os
@@ -88,11 +90,35 @@ _MEDIA_TYPE_BY_SUFFIX = {
     ".mmcif": "chemical/x-mmcif",
     ".png": "image/png",
     ".zip": "application/zip",
+    ".xtc": "application/octet-stream",
+    ".dcd": "application/octet-stream",
 }
-
 
 class ReplayBundleError(ValueError):
     """A replay bundle could not be captured, validated, or served faithfully."""
+
+
+#: How a checked-in payload's bytes are spelled in the bundle JSON. An absent
+#: ``encoding`` is the original spelling -- UTF-8 text -- so every bundle written
+#: before binary payloads existed loads unchanged. ``base64`` carries bytes that
+#: are not text (an XTC/DCD coordinate stream); its ``payload`` is the base64 of
+#: the decoded bytes, and ``size``/``sha256`` always describe the DECODED bytes,
+#: never the base64 spelling.
+PAYLOAD_ENCODING_BASE64 = "base64"
+
+
+def payload_bytes(entry: Mapping[str, Any]) -> bytes:
+    """Decode one payload entry to the artifact bytes it carries."""
+    encoding = str(entry.get("encoding") or "")
+    payload = str(entry.get("payload") or "")
+    if encoding == PAYLOAD_ENCODING_BASE64:
+        try:
+            return base64.b64decode(payload, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise ReplayBundleError("a base64 replay payload is not decodable") from exc
+    if encoding:
+        raise ReplayBundleError(f"unknown replay payload encoding: {encoding!r}")
+    return payload.encode("utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -523,8 +549,8 @@ def _capture_payloads(
     partial artifact.
     """
     required_paths = {path for _, _, path in required_view_sources(response)}
-    required: list[tuple[str, str, Mapping[str, Any]]] = []
-    optional: list[tuple[str, str, Mapping[str, Any]]] = []
+    required: list[tuple[str, str, Mapping[str, Any], str | None, int, str]] = []
+    optional: list[tuple[str, str, Mapping[str, Any], str | None, int, str]] = []
     for artifact in sorted(response.get("artifacts", []), key=lambda item: str(item.get("path"))):
         relative = _safe_relative(str(artifact.get("path") or ""))
         if relative is None:
@@ -548,9 +574,16 @@ def _capture_payloads(
         try:
             text = data.decode("utf-8")
         except UnicodeDecodeError:
+            # Binary bytes (an XTC/DCD coordinate stream) are checked in as
+            # base64. The hash and size stay those of the DECODED bytes, so the
+            # payload still proves it is the artifact the manifest published.
             if is_required:
-                raise ReplayBundleError(f"a required view source is not text and cannot be checked in: {relative}") from None
-            excluded.append(_excluded(relative, len(data), digest, artifact, "binary payload is not checked in"))
+                required.append(
+                    (relative, base64.b64encode(data).decode("ascii"), artifact,
+                     PAYLOAD_ENCODING_BASE64, len(data), digest)
+                )
+            else:
+                excluded.append(_excluded(relative, len(data), digest, artifact, "binary payload is not checked in"))
             continue
         if _HOST_PATH.search(text):
             # A payload that embeds a host-local absolute path (e.g. a warning
@@ -561,7 +594,7 @@ def _capture_payloads(
                 raise ReplayBundleError(f"a required view source embeds a host-local path: {relative}")
             excluded.append(_excluded(relative, len(data), digest, artifact, "payload embeds a host-local path"))
             continue
-        (required if is_required else optional).append((relative, text, artifact))
+        (required if is_required else optional).append((relative, text, artifact, None, len(data), digest))
 
     # Required view sources win the bundle budget unconditionally; an optional
     # payload is admitted only from what remains, largest-first, and is recorded
@@ -569,28 +602,29 @@ def _capture_payloads(
     # source that cannot fit fails the capture: a replay missing a declared view
     # is a broken bundle, not a smaller one. Ordering by size keeps the result
     # deterministic regardless of the order required and optional are read in.
-    required_total = sum(len(text.encode("utf-8")) for _, text, _ in required)
+    required_total = sum(size for _, _, _, _, size, _ in required)
     if required_total > max_bundle_bytes:
         raise ReplayBundleError("the required view sources exceed the bundle payload budget")
     budget = max_bundle_bytes - required_total
-    for relative, text, artifact in required:
+    for relative, payload, artifact, encoding, size, digest in required:
         payloads[relative] = {
-            "size": len(text.encode("utf-8")),
-            "sha256": _sha256_hex(text.encode("utf-8")),
+            "size": size,
+            "sha256": digest,
             "media_type": _media_type(artifact),
-            "payload": text,
+            "payload": payload,
+            **({"encoding": encoding} if encoding else {}),
         }
-    for relative, text, artifact in sorted(optional, key=lambda item: (-len(item[1].encode("utf-8")), item[0])):
-        size = len(text.encode("utf-8"))
+    for relative, payload, artifact, encoding, size, digest in sorted(optional, key=lambda item: (-item[4], item[0])):
         if size > budget:
-            excluded.append(_excluded(relative, size, _sha256_hex(text.encode("utf-8")), artifact, "exceeds the bundle payload budget"))
+            excluded.append(_excluded(relative, size, digest, artifact, "exceeds the bundle payload budget"))
             continue
         budget -= size
         payloads[relative] = {
             "size": size,
-            "sha256": _sha256_hex(text.encode("utf-8")),
+            "sha256": digest,
             "media_type": _media_type(artifact),
-            "payload": text,
+            "payload": payload,
+            **({"encoding": encoding} if encoding else {}),
         }
     ordered = {path: payloads[path] for path in sorted(payloads)}
     payloads.clear()
@@ -896,6 +930,16 @@ def _verify_publication_anchor(capture: Mapping[str, Any]) -> None:
         raise ReplayBundleError("the capture's publication anchor carries no publication revision")
 
 
+def _declared_int(value: Any) -> int:
+    """A declared byte count, with an absent value reading as -1 (never equal).
+
+    ``int(None or -1)`` is right for a positive count but silently turns a real
+    zero-byte artifact's ``0`` into ``-1``; an empty file is a legitimate
+    published artifact, so the size keeps its own value.
+    """
+    return int(value) if value is not None else -1
+
+
 def _verify_payloads(bundle: Mapping[str, Any]) -> None:
     response = bundle["response"]
     by_path = {str(artifact.get("path")): artifact for artifact in response.get("artifacts", [])}
@@ -905,13 +949,15 @@ def _verify_payloads(bundle: Mapping[str, Any]) -> None:
     for path, entry in payloads.items():
         if not isinstance(entry, Mapping):
             raise ReplayBundleError(f"replay payload {path!r} is not an object")
-        data = str(entry.get("payload") or "").encode("utf-8")
+        data = payload_bytes(entry)
         if _sha256_hex(data) != str(entry.get("sha256")):
             raise ReplayBundleError(f"replay payload {path!r} does not match its own sha256")
+        if len(data) != _declared_int(entry.get("size")):
+            raise ReplayBundleError(f"replay payload {path!r} does not match its own size")
         artifact = by_path.get(path)
         if artifact is None:
             raise ReplayBundleError(f"replay payload {path!r} is not a declared artifact")
-        if int(artifact.get("size") or -1) != len(data):
+        if _declared_int(artifact.get("size")) != len(data):
             raise ReplayBundleError(f"replay payload {path!r} disagrees with the manifest size")
         if str(artifact.get("sha256") or "") and str(artifact["sha256"]) != str(entry.get("sha256")):
             raise ReplayBundleError(f"replay payload {path!r} disagrees with the manifest sha256")

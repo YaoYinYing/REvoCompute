@@ -36,9 +36,9 @@ from .models import (
     ResultArtifactSpec,
     ResultFixture,
     RunnerDefinition,
+    WorkflowStage,
     WorkspaceCapability,
     WorkspaceStep,
-    WorkflowStage,
 )
 
 CONTROLLED_RUNNER_NAME = "sequence_demo"
@@ -607,6 +607,99 @@ def replay_scenario(
     return scenario.with_bundle(bundle)
 
 
+def bioemu_runner() -> RunnerDefinition:
+    """The real ``bioemu`` declared contract, transcribed from ``task.yaml``.
+
+    The Runner identity, input role, workspace, parameters, considerations, and
+    citation are the source of truth for the catalog/detail surface. The replay
+    bundle supplies the real result; this helper supplies the declared contract
+    the result was produced under.
+    """
+    return RunnerDefinition(
+        name="bioemu",
+        display_name="BioEmu",
+        category="structure",
+        category_label="Structure prediction",
+        summary="Conformational ensemble sampling from sequence (BioEmu).",
+        use_when="Use this to sample a diverse conformational ensemble from one protein sequence.",
+        input_summary="One protein sequence as FASTA.",
+        output_summary="A filtered ensemble of sampled protein conformations and supporting artifacts.",
+        considerations=(
+            "A generated ensemble is a model sample and not a measured thermodynamic population.",
+            "Sample order is generation order, not physical time or a kinetic trajectory.",
+        ),
+        runtime_family="bioemu",
+        gpus=True,
+        requires_network=True,
+        inputs=(SEQUENCE_ROLE,),
+        parameters=(
+            ParameterSpec.integer(
+                "num_samples", default=10, has_default=True, minimum=1, maximum=1000,
+                description="Total number of equilibrium protein conformations to generate.",
+            ),
+            ParameterSpec.integer(
+                "batch_size_100", default=10, has_default=True, minimum=1, maximum=100,
+                description=(
+                    "Sampling batch size used for proteins of approximately 100 residues, "
+                    "scaled internally by sequence length."
+                ),
+            ),
+            ParameterSpec.enumeration(
+                "denoiser_type", ("dpm", "heun"), default="dpm", has_default=True,
+                description="Numerical denoising solver used during diffusion sampling.",
+            ),
+            ParameterSpec.boolean(
+                "filter_samples", default=True, has_default=True,
+                description="Rejects generated conformations that fail BioEmu physical-validity filters.",
+            ),
+            ParameterSpec.integer(
+                "base_seed", minimum=0, advanced=True, ui_control=(("kind", "seed"),),
+                description="Optional base random seed used to make sampling reproducible.",
+            ),
+        ),
+        workspace_steps=(
+            WorkspaceStep(
+                id="material",
+                title="Provide the protein sequence",
+                description="Upload FASTA files or paste one protein sequence",
+                capabilities=(
+                    WorkspaceCapability("files", "source_files", "Sequence files"),
+                    WorkspaceCapability(
+                        "sequence", "sequence_editor", "Paste a sequence", options=(("role", "sequence"),)
+                    ),
+                ),
+            ),
+            WorkspaceStep(
+                id="settings",
+                title="Set the experiment",
+                description="Adjust only the controls that matter for this run",
+                capabilities=(
+                    WorkspaceCapability("parameters", "task_parameters", "Method settings"),
+                ),
+            ),
+            WorkspaceStep(
+                id="review",
+                title="Review and run",
+                description="Check the sequence and settings before creating the task snapshot",
+                capabilities=(
+                    WorkspaceCapability(
+                        "review", "submission_review", "Experiment review", options=(("show_paths", True),)
+                    ),
+                ),
+            ),
+        ),
+        workflow=(WorkflowStage(name="bioemu", display_name="BioEmu structure sampling", requires_gpu=True),),
+        citations=(
+            Citation(
+                num=1,
+                doi="10.1126/science.adv9817",
+                title="Scalable emulation of protein equilibrium ensembles with generative deep learning",
+                url="https://doi.org/10.1126/science.adv9817",
+            ),
+        ),
+    )
+
+
 def gremlin_lh_runner() -> RunnerDefinition:
     """The real ``gremlin_lh_fit`` declared contract, transcribed from ``task.yaml``.
 
@@ -1046,6 +1139,7 @@ __all__ = [
     "CONTROLLED_RUNNER_NAME",
     "SEQUENCE_ROLE",
     "RunnerScenario",
+    "bioemu_runner",
     "controlled_runner",
     "controlled_scenario",
     "gremlin_lh_runner",

@@ -12,16 +12,34 @@ export interface ArtifactRenderer {
 }
 
 /**
+ * Every declared source of one view, resolved to the manifest artifacts that
+ * satisfy it, keyed by the source name the Server declared (``topology``,
+ * ``coordinates``, ``matrices``, ...). Source names and their resolved order
+ * are preserved end to end; a missing source resolves to an empty list rather
+ * than being dropped, so a renderer can state which source is absent.
+ */
+export type ResolvedViewSources = Record<string, ResultFile[]>;
+
+/** The first published artifact across a view's sources, in declared order. */
+export function firstViewSource(sources: ResolvedViewSources): ResultFile | null {
+  for (const artifacts of Object.values(sources)) {
+    if (artifacts.length) return artifacts[0]!;
+  }
+  return null;
+}
+
+/**
  * A server-declared result view's renderer, keyed by its declared `plugin`.
  *
- * A view renderer receives the view's own manifest definition and the first
- * resolved source artifact; it never branches on a task or runner name.
+ * A view renderer receives the view's own manifest definition and every source
+ * it declares, each resolved to artifacts; it never branches on a task or
+ * runner name.
  */
 export interface ViewRenderer {
   id: string;
   render(
     view: ResultView,
-    artifact: ResultFile | null,
+    sources: ResolvedViewSources,
     host: HTMLElement,
     context: RendererContext,
   ): Promise<void | { destroy(): void }>;

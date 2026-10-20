@@ -3,10 +3,10 @@
  * PairMatrix primitive. The loader reads only the manifest mapping vocabulary the task
  * declared; it never infers scientific meaning from a filename.
  */
-import type { ResultFile, ResultView } from '../../api/result-types';
+import type { ResultView } from '../../api/result-types';
 import { t } from '../../app/i18n';
 import { MAX_ELEMENTS, PairMatrix } from './scientific';
-import type { ViewRenderer } from './renderer-registry';
+import type { ResolvedViewSources, ViewRenderer } from './renderer-registry';
 
 /** The server rejects `limit` above 500 and `offset` above 10000. */
 const PAGE_LIMIT = 500;
@@ -181,8 +181,9 @@ function element<K extends keyof HTMLElementTagNameMap>(tag: K, className?: stri
 export function createMatrixViewRenderer(): ViewRenderer {
   return {
     id: 'matrix',
-    async render(view: ResultView, source: ResultFile | null, host: HTMLElement, context) {
+    async render(view: ResultView, sources: ResolvedViewSources, host: HTMLElement, context) {
       const mapping = (view.mapping || {}) as MatrixMapping;
+      const source = sources.matrices?.[0];
       const tableUrl = source && 'table_url' in source ? source.table_url : undefined;
       const series = await loadMatrixSeries(tableUrl, mapping, { signal: context.signal });
       const range = matrixRange(series.values, mapping);

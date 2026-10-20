@@ -1,0 +1,38 @@
+# Logical result files published by the BioEmu Task.
+#
+# The Runner owns this judgement: it is the component that knows what each
+# published file is. Allowed `role:` values are evidence | provenance |
+# diagnostic | artifact; `primary` belongs to the primary ResultView, not to a
+# file declaration. BioEmu's own upstream `bioemu.sample` writes
+# `topology.pdb`, `samples.xtc`, `sequence.fasta`, and `batch_*.npz`;
+# `citations.bib` is written by Core's finalization from the Task's citations.
+#
+# The topology is declared `type: structure` so the Server projects it to the
+# `molecular_structure` capability the `trajectory` view requires. The
+# coordinate frames carry no separate logical type: the view's own
+# `coordinate_format: xtc` governs them.
+result:
+  files:
+    topology:
+      path: topology.pdb
+      cardinality: one
+      required: true
+      type: structure
+      role: artifact
+    coordinates:
+      path: samples.xtc
+      cardinality: one
+      required: true
+      role: evidence
+    sequence:
+      path: sequence.fasta
+      cardinality: one
+      required: true
+      type: fasta
+      role: artifact
+    citations:
+      path: citations.bib
+      cardinality: one
+      required: true
+      type: text
+      role: provenance

@@ -151,8 +151,8 @@ def test_fleet_report_separates_covered_unaudited_and_defective():
     # Coverage is a partition ...
     assert report.covered | report.unaudited == frozenset(report.tasks)
     assert not (report.covered & report.unaudited)
-    assert len(report.covered) == 20 and len(report.unaudited) == 36
-    # ... and defect status is orthogonal: it is empty here, while 36 Tasks are
+    assert len(report.covered) == 21 and len(report.unaudited) == 35
+    # ... and defect status is orthogonal: it is empty here, while 35 Tasks are
     # still unaudited, so a clean defect set is not a clean coverage set.
     assert set(report.defective) == set()
     assert report.defective <= report.covered
@@ -166,8 +166,8 @@ def test_fleet_audit_surfaces_the_families_with_no_declared_result_tree():
 
     The required-source and renderer-kind invariants are statements about a view
     and the ``expected_files.yaml`` identities a family publishes. Of the 56 Tasks,
-    20 are covered (a declared tree lets their required sources be evaluated) and
-    36 are unaudited -- each declaring a required view source with no shipped tree
+    21 are covered (a declared tree lets their required sources be evaluated) and
+    35 are unaudited -- each declaring a required view source with no shipped tree
     to check it against. This test names that gap rather than letting the audit
     report those Tasks green, and it fails if the set changes -- either a family
     gained a tree (good; update the expected set) or a required source appeared
@@ -181,7 +181,7 @@ def test_fleet_audit_surfaces_the_families_with_no_declared_result_tree():
     # against. Each entry is a family that ships a ``result_workspace`` with a
     # required source but no ``expected_files.yaml``.
     expected = {
-        "autodock_vina", "bioemu", "deeppocket", "diffdock", "dynamicmpnn", "easifa", "esm_1v",
+        "autodock_vina", "deeppocket", "diffdock", "dynamicmpnn", "easifa", "esm_1v",
         "esm_if1", "esm_msa", "evosplit_cluster", "fampnn_design", "fampnn_pack", "fampnn_score",
         "freebindcraft", "frodock", "frustrampnn", "geodock", "gnina", "hypermpnn", "lasermpnn",
         "ligandmpnn", "molprobity_validate", "p2rank", "pallatom_generate", "placer", "ppiformer_ddg",
