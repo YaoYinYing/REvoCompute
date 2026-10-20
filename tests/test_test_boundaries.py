@@ -15,7 +15,13 @@ assert SPEC and SPEC.loader
 checker = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(checker)
 
-AUTHENTIC = frozenset({"pssm_gremlin_scenario", "gremlin_lh_runner", "replay_scenario", "production_receipt_pointer"})
+AUTHENTIC = frozenset({
+    "bioemu_runner",
+    "pssm_gremlin_scenario",
+    "gremlin_lh_runner",
+    "replay_scenario",
+    "production_receipt_pointer",
+})
 GENERIC = frozenset({"controlled_scenario", "controlled_runner", "runner_scenario", "structure_scenario"})
 
 
