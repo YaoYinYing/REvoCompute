@@ -18,9 +18,11 @@ container path. Production inference requires these immutable files:
 and its size is 6921224318 bytes. It belongs to the pre-confidence Boltz-1
 release line and is intentionally not consumed or required by this Runner.
 
-The wrapper verifies the required files against `model-assets.sha256` before
-starting the upstream CLI and publishes that manifest with every result. It
-never enables the upstream MSA service. Protein inputs must provide an A3M or
-CSV alignment as a task input, or explicitly use `msa: empty`. Writable
-Lightning logs and preprocessing intermediates remain inside the task result
-directory; the mounted resource root is never used as a cache.
+The wrapper verifies the required files against `model-assets.sha256` from
+within the asset root before starting the upstream CLI and publishes that
+manifest with every result. The manifest names the assets relative to the
+root, so the published copy carries no host path. It never enables the
+upstream MSA service. Protein inputs must provide an A3M or CSV alignment as a
+task input, or explicitly use `msa: empty`. Writable Lightning logs and
+preprocessing intermediates remain inside the task result directory; the
+mounted resource root is never used as a cache.
