@@ -263,6 +263,7 @@ def test_storyboard_composes_structures_and_confidence(page: Page) -> None:
         "0.85 scoreHigher is better",
         "0.85 scoreHigher is better",
         "0 fractionLower is better",
+        "0 flagLower is better",
     ]
     assert result["destroyable"] is True
 

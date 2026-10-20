@@ -187,19 +187,15 @@ def test_replayed_detection_summary_renders_the_real_scalar_values(page: Page) -
     page.locator(".result-view-menu > summary").click()
     page.locator(".result-tab", has_text="Detection summary").click()
     summary = json.loads(replay.payload("summary.json")[0])
-    preview = page.locator(".result-preview")
-    # The scalar-summary view has no dedicated view renderer, so it falls back to
-    # the generic renderer for its first resolved source: the captured summary.json
-    # the real normalizer wrote. Assert the RENDERED body carries the captured
-    # bytes, so a renderer showing nothing -- or a different file -- would not pass.
-    field_path = next(
-        view["mapping"]["fields"][0]["path"]
-        for view in replay.manifest["views"]
-        if view["plugin"] == "scalar-summary"
-    )
-    assert field_path in summary, "the declared scalar path must exist in the captured summary"
-    expect(preview).to_contain_text(f'"{field_path}"')
-    expect(preview).to_contain_text(str(summary[field_path]))
+    view = next(candidate for candidate in replay.manifest["views"] if candidate["plugin"] == "scalar-summary")
+    field = view["mapping"]["fields"][0]
+    assert field["path"] in summary, "the declared scalar path must exist in the captured summary"
+    # The shared scalar-summary renderer reads the captured summary.json the real
+    # normalizer wrote and shows the declared field through the scalar grid.
+    grid = page.locator("section.scalar-summary-view dl.scalar-grid")
+    expect(grid).to_be_visible()
+    expect(grid.locator("dt")).to_have_text([field["label"]])
+    expect(grid.locator("dd")).to_have_text([f'{summary[field["path"]]} {field["unit"]}'])
 
 
 def test_replayed_evidence_bundle_exposes_the_raw_fpocket_output(page: Page) -> None:

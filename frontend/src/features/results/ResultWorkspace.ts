@@ -8,6 +8,7 @@ import { artifactCapability, createBasicRenderers, firstViewSource, RendererRegi
   type ResolvedViewSources } from './renderer-registry';
 import { createTrajectoryViewRenderer } from './trajectory-view';
 import { createMatrixViewRenderer } from './matrix-view';
+import { createScalarSummaryViewRenderer } from './scalar-summary-view';
 import type { MolecularViewerFactory } from './molecular/viewer-contract';
 import { StructureController } from './molecular/structure-controller';
 import { installScientificPrimitives } from './scientific';
@@ -104,6 +105,7 @@ export class ResultWorkspace {
     createBasicRenderers().forEach((renderer) => this.rendererRegistry.register(renderer));
     this.rendererRegistry.register({ id: 'structure', render: (artifact, host) => this.renderStructure(artifact, host) });
     this.viewRenderers.register(createMatrixViewRenderer());
+    this.viewRenderers.register(createScalarSummaryViewRenderer());
     this.viewRenderers.register(createTrajectoryViewRenderer(createViewer, theme));
     this.bind();
   }
