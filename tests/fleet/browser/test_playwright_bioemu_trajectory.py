@@ -190,59 +190,86 @@ def test_teardown_removes_the_stage_when_another_artifact_opens(page: Page) -> N
     expect(page.locator(".trajectory-viewport")).to_have_count(0)
 
 
-def test_the_storyboard_composes_the_shared_trajectory_view(page: Page) -> None:
-    """The checked-in storyboard module, mounted against the authentic bundle.
+SEQUENCE = "MSTNPKPQRKTKRNTNRRPQDVKFPGGGQIVGGVYLLPRRGPRL"
+
+
+MOUNT_STORYBOARD = """async (payload) => {
+  // The storyboard reads its sequence over HTTP. Serve that one URL from the
+  // test so the healthy and failing responses are the only variable.
+  const originalFetch = window.fetch.bind(window);
+  window.fetch = async (input, init) => {
+    if (String(input).includes('/files/sequence')) {
+      return new Response(payload.sequence.status === 200 ? payload.sequence.body : '', { status: payload.sequence.status });
+    }
+    return originalFetch(input, init);
+  };
+  const url = URL.createObjectURL(new Blob([payload.source], { type: 'text/javascript' }));
+  const module = await import(url);
+  const files = new Map(Object.entries(payload.files));
+  window.__mounted = [];
+  window.__downloads = [];
+  await module.default.mount(document.getElementById('host'), {
+    files: { get: (id) => files.get(id) || null },
+    metadata: { taskType: payload.taskType },
+    views: payload.views,
+    services: {
+      mountView: async (viewId, host, signal) => {
+        window.__mounted.push(viewId);
+        const notice = document.createElement('p');
+        notice.className = 'trajectory-status';
+        notice.textContent = '23 frames loaded.';
+        host.append(notice);
+        return { frameCount: 23, destroy() { host.replaceChildren(); } };
+      },
+      downloadFile: (file) => window.__downloads.push(file.url),
+    },
+  });
+}"""
+
+
+def _storyboard_context() -> dict:
+    """The storyboard's real context: served views plus the Server's own logical files.
 
     The production manifest predates the storyboard, so ``result.files`` is
-    empty in the capture. The logical files are therefore resolved by the
-    Server's own contract resolver from the checked-in ``expected_files.yaml``
-    and projected by the same route implementation the API uses; only the
-    manifest's inability to name them is synthetic. ``mountView`` is a recording
+    empty in the capture. The logical files are resolved by the Server's
+    contract resolver from the checked-in ``expected_files.yaml`` and projected
+    by the same route implementation the API uses; only the manifest's
+    inability to name them is synthetic. ``mountView`` is a recording
     stand-in: the storyboard must delegate the trajectory to the declared view
     instead of mounting its own stage.
     """
     replay = _replay()
-    manifest = replay.manifest
     tree = load_expected_file_tree(STORYBOARD.parents[1] / "expected_files.yaml")
-    resolved, _checks, problems = resolve_expected_files(tree, manifest["artifacts"])
+    resolved, _checks, problems = resolve_expected_files(tree, replay.manifest["artifacts"])
     assert not problems
-    published = json.loads(json.dumps(manifest))
+    published = json.loads(json.dumps(replay.manifest))
     published["result"] = {"files": resolved}
     served = project_manifest_for_serve(published, task_id=TASK_ID)
-    mount_scenario(page, replay_scenario(bioemu_runner(), replay))
+    return {
+        "source": STORYBOARD.read_text(encoding="utf-8"),
+        "views": served["views"],
+        "files": served["result"]["files"],
+        "taskType": served["task_type"],
+    }
+
+
+def _mount_storyboard(page: Page, sequence: dict) -> None:
+    mount_scenario(page, replay_scenario(bioemu_runner(), _replay()))
     page.set_content("<div id='host'></div>")
-    source = STORYBOARD.read_text(encoding="utf-8")
-    page.evaluate(
-        """async (payload) => {
-          const url = URL.createObjectURL(new Blob([payload.source], { type: 'text/javascript' }));
-          const module = await import(url);
-          const files = new Map(Object.entries(payload.files));
-          window.__mounted = [];
-          window.__downloads = [];
-          await module.default.mount(document.getElementById('host'), {
-            files: { get: (id) => files.get(id) || null },
-            metadata: { taskType: payload.taskType },
-            views: payload.views,
-            services: {
-              mountView: async (viewId, host, signal) => {
-                window.__mounted.push(viewId);
-                const notice = document.createElement('p');
-                notice.className = 'trajectory-status';
-                notice.textContent = '23 frames loaded.';
-                host.append(notice);
-                return { frameCount: 23, destroy() { host.replaceChildren(); } };
-              },
-              downloadFile: (file) => window.__downloads.push(file.url),
-            },
-          });
-        }""",
-        {"source": source, "views": served["views"], "files": served["result"]["files"], "taskType": served["task_type"]},
-    )
+    page.evaluate(MOUNT_STORYBOARD, {**_storyboard_context(), "sequence": sequence})
     expect(page.locator(".be-result")).to_be_visible()
+
+
+def test_the_storyboard_composes_the_shared_trajectory_view(page: Page) -> None:
+    _mount_storyboard(page, {"status": 200, "body": f">2KL8\n{SEQUENCE}\n"})
+
     assert page.evaluate("window.__mounted") == ["conformational_ensemble"]
-    # The storyboard states the published sample count, the scientific caution,
-    # and the fact that the validity filter removed samples.
-    expect(page.locator("[data-bioemu=published-samples]")).to_contain_text("23 samples")
+    # The published label names the coordinate file the Server actually serves,
+    # which projects ``name`` (basename); there is no ``path`` on a logical file.
+    expect(page.locator("[data-bioemu=published-samples] dd")).to_have_text("23 samples · samples.xtc")
+    expect(page.locator("[data-bioemu=input-sequence] dd")).to_have_text(f"2KL8 · {len(SEQUENCE)} residues")
+    # The storyboard states the scientific caution, and the fact that the
+    # validity filter removed samples.
     expect(page.get_by_text("not measured kinetics or calibrated thermodynamic populations", exact=False)).to_be_visible()
     expect(page.get_by_text("physical-validity filter", exact=False)).to_be_visible()
     # Full downloads for the XTC and the topology stay reachable even though the
@@ -252,3 +279,43 @@ def test_the_storyboard_composes_the_shared_trajectory_view(page: Page) -> None:
     assert len(page.evaluate("window.__downloads")) == 2
 
 
+def test_the_storyboard_names_a_missing_sequence_and_keeps_the_ensemble(page: Page) -> None:
+    page_errors: list[str] = []
+    page.on("pageerror", lambda error: page_errors.append(str(error)))
+    _mount_storyboard(page, {"status": 404, "body": ""})
+
+    # A failed fetch names the resource and the failure; it must never fall
+    # back to the "not yet known" dash.
+    sequence = page.locator("[data-bioemu=input-sequence] dd")
+    expect(sequence).to_contain_text("sequence.fasta")
+    expect(sequence).to_contain_text("HTTP 404")
+    expect(sequence).not_to_have_text("—")
+    # The ensemble and its downloads are unaffected by the sequence failure.
+    expect(page.locator("[data-bioemu=published-samples] dd")).to_have_text("23 samples · samples.xtc")
+    page.get_by_role("button", name="Download sampled frames (XTC)").click()
+    page.get_by_role("button", name="Download topology (PDB)").click()
+    assert len(page.evaluate("window.__downloads")) == 2
+    # The failure belongs in the row that reports it, not in the page's
+    # unhandled-error channel.
+    assert page_errors == []
+
+
+def test_the_ensemble_renders_without_an_unhandled_viewer_error(page: Page) -> None:
+    """A zero-box XTC is legitimate; the viewer must not throw while rendering it.
+
+    Mol*'s trajectory preset decorates a frame that carries a cell with a hidden
+    unit-cell shape. A zero box yields an empty cell, whose instance grid is
+    sized from NaN bounds and throws ``RangeError: Invalid typed array length``
+    outside the load task. That error reaches the page as an unhandled console
+    error even though the 23 samples render.
+    """
+    page_errors: list[str] = []
+    console_errors: list[str] = []
+    page.on("pageerror", lambda error: page_errors.append(str(error)))
+    page.on("console", lambda message: console_errors.append(message.text) if message.type == "error" else None)
+    _open(page)
+    page.locator("[data-trajectory=next]").click()
+    expect(page.locator(".trajectory-position")).to_contain_text("Sample index 2 of 23")
+    page.wait_for_timeout(1500)
+    assert page_errors == []
+    assert console_errors == []

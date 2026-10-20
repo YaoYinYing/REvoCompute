@@ -44,16 +44,33 @@ export default {
     root.append(header, facts, caution, filtered, stage, status, downloads);
     host.replaceChildren(root);
 
+    // Every failure the reader can see must name the file and the reason: a
+    // silent null would leave the row showing the "not yet known" dash.
+    function fastaLabel(fasta, name) {
+      const records = fasta.split(/\r?\n/).filter(line => line.startsWith('>'));
+      const residues = fasta.split(/\r?\n/).filter(line => !line.startsWith('>')).join('').replace(/[^A-Za-z]/g, '').length;
+      return `${records[0]?.slice(1).trim() || name} · ${residues} residues`;
+    }
     async function fetchText(file) {
-      if (!file || Number(file.size) > 1024 * 1024) return null;
+      if (!file) throw new Error('No input sequence is published.');
+      const name = file.name || 'The input file';
+      if (Number(file.size) > 1024 * 1024) throw new Error(`${name} is too large to read inline.`);
+      let response;
       try {
-        const response = window.REvoDesignAuth
+        response = window.REvoDesignAuth
           ? await window.REvoDesignAuth.authFetch(file.url, { signal: abort.signal })
           : await fetch(file.url, { credentials: 'same-origin', signal: abort.signal });
-        return response.ok ? (await response.text()).slice(0, 1024 * 1024) : null;
-      } catch (error) { if (error.name !== 'AbortError') return null; throw error; }
+      } catch (error) {
+        if (error.name === 'AbortError') throw error;
+        throw new Error(`${name} could not be fetched: ${error.message}`);
+      }
+      if (!response.ok) throw new Error(`${name} could not be read (HTTP ${response.status}).`);
+      return (await response.text()).slice(0, 1024 * 1024);
     }
-    const sequenceText = fetchText(first(context, 'sequence'));
+    // Start the read in parallel with the view, but settle it immediately: a
+    // floating rejection would surface as an unhandled page error before the
+    // row that reports it runs.
+    const sequenceRead = fetchText(first(context, 'sequence')).then(text => ({ text }), error => ({ error }));
     const views = list(context.views), view = views.find(item => item.plugin === 'trajectory');
     let embedded = null;
     try {
@@ -63,21 +80,17 @@ export default {
       const count = embedded && embedded.frameCount;
       if (Number.isFinite(count)) {
         const unit = view.mapping && view.mapping.frame_unit === 'sample' ? 'samples' : 'frames';
-        published.lastElementChild.textContent = `${count} ${unit} · ${first(context, 'coordinates')?.path || 'coordinates'}`;
+        published.lastElementChild.textContent = `${count} ${unit} · ${first(context, 'coordinates')?.name || 'coordinates'}`;
         status.textContent = `${count} ${unit} published. Use the sample controls to step through them.`;
       } else status.textContent = 'The sampled ensemble is ready.';
     } catch (error) {
       if (error.name !== 'AbortError') stage.replaceChildren(el('p', 'be-error', error.message));
       status.textContent = 'The inline ensemble could not be shown; the downloads below remain available.';
     }
-    try {
-      const fasta = await sequenceText;
-      if (fasta) {
-        const records = fasta.split(/\r?\n/).filter(line => line.startsWith('>'));
-        const residues = fasta.split(/\r?\n/).filter(line => !line.startsWith('>')).join('').replace(/[^A-Za-z]/g, '').length;
-        input.lastElementChild.textContent = `${records[0]?.slice(1).trim() || 'sequence'} · ${residues} residues`;
-      }
-    } catch (error) { if (error.name !== 'AbortError') input.lastElementChild.textContent = 'Unavailable'; }
+    const { text: fasta, error: sequenceError } = await sequenceRead;
+    if (sequenceError) {
+      if (sequenceError.name !== 'AbortError') input.lastElementChild.textContent = sequenceError.message;
+    } else input.lastElementChild.textContent = fastaLabel(fasta, first(context, 'sequence')?.name);
     return { destroy() { abort.abort(); embedded?.destroy?.(); } };
   },
 };
