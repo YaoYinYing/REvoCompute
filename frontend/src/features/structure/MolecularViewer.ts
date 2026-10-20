@@ -21,6 +21,7 @@ import { createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import 'molstar/build/viewer/molstar.css';
 import { t } from '../../app/i18n';
+import { normalizePdbFrameDelimiters } from './pdb-frames';
 
 const REPRESENTATIONS: Record<string, string> = {
   cartoon: 'cartoon',
@@ -227,7 +228,14 @@ export class MolecularViewer {
       this.removeSphereGeometry();
       await this.plugin.clear();
       if (source.coordinateFormat === 'pdb') {
-        const raw = await this.plugin.builders.data.rawData({ data: source.coordinates, label: source.label || 'trajectory' });
+        // Some runners delimit frames with ENDMDL alone (RFdiffusion's pX0 and
+        // Xt-1 trajectories do). Mol* 5.12.0's PDB reader starts a model only at
+        // a `MODEL ` record, so such a file collapses to one frame and the later
+        // ENDMDL records would silently disappear. The delimiter is made explicit
+        // before parsing; a file that already carries MODEL records is untouched.
+        const text = typeof source.coordinates === 'string' ? source.coordinates : new TextDecoder().decode(source.coordinates);
+        const normalized = normalizePdbFrameDelimiters(text);
+        const raw = await this.plugin.builders.data.rawData({ data: normalized, label: source.label || 'trajectory' });
         const trajectory = await this.plugin.builders.structure.parseTrajectory(raw, 'pdb');
         await this.plugin.builders.structure.hierarchy.applyPreset(trajectory, 'default');
       } else {

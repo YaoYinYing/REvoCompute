@@ -50,9 +50,17 @@ export function createTrajectoryViewRenderer(
       const status = element('p', 'result-note trajectory-status');
       status.setAttribute('role', 'status');
       status.setAttribute('aria-live', 'polite');
-      const previous = navigationButton('previous', t('results.trajectory.previous'));
-      const next = navigationButton('next', t('results.trajectory.next'));
-      const unit = mapping.frame_unit === 'sample' ? t('results.trajectory.sampleIndex') : t('results.trajectory.frame');
+      // The frame axis is the mapping's own vocabulary. A declared unit the view
+      // does not recognize (``diffusion step``) is shown verbatim: it names what
+      // one frame is, and nothing here converts it to physical time.
+      const sample = mapping.frame_unit === 'sample';
+      const declared = typeof mapping.frame_unit === 'string' ? mapping.frame_unit.trim() : '';
+      // The unit is the Runner's declared vocabulary, emitted verbatim; only the
+      // `sample` case has frontend-owned wording, because it also carries the
+      // "not physical time" caution the API's own sample order needs.
+      const unit = sample ? t('results.trajectory.sampleIndex') : declared || t('results.trajectory.frame');
+      const previous = navigationButton('previous', t(sample ? 'results.trajectory.previous' : 'results.trajectory.previousFrame'));
+      const next = navigationButton('next', t(sample ? 'results.trajectory.next' : 'results.trajectory.nextFrame'));
       const scrubber = element('input', 'trajectory-scrubber') as HTMLInputElement;
       scrubber.type = 'range';
       scrubber.min = '1';
@@ -80,7 +88,9 @@ export function createTrajectoryViewRenderer(
         label.textContent = t('results.trajectory.position', {
           unit, frame: String(value.frame + 1), total: String(value.frameCount),
         });
-        status.textContent = t('results.trajectory.frames', { count: value.frameCount });
+        status.textContent = sample
+          ? t('results.trajectory.frames', { count: value.frameCount })
+          : t('results.trajectory.framesDeclared', { count: value.frameCount, unit: declared || unit.toLowerCase() });
       };
       const step = async (action: 'set' | 'advance', value: number): Promise<void> => {
         try {
