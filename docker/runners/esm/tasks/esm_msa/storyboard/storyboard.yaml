@@ -1,0 +1,10 @@
+identifier: esm-msa-result
+entrypoint: ./index.js
+requires:
+  - residue_profile
+  - profile_summary
+optional:
+  - input_alignment
+  - submission
+  - citations
+  - execution_records

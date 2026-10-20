@@ -1,0 +1,12 @@
+>query
+ACDEFGHIKLMN
+>state_a_1
+ACDEFGHIKLMN
+>state_a_2
+ACDEYGHIKLMN
+>state_b_1
+ACNEFGHIKLMN
+>state_b_2
+VCNEFGHIKLMN
+>state_b_3
+VCNEFGHIKLMK

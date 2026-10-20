@@ -1,0 +1,13 @@
+identifier: ppiformer-embed-result
+entrypoint: ./index.js
+requires:
+  - residue_index
+optional:
+  - residue_embeddings
+  - interface_embedding
+  - embedding_summary
+  - run_metadata
+  - input_complex
+  - submission
+  - citations
+  - execution_records

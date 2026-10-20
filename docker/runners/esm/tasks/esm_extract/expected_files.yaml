@@ -1,0 +1,38 @@
+# Logical result files published by the ESM-2 extraction Task.
+#
+# Derived from the production result recorded in the Task's evidence packet:
+# one opaque torch bundle holding the requested representations, plus the run's
+# sequence, submission, citation and execution provenance. The `.pt` bundle has
+# no preview in the Server, so it is declared `type: model` (download only).
+result:
+  files:
+    embeddings:
+      pattern: '*.pt'
+      cardinality: one
+      required: true
+      type: model
+      role: evidence
+    input_sequence:
+      pattern: 'debug/inputs/sequence/*.fasta'
+      cardinality: one
+      required: true
+      type: fasta
+      role: provenance
+    submission:
+      path: debug/submission.json
+      cardinality: one
+      required: true
+      type: json
+      role: provenance
+    citations:
+      path: citations.bib
+      cardinality: one
+      required: true
+      type: text
+      role: provenance
+    execution_records:
+      pattern: 'execution/*'
+      cardinality: many
+      required: true
+      type: text
+      role: diagnostic

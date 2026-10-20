@@ -70,7 +70,7 @@ optional.
 Coverage and defect status are independent. A `tree_audited` Task can carry a
 concrete defect, and the report always exposes both, so a clean defect set can
 never be read as "the whole fleet passed": the defect set is currently empty
-while 36 Tasks remain unaudited (see [Known defects](#known-defects)).
+while 24 Tasks remain unaudited (see [Known defects](#known-defects)).
 
 ## Evidence levels
 
@@ -194,8 +194,8 @@ Two caveats are load-bearing and are carried in the report itself:
 
 The audit's defect set is orthogonal to its coverage partition, and it is
 currently **empty**: `defective: []`, `ok: true`, with the coverage partition
-unchanged at 20 covered / 36 unaudited. An empty defect set is not a clean bill
-of health — all 36 unaudited Tasks still report
+unchanged at 32 covered / 24 unaudited. An empty defect set is not a clean bill
+of health — all 24 unaudited Tasks still report
 `result.required_source_undeclared_tree`, because no shipped tree exists to check
 their required sources against. The partition and the defect set are read off the
 same audit report, so a fleet that grows or shrinks moves them together; the

@@ -1,0 +1,37 @@
+# Logical result files published by the PRIME-DMS Task.
+#
+# Derived from the production result recorded in the Task's evidence packet:
+# one per-substitution score table (all single mutations of the reference), plus
+# the run's sequences, submission, citation and execution provenance.
+result:
+  files:
+    mutation_scores:
+      pattern: '*_prime_*.csv'
+      cardinality: one
+      required: true
+      type: table
+      role: evidence
+    input_sequences:
+      pattern: 'debug/inputs/sequences/*.fasta'
+      cardinality: one
+      required: true
+      type: fasta
+      role: provenance
+    submission:
+      path: debug/submission.json
+      cardinality: one
+      required: true
+      type: json
+      role: provenance
+    citations:
+      path: citations.bib
+      cardinality: one
+      required: true
+      type: text
+      role: provenance
+    execution_records:
+      pattern: 'execution/*'
+      cardinality: many
+      required: true
+      type: text
+      role: diagnostic

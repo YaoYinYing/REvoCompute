@@ -1,0 +1,5 @@
+{
+  "residue_count": 8,
+  "embedding_dimension": 128,
+  "pooling": "mean"
+}
