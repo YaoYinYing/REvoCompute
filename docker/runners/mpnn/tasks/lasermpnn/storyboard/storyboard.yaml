@@ -1,0 +1,8 @@
+identifier: lasermpnn-designs
+entrypoint: ./index.js
+requires:
+  - sequences
+optional:
+  - designs
+  - input_structure
+  - citations
