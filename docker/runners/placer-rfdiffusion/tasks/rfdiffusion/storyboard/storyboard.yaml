@@ -1,0 +1,10 @@
+identifier: rfdiffusion-backbones
+entrypoint: ./index.js
+requires:
+  - backbones
+optional:
+  - diffusion_px0
+  - diffusion_noisy
+  - design_records
+  - submission
+  - citations

@@ -1,0 +1,8 @@
+identifier: placer-complex
+entrypoint: ./index.js
+requires:
+  - complexes
+  - model_scores
+optional:
+  - input_structures
+  - citations
