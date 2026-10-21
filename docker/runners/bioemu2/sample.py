@@ -28,6 +28,7 @@ import os
 import shutil
 import sys
 import tempfile
+from collections import Counter
 from pathlib import Path
 
 #: The protein alphabet BioEmu2's ``Protein`` entity accepts. Stricter than the
@@ -84,6 +85,25 @@ def sampling_kwargs(params: dict) -> dict:
     return kwargs
 
 
+def physicality_summary(path: Path) -> str:
+    """One log line for the per-frame physicality outcome upstream wrote.
+
+    A rejected ensemble is a result with a stated limitation, not a failure, so
+    this only reports: the counts and rejection reasons must be readable without
+    opening ``physicality.json``.
+    """
+    frames = json.loads(path.read_text(encoding="utf-8"))
+    statuses = Counter(str(frame.get("status")) for frame in frames)
+    reasons = Counter(str(frame.get("reason") or "unspecified") for frame in frames if frame.get("status") == "rejected")
+    summary = f"BioEmu2 physicality: {statuses.get('passed', 0)}/{len(frames)} frames accepted"
+    if reasons:
+        summary += " (" + ", ".join(f"{reason}: {count}" for reason, count in sorted(reasons.items())) + ")"
+    for status in ("rejected", "not_checked"):
+        if statuses.get(status):
+            summary += f", {statuses[status]} {status.replace('_', ' ')}"
+    return summary
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--task-manifest", required=True, type=Path)
@@ -116,6 +136,7 @@ def main() -> int:
         shutil.rmtree(scratch, ignore_errors=True)
 
     (args.output_dir / "sequence.fasta").write_text(f">input\n{sequence}\n", encoding="utf-8")
+    print(physicality_summary(args.output_dir / "physicality.json"))
     return 0
 
 
