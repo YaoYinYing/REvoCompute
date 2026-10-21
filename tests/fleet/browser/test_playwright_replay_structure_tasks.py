@@ -37,7 +37,9 @@ ROOT = Path(__file__).resolve().parents[3]
 ORIGIN = "https://revocompute.example"
 # The built production bundle is the only one with the real Mol* viewer.
 RESULT_DIST = ROOT / "frontend" / "dist"
-STORYBOARD = ROOT / "docker" / "runners" / "alphafold3" / "storyboard" / "index.js"
+STORYBOARDS = {
+    family: ROOT / "docker" / "runners" / family / "storyboard" / "index.js" for family in ("alphafold", "alphafold3")
+}
 
 BUNDLES = {
     "alphafold": "tests/data/alphafold_replay/2kl8_production_51d8c875.json",
@@ -166,7 +168,7 @@ def test_alphafold3_real_mol_stage_fills_the_hero_first_screen(page: Page, monke
     replay = _mount(page, "alphafold3")
     page.route(
         f"{ORIGIN}/compute/api/results/{replay.task_id}/storyboard/**",
-        lambda route: route.fulfill(content_type="text/javascript", path=STORYBOARD),
+        lambda route: route.fulfill(content_type="text/javascript", path=STORYBOARDS["alphafold3"]),
     )
     _open(page, "alphafold3", height=1000)
 
@@ -177,6 +179,27 @@ def test_alphafold3_real_mol_stage_fills_the_hero_first_screen(page: Page, monke
     # this case states the page-level requirement: the stage and its PAE figure
     # open on the first screen, and the hero itself is one unscrolled region.
     assert_first_screen(page, hero=".af3-hero", slot=".af3-stage", figure=".af3-side .af3-figure", within_viewport=False)
+
+
+def test_alphafold_real_mol_stage_fills_the_hero_first_screen(page: Page, monkeypatch) -> None:
+    """AlphaFold2's first paint mounts real Mol*, not just its confidence evidence.
+
+    Its storyboard opens the structure without awaiting it and the selection store
+    re-opens the same artifact, so two overlapping mounts on one stage must share
+    the one viewer. A stand-in ``openFile`` cannot see that, which is why this
+    case runs the production bundle.
+    """
+    monkeypatch.setattr(browser_frontend_assets, "_RESULT_DIST", RESULT_DIST)
+    replay = _mount(page, "alphafold")
+    page.route(
+        f"{ORIGIN}/compute/api/results/{replay.task_id}/storyboard/**",
+        lambda route: route.fulfill(content_type="text/javascript", path=STORYBOARDS["alphafold"]),
+    )
+    _open(page, "alphafold", height=1000)
+
+    panel = page.locator("section.storyboard-structure-panel[data-ready='true']")
+    expect(panel).to_be_visible(timeout=120_000)
+    expect(page.locator(".af2-stage .storyboard-structure-panel canvas").first).to_be_visible(timeout=120_000)
 
 
 def _open_tab(page: Page, title: str) -> None:

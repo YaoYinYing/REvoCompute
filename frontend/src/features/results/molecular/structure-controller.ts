@@ -335,7 +335,10 @@ export class StructureController {
     if (!pending) return null;
     let created: MolecularViewer;
     try { created = await pending; } finally { if (this.viewerMount === pending) this.viewerMount = null; }
-    if (this.host !== host || generation !== this.generation) { created.dispose(); return null; }
+    // A stale generation on the same host is superseded by a newer mount awaiting
+    // this same viewer, so only a viewer created for a host we no longer use is disposed.
+    if (this.host !== host) { created.dispose(); return null; }
+    if (generation !== this.generation) return null;
     this.viewer = created;
     if (this.options.onSelectionChanged) this.selectionUnsubscribe = created.onSelectionChanged?.(this.options.onSelectionChanged) || null;
     return created;

@@ -19,6 +19,29 @@ describe('StructureController', () => {
     expect(loaded).toEqual(['first.pdb', 'second.pdb']);
   });
 
+  it('lets a newer mount on the same host adopt a viewer a stale mount is still awaiting', async () => {
+    let releaseViewer!: () => void; const viewerReady = new Promise<void>((resolve) => { releaseViewer = resolve; });
+    let disposed = false; const loaded: string[] = [];
+    const guard = (): void => { if (disposed) throw new Error('MolecularViewer is not mounted'); };
+    const viewer: MolecularViewer = {
+      setRepresentation: async () => guard(), setColor: async () => guard(), setTheme: () => {}, resize: () => {}, captureImage: async () => '',
+      dispose: () => { disposed = true; },
+      loadStructure: async (source) => { guard(); loaded.push(source.label || ''); },
+    };
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => new Response(url)));
+    const controller = new StructureController(async () => { await viewerReady; return viewer; }); const host = {} as HTMLElement;
+
+    // Both mounts start while viewer creation is pending; the older one resumes first.
+    const stale = controller.mount(host, file('first.pdb'), 'light');
+    const current = controller.mount(host, file('second.pdb'), 'light');
+    await Promise.resolve();
+    releaseViewer();
+    await Promise.all([stale, current]);
+
+    expect(disposed).toBe(false);
+    expect(loaded).toEqual(['second.pdb']);
+  });
+
   it('retries viewer creation after an isolated mount failure', async () => {
     const viewer: MolecularViewer = { setRepresentation: async () => {}, setColor: async () => {}, setTheme: () => {}, resize: () => {}, captureImage: async () => '', dispose: vi.fn(), loadStructure: async () => {} };
     const createViewer = vi.fn()
