@@ -4,7 +4,24 @@
 const RAMP_LIGHT = ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", "#0d366b"];
 const RAMP_DARK = ["#184f95", "#256abf", "#3987e5", "#6da7ec", "#9ec5f4", "#b7d3f6", "#cde2fb"];
 const PLOT = { width: 800, height: 600, left: 78, top: 30, size: 500, legendX: 604, legendWidth: 24 };
-const STYLE = `.af3-result{display:grid;gap:1.1rem;padding:1rem}.af3-result h2,.af3-result h3,.af3-result p{margin:0}.af3-section{display:grid;gap:.5rem}.af3-actions{display:flex;flex-wrap:wrap;gap:.5rem}`;
+const STYLE = `
+.af3-result{display:grid;gap:1.1rem;min-width:0;color:var(--app-ink);font:14px/1.5 var(--font-sans)}
+.af3-result h2,.af3-result h3,.af3-result p{margin:0}
+.af3-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 18px}
+.af3-head h2{font:500 26px var(--font-display);letter-spacing:-.5px;width:100%}
+.af3-note{color:var(--app-muted);font-size:14px;line-height:1.7;max-width:78ch}
+.af3-section{display:grid;gap:.5rem;min-width:0}
+.af3-actions{display:flex;flex-wrap:wrap;gap:.5rem}
+.af3-hero{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:18px;min-width:0;align-items:stretch}
+.af3-stage{position:relative;min-width:0;height:600px;min-height:600px;border:1px solid var(--app-line);border-radius:8px;overflow:hidden;background:var(--app-stage)}
+.af3-stage-label{position:absolute;z-index:4;top:10px;left:10px;max-width:calc(100% - 20px);padding:3px 8px;border:1px solid var(--app-line);border-radius:4px;background:var(--app-surface);color:var(--app-muted);font:12px var(--font-mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none}
+.af3-stage-unavailable{position:absolute;z-index:4;inset:0;display:grid;place-items:center;padding:24px;text-align:center;color:var(--app-muted);font-size:13px;line-height:1.6}
+.af3-stage .storyboard-structure-panel{height:100%}
+.af3-side{min-width:0;display:grid;gap:14px;align-content:start}
+.af3-side .af3-figure{margin:0 auto}
+.af3-caveat{padding:10px 12px;border:1px solid var(--app-line);border-left:3px solid var(--app-plum);border-radius:4px;background:var(--app-soft);font-size:13px;line-height:1.6;color:var(--app-muted)}
+@container(max-width: 860px){.af3-hero{grid-template-columns:minmax(0,1fr)}.af3-stage{height:420px;min-height:420px}}
+`;
 
 // The Task's declared `confidence_summary` scalar-summary view is the only
 // source of the global-confidence vocabulary shown here: fields, labels, units,
@@ -27,22 +44,59 @@ export default {
     const scalars = declaredScalars(context.views);
     const summaryByKey = new Map(list(context.files.get("summaries")).map((item) => [key(item, "_summary_confidences.json"), item]));
     const confidenceByKey = new Map(list(context.files.get("confidences")).filter((item) => !name(item).endsWith("_summary_confidences.json")).map((item) => [key(item, "_confidences.json"), item]));
-    let generation = 0; let matrix = null;
+    const services = context.services || {};
+    let generation = 0; let stageGeneration = 0; let matrix = null;
 
     const root = document.createElement("div"); root.className = "af3-result"; const style = document.createElement("style"); style.textContent = STYLE;
-    const heading = document.createElement("h2"); heading.textContent = "AlphaFold 3 prediction"; const intro = document.createElement("p"); intro.textContent = "Candidate-matched structures and bounded confidence evidence."; root.append(style, heading, intro);
-    const candidates = section("Predicted structures", "Selecting a candidate updates every confidence view as one generation."); const candidateHost = document.createElement("div"); candidates.appendChild(candidateHost); const actions = document.createElement("div"); actions.className = "af3-actions"; candidates.appendChild(actions); root.appendChild(candidates);
-    const metrics = section("Global confidence", "Published values are shown without client-side rescaling. pTM, ipTM, and pLDDT are model confidence estimates, not experimental validation."); const metricHost = document.createElement("div"); metrics.appendChild(metricHost); root.appendChild(metrics);
+    const head = document.createElement("header"); head.className = "af3-head"; head.append(
+      element("h2", "", "AlphaFold 3 prediction"),
+      element("p", "af3-note", "Candidate-matched structures with the selected model's confidence evidence beside it."),
+    );
+    // The selected candidate's published scalars lead the page as a compact
+    // strip, so the stage and its evidence stay on the first screen.
+    const metricHost = document.createElement('div'); metricHost.className = 'af3-strip';
+
+    // The structure is the result: one persistent stage on the first screen,
+    // with the selected candidate's confidence evidence beside it.
+    const hero = document.createElement("div"); hero.className = "af3-hero";
+    const stage = document.createElement("section"); stage.className = "af3-stage"; stage.dataset.structureSlot = "true";
+    const stageLabel = element("p", "af3-stage-label", "No candidate selected");
+    const stageUnavailable = element("p", "af3-stage-unavailable", "");
+    stageUnavailable.hidden = true; stage.append(stageLabel, stageUnavailable);
+    const side = document.createElement("aside"); side.className = "af3-side"; side.setAttribute("aria-label", "Candidate confidence evidence");
+
+    const candidates = section("Predicted structures", "Selecting a candidate updates the structure and every confidence view as one generation.");
+    const candidateHost = document.createElement("div"); candidates.appendChild(candidateHost); const actions = document.createElement("div"); actions.className = "af3-actions"; candidates.appendChild(actions);
     const pae = section("Expected position error", null); const note = document.createElement("p"); note.className = "scientific-note"; note.id = "af3-pae-note"; note.textContent = "Select a candidate to load bounded PAE evidence."; pae.appendChild(note);
     const toolbar = document.createElement("div"); toolbar.className = "scientific-toolbar"; const borders = document.createElement("button"); borders.type = "button"; borders.className = "btn btn-soft"; borders.textContent = "Show chain borders"; borders.disabled = true; borders.setAttribute("aria-pressed", "false"); toolbar.appendChild(borders); pae.appendChild(toolbar);
-    const plot = document.createElement("div"); plot.className = "af3-plot pair-matrix-plot"; const figure = document.createElement("div"); figure.className = "af3-figure pair-matrix-figure"; const canvas = document.createElement("canvas"); canvas.className = "af3-canvas pair-matrix-canvas"; canvas.width = PLOT.width; canvas.height = PLOT.height; canvas.tabIndex = 0; canvas.setAttribute("role", "grid"); canvas.setAttribute("aria-describedby", note.id); figure.appendChild(canvas); plot.appendChild(figure); pae.appendChild(plot); const readout = document.createElement("p"); readout.className = "matrix-readout"; readout.setAttribute("role", "status"); pae.appendChild(readout); root.appendChild(pae); host.replaceChildren(root);
+    const plot = document.createElement("div"); plot.className = "af3-plot pair-matrix-plot"; const figure = document.createElement("div"); figure.className = "af3-figure pair-matrix-figure"; const canvas = document.createElement("canvas"); canvas.className = "af3-canvas pair-matrix-canvas"; canvas.width = PLOT.width; canvas.height = PLOT.height; canvas.tabIndex = 0; canvas.setAttribute("role", "grid"); canvas.setAttribute("aria-describedby", note.id); figure.appendChild(canvas); plot.appendChild(figure); pae.appendChild(plot); const readout = document.createElement("p"); readout.className = "matrix-readout"; readout.setAttribute("role", "status"); pae.appendChild(readout);
+    side.append(candidates, pae); hero.append(stage, side);
+    const caveat = element("p", "af3-caveat", "Published values are shown without client-side rescaling. pTM, ipTM, and pLDDT are model confidence estimates, not experimental validation.");
+    root.append(style, head, metricHost, hero, caveat); host.replaceChildren(root);
 
     let residueIds = [], residueLabels = [], chainIds = [], showBorders = false;
+    function element(tag, className, text) { const node = document.createElement(tag); node.className = className; if (text != null) node.textContent = text; return node; }
+
+    // The stage follows the selection: a late mount from a superseded candidate
+    // is skipped rather than replacing the freshly chosen structure.
+    async function showStructure(structure, request) {
+      const current = ++stageGeneration;
+      stageLabel.textContent = name(structure) || "Selected structure";
+      stageUnavailable.hidden = true;
+      if (typeof services.openFile !== "function") { stageUnavailable.textContent = "The structure viewer is unavailable; the confidence evidence remains available."; stageUnavailable.hidden = false; return; }
+      try { await services.openFile(structure); }
+      catch (error) {
+        if (error.name === "AbortError" || current !== stageGeneration || !request.current()) return;
+        stageUnavailable.textContent = "The structure could not be shown: " + (error.message || "the viewer refused it") + ". The confidence evidence remains available.";
+        stageUnavailable.hidden = false;
+      }
+    }
     function clearCandidate(text) { actions.replaceChildren(); metricHost.replaceChildren(); residueIds = []; residueLabels = []; chainIds = []; borders.disabled = true; readout.textContent = ""; plot.hidden = true; note.textContent = text; if (matrix) { matrix.destroy(); matrix = null; } }
     borders.addEventListener("click", () => { showBorders = !showBorders; borders.setAttribute("aria-pressed", String(showBorders)); if (matrix) matrix.setBorders(showBorders); });
     function scalarValue(projection) { return projection && projection.shape.length === 0 && projection.values.length === 1 ? projection.values[0] : null; }
     async function select(structure, _index, request) {
       const current = ++generation; clearCandidate("Loading candidate confidence...");
+      await showStructure(structure, request);
       const identity = key(structure, "_model.cif"), summary = summaryByKey.get(identity), confidence = confidenceByKey.get(identity);
       if (!identity || !confidence) { clearCandidate("No exact confidence record matches this structure candidate."); return; }
       try {
@@ -85,6 +139,6 @@ export default {
     }) || (() => {});
     const selector = new Scientific.CandidateSelector(candidateHost, { items: structures, store: context.selection, label: (item) => name(item).replace(/_model\.cif$/, ""), onSelect: select });
     if (structures.length) await selector.select(0); else clearCandidate("No structure candidate was published.");
-    return { destroy() { generation += 1; unsubscribe(); selector.destroy(); if (matrix) matrix.destroy(); } };
+    return { destroy() { generation += 1; stageGeneration += 1; unsubscribe(); selector.destroy(); if (matrix) matrix.destroy(); } };
   },
 };

@@ -11,6 +11,7 @@ from playwright.sync_api import Page, expect
 import pytest
 
 from browser_frontend_assets import install_scientific_assets
+from storyboard_first_screen import assert_first_screen
 
 pytestmark = pytest.mark.browser
 
@@ -91,6 +92,7 @@ async (payload) => {
 
 
 def _mount(page: Page, *, failed_key: str | None = None, failed_summary: str | None = None) -> None:
+    page.set_viewport_size({"width": 1280, "height": 1000})
     page.set_content("<div id='host'></div>")
     install_scientific_assets(page)
     page.evaluate(
@@ -120,6 +122,8 @@ def test_opendde_storyboard_pairs_duplicate_sample_names_by_contract_order(page:
     assert fetched[0] == "/summaries/0"
     assert "/summaries/1" in fetched
     assert all(url.startswith(("/summaries/", "/arrays/")) for url in fetched)
+    # The stage receives the first sample on mount and the next one on selection.
+    assert page.evaluate("window.__opendde.opened") == ["/structures/0", "/structures/1"]
 
 
 def test_opendde_full_confidence_is_downloaded_without_browser_fetch(page: Page) -> None:
@@ -128,7 +132,8 @@ def test_opendde_full_confidence_is_downloaded_without_browser_fetch(page: Page)
     page.get_by_role("button", name="Open selected structure").click()
 
     assert page.evaluate("window.__opendde.downloaded") == ["/full/0"]
-    assert page.evaluate("window.__opendde.opened") == ["/structures/0"]
+    # The stage already mounted sample 0 on mount; the button re-opens it.
+    assert page.evaluate("window.__opendde.opened") == ["/structures/0", "/structures/0"]
     assert all(not url.startswith("/full/") for url in page.evaluate("window.__opendde.fetched"))
 
 
@@ -138,6 +143,9 @@ def test_opendde_renders_bounded_local_and_pairwise_confidence(page: Page) -> No
     expect(page.get_by_role("img", name="Atom pLDDT by Atom index")).to_be_visible()
     expect(page.get_by_label("Pairwise confidence matrix")).to_have_value("0")
     expect(page.locator(".matrix-readout")).to_contain_text("1.0 Å")
+    # The sample is on the stage and the PAE matrix is in the hero beside it.
+    assert page.evaluate("window.__opendde.opened") == ["/structures/0"]
+    assert_first_screen(page, hero=".opendde-hero", slot=".opendde-stage", figure=".opendde-side .pair-matrix-figure")
     pair_section = page.locator(".opendde-section").filter(has_text="Pairwise confidence")
     expect(pair_section.locator(".scientific-note")).to_contain_text("2 × 2 tokens")
 

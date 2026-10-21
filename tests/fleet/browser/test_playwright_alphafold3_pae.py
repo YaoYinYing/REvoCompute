@@ -18,6 +18,7 @@ from playwright.sync_api import Page, expect
 import pytest
 
 from browser_frontend_assets import install_scientific_assets
+from storyboard_first_screen import assert_first_screen
 
 pytestmark = pytest.mark.browser
 
@@ -202,7 +203,13 @@ def test_storyboard_draws_the_pae_matrix_with_axes_and_a_legend(page: Page) -> N
     _open(page)
     result = _mount(page)
 
-    assert result["canvas"]["cssWidth"] == 800 and result["canvas"]["role"] == "grid"
+    # The matrix sits in the hero's evidence column now, so it is as wide as that
+    # column rather than the old full-width 800 px.
+    assert result["canvas"]["role"] == "grid" and 200 < result["canvas"]["cssWidth"] <= 340
+    # The matrix is on the first screen: inside the hero's evidence column and
+    # fully above the fold at 1280x1000.
+    hero = assert_first_screen(page, hero=".af3-hero", slot=".af3-stage", figure=".af3-figure", stage_height=590)
+    assert hero["slot"]["width"] > hero["figure"]["width"]
     # The colour mapping is real: the low-error diagonal cell and a cross-chain
     # cell are opaque and visually distinct.
     low = page.evaluate("() => window.__af3.probe(0, 0)")
@@ -272,10 +279,12 @@ def test_storyboard_composes_structures_and_confidence(page: Page) -> None:
     _open(page)
     result = _mount(page)
 
-    # Structures stay reachable: the storyboard hands them to the shared viewer.
+    # Mounting selects the first candidate, and the stage receives it at once.
+    assert page.evaluate("() => window.__af3.opened") == ["structures"]
+    # Structures stay reachable: the storyboard also hands them to the shared viewer.
     assert result["buttons"][0] == "job"
     page.get_by_role("button", name="Open selected structure").click()
-    assert page.evaluate("() => window.__af3.opened") == ["structures"]
+    assert page.evaluate("() => window.__af3.opened") == ["structures", "structures"]
     assert result["confidence"] == [
         "0.88 scoreHigher is better",
         "0.85 scoreHigher is better",
@@ -329,4 +338,29 @@ def test_storyboard_matches_reordered_files_by_name_and_rejects_late_generation(
     page.wait_for_timeout(180)
     expect(page.locator(".scalar-grid")).to_contain_text("pTM0.42 score")
     page.get_by_role("button", name="Open selected structure").click()
-    assert page.evaluate("window.__af3.opened") == ["next-structure"]
+    opened = page.evaluate("window.__af3.opened")
+    # The stage followed every selection made above, and the button opened the
+    # candidate that is actually current -- not the superseded generation.
+    assert opened[0] == "structures" and opened[-1] == "next-structure"
+    assert "next-structure" in opened[1:]
+
+
+def test_stage_receives_the_first_candidate_on_mount_and_each_new_selection(page: Page) -> None:
+    _open(page)
+    files = {
+        "structures": [FILES["structures"], {**FILES["structures"], "id": "next-structure", "name": "next_model.cif"}],
+        "summaries": [FILES["summaries"], {**FILES["summaries"], "id": "next-summary", "name": "next_summary_confidences.json", "ndarray_url": "/projection/next-summary"}],
+        "confidences": [FILES["confidences"], {**FILES["confidences"], "id": "next-confidence", "name": "next_confidences.json", "ndarray_url": "/projection/next-confidence"}],
+    }
+    _mount(page, files, projections={
+        "/projection/summary": SUMMARY,
+        "/projection/confidence": CONFIDENCES,
+        "/projection/next-summary": {**SUMMARY, "ptm": 0.42},
+        "/projection/next-confidence": CONFIDENCES,
+    })
+
+    expect(page.locator(".af3-stage-label")).to_have_text("job_model.cif")
+    assert page.evaluate("window.__af3.opened") == ["structures"]
+    page.locator(".candidate-open").nth(1).click()
+    expect(page.locator(".af3-stage-label")).to_have_text("next_model.cif")
+    assert page.evaluate("window.__af3.opened") == ["structures", "next-structure"]
