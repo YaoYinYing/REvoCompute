@@ -1,0 +1,10 @@
+identifier: bioemu2-equilibrium
+entrypoint: ./index.js
+requires:
+  - topology
+  - coordinates
+  - physicality
+optional:
+  - sequence
+  - system
+  - upstream_topology
