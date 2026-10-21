@@ -1,573 +1,581 @@
 {
- "bundle_digest": "sha256:aeff681ce63696ebd10b8c414d92bbf155bd091cf01a5c8388825fad2d4cb0f4",
- "bundle_version": 1,
- "excluded": [
-  {
-   "media_type": "chemical/x-pdb",
-   "path": "debug/inputs/structures/3fap_hf3_A_short_lig.pdb",
-   "reason": "declared artifact not captured by this capture",
-   "sha256": "09d52018dbb0d08ac4f93344b068db7ac296a51ba1ef94366d01fc37f43875d1",
-   "size": 10578
-  },
-  {
-   "media_type": "application/json",
-   "path": "debug/submission.json",
-   "reason": "declared artifact not captured by this capture",
-   "sha256": "6a5f241c5c1ccfe73d3ff13df6bf4f255d8730011f34266900141d786cad80d4",
-   "size": 688
-  },
-  {
-   "media_type": "application/json",
-   "path": "execution/slurm-status.execution.json",
-   "reason": "declared artifact not captured by this capture",
-   "sha256": "aeafe3fedbc2f17839e84c6ccf8778e8762ec486a050057b3febc1ce83832d8c",
-   "size": 1158
-  },
-  {
-   "media_type": "application/json",
-   "path": "execution/slurm-unknown-user-placer-6a55b7e4ffb9177b10df61df4ddbed1e.resource.json",
-   "reason": "declared artifact not captured by this capture",
-   "sha256": "6da24d858c4168c2b174aecd04dffb2e4e04363f6fb992e2dc3d9f6c17f5ae99",
-   "size": 524
-  },
-  {
-   "media_type": "text/plain",
-   "path": "execution/slurm-unknown-user-placer-6a55b7e4ffb9177b10df61df4ddbed1e.stderr.log",
-   "reason": "declared artifact not captured by this capture",
-   "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-   "size": 0
-  },
-  {
-   "media_type": "text/plain",
-   "path": "execution/slurm-unknown-user-placer-6a55b7e4ffb9177b10df61df4ddbed1e.stdout.log",
-   "reason": "declared artifact not captured by this capture",
-   "sha256": "947f33551ce83129f0f00f7ade05b2060d66ec6952552c0196a1685ee8a3b6ce",
-   "size": 1006
-  }
- ],
- "kind": "real_runner_result_replay",
- "logical_files": {
-  "citations": [
-   {
-    "path": "citations.bib",
-    "sha256": "a6346af61cd5213cefe60826a54dd6e302dab921576ae8975d3a983580d62329",
-    "size": 468
-   }
-  ],
-  "complexes": [
-   {
-    "path": "3fap_hf3_A_short_lig_model.pdb",
-    "sha256": "f2c9aa7b14a2e5c7a0df7105c18e5827a2c18521dce4ce988bb778c82ea02e2d",
-    "size": 9720
-   }
-  ],
-  "execution_records": [
-   {
-    "path": "execution/slurm-status.execution.json",
-    "sha256": "aeafe3fedbc2f17839e84c6ccf8778e8762ec486a050057b3febc1ce83832d8c",
-    "size": 1158
-   },
-   {
-    "path": "execution/slurm-unknown-user-placer-6a55b7e4ffb9177b10df61df4ddbed1e.resource.json",
-    "sha256": "6da24d858c4168c2b174aecd04dffb2e4e04363f6fb992e2dc3d9f6c17f5ae99",
-    "size": 524
-   },
-   {
-    "path": "execution/slurm-unknown-user-placer-6a55b7e4ffb9177b10df61df4ddbed1e.stdout.log",
-    "sha256": "947f33551ce83129f0f00f7ade05b2060d66ec6952552c0196a1685ee8a3b6ce",
-    "size": 1006
-   }
-  ],
-  "input_structures": [
-   {
-    "path": "debug/inputs/structures/3fap_hf3_A_short_lig.pdb",
-    "sha256": "09d52018dbb0d08ac4f93344b068db7ac296a51ba1ef94366d01fc37f43875d1",
-    "size": 10578
-   }
-  ],
-  "model_scores": [
-   {
-    "path": "3fap_hf3_A_short_lig.csv",
-    "sha256": "5526d567828c1529d69f3d7fb35098fb89c9b2befc0348e1e03a464ccbfe01b9",
-    "size": 214
-   }
-  ],
-  "submission": [
-   {
-    "path": "debug/submission.json",
-    "sha256": "6a5f241c5c1ccfe73d3ff13df6bf4f255d8730011f34266900141d786cad80d4",
-    "size": 688
-   }
-  ]
- },
- "payloads": {
-  "3fap_hf3_A_short_lig.csv": {
-   "media_type": "text/csv",
-   "payload": "label,model_idx,fape,lddt,rmsd,kabsch,prmsd,plddt,plddt_pde\n3fap_hf3_A_short_lig,1,5.322027683258057,0.7155157327651978,10.260625839233398,2.7411983013153076,7.281238079071045,0.4663636386394501,0.5704931616783142\n",
-   "sha256": "5526d567828c1529d69f3d7fb35098fb89c9b2befc0348e1e03a464ccbfe01b9",
-   "size": 214
-  },
-  "3fap_hf3_A_short_lig_model.pdb": {
-   "media_type": "chemical/x-pdb",
-   "payload": "MODEL 1\nATOM      1  N   ILE A   1     -11.104   0.393  -0.425  1.00  0.24           N 1\nATOM      2  CA  ILE A   1     -12.430  -0.107  -0.740  1.00  0.16           C 0\nATOM      3  C   ILE A   1     -13.521   0.666  -0.000  1.00  0.13           C 0\nATOM      4  O   ILE A   1     -13.358   0.965   1.172  1.00  0.29           O 0\nATOM      5  CB  ILE A   1     -12.505  -1.604  -0.394  1.00  0.48           C 0\nATOM      6  CG1 ILE A   1     -11.418  -2.329  -0.939  1.00  1.87           C 0\nATOM      7  CG2 ILE A   1     -13.806  -2.181  -0.855  1.00  1.78           C 0\nATOM      8  CD1 ILE A   1     -11.331  -3.686  -0.516  1.00  2.83           C 0\nATOM      9  N   ARG A   2     -14.644   0.947  -0.671  1.00  0.13           N 0\nATOM     10  CA  ARG A   2     -15.750   1.700  -0.092  1.00  0.12           C 0\nATOM     11  C   ARG A   2     -16.280   1.068   1.189  1.00  0.11           C 0\nATOM     12  O   ARG A   2     -16.652   1.744   2.136  1.00  0.21           O 0\nATOM     13  CB  ARG A   2     -16.855   1.798  -1.130  1.00  0.24           C 0\nATOM     14  CG  ARG A   2     -18.006   2.568  -0.672  1.00  0.75           C 0\nATOM     15  CD  ARG A   2     -18.972   2.726  -1.772  1.00  1.41           C 0\nATOM     16  NE  ARG A   2     -19.971   3.471  -1.313  1.00  1.96           N 0\nATOM     17  CZ  ARG A   2     -20.906   3.853  -2.036  1.00  2.60           C 0\nATOM     18  NH1 ARG A   2     -21.832   4.521  -1.454  1.00  3.37           N 0\nATOM     19  NH2 ARG A   2     -20.944   3.585  -3.329  1.00  3.31           N 1\nATOM     20  N   GLY A   3     -16.329  -0.267   1.189  1.00  0.12           N 0\nATOM     21  CA  GLY A   3     -16.800  -1.004   2.345  1.00  0.12           C 0\nATOM     22  C   GLY A   3     -15.977  -0.709   3.612  1.00  0.12           C 0\nATOM     23  O   GLY A   3     -16.501  -0.627   4.682  1.00  0.23           O 0\nATOM     24  N   TRP A   4     -14.645  -0.567   3.406  1.00  0.11           N 0\nATOM     25  CA  TRP A   4     -13.811  -0.249   4.542  1.00  0.12           C 0\nATOM     26  C   TRP A   4     -14.016   1.220   4.992  1.00  0.11           C 0\nATOM     27  O   TRP A   4     -14.085   1.493   6.160  1.00  0.20           O 0\nATOM     28  CB  TRP A   4     -12.368  -0.557   4.278  1.00  0.29           C 0\nATOM     29  CG  TRP A   4     -11.999  -1.996   4.282  1.00  1.07           C 0\nATOM     30  CD1 TRP A   4     -11.682  -2.685   3.206  1.00  2.38           C 0\nATOM     31  CD2 TRP A   4     -11.912  -2.884   5.365  1.00  1.97           C 0\nATOM     32  NE1 TRP A   4     -11.397  -3.959   3.550  1.00  2.97           N 0\nATOM     33  CE2 TRP A   4     -11.536  -4.076   4.880  1.00  2.56           C 0\nATOM     34  CE3 TRP A   4     -12.122  -2.663   6.689  1.00  2.96           C 0\nATOM     35  CZ2 TRP A   4     -11.329  -5.159   5.727  1.00  3.43           C 0\nATOM     36  CZ3 TRP A   4     -11.953  -3.725   7.508  1.00  4.05           C 0\nATOM     37  CH2 TRP A   4     -11.535  -4.951   7.065  1.00  4.01           C 0\nATOM     38  N   GLU A   5     -14.127   2.123   4.012  1.00  0.10           N 0\nATOM     39  CA  GLU A   5     -14.306   3.542   4.339  1.00  0.10           C 0\nATOM     40  C   GLU A   5     -15.532   3.786   5.193  1.00  0.10           C 0\nATOM     41  O   GLU A   5     -15.495   4.529   6.175  1.00  0.23           O 0\nATOM     42  CB  GLU A   5     -14.354   4.369   3.066  1.00  0.20           C 0\nATOM     43  CG  GLU A   5     -13.029   4.350   2.345  1.00  1.02           C 0\nATOM     44  CD  GLU A   5     -13.068   5.004   1.043  1.00  1.73           C 0\nATOM     45  OE1 GLU A   5     -14.135   5.667   0.691  1.00  2.31           O 0\nATOM     46  OE2 GLU A   5     -12.025   4.883   0.341  1.00  2.18           O-1\nATOM     47  N   GLU A   6     -16.635   3.155   4.826  1.00  0.09           N 0\nATOM     48  CA  GLU A   6     -17.854   3.275   5.609  1.00  0.10           C 0\nATOM     49  C   GLU A   6     -17.841   2.416   6.851  1.00  0.10           C 0\nATOM     50  O   GLU A   6     -18.243   2.855   7.926  1.00  0.21           O 0\nATOM     51  CB  GLU A   6     -19.045   2.922   4.732  1.00  0.21           C 0\nATOM     52  CG  GLU A   6     -19.232   3.872   3.591  1.00  1.12           C 0\nATOM     53  CD  GLU A   6     -20.318   3.436   2.664  1.00  1.56           C 0\nATOM     54  OE1 GLU A   6     -20.768   2.274   2.714  1.00  2.02           O 0\nATOM     55  OE2 GLU A   6     -20.713   4.283   1.863  1.00  1.90           O-1\nATOM     56  N   GLY A   7     -17.402   1.181   6.685  1.00  0.10           N 0\nATOM     57  CA  GLY A   7     -17.433   0.200   7.740  1.00  0.10           C 0\nATOM     58  C   GLY A   7     -16.598   0.578   8.968  1.00  0.10           C 0\nATOM     59  O   GLY A   7     -17.086   0.505  10.083  1.00  0.24           O 0\nATOM     60  N   VAL A   8     -15.344   0.960   8.728  1.00  0.10           N 0\nATOM     61  CA  VAL A   8     -14.469   1.289   9.852  1.00  0.10           C 0\nATOM     62  C   VAL A   8     -14.843   2.627  10.508  1.00  0.10           C 0\nATOM     63  O   VAL A   8     -14.562   2.830  11.681  1.00  0.22           O 0\nATOM     64  CB  VAL A   8     -12.976   1.306   9.515  1.00  0.23           C 0\nATOM     65  CG1 VAL A   8     -12.528  -0.032   8.871  1.00  0.69           C 0\nATOM     66  CG2 VAL A   8     -12.564   2.492   8.728  1.00  1.03           C 0\nATOM     67  N   ALA A   9     -15.468   3.513   9.737  1.00  0.10           N 0\nATOM     68  CA  ALA A   9     -15.916   4.794  10.267  1.00  0.11           C 0\nATOM     69  C   ALA A   9     -16.886   4.610  11.396  1.00  0.13           C 0\nATOM     70  O   ALA A   9     -16.955   5.402  12.325  1.00  0.40           O 0\nATOM     71  CB  ALA A   9     -16.525   5.648   9.175  1.00  0.20           C 0\nATOM     72  N   MET A  11     -16.775   2.111  13.724  1.00  0.13           N 0\nATOM     73  CA  MET A  11     -16.096   1.378  14.745  1.00  0.13           C 0\nATOM     74  C   MET A  11     -15.472   2.280  15.745  1.00  0.15           C 0\nATOM     75  O   MET A  11     -14.882   3.331  15.504  1.00  1.13           O 0\nATOM     76  CB  MET A  11     -15.048   0.458  14.144  1.00  0.27           C 0\nATOM     77  CG  MET A  11     -15.660  -0.624  13.267  1.00  0.63           C 0\nATOM     78  SD  MET A  11     -14.482  -1.703  12.654  1.00  1.18           S 0\nATOM     79  CE  MET A  11     -14.009  -2.712  13.859  1.00  1.85           C 0\nHETATM   80 C1   lig B   1      -9.626  -4.842   4.019  1.00  9.34           C 0\nHETATM   81 N1   lig B   1     -10.471  -5.476   4.551  1.00  8.64           N 0\nHETATM   82 O1   lig B   1     -10.630  -6.561   5.980  1.00  8.82           O 0\nHETATM   83 C2   lig B   1     -11.209  -6.053   5.292  1.00  7.66           C 0\nHETATM   84 N2   lig B   1     -12.706  -5.915   6.746  1.00  7.21           N 0\nHETATM   85 C3   lig B   1     -12.456  -6.032   5.555  1.00  6.57           C 0\nHETATM   86 N3   lig B   1     -13.977  -5.927   6.995  1.00  7.07           N 0\nHETATM   87 C4   lig B   1     -14.161  -6.006   8.064  1.00  8.59           C 0\nHETATM   88 N4   lig B   1     -14.899  -6.711   2.325  1.00  2.90           N 0\nHETATM   89 C5   lig B   1     -14.460  -6.079   5.858  1.00  6.21           C 0\nHETATM   90 N5   lig B   1     -15.518  -8.485   1.359  1.00  4.60           N 0\nHETATM   91 C6   lig B   1     -15.625  -6.250   5.388  1.00  5.76           C 0\nHETATM   92 N6   lig B   1     -15.692  -6.290   0.809  1.00  3.78           N 0\nHETATM   93 C7   lig B   1     -15.861  -6.458   4.136  1.00  4.48           C 0\nHETATM   94 N7   lig B   1     -16.832  -6.017  -0.968  1.00  6.18           N 0\nHETATM   95 C8   lig B   1     -14.880  -6.530   3.338  1.00  3.54           C 0\nHETATM   96 N8   lig B   1     -16.329  -3.734  -2.913  1.00  8.12           N 0\nHETATM   97 C9   lig B   1     -15.252  -7.224   1.473  1.00  3.11           C 0\nHETATM   98 N9   lig B   1     -15.937  -0.981  -4.360  1.00 10.83           N 0\nHETATM   99 C10  lig B   1     -16.249  -8.891   0.569  1.00  5.51           C 0\nHETATM  100 N10  lig B   1     -17.899  -6.127  -1.543  1.00  6.82           N 0\nHETATM  101 C11  lig B   1     -16.845  -8.076  -0.038  1.00  5.82           C 0\nHETATM  102 C12  lig B   1     -16.560  -6.762   0.055  1.00  5.08           C 0\nHETATM  103 C13  lig B   1     -16.107  -5.088  -1.400  1.00  6.40           C 0\nHETATM  104 C14  lig B   1     -16.801  -4.639  -2.292  1.00  7.07           C 0\nHETATM  105 C15  lig B   1     -16.372  -3.049  -3.610  1.00  9.56           C 0\nHETATM  106 C16  lig B   1     -15.305  -3.245  -4.422  1.00 10.69           C 0\nHETATM  107 C17  lig B   1     -15.245  -2.021  -5.127  1.00 11.27           C 0\nHETATM  108 C18  lig B   1     -16.497  -1.693  -3.204  1.00 10.18           C 0\nHETATM  109 C19  lig B   1     -17.878  -5.288  -2.406  1.00  7.43           C 0\nHETATM  110 C20  lig B   1     -18.793  -5.153  -3.419  1.00  9.22           C 0\nHETATM  111 C21  lig B   1     -13.742  -6.372   3.652  1.00  4.24           C 0\nHETATM  112 C22  lig B   1     -13.476  -6.188   4.907  1.00  5.59           C 0\nCONECT   80   81\nCONECT   81   83\nCONECT   82   83\nCONECT   83   85\nCONECT   84   86\nCONECT   84   85\nCONECT   85  112\nCONECT   86   87\nCONECT   86   89\nCONECT   88   97\nCONECT   88   95\nCONECT   89   91\nCONECT   89  112\nCONECT   90   99\nCONECT   90   97\nCONECT   91   93\nCONECT   92   97\nCONECT   92  102\nCONECT   93   95\nCONECT   94  100\nCONECT   94  103\nCONECT   94  102\nCONECT   95  111\nCONECT   96  105\nCONECT   96  104\nCONECT   98  108\nCONECT   98  107\nCONECT   99  101\nCONECT  100  109\nCONECT  101  102\nCONECT  103  104\nCONECT  104  109\nCONECT  105  106\nCONECT  105  108\nCONECT  106  107\nCONECT  109  110\nCONECT  111  112\nTER\nENDMDL\n",
-   "sha256": "f2c9aa7b14a2e5c7a0df7105c18e5827a2c18521dce4ce988bb778c82ea02e2d",
-   "size": 9720
-  },
-  "citations.bib": {
-   "media_type": "application/octet-stream",
-   "payload": "@article{Anishchenko_2024, title={Modeling protein-small molecule conformational ensembles with PLACER}, url={http://dx.doi.org/10.1101/2024.09.25.614868}, DOI={10.1101/2024.09.25.614868}, publisher={openRxiv}, author={Anishchenko, Ivan and Kipnis, Yakov and Kalvet, Indrek and Zhou, Guangfeng and Krishna, Rohith and Pellock, Samuel J. and Lauko, Anna and Lee, Gyu Rie and An, Linna and Dauparas, Justas and DiMaio, Frank and Baker, David}, year={2024}, month=Sept }\n",
-   "sha256": "a6346af61cd5213cefe60826a54dd6e302dab921576ae8975d3a983580d62329",
-   "size": 468
-  }
- },
- "provenance": {
-  "capture": {
-   "captured_from": "authenticated production artifact API; the deployment result root was not readable by the capturing user, so no result-root capture was possible",
-   "mode": "synthetic",
-   "payload_source": "GET /compute/api/results/<task>/artifacts/<path> with a Bearer token; every byte checked against the served manifest sha256",
-   "production_task_id": "6a55b7e4ffb9177b10df61df4ddbed1e",
-   "production_task_type": "placer",
-   "served_manifest_sha256": "82fa163c81c98c263d4edcc1041f69b8b6f8eb074e1f35a53788f051a51cb4cf",
-   "task_source": "none - the deployment task store publication anchor was not readable"
-  },
-  "production_finished_at": "2026-10-20T23:53:29.549721+08:00",
-  "production_started_at": "2026-10-20T23:52:46.014684+08:00",
-  "runner_family": "placer-rfdiffusion",
-  "runner_revision": "deployment 57c8114; campaign base eae170d",
-  "storyboard_sha256": "f36db365ff5579b1a29e170e02b8f4665518f67b6cb7572d6d1c1ef9e780b48f"
- },
- "response": {
-  "archive": {
-   "download_url": null,
-   "ready": false,
-   "request_url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/archive"
-  },
-  "artifacts": [
-   {
-    "capability": "table",
-    "media_type": "text/csv",
-    "ndarray_url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/ndarrays/3fap_hf3_A_short_lig.csv",
-    "path": "3fap_hf3_A_short_lig.csv",
-    "preview": "table",
-    "role": "evidence",
-    "sha256": "5526d567828c1529d69f3d7fb35098fb89c9b2befc0348e1e03a464ccbfe01b9",
-    "size": 214,
-    "table_url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/tables/3fap_hf3_A_short_lig.csv",
-    "url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/artifacts/3fap_hf3_A_short_lig.csv"
-   },
-   {
-    "capability": "molecular_structure",
-    "media_type": "application/octet-stream",
-    "path": "3fap_hf3_A_short_lig_model.pdb",
-    "preview": "structure",
-    "role": "primary",
-    "sha256": "f2c9aa7b14a2e5c7a0df7105c18e5827a2c18521dce4ce988bb778c82ea02e2d",
-    "size": 9720,
-    "url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/artifacts/3fap_hf3_A_short_lig_model.pdb"
-   },
-   {
-    "capability": "text",
-    "media_type": "application/octet-stream",
-    "path": "citations.bib",
-    "preview": "text",
-    "role": "provenance",
-    "sha256": "a6346af61cd5213cefe60826a54dd6e302dab921576ae8975d3a983580d62329",
-    "size": 468,
-    "url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/artifacts/citations.bib"
-   },
-   {
-    "capability": "molecular_structure",
-    "media_type": "application/octet-stream",
-    "path": "debug/inputs/structures/3fap_hf3_A_short_lig.pdb",
-    "preview": "structure",
-    "role": "provenance",
-    "sha256": "09d52018dbb0d08ac4f93344b068db7ac296a51ba1ef94366d01fc37f43875d1",
-    "size": 10578,
-    "url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/artifacts/debug/inputs/structures/3fap_hf3_A_short_lig.pdb"
-   },
-   {
-    "capability": "text",
-    "media_type": "application/json",
-    "ndarray_url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/ndarrays/debug/submission.json",
-    "path": "debug/submission.json",
-    "preview": "text",
-    "role": "provenance",
-    "sha256": "6a5f241c5c1ccfe73d3ff13df6bf4f255d8730011f34266900141d786cad80d4",
-    "size": 688,
-    "url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/artifacts/debug/submission.json"
-   },
-   {
-    "capability": "text",
-    "media_type": "application/json",
-    "ndarray_url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/ndarrays/execution/slurm-status.execution.json",
-    "path": "execution/slurm-status.execution.json",
-    "preview": "text",
-    "role": "diagnostic",
-    "sha256": "aeafe3fedbc2f17839e84c6ccf8778e8762ec486a050057b3febc1ce83832d8c",
-    "size": 1158,
-    "url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/artifacts/execution/slurm-status.execution.json"
-   },
-   {
-    "capability": "text",
-    "media_type": "application/json",
-    "ndarray_url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/ndarrays/execution/slurm-unknown-user-placer-6a55b7e4ffb9177b10df61df4ddbed1e.resource.json",
-    "path": "execution/slurm-unknown-user-placer-6a55b7e4ffb9177b10df61df4ddbed1e.resource.json",
-    "preview": "text",
-    "role": "diagnostic",
-    "sha256": "6da24d858c4168c2b174aecd04dffb2e4e04363f6fb992e2dc3d9f6c17f5ae99",
-    "size": 524,
-    "url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/artifacts/execution/slurm-unknown-user-placer-6a55b7e4ffb9177b10df61df4ddbed1e.resource.json"
-   },
-   {
-    "capability": "text",
-    "media_type": "application/octet-stream",
-    "path": "execution/slurm-unknown-user-placer-6a55b7e4ffb9177b10df61df4ddbed1e.stderr.log",
-    "preview": "text",
-    "role": "diagnostic",
-    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "size": 0,
-    "url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/artifacts/execution/slurm-unknown-user-placer-6a55b7e4ffb9177b10df61df4ddbed1e.stderr.log"
-   },
-   {
-    "capability": "text",
-    "media_type": "application/octet-stream",
-    "path": "execution/slurm-unknown-user-placer-6a55b7e4ffb9177b10df61df4ddbed1e.stdout.log",
-    "preview": "text",
-    "role": "diagnostic",
-    "sha256": "947f33551ce83129f0f00f7ade05b2060d66ec6952552c0196a1685ee8a3b6ce",
-    "size": 1006,
-    "url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/artifacts/execution/slurm-unknown-user-placer-6a55b7e4ffb9177b10df61df4ddbed1e.stdout.log"
-   }
-  ],
-  "created_at": "2026-10-20T23:53:29.549721+08:00",
-  "error": null,
-  "limitations": [
-   "Ligand, residue, mutation, bond, and crop identifiers must follow the pinned PLACER syntax."
-  ],
-  "outcome": null,
-  "output_check": {
-   "checks": [
+  "bundle_digest": "sha256:c86fb82ad50a09e364db4a02ff026283342f881e8bcf453cc76bd7689fa44fae",
+  "bundle_version": 1,
+  "excluded": [
     {
-     "matched": 1,
-     "required": true,
-     "source": "candidates",
-     "status": "passed",
-     "view_id": "complex_models"
+      "media_type": "chemical/x-pdb",
+      "path": "debug/inputs/structures/3fap_hf3_A_short_lig.pdb",
+      "reason": "declared artifact not captured by this capture",
+      "sha256": "09d52018dbb0d08ac4f93344b068db7ac296a51ba1ef94366d01fc37f43875d1",
+      "size": 10578
     },
     {
-     "matched": 1,
-     "required": true,
-     "source": "table",
-     "status": "passed",
-     "view_id": "model_scores"
+      "media_type": "application/json",
+      "path": "debug/submission.json",
+      "reason": "declared artifact not captured by this capture",
+      "sha256": "6a5f241c5c1ccfe73d3ff13df6bf4f255d8730011f34266900141d786cad80d4",
+      "size": 688
+    },
+    {
+      "media_type": "application/json",
+      "path": "execution/slurm-status.execution.json",
+      "reason": "declared artifact not captured by this capture",
+      "sha256": "aeafe3fedbc2f17839e84c6ccf8778e8762ec486a050057b3febc1ce83832d8c",
+      "size": 1158
+    },
+    {
+      "media_type": "application/json",
+      "path": "execution/slurm-unknown-user-placer-6a55b7e4ffb9177b10df61df4ddbed1e.resource.json",
+      "reason": "declared artifact not captured by this capture",
+      "sha256": "6da24d858c4168c2b174aecd04dffb2e4e04363f6fb992e2dc3d9f6c17f5ae99",
+      "size": 524
+    },
+    {
+      "media_type": "text/plain",
+      "path": "execution/slurm-unknown-user-placer-6a55b7e4ffb9177b10df61df4ddbed1e.stderr.log",
+      "reason": "declared artifact not captured by this capture",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size": 0
+    },
+    {
+      "media_type": "text/plain",
+      "path": "execution/slurm-unknown-user-placer-6a55b7e4ffb9177b10df61df4ddbed1e.stdout.log",
+      "reason": "declared artifact not captured by this capture",
+      "sha256": "947f33551ce83129f0f00f7ade05b2060d66ec6952552c0196a1685ee8a3b6ce",
+      "size": 1006
     }
-   ],
-   "problems": [],
-   "state": "passed"
-  },
-  "result": {
-   "files": {
+  ],
+  "kind": "real_runner_result_replay",
+  "logical_files": {
     "citations": [
-     {
-      "capability": "text",
-      "cardinality": "one",
-      "id": "citations",
-      "media_type": "application/octet-stream",
-      "name": "citations.bib",
-      "preview": "text",
-      "role": "provenance",
-      "size": 468,
-      "url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/files/citations?index=0",
-      "viewer": "text"
-     }
+      {
+        "path": "citations.bib",
+        "sha256": "a6346af61cd5213cefe60826a54dd6e302dab921576ae8975d3a983580d62329",
+        "size": 468
+      }
     ],
     "complexes": [
-     {
-      "capability": "molecular_structure",
-      "cardinality": "many",
-      "id": "complexes",
-      "media_type": "application/octet-stream",
-      "name": "3fap_hf3_A_short_lig_model.pdb",
-      "preview": "structure",
-      "role": "primary",
-      "size": 9720,
-      "url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/files/complexes?index=0",
-      "viewer": "structure"
-     }
+      {
+        "path": "3fap_hf3_A_short_lig_model.pdb",
+        "sha256": "f2c9aa7b14a2e5c7a0df7105c18e5827a2c18521dce4ce988bb778c82ea02e2d",
+        "size": 9720
+      }
     ],
     "execution_records": [
-     {
-      "capability": "text",
-      "cardinality": "many",
-      "id": "execution_records",
-      "media_type": "application/json",
-      "name": "slurm-status.execution.json",
-      "ndarray_url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/ndarrays/execution/slurm-status.execution.json",
-      "preview": "text",
-      "role": "diagnostic",
-      "size": 1158,
-      "url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/files/execution_records?index=0",
-      "viewer": "text"
-     },
-     {
-      "capability": "text",
-      "cardinality": "many",
-      "id": "execution_records",
-      "media_type": "application/json",
-      "name": "slurm-unknown-user-placer-6a55b7e4ffb9177b10df61df4ddbed1e.resource.json",
-      "ndarray_url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/ndarrays/execution/slurm-unknown-user-placer-6a55b7e4ffb9177b10df61df4ddbed1e.resource.json",
-      "preview": "text",
-      "role": "diagnostic",
-      "size": 524,
-      "url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/files/execution_records?index=1",
-      "viewer": "text"
-     },
-     {
-      "capability": "text",
-      "cardinality": "many",
-      "id": "execution_records",
-      "media_type": "application/octet-stream",
-      "name": "slurm-unknown-user-placer-6a55b7e4ffb9177b10df61df4ddbed1e.stdout.log",
-      "preview": "text",
-      "role": "diagnostic",
-      "size": 1006,
-      "url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/files/execution_records?index=2",
-      "viewer": "text"
-     }
+      {
+        "path": "execution/slurm-status.execution.json",
+        "sha256": "aeafe3fedbc2f17839e84c6ccf8778e8762ec486a050057b3febc1ce83832d8c",
+        "size": 1158
+      },
+      {
+        "path": "execution/slurm-unknown-user-placer-6a55b7e4ffb9177b10df61df4ddbed1e.resource.json",
+        "sha256": "6da24d858c4168c2b174aecd04dffb2e4e04363f6fb992e2dc3d9f6c17f5ae99",
+        "size": 524
+      },
+      {
+        "path": "execution/slurm-unknown-user-placer-6a55b7e4ffb9177b10df61df4ddbed1e.stdout.log",
+        "sha256": "947f33551ce83129f0f00f7ade05b2060d66ec6952552c0196a1685ee8a3b6ce",
+        "size": 1006
+      }
     ],
     "input_structures": [
-     {
-      "capability": "molecular_structure",
-      "cardinality": "many",
-      "id": "input_structures",
-      "media_type": "application/octet-stream",
-      "name": "3fap_hf3_A_short_lig.pdb",
-      "preview": "structure",
-      "role": "provenance",
-      "size": 10578,
-      "url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/files/input_structures?index=0",
-      "viewer": "structure"
-     }
+      {
+        "path": "debug/inputs/structures/3fap_hf3_A_short_lig.pdb",
+        "sha256": "09d52018dbb0d08ac4f93344b068db7ac296a51ba1ef94366d01fc37f43875d1",
+        "size": 10578
+      }
     ],
     "model_scores": [
-     {
-      "capability": "table",
-      "cardinality": "one",
-      "id": "model_scores",
-      "media_type": "text/csv",
-      "name": "3fap_hf3_A_short_lig.csv",
-      "ndarray_url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/ndarrays/3fap_hf3_A_short_lig.csv",
-      "preview": "table",
-      "role": "evidence",
-      "size": 214,
-      "table_url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/tables/3fap_hf3_A_short_lig.csv",
-      "url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/files/model_scores?index=0",
-      "viewer": "table"
-     }
+      {
+        "path": "3fap_hf3_A_short_lig.csv",
+        "sha256": "5526d567828c1529d69f3d7fb35098fb89c9b2befc0348e1e03a464ccbfe01b9",
+        "size": 214
+      }
     ],
     "submission": [
-     {
-      "capability": "text",
-      "cardinality": "one",
-      "id": "submission",
-      "media_type": "application/json",
-      "name": "submission.json",
-      "ndarray_url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/ndarrays/debug/submission.json",
-      "preview": "json",
-      "role": "provenance",
-      "size": 688,
-      "url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/files/submission?index=0",
-      "viewer": "json"
-     }
+      {
+        "path": "debug/submission.json",
+        "sha256": "6a5f241c5c1ccfe73d3ff13df6bf4f255d8730011f34266900141d786cad80d4",
+        "size": 688
+      }
     ]
-   }
   },
-  "run": {
-   "citations": [
-    {
-     "doi": "10.1101/2024.09.25.614868",
-     "num": 1,
-     "title": "Modeling protein-small molecule conformational ensembles with PLACER",
-     "url": "https://doi.org/10.1101/2024.09.25.614868"
+  "payloads": {
+    "3fap_hf3_A_short_lig.csv": {
+      "media_type": "text/csv",
+      "payload": "label,model_idx,fape,lddt,rmsd,kabsch,prmsd,plddt,plddt_pde\n3fap_hf3_A_short_lig,1,5.322027683258057,0.7155157327651978,10.260625839233398,2.7411983013153076,7.281238079071045,0.4663636386394501,0.5704931616783142\n",
+      "sha256": "5526d567828c1529d69f3d7fb35098fb89c9b2befc0348e1e03a464ccbfe01b9",
+      "size": 214
+    },
+    "3fap_hf3_A_short_lig_model.pdb": {
+      "media_type": "chemical/x-pdb",
+      "payload": "MODEL 1\nATOM      1  N   ILE A   1     -11.104   0.393  -0.425  1.00  0.24           N 1\nATOM      2  CA  ILE A   1     -12.430  -0.107  -0.740  1.00  0.16           C 0\nATOM      3  C   ILE A   1     -13.521   0.666  -0.000  1.00  0.13           C 0\nATOM      4  O   ILE A   1     -13.358   0.965   1.172  1.00  0.29           O 0\nATOM      5  CB  ILE A   1     -12.505  -1.604  -0.394  1.00  0.48           C 0\nATOM      6  CG1 ILE A   1     -11.418  -2.329  -0.939  1.00  1.87           C 0\nATOM      7  CG2 ILE A   1     -13.806  -2.181  -0.855  1.00  1.78           C 0\nATOM      8  CD1 ILE A   1     -11.331  -3.686  -0.516  1.00  2.83           C 0\nATOM      9  N   ARG A   2     -14.644   0.947  -0.671  1.00  0.13           N 0\nATOM     10  CA  ARG A   2     -15.750   1.700  -0.092  1.00  0.12           C 0\nATOM     11  C   ARG A   2     -16.280   1.068   1.189  1.00  0.11           C 0\nATOM     12  O   ARG A   2     -16.652   1.744   2.136  1.00  0.21           O 0\nATOM     13  CB  ARG A   2     -16.855   1.798  -1.130  1.00  0.24           C 0\nATOM     14  CG  ARG A   2     -18.006   2.568  -0.672  1.00  0.75           C 0\nATOM     15  CD  ARG A   2     -18.972   2.726  -1.772  1.00  1.41           C 0\nATOM     16  NE  ARG A   2     -19.971   3.471  -1.313  1.00  1.96           N 0\nATOM     17  CZ  ARG A   2     -20.906   3.853  -2.036  1.00  2.60           C 0\nATOM     18  NH1 ARG A   2     -21.832   4.521  -1.454  1.00  3.37           N 0\nATOM     19  NH2 ARG A   2     -20.944   3.585  -3.329  1.00  3.31           N 1\nATOM     20  N   GLY A   3     -16.329  -0.267   1.189  1.00  0.12           N 0\nATOM     21  CA  GLY A   3     -16.800  -1.004   2.345  1.00  0.12           C 0\nATOM     22  C   GLY A   3     -15.977  -0.709   3.612  1.00  0.12           C 0\nATOM     23  O   GLY A   3     -16.501  -0.627   4.682  1.00  0.23           O 0\nATOM     24  N   TRP A   4     -14.645  -0.567   3.406  1.00  0.11           N 0\nATOM     25  CA  TRP A   4     -13.811  -0.249   4.542  1.00  0.12           C 0\nATOM     26  C   TRP A   4     -14.016   1.220   4.992  1.00  0.11           C 0\nATOM     27  O   TRP A   4     -14.085   1.493   6.160  1.00  0.20           O 0\nATOM     28  CB  TRP A   4     -12.368  -0.557   4.278  1.00  0.29           C 0\nATOM     29  CG  TRP A   4     -11.999  -1.996   4.282  1.00  1.07           C 0\nATOM     30  CD1 TRP A   4     -11.682  -2.685   3.206  1.00  2.38           C 0\nATOM     31  CD2 TRP A   4     -11.912  -2.884   5.365  1.00  1.97           C 0\nATOM     32  NE1 TRP A   4     -11.397  -3.959   3.550  1.00  2.97           N 0\nATOM     33  CE2 TRP A   4     -11.536  -4.076   4.880  1.00  2.56           C 0\nATOM     34  CE3 TRP A   4     -12.122  -2.663   6.689  1.00  2.96           C 0\nATOM     35  CZ2 TRP A   4     -11.329  -5.159   5.727  1.00  3.43           C 0\nATOM     36  CZ3 TRP A   4     -11.953  -3.725   7.508  1.00  4.05           C 0\nATOM     37  CH2 TRP A   4     -11.535  -4.951   7.065  1.00  4.01           C 0\nATOM     38  N   GLU A   5     -14.127   2.123   4.012  1.00  0.10           N 0\nATOM     39  CA  GLU A   5     -14.306   3.542   4.339  1.00  0.10           C 0\nATOM     40  C   GLU A   5     -15.532   3.786   5.193  1.00  0.10           C 0\nATOM     41  O   GLU A   5     -15.495   4.529   6.175  1.00  0.23           O 0\nATOM     42  CB  GLU A   5     -14.354   4.369   3.066  1.00  0.20           C 0\nATOM     43  CG  GLU A   5     -13.029   4.350   2.345  1.00  1.02           C 0\nATOM     44  CD  GLU A   5     -13.068   5.004   1.043  1.00  1.73           C 0\nATOM     45  OE1 GLU A   5     -14.135   5.667   0.691  1.00  2.31           O 0\nATOM     46  OE2 GLU A   5     -12.025   4.883   0.341  1.00  2.18           O-1\nATOM     47  N   GLU A   6     -16.635   3.155   4.826  1.00  0.09           N 0\nATOM     48  CA  GLU A   6     -17.854   3.275   5.609  1.00  0.10           C 0\nATOM     49  C   GLU A   6     -17.841   2.416   6.851  1.00  0.10           C 0\nATOM     50  O   GLU A   6     -18.243   2.855   7.926  1.00  0.21           O 0\nATOM     51  CB  GLU A   6     -19.045   2.922   4.732  1.00  0.21           C 0\nATOM     52  CG  GLU A   6     -19.232   3.872   3.591  1.00  1.12           C 0\nATOM     53  CD  GLU A   6     -20.318   3.436   2.664  1.00  1.56           C 0\nATOM     54  OE1 GLU A   6     -20.768   2.274   2.714  1.00  2.02           O 0\nATOM     55  OE2 GLU A   6     -20.713   4.283   1.863  1.00  1.90           O-1\nATOM     56  N   GLY A   7     -17.402   1.181   6.685  1.00  0.10           N 0\nATOM     57  CA  GLY A   7     -17.433   0.200   7.740  1.00  0.10           C 0\nATOM     58  C   GLY A   7     -16.598   0.578   8.968  1.00  0.10           C 0\nATOM     59  O   GLY A   7     -17.086   0.505  10.083  1.00  0.24           O 0\nATOM     60  N   VAL A   8     -15.344   0.960   8.728  1.00  0.10           N 0\nATOM     61  CA  VAL A   8     -14.469   1.289   9.852  1.00  0.10           C 0\nATOM     62  C   VAL A   8     -14.843   2.627  10.508  1.00  0.10           C 0\nATOM     63  O   VAL A   8     -14.562   2.830  11.681  1.00  0.22           O 0\nATOM     64  CB  VAL A   8     -12.976   1.306   9.515  1.00  0.23           C 0\nATOM     65  CG1 VAL A   8     -12.528  -0.032   8.871  1.00  0.69           C 0\nATOM     66  CG2 VAL A   8     -12.564   2.492   8.728  1.00  1.03           C 0\nATOM     67  N   ALA A   9     -15.468   3.513   9.737  1.00  0.10           N 0\nATOM     68  CA  ALA A   9     -15.916   4.794  10.267  1.00  0.11           C 0\nATOM     69  C   ALA A   9     -16.886   4.610  11.396  1.00  0.13           C 0\nATOM     70  O   ALA A   9     -16.955   5.402  12.325  1.00  0.40           O 0\nATOM     71  CB  ALA A   9     -16.525   5.648   9.175  1.00  0.20           C 0\nATOM     72  N   MET A  11     -16.775   2.111  13.724  1.00  0.13           N 0\nATOM     73  CA  MET A  11     -16.096   1.378  14.745  1.00  0.13           C 0\nATOM     74  C   MET A  11     -15.472   2.280  15.745  1.00  0.15           C 0\nATOM     75  O   MET A  11     -14.882   3.331  15.504  1.00  1.13           O 0\nATOM     76  CB  MET A  11     -15.048   0.458  14.144  1.00  0.27           C 0\nATOM     77  CG  MET A  11     -15.660  -0.624  13.267  1.00  0.63           C 0\nATOM     78  SD  MET A  11     -14.482  -1.703  12.654  1.00  1.18           S 0\nATOM     79  CE  MET A  11     -14.009  -2.712  13.859  1.00  1.85           C 0\nHETATM   80 C1   lig B   1      -9.626  -4.842   4.019  1.00  9.34           C 0\nHETATM   81 N1   lig B   1     -10.471  -5.476   4.551  1.00  8.64           N 0\nHETATM   82 O1   lig B   1     -10.630  -6.561   5.980  1.00  8.82           O 0\nHETATM   83 C2   lig B   1     -11.209  -6.053   5.292  1.00  7.66           C 0\nHETATM   84 N2   lig B   1     -12.706  -5.915   6.746  1.00  7.21           N 0\nHETATM   85 C3   lig B   1     -12.456  -6.032   5.555  1.00  6.57           C 0\nHETATM   86 N3   lig B   1     -13.977  -5.927   6.995  1.00  7.07           N 0\nHETATM   87 C4   lig B   1     -14.161  -6.006   8.064  1.00  8.59           C 0\nHETATM   88 N4   lig B   1     -14.899  -6.711   2.325  1.00  2.90           N 0\nHETATM   89 C5   lig B   1     -14.460  -6.079   5.858  1.00  6.21           C 0\nHETATM   90 N5   lig B   1     -15.518  -8.485   1.359  1.00  4.60           N 0\nHETATM   91 C6   lig B   1     -15.625  -6.250   5.388  1.00  5.76           C 0\nHETATM   92 N6   lig B   1     -15.692  -6.290   0.809  1.00  3.78           N 0\nHETATM   93 C7   lig B   1     -15.861  -6.458   4.136  1.00  4.48           C 0\nHETATM   94 N7   lig B   1     -16.832  -6.017  -0.968  1.00  6.18           N 0\nHETATM   95 C8   lig B   1     -14.880  -6.530   3.338  1.00  3.54           C 0\nHETATM   96 N8   lig B   1     -16.329  -3.734  -2.913  1.00  8.12           N 0\nHETATM   97 C9   lig B   1     -15.252  -7.224   1.473  1.00  3.11           C 0\nHETATM   98 N9   lig B   1     -15.937  -0.981  -4.360  1.00 10.83           N 0\nHETATM   99 C10  lig B   1     -16.249  -8.891   0.569  1.00  5.51           C 0\nHETATM  100 N10  lig B   1     -17.899  -6.127  -1.543  1.00  6.82           N 0\nHETATM  101 C11  lig B   1     -16.845  -8.076  -0.038  1.00  5.82           C 0\nHETATM  102 C12  lig B   1     -16.560  -6.762   0.055  1.00  5.08           C 0\nHETATM  103 C13  lig B   1     -16.107  -5.088  -1.400  1.00  6.40           C 0\nHETATM  104 C14  lig B   1     -16.801  -4.639  -2.292  1.00  7.07           C 0\nHETATM  105 C15  lig B   1     -16.372  -3.049  -3.610  1.00  9.56           C 0\nHETATM  106 C16  lig B   1     -15.305  -3.245  -4.422  1.00 10.69           C 0\nHETATM  107 C17  lig B   1     -15.245  -2.021  -5.127  1.00 11.27           C 0\nHETATM  108 C18  lig B   1     -16.497  -1.693  -3.204  1.00 10.18           C 0\nHETATM  109 C19  lig B   1     -17.878  -5.288  -2.406  1.00  7.43           C 0\nHETATM  110 C20  lig B   1     -18.793  -5.153  -3.419  1.00  9.22           C 0\nHETATM  111 C21  lig B   1     -13.742  -6.372   3.652  1.00  4.24           C 0\nHETATM  112 C22  lig B   1     -13.476  -6.188   4.907  1.00  5.59           C 0\nCONECT   80   81\nCONECT   81   83\nCONECT   82   83\nCONECT   83   85\nCONECT   84   86\nCONECT   84   85\nCONECT   85  112\nCONECT   86   87\nCONECT   86   89\nCONECT   88   97\nCONECT   88   95\nCONECT   89   91\nCONECT   89  112\nCONECT   90   99\nCONECT   90   97\nCONECT   91   93\nCONECT   92   97\nCONECT   92  102\nCONECT   93   95\nCONECT   94  100\nCONECT   94  103\nCONECT   94  102\nCONECT   95  111\nCONECT   96  105\nCONECT   96  104\nCONECT   98  108\nCONECT   98  107\nCONECT   99  101\nCONECT  100  109\nCONECT  101  102\nCONECT  103  104\nCONECT  104  109\nCONECT  105  106\nCONECT  105  108\nCONECT  106  107\nCONECT  109  110\nCONECT  111  112\nTER\nENDMDL\n",
+      "sha256": "f2c9aa7b14a2e5c7a0df7105c18e5827a2c18521dce4ce988bb778c82ea02e2d",
+      "size": 9720
+    },
+    "citations.bib": {
+      "media_type": "application/octet-stream",
+      "payload": "@article{Anishchenko_2024, title={Modeling protein-small molecule conformational ensembles with PLACER}, url={http://dx.doi.org/10.1101/2024.09.25.614868}, DOI={10.1101/2024.09.25.614868}, publisher={openRxiv}, author={Anishchenko, Ivan and Kipnis, Yakov and Kalvet, Indrek and Zhou, Guangfeng and Krishna, Rohith and Pellock, Samuel J. and Lauko, Anna and Lee, Gyu Rie and An, Linna and Dauparas, Justas and DiMaio, Frank and Baker, David}, year={2024}, month=Sept }\n",
+      "sha256": "a6346af61cd5213cefe60826a54dd6e302dab921576ae8975d3a983580d62329",
+      "size": 468
     }
-   ],
-   "finished_at": "2026-10-20T23:53:29.549721+08:00",
-   "inputs": [
-    {
-     "format": "pdb",
-     "logical_type": "protein_structure",
-     "path": "3fap_hf3_A_short_lig.pdb",
-     "role": "structures",
-     "sha256": "09d52018dbb0d08ac4f93344b068db7ac296a51ba1ef94366d01fc37f43875d1"
-    }
-   ],
-   "method": {
-    "id": "placer",
-    "name": "PLACER",
-    "output_summary": "Sampled complex structures and PLACER scoring tables.",
-    "summary": "All-atom modeling of protein-ligand complexes from an input structure (PLACER)."
-   },
-   "parameters": [
-    {
-     "label": "Num Samples",
-     "name": "num_samples",
-     "unit": "",
-     "value": 1
-    },
-    {
-     "label": "Predict Ligand",
-     "name": "predict_ligand",
-     "unit": "",
-     "value": "lig"
-    },
-    {
-     "label": "Use Sm",
-     "name": "use_sm",
-     "unit": "",
-     "value": true
-    },
-    {
-     "label": "Fixed Ligand",
-     "name": "fixed_ligand",
-     "unit": "",
-     "value": ""
-    },
-    {
-     "label": "Target Res",
-     "name": "target_res",
-     "unit": "",
-     "value": ""
-    },
-    {
-     "label": "Rerank",
-     "name": "rerank",
-     "unit": "",
-     "value": "plddt_pde"
-    },
-    {
-     "label": "Cautious",
-     "name": "cautious",
-     "unit": "",
-     "value": false
-    },
-    {
-     "label": "Exclude Common Ligands",
-     "name": "exclude_common_ligands",
-     "unit": "",
-     "value": false
-    },
-    {
-     "label": "Predict Multi",
-     "name": "predict_multi",
-     "unit": "",
-     "value": false
-    },
-    {
-     "label": "Bonds",
-     "name": "bonds",
-     "unit": "",
-     "value": ""
-    },
-    {
-     "label": "Mutate",
-     "name": "mutate",
-     "unit": "",
-     "value": ""
-    },
-    {
-     "label": "Crop Centers",
-     "name": "crop_centers",
-     "unit": "",
-     "value": ""
-    },
-    {
-     "label": "Corruption Centers",
-     "name": "corruption_centers",
-     "unit": "",
-     "value": ""
-    },
-    {
-     "label": "Ignore Ligand Hydrogens",
-     "name": "ignore_ligand_hydrogens",
-     "unit": "",
-     "value": false
-    }
-   ],
-   "started_at": "2026-10-20T23:52:46.014684+08:00",
-   "submitted_at": "2026-10-20T15:52:45.985568+00:00",
-   "walltime_seconds": 43.53503680229187
   },
-  "schema_version": 3,
-  "status": "finished",
+  "provenance": {
+    "capture": {
+      "captured_from": "authenticated production artifact API; the deployment result root was not readable by the capturing user, so no result-root capture was possible",
+      "mode": "synthetic",
+      "payload_source": "GET /compute/api/results/<task>/artifacts/<path> with a Bearer token; every byte checked against the served manifest sha256",
+      "production_task_id": "6a55b7e4ffb9177b10df61df4ddbed1e",
+      "production_task_type": "placer",
+      "served_manifest_sha256": "82fa163c81c98c263d4edcc1041f69b8b6f8eb074e1f35a53788f051a51cb4cf",
+      "task_source": "none - the deployment task store publication anchor was not readable"
+    },
+    "production_finished_at": "2026-10-20T23:53:29.549721+08:00",
+    "production_started_at": "2026-10-20T23:52:46.014684+08:00",
+    "runner_family": "placer-rfdiffusion",
+    "runner_revision": "deployment 57c8114; campaign base eae170d",
+    "storyboard_sha256": "94d2afea4e5f84f5414e1e83e99e209986210a8c4ee8aa004c0d4ec574987d61"
+  },
+  "response": {
+    "archive": {
+      "download_url": null,
+      "ready": false,
+      "request_url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/archive"
+    },
+    "artifacts": [
+      {
+        "capability": "table",
+        "media_type": "text/csv",
+        "ndarray_url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/ndarrays/3fap_hf3_A_short_lig.csv",
+        "path": "3fap_hf3_A_short_lig.csv",
+        "preview": "table",
+        "role": "evidence",
+        "sha256": "5526d567828c1529d69f3d7fb35098fb89c9b2befc0348e1e03a464ccbfe01b9",
+        "size": 214,
+        "table_url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/tables/3fap_hf3_A_short_lig.csv",
+        "url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/artifacts/3fap_hf3_A_short_lig.csv"
+      },
+      {
+        "capability": "molecular_structure",
+        "media_type": "application/octet-stream",
+        "path": "3fap_hf3_A_short_lig_model.pdb",
+        "preview": "structure",
+        "role": "primary",
+        "sha256": "f2c9aa7b14a2e5c7a0df7105c18e5827a2c18521dce4ce988bb778c82ea02e2d",
+        "size": 9720,
+        "url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/artifacts/3fap_hf3_A_short_lig_model.pdb"
+      },
+      {
+        "capability": "text",
+        "media_type": "application/octet-stream",
+        "path": "citations.bib",
+        "preview": "text",
+        "role": "provenance",
+        "sha256": "a6346af61cd5213cefe60826a54dd6e302dab921576ae8975d3a983580d62329",
+        "size": 468,
+        "url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/artifacts/citations.bib"
+      },
+      {
+        "capability": "molecular_structure",
+        "media_type": "application/octet-stream",
+        "path": "debug/inputs/structures/3fap_hf3_A_short_lig.pdb",
+        "preview": "structure",
+        "role": "provenance",
+        "sha256": "09d52018dbb0d08ac4f93344b068db7ac296a51ba1ef94366d01fc37f43875d1",
+        "size": 10578,
+        "url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/artifacts/debug/inputs/structures/3fap_hf3_A_short_lig.pdb"
+      },
+      {
+        "capability": "text",
+        "media_type": "application/json",
+        "ndarray_url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/ndarrays/debug/submission.json",
+        "path": "debug/submission.json",
+        "preview": "text",
+        "role": "provenance",
+        "sha256": "6a5f241c5c1ccfe73d3ff13df6bf4f255d8730011f34266900141d786cad80d4",
+        "size": 688,
+        "url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/artifacts/debug/submission.json"
+      },
+      {
+        "capability": "text",
+        "media_type": "application/json",
+        "ndarray_url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/ndarrays/execution/slurm-status.execution.json",
+        "path": "execution/slurm-status.execution.json",
+        "preview": "text",
+        "role": "diagnostic",
+        "sha256": "aeafe3fedbc2f17839e84c6ccf8778e8762ec486a050057b3febc1ce83832d8c",
+        "size": 1158,
+        "url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/artifacts/execution/slurm-status.execution.json"
+      },
+      {
+        "capability": "text",
+        "media_type": "application/json",
+        "ndarray_url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/ndarrays/execution/slurm-unknown-user-placer-6a55b7e4ffb9177b10df61df4ddbed1e.resource.json",
+        "path": "execution/slurm-unknown-user-placer-6a55b7e4ffb9177b10df61df4ddbed1e.resource.json",
+        "preview": "text",
+        "role": "diagnostic",
+        "sha256": "6da24d858c4168c2b174aecd04dffb2e4e04363f6fb992e2dc3d9f6c17f5ae99",
+        "size": 524,
+        "url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/artifacts/execution/slurm-unknown-user-placer-6a55b7e4ffb9177b10df61df4ddbed1e.resource.json"
+      },
+      {
+        "capability": "text",
+        "media_type": "application/octet-stream",
+        "path": "execution/slurm-unknown-user-placer-6a55b7e4ffb9177b10df61df4ddbed1e.stderr.log",
+        "preview": "text",
+        "role": "diagnostic",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "size": 0,
+        "url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/artifacts/execution/slurm-unknown-user-placer-6a55b7e4ffb9177b10df61df4ddbed1e.stderr.log"
+      },
+      {
+        "capability": "text",
+        "media_type": "application/octet-stream",
+        "path": "execution/slurm-unknown-user-placer-6a55b7e4ffb9177b10df61df4ddbed1e.stdout.log",
+        "preview": "text",
+        "role": "diagnostic",
+        "sha256": "947f33551ce83129f0f00f7ade05b2060d66ec6952552c0196a1685ee8a3b6ce",
+        "size": 1006,
+        "url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/artifacts/execution/slurm-unknown-user-placer-6a55b7e4ffb9177b10df61df4ddbed1e.stdout.log"
+      }
+    ],
+    "created_at": "2026-10-20T23:53:29.549721+08:00",
+    "error": null,
+    "limitations": [
+      "Ligand, residue, mutation, bond, and crop identifiers must follow the pinned PLACER syntax."
+    ],
+    "outcome": null,
+    "output_check": {
+      "checks": [
+        {
+          "matched": 1,
+          "required": true,
+          "source": "candidates",
+          "status": "passed",
+          "view_id": "complex_models"
+        },
+        {
+          "matched": 1,
+          "required": true,
+          "source": "table",
+          "status": "passed",
+          "view_id": "model_scores"
+        }
+      ],
+      "problems": [],
+      "state": "passed"
+    },
+    "result": {
+      "files": {
+        "citations": [
+          {
+            "capability": "text",
+            "cardinality": "one",
+            "id": "citations",
+            "media_type": "application/octet-stream",
+            "name": "citations.bib",
+            "path": "citations.bib",
+            "preview": "text",
+            "role": "provenance",
+            "size": 468,
+            "url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/files/citations?index=0",
+            "viewer": "text"
+          }
+        ],
+        "complexes": [
+          {
+            "capability": "molecular_structure",
+            "cardinality": "many",
+            "id": "complexes",
+            "media_type": "application/octet-stream",
+            "name": "3fap_hf3_A_short_lig_model.pdb",
+            "path": "3fap_hf3_A_short_lig_model.pdb",
+            "preview": "structure",
+            "role": "primary",
+            "size": 9720,
+            "url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/files/complexes?index=0",
+            "viewer": "structure"
+          }
+        ],
+        "execution_records": [
+          {
+            "capability": "text",
+            "cardinality": "many",
+            "id": "execution_records",
+            "media_type": "application/json",
+            "name": "slurm-status.execution.json",
+            "ndarray_url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/ndarrays/execution/slurm-status.execution.json",
+            "path": "execution/slurm-status.execution.json",
+            "preview": "text",
+            "role": "diagnostic",
+            "size": 1158,
+            "url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/files/execution_records?index=0",
+            "viewer": "text"
+          },
+          {
+            "capability": "text",
+            "cardinality": "many",
+            "id": "execution_records",
+            "media_type": "application/json",
+            "name": "slurm-unknown-user-placer-6a55b7e4ffb9177b10df61df4ddbed1e.resource.json",
+            "ndarray_url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/ndarrays/execution/slurm-unknown-user-placer-6a55b7e4ffb9177b10df61df4ddbed1e.resource.json",
+            "path": "execution/slurm-unknown-user-placer-6a55b7e4ffb9177b10df61df4ddbed1e.resource.json",
+            "preview": "text",
+            "role": "diagnostic",
+            "size": 524,
+            "url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/files/execution_records?index=1",
+            "viewer": "text"
+          },
+          {
+            "capability": "text",
+            "cardinality": "many",
+            "id": "execution_records",
+            "media_type": "application/octet-stream",
+            "name": "slurm-unknown-user-placer-6a55b7e4ffb9177b10df61df4ddbed1e.stdout.log",
+            "path": "execution/slurm-unknown-user-placer-6a55b7e4ffb9177b10df61df4ddbed1e.stdout.log",
+            "preview": "text",
+            "role": "diagnostic",
+            "size": 1006,
+            "url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/files/execution_records?index=2",
+            "viewer": "text"
+          }
+        ],
+        "input_structures": [
+          {
+            "capability": "molecular_structure",
+            "cardinality": "many",
+            "id": "input_structures",
+            "media_type": "application/octet-stream",
+            "name": "3fap_hf3_A_short_lig.pdb",
+            "path": "debug/inputs/structures/3fap_hf3_A_short_lig.pdb",
+            "preview": "structure",
+            "role": "provenance",
+            "size": 10578,
+            "url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/files/input_structures?index=0",
+            "viewer": "structure"
+          }
+        ],
+        "model_scores": [
+          {
+            "capability": "table",
+            "cardinality": "one",
+            "id": "model_scores",
+            "media_type": "text/csv",
+            "name": "3fap_hf3_A_short_lig.csv",
+            "ndarray_url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/ndarrays/3fap_hf3_A_short_lig.csv",
+            "path": "3fap_hf3_A_short_lig.csv",
+            "preview": "table",
+            "role": "evidence",
+            "size": 214,
+            "table_url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/tables/3fap_hf3_A_short_lig.csv",
+            "url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/files/model_scores?index=0",
+            "viewer": "table"
+          }
+        ],
+        "submission": [
+          {
+            "capability": "text",
+            "cardinality": "one",
+            "id": "submission",
+            "media_type": "application/json",
+            "name": "submission.json",
+            "ndarray_url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/ndarrays/debug/submission.json",
+            "path": "debug/submission.json",
+            "preview": "json",
+            "role": "provenance",
+            "size": 688,
+            "url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/files/submission?index=0",
+            "viewer": "json"
+          }
+        ]
+      }
+    },
+    "run": {
+      "citations": [
+        {
+          "doi": "10.1101/2024.09.25.614868",
+          "num": 1,
+          "title": "Modeling protein-small molecule conformational ensembles with PLACER",
+          "url": "https://doi.org/10.1101/2024.09.25.614868"
+        }
+      ],
+      "finished_at": "2026-10-20T23:53:29.549721+08:00",
+      "inputs": [
+        {
+          "format": "pdb",
+          "logical_type": "protein_structure",
+          "path": "3fap_hf3_A_short_lig.pdb",
+          "role": "structures",
+          "sha256": "09d52018dbb0d08ac4f93344b068db7ac296a51ba1ef94366d01fc37f43875d1"
+        }
+      ],
+      "method": {
+        "id": "placer",
+        "name": "PLACER",
+        "output_summary": "Sampled complex structures and PLACER scoring tables.",
+        "summary": "All-atom modeling of protein-ligand complexes from an input structure (PLACER)."
+      },
+      "parameters": [
+        {
+          "label": "Num Samples",
+          "name": "num_samples",
+          "unit": "",
+          "value": 1
+        },
+        {
+          "label": "Predict Ligand",
+          "name": "predict_ligand",
+          "unit": "",
+          "value": "lig"
+        },
+        {
+          "label": "Use Sm",
+          "name": "use_sm",
+          "unit": "",
+          "value": true
+        },
+        {
+          "label": "Fixed Ligand",
+          "name": "fixed_ligand",
+          "unit": "",
+          "value": ""
+        },
+        {
+          "label": "Target Res",
+          "name": "target_res",
+          "unit": "",
+          "value": ""
+        },
+        {
+          "label": "Rerank",
+          "name": "rerank",
+          "unit": "",
+          "value": "plddt_pde"
+        },
+        {
+          "label": "Cautious",
+          "name": "cautious",
+          "unit": "",
+          "value": false
+        },
+        {
+          "label": "Exclude Common Ligands",
+          "name": "exclude_common_ligands",
+          "unit": "",
+          "value": false
+        },
+        {
+          "label": "Predict Multi",
+          "name": "predict_multi",
+          "unit": "",
+          "value": false
+        },
+        {
+          "label": "Bonds",
+          "name": "bonds",
+          "unit": "",
+          "value": ""
+        },
+        {
+          "label": "Mutate",
+          "name": "mutate",
+          "unit": "",
+          "value": ""
+        },
+        {
+          "label": "Crop Centers",
+          "name": "crop_centers",
+          "unit": "",
+          "value": ""
+        },
+        {
+          "label": "Corruption Centers",
+          "name": "corruption_centers",
+          "unit": "",
+          "value": ""
+        },
+        {
+          "label": "Ignore Ligand Hydrogens",
+          "name": "ignore_ligand_hydrogens",
+          "unit": "",
+          "value": false
+        }
+      ],
+      "started_at": "2026-10-20T23:52:46.014684+08:00",
+      "submitted_at": "2026-10-20T15:52:45.985568+00:00",
+      "walltime_seconds": 43.53503680229187
+    },
+    "schema_version": 3,
+    "status": "finished",
+    "storyboard": {
+      "entrypoint": "index.js",
+      "entrypoint_url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/storyboard/index.js",
+      "identifier": "placer-complex",
+      "optional": [
+        "input_structures",
+        "citations"
+      ],
+      "requires": [
+        "complexes",
+        "model_scores"
+      ]
+    },
+    "task_id": "6a55b7e4ffb9177b10df61df4ddbed1e",
+    "task_type": "placer",
+    "terminal": true,
+    "total_size": 24356,
+    "views": [
+      {
+        "description": "Protein\u2013ligand complex models in the order emitted by PLACER.",
+        "id": "complex_models",
+        "mapping": {},
+        "plugin": "candidate-collection",
+        "role": "primary",
+        "sources": {
+          "candidates": [
+            "3fap_hf3_A_short_lig_model.pdb"
+          ]
+        },
+        "title": "Predicted complex models"
+      },
+      {
+        "description": "PLACER model metrics; interpretation depends on the selected reranking field.",
+        "id": "model_scores",
+        "mapping": {
+          "entity": "candidate",
+          "evidence_columns": [
+            "fape",
+            "lddt",
+            "rmsd",
+            "prmsd",
+            "plddt",
+            "plddt_pde"
+          ],
+          "key_columns": [
+            "label",
+            "model_idx"
+          ],
+          "label_column": "label"
+        },
+        "plugin": "entity-table",
+        "role": "evidence",
+        "sources": {
+          "table": [
+            "3fap_hf3_A_short_lig.csv"
+          ]
+        },
+        "title": "Model confidence and geometry scores"
+      }
+    ]
+  },
   "storyboard": {
-   "entrypoint": "index.js",
-   "entrypoint_url": "/compute/api/results/6a55b7e4ffb9177b10df61df4ddbed1e/storyboard/index.js",
-   "identifier": "placer-complex",
-   "optional": [
-    "input_structures",
-    "citations"
-   ],
-   "requires": [
-    "complexes",
-    "model_scores"
-   ]
+    "entrypoint": "index.js",
+    "sha256": "94d2afea4e5f84f5414e1e83e99e209986210a8c4ee8aa004c0d4ec574987d61",
+    "source": "/* PLACER: protein\u2013ligand complex samples and the scores that rank them. */\n/* SPDX-License-Identifier: GPL-3.0-only */\nconst STYLE = `.pl-result{display:grid;gap:16px;min-width:0;font:14px/1.5 var(--font-sans)}.pl-result h2,.pl-result h3,.pl-result p{margin:0}.pl-result h2{font:500 24px var(--font-display)}.pl-section{display:grid;gap:8px;min-width:0}.pl-note{color:var(--app-muted);line-height:1.7;max-width:78ch}.pl-stage{border:1px solid var(--app-line);border-radius:8px;background:var(--app-surface);padding:12px;overflow:auto}.pl-stage:empty{display:none}.pl-structure{display:grid;grid-template-rows:minmax(0,1fr) auto;height:480px;border:1px solid var(--app-line);border-radius:8px;background:var(--app-stage);overflow:hidden}.pl-structure-slot{position:relative;min-height:0}.pl-structure-tools{background:var(--app-surface)}.pl-downloads{display:flex;flex-wrap:wrap;gap:8px}.pl-downloads button{font:14px var(--font-sans);min-height:34px;padding:7px 12px;border:1px solid var(--app-line-strong);border-radius:4px;color:var(--app-ink);background:var(--app-raised);cursor:pointer}`;\nconst list = value => Array.isArray(value) ? value : value ? [value] : [];\nconst first = (context, id) => list(context.files.get(id))[0] || null;\nfunction el(tag, className = '', text) { const node = document.createElement(tag); node.className = className; if (text != null) node.textContent = String(text); return node; }\n\nexport default {\n  async mount(host, context) {\n    const services = context.services || {};\n    const abort = new AbortController();\n    const views = list(context.views);\n    const root = el('div', 'pl-result');\n    const style = el('style'); style.textContent = STYLE; root.append(style);\n    root.append(el('h2', '', 'Protein\u2013ligand complex models'));\n    root.append(el('p', 'pl-note', 'Each published complex is one independently sampled placement. The metrics table beside it scores the same sample: lDDT and RMSD compare it with the fixed input geometry, and pLDDT/pLDDT-PDE are the model\\'s own confidence outputs. A single sample is a hypothesis, not a converged ensemble. The complex keeps the input\\'s chain and residue numbering; a residue number absent from the complex was not placed in this sample, and this page never renumbers it.'));\n    // The sampled complex is the run's own protein\u2013ligand model. The declared\n    // views list candidates and table rows and mount no viewer, so the complex\n    // opens here, on the first screen.\n    const complex = first(context, 'complexes');\n    const structureNote = el('p', 'pl-note', complex ? `Loading ${complex.name || 'the sampled complex'}\u2026` : 'This run published no complex model.');\n    const structureStage = el('section', 'pl-structure');\n    const structureSlot = el('div', 'pl-structure-slot'); structureSlot.dataset.structureSlot = 'true';\n    const structureTools = el('div', 'pl-structure-tools'); structureTools.dataset.structureTools = 'true';\n    structureStage.append(structureSlot, structureTools);\n    root.append(structureNote);\n    if (complex) root.append(structureStage);\n    for (const view of views) {\n      const section = el('section', 'pl-section'); section.dataset.viewId = view.id;\n      section.append(el('h3', '', view.title));\n      if (view.description) section.append(el('p', 'pl-note', view.description));\n      section.append(el('div', 'pl-stage')); root.append(section);\n    }\n    const downloads = el('div', 'pl-downloads'); downloads.setAttribute('role', 'group'); downloads.setAttribute('aria-label', 'Result downloads');\n    const download = (id, label) => { const file = first(context, id); const button = el('button', '', label); button.type = 'button'; button.disabled = !file; button.onclick = () => file && services.downloadFile?.(file); downloads.append(button); };\n    download('complexes', 'Download complex models (PDB)');\n    download('model_scores', 'Download model scores (CSV)');\n    download('input_structures', 'Download input structures');\n    download('citations', 'Download citations (BibTeX)');\n    const status = el('p', 'result-note', 'Loading the published complex\u2026'); status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');\n    root.append(status, downloads); host.replaceChildren(root);\n    let structureMounted = false;\n    if (complex && typeof services.openFile === 'function') {\n      try { await services.openFile(complex); structureMounted = true; }\n      catch (error) { if (error.name === 'AbortError') { structureStage.remove(); return { destroy() { abort.abort(); } }; } }\n    }\n    if (!structureMounted) structureStage.remove();\n    structureNote.textContent = !complex ? 'This run published no complex model.'\n      : structureMounted ? `The complex ${complex.name || ''} is the sampled placement published with this run.`\n        : 'The complex could not be drawn here; it stays downloadable below.';\n    const mounted = [];\n    try {\n      if (!services.mountView) throw new Error('The declared complex view is unavailable.');\n      for (const section of root.querySelectorAll('[data-view-id]')) {\n        mounted.push(await services.mountView(section.dataset.viewId, section.querySelector('.pl-stage'), abort.signal) || null);\n      }\n      status.textContent = 'The complex and the score row are the same published sample.';\n    } catch (error) {\n      if (error.name !== 'AbortError') { status.textContent = 'The complex could not be rendered; the downloads above remain available.'; status.className = 'result-note'; }\n    }\n    return { destroy() { abort.abort(); mounted.forEach(item => item?.destroy?.()); } };\n  },\n};\n"
   },
-  "task_id": "6a55b7e4ffb9177b10df61df4ddbed1e",
-  "task_type": "placer",
-  "terminal": true,
-  "total_size": 24356,
-  "views": [
-   {
-    "description": "Protein\u2013ligand complex models in the order emitted by PLACER.",
-    "id": "complex_models",
-    "mapping": {},
-    "plugin": "candidate-collection",
-    "role": "primary",
-    "sources": {
-     "candidates": [
-      "3fap_hf3_A_short_lig_model.pdb"
-     ]
-    },
-    "title": "Predicted complex models"
-   },
-   {
-    "description": "PLACER model metrics; interpretation depends on the selected reranking field.",
-    "id": "model_scores",
-    "mapping": {
-     "entity": "candidate",
-     "evidence_columns": [
-      "fape",
-      "lddt",
-      "rmsd",
-      "prmsd",
-      "plddt",
-      "plddt_pde"
-     ],
-     "key_columns": [
-      "label",
-      "model_idx"
-     ],
-     "label_column": "label"
-    },
-    "plugin": "entity-table",
-    "role": "evidence",
-    "sources": {
-     "table": [
-      "3fap_hf3_A_short_lig.csv"
-     ]
-    },
-    "title": "Model confidence and geometry scores"
-   }
-  ]
- },
- "storyboard": {
-  "entrypoint": "index.js",
-  "sha256": "94d2afea4e5f84f5414e1e83e99e209986210a8c4ee8aa004c0d4ec574987d61",
-  "source": "/* PLACER: protein\u2013ligand complex samples and the scores that rank them. */\n/* SPDX-License-Identifier: GPL-3.0-only */\nconst STYLE = `.pl-result{display:grid;gap:16px;min-width:0;font:14px/1.5 var(--font-sans)}.pl-result h2,.pl-result h3,.pl-result p{margin:0}.pl-result h2{font:500 24px var(--font-display)}.pl-section{display:grid;gap:8px;min-width:0}.pl-note{color:var(--app-muted);line-height:1.7;max-width:78ch}.pl-stage{border:1px solid var(--app-line);border-radius:8px;background:var(--app-surface);padding:12px;overflow:auto}.pl-stage:empty{display:none}.pl-structure{display:grid;grid-template-rows:minmax(0,1fr) auto;height:480px;border:1px solid var(--app-line);border-radius:8px;background:var(--app-stage);overflow:hidden}.pl-structure-slot{position:relative;min-height:0}.pl-structure-tools{background:var(--app-surface)}.pl-downloads{display:flex;flex-wrap:wrap;gap:8px}.pl-downloads button{font:14px var(--font-sans);min-height:34px;padding:7px 12px;border:1px solid var(--app-line-strong);border-radius:4px;color:var(--app-ink);background:var(--app-raised);cursor:pointer}`;\nconst list = value => Array.isArray(value) ? value : value ? [value] : [];\nconst first = (context, id) => list(context.files.get(id))[0] || null;\nfunction el(tag, className = '', text) { const node = document.createElement(tag); node.className = className; if (text != null) node.textContent = String(text); return node; }\n\nexport default {\n  async mount(host, context) {\n    const services = context.services || {};\n    const abort = new AbortController();\n    const views = list(context.views);\n    const root = el('div', 'pl-result');\n    const style = el('style'); style.textContent = STYLE; root.append(style);\n    root.append(el('h2', '', 'Protein\u2013ligand complex models'));\n    root.append(el('p', 'pl-note', 'Each published complex is one independently sampled placement. The metrics table beside it scores the same sample: lDDT and RMSD compare it with the fixed input geometry, and pLDDT/pLDDT-PDE are the model\\'s own confidence outputs. A single sample is a hypothesis, not a converged ensemble. The complex keeps the input\\'s chain and residue numbering; a residue number absent from the complex was not placed in this sample, and this page never renumbers it.'));\n    // The sampled complex is the run's own protein\u2013ligand model. The declared\n    // views list candidates and table rows and mount no viewer, so the complex\n    // opens here, on the first screen.\n    const complex = first(context, 'complexes');\n    const structureNote = el('p', 'pl-note', complex ? `Loading ${complex.name || 'the sampled complex'}\u2026` : 'This run published no complex model.');\n    const structureStage = el('section', 'pl-structure');\n    const structureSlot = el('div', 'pl-structure-slot'); structureSlot.dataset.structureSlot = 'true';\n    const structureTools = el('div', 'pl-structure-tools'); structureTools.dataset.structureTools = 'true';\n    structureStage.append(structureSlot, structureTools);\n    root.append(structureNote);\n    if (complex) root.append(structureStage);\n    for (const view of views) {\n      const section = el('section', 'pl-section'); section.dataset.viewId = view.id;\n      section.append(el('h3', '', view.title));\n      if (view.description) section.append(el('p', 'pl-note', view.description));\n      section.append(el('div', 'pl-stage')); root.append(section);\n    }\n    const downloads = el('div', 'pl-downloads'); downloads.setAttribute('role', 'group'); downloads.setAttribute('aria-label', 'Result downloads');\n    const download = (id, label) => { const file = first(context, id); const button = el('button', '', label); button.type = 'button'; button.disabled = !file; button.onclick = () => file && services.downloadFile?.(file); downloads.append(button); };\n    download('complexes', 'Download complex models (PDB)');\n    download('model_scores', 'Download model scores (CSV)');\n    download('input_structures', 'Download input structures');\n    download('citations', 'Download citations (BibTeX)');\n    const status = el('p', 'result-note', 'Loading the published complex\u2026'); status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');\n    root.append(status, downloads); host.replaceChildren(root);\n    let structureMounted = false;\n    if (complex && typeof services.openFile === 'function') {\n      try { await services.openFile(complex); structureMounted = true; }\n      catch (error) { if (error.name === 'AbortError') { structureStage.remove(); return { destroy() { abort.abort(); } }; } }\n    }\n    if (!structureMounted) structureStage.remove();\n    structureNote.textContent = !complex ? 'This run published no complex model.'\n      : structureMounted ? `The complex ${complex.name || ''} is the sampled placement published with this run.`\n        : 'The complex could not be drawn here; it stays downloadable below.';\n    const mounted = [];\n    try {\n      if (!services.mountView) throw new Error('The declared complex view is unavailable.');\n      for (const section of root.querySelectorAll('[data-view-id]')) {\n        mounted.push(await services.mountView(section.dataset.viewId, section.querySelector('.pl-stage'), abort.signal) || null);\n      }\n      status.textContent = 'The complex and the score row are the same published sample.';\n    } catch (error) {\n      if (error.name !== 'AbortError') { status.textContent = 'The complex could not be rendered; the downloads above remain available.'; status.className = 'result-note'; }\n    }\n    return { destroy() { abort.abort(); mounted.forEach(item => item?.destroy?.()); } };\n  },\n};\n"
- },
- "task": {
-  "display_name": "3fap_hf3_A_short_lig.pdb",
-  "id": "6a55b7e4ffb9177b10df61df4ddbed1e",
-  "type": "placer"
- }
+  "task": {
+    "display_name": "3fap_hf3_A_short_lig.pdb",
+    "id": "6a55b7e4ffb9177b10df61df4ddbed1e",
+    "type": "placer"
+  }
 }
