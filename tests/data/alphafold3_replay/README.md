@@ -23,8 +23,10 @@ manifest sha256. It is test evidence, not an acceptance receipt.
   CIFs, two summary-confidence JSONs) plus the `evidence-bundle` items
   (`tiny-protein_ranking_scores.csv`, both `*_confidences.json`, both `*_data.json`)
   and the `TERMS_OF_USE.md` the model ships beside its outputs.
-- **Storyboard**: the checked-in `docker/runners/alphafold3/storyboard/index.js`,
+- **Storyboard**: `docker/runners/alphafold3/storyboard/index.js`,
   sha256 `d6a0b0848712b58d4b533f33b11c3dbbbdb826919a5c9273ecaa4cbdb93bdbe8`.
+  This is the module as it stood at capture time (`bf51c9c`), not the current
+  checked-in file: `be112fa` revised it afterwards.
 
 Declared artifacts: 21. Checked in: 15. Excluded: 6, each with sha256 and size.
 
@@ -42,11 +44,12 @@ records and says so.
 ## Honest limitation
 
 The bundle carries the artifacts the views and storyboard read; it is not the
-complete result directory. The storyboard module is the current checked-in
-source, not the byte-for-byte module the production result page served: the
-Server reads it from the deploying runner tree, which this capture user could not
-read. The replayed page therefore shows the reviewed storyboard against authentic
-result bytes.
+complete result directory. The storyboard module is the source as it stood at
+capture time (`bf51c9c`), not the byte-for-byte module the production result page
+served and not the current checked-in file: the Server reads it from the deploying
+runner tree, which this capture user could not read, and `be112fa` revised it
+afterwards. The replayed page therefore shows a reviewed storyboard against
+authentic result bytes.
 
 Nothing in the bundle asserts that the prediction is scientifically correct. pTM,
 ipTM, and pLDDT shown by this page are model confidence estimates; they are not

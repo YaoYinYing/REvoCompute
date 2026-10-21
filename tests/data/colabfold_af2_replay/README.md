@@ -23,8 +23,10 @@ manifest sha256. It is test evidence, not an acceptance receipt.
   (`2KL8_scores_rank_001_*.json`, the relaxed and unrelaxed ranked PDBs,
   `2KL8.a3m`) plus the small JSON companions (`config.json`,
   `debug/submission.json`, the SLURM resource/status records).
-- **Storyboard**: the checked-in `docker/runners/colabfold_af2/storyboard/index.js`,
-  sha256 `d1d2fd1ab1c335c1e0047274645a494d363b9634faaa12fa5400f5d68c4466a4`.
+- **Storyboard**: `docker/runners/colabfold_af2/storyboard/index.js` as it stood at
+  capture time (`bf51c9c`), sha256
+  `d1d2fd1ab1c335c1e0047274645a494d363b9634faaa12fa5400f5d68c4466a4`; `be112fa`
+  revised the module afterwards.
 
 Declared artifacts: 24. Checked in: 10. Excluded: 14, each with sha256 and size.
 
@@ -45,9 +47,11 @@ artifact." rather than showing a stale or invented interface panel — the repla
 asserts exactly that.
 
 The bundle carries the artifacts the views and storyboard read; it is not the
-complete result directory. The storyboard module is the current checked-in source,
-not the byte-for-byte module the production result page served: the Server reads it
-from the deploying runner tree, which this capture user could not read.
+complete result directory. The storyboard module is the source as it stood at
+capture time (`bf51c9c`), not the byte-for-byte module the production result page
+served and not the current checked-in file: the Server reads it from the deploying
+runner tree, which this capture user could not read, and `be112fa` revised it
+afterwards.
 
 Nothing in the bundle asserts that the prediction is scientifically correct.
 pLDDT (persisted on the 0–100 scale and shown on it) and pTM are model confidence

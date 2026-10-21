@@ -22,8 +22,10 @@ manifest sha256. It is test evidence, not an acceptance receipt.
   (`ranking_debug.json`, five `confidence_*.json`, five `pae_*.json`, five
   `ranked_*.pdb`) plus the small JSON companions the storyboard reads
   (`timings.json`, `debug/submission.json`, the SLURM resource/status records).
-- **Storyboard**: the checked-in `docker/runners/alphafold/storyboard/index.js`,
-  sha256 `fe647218e24810032985d2bd35168e28a9766261ce12d8a8a0af92d3287a2643`.
+- **Storyboard**: `docker/runners/alphafold/storyboard/index.js` as it stood at
+  capture time (`bf51c9c`), sha256
+  `fe647218e24810032985d2bd35168e28a9766261ce12d8a8a0af92d3287a2643`; `be112fa`
+  revised the module afterwards.
 
 Declared artifacts: 53. Checked in: 21. Excluded: 32, each with sha256 and size.
 
@@ -47,10 +49,12 @@ complete result directory. A replay therefore cannot exercise a path that reads
 an excluded artifact (for example, the pickles or the MSA hits), and no excluded
 path is represented by invented bytes.
 
-The storyboard module is the current checked-in source, not the byte-for-byte
-module the production result page served: the Server reads it from the deploying
-runner tree, which this capture user could not read. The replayed page therefore
-shows the reviewed storyboard against authentic result bytes.
+The storyboard module is the source as it stood at capture time (`bf51c9c`),
+not the byte-for-byte module the production result page served and not the
+current checked-in file: the Server reads it from the deploying runner tree,
+which this capture user could not read, and `be112fa` revised it afterwards.
+The replayed page therefore shows a reviewed storyboard against authentic
+result bytes.
 
 Nothing in the bundle asserts that the prediction is scientifically correct.
 pLDDT and pTM shown by this page are model confidence estimates; they are not
