@@ -63,11 +63,20 @@ def sample_equilibrium(system, *, model, output_dir, **kwargs):
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
     omit = os.environ.get("BIOEMU2_OMIT_OUTPUT", "")
+    reject_first = os.environ.get("BIOEMU2_REJECT_FIRST") == "1"
+    report = [
+        {
+            "frame": frame,
+            "status": "rejected" if reject_first and frame == 0 else "passed",
+            "reason": "bad_bonds_sidechain" if reject_first and frame == 0 else None,
+        }
+        for frame in range(kwargs["num_samples"])
+    ]
     published = {
         "samples.xtc": b"xtc",
         "topology.cif": b"data_topology\\n",
         "system.yaml": b"entities: []\\n",
-        "physicality.json": b'[{"frame": 0, "status": "passed", "reason": null}]\\n',
+        "physicality.json": json.dumps(report).encode(),
     }
     for name, payload in published.items():
         if name != omit:
@@ -207,6 +216,25 @@ def test_bioemu2_publication_check_covers_every_required_contract_file(tmp_path)
         assert completed.returncode != 0, path
         assert path in completed.stderr, completed.stderr
         assert not (output_dir / "task_finished").exists(), path
+
+
+def test_bioemu2_rejected_frames_are_reported_not_failed(tmp_path):
+    """A rejected ensemble still succeeds, and its counts must reach the log."""
+    asset_root, manifest, modules, fasta = _workspace(tmp_path)
+
+    completed, output_dir, _ = _run(
+        tmp_path,
+        asset_root,
+        manifest,
+        modules,
+        fasta,
+        {"num_samples": 2},
+        {"BIOEMU2_REJECT_FIRST": "1"},
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "BioEmu2 physicality: 1/2 frames accepted (bad_bonds_sidechain: 1), 1 rejected" in completed.stdout
+    assert (output_dir / "task_finished").is_file()
 
 
 def test_bioemu2_sequence_framing(tmp_path):
