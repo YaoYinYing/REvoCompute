@@ -1,0 +1,745 @@
+{
+ "bundle_digest": "sha256:aae2a15d9e1ce251d59edab04fdb4836bed29bc07159e34a3cac6b702be0d445",
+ "bundle_version": 1,
+ "excluded": [
+  {
+   "media_type": "application/octet-stream",
+   "path": "citations.bib",
+   "reason": "declared artifact not checked in by this capture",
+   "sha256": "3baff75a3259104ee9370e5bcd602dcd3b953b1871ba7feb515526873d6340a5",
+   "size": 352
+  },
+  {
+   "media_type": "text/x-fasta",
+   "path": "debug/inputs/entities/minimal.fasta",
+   "reason": "declared artifact not checked in by this capture",
+   "sha256": "c53e07aafbfc563781ec87fb8a8ee13179957c9e99ad0ac6f099e6c2365da6e1",
+   "size": 60
+  },
+  {
+   "media_type": "text/plain",
+   "path": "execution/slurm-unknown-user-chai1_predict-018c32b6d5d97dbb2fd99792155211b2.stderr.log",
+   "reason": "declared artifact not checked in by this capture",
+   "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "size": 0
+  },
+  {
+   "media_type": "text/plain",
+   "path": "execution/slurm-unknown-user-chai1_predict-018c32b6d5d97dbb2fd99792155211b2.stdout.log",
+   "reason": "declared artifact not checked in by this capture",
+   "sha256": "cba85e2093e7caca7d1fef10d24fa2a0c49b9f9679291d0fb25b9204bb9da192",
+   "size": 139
+  },
+  {
+   "media_type": "chemical/x-cif",
+   "path": "upstream/pred.model_idx_0.cif",
+   "reason": "declared artifact not checked in by this capture",
+   "sha256": "b170c9344a9fe8ec6186614f0e9e426bdb4f2ef30cabe475e98fd27f8289b419",
+   "size": 22661
+  },
+  {
+   "media_type": "application/octet-stream",
+   "path": "upstream/scores.model_idx_0.npz",
+   "reason": "declared artifact not checked in by this capture",
+   "sha256": "689a0a85fe3ae07646b6929ce140a8dad421c1eae664492eb53b03fe78038d97",
+   "size": 1863
+  }
+ ],
+ "kind": "real_runner_result_replay",
+ "logical_files": {
+  "local_confidence": [
+   {
+    "path": "plddt.rank_0.npy",
+    "sha256": "6140caea4734bd309180cd436f16452e2b6c1f8ef28747a3c61f8314c749393e",
+    "size": 244
+   }
+  ],
+  "pae": [
+   {
+    "path": "pae.rank_0.npy",
+    "sha256": "a88cdbb6546d87e97b3977637a17ce1b6606cd8da0243e672bdc479b6a02aa6a",
+    "size": 3492
+   }
+  ],
+  "pde": [
+   {
+    "path": "pde.rank_0.npy",
+    "sha256": "24479ac68951a53518a1387a8b6a76ead39fa5c20a458622e0d8fcb0385020b6",
+    "size": 3492
+   }
+  ],
+  "structures": [
+   {
+    "path": "ranked/rank_0.model_idx_0.cif",
+    "sha256": "b170c9344a9fe8ec6186614f0e9e426bdb4f2ef30cabe475e98fd27f8289b419",
+    "size": 22661
+   }
+  ],
+  "summaries": [
+   {
+    "path": "confidence.rank_0.json",
+    "sha256": "f40ede6b1266edde5596903f50481c694e57e4f892d934d98c42af24f96532a5",
+    "size": 298
+   }
+  ]
+ },
+ "payloads": {
+  "chai1-model-assets.json": {
+   "media_type": "application/json",
+   "payload": "{\n  \"schema_version\": 1,\n  \"upstream_version\": \"0.6.1\",\n  \"upstream_commit\": \"8d5ac0f93e9b6ea4c3a6545c253a6381c0f3694b\",\n  \"provisioning_root\": \"/mnt/db/weights/revocompute/chai1\",\n  \"total_size\": 6979394752,\n  \"checksum_status\": \"verified\",\n  \"assets\": [\n    {\n      \"path\": \"models_v2/feature_embedding.pt\",\n      \"size\": 4587962,\n      \"sha256\": \"58600fb282827ee105b4bf33845c2eb2dce2a7d2ba7582951f76c9290c66c019\",\n      \"etag\": \"765a9407c7aadead90de445e6269b418\",\n      \"url\": \"https://chaiassets.com/chai1-inference-depencencies/models_v2/feature_embedding.pt\",\n      \"role\": \"feature embedding model component\",\n      \"license\": \"Apache-2.0 (Chai README model-weights statement)\"\n    },\n    {\n      \"path\": \"models_v2/bond_loss_input_proj.pt\",\n      \"size\": 5502,\n      \"sha256\": \"98f3b2e415d11e460a684cdbfc213ca80447308022b1953cc5326ad468948851\",\n      \"etag\": \"d19af4bba7e474d2d47f4df367be1abf\",\n      \"url\": \"https://chaiassets.com/chai1-inference-depencencies/models_v2/bond_loss_input_proj.pt\",\n      \"role\": \"bond-loss input projection model component\",\n      \"license\": \"Apache-2.0 (Chai README model-weights statement)\"\n    },\n    {\n      \"path\": \"models_v2/token_embedder.pt\",\n      \"size\": 6286772,\n      \"sha256\": \"60cada19fd9c77d8298131a00368d162b6bc7d3c836dd36c715db04d21f7bbde\",\n      \"etag\": \"d9f0bca6372220416eb3f199925bf220\",\n      \"url\": \"https://chaiassets.com/chai1-inference-depencencies/models_v2/token_embedder.pt\",\n      \"role\": \"token embedding model component\",\n      \"license\": \"Apache-2.0 (Chai README model-weights statement)\"\n    },\n    {\n      \"path\": \"models_v2/trunk.pt\",\n      \"size\": 633042135,\n      \"sha256\": \"b7a08e104455f76491088a5eeaea9bb95a08168c48969b0b892971346e51ccbc\",\n      \"etag\": \"418c5a454b47e6821f57b7ffcb60720d\",\n      \"url\": \"https://chaiassets.com/chai1-inference-depencencies/models_v2/trunk.pt\",\n      \"role\": \"structure trunk model component\",\n      \"license\": \"Apache-2.0 (Chai README model-weights statement)\"\n    },\n    {\n      \"path\": \"models_v2/diffusion_module.pt\",\n      \"size\": 476546304,\n      \"sha256\": \"bd77cf4095ad6b8a4eae7e390d01d24be1ebd819922ca3f28e8744f9945c9cad\",\n      \"etag\": \"f3e2ff34596540e94b0415767b6c55e8\",\n      \"url\": \"https://chaiassets.com/chai1-inference-depencencies/models_v2/diffusion_module.pt\",\n      \"role\": \"structure diffusion model component\",\n      \"license\": \"Apache-2.0 (Chai README model-weights statement)\"\n    },\n    {\n      \"path\": \"models_v2/confidence_head.pt\",\n      \"size\": 55259496,\n      \"sha256\": \"82a4ac9f934fdd0e73870150f508cecbe010c1383234bdadcaa70d57323deb6b\",\n      \"etag\": \"da056064b335ee351d65de6fe5e77561\",\n      \"url\": \"https://chaiassets.com/chai1-inference-depencencies/models_v2/confidence_head.pt\",\n      \"role\": \"confidence model component\",\n      \"license\": \"Apache-2.0 (Chai README model-weights statement)\"\n    },\n    {\n      \"path\": \"esm/traced_sdpa_esm2_t36_3B_UR50D_fp16.pt\",\n      \"size\": 5678940466,\n      \"sha256\": \"074673b97e1c1ff9c3cf949294749dd446ad1c83cee50a466b4841bb4d89c27a\",\n      \"etag\": \"feea684c8d3c39dcc98f3259a1532d4a-1084\",\n      \"url\": \"https://chaiassets.com/chai1-inference-depencencies/esm2/traced_sdpa_esm2_t36_3B_UR50D_fp16.pt\",\n      \"role\": \"traced ESM-2 3B embedding model\",\n      \"license\": \"MIT upstream ESM-2; Chai-hosted traced artifact covered by Chai model-weights statement\"\n    },\n    {\n      \"path\": \"conformers_v1.apkl\",\n      \"size\": 124726115,\n      \"sha256\": \"f2161256b565bbd84198da8b3e3d3978ae2f179f778d0995cd135c4c0c57c41f\",\n      \"etag\": \"2d903d1952f1e6ebb409ad4ce0d2e8cd-15\",\n      \"url\": \"https://chaiassets.com/chai1-inference-depencencies/conformers_v1.apkl\",\n      \"role\": \"reference conformer database\",\n      \"license\": \"No separate asset-level license or notice found in chai-lab v0.6.1\"\n    }\n  ]\n}\n",
+   "sha256": "5a09bca5cdbd8c7894777fb45a7e4dd86ae4b4af9cd522813752118e25ddfc18",
+   "size": 3783
+  },
+  "confidence.rank_0.json": {
+   "media_type": "application/json",
+   "payload": "{\n  \"aggregate_score\": 0.05160942301154137,\n  \"chain_chain_clashes\": [\n    [\n      0\n    ]\n  ],\n  \"has_inter_chain_clashes\": false,\n  \"iptm\": 0.0,\n  \"per_chain_pair_iptm\": [\n    [\n      0.25804710388183594\n    ]\n  ],\n  \"per_chain_ptm\": [\n    0.25804710388183594\n  ],\n  \"ptm\": 0.25804710388183594\n}\n",
+   "sha256": "f40ede6b1266edde5596903f50481c694e57e4f892d934d98c42af24f96532a5",
+   "size": 298
+  },
+  "debug/submission.json": {
+   "media_type": "application/json",
+   "payload": "{\n  \"inputs\": [\n    {\n      \"name\": \"minimal.fasta\",\n      \"role\": \"entities\",\n      \"sha256\": \"c53e07aafbfc563781ec87fb8a8ee13179957c9e99ad0ac6f099e6c2365da6e1\",\n      \"size\": 60\n    }\n  ],\n  \"params\": {\n    \"low_memory\": true,\n    \"num_diffusion_samples\": 1,\n    \"num_diffusion_timesteps\": 2,\n    \"num_trunk_recycles\": 1,\n    \"num_trunk_samples\": 1,\n    \"recycle_msa_subsample\": 0,\n    \"seed\": 0,\n    \"use_esm_embeddings\": true,\n    \"use_msa\": false,\n    \"use_restraints\": false\n  },\n  \"submitted_at\": \"2026-10-20T16:57:10.768906+00:00\",\n  \"task_type\": \"chai1_predict\",\n  \"username\": \"tester\"\n}\n",
+   "sha256": "5fbebf555d77f814270928706e12a2a8f590c4114d3eb959808de740bad90027",
+   "size": 597
+  },
+  "execution/slurm-status.execution.json": {
+   "media_type": "application/json",
+   "payload": "{\"source\": \"slurm_adapter\", \"schema_version\": 1, \"task_id\": \"018c32b6d5d97dbb2fd99792155211b2\", \"logs\": {\"stdout\": \"REVODESIGN_JOB_ID=311733\\nREVODESIGN_ALLOCATION_LIVE=311733\\nREVODESIGN_STAGE:chai1_predict\\nScore=0.0516, writing output to [path redacted]\\n\\n\", \"stderr\": \"\"}}",
+   "sha256": "320c23464545cd41d62a0b751475d0edbb28cfc4f6f56df31cc32b49b2b132fd",
+   "size": 277
+  },
+  "execution/slurm-unknown-user-chai1_predict-018c32b6d5d97dbb2fd99792155211b2.resource.json": {
+   "media_type": "application/json",
+   "payload": "{\n  \"allocated_cpus_per_task\": 8,\n  \"allocated_gpu_ids\": \"0\",\n  \"allocated_gpus_on_node\": \"1\",\n  \"allocated_tasks\": 1,\n  \"elapsed_seconds\": 119.67,\n  \"exit_code\": 0,\n  \"gpu_memory_peak_mib\": 8525,\n  \"gpu_utilization_peak_percent\": 100,\n  \"job_id\": \"311733\",\n  \"max_rss_kib\": 10138368,\n  \"schema_version\": 1,\n  \"scratch_guard.exceeded\": 0,\n  \"scratch_guard.peak_bytes\": 36864,\n  \"scratch_guard.samples\": 24,\n  \"source\": \"allocation_wrapper\",\n  \"system_cpu_seconds\": 21.23,\n  \"user_cpu_seconds\": 99.65,\n  \"visible_gpu_devices\": \"0\"\n}\n",
+   "sha256": "01995b2b0ee75b78de9b743d979d7c3285651877f03eb96710d193a36851d21e",
+   "size": 532
+  },
+  "pae.rank_0.npy": {
+   "encoding": "base64",
+   "media_type": "application/octet-stream",
+   "payload": "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",
+   "sha256": "a88cdbb6546d87e97b3977637a17ce1b6606cd8da0243e672bdc479b6a02aa6a",
+   "size": 3492
+  },
+  "pde.rank_0.npy": {
+   "encoding": "base64",
+   "media_type": "application/octet-stream",
+   "payload": "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",
+   "sha256": "24479ac68951a53518a1387a8b6a76ead39fa5c20a458622e0d8fcb0385020b6",
+   "size": 3492
+  },
+  "plddt.rank_0.npy": {
+   "encoding": "base64",
+   "media_type": "application/octet-stream",
+   "payload": "k05VTVBZAQB2AHsnZGVzY3InOiAnPGY0JywgJ2ZvcnRyYW5fb3JkZXInOiBGYWxzZSwgJ3NoYXBlJzogKDI5LCksIH0gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIAq6tjo/aJhJPy2rQj8B2Dc/UxE9Pz1yND+H8iA/k8IlPypWLD9LUC0/6KwlP1ulLD/4mCQ/n3AvPwEtIj9Owi0/Q8M2P2+fGj+ETz4/BOAuPyAxKz/J1wo/zlYXPxFBGj89SSA/qDUaP9MkJj+TPhE/DrwTPw==",
+   "sha256": "6140caea4734bd309180cd436f16452e2b6c1f8ef28747a3c61f8314c749393e",
+   "size": 244
+  },
+  "ranked/rank_0.model_idx_0.cif": {
+   "media_type": "chemical/x-cif",
+   "payload": "data_model\n_entry.id model\n_struct.entry_id model\n_struct.pdbx_model_details .\n_struct.pdbx_structure_determination_methodology computational\n_struct.title 'Chai-1 predicted structure'\n_audit_conform.dict_location https://raw.githubusercontent.com/ihmwg/ModelCIF/80e1e22/dist/mmcif_ma.dic\n_audit_conform.dict_name mmcif_ma.dic\n_audit_conform.dict_version 1.4.7\n#\nloop_\n_audit_author.name\n_audit_author.pdbx_ordinal\n'Chai Discovery team' 1\n#\n#\nloop_\n_chem_comp.id\n_chem_comp.type\n_chem_comp.name\n_chem_comp.formula\n_chem_comp.formula_weight\n_chem_comp.ma_provenance\nALA 'L-peptide linking' . . . 'CCD Core'\nARG 'L-peptide linking' . . . 'CCD Core'\nGLU 'L-peptide linking' . . . 'CCD Core'\nGLY 'L-peptide linking' . . . 'CCD Core'\nHIS 'L-peptide linking' . . . 'CCD Core'\nILE 'L-peptide linking' . . . 'CCD Core'\nMET 'L-peptide linking' . . . 'CCD Core'\nPHE 'L-peptide linking' . . . 'CCD Core'\nPRO 'L-peptide linking' . . . 'CCD Core'\nSER 'L-peptide linking' . . . 'CCD Core'\nTHR 'L-peptide linking' . . . 'CCD Core'\nTYR 'L-peptide linking' . . . 'CCD Core'\nVAL 'L-peptide linking' . . . 'CCD Core'\n#\n#\nloop_\n_entity.id\n_entity.type\n_entity.src_method\n_entity.pdbx_description\n_entity.formula_weight\n_entity.pdbx_number_of_molecules\n_entity.details\n1 polymer man 'Entity A' . 1 .\n#\n#\nloop_\n_entity_poly.entity_id\n_entity_poly.type\n_entity_poly.nstd_linkage\n_entity_poly.nstd_monomer\n_entity_poly.pdbx_strand_id\n_entity_poly.pdbx_seq_one_letter_code\n_entity_poly.pdbx_seq_one_letter_code_can\n1 polypeptide(L) no no A AGSHSMRYFSTSVSRPGRGEPRFIAVGYV\nAGSHSMRYFSTSVSRPGRGEPRFIAVGYV\n#\n#\nloop_\n_entity_poly_seq.entity_id\n_entity_poly_seq.num\n_entity_poly_seq.mon_id\n_entity_poly_seq.hetero\n1 1 ALA .\n1 2 GLY .\n1 3 SER .\n1 4 HIS .\n1 5 SER .\n1 6 MET .\n1 7 ARG .\n1 8 TYR .\n1 9 PHE .\n1 10 SER .\n1 11 THR .\n1 12 SER .\n1 13 VAL .\n1 14 SER .\n1 15 ARG .\n1 16 PRO .\n1 17 GLY .\n1 18 ARG .\n1 19 GLY .\n1 20 GLU .\n1 21 PRO .\n1 22 ARG .\n1 23 PHE .\n1 24 ILE .\n1 25 ALA .\n1 26 VAL .\n1 27 GLY .\n1 28 TYR .\n1 29 VAL .\n#\n#\nloop_\n_struct_asym.id\n_struct_asym.entity_id\n_struct_asym.details\nA 1 'Chain A'\n#\n#\nloop_\n_pdbx_poly_seq_scheme.asym_id\n_pdbx_poly_seq_scheme.entity_id\n_pdbx_poly_seq_scheme.seq_id\n_pdbx_poly_seq_scheme.mon_id\n_pdbx_poly_seq_scheme.pdb_seq_num\n_pdbx_poly_seq_scheme.auth_seq_num\n_pdbx_poly_seq_scheme.pdb_mon_id\n_pdbx_poly_seq_scheme.auth_mon_id\n_pdbx_poly_seq_scheme.pdb_strand_id\n_pdbx_poly_seq_scheme.pdb_ins_code\nA 1 1 ALA 1 1 ALA ALA A .\nA 1 2 GLY 2 2 GLY GLY A .\nA 1 3 SER 3 3 SER SER A .\nA 1 4 HIS 4 4 HIS HIS A .\nA 1 5 SER 5 5 SER SER A .\nA 1 6 MET 6 6 MET MET A .\nA 1 7 ARG 7 7 ARG ARG A .\nA 1 8 TYR 8 8 TYR TYR A .\nA 1 9 PHE 9 9 PHE PHE A .\nA 1 10 SER 10 10 SER SER A .\nA 1 11 THR 11 11 THR THR A .\nA 1 12 SER 12 12 SER SER A .\nA 1 13 VAL 13 13 VAL VAL A .\nA 1 14 SER 14 14 SER SER A .\nA 1 15 ARG 15 15 ARG ARG A .\nA 1 16 PRO 16 16 PRO PRO A .\nA 1 17 GLY 17 17 GLY GLY A .\nA 1 18 ARG 18 18 ARG ARG A .\nA 1 19 GLY 19 19 GLY GLY A .\nA 1 20 GLU 20 20 GLU GLU A .\nA 1 21 PRO 21 21 PRO PRO A .\nA 1 22 ARG 22 22 ARG ARG A .\nA 1 23 PHE 23 23 PHE PHE A .\nA 1 24 ILE 24 24 ILE ILE A .\nA 1 25 ALA 25 25 ALA ALA A .\nA 1 26 VAL 26 26 VAL VAL A .\nA 1 27 GLY 27 27 GLY GLY A .\nA 1 28 TYR 28 28 TYR TYR A .\nA 1 29 VAL 29 29 VAL VAL A .\n#\n#\nloop_\n_ma_data.id\n_ma_data.name\n_ma_data.content_type\n_ma_data.content_type_other_details\n1 'Entity A' target .\n2 pred_model_1 'model coordinates' .\n#\n#\nloop_\n_ma_target_entity.entity_id\n_ma_target_entity.data_id\n_ma_target_entity.origin\n1 1 designed\n#\n#\nloop_\n_ma_target_entity_instance.asym_id\n_ma_target_entity_instance.entity_id\n_ma_target_entity_instance.details\nA 1 'Chain A'\n#\n#\nloop_\n_ma_model_list.ordinal_id\n_ma_model_list.model_name\n_ma_model_list.data_id\n_ma_model_list.model_type\n_ma_model_list.model_type_other_details\n1 pred_model_1 2 'Ab initio model' .\n#\n#\nloop_\n_ma_model_group.id\n_ma_model_group.name\n_ma_model_group.details\n1 pred .\n#\n#\nloop_\n_ma_model_group_link.group_id\n_ma_model_group_link.model_id\n1 1\n#\n#\nloop_\n_atom_site.group_PDB\n_atom_site.id\n_atom_site.type_symbol\n_atom_site.label_atom_id\n_atom_site.label_alt_id\n_atom_site.label_comp_id\n_atom_site.label_seq_id\n_atom_site.auth_seq_id\n_atom_site.pdbx_PDB_ins_code\n_atom_site.label_asym_id\n_atom_site.Cartn_x\n_atom_site.Cartn_y\n_atom_site.Cartn_z\n_atom_site.occupancy\n_atom_site.label_entity_id\n_atom_site.auth_asym_id\n_atom_site.auth_comp_id\n_atom_site.B_iso_or_equiv\n_atom_site.pdbx_PDB_model_num\nATOM 1 N N . ALA 1 1 ? A -99.610 -252.417 -194.718 1.000 1 A ALA 72.104 1\nATOM 2 C CA . ALA 1 1 ? A -88.830 -624.938 570.026 1.000 1 A ALA 75.641 1\nATOM 3 C C . ALA 1 1 ? A 66.420 -725.435 109.505 1.000 1 A ALA 75.529 1\nATOM 4 O O . ALA 1 1 ? A 148.952 -207.938 225.315 1.000 1 A ALA 70.795 1\nATOM 5 C CB . ALA 1 1 ? A -137.503 -234.635 176.792 1.000 1 A ALA 70.607 1\nATOM 6 N N . GLY 2 2 ? A 335.321 -500.115 611.484 1.000 1 A GLY 76.622 1\nATOM 7 C CA . GLY 2 2 ? A -189.721 -294.190 -133.451 1.000 1 A GLY 78.865 1\nATOM 8 C C . GLY 2 2 ? A -357.745 4.958 775.456 1.000 1 A GLY 80.980 1\nATOM 9 O O . GLY 2 2 ? A 123.665 -390.265 395.290 1.000 1 A GLY 78.526 1\nATOM 10 N N . SER 3 3 ? A -250.675 -516.853 -190.197 1.000 1 A SER 76.263 1\nATOM 11 C CA . SER 3 3 ? A 36.063 -200.856 452.932 1.000 1 A SER 78.302 1\nATOM 12 C C . SER 3 3 ? A -322.887 -340.251 0.663 1.000 1 A SER 78.919 1\nATOM 13 O O . SER 3 3 ? A 275.436 -358.746 -28.728 1.000 1 A SER 76.636 1\nATOM 14 C CB . SER 3 3 ? A 54.928 -541.190 726.708 1.000 1 A SER 75.111 1\nATOM 15 O OG . SER 3 3 ? A -74.672 -206.647 219.431 1.000 1 A SER 71.024 1\nATOM 16 N N . HIS 4 4 ? A 75.959 -317.236 180.837 1.000 1 A HIS 77.080 1\nATOM 17 C CA . HIS 4 4 ? A -378.813 -356.928 346.136 1.000 1 A HIS 78.321 1\nATOM 18 C C . HIS 4 4 ? A -160.324 -511.146 640.350 1.000 1 A HIS 78.726 1\nATOM 19 O O . HIS 4 4 ? A 209.586 -95.535 404.741 1.000 1 A HIS 77.886 1\nATOM 20 C CB . HIS 4 4 ? A 246.936 -270.522 296.551 1.000 1 A HIS 75.628 1\nATOM 21 C CG . HIS 4 4 ? A 220.300 -24.954 -6.084 1.000 1 A HIS 70.459 1\nATOM 22 N ND1 . HIS 4 4 ? A -278.653 -373.093 405.553 1.000 1 A HIS 63.750 1\nATOM 23 C CD2 . HIS 4 4 ? A 16.995 -186.818 248.914 1.000 1 A HIS 66.256 1\nATOM 24 C CE1 . HIS 4 4 ? A -140.515 -328.189 393.571 1.000 1 A HIS 66.613 1\nATOM 25 N NE2 . HIS 4 4 ? A -449.668 -613.870 687.650 1.000 1 A HIS 63.420 1\nATOM 26 N N . SER 5 5 ? A 138.192 -590.410 648.117 1.000 1 A SER 74.608 1\nATOM 27 C CA . SER 5 5 ? A -271.450 -113.370 81.809 1.000 1 A SER 75.521 1\nATOM 28 C C . SER 5 5 ? A -212.394 -540.568 222.663 1.000 1 A SER 75.940 1\nATOM 29 O O . SER 5 5 ? A 258.657 -119.886 161.853 1.000 1 A SER 74.741 1\nATOM 30 C CB . SER 5 5 ? A 62.008 -714.098 415.758 1.000 1 A SER 73.132 1\nATOM 31 O OG . SER 5 5 ? A -372.424 -233.178 355.800 1.000 1 A SER 69.186 1\nATOM 32 N N . MET 6 6 ? A 577.526 -368.212 142.873 1.000 1 A MET 72.281 1\nATOM 33 C CA . MET 6 6 ? A -110.384 -475.924 166.261 1.000 1 A MET 73.403 1\nATOM 34 C C . MET 6 6 ? A -120.070 -574.283 279.916 1.000 1 A MET 73.519 1\nATOM 35 O O . MET 6 6 ? A 23.860 -441.740 83.861 1.000 1 A MET 72.823 1\nATOM 36 C CB . MET 6 6 ? A 35.442 -176.421 -41.065 1.000 1 A MET 71.888 1\nATOM 37 C CG . MET 6 6 ? A 212.752 -989.082 384.156 1.000 1 A MET 67.038 1\nATOM 38 S SD . MET 6 6 ? A 74.284 -598.191 648.073 1.000 1 A MET 69.301 1\nATOM 39 C CE . MET 6 6 ? A -233.389 -419.056 262.957 1.000 1 A MET 63.641 1\nATOM 40 N N . ARG 7 7 ? A -307.171 -252.480 442.183 1.000 1 A ARG 71.208 1\nATOM 41 C CA . ARG 7 7 ? A -112.412 -250.198 260.989 1.000 1 A ARG 71.130 1\nATOM 42 C C . ARG 7 7 ? A 57.865 -687.522 254.219 1.000 1 A ARG 70.385 1\nATOM 43 O O . ARG 7 7 ? A -151.655 -696.654 -201.895 1.000 1 A ARG 69.059 1\nATOM 44 C CB . ARG 7 7 ? A -252.459 -802.616 243.695 1.000 1 A ARG 69.846 1\nATOM 45 C CG . ARG 7 7 ? A -291.506 -416.400 -60.404 1.000 1 A ARG 64.436 1\nATOM 46 C CD . ARG 7 7 ? A -262.444 -382.877 326.346 1.000 1 A ARG 62.093 1\nATOM 47 N NE . ARG 7 7 ? A -325.633 -294.508 444.930 1.000 1 A ARG 57.755 1\nATOM 48 C CZ . ARG 7 7 ? A -67.931 -287.300 107.159 1.000 1 A ARG 55.466 1\nATOM 49 N NH1 . ARG 7 7 ? A 311.930 -30.058 259.571 1.000 1 A ARG 51.394 1\nATOM 50 N NH2 . ARG 7 7 ? A -417.822 -525.545 270.614 1.000 1 A ARG 48.798 1\nATOM 51 N N . TYR 8 8 ? A 329.504 -557.422 454.594 1.000 1 A TYR 73.089 1\nATOM 52 C CA . TYR 8 8 ? A 161.724 -146.564 -84.850 1.000 1 A TYR 73.201 1\nATOM 53 C C . TYR 8 8 ? A -280.741 -83.975 447.062 1.000 1 A TYR 72.246 1\nATOM 54 O O . TYR 8 8 ? A -160.295 -423.731 -136.712 1.000 1 A TYR 70.890 1\nATOM 55 C CB . TYR 8 8 ? A -312.468 -307.519 423.594 1.000 1 A TYR 71.043 1\nATOM 56 C CG . TYR 8 8 ? A 9.390 -244.619 85.230 1.000 1 A TYR 66.197 1\nATOM 57 C CD1 . TYR 8 8 ? A -44.491 -382.716 426.599 1.000 1 A TYR 60.699 1\nATOM 58 C CD2 . TYR 8 8 ? A -203.721 -26.994 320.464 1.000 1 A TYR 60.647 1\nATOM 59 C CE1 . TYR 8 8 ? A -170.657 -524.827 398.841 1.000 1 A TYR 57.978 1\nATOM 60 C CE2 . TYR 8 8 ? A -86.460 -613.672 388.276 1.000 1 A TYR 58.536 1\nATOM 61 C CZ . TYR 8 8 ? A 307.584 -467.118 448.113 1.000 1 A TYR 56.381 1\nATOM 62 O OH . TYR 8 8 ? A -189.581 -403.092 151.585 1.000 1 A TYR 56.095 1\nATOM 63 N N . PHE 9 9 ? A 119.678 -164.794 351.828 1.000 1 A PHE 70.019 1\nATOM 64 C CA . PHE 9 9 ? A 87.454 -624.934 254.385 1.000 1 A PHE 70.540 1\nATOM 65 C C . PHE 9 9 ? A 82.317 -259.483 149.920 1.000 1 A PHE 70.193 1\nATOM 66 O O . PHE 9 9 ? A -113.820 -245.385 324.951 1.000 1 A PHE 68.925 1\nATOM 67 C CB . PHE 9 9 ? A -27.330 -443.332 529.545 1.000 1 A PHE 68.213 1\nATOM 68 C CG . PHE 9 9 ? A -289.712 -233.892 626.194 1.000 1 A PHE 67.024 1\nATOM 69 C CD1 . PHE 9 9 ? A 329.399 -250.905 261.100 1.000 1 A PHE 65.918 1\nATOM 70 C CD2 . PHE 9 9 ? A -191.518 -437.888 406.187 1.000 1 A PHE 65.945 1\nATOM 71 C CE1 . PHE 9 9 ? A -99.600 -275.650 19.709 1.000 1 A PHE 65.179 1\nATOM 72 C CE2 . PHE 9 9 ? A -256.097 -725.066 321.565 1.000 1 A PHE 64.904 1\nATOM 73 C CZ . PHE 9 9 ? A 192.875 -881.440 -51.937 1.000 1 A PHE 63.647 1\nATOM 74 N N . SER 10 10 ? A -328.890 -479.944 21.233 1.000 1 A SER 69.012 1\nATOM 75 C CA . SER 10 10 ? A 409.008 -59.848 280.818 1.000 1 A SER 69.613 1\nATOM 76 C C . SER 10 10 ? A 272.763 -109.392 82.569 1.000 1 A SER 69.092 1\nATOM 77 O O . SER 10 10 ? A -153.901 -250.409 153.002 1.000 1 A SER 68.165 1\nATOM 78 C CB . SER 10 10 ? A -25.556 -402.748 382.175 1.000 1 A SER 67.060 1\nATOM 79 O OG . SER 10 10 ? A -205.170 -503.316 459.354 1.000 1 A SER 63.262 1\nATOM 80 N N . THR 11 11 ? A -478.862 -302.321 26.885 1.000 1 A THR 66.525 1\nATOM 81 C CA . THR 11 11 ? A 24.550 -172.842 304.161 1.000 1 A THR 66.567 1\nATOM 82 C C . THR 11 11 ? A -7.569 -315.537 298.048 1.000 1 A THR 67.025 1\nATOM 83 O O . THR 11 11 ? A -150.157 1.024 166.224 1.000 1 A THR 67.242 1\nATOM 84 C CB . THR 11 11 ? A 2.565 -470.631 515.325 1.000 1 A THR 64.190 1\nATOM 85 O OG1 . THR 11 11 ? A 108.314 -231.378 594.793 1.000 1 A THR 60.678 1\nATOM 86 C CG2 . THR 11 11 ? A -192.342 -320.392 173.916 1.000 1 A THR 60.791 1\nATOM 87 N N . SER 12 12 ? A -423.595 -279.899 300.308 1.000 1 A SER 68.473 1\nATOM 88 C CA . SER 12 12 ? A -197.765 -781.567 162.498 1.000 1 A SER 68.911 1\nATOM 89 C C . SER 12 12 ? A 157.605 -772.201 572.439 1.000 1 A SER 68.567 1\nATOM 90 O O . SER 12 12 ? A -437.742 -718.859 38.419 1.000 1 A SER 68.665 1\nATOM 91 C CB . SER 12 12 ? A 293.544 -35.321 220.356 1.000 1 A SER 66.785 1\nATOM 92 O OG . SER 12 12 ? A -15.211 -811.678 -23.000 1.000 1 A SER 63.238 1\nATOM 93 N N . VAL 13 13 ? A 45.268 -357.998 505.419 1.000 1 A VAL 64.500 1\nATOM 94 C CA . VAL 13 13 ? A 9.348 -369.019 312.078 1.000 1 A VAL 65.842 1\nATOM 95 C C . VAL 13 13 ? A 420.740 -433.665 -99.089 1.000 1 A VAL 66.226 1\nATOM 96 O O . VAL 13 13 ? A -304.954 -498.640 244.355 1.000 1 A VAL 65.773 1\nATOM 97 C CB . VAL 13 13 ? A -103.952 -460.013 -49.809 1.000 1 A VAL 63.241 1\nATOM 98 C CG1 . VAL 13 13 ? A 230.461 -349.919 -37.736 1.000 1 A VAL 62.709 1\nATOM 99 C CG2 . VAL 13 13 ? A -235.899 161.124 102.918 1.000 1 A VAL 61.779 1\nATOM 100 N N . SER 14 14 ? A -237.074 -673.396 217.151 1.000 1 A SER 68.226 1\nATOM 101 C CA . SER 14 14 ? A 114.124 -616.382 653.000 1.000 1 A SER 68.651 1\nATOM 102 C C . SER 14 14 ? A -133.217 -499.941 323.827 1.000 1 A SER 68.747 1\nATOM 103 O O . SER 14 14 ? A -220.576 -271.771 289.849 1.000 1 A SER 69.503 1\nATOM 104 C CB . SER 14 14 ? A -15.667 -300.263 98.966 1.000 1 A SER 67.592 1\nATOM 105 O OG . SER 14 14 ? A 82.899 -390.622 293.520 1.000 1 A SER 68.468 1\nATOM 106 N N . ARG 15 15 ? A -36.896 45.169 297.316 1.000 1 A ARG 69.387 1\nATOM 107 C CA . ARG 15 15 ? A -9.896 54.104 232.917 1.000 1 A ARG 70.080 1\nATOM 108 C C . ARG 15 15 ? A -234.956 -668.576 -15.982 1.000 1 A ARG 69.526 1\nATOM 109 O O . ARG 15 15 ? A 222.106 -499.781 64.585 1.000 1 A ARG 69.207 1\nATOM 110 C CB . ARG 15 15 ? A -26.076 -523.878 473.801 1.000 1 A ARG 67.206 1\nATOM 111 C CG . ARG 15 15 ? A 165.799 -353.821 236.569 1.000 1 A ARG 63.499 1\nATOM 112 C CD . ARG 15 15 ? A -213.025 -744.070 582.097 1.000 1 A ARG 62.395 1\nATOM 113 N NE . ARG 15 15 ? A -275.989 -533.304 345.290 1.000 1 A ARG 61.096 1\nATOM 114 C CZ . ARG 15 15 ? A -195.914 -610.520 140.540 1.000 1 A ARG 58.664 1\nATOM 115 N NH1 . ARG 15 15 ? A 154.127 -442.680 122.539 1.000 1 A ARG 54.393 1\nATOM 116 N NH2 . ARG 15 15 ? A -24.471 -434.558 321.858 1.000 1 A ARG 51.396 1\nATOM 117 N N . PRO 16 16 ? A 97.867 -380.572 111.018 1.000 1 A PRO 67.928 1\nATOM 118 C CA . PRO 16 16 ? A 369.190 -439.650 456.517 1.000 1 A PRO 68.518 1\nATOM 119 C C . PRO 16 16 ? A -392.830 -279.110 420.240 1.000 1 A PRO 67.967 1\nATOM 120 O O . PRO 16 16 ? A -316.609 25.853 -569.944 1.000 1 A PRO 65.001 1\nATOM 121 C CB . PRO 16 16 ? A -139.248 -689.106 -275.343 1.000 1 A PRO 66.707 1\nATOM 122 C CG . PRO 16 16 ? A -166.613 -348.184 335.789 1.000 1 A PRO 67.169 1\nATOM 123 C CD . PRO 16 16 ? A 147.109 -502.082 470.964 1.000 1 A PRO 71.832 1\nATOM 124 N N . GLY 17 17 ? A 372.180 -287.981 404.227 1.000 1 A GLY 72.280 1\nATOM 125 C CA . GLY 17 17 ? A -216.504 -201.914 129.483 1.000 1 A GLY 71.693 1\nATOM 126 C C . GLY 17 17 ? A 50.758 -623.700 -82.210 1.000 1 A GLY 72.406 1\nATOM 127 O O . GLY 17 17 ? A -162.921 -661.719 277.156 1.000 1 A GLY 69.188 1\nATOM 128 N N . ARG 18 18 ? A 109.458 -687.092 508.656 1.000 1 A ARG 68.657 1\nATOM 129 C CA . ARG 18 18 ? A -266.271 -327.372 250.324 1.000 1 A ARG 70.377 1\nATOM 130 C C . ARG 18 18 ? A -65.694 -519.023 112.715 1.000 1 A ARG 71.311 1\nATOM 131 O O . ARG 18 18 ? A -48.971 -294.694 442.184 1.000 1 A ARG 66.516 1\nATOM 132 C CB . ARG 18 18 ? A 258.248 -789.082 35.379 1.000 1 A ARG 67.021 1\nATOM 133 C CG . ARG 18 18 ? A 253.228 -468.101 116.147 1.000 1 A ARG 62.596 1\nATOM 134 C CD . ARG 18 18 ? A -71.051 -208.575 362.232 1.000 1 A ARG 59.387 1\nATOM 135 N NE . ARG 18 18 ? A 117.393 -860.322 471.855 1.000 1 A ARG 53.946 1\nATOM 136 C CZ . ARG 18 18 ? A -38.750 -145.118 133.863 1.000 1 A ARG 52.346 1\nATOM 137 N NH1 . ARG 18 18 ? A -332.447 0.945 153.904 1.000 1 A ARG 47.579 1\nATOM 138 N NH2 . ARG 18 18 ? A 25.601 -513.935 477.494 1.000 1 A ARG 44.659 1\nATOM 139 N N . GLY 19 19 ? A 37.198 -415.194 369.121 1.000 1 A GLY 72.819 1\nATOM 140 C CA . GLY 19 19 ? A -133.595 -242.803 -84.515 1.000 1 A GLY 72.993 1\nATOM 141 C C . GLY 19 19 ? A -342.765 -402.346 356.639 1.000 1 A GLY 76.191 1\nATOM 142 O O . GLY 19 19 ? A 210.071 -510.661 267.054 1.000 1 A GLY 75.358 1\nATOM 143 N N . GLU 20 20 ? A -192.873 -428.272 339.731 1.000 1 A GLU 71.624 1\nATOM 144 C CA . GLU 20 20 ? A -68.168 -385.576 -423.736 1.000 1 A GLU 73.083 1\nATOM 145 C C . GLU 20 20 ? A -121.847 -159.093 127.761 1.000 1 A GLU 73.656 1\nATOM 146 O O . GLU 20 20 ? A -92.699 -646.151 481.718 1.000 1 A GLU 73.208 1\nATOM 147 C CB . GLU 20 20 ? A 165.632 -110.304 642.270 1.000 1 A GLU 70.982 1\nATOM 148 C CG . GLU 20 20 ? A 55.883 -158.669 394.025 1.000 1 A GLU 66.284 1\nATOM 149 C CD . GLU 20 20 ? A 107.494 -385.688 110.992 1.000 1 A GLU 63.598 1\nATOM 150 O OE1 . GLU 20 20 ? A -137.419 -338.141 526.154 1.000 1 A GLU 62.596 1\nATOM 151 O OE2 . GLU 20 20 ? A 9.870 -250.217 -17.498 1.000 1 A GLU 59.763 1\nATOM 152 N N . PRO 21 21 ? A 548.468 263.473 749.085 1.000 1 A PRO 66.570 1\nATOM 153 C CA . PRO 21 21 ? A 238.695 -781.187 -150.195 1.000 1 A PRO 67.801 1\nATOM 154 C C . PRO 21 21 ? A -758.846 -246.076 292.639 1.000 1 A PRO 67.869 1\nATOM 155 O O . PRO 21 21 ? A -275.570 -202.057 64.421 1.000 1 A PRO 67.118 1\nATOM 156 C CB . PRO 21 21 ? A -102.967 -693.536 79.564 1.000 1 A PRO 64.787 1\nATOM 157 C CG . PRO 21 21 ? A -236.847 -577.370 245.500 1.000 1 A PRO 64.655 1\nATOM 158 C CD . PRO 21 21 ? A -143.452 -285.605 537.514 1.000 1 A PRO 69.303 1\nATOM 159 N N . ARG 22 22 ? A 248.665 -638.060 352.088 1.000 1 A ARG 62.660 1\nATOM 160 C CA . ARG 22 22 ? A -249.247 -677.004 310.038 1.000 1 A ARG 62.229 1\nATOM 161 C C . ARG 22 22 ? A -391.385 -210.008 270.036 1.000 1 A ARG 60.676 1\nATOM 162 O O . ARG 22 22 ? A -201.389 -440.317 -188.146 1.000 1 A ARG 58.752 1\nATOM 163 C CB . ARG 22 22 ? A -231.401 -94.984 163.738 1.000 1 A ARG 59.457 1\nATOM 164 C CG . ARG 22 22 ? A -183.409 -866.228 244.655 1.000 1 A ARG 55.337 1\nATOM 165 C CD . ARG 22 22 ? A -200.405 -283.886 662.354 1.000 1 A ARG 52.533 1\nATOM 166 N NE . ARG 22 22 ? A -122.633 -276.455 409.020 1.000 1 A ARG 48.394 1\nATOM 167 C CZ . ARG 22 22 ? A 156.442 -502.070 308.773 1.000 1 A ARG 48.350 1\nATOM 168 N NH1 . ARG 22 22 ? A -163.996 -441.621 230.674 1.000 1 A ARG 44.614 1\nATOM 169 N NH2 . ARG 22 22 ? A 168.853 -214.560 365.857 1.000 1 A ARG 43.588 1\nATOM 170 N N . PHE 23 23 ? A -113.887 -65.366 394.826 1.000 1 A PHE 64.266 1\nATOM 171 C CA . PHE 23 23 ? A 307.154 4.965 443.370 1.000 1 A PHE 64.474 1\nATOM 172 C C . PHE 23 23 ? A 260.038 -627.697 -16.677 1.000 1 A PHE 64.609 1\nATOM 173 O O . PHE 23 23 ? A -264.998 -671.094 549.003 1.000 1 A PHE 64.238 1\nATOM 174 C CB . PHE 23 23 ? A -29.292 -431.577 34.254 1.000 1 A PHE 62.118 1\nATOM 175 C CG . PHE 23 23 ? A -313.785 -123.375 103.980 1.000 1 A PHE 58.276 1\nATOM 176 C CD1 . PHE 23 23 ? A -338.883 -548.621 594.165 1.000 1 A PHE 54.906 1\nATOM 177 C CD2 . PHE 23 23 ? A 166.899 -584.668 426.373 1.000 1 A PHE 55.392 1\nATOM 178 C CE1 . PHE 23 23 ? A -71.805 -587.266 323.137 1.000 1 A PHE 54.630 1\nATOM 179 C CE2 . PHE 23 23 ? A -106.845 -298.373 122.091 1.000 1 A PHE 54.559 1\nATOM 180 C CZ . PHE 23 23 ? A -111.544 -563.154 46.104 1.000 1 A PHE 52.818 1\nATOM 181 N N . ILE 24 24 ? A -515.444 -766.694 414.064 1.000 1 A ILE 61.059 1\nATOM 182 C CA . ILE 24 24 ? A 16.338 -393.190 156.677 1.000 1 A ILE 62.082 1\nATOM 183 C C . ILE 24 24 ? A -268.375 -358.934 -137.610 1.000 1 A ILE 62.832 1\nATOM 184 O O . ILE 24 24 ? A -101.244 -345.149 197.561 1.000 1 A ILE 62.259 1\nATOM 185 C CB . ILE 24 24 ? A -38.729 -174.031 401.465 1.000 1 A ILE 58.951 1\nATOM 186 C CG1 . ILE 24 24 ? A 127.438 -508.946 354.485 1.000 1 A ILE 61.051 1\nATOM 187 C CG2 . ILE 24 24 ? A 304.424 -364.436 209.095 1.000 1 A ILE 59.032 1\nATOM 188 C CD1 . ILE 24 24 ? A 67.102 -316.291 -151.603 1.000 1 A ILE 54.779 1\nATOM 189 N N . ALA 25 25 ? A 31.753 -465.833 254.641 1.000 1 A ALA 61.894 1\nATOM 190 C CA . ALA 25 25 ? A -508.526 -361.051 153.189 1.000 1 A ALA 63.343 1\nATOM 191 C C . ALA 25 25 ? A -208.768 -158.094 -56.967 1.000 1 A ALA 63.031 1\nATOM 192 O O . ALA 25 25 ? A 137.096 -425.043 277.501 1.000 1 A ALA 62.988 1\nATOM 193 C CB . ALA 25 25 ? A -139.364 -547.606 181.177 1.000 1 A ALA 61.804 1\nATOM 194 N N . VAL 26 26 ? A 166.634 -459.911 231.124 1.000 1 A VAL 60.762 1\nATOM 195 C CA . VAL 26 26 ? A -49.658 -588.074 424.246 1.000 1 A VAL 62.288 1\nATOM 196 C C . VAL 26 26 ? A -209.043 -169.478 303.663 1.000 1 A VAL 62.059 1\nATOM 197 O O . VAL 26 26 ? A 55.058 -676.664 356.278 1.000 1 A VAL 60.856 1\nATOM 198 C CB . VAL 26 26 ? A -244.456 -65.548 649.894 1.000 1 A VAL 59.408 1\nATOM 199 C CG1 . VAL 26 26 ? A -2.000 -446.108 569.278 1.000 1 A VAL 58.810 1\nATOM 200 C CG2 . VAL 26 26 ? A 331.050 16.760 358.633 1.000 1 A VAL 57.484 1\nATOM 201 N N . GLY 27 27 ? A 179.360 278.000 262.458 1.000 1 A GLY 65.420 1\nATOM 202 C CA . GLY 27 27 ? A -692.942 -179.597 11.542 1.000 1 A GLY 64.777 1\nATOM 203 C C . GLY 27 27 ? A -266.976 -544.311 39.915 1.000 1 A GLY 64.924 1\nATOM 204 O O . GLY 27 27 ? A 102.111 -242.993 -0.373 1.000 1 A GLY 64.478 1\nATOM 205 N N . TYR 28 28 ? A 167.700 -519.810 134.294 1.000 1 A TYR 60.700 1\nATOM 206 C CA . TYR 28 28 ? A 197.572 -249.267 125.544 1.000 1 A TYR 61.500 1\nATOM 207 C C . TYR 28 28 ? A -136.422 -821.156 486.784 1.000 1 A TYR 59.443 1\nATOM 208 O O . TYR 28 28 ? A -272.875 -161.465 100.823 1.000 1 A TYR 58.652 1\nATOM 209 C CB . TYR 28 28 ? A 100.790 -446.523 48.072 1.000 1 A TYR 59.996 1\nATOM 210 C CG . TYR 28 28 ? A -169.815 -854.402 162.637 1.000 1 A TYR 58.958 1\nATOM 211 C CD1 . TYR 28 28 ? A 165.628 -340.850 275.959 1.000 1 A TYR 54.125 1\nATOM 212 C CD2 . TYR 28 28 ? A -294.452 -341.272 375.607 1.000 1 A TYR 54.630 1\nATOM 213 C CE1 . TYR 28 28 ? A 153.040 -576.033 221.477 1.000 1 A TYR 53.151 1\nATOM 214 C CE2 . TYR 28 28 ? A -4.847 -282.446 63.644 1.000 1 A TYR 53.002 1\nATOM 215 C CZ . TYR 28 28 ? A -357.638 -346.114 500.531 1.000 1 A TYR 51.815 1\nATOM 216 O OH . TYR 28 28 ? A -142.853 -248.642 215.459 1.000 1 A TYR 54.861 1\nATOM 217 N N . VAL 29 29 ? A 511.830 107.273 345.122 1.000 1 A VAL 59.809 1\nATOM 218 C CA . VAL 29 29 ? A -284.036 -434.960 -329.535 1.000 1 A VAL 60.022 1\nATOM 219 C C . VAL 29 29 ? A -60.324 -800.024 579.032 1.000 1 A VAL 57.241 1\nATOM 220 O O . VAL 29 29 ? A -214.593 -579.830 254.839 1.000 1 A VAL 55.654 1\nATOM 221 C CB . VAL 29 29 ? A 124.699 -310.934 260.559 1.000 1 A VAL 56.829 1\nATOM 222 C CG1 . VAL 29 29 ? A 34.612 126.215 507.149 1.000 1 A VAL 57.397 1\nATOM 223 C CG2 . VAL 29 29 ? A 167.781 -312.765 682.202 1.000 1 A VAL 57.009 1\n#\n#\nloop_\n_atom_type.symbol\nC\nN\nO\nS\n#\n#\nloop_\n_ma_qa_metric.id\n_ma_qa_metric.name\n_ma_qa_metric.description\n_ma_qa_metric.type\n_ma_qa_metric.mode\n_ma_qa_metric.type_other_details\n_ma_qa_metric.software_group_id\n1 pLDDT 'Predicted lddt' pLDDT local . .\n#\n#\nloop_\n_ma_qa_metric_local.ordinal_id\n_ma_qa_metric_local.model_id\n_ma_qa_metric_local.label_asym_id\n_ma_qa_metric_local.label_seq_id\n_ma_qa_metric_local.label_comp_id\n_ma_qa_metric_local.metric_id\n_ma_qa_metric_local.metric_value\n1 1 A 1 ALA 1 75.641\n2 1 A 2 GLY 1 78.865\n3 1 A 3 SER 1 78.302\n4 1 A 4 HIS 1 78.321\n5 1 A 5 SER 1 75.521\n6 1 A 6 MET 1 73.403\n7 1 A 7 ARG 1 71.130\n8 1 A 8 TYR 1 73.201\n9 1 A 9 PHE 1 70.540\n10 1 A 10 SER 1 69.613\n11 1 A 11 THR 1 66.567\n12 1 A 12 SER 1 68.911\n13 1 A 13 VAL 1 65.842\n14 1 A 14 SER 1 68.651\n15 1 A 15 ARG 1 70.080\n16 1 A 16 PRO 1 68.518\n17 1 A 17 GLY 1 71.693\n18 1 A 18 ARG 1 70.377\n19 1 A 19 GLY 1 72.993\n20 1 A 20 GLU 1 73.083\n21 1 A 21 PRO 1 67.801\n22 1 A 22 ARG 1 62.229\n23 1 A 23 PHE 1 64.474\n24 1 A 24 ILE 1 62.082\n25 1 A 25 ALA 1 63.343\n26 1 A 26 VAL 1 62.288\n27 1 A 27 GLY 1 64.777\n28 1 A 28 TYR 1 61.500\n29 1 A 29 VAL 1 60.022\n#\n",
+   "sha256": "b170c9344a9fe8ec6186614f0e9e426bdb4f2ef30cabe475e98fd27f8289b419",
+   "size": 22661
+  },
+  "ranking.json": {
+   "media_type": "application/json",
+   "payload": "[\n  {\n    \"aggregate_score\": 0.05160942301154137,\n    \"chain_chain_clashes\": [\n      [\n        0\n      ]\n    ],\n    \"has_inter_chain_clashes\": false,\n    \"iptm\": 0.0,\n    \"per_chain_pair_iptm\": [\n      [\n        0.25804710388183594\n      ]\n    ],\n    \"per_chain_ptm\": [\n      0.25804710388183594\n    ],\n    \"ptm\": 0.25804710388183594,\n    \"rank\": 0,\n    \"structure\": \"ranked/rank_0.model_idx_0.cif\"\n  }\n]\n",
+   "sha256": "a80a7caa3e1aa011479b3418dc08955ab59e089427be77eaca42bc5ac2e91b20",
+   "size": 405
+  },
+  "run_metadata.json": {
+   "media_type": "application/json",
+   "payload": "{\n  \"parameters\": {\n    \"low_memory\": true,\n    \"num_diffusion_samples\": 1,\n    \"num_diffusion_timesteps\": 2,\n    \"num_trunk_recycles\": 1,\n    \"num_trunk_samples\": 1,\n    \"recycle_msa_subsample\": 0,\n    \"seed\": 0,\n    \"use_esm_embeddings\": true,\n    \"use_msa\": false,\n    \"use_restraints\": false\n  },\n  \"runner\": \"chai1\",\n  \"runtime_network\": false,\n  \"upstream_commit\": \"8d5ac0f93e9b6ea4c3a6545c253a6381c0f3694b\",\n  \"upstream_version\": \"0.6.1\"\n}\n",
+   "sha256": "f98141ef78643dceffff61e0c8f93bb51d1932a2d8dc10f597920b02b6b4b7cb",
+   "size": 447
+  }
+ },
+ "provenance": {
+  "capture": {
+   "captured_from": "authenticated production artifact API; the deployment result root is not readable by this capture user, so no result-root capture was possible",
+   "mode": "synthetic",
+   "payload_source": "GET /compute/api/results/<task>/artifacts/<path> with a Bearer token; every byte checked against the served manifest sha256",
+   "production_task_id": "018c32b6d5d97dbb2fd99792155211b2",
+   "production_task_type": "chai1_predict",
+   "served_manifest_sha256": "f877ef7461e731dc31fb7f10e58cba673f70d98279759fcc51c1fa8732f7fb1e",
+   "task_source": "none - the deployment task store publication anchor was not readable"
+  },
+  "production_finished_at": "2026-10-21T00:59:15.145586+08:00",
+  "production_started_at": "2026-10-21T00:57:10.792991+08:00",
+  "runner_family": "chai1",
+  "runner_revision": "deploy 57c8114; campaign base eae170d",
+  "storyboard_sha256": "cb6b8d06d534316acaa162525458eb752cc8a825c8fb5057f758e1316f8697aa"
+ },
+ "response": {
+  "archive": {
+   "download_url": null,
+   "ready": false,
+   "request_url": "/compute/api/results/018c32b6d5d97dbb2fd99792155211b2/archive"
+  },
+  "artifacts": [
+   {
+    "capability": "text",
+    "media_type": "application/json",
+    "ndarray_url": "/compute/api/results/018c32b6d5d97dbb2fd99792155211b2/ndarrays/chai1-model-assets.json",
+    "path": "chai1-model-assets.json",
+    "preview": "text",
+    "role": "evidence",
+    "sha256": "5a09bca5cdbd8c7894777fb45a7e4dd86ae4b4af9cd522813752118e25ddfc18",
+    "size": 3783,
+    "url": "/compute/api/results/018c32b6d5d97dbb2fd99792155211b2/artifacts/chai1-model-assets.json"
+   },
+   {
+    "capability": "text",
+    "media_type": "application/octet-stream",
+    "path": "citations.bib",
+    "preview": "text",
+    "role": "provenance",
+    "sha256": "3baff75a3259104ee9370e5bcd602dcd3b953b1871ba7feb515526873d6340a5",
+    "size": 352,
+    "url": "/compute/api/results/018c32b6d5d97dbb2fd99792155211b2/artifacts/citations.bib"
+   },
+   {
+    "capability": "text",
+    "media_type": "application/json",
+    "ndarray_url": "/compute/api/results/018c32b6d5d97dbb2fd99792155211b2/ndarrays/confidence.rank_0.json",
+    "path": "confidence.rank_0.json",
+    "preview": "text",
+    "role": "evidence",
+    "sha256": "f40ede6b1266edde5596903f50481c694e57e4f892d934d98c42af24f96532a5",
+    "size": 298,
+    "url": "/compute/api/results/018c32b6d5d97dbb2fd99792155211b2/artifacts/confidence.rank_0.json"
+   },
+   {
+    "capability": "text",
+    "media_type": "application/octet-stream",
+    "path": "debug/inputs/entities/minimal.fasta",
+    "preview": "text",
+    "role": "provenance",
+    "sha256": "c53e07aafbfc563781ec87fb8a8ee13179957c9e99ad0ac6f099e6c2365da6e1",
+    "size": 60,
+    "url": "/compute/api/results/018c32b6d5d97dbb2fd99792155211b2/artifacts/debug/inputs/entities/minimal.fasta"
+   },
+   {
+    "capability": "text",
+    "media_type": "application/json",
+    "ndarray_url": "/compute/api/results/018c32b6d5d97dbb2fd99792155211b2/ndarrays/debug/submission.json",
+    "path": "debug/submission.json",
+    "preview": "text",
+    "role": "provenance",
+    "sha256": "5fbebf555d77f814270928706e12a2a8f590c4114d3eb959808de740bad90027",
+    "size": 597,
+    "url": "/compute/api/results/018c32b6d5d97dbb2fd99792155211b2/artifacts/debug/submission.json"
+   },
+   {
+    "capability": "text",
+    "media_type": "application/json",
+    "ndarray_url": "/compute/api/results/018c32b6d5d97dbb2fd99792155211b2/ndarrays/execution/slurm-status.execution.json",
+    "path": "execution/slurm-status.execution.json",
+    "preview": "text",
+    "role": "diagnostic",
+    "sha256": "320c23464545cd41d62a0b751475d0edbb28cfc4f6f56df31cc32b49b2b132fd",
+    "size": 277,
+    "url": "/compute/api/results/018c32b6d5d97dbb2fd99792155211b2/artifacts/execution/slurm-status.execution.json"
+   },
+   {
+    "capability": "text",
+    "media_type": "application/json",
+    "ndarray_url": "/compute/api/results/018c32b6d5d97dbb2fd99792155211b2/ndarrays/execution/slurm-unknown-user-chai1_predict-018c32b6d5d97dbb2fd99792155211b2.resource.json",
+    "path": "execution/slurm-unknown-user-chai1_predict-018c32b6d5d97dbb2fd99792155211b2.resource.json",
+    "preview": "text",
+    "role": "diagnostic",
+    "sha256": "01995b2b0ee75b78de9b743d979d7c3285651877f03eb96710d193a36851d21e",
+    "size": 532,
+    "url": "/compute/api/results/018c32b6d5d97dbb2fd99792155211b2/artifacts/execution/slurm-unknown-user-chai1_predict-018c32b6d5d97dbb2fd99792155211b2.resource.json"
+   },
+   {
+    "capability": "text",
+    "media_type": "application/octet-stream",
+    "path": "execution/slurm-unknown-user-chai1_predict-018c32b6d5d97dbb2fd99792155211b2.stderr.log",
+    "preview": "text",
+    "role": "diagnostic",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0,
+    "url": "/compute/api/results/018c32b6d5d97dbb2fd99792155211b2/artifacts/execution/slurm-unknown-user-chai1_predict-018c32b6d5d97dbb2fd99792155211b2.stderr.log"
+   },
+   {
+    "capability": "text",
+    "media_type": "application/octet-stream",
+    "path": "execution/slurm-unknown-user-chai1_predict-018c32b6d5d97dbb2fd99792155211b2.stdout.log",
+    "preview": "text",
+    "role": "diagnostic",
+    "sha256": "cba85e2093e7caca7d1fef10d24fa2a0c49b9f9679291d0fb25b9204bb9da192",
+    "size": 139,
+    "url": "/compute/api/results/018c32b6d5d97dbb2fd99792155211b2/artifacts/execution/slurm-unknown-user-chai1_predict-018c32b6d5d97dbb2fd99792155211b2.stdout.log"
+   },
+   {
+    "capability": "download_only",
+    "media_type": "application/octet-stream",
+    "ndarray_url": "/compute/api/results/018c32b6d5d97dbb2fd99792155211b2/ndarrays/pae.rank_0.npy",
+    "path": "pae.rank_0.npy",
+    "preview": null,
+    "role": "evidence",
+    "sha256": "a88cdbb6546d87e97b3977637a17ce1b6606cd8da0243e672bdc479b6a02aa6a",
+    "size": 3492,
+    "url": "/compute/api/results/018c32b6d5d97dbb2fd99792155211b2/artifacts/pae.rank_0.npy"
+   },
+   {
+    "capability": "download_only",
+    "media_type": "application/octet-stream",
+    "ndarray_url": "/compute/api/results/018c32b6d5d97dbb2fd99792155211b2/ndarrays/pde.rank_0.npy",
+    "path": "pde.rank_0.npy",
+    "preview": null,
+    "role": "evidence",
+    "sha256": "24479ac68951a53518a1387a8b6a76ead39fa5c20a458622e0d8fcb0385020b6",
+    "size": 3492,
+    "url": "/compute/api/results/018c32b6d5d97dbb2fd99792155211b2/artifacts/pde.rank_0.npy"
+   },
+   {
+    "capability": "download_only",
+    "media_type": "application/octet-stream",
+    "ndarray_url": "/compute/api/results/018c32b6d5d97dbb2fd99792155211b2/ndarrays/plddt.rank_0.npy",
+    "path": "plddt.rank_0.npy",
+    "preview": null,
+    "role": "evidence",
+    "sha256": "6140caea4734bd309180cd436f16452e2b6c1f8ef28747a3c61f8314c749393e",
+    "size": 244,
+    "url": "/compute/api/results/018c32b6d5d97dbb2fd99792155211b2/artifacts/plddt.rank_0.npy"
+   },
+   {
+    "capability": "molecular_structure",
+    "confidence_encoding": "plddt_bfactor",
+    "media_type": "application/octet-stream",
+    "path": "ranked/rank_0.model_idx_0.cif",
+    "preview": "structure",
+    "role": "primary",
+    "sha256": "b170c9344a9fe8ec6186614f0e9e426bdb4f2ef30cabe475e98fd27f8289b419",
+    "size": 22661,
+    "url": "/compute/api/results/018c32b6d5d97dbb2fd99792155211b2/artifacts/ranked/rank_0.model_idx_0.cif"
+   },
+   {
+    "capability": "text",
+    "media_type": "application/json",
+    "ndarray_url": "/compute/api/results/018c32b6d5d97dbb2fd99792155211b2/ndarrays/ranking.json",
+    "path": "ranking.json",
+    "preview": "text",
+    "role": "evidence",
+    "sha256": "a80a7caa3e1aa011479b3418dc08955ab59e089427be77eaca42bc5ac2e91b20",
+    "size": 405,
+    "url": "/compute/api/results/018c32b6d5d97dbb2fd99792155211b2/artifacts/ranking.json"
+   },
+   {
+    "capability": "text",
+    "media_type": "application/json",
+    "ndarray_url": "/compute/api/results/018c32b6d5d97dbb2fd99792155211b2/ndarrays/run_metadata.json",
+    "path": "run_metadata.json",
+    "preview": "text",
+    "role": "evidence",
+    "sha256": "f98141ef78643dceffff61e0c8f93bb51d1932a2d8dc10f597920b02b6b4b7cb",
+    "size": 447,
+    "url": "/compute/api/results/018c32b6d5d97dbb2fd99792155211b2/artifacts/run_metadata.json"
+   },
+   {
+    "capability": "molecular_structure",
+    "media_type": "application/octet-stream",
+    "path": "upstream/pred.model_idx_0.cif",
+    "preview": "structure",
+    "role": "artifact",
+    "sha256": "b170c9344a9fe8ec6186614f0e9e426bdb4f2ef30cabe475e98fd27f8289b419",
+    "size": 22661,
+    "url": "/compute/api/results/018c32b6d5d97dbb2fd99792155211b2/artifacts/upstream/pred.model_idx_0.cif"
+   },
+   {
+    "capability": "download_only",
+    "media_type": "application/octet-stream",
+    "ndarray_url": "/compute/api/results/018c32b6d5d97dbb2fd99792155211b2/ndarrays/upstream/scores.model_idx_0.npz",
+    "path": "upstream/scores.model_idx_0.npz",
+    "preview": null,
+    "role": "artifact",
+    "sha256": "689a0a85fe3ae07646b6929ce140a8dad421c1eae664492eb53b03fe78038d97",
+    "size": 1863,
+    "url": "/compute/api/results/018c32b6d5d97dbb2fd99792155211b2/artifacts/upstream/scores.model_idx_0.npz"
+   }
+  ],
+  "created_at": "2026-10-21T00:59:15.145586+08:00",
+  "error": null,
+  "limitations": [
+   "Runtime network access is disabled; MSA-server and template-server workflows are intentionally unavailable.",
+   "When local MSA use is enabled, upload sequence-hash-named `.aligned.pqt` files beside the primary FASTA.",
+   "Predictions and confidence estimates require independent scientific validation."
+  ],
+  "outcome": null,
+  "output_check": {
+   "checks": [
+    {
+     "matched": 1,
+     "required": true,
+     "source": "candidates",
+     "status": "passed",
+     "view_id": "predicted_structures"
+    },
+    {
+     "matched": 1,
+     "required": true,
+     "source": "data",
+     "status": "passed",
+     "view_id": "confidence_summary"
+    },
+    {
+     "matched": 1,
+     "required": true,
+     "source": "items",
+     "status": "passed",
+     "view_id": "prediction_evidence"
+    },
+    {
+     "matched": 1,
+     "required": true,
+     "source": "items",
+     "status": "passed",
+     "view_id": "prediction_evidence"
+    },
+    {
+     "matched": 1,
+     "required": true,
+     "source": "items",
+     "status": "passed",
+     "view_id": "prediction_evidence"
+    },
+    {
+     "matched": 1,
+     "required": true,
+     "source": "items",
+     "status": "passed",
+     "view_id": "prediction_evidence"
+    },
+    {
+     "matched": 1,
+     "required": true,
+     "source": "items",
+     "status": "passed",
+     "view_id": "prediction_evidence"
+    },
+    {
+     "matched": 1,
+     "required": true,
+     "source": "items",
+     "status": "passed",
+     "view_id": "prediction_evidence"
+    },
+    {
+     "matched": 0,
+     "required": false,
+     "source": "items",
+     "status": "passed",
+     "view_id": "prediction_evidence"
+    },
+    {
+     "file_id": "structures",
+     "matched": 1,
+     "required": true,
+     "status": "passed"
+    },
+    {
+     "file_id": "summaries",
+     "matched": 1,
+     "required": true,
+     "status": "passed"
+    },
+    {
+     "file_id": "local_confidence",
+     "matched": 1,
+     "required": true,
+     "status": "passed"
+    },
+    {
+     "file_id": "pae",
+     "matched": 1,
+     "required": true,
+     "status": "passed"
+    },
+    {
+     "file_id": "pde",
+     "matched": 1,
+     "required": true,
+     "status": "passed"
+    }
+   ],
+   "problems": [],
+   "state": "passed"
+  },
+  "result": {
+   "files": {
+    "local_confidence": [
+     {
+      "capability": "download_only",
+      "cardinality": "many",
+      "id": "local_confidence",
+      "media_type": "application/octet-stream",
+      "name": "plddt.rank_0.npy",
+      "ndarray_url": "/compute/api/results/018c32b6d5d97dbb2fd99792155211b2/ndarrays/plddt.rank_0.npy",
+      "preview": "model",
+      "role": "evidence",
+      "size": 244,
+      "url": "/compute/api/results/018c32b6d5d97dbb2fd99792155211b2/files/local_confidence?index=0",
+      "viewer": "model"
+     }
+    ],
+    "pae": [
+     {
+      "capability": "download_only",
+      "cardinality": "many",
+      "id": "pae",
+      "media_type": "application/octet-stream",
+      "name": "pae.rank_0.npy",
+      "ndarray_url": "/compute/api/results/018c32b6d5d97dbb2fd99792155211b2/ndarrays/pae.rank_0.npy",
+      "preview": "model",
+      "role": "evidence",
+      "size": 3492,
+      "url": "/compute/api/results/018c32b6d5d97dbb2fd99792155211b2/files/pae?index=0",
+      "viewer": "model"
+     }
+    ],
+    "pde": [
+     {
+      "capability": "download_only",
+      "cardinality": "many",
+      "id": "pde",
+      "media_type": "application/octet-stream",
+      "name": "pde.rank_0.npy",
+      "ndarray_url": "/compute/api/results/018c32b6d5d97dbb2fd99792155211b2/ndarrays/pde.rank_0.npy",
+      "preview": "model",
+      "role": "evidence",
+      "size": 3492,
+      "url": "/compute/api/results/018c32b6d5d97dbb2fd99792155211b2/files/pde?index=0",
+      "viewer": "model"
+     }
+    ],
+    "structures": [
+     {
+      "capability": "molecular_structure",
+      "cardinality": "many",
+      "confidence_encoding": "plddt_bfactor",
+      "id": "structures",
+      "media_type": "application/octet-stream",
+      "name": "rank_0.model_idx_0.cif",
+      "preview": "structure",
+      "role": "primary",
+      "size": 22661,
+      "url": "/compute/api/results/018c32b6d5d97dbb2fd99792155211b2/files/structures?index=0",
+      "viewer": "structure"
+     }
+    ],
+    "summaries": [
+     {
+      "capability": "text",
+      "cardinality": "many",
+      "id": "summaries",
+      "media_type": "application/json",
+      "name": "confidence.rank_0.json",
+      "ndarray_url": "/compute/api/results/018c32b6d5d97dbb2fd99792155211b2/ndarrays/confidence.rank_0.json",
+      "preview": "json",
+      "role": "evidence",
+      "size": 298,
+      "url": "/compute/api/results/018c32b6d5d97dbb2fd99792155211b2/files/summaries?index=0",
+      "viewer": "json"
+     }
+    ]
+   }
+  },
+  "run": {
+   "citations": [
+    {
+     "doi": "10.1101/2024.10.10.615955",
+     "num": 1,
+     "title": "Chai-1: Decoding the molecular interactions of life",
+     "url": "https://doi.org/10.1101/2024.10.10.615955"
+    }
+   ],
+   "finished_at": "2026-10-21T00:59:15.145586+08:00",
+   "inputs": [
+    {
+     "format": "fasta",
+     "logical_type": "chai_entity_specification",
+     "path": "minimal.fasta",
+     "role": "entities",
+     "sha256": "c53e07aafbfc563781ec87fb8a8ee13179957c9e99ad0ac6f099e6c2365da6e1"
+    }
+   ],
+   "method": {
+    "id": "chai1_predict",
+    "name": "Chai-1 structure prediction",
+    "output_summary": "Ranked mmCIF structures, scalar confidence summaries, PAE, PDE, pLDDT arrays, ranking, and immutable model provenance.",
+    "summary": "Chai-1 all-atom biomolecular complex structure prediction from sequence and chemical inputs."
+   },
+   "parameters": [
+    {
+     "label": "Use Esm Embeddings",
+     "name": "use_esm_embeddings",
+     "unit": "",
+     "value": true
+    },
+    {
+     "label": "Use Msa",
+     "name": "use_msa",
+     "unit": "",
+     "value": false
+    },
+    {
+     "label": "Use Restraints",
+     "name": "use_restraints",
+     "unit": "",
+     "value": false
+    },
+    {
+     "label": "Recycle Msa Subsample",
+     "name": "recycle_msa_subsample",
+     "unit": "",
+     "value": 0
+    },
+    {
+     "label": "Num Trunk Recycles",
+     "name": "num_trunk_recycles",
+     "unit": "",
+     "value": 1
+    },
+    {
+     "label": "Num Diffusion Timesteps",
+     "name": "num_diffusion_timesteps",
+     "unit": "",
+     "value": 2
+    },
+    {
+     "label": "Num Diffusion Samples",
+     "name": "num_diffusion_samples",
+     "unit": "",
+     "value": 1
+    },
+    {
+     "label": "Num Trunk Samples",
+     "name": "num_trunk_samples",
+     "unit": "",
+     "value": 1
+    },
+    {
+     "label": "Seed",
+     "name": "seed",
+     "unit": "",
+     "value": 0
+    },
+    {
+     "label": "Low Memory",
+     "name": "low_memory",
+     "unit": "",
+     "value": true
+    }
+   ],
+   "started_at": "2026-10-21T00:57:10.792991+08:00",
+   "submitted_at": "2026-10-20T16:57:10.768906+00:00",
+   "walltime_seconds": 124.35259509086609
+  },
+  "schema_version": 3,
+  "status": "finished",
+  "storyboard": {
+   "entrypoint": "index.js",
+   "entrypoint_url": "/compute/api/results/018c32b6d5d97dbb2fd99792155211b2/storyboard/index.js",
+   "identifier": "chai1-result",
+   "optional": [],
+   "requires": [
+    "structures",
+    "summaries",
+    "local_confidence",
+    "pae",
+    "pde"
+   ]
+  },
+  "task_id": "018c32b6d5d97dbb2fd99792155211b2",
+  "task_type": "chai1_predict",
+  "terminal": true,
+  "total_size": 61303,
+  "views": [
+   {
+    "description": "Chai-1 all-atom mmCIF predictions ordered by aggregate confidence.",
+    "id": "predicted_structures",
+    "mapping": {
+     "confidence_encoding": "plddt_bfactor"
+    },
+    "plugin": "candidate-collection",
+    "role": "primary",
+    "sources": {
+     "candidates": [
+      "ranked/rank_0.model_idx_0.cif"
+     ]
+    },
+    "title": "Confidence-ranked structures"
+   },
+   {
+    "description": "Global and interface confidence values for every ranked structure.",
+    "id": "confidence_summary",
+    "mapping": {
+     "fields": [
+      {
+       "direction": "higher",
+       "label": "Aggregate score",
+       "path": "aggregate_score",
+       "unit": "score"
+      },
+      {
+       "direction": "higher",
+       "label": "pTM",
+       "path": "ptm",
+       "unit": "score"
+      },
+      {
+       "direction": "higher",
+       "label": "ipTM",
+       "path": "iptm",
+       "unit": "score"
+      },
+      {
+       "direction": "lower",
+       "label": "Inter-chain clashes",
+       "path": "has_inter_chain_clashes",
+       "unit": "flag"
+      }
+     ]
+    },
+    "plugin": "scalar-summary",
+    "role": "evidence",
+    "sources": {
+     "data": [
+      "confidence.rank_0.json"
+     ]
+    },
+    "title": "Prediction confidence"
+   },
+   {
+    "description": "Pairwise and per-token confidence arrays, ranking, invocation metadata, and verified model identities.",
+    "id": "prediction_evidence",
+    "mapping": {},
+    "plugin": "evidence-bundle",
+    "role": "evidence",
+    "sources": {
+     "items": [
+      "pae.rank_0.npy",
+      "pde.rank_0.npy",
+      "plddt.rank_0.npy",
+      "ranking.json",
+      "run_metadata.json",
+      "chai1-model-assets.json"
+     ]
+    },
+    "title": "Confidence arrays and provenance"
+   }
+  ]
+ },
+ "storyboard": {
+  "entrypoint": "index.js",
+  "sha256": "cb6b8d06d534316acaa162525458eb752cc8a825c8fb5057f758e1316f8697aa",
+  "source": "/* Chai-1 scientific result composition using bounded ndarray projections. */\n/* SPDX-License-Identifier: GPL-3.0-only */\n\nconst STYLE = `.chai-result{display:grid;gap:1rem;padding:1rem}.chai-result h2,.chai-result h3,.chai-result p{margin:0}.chai-section{display:grid;gap:.55rem;min-width:0}.chai-candidates,.chai-actions{display:flex;flex-wrap:wrap;gap:.45rem}.chai-candidates button[aria-current=\"true\"]{outline:2px solid var(--accent);outline-offset:2px}.chai-columns{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,26rem),1fr));gap:1rem}.chai-figure{position:relative;overflow:hidden}.chai-figure canvas{display:block;max-width:100%}.chai-figure .pair-matrix-label{position:absolute;color:var(--muted);font-size:11px}.chai-figure .af3-label-x{transform:translateX(-50%)}.chai-figure .af3-label-y{transform:translateY(-50%)}.chai-figure .af3-title{color:var(--ink);font-size:12px}.chai-figure .af3-title-y{transform:translate(-50%,-50%) rotate(-90deg);white-space:nowrap}`;\nfunction list(v){return Array.isArray(v)?v:v?[v]:[]} function section(t,n){const e=document.createElement(\"section\");e.className=\"chai-section\";const h=document.createElement(\"h3\");h.textContent=t;e.appendChild(h);if(n){const p=document.createElement(\"p\");p.className=\"scientific-note\";p.textContent=n;e.appendChild(p)}return e} function message(t){const p=document.createElement(\"p\");p.className=\"preview-message\";p.textContent=t;return p} async function json(url,signal){const r=window.REvoDesignAuth?await window.REvoDesignAuth.authFetch(url,{signal}):await fetch(url,{credentials:\"same-origin\",signal});if(!r.ok)throw new Error(\"Chai-1 evidence could not be loaded.\");return r.json()} async function ndarray(a,signal){if(!a||!a.ndarray_url)return null;try{return await window.REvoComputeScientific.loadNumericProjection(a,{signal})}catch(error){if(signal&&signal.aborted)throw error;return null}} function reshape(v){if(!v||v.shape.length!==2||v.shape[0]!==v.shape[1]||v.values.length!==v.shape[0]*v.shape[1])return null;const rows=[];for(let i=0;i<v.values.length;i+=v.shape[1])rows.push(v.values.slice(i,i+v.shape[1]));return rows}\nexport default{async mount(host,context){const S=window.REvoComputeScientific;if(!S)throw new Error(\"Scientific result components are unavailable.\");const structures=list(context.files.get(\"structures\")),summaries=list(context.files.get(\"summaries\")),locals=list(context.files.get(\"local_confidence\")),paes=list(context.files.get(\"pae\")),pdes=list(context.files.get(\"pde\"));const aligned=[summaries,locals,paes,pdes].every(v=>v.length===structures.length);let local=null,paeMatrix=null,pdeMatrix=null;const root=document.createElement(\"div\");root.className=\"chai-result\";const style=document.createElement(\"style\");style.textContent=STYLE;const h=document.createElement(\"h2\");h.textContent=\"Chai-1 prediction\";const intro=document.createElement(\"p\");intro.textContent=\"Confidence-ranked structures with bounded local and pairwise confidence projections.\";root.append(style,h,intro);const candidates=section(\"Ranked structures\",\"Ranks are published by Chai-1 aggregate confidence.\");const candidateHost=document.createElement(\"div\");candidateHost.className=\"chai-candidates\";const actions=document.createElement(\"div\");actions.className=\"chai-actions\";candidates.append(candidateHost,actions);root.appendChild(candidates);const columns=document.createElement(\"div\");columns.className=\"chai-columns\";const metrics=section(\"Prediction confidence\",\"Published metrics for the selected rank. pLDDT and pTM are model confidence estimates, not experimental validation.\");const metricHost=document.createElement(\"div\");metrics.appendChild(metricHost);const confidence=section(\"Local confidence\",\"Per-token pLDDT on Chai-1's persisted 0 to 1 scale.\");const confidenceHost=document.createElement(\"div\");confidence.appendChild(confidenceHost);columns.append(metrics,confidence);root.appendChild(columns);function matrixSection(title,note){const group=section(title,note),figure=document.createElement(\"div\");figure.className=\"chai-figure\";const canvas=document.createElement(\"canvas\");canvas.tabIndex=0;canvas.setAttribute(\"role\",\"grid\");const readout=document.createElement(\"p\");readout.className=\"matrix-readout\";readout.setAttribute(\"role\",\"status\");figure.appendChild(canvas);group.append(figure,readout);root.appendChild(group);return{figure,canvas,readout}}const paeView=matrixSection(\"Predicted aligned error\",\"PAE in angstroms; lower is better.\"),pdeView=matrixSection(\"Predicted distance error\",\"PDE in angstroms; lower is better.\");host.replaceChildren(root);paeMatrix=new S.PairMatrix({figure:paeView.figure,canvas:paeView.canvas,readout:paeView.readout,minimum:0,unit:\"angstrom\",xTitle:\"Aligned token\",yTitle:\"Scored token\",legendTitle:\"PAE\",decimals:1});pdeMatrix=new S.PairMatrix({figure:pdeView.figure,canvas:pdeView.canvas,readout:pdeView.readout,minimum:0,unit:\"angstrom\",xTitle:\"Token\",yTitle:\"Token\",legendTitle:\"PDE\",decimals:1});\n    function clearCandidate(text){actions.replaceChildren();metricHost.replaceChildren(message(text));confidenceHost.replaceChildren();if(local){local.destroy();local=null}for(const view of[paeView,pdeView]){view.figure.hidden=true;view.readout.textContent=\"\"}}\n    function show(value,view,renderer){const projected=reshape(value);if(!projected){view.readout.textContent=\"This array exceeds the bounded interactive limit.\";return}view.figure.hidden=false;const labels=projected.map((_,i)=>String(i+1));renderer.setData({values:projected,xLabels:labels,yLabels:labels})}\n    async function select(structure,index,request){clearCandidate(\"Loading candidate evidence...\");if(!aligned){clearCandidate(\"Candidate evidence counts do not align.\");return}try{const [summary,plddt,pae,pde]=await Promise.all([json(summaries[index].url,request.signal),ndarray(locals[index],request.signal),ndarray(paes[index],request.signal),ndarray(pdes[index],request.signal)]);if(!request.current())return;const open=document.createElement(\"button\");open.type=\"button\";open.className=\"btn btn-soft\";open.textContent=\"Open selected structure\";open.addEventListener(\"click\",()=>context.services.openFile(structure));actions.replaceChildren(open);new S.ScalarMetricGrid(metricHost,[{label:\"Aggregate score\",value:summary.aggregate_score,unit:\"score\",meaning:\"Higher is better\"},{label:\"pTM\",value:summary.ptm,unit:\"score\",meaning:\"Higher is better\"},{label:\"ipTM\",value:summary.iptm,unit:\"score\",meaning:\"Higher is better\"},{label:\"Inter-chain clashes\",value:summary.has_inter_chain_clashes?\"Yes\":\"No\"}]);if(plddt&&plddt.shape.length===1)local=new S.LocalConfidenceSeries(confidenceHost,{series:[{label:\"pLDDT\",values:plddt.values}],xLabel:\"Token index\",yLabel:\"pLDDT\",unit:\"score\",direction:\"higher is better\",yMin:0,yMax:1});else confidenceHost.replaceChildren(message(\"Local pLDDT exceeds the bounded interactive limit.\"));show(pae,paeView,paeMatrix);show(pde,pdeView,pdeMatrix);return true}catch(error){if(error.name!==\"AbortError\"&&request.current())clearCandidate(error.message||\"Chai-1 evidence could not be loaded.\")}}const selector=new S.CandidateSelector(candidateHost,{items:structures,store:context.selection,label:(_,i)=>\"Rank \"+i,onSelect:select});if(structures.length)await selector.select(0);else candidateHost.replaceChildren(message(\"No ranked structure was published.\"));return{destroy(){selector.destroy();if(local)local.destroy();paeMatrix.destroy();pdeMatrix.destroy()}}}};\n"
+ },
+ "task": {
+  "display_name": "minimal.fasta",
+  "id": "018c32b6d5d97dbb2fd99792155211b2",
+  "type": "chai1_predict"
+ }
+}

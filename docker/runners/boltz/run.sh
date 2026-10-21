@@ -36,7 +36,9 @@ ccd="${asset_root}/ccd.pkl"
 [[ -s "$checkpoint" ]] || { echo "Missing Boltz-1 checkpoint: $checkpoint" >&2; exit 1; }
 [[ -s "$ccd" ]] || { echo "Missing Boltz CCD dictionary: $ccd" >&2; exit 1; }
 [[ -s "$asset_manifest" ]] || { echo "Missing Boltz asset manifest: $asset_manifest" >&2; exit 1; }
-sha256sum --strict --check --status "$asset_manifest" || {
+# The manifest names assets relative to the mount, as GeoDock's does, so the
+# published copy carries no host path.
+(cd "$asset_root" && sha256sum --strict --check --status "$asset_manifest") || {
   echo "Boltz asset integrity verification failed: $asset_manifest" >&2
   exit 1
 }

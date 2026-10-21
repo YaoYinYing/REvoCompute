@@ -705,6 +705,16 @@ const en: Dictionary = {
   'results.matrix.error.exceedsWindow': 'The matrix exceeds the bounded server page window.',
   'results.matrix.error.empty': 'The matrix is empty.',
   'results.matrix.error.missingLabel': 'The matrix is missing its declared row label column {column}.',
+  'results.scalar.higher': 'Higher is better',
+  'results.scalar.lower': 'Lower is better',
+  'results.scalar.note': 'Values are shown exactly as the runner published them, on their published scale.',
+  'results.scalar.firstOfMany': 'Showing the first of {count} published summary records.',
+  'results.scalar.error.declaration': 'This view declares scalar fields the workspace cannot render.',
+  'results.scalar.error.noSource': 'The summary view has no published data source.',
+  'results.scalar.error.tooLarge': 'The summary record exceeds the browser read limit.',
+  'results.scalar.error.load': 'The summary record could not be loaded.',
+  'results.scalar.error.malformed': 'The summary record is not a JSON object.',
+  'results.scalar.error.field': 'The summary record has no scalar value at the declared path {path}.',
 
   // Result manifest parse faults. Each is a frontend-authored frame over a value
   // the server projected; the projected value is interpolated verbatim.
@@ -1388,6 +1398,16 @@ const zhCN: Dictionary = {
   'results.matrix.error.exceedsWindow': '矩阵超出服务端受限的分页窗口。',
   'results.matrix.error.empty': '矩阵为空。',
   'results.matrix.error.missingLabel': '矩阵缺少其声明的行标签列 {column}。',
+  'results.scalar.higher': '数值越高越好',
+  'results.scalar.lower': '数值越低越好',
+  'results.scalar.note': '数值按 Runner 发布时的原样及其发布尺度显示。',
+  'results.scalar.firstOfMany': '显示 {count} 条已发布摘要记录中的第一条。',
+  'results.scalar.error.declaration': '该视图声明的标量字段无法被工作区渲染。',
+  'results.scalar.error.noSource': '该摘要视图没有已发布的数据来源。',
+  'results.scalar.error.tooLarge': '该摘要记录超出浏览器读取上限。',
+  'results.scalar.error.load': '无法加载该摘要记录。',
+  'results.scalar.error.malformed': '该摘要记录不是 JSON 对象。',
+  'results.scalar.error.field': '该摘要记录在声明的路径 {path} 上不是标量值。',
 
   // Result manifest parse faults. Each is a frontend-authored frame over a value
   // the server projected; the projected value is interpolated verbatim.

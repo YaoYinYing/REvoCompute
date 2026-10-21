@@ -74,7 +74,7 @@ export default {
     const candidates = section("Ranked models", "A relaxed model is preferred when ColabFold published both relaxed and unrelaxed files for the same rank.");
     const candidateHost = document.createElement("div"); candidateHost.className = "colabfold-candidates"; candidates.appendChild(candidateHost); const actions = document.createElement("div"); actions.className = "colabfold-candidates"; candidates.appendChild(actions); root.appendChild(candidates);
     const columns = document.createElement("div"); columns.className = "colabfold-columns";
-    const metrics = section("Model confidence", "Values belong to the selected ranked model."); const metricHost = document.createElement("div"); metrics.appendChild(metricHost);
+    const metrics = section("Model confidence", "Values belong to the selected ranked model. pLDDT and pTM are model confidence estimates, not experimental validation."); const metricHost = document.createElement("div"); metrics.appendChild(metricHost);
     const local = section("Local confidence", "Per-residue pLDDT; higher values indicate greater model confidence."); const localHost = document.createElement("div"); local.appendChild(localHost);
     columns.append(metrics, local); root.appendChild(columns);
 

@@ -19,6 +19,7 @@ import csv
 import io
 import json
 import os
+import tempfile
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -123,89 +124,28 @@ class ReplayBundle:
         }
 
     def projection(self, path: str, *, kind: str = "numeric", key: str | None = None) -> dict[str, Any] | None:
-        """Project a captured table/JSON artifact into the bounded array response.
+        """Project a captured artifact through the Server's own bounded reader.
 
-        Mirrors ``revocompute.ndarray.read_array_projection`` for the formats a
-        replay bundle checks in (CSV, TSV, JSON): a numeric column or matrix
-        becomes a fixed-width numeric projection, a JSON object path becomes a
-        categorical or numeric vector. Binary NPY/NPZ members are not checked in,
-        so their projection is unavailable and the route returns 404.
+        Delegates to ``revocompute.ndarray.read_array_projection`` -- the function
+        the ``GET .../ndarrays/<path>`` route serves through -- so a replayed
+        projection has the Server's shape, dtype, null, and NPY/NPZ semantics
+        rather than a harness approximation. A projection the Server would refuse
+        (an unsafe path, an element/byte overflow, an unsupported artifact) is
+        not served.
         """
+        from revocompute.ndarray import MAX_PROJECTION_ELEMENTS, ArrayAccessError, read_array_projection
+
         body = self.payload(path)
         if body is None:
             return None
-        suffix = os.path.splitext(path)[1].lower()
-        try:
-            text = body[0].decode("utf-8")
-            if suffix in {".csv", ".tsv"}:
-                values = _csv_value(text, key=key, kind=kind, delimiter="\t" if suffix == ".tsv" else ",")
-            elif suffix == ".json":
-                values = _json_value(json.loads(text), key=key, kind=kind)
-            else:
+        with tempfile.NamedTemporaryFile(suffix=os.path.splitext(path)[1].lower()) as stream:
+            stream.write(body[0])
+            stream.flush()
+            stream.seek(0)
+            try:
+                return read_array_projection(
+                    stream, name=path, key=key, kind=kind, max_elements=MAX_PROJECTION_ELEMENTS
+                )
+            except ArrayAccessError:
                 return None
-        except (ValueError, UnicodeDecodeError):
-            return None
-        if values is None:
-            return None
-        if kind == "categorical":
-            strings = [str(value) for value in values]
-            return {
-                "kind": "categorical",
-                "dtype": "string",
-                "shape": [len(strings)],
-                "key": key,
-                "total_elements": len(strings),
-                "data": strings,
-            }
-        numbers = [None if value is None else float(value) for value in values]
-        return {
-            "kind": "numeric",
-            "dtype": "<f8",
-            "shape": [len(numbers)],
-            "key": key,
-            "total_elements": len(numbers),
-            "data": numbers,
-        }
 
-
-def _csv_value(text: str, *, key: str | None, kind: str, delimiter: str) -> list[Any] | None:
-    reader = csv.DictReader(io.StringIO(text), delimiter=delimiter)
-    if key is None:
-        return None
-    cells = [row.get(key) for row in reader]
-    if any(cell is None for cell in cells):
-        return None
-    if kind == "categorical":
-        return [str(cell) for cell in cells]
-    out: list[Any] = []
-    for cell in cells:
-        stripped = str(cell).strip()
-        if stripped == "":
-            out.append(None)
-            continue
-        try:
-            out.append(float(stripped))
-        except ValueError:
-            return None
-    return out
-
-
-def _json_value(payload: Any, *, key: str | None, kind: str) -> list[Any] | None:
-    node = payload
-    if key:
-        for part in key.split("."):
-            if isinstance(node, Mapping) and part in node:
-                node = node[part]
-            else:
-                return None
-    if isinstance(node, list):
-        cells = node
-    elif isinstance(node, str) or (isinstance(node, (int, float)) and not isinstance(node, bool)):
-        cells = [node]
-    else:
-        return None
-    if kind == "categorical":
-        return [cell for cell in cells] if all(isinstance(cell, str) for cell in cells) else None
-    if any(isinstance(cell, (list, dict)) or (cell is not None and not isinstance(cell, (bool, int, float))) for cell in cells):
-        return None
-    return [None if cell is None else float(cell) for cell in cells]
