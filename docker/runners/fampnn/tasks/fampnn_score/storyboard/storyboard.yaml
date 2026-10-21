@@ -1,0 +1,8 @@
+identifier: fampnn-mutation-scores
+entrypoint: ./index.js
+requires:
+  - mutation_scores
+optional:
+  - config
+  - input_structure
+  - citations

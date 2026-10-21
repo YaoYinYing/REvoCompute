@@ -1,0 +1,52 @@
+# Logical result files published by the RFdiffusion Task.
+#
+# RFdiffusion publishes one backbone per design index and, when trajectories are
+# enabled, the diffusion trajectory written beside it. The final backbone is the
+# primary view's candidate source; the pX0 trajectory is the evidence view's
+# coordinates, read as one ENDMDL-delimited PDB per diffusion step. Both trajectories are
+# the same diffusion run seen as predicted x0 and as the noisy state, so only the
+# declared view source (`traj/*_pX0_traj.pdb`) is evidence and the sibling Xt-1
+# file is an artifact.
+result:
+  files:
+    backbones:
+      pattern: 'design_*.pdb'
+      cardinality: many
+      required: true
+      type: structure
+      role: evidence
+    diffusion_px0:
+      pattern: 'traj/*_pX0_traj.pdb'
+      cardinality: many
+      required: false
+      type: structure
+      role: evidence
+    diffusion_noisy:
+      pattern: 'traj/*_Xt-1_traj.pdb'
+      cardinality: many
+      required: false
+      type: structure
+      role: artifact
+    design_records:
+      pattern: '*.trb'
+      cardinality: many
+      required: false
+      role: artifact
+    submission:
+      path: debug/submission.json
+      cardinality: one
+      required: true
+      type: json
+      role: provenance
+    citations:
+      path: citations.bib
+      cardinality: one
+      required: true
+      type: text
+      role: provenance
+    execution_records:
+      pattern: 'execution/*'
+      cardinality: many
+      required: true
+      type: text
+      role: diagnostic

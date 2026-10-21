@@ -1,0 +1,16 @@
+identifier: freebindcraft-binders
+entrypoint: ./index.js
+requires:
+  - design_metrics
+optional:
+  - ranked_binders
+  - accepted_binders
+  - mpnn_designs
+  - trajectory_structures
+  - trajectory_plots
+  - trajectory_animation
+  - design_plots
+  - run_settings
+  - target_settings
+  - input_structure
+  - citations

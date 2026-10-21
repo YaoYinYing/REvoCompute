@@ -81,6 +81,27 @@ describe('trajectory view renderer', () => {
     expect((handle as { destroy(): void }).destroy).toBeTypeOf('function');
   });
 
+  it('labels a declared diffusion-step axis as diffusion steps, with no physical-time claim', async () => {
+    const host = installGlobals();
+    const renderer = createTrajectoryViewRenderer(async () => viewer({
+      loadTrajectory: async () => ({ frame: 0, frameCount: 15 }),
+    }), () => 'light');
+    const diffusion = {
+      ...view, id: 'diffusion_trajectory', plugin: 'trajectory', title: 'Diffusion trajectories',
+      sources: { topology: ['design_0.pdb'], coordinates: ['traj/design_0_pX0_traj.pdb'] },
+      mapping: { coordinate_format: 'pdb', frame_unit: 'diffusion step', timestep: 1, association: 'stem-prefix' },
+    };
+    await renderer.render(diffusion as never, { topology: [source('design_0.pdb')], coordinates: [source('traj/design_0_pX0_traj.pdb')] }, host as never, {
+      signal: new AbortController().signal, taskId: 'a'.repeat(32),
+    });
+    const parts = nodes(host);
+    expect(parts.position.textContent).toBe('diffusion step 1 of 15');
+    expect(parts.status.textContent).toBe('15 frames loaded; one frame is one diffusion step.');
+    expect(parts.status.textContent).not.toContain('physical time');
+    expect(parts.previous.textContent).toBe('Previous frame');
+    expect(parts.next.textContent).toBe('Next frame');
+  });
+
   it('advances the frame without remounting the stage or fabricating time', async () => {
     const host = installGlobals();
     const steps: Array<[string, number]> = [];

@@ -1,0 +1,39 @@
+# Logical result files published by the ProteinMPNN Task.
+#
+# Derived from the production result recorded in the Task's evidence packet: one
+# FASTA holding the wild-type query and the designs, the submission snapshot it
+# was produced from, and the execution records. The FASTA is the primary view's
+# candidate source; it is a sequence collection, not a molecular structure, so
+# it carries no `type` (the `candidate-collection` source kind the Server
+# declares is a structure, and this Task publishes sequences instead).
+result:
+  files:
+    designs:
+      pattern: 'seqs/*.fa'
+      cardinality: many
+      required: true
+      role: evidence
+    input_structure:
+      pattern: 'debug/inputs/structure/*.pdb'
+      cardinality: one
+      required: true
+      type: structure
+      role: provenance
+    submission:
+      path: debug/submission.json
+      cardinality: one
+      required: true
+      type: json
+      role: provenance
+    citations:
+      path: citations.bib
+      cardinality: one
+      required: true
+      type: text
+      role: provenance
+    execution_records:
+      pattern: 'execution/*'
+      cardinality: many
+      required: true
+      type: text
+      role: diagnostic

@@ -1,0 +1,10 @@
+identifier: fampnn-designs
+entrypoint: ./index.js
+requires:
+  - designs
+  - structures
+optional:
+  - samples
+  - config
+  - input_structure
+  - citations

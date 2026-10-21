@@ -1,0 +1,7 @@
+identifier: hypermpnn-designs
+entrypoint: ./index.js
+requires:
+  - designs
+optional:
+  - input_structure
+  - citations
