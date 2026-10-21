@@ -28,10 +28,16 @@ from frontend_fixtures import ReplayBundle, mount_scenario, replay_scenario
 from frontend_fixtures.models import InputRole, RunnerDefinition
 from playwright.sync_api import Page, expect
 
+import browser_frontend_assets
+from storyboard_first_screen import assert_first_screen
+
 pytestmark = pytest.mark.browser
 
 ROOT = Path(__file__).resolve().parents[3]
 ORIGIN = "https://revocompute.example"
+# The built production bundle is the only one with the real Mol* viewer.
+RESULT_DIST = ROOT / "frontend" / "dist"
+STORYBOARD = ROOT / "docker" / "runners" / "alphafold3" / "storyboard" / "index.js"
 
 BUNDLES = {
     "alphafold": "tests/data/alphafold_replay/2kl8_production_51d8c875.json",
@@ -140,13 +146,37 @@ def _mount(page: Page, family: str) -> ReplayBundle:
     return replay
 
 
-def _open(page: Page, family: str) -> None:
-    page.set_viewport_size({"width": 1280, "height": 900})
+def _open(page: Page, family: str, *, height: int = 900) -> None:
+    page.set_viewport_size({"width": 1280, "height": height})
     page.goto(f"{ORIGIN}/compute/results/{_replay(family).task_id}")
     # The scientific surface is the one root these tests then exercise, and the
     # only one whose visibility is stable once the manifest arrives.
     expect(page.locator(ROOTS[family])).to_be_visible()
     page.evaluate(_SETTLE)
+
+
+def test_alphafold3_real_mol_stage_fills_the_hero_first_screen(page: Page, monkeypatch) -> None:
+    """The hero layout against the real Mol* viewer, not the harness stand-in.
+
+    The replay bundle carries the captured storyboard source; this serves the
+    current runner-owned module so the case judges the layout being delivered,
+    and the production bundle so ``openFile`` renders through real Mol*.
+    """
+    monkeypatch.setattr(browser_frontend_assets, "_RESULT_DIST", RESULT_DIST)
+    replay = _mount(page, "alphafold3")
+    page.route(
+        f"{ORIGIN}/compute/api/results/{replay.task_id}/storyboard/**",
+        lambda route: route.fulfill(content_type="text/javascript", path=STORYBOARD),
+    )
+    _open(page, "alphafold3", height=1000)
+
+    panel = page.locator("section.storyboard-structure-panel[data-ready='true']")
+    expect(panel).to_be_visible(timeout=120_000)
+    expect(page.locator(".af3-stage .storyboard-structure-panel canvas").first).to_be_visible(timeout=120_000)
+    # The result page keeps its own header and view band above the storyboard, so
+    # this case states the page-level requirement: the stage and its PAE figure
+    # open on the first screen, and the hero itself is one unscrolled region.
+    assert_first_screen(page, hero=".af3-hero", slot=".af3-stage", figure=".af3-side .af3-figure", within_viewport=False)
 
 
 def _open_tab(page: Page, title: str) -> None:
