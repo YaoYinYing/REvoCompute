@@ -5,6 +5,13 @@ import { StructureController } from '../src/features/results/molecular/structure
 import type { MolecularViewer } from '../src/features/results/molecular/viewer-contract';
 
 const file = (path: string): ResultArtifact => ({ path, size: 8, sha256: 'a'.repeat(64), url: `/${path}`, media_type: 'chemical/x-pdb', preview: 'structure', capability: 'molecular_structure', role: 'primary' });
+
+/** A host element stub: this suite runs without a DOM. */
+function holder(): HTMLElement {
+  const node: { contains(self: object): boolean } = { contains: (self) => self === node };
+  return node as unknown as HTMLElement;
+}
+
 afterEach(() => vi.unstubAllGlobals());
 
 describe('StructureController', () => {
@@ -94,5 +101,22 @@ describe('StructureController', () => {
     expect(select).toHaveBeenCalledWith({ residues });
     expect(residues[0]!.insertionCode).toBe('A');
     expect('insertionCode' in residues[1]!).toBe(false);
+  });
+
+  it('closes a stage only for the host that owns it', async () => {
+    let disposed = 0;
+    const viewer: MolecularViewer = { setRepresentation: async () => {}, setColor: async () => {}, setTheme: () => {},
+      resize: () => {}, captureImage: async () => '', loadStructure: async () => {}, dispose: () => { disposed += 1; } };
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => new Response(url)));
+    const controller = new StructureController(async () => viewer);
+    const owner = holder(); const other = holder();
+    await controller.mount(owner, file('first.pdb'), 'light');
+
+    // Another owner has since mounted elsewhere in the same workspace: the first
+    // view's late close must not blank a stage it no longer owns.
+    controller.disposeIfIn(other);
+    expect(disposed).toBe(0);
+    controller.disposeIfIn(owner);
+    expect(disposed).toBe(1);
   });
 });

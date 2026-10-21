@@ -8,9 +8,11 @@ export interface RendererContext {
   // stage; absent for an embedder that has none. A view renderer that shows a
   // candidate as a structure uses this instead of carrying a second viewer.
   openStructure?(artifact: ResultFile, host: HTMLElement): Promise<void>;
-  // Invalidate the shared molecular stage; a view renderer calls this when the
-  // structure it opened is superseded by a selection that is not a structure.
-  closeStructure?(): void;
+  // Close the shared molecular stage this view mounted into `host`; a view renderer
+  // calls this when the structure it opened is superseded by a selection that is not
+  // a structure, and passes the host it mounted into so another owner's stage is left
+  // alone. A view that never mounted a stage closes nothing.
+  closeStructure?(host: HTMLElement): void;
   // Apply the molecular selection a rendered row declares, in the workspace's own
   // structure vocabulary; absent for an embedder without a molecular stage.
   selectStructure?(selection: { chain: string; residue: number; numbering?: string }): void;

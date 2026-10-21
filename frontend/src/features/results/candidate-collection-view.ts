@@ -118,7 +118,7 @@ export function createCandidateCollectionViewRenderer(): ViewRenderer {
           // it cannot land in a stage the sequence now owns. A view that never
           // opened the shared stage owns nothing to close: the storyboard's own
           // structure may already be mounted in it.
-          if (!showsStructure && ownsStage) { stage.remove(); context.closeStructure?.(); ownsStage = false; }
+          if (!showsStructure && ownsStage) { stage.remove(); context.closeStructure?.(stage); ownsStage = false; }
           // The page already draws this returned structure in its own stage on the
           // first screen; mounting it here as well would dispossess that stage, so
           // the download link is the whole statement this view makes of it.
@@ -162,7 +162,7 @@ export function createCandidateCollectionViewRenderer(): ViewRenderer {
         },
       });
       void selector.select(0);
-      return { destroy: () => { selector.destroy(); if (ownsStage) context.closeStructure?.(); } };
+      return { destroy: () => { selector.destroy(); if (ownsStage) context.closeStructure?.(stage); } };
     },
   };
 }

@@ -300,7 +300,7 @@ export class ResultWorkspace {
   // slot, in which case the view states instead of mounting it.
   private rendererContext(signal: AbortSignal): RendererContext {
     return { signal, taskId: this.taskId, openStructure: (artifact, host) => this.renderStructure(artifact, host),
-      closeStructure: () => this.structure.dispose(), selectStructure: (selection) => this.structure.select(selection),
+      closeStructure: (host) => this.structure.disposeIfIn(host), selectStructure: (selection) => this.structure.select(selection),
       drawsStructure: (artifact) => this.storyboardStructure !== null
         && this.storyboardStructure.name === localName(resultFileName(artifact)) };
   }

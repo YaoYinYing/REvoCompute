@@ -391,6 +391,18 @@ export class StructureController {
     return this.viewer.captureImage();
   }
 
+  /**
+   * Dispose the shared viewer only when it is the stage inside `host`.
+   *
+   * A view renderer owns the stage it mounted, not the workspace's one molecular
+   * stage: when another owner has since mounted there, closing is not this
+   * view's to do, and doing it anyway would blank a stage it never opened.
+   */
+  disposeIfIn(host: HTMLElement): void {
+    const current = this.host;
+    if (current && (current === host || host.contains(current) || current.contains(host))) this.dispose();
+  }
+
   dispose(): void {
     this.generation += 1; this.geometryGeneration += 1; this.geometryAbort?.abort(); this.geometryAbort = null;
     this.controller?.abort();

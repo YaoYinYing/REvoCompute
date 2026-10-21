@@ -128,9 +128,10 @@ describe('entity-table declared structure', () => {
     const instance = await createEntityTableViewRenderer().render(activeSites as never,
       { ...tableSource, structure: [structure] } as never, host as unknown as HTMLElement,
       { signal: new AbortController().signal, taskId: 'a'.repeat(32),
-        openStructure: async () => undefined, closeStructure: () => { closed.push('closed'); } });
+        openStructure: async () => undefined, closeStructure: (host) => { closed.push(host.className); } });
     (instance as { destroy(): void }).destroy();
-    expect(closed).toHaveLength(1);
+    // The view closes the exact stage it mounted, never the workspace's stage by name.
+    expect(closed).toEqual(['entity-table-stage']);
   });
 
   it('renders only the table when the view declares no structure', async () => {
