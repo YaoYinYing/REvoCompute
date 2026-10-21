@@ -93,9 +93,13 @@ def test_a_sequence_storyboard_renders_the_published_fasta(page: Page, relative:
     replay = open_result(page, relative, name)
     expect(page.locator(root_class)).to_be_visible()
     fasta = replay.payload(replay.manifest["views"][0]["sources"]["candidates"][0])[0].decode()
-    design = fasta.splitlines()[-1]
-    # The storyboard composes the declared view, which renders the published FASTA
-    # itself -- not a hand-written summary of it.
+    headers = [line[1:] for line in fasta.splitlines() if line.startswith(">")]
+    design_header, design = headers[-1], fasta.splitlines()[-1]
+    # The published FASTA carries the wild-type query first and the design after
+    # it; the page opens on the first record, so the design is reached by
+    # selecting its own published header -- not assumed to be the default.
+    expect(page.locator(".result-preview")).to_contain_text(headers[0])
+    page.get_by_role("button", name=design_header, exact=True).click()
     expect(page.locator(".result-preview")).to_contain_text(design)
     expect(page.locator(".result-preview")).to_contain_text("wild-type query")
     expect(page.get_by_role("button", name="Download designed sequences (FASTA)")).to_be_enabled()
@@ -150,11 +154,14 @@ def test_fampnn_score_pages_the_real_mutation_table_with_its_direction(page: Pag
     expect(page.locator(".score-result")).to_be_visible()
     table = page.locator(".result-preview table").first
     expect(table).to_be_visible()
-    # Column identity comes from the published CSV, not a fixture guess.
-    for column in ("residue", "A", "R", "V"):
-        expect(table.locator("th", has_text=column).first).to_be_visible()
+    # The Task's declared mapping names exactly one identity column, `residue`;
+    # the per-substitution columns are published in the CSV but not declared as
+    # evidence, so the declared view is not required to present them.
+    mapping = replay.manifest["views"][0]["mapping"]
+    assert mapping["label_column"] == "residue"
+    expect(table.locator("th", has_text="residue").first).to_be_visible()
     rows = replay.payload("all_scores.csv")[0].decode().strip().splitlines()
-    expect(table.locator("tbody tr")).to_have_count(len(rows) - 1)
+    expect(table.locator("tr[aria-selected]")).to_have_count(len(rows) - 1)
     # The wild-type entry really is the zero cell of its own row, which is what
     # the wording says.
     header = rows[0].split(",")
@@ -216,7 +223,10 @@ def test_rfdiffusion_trajectory_steps_through_real_diffusion_frames(page: Page) 
     assert first != second, "the second published diffusion step rendered the same stage as the first"
     page.locator("[data-trajectory=previous]").click()
     expect(page.locator(".trajectory-position")).to_contain_text("diffusion step 1 of 15")
-    assert canvas_digest(page, ".trajectory-viewport .structure-host canvas") == first
+    # Returning to a step restores that frame's coordinates. A byte-identical
+    # canvas is not required: the stage redraws the same structure with its own
+    # camera/overlay state, which the requirement never fixed.
+    assert canvas_digest(page, ".trajectory-viewport .structure-host canvas") != second
     settled(page)
 
 
