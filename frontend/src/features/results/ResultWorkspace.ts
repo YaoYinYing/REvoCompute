@@ -5,7 +5,7 @@ import { setButtonIcon } from '../../components/icons';
 import { t } from '../../app/i18n';
 import { buildArtifactTree, filterArtifacts, localName, type ArtifactTreeNode } from './artifact-tree';
 import { artifactCapability, createBasicRenderers, firstViewSource, RendererRegistry, ViewRendererRegistry,
-  type ResolvedViewSources } from './renderer-registry';
+  type ResolvedViewSources, type RendererContext } from './renderer-registry';
 import { createTrajectoryViewRenderer } from './trajectory-view';
 import { createMatrixViewRenderer } from './matrix-view';
 import { createScalarSummaryViewRenderer } from './scalar-summary-view';
@@ -93,7 +93,7 @@ export class ResultWorkspace {
         const sources = this.sourcesForView(view);
         const artifact = firstViewSource(sources);
         if (!artifact) throw new Error(t('results.viewNoArtifact'));
-        const context = { signal, taskId: this.taskId };
+        const context = this.rendererContext(signal);
         const renderer = this.viewRenderers.resolve(view);
         if (renderer) return renderer.render(view, sources, host, context);
         return this.rendererRegistry.resolve(artifact)?.render(artifact, host, context);
@@ -293,6 +293,13 @@ export class ResultWorkspace {
     return sources;
   }
 
+  // A view renderer draws its own sources but shares this workspace's one molecular
+  // stage, so a structure candidate opens through the same viewer and toolbar as
+  // a structure artifact.
+  private rendererContext(signal: AbortSignal): RendererContext {
+    return { signal, taskId: this.taskId, openStructure: (artifact, host) => this.renderStructure(artifact, host) };
+  }
+
   private openViewById(viewId: string): Promise<void> {
     const view = this.manifest?.views?.find((item) => item.id === viewId);
     return view ? this.openView(view) : Promise.resolve();
@@ -318,7 +325,7 @@ export class ResultWorkspace {
     this.nodes.download.hidden = false; this.nodes.download.href = downloadUrl(artifact); this.nodes.download.title = fileName;
     this.nodes.download.textContent = t('results.downloadNamed', { name: localName(fileName) });
     const controller = new AbortController(); this.renderController = controller; this.nodes.preview.setAttribute('aria-busy', 'true');
-    try { this.viewRenderer = (await renderer.render(view, sources, this.nodes.preview, { signal: controller.signal, taskId: this.taskId })) || null; }
+    try { this.viewRenderer = (await renderer.render(view, sources, this.nodes.preview, this.rendererContext(controller.signal))) || null; }
     catch (error) {
       if ((error as Error).name === 'AbortError' || generation !== this.previewGeneration) return;
       this.destroyViewRenderer();

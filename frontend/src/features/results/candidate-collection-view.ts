@@ -7,6 +7,7 @@
  */
 import { resultFileName, type ResultFile, type ResultView } from '../../api/result-types';
 import { t } from '../../app/i18n';
+import { artifactCapability } from './renderer-registry';
 import { CandidateSelector } from './scientific';
 import type { ResolvedViewSources, ViewRenderer } from './renderer-registry';
 
@@ -45,6 +46,10 @@ export function createCandidateCollectionViewRenderer(): ViewRenderer {
       const section = document.createElement('section'); section.className = 'candidate-collection-view';
       const heading = document.createElement('h3'); heading.textContent = view.title;
       const controls = document.createElement('div'); controls.className = 'candidate-list';
+      // A structure candidate is shown in the workspace's own molecular stage, so the
+      // stage element is dedicated: the structure renderer replaces the children of
+      // the host it is handed, and the selector must stay beside it.
+      const stage = document.createElement('div'); stage.className = 'candidate-stage';
       const detail = document.createElement('div'); detail.className = 'candidate-detail';
       section.append(heading, controls, detail); host.replaceChildren(section);
       if (!files.length) {
@@ -74,7 +79,7 @@ export function createCandidateCollectionViewRenderer(): ViewRenderer {
       const selector = new CandidateSelector(controls, {
         items,
         label: (item) => item.name,
-        onSelect: (item) => {
+        onSelect: async (item) => {
           detail.replaceChildren();
           if (!item.record) {
             const file = item.file!;
@@ -82,6 +87,11 @@ export function createCandidateCollectionViewRenderer(): ViewRenderer {
             link.href = file.url; link.setAttribute('download', '');
             link.textContent = t('results.candidates.download', { name: resultFileName(file) });
             detail.append(link);
+            const capability = artifactCapability(file);
+            if (context.openStructure && (capability === 'structure' || capability === 'molecular_structure')) {
+              if (!stage.isConnected) section.insertBefore(stage, detail);
+              await context.openStructure(file, stage);
+            }
             return true;
           }
           const facts = document.createElement('dl'); facts.className = 'candidate-facts';

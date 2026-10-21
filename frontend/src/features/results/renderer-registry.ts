@@ -4,6 +4,10 @@ import { t } from '../../app/i18n';
 export interface RendererContext {
   signal: AbortSignal;
   taskId: string;
+  // Mount one structure artifact into `host` through the workspace's own molecular
+  // stage; absent for an embedder that has none. A view renderer that shows a
+  // candidate as a structure uses this instead of carrying a second viewer.
+  openStructure?(artifact: ResultFile, host: HTMLElement): Promise<void>;
 }
 
 export interface ArtifactRenderer {
