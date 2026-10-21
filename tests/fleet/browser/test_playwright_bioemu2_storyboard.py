@@ -207,6 +207,15 @@ def test_stepping_to_the_second_sample_changes_the_stage(page: Page) -> None:
     expect(page.locator(".be2-stage .trajectory-position")).to_contain_text(f"Sample index 1 of {total}")
     assert _settled_canvas_digest(page) == first, "stepping back did not restore the earlier sample"
 
+    # Playback is reachable in the product: the control is enabled once the frames
+    # are loaded, advances to the last declared sample, and stops there rather than
+    # wrapping or claiming a physical time.
+    play = page.locator(".be2-stage [data-trajectory=play]")
+    expect(play).to_be_enabled()
+    play.click()
+    expect(page.locator(".be2-stage .trajectory-position")).to_contain_text(f"Sample index {total} of {total}", timeout=30_000)
+    expect(play).to_have_text("Play")
+
 
 def test_the_table_and_verdict_state_what_upstream_reported(page: Page) -> None:
     _, replay = _open(page)
