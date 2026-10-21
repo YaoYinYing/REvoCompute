@@ -73,6 +73,88 @@ describe('entity table columns', () => {
   });
 });
 
+describe('entity-table declared structure', () => {
+  const structure = { path: 'enzyme_structure.pdb', media_type: 'chemical/x-pdb', size: 10, sha256: 'b'.repeat(64), url: '/artifacts/enzyme_structure.pdb' };
+  const activeSites = {
+    id: 'active_sites', plugin: 'entity-table', role: 'primary', title: 'Active-site mapping',
+    sources: { table: ['active_sites.csv'], structure: ['enzyme_structure.pdb'] },
+    mapping: { entity: 'residue', key_columns: ['chain', 'residue_index'], label_column: 'site_name',
+      chain_column: 'chain', residue_column: 'residue_index', numbering: 'label_seq_id', evidence_columns: ['site_class'] },
+  };
+  const tableSource = { table: [{ path: 'active_sites.csv', size: 10, sha256: 'a'.repeat(64), url: '/artifacts/a', table_url: '/tables/a' }] };
+  const rows = [['siteA', 'A', '42', 'catalytic'], ['siteB', 'B', '7', 'binding']];
+  const columns = ['site_name', 'chain', 'residue_index', 'site_class'];
+
+  it('mounts the declared structure beside the table', async () => {
+    installHarness(vi.stubGlobal);
+    servePages(rows, columns, 500);
+    const opened: string[] = [];
+    const host = document.createElement('section') as unknown as HarnessNode;
+    const instance = await createEntityTableViewRenderer().render(activeSites as never,
+      { ...tableSource, structure: [structure] } as never, host as unknown as HTMLElement,
+      { signal: new AbortController().signal, taskId: 'a'.repeat(32),
+        openStructure: async (artifact, stage) => { opened.push(artifact.url); stage.append(document.createElement('div')); } });
+    expect(opened).toEqual([structure.url]);
+    expect(host.querySelector('.entity-table-stage')).not.toBeNull();
+    expect(host.querySelector('.entity-table-stage')!.children).toHaveLength(1);
+    expect(host.querySelectorAll('tr')).toHaveLength(3);
+    (instance as { destroy(): void }).destroy();
+  });
+
+  it('selects the declared residue of a row and replaces it with the next row', async () => {
+    installHarness(vi.stubGlobal);
+    servePages(rows, columns, 500);
+    const selections: unknown[] = [];
+    const host = document.createElement('section') as unknown as HarnessNode;
+    const instance = await createEntityTableViewRenderer().render(activeSites as never,
+      { ...tableSource, structure: [structure] } as never, host as unknown as HTMLElement,
+      { signal: new AbortController().signal, taskId: 'a'.repeat(32),
+        openStructure: async () => undefined, selectStructure: (selection) => selections.push(selection) });
+    const lines = host.querySelectorAll('tr').slice(1);
+    lines[0]!.dispatch('click', {});
+    lines[1]!.dispatch('click', {});
+    expect(selections).toEqual([
+      { chain: 'A', residue: 42, numbering: 'label_seq_id' },
+      { chain: 'B', residue: 7, numbering: 'label_seq_id' },
+    ]);
+    (instance as { destroy(): void }).destroy();
+  });
+
+  it('renders only the table when the view declares no structure', async () => {
+    installHarness(vi.stubGlobal);
+    servePages(rows, columns, 500);
+    const openStructure = vi.fn(async () => undefined);
+    const selectStructure = vi.fn();
+    const host = document.createElement('section') as unknown as HarnessNode;
+    const view = { ...activeSites, sources: { table: ['active_sites.csv'] } };
+    const instance = await createEntityTableViewRenderer().render(view as never, tableSource as never,
+      host as unknown as HTMLElement,
+      { signal: new AbortController().signal, taskId: 'a'.repeat(32), openStructure, selectStructure });
+    host.querySelectorAll('tr')[1]!.dispatch('click', {});
+    expect(host.querySelector('table.entity-result-table')).not.toBeNull();
+    expect(host.querySelector('.entity-table-stage')).toBeNull();
+    expect(openStructure).not.toHaveBeenCalled();
+    expect(selectStructure).not.toHaveBeenCalled();
+    (instance as { destroy(): void }).destroy();
+  });
+
+  it('states a failed structure mount, leaves no stage, and clears everything on destroy', async () => {
+    installHarness(vi.stubGlobal);
+    servePages(rows, columns, 500);
+    const host = document.createElement('section') as unknown as HarnessNode;
+    const instance = await createEntityTableViewRenderer().render(activeSites as never,
+      { ...tableSource, structure: [structure] } as never, host as unknown as HTMLElement,
+      { signal: new AbortController().signal, taskId: 'a'.repeat(32),
+        openStructure: async () => { throw new Error('The structure could not be parsed.'); } });
+    expect(host.querySelector('.entity-table-stage')).toBeNull();
+    expect(host.textContent).toContain('The structure could not be parsed.');
+    expect(host.querySelector('table.entity-result-table')).not.toBeNull();
+    (instance as { destroy(): void }).destroy();
+    expect(host.querySelector('table')).toBeNull();
+    expect(host.textContent).not.toContain('The structure could not be parsed.');
+  });
+});
+
 describe('metric series values and range', () => {
   it('keeps a blank or NA cell as a gap and preserves negative values', () => {
     expect(seriesValues(['-2.5', '', 'NA', '0', '1e3'])).toEqual([-2.5, null, null, 0, 1000]);

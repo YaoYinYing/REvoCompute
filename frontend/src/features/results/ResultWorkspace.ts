@@ -297,7 +297,8 @@ export class ResultWorkspace {
   // stage, so a structure candidate opens through the same viewer and toolbar as
   // a structure artifact.
   private rendererContext(signal: AbortSignal): RendererContext {
-    return { signal, taskId: this.taskId, openStructure: (artifact, host) => this.renderStructure(artifact, host), closeStructure: () => this.structure.dispose() };
+    return { signal, taskId: this.taskId, openStructure: (artifact, host) => this.renderStructure(artifact, host),
+      closeStructure: () => this.structure.dispose(), selectStructure: (selection) => this.structure.select(selection) };
   }
 
   private openViewById(viewId: string): Promise<void> {

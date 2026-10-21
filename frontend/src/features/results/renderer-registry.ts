@@ -11,6 +11,9 @@ export interface RendererContext {
   // Invalidate the shared molecular stage; a view renderer calls this when the
   // structure it opened is superseded by a selection that is not a structure.
   closeStructure?(): void;
+  // Apply the molecular selection a rendered row declares, in the workspace's own
+  // structure vocabulary; absent for an embedder without a molecular stage.
+  selectStructure?(selection: { chain: string; residue: number; numbering?: string }): void;
 }
 
 export interface ArtifactRenderer {
