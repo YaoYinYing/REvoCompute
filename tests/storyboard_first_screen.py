@@ -14,8 +14,8 @@ from __future__ import annotations
 
 _LAYOUT_JS = """({hero, slot, figure}) => {
   const box = (selector) => {
-    // The first laid-out match: a hidden example (an unavailable matrix) is not
-    // the evidence figure the requirement is about.
+    // The first laid-out match: a hidden node (an unavailable matrix) is not the
+    // evidence figure the requirement is about.
     for (const node of document.querySelectorAll(selector)) {
       const rect = node.getBoundingClientRect();
       if (rect.width > 0 && rect.height > 0) {
