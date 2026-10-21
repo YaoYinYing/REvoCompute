@@ -78,12 +78,3 @@ export function column(page: TablePage, name: string): string[] {
   if (index < 0) throw new Error(t('results.table.error.missingColumn', { column: name }));
   return page.rows.map((row) => row[index] ?? '');
 }
-
-/** A cell as a finite number, or `null` for a blank/`NA` cell the format allows. */
-export function cellNumber(value: string, columnName: string): number | null {
-  const text = value.trim();
-  if (text === '' || text.toLowerCase() === 'na' || text.toLowerCase() === 'nan') return null;
-  const number = Number(text);
-  if (!Number.isFinite(number)) throw new Error(t('results.table.error.notNumber', { column: columnName, value: text }));
-  return number;
-}
