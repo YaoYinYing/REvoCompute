@@ -1,0 +1,39 @@
+Bootstrap: docker
+From: nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04
+
+%files
+    bioemu2/requirements.lock /opt/bioemu2-requirements.lock
+
+%post
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates python3 python3-venv
+    rm -rf /var/lib/apt/lists/*
+    python3 -m venv /opt/venv
+    /opt/venv/bin/pip install --no-cache-dir uv==0.8.22
+    # BioEmu2's CUDA 12 extra: torch 2.13.0+cu126 and the cu12 cuEquivariance
+    # kernels, so the base image and the wheels share the CUDA 12.6 minor.
+    /opt/venv/bin/uv pip sync --python /opt/venv/bin/python --no-cache \
+        --require-hashes \
+        --index-url https://download.pytorch.org/whl/cu126 \
+        --extra-index-url https://pypi.org/simple --index-strategy unsafe-best-match \
+        /opt/bioemu2-requirements.lock
+    rm -f /opt/bioemu2-requirements.lock
+    # Reserved Runtime Bundle mount point. This image is the *environment*;
+    # REvoCompute's entrypoint and adapter arrive at execution time as a
+    # read-only bundle mounted here.
+    mkdir -p /opt/revocompute/runtime
+    chmod 0555 /opt/revocompute/runtime
+
+%environment
+    export PATH=/opt/venv/bin:$PATH
+    export BIOEMU2_CHECKPOINT_ROOT=/mnt/db/weights/bioemu2/checkpoints/bioemu2-preview
+    export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+    export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
+
+%test
+    # Environment validity only: the CUDA/PyTorch ABI and the pinned upstream
+    # package. REvoCompute overlay modules are deliberately absent from the
+    # image, so importing them here would test the wrong artifact.
+    python -c 'import torch, bioemu2; assert torch.__version__ == "2.13.0+cu126", torch.__version__; assert torch.version.cuda == "12.6"'
+    test -d /opt/revocompute/runtime
+    test ! -e /app/revocompute

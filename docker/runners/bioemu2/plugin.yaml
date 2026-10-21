@@ -1,0 +1,23 @@
+api_version: 1
+id: bioemu2
+version: '1'
+runtime:
+  image_artifact: bioemu2_v1.sif
+  definition: bioemu2.def
+  # Build inputs are SIF inputs: the hashed dependency lock. REvoCompute's
+  # entrypoint, adapter, and asset manifest are runtime_overlay, delivered as an
+  # immutable bundle mounted at /opt/revocompute/runtime.
+  build_inputs:
+  - bioemu2/requirements.in
+  - bioemu2/requirements.lock
+  runtime_overlay:
+  - common/runtime/
+  - bioemu2/run.sh
+  - bioemu2/sample.py
+  - bioemu2/model-assets.sha256
+  - bioemu2/tasks/bioemu2_equilibrium/expected_files.yaml
+  entrypoint:
+  - bash
+  - /opt/revocompute/runtime/bioemu2/run.sh
+tasks:
+- tasks/bioemu2_equilibrium/task.yaml
