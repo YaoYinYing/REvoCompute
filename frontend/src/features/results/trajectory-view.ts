@@ -205,7 +205,11 @@ export function createTrajectoryViewRenderer(
         } catch (error) {
           // A superseded mount aborts; its failure belongs to the old selection.
           if (current !== request) return;
-          throw error;
+          // The frames of the design that was on screen are not this design's, so a
+          // failed mount empties the stage the same way an absent coordinate does.
+          await controller.clear();
+          if (!destroyed && current === request) throw error;
+          return;
         }
       };
       const failed = (error: Error): void => {

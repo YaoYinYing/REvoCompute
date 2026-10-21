@@ -271,5 +271,34 @@ describe('trajectory view renderer', () => {
       expect(nodes(host).scrubber.disabled).toBe(true);
       expect(nodes(host).position.textContent).toBe('diffusion step — of —');
     });
+
+    it("empties the stage when a design's declared frames fail to load", async () => {
+      const host = installGlobals();
+      const requested: string[] = [];
+      vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+        requested.push(url);
+        if (url === '/traj/design_2_pX0_traj.pdb') return new Response('gone', { status: 404 });
+        return new Response(url.startsWith('/traj/') ? frames('1') : 'ATOM');
+      }));
+      let cleared = 0;
+      const renderer = createTrajectoryViewRenderer(async () => viewer({
+        loadTrajectory: async () => ({ frame: 0, frameCount: 5 }),
+        clear: async () => { cleared += 1; },
+      }), () => 'light');
+      await renderer.render(design as never, {
+        topology: [source('design_1.pdb'), source('design_2.pdb')],
+        coordinates: [source('traj/design_1_pX0_traj.pdb'), source('traj/design_2_pX0_traj.pdb')],
+      }, host as never, { signal: new AbortController().signal, taskId: 'a'.repeat(32) });
+
+      const selector = host.all().find((node) => node.className === 'trajectory-topology')!;
+      selector.value = '1';
+      selector.fire('change');
+      await vi.waitFor(() => expect(nodes(host).status.textContent).toBe('Coordinate download failed (HTTP 404).'));
+      // Design 1's frames are the ones on screen; they are removed rather than left
+      // under design 2's label.
+      expect(cleared).toBe(1);
+      expect(nodes(host).scrubber.disabled).toBe(true);
+      expect(nodes(host).position.textContent).toBe('diffusion step — of —');
+    });
   });
 });
