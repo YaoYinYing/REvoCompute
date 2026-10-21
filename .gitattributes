@@ -2,3 +2,7 @@
 * text=auto
 # Captured Runner output: keep the exact published bytes.
 tests/data/storyboards/** -text
+# Captured Runner submission metadata and input snapshot: exact bytes.
+tests/data/storyboards/**/debug/** -text
+# Captured Runner stdout/stderr: exact bytes.
+tests/data/storyboards/**/execution/*.log -text

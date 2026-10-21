@@ -1,0 +1,25 @@
+REVODESIGN_JOB_ID=311227
+REVODESIGN_ALLOCATION_LIVE=311227
+REVODESIGN_STAGE:ppiformer_embed
+[10/20/26 23:56:05] WARNING  To use the Graphein submodule      ]8;id=398351;file://[path redacted]\embeddings.py]8;;\:]8;id=128020;file://[path redacted]#45\45]8;;\
+                             graphein.protein.features.sequence                 
+                             .embeddings, you need to install:                  
+                             biovec                                             
+                             To do so, use the following                        
+                             command: pip install biovec                        
+                             Alternatively, you can install                     
+                             graphein with the extras:                          
+                                                                                
+                             pip install graphein[extras]                       
+[10/20/26 23:56:07] WARNING  To use the Graphein submodule   ]8;id=767962;file://[path redacted]\visualisation.py]8;;\:]8;id=237352;file://[path redacted]#36\36]8;;\
+                             graphein.protein.visualisation,                    
+                             you need to install: pytorch3d                     
+                             pytorch3d cannot be installed                      
+                             via pip                                            
+                    WARNING  To use the Graphein submodule          ]8;id=917186;file://[path redacted]\meshes.py]8;;\:]8;id=255126;file://[path redacted]#30\30]8;;\
+                             graphein.protein.meshes, you need to               
+                             install: pytorch3d                                 
+                             To do so, use the following command:               
+                             pip install pytorch3d                              
+1 PPIs loaded: PPIInMemoryDataset()
+

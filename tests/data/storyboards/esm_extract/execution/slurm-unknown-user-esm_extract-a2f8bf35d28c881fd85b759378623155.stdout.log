@@ -1,0 +1,10 @@
+REVODESIGN_JOB_ID=311009
+REVODESIGN_ALLOCATION_LIVE=311009
+Processing [path redacted] ...
+Output directory: [path redacted]
+REVODESIGN_STAGE:esm_extract
+Transferred model to GPU
+Read [path redacted] with 1 sequences
+Processing 1 of 1 batches (1 sequences)
+ESM esm_extract complete.
+
