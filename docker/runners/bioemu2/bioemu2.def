@@ -28,9 +28,9 @@ From: nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04
     # Importing bioemu2 creates two caches eagerly: cuequivariance's Triton cache
     # resolves through HOME when CUEQ_TRITON_CACHE_DIR is unset, and numba's
     # cache needs a writable locator (its in-tree locator is unusable in a
-    # read-only image). A container with a nonexistent passwd/home dir
-    # (--containall --no-home) can write neither place, so keep both in the
-    # container-local /tmp, which is writable and discarded with the job.
+    # read-only image). HOME under --containall is a 64 MiB private tmpfs, too
+    # small for compiled caches, so keep both in the container-local /tmp, which
+    # is writable and discarded with the job.
     export PATH=/opt/venv/bin:$PATH
     export CUEQ_TRITON_CACHE_DIR=/tmp/cuequivariance-triton
     export NUMBA_CACHE_DIR=/tmp/numba-cache
