@@ -104,7 +104,7 @@ export function createTrajectoryViewRenderer(
 
       let destroyed = false;
       let loaded: TrajectoryInfo | null = null;
-      context.signal.addEventListener('abort', () => { destroyed = true; controller.dispose(); }, { once: true });
+      context.signal.addEventListener('abort', () => { destroyed = true; stop(); controller.dispose(); }, { once: true });
 
       const show = (value: TrajectoryInfo): void => {
         loaded = value;
