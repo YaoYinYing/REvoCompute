@@ -9,6 +9,9 @@ async function json(url, signal) { const response = window.REvoDesignAuth ? awai
 function rankOf(artifact, fallback) { const match = String(artifact.name || "").match(/ranked_(\d+)\.pdb$/); return match ? Number(match[1]) : fallback; }
 function bySuffix(files, prefix, identity) { return files.find((file) => String(file.name || "").endsWith(prefix + identity + ".json")) || null; }
 function square(value) { if (!value || value.shape.length !== 2 || value.shape[0] !== value.shape[1]) return null; return Array.from({ length: value.shape[0] }, (_, row) => value.values.slice(row * value.shape[1], (row + 1) * value.shape[1])); }
+// The Task's declared `predicted_aligned_error` matrix view owns the PAE scale;
+// the module reads it instead of pinning a scientific range of its own.
+function matrixMapping(views, id) { const view = list(views).find((item) => item.id === id); return view && view.mapping || {}; }
 
 export default { async mount(host, context) {
   const S = window.REvoComputeScientific; if (!S) throw new Error("Scientific result components are unavailable.");
@@ -18,7 +21,8 @@ export default { async mount(host, context) {
   const candidates = section("Ranked models", "Candidate order follows AlphaFold's published ranking."); const candidateHost = document.createElement("div"); candidateHost.className = "af2-candidates"; const actions = document.createElement("div"); actions.className = "af2-actions"; candidates.append(candidateHost, actions); root.appendChild(candidates);
   const confidence = section("Local confidence", "Per-residue pLDDT on AlphaFold's persisted 0 to 100 scale; model confidence, not experimental validation."); const confidenceHost = document.createElement("div"); confidence.appendChild(confidenceHost); root.appendChild(confidence);
   const pae = section("Predicted aligned error", "Optional PAE in angstroms; lower is better."); const figure = document.createElement("div"); figure.className = "af2-figure"; const canvas = document.createElement("canvas"); canvas.tabIndex = 0; canvas.setAttribute("role", "grid"); const readout = document.createElement("p"); readout.className = "matrix-readout"; readout.setAttribute("role", "status"); figure.appendChild(canvas); pae.append(figure, readout); root.appendChild(pae); host.replaceChildren(root);
-  matrix = new S.PairMatrix({ figure, canvas, readout, minimum: 0, maximum: 31.75, unit: "angstrom", xTitle: "Aligned residue", yTitle: "Scored residue", legendTitle: "PAE", decimals: 1 });
+  const paeMapping = matrixMapping(context.views, "predicted_aligned_error");
+  matrix = new S.PairMatrix({ figure, canvas, readout, minimum: paeMapping.scale_min, maximum: paeMapping.scale_max, unit: paeMapping.unit || "angstrom", xTitle: paeMapping.x_label || "Aligned residue", yTitle: paeMapping.y_label || "Scored residue", legendTitle: "PAE", decimals: 1 });
   const ranking = await json(rankingFile.url); const order = Array.isArray(ranking.order) ? ranking.order : [];
   function clearCandidate(text) {
     actions.replaceChildren(); confidenceHost.replaceChildren(message(text)); figure.hidden = true; readout.textContent = "";

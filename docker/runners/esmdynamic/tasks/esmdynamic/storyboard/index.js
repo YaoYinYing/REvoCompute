@@ -36,7 +36,10 @@ export default {
         const view = views.find(item => item.id === section.dataset.viewId);
         mounted.push(await services.mountView(view.id, section.querySelector('.sl-stage'), abort.signal) || null);
       }
-      status.textContent = 'The primary view shows the 320 K dynamic, frequency and kinetics plots; other temperatures are download-only.';
+      const temperatures = [...new Set(list(context.files.get('temperature_plots')).flatMap(file => String(file.name || '').split('_')).filter(part => part.endsWith('K.png')).map(part => part.slice(0, -5)))];
+      status.textContent = temperatures.length
+        ? `The primary view shows the ${temperatures.join(', ')} K dynamic, frequency and kinetics plots; other temperatures are download-only.`
+        : 'The primary view shows the reported-temperature dynamic, frequency and kinetics plots; other temperatures are download-only.';
     } catch (error) {
       if (error.name !== 'AbortError') { status.textContent = 'The dynamics evidence could not be rendered; the downloads above remain available.'; status.className = 'sl-error'; }
     }

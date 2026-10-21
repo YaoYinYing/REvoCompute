@@ -41,6 +41,20 @@ CONFIDENCES = {
     "contact_probs": [[0.0] * 12] * 12,
 }
 SUMMARY = {"ptm": 0.88, "iptm": 0.85, "ranking_score": 0.85, "fraction_disordered": 0.0, "has_clash": 0.0}
+# The Task's declared `confidence_summary` view, transcribed from `task.yaml`.
+VIEWS = [{
+    "id": "confidence_summary",
+    "plugin": "scalar-summary",
+    "title": "Structure confidence",
+    "sources": {},
+    "mapping": {"fields": [
+        {"path": "ptm", "label": "pTM", "unit": "score", "direction": "higher"},
+        {"path": "iptm", "label": "ipTM", "unit": "score", "direction": "higher", "nullable": True},
+        {"path": "ranking_score", "label": "Ranking score", "unit": "score", "direction": "higher"},
+        {"path": "fraction_disordered", "label": "Fraction disordered", "unit": "fraction", "direction": "lower"},
+        {"path": "has_clash", "label": "Has clash", "unit": "flag", "direction": "lower"},
+    ]},
+}]
 
 # Mirrors the logical-file record the server returns for a storyboard
 # (`revocompute/routes.py`): `preview` is the declared expected-file type and
@@ -97,6 +111,9 @@ async (payload) => {
   const context = {
     files: { get: (id) => files.get(id) || null },
     metadata: { taskType: "alphafold3" },
+    // The Task's declared `confidence_summary` scalar-summary view, projected
+    // as the Server projects it: the storyboard must read this vocabulary.
+    views: payload.views || [],
     services: { openFile: (artifact) => { opened.push(artifact.id); } },
   };
   const host = document.getElementById("host");
@@ -172,6 +189,7 @@ def _mount(page: Page, files: dict = FILES, *, summary: dict = SUMMARY, projecti
         {
             "source": STORYBOARD.read_text(encoding="utf-8"),
             "files": files,
+            "views": VIEWS,
             "confidences": CONFIDENCES,
             "summary": summary,
             "projections": projections or {},
@@ -277,12 +295,14 @@ def test_storyboard_rejects_near_match_instead_of_pairing_by_array_order(page: P
     expect(page.locator("#af3-pae-note")).to_have_text("No exact confidence record matches this structure candidate.")
 
 
-def test_storyboard_keeps_required_evidence_when_one_optional_scalar_is_absent(page: Page) -> None:
+def test_storyboard_renders_a_declared_nullable_scalar_as_na_when_the_candidate_omits_it(page: Page) -> None:
     _open(page)
     _mount(page, summary={key: value for key, value in SUMMARY.items() if key != "iptm"})
 
     expect(page.locator(".scalar-grid")).to_contain_text("pTM0.88 score")
-    expect(page.locator(".scalar-grid")).not_to_contain_text("ipTM")
+    # `iptm` is declared nullable, so an omitted value renders as N/A rather than
+    # silently shortening the grid or failing the candidate.
+    expect(page.locator(".scalar-grid")).to_contain_text("ipTMN/AHigher is better")
     expect(page.locator("#af3-pae-note")).to_contain_text("12 × 12")
 
 

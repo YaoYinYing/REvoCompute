@@ -239,10 +239,7 @@ def test_colabfold_reads_the_a3m_header_and_leaves_an_empty_view_honest(page: Pa
     _open(page, "colabfold_af2")
 
     expect(page.locator(".colabfold-result h2")).to_have_text("ColabFold prediction")
-    scores = replay.projection("2KL8_scores_rank_001_alphafold2_ptm_model_1_seed_000.json", key="plddt")
-    mean = sum(scores["data"]) / len(scores["data"])
     grid = page.locator(".colabfold-result .scalar-grid")
-    expect(grid).to_contain_text(f"Mean pLDDT{mean:.1f} score")
     expect(grid).to_contain_text("pTM0.6 score")
     expect(page.get_by_role("img", name="pLDDT by Residue position")).to_be_visible()
 

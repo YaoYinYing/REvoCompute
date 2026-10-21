@@ -4,6 +4,18 @@ const STYLE = `.sl-result{display:grid;gap:18px;min-width:0;font:14px/1.5 var(--
 const list = value => Array.isArray(value) ? value : value ? [value] : [];
 const first = (context, id) => list(context.files.get(id))[0] || null;
 function el(tag, className = '', text) { const node = document.createElement(tag); node.className = className; if (text != null) node.textContent = String(text); return node; }
+async function fetchJson(file, signal) {
+  const response = window.REvoDesignAuth ? await window.REvoDesignAuth.authFetch(file.url, { signal }) : await fetch(file.url, { credentials: 'same-origin', signal });
+  if (!response.ok) throw new Error('The published EasIFA prediction could not be loaded.');
+  return response.json();
+}
+// The published prediction owns the class vocabulary; the note names it only when
+// the run actually published one, never from a hard-coded copy of the model labels.
+function classVocabulary(prediction) {
+  const mapping = prediction && prediction.site_type_mapping;
+  if (!mapping || typeof mapping !== 'object') return null;
+  return Object.keys(mapping).sort((a, b) => Number(a) - Number(b)).map(key => `${key} ${mapping[key]}`).join(', ');
+}
 
 export default {
   async mount(host, context) {
@@ -12,7 +24,8 @@ export default {
     const views = list(context.views);
     const root = el('div', 'sl-result'), style = el('style'); style.textContent = STYLE; root.append(style);
     root.append(el('h2', '', 'Predicted enzyme active sites'));
-    root.append(el('p', 'sl-note', 'One row per residue of the submitted structure, with the predicted site class and its four class probabilities. The classes are a fixed model vocabulary (0 non-site, 1 binding, 2 active site, 3 site). A run in which every residue is class 0 is a negative prediction for this structure, not a missing analysis: all four probabilities are present for every row. In the recorded run the table\'s `chain` column is empty for every row even though the structure has chain A; the residue index and label sequence number are unaffected.'));
+    const note = el('p', 'sl-note', 'One row per residue of the submitted structure, with the predicted site class and its class probabilities. A run in which every residue is class 0 is a negative prediction for this structure, not a missing analysis: a probability is present for every row.');
+    root.append(note);
     for (const view of views) {
       const section = el('section', 'sl-section'); section.dataset.viewId = view.id;
       section.append(el('h3', '', view.title));
@@ -28,6 +41,15 @@ export default {
     download('citations', 'Download citations (BibTeX)');
     const status = el('p', 'result-note', 'Loading the published active-site predictions…'); status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
     root.append(status, downloads); host.replaceChildren(root);
+    const prediction = first(context, 'prediction');
+    if (prediction) {
+      fetchJson(prediction, abort.signal).then((payload) => {
+        const vocabulary = classVocabulary(payload);
+        note.textContent = `${note.textContent} ${vocabulary ? `Published site classes: ${vocabulary}.` : 'This run published no site-class vocabulary.'}`;
+      }, () => { if (!abort.signal.aborted) note.textContent = `${note.textContent} The site-class vocabulary could not be read from the published prediction.`; });
+    } else {
+      note.textContent = `${note.textContent} This run published no prediction JSON, so the site-class vocabulary is not known.`;
+    }
     let mounted = [];
     try {
       if (!services.mountView) throw new Error('The declared active-site views are unavailable.');
