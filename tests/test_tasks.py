@@ -1059,7 +1059,9 @@ def test_cpu_runner_logical_file_api_preserves_declared_viewer_and_download(monk
     assert pssm["capability"] == "table"
     assert pssm["table_url"].endswith("/tables/pssm_msa/input_ascii_mtx_file")
     assert pssm["cardinality"] == "one"
-    assert "path" not in pssm
+    # The logical file names its published path: that is its identity, and the
+    # name a reader sees stays the declared one.
+    assert pssm["path"] == "pssm_msa/input_ascii_mtx_file"
     raw_pssm = next(artifact for artifact in manifest["artifacts"] if artifact["path"].endswith("input_ascii_mtx_file"))
     assert raw_pssm["capability"] == "download_only"
     assert logical_download.status_code == 200
