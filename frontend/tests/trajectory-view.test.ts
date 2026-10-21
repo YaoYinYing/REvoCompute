@@ -21,7 +21,7 @@ class TestNode {
   append(...nodes: TestNode[]): void { this.children.push(...nodes); }
   replaceChildren(...nodes: TestNode[]): void { this.children = nodes; }
   addEventListener(type: string, listener: () => void): void { (this.listeners[type] ||= []).push(listener); }
-  fire(type: string): void { this.listeners[type]?.forEach((listener) => listener()); }
+  fire(type: string): void { if (!this.disabled) this.listeners[type]?.forEach((listener) => listener()); }
   all(): TestNode[] { return this.children.flatMap((child) => [child, ...child.all()]); }
 }
 
@@ -164,6 +164,7 @@ describe('trajectory view renderer', () => {
         { topology: [source('topology.pdb')], coordinates: [source('samples.xtc')] }, host as never,
         { signal: new AbortController().signal, taskId: 'a'.repeat(32) });
       const play = host.all().find((node) => node.dataset.trajectory === 'play')!;
+      expect(play.disabled).toBe(false);
       play.fire('click');
       expect(play.textContent).toBe('Pause');
       await vi.advanceTimersByTimeAsync(200);

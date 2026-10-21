@@ -113,6 +113,7 @@ export function createTrajectoryViewRenderer(
         scrubber.disabled = value.frameCount < 2;
         previous.disabled = value.frameCount < 2;
         next.disabled = value.frameCount < 2;
+        play.disabled = value.frameCount < 2;
         label.textContent = t('results.trajectory.position', {
           unit, frame: String(value.frame + 1), total: String(value.frameCount),
         });
