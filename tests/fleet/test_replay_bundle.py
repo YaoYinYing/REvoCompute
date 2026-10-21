@@ -1224,3 +1224,48 @@ def test_real_fpocket_bundle_records_its_oversized_artifacts_with_hashes() -> No
     # exists to avoid, so a re-capture cannot quietly reintroduce a huge fixture.
     assert len(replay.bundle["payloads"]) <= 20
     assert FPOCKET_BUNDLE.stat().st_size < 200_000
+
+
+# ── the checked-in BioEmu2 bundle ────────────────────────────────────────────
+
+BIOEMU2_BUNDLE = ROOT / "tests/data/bioemu2_replay/2kl8_production_4d77ffcc.json"
+
+
+def test_real_bioemu2_bundle_round_trips_with_its_published_verdicts() -> None:
+    """The checked-in BioEmu2 bundle loads and serves what the run published.
+
+    The run is a contract demonstration, not a converged ensemble: both of its
+    two samples are rejected by upstream physicality. That is the fact the
+    browser acceptance binds to, so it is asserted here against the captured
+    bytes rather than restated in the test.
+    """
+    if not BIOEMU2_BUNDLE.is_file():
+        pytest.skip("the captured BioEmu2 replay bundle is not present")
+    replay = ReplayBundle.load(BIOEMU2_BUNDLE)
+    assert replay.bundle["task"]["type"] == "bioemu2_equilibrium"
+    assert replay.provenance["capture"]["mode"] == "reproduced_real_result"
+    parameters = {item["name"]: item["value"] for item in replay.manifest["run"]["parameters"]}
+    assert parameters["num_samples"] == 2 and parameters["num_steps"] == 4
+
+    (view,) = replay.manifest["views"]
+    assert (view["id"], view["plugin"], view["role"]) == ("conformational_ensemble", "trajectory", "primary")
+    assert view["mapping"]["frame_unit"] == "sample"
+    for _, _, path in required_view_sources(replay.manifest):
+        assert path in replay.bundle["payloads"], path
+
+    report = json.loads(replay.payload("physicality.json")[0])
+    assert [(entry["frame"], entry["status"], entry["reason"]) for entry in report] == [
+        (0, "rejected", "bad_bonds_sidechain"),
+        (1, "rejected", "bad_bonds_sidechain"),
+    ]
+    # The published logical files are the six this Task declares, each resolving
+    # to a captured payload whose bytes still match its recorded digest.
+    assert set(replay.bundle["logical_files"]) == {
+        "coordinates", "topology", "upstream_topology", "physicality", "system", "sequence",
+    }
+    for file_id in replay.bundle["logical_files"]:
+        path = replay.logical_artifact_path(file_id, 0)
+        assert path is not None, file_id
+        body = replay.payload(path)
+        assert body is not None, path
+        assert _sha(body[0]) == replay.bundle["payloads"][path]["sha256"], path
