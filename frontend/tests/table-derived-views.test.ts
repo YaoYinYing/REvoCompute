@@ -120,6 +120,19 @@ describe('entity-table declared structure', () => {
     (instance as { destroy(): void }).destroy();
   });
 
+  it('closes the stage it mounted when the view is superseded', async () => {
+    installHarness(vi.stubGlobal);
+    servePages(rows, columns, 500);
+    const closed: string[] = [];
+    const host = document.createElement('section') as unknown as HarnessNode;
+    const instance = await createEntityTableViewRenderer().render(activeSites as never,
+      { ...tableSource, structure: [structure] } as never, host as unknown as HTMLElement,
+      { signal: new AbortController().signal, taskId: 'a'.repeat(32),
+        openStructure: async () => undefined, closeStructure: () => { closed.push('closed'); } });
+    (instance as { destroy(): void }).destroy();
+    expect(closed).toHaveLength(1);
+  });
+
   it('renders only the table when the view declares no structure', async () => {
     installHarness(vi.stubGlobal);
     servePages(rows, columns, 500);

@@ -178,8 +178,30 @@ describe('candidate collection', () => {
     await vi.waitFor(() => expect(host.querySelector('pre.candidate-sequence')!.textContent).toBe('MKT'));
     release(); await rendering; await Promise.resolve();
     expect(host.querySelector('.candidate-stage')).toBeNull();
-    expect(closes).toHaveLength(2);
+    // Closed once, by the selection that superseded it; the destroy that follows
+    // finds nothing left for this view to close.
+    expect(closes).toHaveLength(1);
     expect(host.textContent).not.toContain('mounted');
+  });
+
+  it('leaves a stage it never opened alone', async () => {
+    installHarness(vi.stubGlobal);
+    serve('>design_a\nMKT\n');
+    const closes: string[] = [];
+    const host = document.createElement('section') as unknown as HarnessNode;
+    const items = [artifact('seqs/designs.fa'), artifact('models/model_0.cif')];
+    const rendering = await createCandidateCollectionViewRenderer().render(
+      { id: 'designs', plugin: 'candidate-collection', role: 'primary', title: 'Designs', sources: { candidates: items.map((item) => item.path) }, mapping: {} } as never,
+      { candidates: items } as never, host as unknown as HTMLElement, {
+        signal: new AbortController().signal, taskId: 'a'.repeat(32),
+        // A storyboard may already own the shared stage; this view never opens it.
+        openStructure: vi.fn(async () => {}),
+        closeStructure: () => { closes.push('closed'); },
+      });
+    await vi.waitFor(() => expect(host.querySelector('pre.candidate-sequence')).not.toBeNull());
+    expect(closes).toHaveLength(0);
+    rendering?.destroy();
+    expect(closes).toHaveLength(0);
   });
 
   it('refuses a Range-ignoring 200 body past the collection bound', async () => {

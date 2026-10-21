@@ -79,7 +79,7 @@ export function createEntityTableViewRenderer(): ViewRenderer {
         const note = document.createElement('p'); note.className = 'result-note';
         note.textContent = t('results.table.truncated'); section.append(note);
       }
-      return { destroy: () => section.replaceChildren() };
+      return { destroy: () => { section.replaceChildren(); if (mounted) context.closeStructure?.(); } };
     },
   };
 }

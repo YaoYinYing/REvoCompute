@@ -96,6 +96,8 @@ export function createCandidateCollectionViewRenderer(): ViewRenderer {
         return { destroy: () => section.replaceChildren() };
       }
 
+      //: Whether this view mounted the shared structure stage, and so owns closing it.
+      let ownsStage = false;
       const selector = new CandidateSelector(controls, {
         items,
         label: (item) => item.name,
@@ -105,8 +107,10 @@ export function createCandidateCollectionViewRenderer(): ViewRenderer {
             && ['structure', 'molecular_structure'].includes(artifactCapability(item.file!));
           // The stage belongs to the selection that opened it: a selection that is
           // not a structure removes it, and invalidates a mount still in flight so
-          // it cannot land in a stage the sequence now owns.
-          if (!showsStructure) { stage.remove(); context.closeStructure?.(); }
+          // it cannot land in a stage the sequence now owns. A view that never
+          // opened the shared stage owns nothing to close: the storyboard's own
+          // structure may already be mounted in it.
+          if (!showsStructure && ownsStage) { stage.remove(); context.closeStructure?.(); ownsStage = false; }
           if (!item.record) {
             const file = item.file!;
             const link = document.createElement('a'); link.className = 'result-button result-button-small';
@@ -115,12 +119,13 @@ export function createCandidateCollectionViewRenderer(): ViewRenderer {
             detail.append(link);
             if (showsStructure) {
               if (stage.parentNode !== section) section.insertBefore(stage, detail);
+              ownsStage = true;
               // A candidate that cannot be shown states why and leaves no empty stage: the
               // selection rejects here, and a superseded mount is not a failure to report.
               try { await context.openStructure!(file, stage); }
               catch (error) {
                 if ((error as Error).name === 'AbortError' || !request.current()) return false;
-                stage.remove();
+                stage.remove(); ownsStage = false;
                 const note = document.createElement('p'); note.className = 'result-empty';
                 note.textContent = (error as Error).message || t('results.structureUnavailable');
                 detail.append(note);
@@ -145,7 +150,7 @@ export function createCandidateCollectionViewRenderer(): ViewRenderer {
         },
       });
       void selector.select(0);
-      return { destroy: () => { selector.destroy(); context.closeStructure?.(); } };
+      return { destroy: () => { selector.destroy(); if (ownsStage) context.closeStructure?.(); } };
     },
   };
 }
