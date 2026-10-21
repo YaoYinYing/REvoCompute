@@ -23,6 +23,8 @@ inputs:
     type: protein_sequence
     cardinality: {min: 1, max: 1}
     formats: [fasta]
+    description: Exactly one FASTA record with a non-empty header; residues must
+      be the 20 standard amino acids or X.
 input_workspace:
   steps:
   - id: material
@@ -111,7 +113,8 @@ parameters:
     physicality_mode:
       type: string
       description: Physicality thresholds reported per frame for invalid bond lengths,
-        clashes, chirality, and chain breaks; no_filter skips the checks.
+        clashes, chirality, and chain breaks; no_filter still writes physicality.json
+        with each frame's status reported as not checked, and no frame is removed.
       default: high_quality
       enum:
       - no_filter

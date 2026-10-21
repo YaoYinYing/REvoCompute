@@ -52,6 +52,8 @@ def load_model(*, checkpoint_path):
 
 class _Frame:
     def save_pdb(self, path):
+        if os.environ.get("BIOEMU2_OMIT_OUTPUT") == Path(path).name:
+            return
         with open(path, "w", encoding="utf-8") as handle:
             handle.write("ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00  0.00           C\\n")
 
@@ -60,11 +62,16 @@ def sample_equilibrium(system, *, model, output_dir, **kwargs):
     _capture("sampling", kwargs)
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
-    (out / "samples.xtc").write_bytes(b"xtc")
-    (out / "topology.cif").write_text("data_topology\\n", encoding="utf-8")
-    (out / "system.yaml").write_text("entities: []\\n", encoding="utf-8")
-    if os.environ.get("BIOEMU2_SKIP_PHYSICALITY") != "1":
-        (out / "physicality.json").write_text('[{"frame": 0, "status": "passed", "reason": null}]\\n')
+    omit = os.environ.get("BIOEMU2_OMIT_OUTPUT", "")
+    published = {
+        "samples.xtc": b"xtc",
+        "topology.cif": b"data_topology\\n",
+        "system.yaml": b"entities: []\\n",
+        "physicality.json": b'[{"frame": 0, "status": "passed", "reason": null}]\\n',
+    }
+    for name, payload in published.items():
+        if name != omit:
+            (out / name).write_bytes(payload)
     return [_Frame() for _ in range(kwargs["num_samples"])]
 """
 
@@ -162,12 +169,44 @@ def test_bioemu2_missing_published_output_fails_the_task(tmp_path):
         modules,
         fasta,
         {"num_samples": 1},
-        {"BIOEMU2_SKIP_PHYSICALITY": "1"},
+        {"BIOEMU2_OMIT_OUTPUT": "physicality.json"},
     )
 
     assert completed.returncode != 0
     assert "physicality.json" in completed.stderr
     assert not (output_dir / "task_finished").exists()
+
+
+def test_bioemu2_publication_check_covers_every_required_contract_file(tmp_path):
+    """The entrypoint drives its check from the same expected_files.yaml the server reads."""
+    import yaml
+
+    required = {
+        entry["path"]
+        for entry in yaml.safe_load((FAMILY / "tasks" / "bioemu2_equilibrium" / "expected_files.yaml").read_text())[
+            "result"
+        ]["files"].values()
+        if entry.get("required")
+    }
+    assert "topology.cif" in required
+    # sequence.fasta is written by the adapter itself, so the fake has no seam to
+    # omit it; every other required path is staged by the fake upstream.
+    for path in sorted(required - {"sequence.fasta"}):
+        case = tmp_path / path
+        case.mkdir()
+        asset_root, manifest, modules, fasta = _workspace(case)
+        completed, output_dir, _ = _run(
+            case,
+            asset_root,
+            manifest,
+            modules,
+            fasta,
+            {"num_samples": 1},
+            {"BIOEMU2_OMIT_OUTPUT": path},
+        )
+        assert completed.returncode != 0, path
+        assert path in completed.stderr, completed.stderr
+        assert not (output_dir / "task_finished").exists(), path
 
 
 def test_bioemu2_sequence_framing(tmp_path):
@@ -176,7 +215,17 @@ def test_bioemu2_sequence_framing(tmp_path):
     fasta.write_text(">query\nacdefg hik\n", encoding="utf-8")
     assert adapter.query_sequence(fasta) == "ACDEFGHIK"
 
+    # A blank header is rejected on its own terms; a second record is rejected
+    # as a second record even when its separator carries no header.
+    fasta.write_text(">\nACDE\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="empty FASTA header"):
+        adapter.query_sequence(fasta)
+
     fasta.write_text(">a\nACDE\n>b\nFGHI\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="exactly one protein sequence"):
+        adapter.query_sequence(fasta)
+
+    fasta.write_text(">a\nACDE\n>\nFGHI\n", encoding="utf-8")
     with pytest.raises(ValueError, match="exactly one protein sequence"):
         adapter.query_sequence(fasta)
 

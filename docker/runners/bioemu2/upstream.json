@@ -13,7 +13,7 @@
   ],
   "python_requires": ">=3.12",
   "cuda_minor": "12.6",
-  "gpu_compute_capability_minimum": "7.5 (CUDA 13 extra); the cuda12 extra also supports 7.0",
+  "gpu_compute_capability_minimum": "7.0 for the cuda12 extra this Runner pins; upstream's CUDA 13 extra requires 7.5",
   "gpu_memory_tested_by_upstream": "80 GB A100 is the smallest device upstream tested",
   "weights": {
     "channel": "https://huggingface.co/microsoft/bioemu2",

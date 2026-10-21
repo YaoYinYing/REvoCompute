@@ -15,6 +15,7 @@ runtime:
   - bioemu2/run.sh
   - bioemu2/sample.py
   - bioemu2/model-assets.sha256
+  - bioemu2/tasks/bioemu2_equilibrium/expected_files.yaml
   entrypoint:
   - bash
   - /opt/revocompute/runtime/bioemu2/run.sh

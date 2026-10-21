@@ -39,7 +39,17 @@ echo "REVODESIGN_STAGE:bioemu2_equilibrium"
   --output-dir "$output_dir" \
   --checkpoint-dir "$checkpoint_dir"
 
-for published in samples.xtc topology.pdb sequence.fasta physicality.json system.yaml; do
+# The task's own contract is the single list of required outputs; the server
+# repeats this check, so a success here must mean the server's check will pass.
+contract="${runtime_root}/bioemu2/tasks/bioemu2_equilibrium/expected_files.yaml"
+required=$("${BIOEMU2_PYTHON:-python}" -c '
+import sys, yaml
+for entry in yaml.safe_load(open(sys.argv[1]))["result"]["files"].values():
+    if entry.get("required"):
+        print(entry["path"])
+' "$contract") || { echo "BioEmu2 could not read the result contract: $contract" >&2; exit 1; }
+[[ -n "$required" ]] || { echo "BioEmu2 contract declares no required output: $contract" >&2; exit 1; }
+for published in $required; do
   [[ -s "$output_dir/$published" ]] || { echo "BioEmu2 did not publish $published" >&2; exit 1; }
 done
 touch "$output_dir/task_finished"

@@ -30,25 +30,35 @@ import sys
 import tempfile
 from pathlib import Path
 
-#: The protein alphabet BioEmu2's ``Protein`` entity accepts.
+#: The protein alphabet BioEmu2's ``Protein`` entity accepts. Stricter than the
+#: server's ``validate_fasta`` alphabet, which also admits the ambiguity codes
+#: B, Z, J, and O and the stop/gap spells -- none of which names a residue
+#: BioEmu2 can sample. The Task input role declares this stricter set.
 PROTEIN_CHARS = frozenset("ACDEFGHIKLMNPQRSTVWYX")
 
 
 def query_sequence(path: Path) -> str:
-    """Return the single protein sequence of a Task FASTA ``sequence`` file."""
-    header = ""
+    """Return the single protein sequence of a Task FASTA ``sequence`` file.
+
+    Raises ``ValueError`` for anything but exactly one headed, non-empty record:
+    a second ``>`` (even with an empty header) would otherwise fuse two proteins
+    into one chain and sample the wrong molecule without any error.
+    """
+    records = 0
     residues: list[str] = []
     for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
             continue
         if line.startswith(">"):
-            if header:
+            records += 1
+            if records > 1:
                 raise ValueError("BioEmu2 takes exactly one protein sequence")
-            header = line[1:].strip()
+            if not line[1:].strip():
+                raise ValueError(f"{path.name} has an empty FASTA header")
             continue
         residues.append("".join(line.split()).upper())
-    if not header or not residues:
+    if not records or not residues:
         raise ValueError(f"{path.name} holds no FASTA sequence")
     sequence = "".join(residues)
     invalid = sorted(set(sequence) - PROTEIN_CHARS)
