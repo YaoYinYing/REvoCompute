@@ -6,9 +6,9 @@ import type { MolecularViewer } from '../src/features/results/molecular/viewer-c
 
 const file = (path: string): ResultArtifact => ({ path, size: 8, sha256: 'a'.repeat(64), url: `/${path}`, media_type: 'chemical/x-pdb', preview: 'structure', capability: 'molecular_structure', role: 'primary' });
 
-/** A host element stub: this suite runs without a DOM. */
-function holder(): HTMLElement {
-  const node: { contains(self: object): boolean } = { contains: (self) => self === node };
+/** A host stub over a small tree: `contains` walks real parent/child relations, no DOM needed. */
+function holder(children: HTMLElement[] = []): HTMLElement {
+  const node = { contains: (other: unknown): boolean => other === node || children.some((child) => (child.contains as (node: unknown) => boolean)(other)) };
   return node as unknown as HTMLElement;
 }
 
@@ -108,15 +108,23 @@ describe('StructureController', () => {
     const viewer: MolecularViewer = { setRepresentation: async () => {}, setColor: async () => {}, setTheme: () => {},
       resize: () => {}, captureImage: async () => '', loadStructure: async () => {}, dispose: () => { disposed += 1; } };
     vi.stubGlobal('fetch', vi.fn(async (url: string) => new Response(url)));
+    // The controller mounts the inner host; the callers pass the outer stage that
+    // contains it, so an ancestor of the mounted host must close too.
+    const child = holder(); const mounted = holder([child]); const stage = holder([mounted]);
+    const sibling = holder(); const foreignStage = holder([sibling]);
     const controller = new StructureController(async () => viewer);
-    const owner = holder(); const other = holder();
-    await controller.mount(owner, file('first.pdb'), 'light');
+    await controller.mount(mounted, file('first.pdb'), 'light');
 
     // Another owner has since mounted elsewhere in the same workspace: the first
-    // view's late close must not blank a stage it no longer owns.
-    controller.disposeIfIn(other);
+    // view's late close must not blank a stage it no longer owns, nor a host
+    // nested inside the one it mounted.
+    controller.disposeIfIn(foreignStage);
     expect(disposed).toBe(0);
-    controller.disposeIfIn(owner);
+    controller.disposeIfIn(sibling);
+    expect(disposed).toBe(0);
+    controller.disposeIfIn(child);
+    expect(disposed).toBe(0);
+    controller.disposeIfIn(stage);
     expect(disposed).toBe(1);
   });
 });

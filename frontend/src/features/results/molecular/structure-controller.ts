@@ -400,7 +400,7 @@ export class StructureController {
    */
   disposeIfIn(host: HTMLElement): void {
     const current = this.host;
-    if (current && (current === host || host.contains(current) || current.contains(host))) this.dispose();
+    if (current && (current === host || host.contains(current))) this.dispose();
   }
 
   dispose(): void {

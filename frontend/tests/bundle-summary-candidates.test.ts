@@ -159,7 +159,7 @@ describe('candidate collection', () => {
     installHarness(vi.stubGlobal);
     serve('>design_a\nMKT\n');
     let release!: () => void; const pending = new Promise<void>((resolve) => { release = resolve; });
-    const closes: string[] = [];
+    const closes: unknown[] = [];
     const host = document.createElement('section') as unknown as HarnessNode;
     const items = [artifact('seqs/designs.fa'), artifact('models/model_0.cif')];
     const rendering = createCandidateCollectionViewRenderer().render(
@@ -168,26 +168,27 @@ describe('candidate collection', () => {
         signal: new AbortController().signal, taskId: 'a'.repeat(32),
         // The mount resolves only after the sequence selection became current.
         openStructure: async (_file, stage) => { stage.textContent = 'mounted'; await pending; },
-        closeStructure: () => { closes.push('closed'); },
+        closeStructure: (stage) => { closes.push(stage); },
       });
     const buttons = () => host.querySelectorAll('button.candidate-open');
     await vi.waitFor(() => expect(buttons()).toHaveLength(2));
     buttons()[1]!.dispatch('click', {});
     await vi.waitFor(() => expect(host.querySelector('.candidate-stage')).not.toBeNull());
+    const stage = host.querySelector('.candidate-stage');
     buttons()[0]!.dispatch('click', {});
     await vi.waitFor(() => expect(host.querySelector('pre.candidate-sequence')!.textContent).toBe('MKT'));
     release(); await rendering; await Promise.resolve();
     expect(host.querySelector('.candidate-stage')).toBeNull();
-    // Closed once, by the selection that superseded it; the destroy that follows
-    // finds nothing left for this view to close.
-    expect(closes).toHaveLength(1);
+    // Closed once, by the selection that superseded it, and only for the stage
+    // node this view opened; the destroy that follows finds nothing left to close.
+    expect(closes).toEqual([stage]);
     expect(host.textContent).not.toContain('mounted');
   });
 
   it('leaves a stage it never opened alone', async () => {
     installHarness(vi.stubGlobal);
     serve('>design_a\nMKT\n');
-    const closes: string[] = [];
+    const closes: unknown[] = [];
     const host = document.createElement('section') as unknown as HarnessNode;
     const items = [artifact('seqs/designs.fa'), artifact('models/model_0.cif')];
     const rendering = await createCandidateCollectionViewRenderer().render(
@@ -196,7 +197,7 @@ describe('candidate collection', () => {
         signal: new AbortController().signal, taskId: 'a'.repeat(32),
         // A storyboard may already own the shared stage; this view never opens it.
         openStructure: vi.fn(async () => {}),
-        closeStructure: () => { closes.push('closed'); },
+        closeStructure: (stage) => { closes.push(stage); },
       });
     await vi.waitFor(() => expect(host.querySelector('pre.candidate-sequence')).not.toBeNull());
     expect(closes).toHaveLength(0);

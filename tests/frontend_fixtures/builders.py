@@ -780,6 +780,7 @@ def _logical_file(file_id: str, entry: Mapping[str, Any], index: int, task_id: s
     payload: dict[str, Any] = {
         "id": file_id,
         "name": Path(str(entry["path"])).name,
+        "path": str(entry["path"]),
         "media_type": entry["media_type"],
         "size": entry["size"],
         "role": entry["role"],

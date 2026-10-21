@@ -138,7 +138,9 @@ export function createBasicRenderers(): ArtifactRenderer[] {
       id: 'table',
       async render(artifact, host, context) {
         const name = resultFileName(artifact), encoded = name.split('/').map(encodeURIComponent).join('/');
-        const url = artifact.table_url || ('path' in artifact
+        // A logical file carries the Server's bounded table URL or none; only a raw
+        // published artifact lets the browser compose the bounded page route.
+        const url = artifact.table_url || (!('id' in artifact)
           ? `/compute/api/results/${encodeURIComponent(context.taskId)}/tables/${encoded}?limit=100`
           : null);
         if (!url) throw new Error(t('results.tableNoUrl'));

@@ -302,7 +302,7 @@ export class ResultWorkspace {
     return { signal, taskId: this.taskId, openStructure: (artifact, host) => this.renderStructure(artifact, host),
       closeStructure: (host) => this.structure.disposeIfIn(host), selectStructure: (selection) => this.structure.select(selection),
       drawsStructure: (artifact) => this.storyboardStructure !== null
-        && this.storyboardStructure.name === localName(resultFileName(artifact)) };
+        && this.storyboardStructure.path === artifact.path };
   }
 
   private openViewById(viewId: string): Promise<void> {
@@ -371,8 +371,12 @@ export class ResultWorkspace {
     let panel = slot.querySelector<HTMLElement>(':scope > .storyboard-structure-panel');
     if (!panel) { panel = element('section', 'storyboard-structure-panel'); slot.append(panel); }
     panel.setAttribute('aria-busy', 'true');
-    this.storyboardStructure = file;
-    try { await this.renderStructure(file, panel); if (generation === this.storyboardStructureGeneration) panel.dataset.ready = 'true'; }
+    try {
+      await this.renderStructure(file, panel);
+      // Only a mount that actually landed makes this the structure the page draws;
+      // a failed mount must not suppress the declared view's own stage.
+      if (generation === this.storyboardStructureGeneration) { this.storyboardStructure = file; panel.dataset.ready = 'true'; }
+    }
     catch (error) {
       if (generation !== this.storyboardStructureGeneration || (error as Error).name === 'AbortError') return;
       this.structure.dispose(); panel.replaceChildren(element('p', 'result-empty', (error as Error).message || t('results.structureUnavailable')));

@@ -7,6 +7,7 @@
  */
 import { resultFileName, type ResultFile, type ResultView } from '../../api/result-types';
 import { t } from '../../app/i18n';
+import { localName } from './artifact-tree';
 import { artifactCapability } from './renderer-registry';
 import type { ResolvedViewSources, ViewRenderer } from './renderer-registry';
 
@@ -48,7 +49,7 @@ export function createEvidenceBundleViewRenderer(): ViewRenderer {
         const name = resultFileName(item.file);
         const row = document.createElement('li'); row.className = 'evidence-bundle-item';
         row.dataset.source = item.source; row.dataset.capability = item.capability; row.dataset.path = name;
-        const title = document.createElement('strong'); title.textContent = name;
+        const title = document.createElement('strong'); title.textContent = localName(name);
         const meta = document.createElement('span'); meta.className = 'result-note';
         meta.textContent = `${item.capability} · ${formatBytes(item.file.size)}`;
         const link = document.createElement('a'); link.className = 'result-button result-button-small';
@@ -57,9 +58,9 @@ export function createEvidenceBundleViewRenderer(): ViewRenderer {
         row.append(title, meta, link);
         if (item.capability === 'image') {
           const image = document.createElement('img'); image.className = 'result-image';
-          image.loading = 'lazy'; image.alt = name; image.src = item.file.url;
+          image.loading = 'lazy'; image.alt = localName(name); image.src = item.file.url;
           image.addEventListener('error', () => { image.replaceWith(Object.assign(document.createElement('p'), {
-            className: 'result-note', textContent: t('results.evidenceBundle.imageFailed', { name }),
+            className: 'result-note', textContent: t('results.evidenceBundle.imageFailed', { name: localName(name) }),
           })); }, { once: true });
           row.append(image);
         }

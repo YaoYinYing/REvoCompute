@@ -16,8 +16,9 @@ export interface ResultArtifact extends ApiArtifact {
   cardinality?: 'one' | 'many';
   id?: string;
 }
+/** A published artifact and a logical file both name their published path. */
 export type ResultFile = ResultArtifact | LogicalResultFile;
-export function resultFileName(file: ResultFile): string { return 'path' in file ? file.path : file.name; }
+export function resultFileName(file: ResultFile): string { return file.path; }
 
 export interface ResultManifest extends Omit<ApiResultManifest, 'artifacts'> {
   filename?: string;

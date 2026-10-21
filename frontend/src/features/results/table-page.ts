@@ -29,7 +29,9 @@ interface RawPage {
 export function tableUrlOf(source: ResultFile | undefined, taskId: string): string | undefined {
   if (!source) return undefined;
   if (source.table_url) return source.table_url;
-  if (!('path' in source)) return undefined;
+  // A logical file carries the Server's bounded table URL or nothing: its path is
+  // published identity, not a route the browser may construct.
+  if ('id' in source) return undefined;
   const encoded = source.path.split('/').map(encodeURIComponent).join('/');
   return `/compute/api/results/${encodeURIComponent(taskId)}/tables/${encoded}`;
 }

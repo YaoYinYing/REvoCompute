@@ -56,6 +56,10 @@ describe('loadTable', () => {
       .toBe('/tables/scores.csv');
     expect(tableUrlOf({ path: 'nested dir/scores.csv', url: '/artifacts/x' } as never, 'a'.repeat(32)))
       .toContain('/tables/nested%20dir/scores.csv');
+    // A logical file's published path is identity, not a route: without the
+    // Server's own table URL the view asks for none.
+    expect(tableUrlOf({ id: 'scores', name: 'scores.csv', path: 'nested/scores.csv', url: '/files/scores?index=0' } as never,
+      'a'.repeat(32))).toBeUndefined();
     expect(tableUrlOf(undefined, 'a'.repeat(32))).toBeUndefined();
   });
 });
@@ -123,15 +127,16 @@ describe('entity-table declared structure', () => {
   it('closes the stage it mounted when the view is superseded', async () => {
     installHarness(vi.stubGlobal);
     servePages(rows, columns, 500);
-    const closed: string[] = [];
+    const closed: unknown[] = [];
     const host = document.createElement('section') as unknown as HarnessNode;
     const instance = await createEntityTableViewRenderer().render(activeSites as never,
       { ...tableSource, structure: [structure] } as never, host as unknown as HTMLElement,
       { signal: new AbortController().signal, taskId: 'a'.repeat(32),
-        openStructure: async () => undefined, closeStructure: (host) => { closed.push(host.className); } });
+        openStructure: async () => undefined, closeStructure: (stage) => { closed.push(stage); } });
+    const stage = host.querySelector('.entity-table-stage');
     (instance as { destroy(): void }).destroy();
-    // The view closes the exact stage it mounted, never the workspace's stage by name.
-    expect(closed).toEqual(['entity-table-stage']);
+    // The view closes the exact stage node it mounted, never a stage chosen by name.
+    expect(closed).toEqual([stage]);
   });
 
   it('renders only the table when the view declares no structure', async () => {
