@@ -9,6 +9,7 @@ import { resultFileName, type ResultFile, type ResultView } from '../../api/resu
 import { t } from '../../app/i18n';
 import { artifactCapability } from './renderer-registry';
 import { CandidateSelector } from './scientific';
+import { boundedText } from './molecular/structure-controller';
 import type { ResolvedViewSources, ViewRenderer } from './renderer-registry';
 
 export interface FastaRecord { name: string; sequence: string; }
@@ -42,7 +43,18 @@ async function fetchText(file: ResultFile, signal: AbortSignal): Promise<string>
   if (file.size > MAX_SEQUENCE_BYTES) throw new Error(t('results.candidates.error.tooLarge', { name: resultFileName(file) }));
   const response = await fetch(file.url, { credentials: 'same-origin', signal, headers: { Range: `bytes=0-${MAX_SEQUENCE_BYTES - 1}` } });
   if (!response.ok && response.status !== 206) throw new Error(t('results.candidates.error.unreadable', { name: resultFileName(file) }));
-  return response.text();
+  // The declared size is not a bound on what is read: a Range-ignoring server
+  // answers 200 with the whole body, and a publication can disagree with the
+  // manifest. The bytes actually read are bounded, so an oversized body is
+  // refused rather than presented as a complete, truncated candidate set.
+  const tooLarge = (): Error => new Error(t('results.candidates.error.tooLarge', { name: resultFileName(file) }));
+  if (!response.body) {
+    const text = await response.text();
+    if (new TextEncoder().encode(text).byteLength > MAX_SEQUENCE_BYTES) throw tooLarge();
+    return text;
+  }
+  try { return await boundedText(response.body, MAX_SEQUENCE_BYTES); }
+  catch (error) { if ((error as Error).name === 'AbortError') throw error; throw tooLarge(); }
 }
 
 /** Render a declared `candidate-collection` view through the shared CandidateSelector. */
@@ -89,18 +101,23 @@ export function createCandidateCollectionViewRenderer(): ViewRenderer {
         label: (item) => item.name,
         onSelect: async (item, _index, request) => {
           detail.replaceChildren();
+          const showsStructure = !item.record && Boolean(context.openStructure)
+            && ['structure', 'molecular_structure'].includes(artifactCapability(item.file!));
+          // The stage belongs to the selection that opened it: a selection that is
+          // not a structure removes it, and invalidates a mount still in flight so
+          // it cannot land in a stage the sequence now owns.
+          if (!showsStructure) { stage.remove(); context.closeStructure?.(); }
           if (!item.record) {
             const file = item.file!;
             const link = document.createElement('a'); link.className = 'result-button result-button-small';
             link.href = file.url; link.setAttribute('download', '');
             link.textContent = t('results.candidates.download', { name: resultFileName(file) });
             detail.append(link);
-            const capability = artifactCapability(file);
-            if (context.openStructure && (capability === 'structure' || capability === 'molecular_structure')) {
+            if (showsStructure) {
               if (stage.parentNode !== section) section.insertBefore(stage, detail);
               // A candidate that cannot be shown states why and leaves no empty stage: the
               // selection rejects here, and a superseded mount is not a failure to report.
-              try { await context.openStructure(file, stage); }
+              try { await context.openStructure!(file, stage); }
               catch (error) {
                 if ((error as Error).name === 'AbortError' || !request.current()) return false;
                 stage.remove();
@@ -128,7 +145,7 @@ export function createCandidateCollectionViewRenderer(): ViewRenderer {
         },
       });
       void selector.select(0);
-      return { destroy: () => selector.destroy() };
+      return { destroy: () => { selector.destroy(); context.closeStructure?.(); } };
     },
   };
 }

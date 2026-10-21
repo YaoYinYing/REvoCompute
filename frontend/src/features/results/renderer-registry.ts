@@ -8,6 +8,9 @@ export interface RendererContext {
   // stage; absent for an embedder that has none. A view renderer that shows a
   // candidate as a structure uses this instead of carrying a second viewer.
   openStructure?(artifact: ResultFile, host: HTMLElement): Promise<void>;
+  // Invalidate the shared molecular stage; a view renderer calls this when the
+  // structure it opened is superseded by a selection that is not a structure.
+  closeStructure?(): void;
 }
 
 export interface ArtifactRenderer {

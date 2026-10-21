@@ -1,0 +1,69 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import type { ResultArtifact } from '../src/api/result-types';
+import { ResultWorkspace } from '../src/features/results/ResultWorkspace';
+import type { MolecularViewer } from '../src/features/results/molecular/viewer-contract';
+import { HarnessNode, installHarness } from './dom-harness';
+
+const TASK = '0123456789abcdef0123456789abcdef';
+const artifact = (path: string, extra: Record<string, unknown> = {}): ResultArtifact & Record<string, unknown> => ({
+  path, size: 8, sha256: 'a'.repeat(64), url: `/artifacts/${path}`, media_type: 'text/plain',
+  preview: 'text', capability: 'text', role: 'primary', ...extra,
+} as ResultArtifact & Record<string, unknown>);
+
+const candidate = artifact('models/model_0.cif', { media_type: 'chemical/x-cif', preview: 'structure', capability: 'molecular_structure' });
+const summary = artifact('summary.txt');
+const manifest = { schema_version: 3, task_id: TASK, task_type: 'demo', created_at: '2026-10-22T00:00:00Z',
+  status: 'finished', terminal: true, error: null, artifacts: [candidate, summary], total_size: 16, limitations: [],
+  views: [
+    { id: 'models', plugin: 'candidate-collection', role: 'primary', title: 'Models', sources: { candidates: [candidate.path] }, mapping: {} },
+    { id: 'summary', plugin: 'evidence-bundle', role: 'evidence', title: 'Summary', sources: { items: [summary.path] }, mapping: {} },
+  ],
+  run: { method: { name: 'Demo' }, inputs: [], parameters: [], citations: [] },
+  output_check: { state: 'passed', checks: [], problems: [] },
+  archive: { ready: false, request_url: `/compute/api/results/${TASK}/archive`, download_url: null },
+  storyboard: null, result: { files: {} }, outcome: 'SUCCESS' };
+const status = { task_id: TASK, task_type: 'demo', display_name: 'demo', status: 'finished', terminal: true,
+  result_available: true, status_url: '', results_url: '' };
+
+/** The harness needs an `<option>` that behaves like the element `new Option` builds. */
+class OptionNode extends HarnessNode {
+  text: string; value: string;
+  constructor(text: string, value: string) { super('option'); this.text = text; this.value = value; }
+}
+
+afterEach(() => vi.unstubAllGlobals());
+
+describe('ResultWorkspace molecular stage ownership', () => {
+  it('disposes the shared viewer when a candidate view is superseded and remounts on return', async () => {
+    installHarness(vi.stubGlobal, { pathname: `/compute/results/${TASK}` });
+    vi.stubGlobal('Option', OptionNode);
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.includes('/auth/me')) return new Response(JSON.stringify({ id: 1, username: 'owner' }));
+      if (url.includes('/running/')) return new Response(JSON.stringify(status));
+      if (url.endsWith(`/results/${TASK}`)) return new Response(JSON.stringify(manifest));
+      return new Response('ATOM');
+    }));
+    let mounts = 0; let disposals = 0;
+    const viewer = (): MolecularViewer => ({ setRepresentation: async () => {}, setColor: async () => {}, setTheme: () => {},
+      resize: () => {}, captureImage: async () => '', loadStructure: async () => {}, dispose: () => { disposals += 1; } });
+    const root = document.createElement('div') as unknown as HarnessNode;
+    const workspace = new ResultWorkspace(root as unknown as HTMLElement, async () => { mounts += 1; return viewer(); });
+    const search = root.querySelector('.result-search') as unknown as { value: string };
+    search.value = '';
+
+    await workspace.load();
+    expect(root.querySelector('.candidate-stage')).not.toBeNull();
+    expect(mounts).toBe(1);
+
+    await (workspace as unknown as { openView(view: unknown): Promise<void> })
+      .openView((manifest.views as unknown[])[1]);
+    expect(disposals).toBe(1);
+    expect(root.querySelector('.candidate-stage')).toBeNull();
+
+    await (workspace as unknown as { openView(view: unknown): Promise<void> })
+      .openView((manifest.views as unknown[])[0]);
+    expect(root.querySelector('.candidate-stage')).not.toBeNull();
+    expect(mounts).toBe(2);
+  });
+});

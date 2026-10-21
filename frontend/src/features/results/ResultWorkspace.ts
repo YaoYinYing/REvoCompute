@@ -297,7 +297,7 @@ export class ResultWorkspace {
   // stage, so a structure candidate opens through the same viewer and toolbar as
   // a structure artifact.
   private rendererContext(signal: AbortSignal): RendererContext {
-    return { signal, taskId: this.taskId, openStructure: (artifact, host) => this.renderStructure(artifact, host) };
+    return { signal, taskId: this.taskId, openStructure: (artifact, host) => this.renderStructure(artifact, host), closeStructure: () => this.structure.dispose() };
   }
 
   private openViewById(viewId: string): Promise<void> {
@@ -319,7 +319,7 @@ export class ResultWorkspace {
     }
     this.storyboardStructureGeneration += 1;
     if ((this.nodes.rail as HTMLDialogElement).open) (this.nodes.rail as HTMLDialogElement).close();
-    this.destroyViewRenderer(); this.geometry.dispose(); this.storyboard.destroy(); this.cancelRender(); this.selectArtifact(artifact); this.markTab(null);
+    this.destroyViewRenderer(); this.geometry.dispose(); this.storyboard.destroy(); this.cancelRender(); this.structure.dispose(); this.selectArtifact(artifact); this.markTab(null);
     const fileName = resultFileName(artifact);
     this.nodes.previewTitle.textContent = view.title; this.nodes.previewDescription.textContent = view.description || '';
     this.nodes.download.hidden = false; this.nodes.download.href = downloadUrl(artifact); this.nodes.download.title = fileName;

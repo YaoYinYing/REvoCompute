@@ -155,6 +155,67 @@ describe('candidate collection', () => {
     expect(host.querySelector('a[download]')!.getAttribute('href')).toBe('/artifacts/predictions/model_0.cif');
   });
 
+  it('removes a superseded structure stage when a sequence record is selected', async () => {
+    installHarness(vi.stubGlobal);
+    serve('>design_a\nMKT\n');
+    let release!: () => void; const pending = new Promise<void>((resolve) => { release = resolve; });
+    const closes: string[] = [];
+    const host = document.createElement('section') as unknown as HarnessNode;
+    const items = [artifact('seqs/designs.fa'), artifact('models/model_0.cif')];
+    const rendering = createCandidateCollectionViewRenderer().render(
+      { id: 'designs', plugin: 'candidate-collection', role: 'primary', title: 'Designs', sources: { candidates: items.map((item) => item.path) }, mapping: {} } as never,
+      { candidates: items } as never, host as unknown as HTMLElement, {
+        signal: new AbortController().signal, taskId: 'a'.repeat(32),
+        // The mount resolves only after the sequence selection became current.
+        openStructure: async (_file, stage) => { stage.textContent = 'mounted'; await pending; },
+        closeStructure: () => { closes.push('closed'); },
+      });
+    const buttons = () => host.querySelectorAll('button.candidate-open');
+    await vi.waitFor(() => expect(buttons()).toHaveLength(2));
+    buttons()[1]!.dispatch('click', {});
+    await vi.waitFor(() => expect(host.querySelector('.candidate-stage')).not.toBeNull());
+    buttons()[0]!.dispatch('click', {});
+    await vi.waitFor(() => expect(host.querySelector('pre.candidate-sequence')!.textContent).toBe('MKT'));
+    release(); await rendering; await Promise.resolve();
+    expect(host.querySelector('.candidate-stage')).toBeNull();
+    expect(closes).toHaveLength(2);
+    expect(host.textContent).not.toContain('mounted');
+  });
+
+  it('refuses a Range-ignoring 200 body past the collection bound', async () => {
+    installHarness(vi.stubGlobal);
+    const body = new Uint8Array(1024 * 1024 + 1).fill(0x41);
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(body, { status: 200 })));
+    const host = document.createElement('section') as unknown as HarnessNode;
+    await expect(createCandidateCollectionViewRenderer().render(
+      { id: 'seqs', plugin: 'candidate-collection', role: 'primary', title: 'Candidates', sources: { candidates: ['seqs/big.fa'] }, mapping: {} } as never,
+      { candidates: [artifact('seqs/big.fa')] } as never, host as unknown as HTMLElement,
+      { signal: new AbortController().signal, taskId: 'a'.repeat(32) })).rejects.toThrow('too large to list');
+  });
+
+  it('refuses a partial 206 body past the collection bound', async () => {
+    installHarness(vi.stubGlobal);
+    const body = new Uint8Array(1024 * 1024 + 1).fill(0x41);
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(body, { status: 206 })));
+    const host = document.createElement('section') as unknown as HarnessNode;
+    await expect(createCandidateCollectionViewRenderer().render(
+      { id: 'seqs', plugin: 'candidate-collection', role: 'primary', title: 'Candidates', sources: { candidates: ['seqs/big.fa'] }, mapping: {} } as never,
+      { candidates: [artifact('seqs/big.fa')] } as never, host as unknown as HTMLElement,
+      { signal: new AbortController().signal, taskId: 'a'.repeat(32) })).rejects.toThrow('too large to list');
+  });
+
+  it('refuses a declared oversize collection without fetching it', async () => {
+    installHarness(vi.stubGlobal);
+    const fetchMock = vi.fn(async () => new Response('>a\nMKT\n'));
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(createCandidateCollectionViewRenderer().render(
+      { id: 'seqs', plugin: 'candidate-collection', role: 'primary', title: 'Candidates', sources: { candidates: ['seqs/big.fa'] }, mapping: {} } as never,
+      { candidates: [artifact('seqs/big.fa', { size: 1024 * 1024 + 1 })] } as never,
+      document.createElement('section') as unknown as HTMLElement,
+      { signal: new AbortController().signal, taskId: 'a'.repeat(32) })).rejects.toThrow('too large to list');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('states a failed sequence read instead of a blank list', async () => {
     installHarness(vi.stubGlobal);
     serve('nope', 500);

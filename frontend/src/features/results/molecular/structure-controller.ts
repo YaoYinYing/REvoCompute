@@ -155,7 +155,7 @@ function encodedLength(text: string): number {
  * -- is accepted now. What the text check additionally refuses is input whose
  * decode expands past the limit, which is not a structure at all.
  */
-async function boundedText(stream: ReadableStream<Uint8Array>, limit: number): Promise<string> {
+export async function boundedText(stream: ReadableStream<Uint8Array>, limit: number): Promise<string> {
   const reader = stream.getReader();
   const decoder = new TextDecoder();
   let text = '';
