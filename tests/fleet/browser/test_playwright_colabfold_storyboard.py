@@ -36,6 +36,14 @@ RESPONSES = {
     "/scores/2": {"plddt": [50, 60, 70], "ptm": 0.61, "iptm": 0.52, "ranking_confidence": 0.54, "pae": [[4, 5, 6], [5, 4, 5], [6, 5, 4]]},
     "/interface": {"scores_file": "job_scores_rank_001_model_1_seed_000.json", "ipsae": 0.67, "pdockq2": 0.58},
 }
+# The declared `predicted_aligned_error` matrix view, transcribed from task.yaml.
+VIEWS = [{
+    "id": "predicted_aligned_error",
+    "plugin": "matrix",
+    "title": "Predicted aligned error",
+    "sources": {},
+    "mapping": {"scale_min": 0, "scale_max": 31.75, "unit": "Å", "x_label": "Aligned residue", "y_label": "Scored residue"},
+}]
 
 MOUNT = """
 async (payload) => {
@@ -60,6 +68,7 @@ async (payload) => {
   const instance = await module.default.mount(document.getElementById("host"), {
     files: { get: (id) => files.get(id) || null },
     metadata: { taskType: "colabfold_af2" },
+    views: payload.views || [],
     services: { openFile: (artifact) => opened.push(artifact.url), downloadFile: () => {} },
   });
   window.__colabfold = { opened, instance };
@@ -71,7 +80,7 @@ def _mount(page: Page, *, delays: dict[str, int] | None = None) -> None:
     page.set_viewport_size({"width": 1200, "height": 1000})
     page.set_content("<div id='host'></div>")
     install_scientific_assets(page)
-    page.evaluate(MOUNT, {"source": STORYBOARD.read_text(encoding="utf-8"), "files": FILES, "responses": RESPONSES, "delays": delays or {}})
+    page.evaluate(MOUNT, {"source": STORYBOARD.read_text(encoding="utf-8"), "files": FILES, "views": VIEWS, "responses": RESPONSES, "delays": delays or {}})
 
 
 def test_colabfold_storyboard_synchronizes_ranked_confidence_and_pae(page: Page) -> None:
@@ -81,8 +90,8 @@ def test_colabfold_storyboard_synchronizes_ranked_confidence_and_pae(page: Page)
     expect(candidates).to_have_count(2)
     expect(candidates.nth(0)).to_have_attribute("aria-current", "true")
     assert page.locator(".scalar-grid").text_content() == (
-        "Mean pLDDT80.0 scoreHigher is betterpTM0.81 scoreHigher is better"
-        "ipTM0.72 scoreHigher is betterRanking confidence0.74 scoreHigher is better"
+        "pTM0.81 scoreHigher is betteripTM0.72 scoreHigher is better"
+        "Ranking confidence0.74 scoreHigher is better"
         "ipSAE0.67 scoreHigher is betterpDockQ20.58 scoreHigher is better"
     )
     expect(page.locator(".colabfold-figure canvas")).to_have_attribute("role", "grid")
@@ -91,7 +100,7 @@ def test_colabfold_storyboard_synchronizes_ranked_confidence_and_pae(page: Page)
     expect(page.locator(".msa-header")).to_have_count(2)
 
     candidates.nth(1).click()
-    expect(page.locator(".scalar-grid")).to_contain_text("Mean pLDDT60.0 score")
+    expect(page.locator(".scalar-grid")).to_contain_text("pTM0.61 score")
     expect(page.locator(".scalar-grid")).not_to_contain_text("ipSAE")
     expect(page.locator(".matrix-readout")).to_contain_text("4.0 Å")
 
@@ -108,9 +117,8 @@ def test_colabfold_renders_available_evidence_when_optional_fields_are_missing(p
     page.set_viewport_size({"width": 1200, "height": 1000})
     page.set_content("<div id='host'></div>")
     install_scientific_assets(page)
-    page.evaluate(MOUNT, {"source": STORYBOARD.read_text(encoding="utf-8"), "files": files, "responses": responses})
+    page.evaluate(MOUNT, {"source": STORYBOARD.read_text(encoding="utf-8"), "files": files, "views": VIEWS, "responses": responses})
 
-    expect(page.locator(".scalar-grid")).to_contain_text("Mean pLDDT80.0 score")
     expect(page.locator(".scalar-grid")).to_contain_text("pTM0.81 score")
     expect(page.locator(".scalar-grid")).not_to_contain_text("ipTM")
     expect(page.locator(".colabfold-figure")).to_be_hidden()
@@ -123,7 +131,7 @@ def test_colabfold_ignores_a_late_response_from_the_previous_generation(page: Pa
     candidates.nth(0).click()
     candidates.nth(1).click()
 
-    expect(page.locator(".scalar-grid")).to_contain_text("Mean pLDDT60.0 score")
+    expect(page.locator(".scalar-grid")).to_contain_text("pTM0.61 score")
     page.wait_for_timeout(180)
-    expect(page.locator(".scalar-grid")).to_contain_text("Mean pLDDT60.0 score")
+    expect(page.locator(".scalar-grid")).to_contain_text("pTM0.61 score")
     expect(page.locator(".matrix-readout")).to_contain_text("4.0 Å")

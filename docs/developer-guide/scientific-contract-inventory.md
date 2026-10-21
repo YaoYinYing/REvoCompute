@@ -98,9 +98,9 @@ reported at `declared_scientific_acceptance` and never one level higher, and a f
 that genuinely runs the program but ships no bundle is under-claimed rather than
 over-claimed. The level never claims more than a re-verifiable artifact proves.
 
-The fleet currently records one family at `real_runner_cli`: GREMLIN_LH, through
-the same re-verified bundle that reaches the strongest level. Only one family
-reaches `target_host_slurm_apptainer`. That is the point of the table: most of the
+The fleet currently records two families at `real_runner_cli`: BioEmu and
+GREMLIN_LH, through re-verified replay bundles. Only one family reaches
+`target_host_slurm_apptainer`. That is the point of the table: most of the
 fleet's strongest available evidence is static or fake-runner, and the report says
 so instead of implying uniform validation.
 
@@ -192,7 +192,6 @@ Two caveats are load-bearing and are carried in the report itself:
 
 ## Known defects
 
-The audit's defect set is orthogonal to its coverage partition, and it is
 The audit's defect set is orthogonal to its coverage partition, and it is
 currently **empty**: `defective: []`, `ok: true`, with the coverage partition
 at 45 covered / 12 unaudited. An empty defect set is not a clean bill of

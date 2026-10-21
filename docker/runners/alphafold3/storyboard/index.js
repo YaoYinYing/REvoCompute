@@ -4,9 +4,13 @@
 const RAMP_LIGHT = ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", "#0d366b"];
 const RAMP_DARK = ["#184f95", "#256abf", "#3987e5", "#6da7ec", "#9ec5f4", "#b7d3f6", "#cde2fb"];
 const PLOT = { width: 800, height: 600, left: 78, top: 30, size: 500, legendX: 604, legendWidth: 24 };
-const SCALARS = [["ptm", "pTM", "score", "Higher is better"], ["iptm", "ipTM", "score", "Higher is better"], ["ranking_score", "Ranking score", "score", "Higher is better"], ["fraction_disordered", "Fraction disordered", "fraction", "Lower is better"], ["has_clash", "Has clash", "flag", "Lower is better"]];
 const STYLE = `.af3-result{display:grid;gap:1.1rem;padding:1rem}.af3-result h2,.af3-result h3,.af3-result p{margin:0}.af3-section{display:grid;gap:.5rem}.af3-actions{display:flex;flex-wrap:wrap;gap:.5rem}`;
 
+// The Task's declared `confidence_summary` scalar-summary view is the only
+// source of the global-confidence vocabulary shown here: fields, labels, units,
+// and direction come from the declaration, not from a copy in this module.
+function declaredScalars(views) { const view = list(views).find((item) => item.id === 'confidence_summary'); const fields = view && view.mapping && view.mapping.fields; return Array.isArray(fields) ? fields : []; }
+function directionWording(direction) { return direction === 'higher' ? 'Higher is better' : direction === 'lower' ? 'Lower is better' : ''; }
 function list(value) { return Array.isArray(value) ? value : value ? [value] : []; }
 function name(artifact) { return artifact && (artifact.name || String(artifact.path || "").split("/").pop()); }
 function key(artifact, suffix) { const value = name(artifact); return value && value.endsWith(suffix) ? value.slice(0, -suffix.length) : null; }
@@ -20,6 +24,7 @@ export default {
     const Scientific = window.REvoComputeScientific;
     if (!Scientific || typeof Scientific.loadProjection !== "function") throw new Error("Shared scientific visualizations are unavailable.");
     const structures = list(context.files.get("structures"));
+    const scalars = declaredScalars(context.views);
     const summaryByKey = new Map(list(context.files.get("summaries")).map((item) => [key(item, "_summary_confidences.json"), item]));
     const confidenceByKey = new Map(list(context.files.get("confidences")).filter((item) => !name(item).endsWith("_summary_confidences.json")).map((item) => [key(item, "_confidences.json"), item]));
     let generation = 0; let matrix = null;
@@ -42,7 +47,7 @@ export default {
       if (!identity || !confidence) { clearCandidate("No exact confidence record matches this structure candidate."); return; }
       try {
         const [scalarResults, required] = await Promise.all([
-          summary ? Promise.allSettled(SCALARS.map(([field]) => Scientific.loadNumericProjection(summary, { key: field, signal: request.signal }))) : Promise.resolve([]),
+          summary && scalars.length ? Promise.allSettled(scalars.map((field) => Scientific.loadNumericProjection(summary, { key: field.path, signal: request.signal }))) : Promise.resolve([]),
           Promise.all([
           Scientific.loadNumericProjection(confidence, { key: "pae", signal: request.signal }),
           Scientific.loadNumericProjection(confidence, { key: "token_res_ids", signal: request.signal }),
@@ -55,14 +60,16 @@ export default {
         residueIds = residueProjection.shape.length === 1 ? residueProjection.values : []; chainIds = chainProjection.shape.length === 1 ? chainProjection.values : [];
         if (residueIds.length !== values.length || chainIds.length !== values.length) throw new Error("Candidate labels do not match the PAE dimensions.");
         residueLabels = residueIds.map((value) => typeof value === "number" && Number.isFinite(value) ? String(value) : "N/A");
-        const scalarMetrics = SCALARS.flatMap(([field, label, unit, direction], index) => {
+        const scalarMetrics = scalars.flatMap((field, index) => {
           const result = scalarResults[index];
-          if (!result || result.status !== "fulfilled") return [];
-          const value = scalarValue(result.value);
-          return value == null ? [] : [{ label, value, unit, meaning: direction }];
+          const value = result && result.status === "fulfilled" ? scalarValue(result.value) : null;
+          // A declared nullable field that this candidate does not publish renders
+          // as N/A, the same way the declared scalar-summary view renders it.
+          if (value == null && !field.nullable) return [];
+          return [{ label: field.label, value, unit: field.unit, meaning: directionWording(field.direction), nullable: Boolean(field.nullable) }];
         });
         if (scalarMetrics.length) new Scientific.ScalarMetricGrid(metricHost, scalarMetrics);
-        else metricHost.replaceChildren(message("This candidate did not publish global confidence scalars."));
+        else metricHost.replaceChildren(message(summary && scalars.length ? "This candidate did not publish global confidence scalars." : "The Task declared no global confidence scalars."));
         const open = document.createElement("button"); open.type = "button"; open.className = "btn btn-soft"; open.textContent = "Open selected structure"; open.addEventListener("click", () => context.services.openFile(structure)); actions.replaceChildren(open);
         plot.hidden = false;
         matrix = new Scientific.PairMatrix({ figure, canvas, readout, observe: plot, geometry: PLOT, minimum: 0, decimals: 1, ticks: 5, xTitle: "Aligned residue", yTitle: "Scored residue", legendTitle: "PAE (Å)", unit: "Å", ramp: () => themeName() === "dark" ? RAMP_DARK : RAMP_LIGHT, formatReadout: ({ x, y, value }) => `Aligned residue ${residueLabels[x]} (chain ${chainIds[x]}) · Scored residue ${residueLabels[y]} (chain ${chainIds[y]}) · ${Number.isFinite(value) ? value.toFixed(1) : "N/A"} Å`, onSelect: ({ x, y }) => { const rawResidue = residueIds[x]; const residue = typeof rawResidue === "number" && Number.isFinite(rawResidue) ? rawResidue : null; const chain = String(chainIds[x] || ""); context.selection.set({ token: residue, entityA: chain || null, entityB: String(chainIds[y] || "") || null }, matrix); if (chain && residue != null) context.services.focusStructure?.({ chain, residue, numbering: "label_seq_id" }); } });

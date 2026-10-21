@@ -38,6 +38,8 @@ async function fetchText(artifact, signal) {
 async function fetchJson(artifact, signal) { return JSON.parse(await fetchText(artifact, signal)); }
 function scalar(projection) { return projection && projection.shape.length === 0 && projection.values.length === 1 ? projection.values[0] : null; }
 function matrixRows(projection) { if (!projection || projection.shape.length !== 2) return null; const [rows, columns] = projection.shape; if (rows < 1 || columns !== rows) return null; return Array.from({ length: rows }, (_, row) => projection.values.slice(row * columns, (row + 1) * columns)); }
+// The Task's declared `predicted_aligned_error` matrix view owns the PAE scale.
+function matrixMapping(views, id) { const view = list(views).find((item) => item.id === id); return view && view.mapping || {}; }
 function preferredStructures(artifacts) {
   const byRank = new Map();
   artifacts.forEach((artifact) => {
@@ -74,7 +76,7 @@ export default {
     const candidates = section("Ranked models", "A relaxed model is preferred when ColabFold published both relaxed and unrelaxed files for the same rank.");
     const candidateHost = document.createElement("div"); candidateHost.className = "colabfold-candidates"; candidates.appendChild(candidateHost); const actions = document.createElement("div"); actions.className = "colabfold-candidates"; candidates.appendChild(actions); root.appendChild(candidates);
     const columns = document.createElement("div"); columns.className = "colabfold-columns";
-    const metrics = section("Model confidence", "Values belong to the selected ranked model. pLDDT and pTM are model confidence estimates, not experimental validation."); const metricHost = document.createElement("div"); metrics.appendChild(metricHost);
+    const metrics = section("Model confidence", "Values belong to the selected ranked model. pTM, ipTM, and ranking confidence are model confidence estimates, not experimental validation."); const metricHost = document.createElement("div"); metrics.appendChild(metricHost);
     const local = section("Local confidence", "Per-residue pLDDT; higher values indicate greater model confidence."); const localHost = document.createElement("div"); local.appendChild(localHost);
     columns.append(metrics, local); root.appendChild(columns);
 
@@ -90,7 +92,9 @@ export default {
     evidence.append(coverage, entities); root.appendChild(evidence); host.replaceChildren(root);
 
     let residueFocusAvailable = false;
-    matrix = new Scientific.PairMatrix({ figure, canvas, readout, minimum: 0, maximum: 31.75, unit: "Å", xTitle: "Aligned residue", yTitle: "Scored residue", legendTitle: "PAE (Å)", decimals: 1, onSelect: ({ x }) => { const residue = x + 1; context.selection.set({ token: residue }, matrix); if (residueFocusAvailable) context.services.focusStructure?.({ residue, numbering: "label_seq_id" }); } });
+    const views = list(context.views);
+    const paeMapping = matrixMapping(views, "predicted_aligned_error");
+    matrix = new Scientific.PairMatrix({ figure, canvas, readout, minimum: paeMapping.scale_min, maximum: paeMapping.scale_max, unit: paeMapping.unit || "Å", xTitle: paeMapping.x_label || "Aligned residue", yTitle: paeMapping.y_label || "Scored residue", legendTitle: "PAE (Å)", decimals: 1, onSelect: ({ x }) => { const residue = x + 1; context.selection.set({ token: residue }, matrix); if (residueFocusAvailable) context.services.focusStructure?.({ residue, numbering: "label_seq_id" }); } });
     const [a3m, interfacePayload] = await Promise.all([
       fetchText(alignment, abort.signal),
       interfaceArtifact ? fetchJson(interfaceArtifact, abort.signal).catch(() => null) : Promise.resolve(null),
@@ -122,10 +126,9 @@ export default {
         const available = results.map((result) => result.status === "fulfilled" ? result.value : null);
         const [plddtProjection, paeProjection, ptm, iptm, ranking] = available;
         const plddt = plddtProjection && plddtProjection.shape.length === 1 ? plddtProjection.values : [];
-        const finite = plddt.filter(Number.isFinite); const mean = finite.length ? finite.reduce((sum, value) => sum + value, 0) / finite.length : null;
+        const finite = plddt.filter(Number.isFinite);
         const publishedInterface = interfacePayload && interfacePayload.scores_file === name(scoreArtifact) ? interfacePayload : null;
         const scalarMetrics = [
-          { label: "Mean pLDDT", value: mean == null ? null : mean.toFixed(1), unit: "score", meaning: "Higher is better" },
           { label: "pTM", value: scalar(ptm), unit: "score", meaning: "Higher is better" },
           { label: "ipTM", value: scalar(iptm), unit: "score", meaning: "Higher is better" },
           { label: "Ranking confidence", value: scalar(ranking), unit: "score", meaning: "Higher is better" },

@@ -62,12 +62,16 @@ rewrite them. `chai1-model-assets.json` is a required item of the
 `prediction_evidence` view, so the bundle cannot drop it without dropping the
 view.
 
-The replay harness's host-path guard did not catch this path, and that is a
-second, separate defect: `_HOST_PATH` in `tests/frontend_fixtures/replay_bundle.py`
-only matches a path preceded by whitespace or the start of a string, so a path
-that begins a JSON string value is not detected. The same gap already admits
-`(/tmp/rc/prodrop)` in the BioEmu bundle's `provenance.source`. The fix belongs
-in the guard (and then a recapture), not in a hand edit of this file.
+The host-path guard in `tests/frontend_fixtures/replay_bundle.py` now recognizes
+a path after a quote, an assignment `=`, a mapping `:`, a parenthesis, or a JSON
+array bracket, so it catches this one and the former `(/tmp/rc/prodrop)` in the
+BioEmu bundle (which is now provenance text without the path). This bundle's
+capture predates that scan, and its bytes are authentic and unchanged, so its
+`provenance.capture` carries `host_path_scan: captured_before_host_path_scan`.
+The exemption is a bundle-declared record that only a persisted bundle can hold:
+the capture strips it from caller provenance and never writes it. The fix for the
+bytes themselves belongs on the runner side (and then a recapture), not in a hand
+edit of this file.
 
 Unblocking the runner side needs a Chai-1 `model-assets.json` that does not
 publish an operator path, a SIF rebuild, a fresh production run, and a recapture.
