@@ -60,11 +60,16 @@ export function createTrajectoryViewRenderer(
     id: 'trajectory',
     async render(view: ResultView, sources: ResolvedViewSources, host: HTMLElement, context) {
       const mapping = (view.mapping || {}) as TrajectoryMapping;
-      const topology: ResultFile | undefined = sources.topology?.[0];
+      const topologies: ResultFile[] = sources.topology ? [...sources.topology] : [];
       const coordinateArtifacts = sources.coordinates ? [...sources.coordinates] : [];
-      if (!topology) throw new Error(t('results.trajectory.topologyMissing'));
-      const coordinates: ResultFile | undefined = associatedCoordinates(topology, coordinateArtifacts, mapping.association);
-      if (!coordinates) throw new Error(t('results.trajectory.coordinatesMissing'));
+      const first = topologies[0];
+      if (!first) throw new Error(t('results.trajectory.topologyMissing'));
+      // A view that publishes one topology keeps failing the mount when its frames
+      // are absent; several topologies stay mounted so the reader can pick another
+      // design and read that design's own status.
+      if (topologies.length === 1 && !associatedCoordinates(first, coordinateArtifacts, mapping.association)) {
+        throw new Error(t('results.trajectory.coordinatesMissing'));
+      }
       const format = String(mapping.coordinate_format || '').toLowerCase();
       if (!format) throw new Error(t('results.trajectory.formatMissing'));
 
@@ -98,6 +103,22 @@ export function createTrajectoryViewRenderer(
       const label = element('span', 'trajectory-position');
       label.textContent = t('results.trajectory.position', { unit, frame: '—', total: '—' });
       shelf.append(label);
+      // A view that publishes several topologies (one per design) must let the
+      // reader choose which design's frames are on screen; showing the first
+      // design's diffusion trajectory under another design's name is a
+      // scientific mis-association.
+      let selector: HTMLSelectElement | null = null;
+      if (topologies.length > 1) {
+        const field = element('label', 'structure-tool-field', t('results.trajectory.topology'));
+        selector = element('select', 'trajectory-topology');
+        topologies.forEach((topology, index) => {
+          const option = element('option', undefined, resultFileName(topology));
+          option.value = String(index);
+          selector!.append(option);
+        });
+        field.append(selector);
+        shelf.append(field);
+      }
       toolbar.append(shelf);
       stage.append(toolbar, viewerHost, status);
       host.replaceChildren(stage);
@@ -156,11 +177,55 @@ export function createTrajectoryViewRenderer(
       controls.append(previous, play, scrubber, next);
       toolbar.append(controls);
 
+      // Each selection mounts that design's topology and its own frames; the
+      // controller supersedes the previous load, so the same stage is reused.
+      let request = 0;
+      const load = async (topology: ResultFile): Promise<void> => {
+        const current = ++request;
+        stop();
+        loaded = null;
+        scrubber.disabled = true;
+        scrubber.value = '1';
+        previous.disabled = true;
+        next.disabled = true;
+        play.disabled = true;
+        label.textContent = t('results.trajectory.position', { unit, frame: '—', total: '—' });
+        const coordinates = associatedCoordinates(topology, coordinateArtifacts, mapping.association);
+        if (!coordinates) {
+          // The stage is emptied so the previous design's frames cannot be
+          // mistaken for this design's.
+          await controller.clear();
+          if (!destroyed && current === request) status.textContent = t('results.trajectory.coordinatesMissing');
+          return;
+        }
+        status.textContent = '';
+        try {
+          const info = await controller.mountTrajectory(viewerHost, topology, coordinates, format, getTheme());
+          if (!destroyed && current === request) show(info);
+        } catch (error) {
+          // A superseded mount aborts; its failure belongs to the old selection.
+          if (current !== request) return;
+          throw error;
+        }
+      };
+      const failed = (error: Error): void => {
+        if (!destroyed) status.textContent = error.message || t('results.trajectory.failed');
+      };
+      selector?.addEventListener('change', () => {
+        const topology = topologies[Number(selector!.value)];
+        if (topology) void load(topology).catch(failed);
+      });
+
       try {
-        show(await controller.mountTrajectory(viewerHost, topology, coordinates, format, getTheme()));
+        await load(first);
       } catch (error) {
-        controller.dispose();
-        throw error;
+        // A single design keeps its existing failure contract; with several, one
+        // design's unreadable frames must not take the selector down with it.
+        if (topologies.length === 1) {
+          controller.dispose();
+          throw error;
+        }
+        failed(error as Error);
       }
       return {
         get frameCount(): number { return loaded?.frameCount || 0; },

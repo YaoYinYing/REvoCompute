@@ -324,6 +324,18 @@ export class StructureController {
     return viewer.setTrajectoryFrame(action, value);
   }
 
+  /** Empty the stage, superseding any in-flight trajectory load. */
+  async clear(): Promise<void> {
+    this.generation += 1;
+    this.controller?.abort(); this.controller = null;
+    this.loading = false;
+    const viewer = this.viewer;
+    if (!viewer) return;
+    const completed = this.operation.then(() => viewer.clear?.(), () => viewer.clear?.());
+    this.operation = completed.then(() => undefined, () => undefined);
+    await completed;
+  }
+
   private async viewerFor(host: HTMLElement, generation: number, theme: 'light' | 'dark'): Promise<MolecularViewer | null> {
     if (!this.viewer && !this.viewerMount) {
       this.viewerMount = this.createViewer(host, {

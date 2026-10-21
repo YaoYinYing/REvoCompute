@@ -191,4 +191,85 @@ describe('trajectory view renderer', () => {
     await expect(renderer.render(view as never, { topology: [source('topology.pdb')], coordinates: [source('samples.xtc')] }, new TestNode() as never, context))
       .rejects.toThrow('Coordinate download failed (HTTP 404)');
   });
+
+  describe('several published topologies', () => {
+    const design = {
+      ...view, id: 'diffusion_trajectory', plugin: 'trajectory', title: 'Diffusion trajectories',
+      sources: { topology: ['design_1.pdb'], coordinates: ['traj/design_1_pX0_traj.pdb'] },
+      mapping: { coordinate_format: 'pdb', frame_unit: 'diffusion step', timestep: 1, association: 'stem-prefix' },
+    };
+    const frames = (id: string): string => `MODEL 1 ${id}\nENDMDL\n`;
+
+    /** Every fetch the renderer makes, and the byte payload each mount received. */
+    function installDesignFetch(designs: string[]): string[] {
+      const requested: string[] = [];
+      vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+        requested.push(url);
+        const coordinate = designs.find((id) => url === `/traj/design_${id}_pX0_traj.pdb`);
+        return new Response(coordinate ? frames(coordinate) : 'ATOM');
+      }));
+      return requested;
+    }
+
+    function mountDesigns(loaded: Array<{ label?: string; coordinates: unknown }>) {
+      return createTrajectoryViewRenderer(async () => viewer({
+        loadTrajectory: async (options: { label?: string; coordinates: unknown }) => {
+          loaded.push({ label: options.label, coordinates: options.coordinates });
+          return { frame: 0, frameCount: options.label!.includes('design_2') ? 7 : 5 };
+        },
+      }), () => 'light');
+    }
+
+    it('lets the reader choose which design the stage shows', async () => {
+      const host = installGlobals();
+      const requested = installDesignFetch(['1', '2']);
+      const loaded: Array<{ label?: string; coordinates: unknown }> = [];
+      const renderer = mountDesigns(loaded);
+      await renderer.render(design as never, {
+        topology: [source('design_1.pdb'), source('design_2.pdb')],
+        coordinates: [source('traj/design_1_pX0_traj.pdb'), source('traj/design_2_pX0_traj.pdb')],
+      }, host as never, { signal: new AbortController().signal, taskId: 'a'.repeat(32) });
+
+      const selector = host.all().find((node) => node.className === 'trajectory-topology')!;
+      expect(selector.children.map((option) => option.textContent)).toEqual(['design_1.pdb', 'design_2.pdb']);
+      expect(loaded.map((entry) => [entry.label, entry.coordinates])).toEqual([['traj/design_1_pX0_traj.pdb', frames('1')]]);
+      expect(nodes(host).position.textContent).toBe('diffusion step 1 of 5');
+
+      selector.value = '1';
+      selector.fire('change');
+      await vi.waitFor(() => expect(loaded.length).toBe(2));
+      expect(requested).toContain('/traj/design_2_pX0_traj.pdb');
+      expect(loaded.map((entry) => [entry.label, entry.coordinates])[1]).toEqual(['traj/design_2_pX0_traj.pdb', frames('2')]);
+      await vi.waitFor(() => expect(nodes(host).position.textContent).toBe('diffusion step 1 of 7'));
+      expect(nodes(host).status.textContent).toBe('7 frames loaded; one frame is one diffusion step.');
+    });
+
+    it('states a design without its own trajectory instead of showing another design', async () => {
+      const host = installGlobals();
+      installDesignFetch(['1']);
+      const loaded: Array<{ label?: string; coordinates: unknown }> = [];
+      let cleared = 0;
+      const renderer = createTrajectoryViewRenderer(async () => viewer({
+        loadTrajectory: async (options: { label?: string; coordinates: unknown }) => {
+          loaded.push({ label: options.label, coordinates: options.coordinates });
+          return { frame: 0, frameCount: 5 };
+        },
+        clear: async () => { cleared += 1; },
+      }), () => 'light');
+      await renderer.render(design as never, {
+        topology: [source('design_1.pdb'), source('design_2.pdb')],
+        coordinates: [source('traj/design_1_pX0_traj.pdb')],
+      }, host as never, { signal: new AbortController().signal, taskId: 'a'.repeat(32) });
+
+      const selector = host.all().find((node) => node.className === 'trajectory-topology')!;
+      selector.value = '1';
+      selector.fire('change');
+      await vi.waitFor(() => expect(nodes(host).status.textContent).toBe('This trajectory view has no coordinate artifact.'));
+      expect(loaded.map((entry) => entry.label)).toEqual(['traj/design_1_pX0_traj.pdb']);
+      // The first design's frames are removed, not left behind under design 2.
+      expect(cleared).toBe(1);
+      expect(nodes(host).scrubber.disabled).toBe(true);
+      expect(nodes(host).position.textContent).toBe('diffusion step — of —');
+    });
+  });
 });
