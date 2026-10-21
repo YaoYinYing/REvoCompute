@@ -73,6 +73,7 @@ export class ResultWorkspace {
   private readonly geometry: StructureController;
   private previewGeneration = 0;
   private storyboardStructureGeneration = 0;
+  private storyboardStructure: LogicalResultFile | null = null;
   private structureRepresentation = 'cartoon_ligand';
   private structureColor = 'rainbow';
   private structureTheme = theme();
@@ -295,10 +296,13 @@ export class ResultWorkspace {
 
   // A view renderer draws its own sources but shares this workspace's one molecular
   // stage, so a structure candidate opens through the same viewer and toolbar as
-  // a structure artifact.
+  // a structure artifact -- unless the page already draws that artifact in its own
+  // slot, in which case the view states instead of mounting it.
   private rendererContext(signal: AbortSignal): RendererContext {
     return { signal, taskId: this.taskId, openStructure: (artifact, host) => this.renderStructure(artifact, host),
-      closeStructure: () => this.structure.dispose(), selectStructure: (selection) => this.structure.select(selection) };
+      closeStructure: () => this.structure.dispose(), selectStructure: (selection) => this.structure.select(selection),
+      drawsStructure: (artifact) => this.storyboardStructure !== null
+        && this.storyboardStructure.name === localName(resultFileName(artifact)) };
   }
 
   private openViewById(viewId: string): Promise<void> {
@@ -318,7 +322,7 @@ export class ResultWorkspace {
       this.nodes.previewTitle.textContent = view.title; this.nodes.previewDescription.textContent = view.description || '';
       return;
     }
-    this.storyboardStructureGeneration += 1;
+    this.storyboardStructureGeneration += 1; this.storyboardStructure = null;
     if ((this.nodes.rail as HTMLDialogElement).open) (this.nodes.rail as HTMLDialogElement).close();
     this.destroyViewRenderer(); this.geometry.dispose(); this.storyboard.destroy(); this.cancelRender(); this.structure.dispose(); this.selectArtifact(artifact); this.markTab(null);
     const fileName = resultFileName(artifact);
@@ -348,7 +352,8 @@ export class ResultWorkspace {
   private async openStoryboard(): Promise<void> {
     const manifest = this.manifest; if (!manifest?.storyboard) return;
     const generation = ++this.previewGeneration;
-    this.storyboardStructureGeneration += 1; this.cancelRender(); this.structure.dispose(); this.geometry.dispose(); this.nodes.preview.setAttribute('aria-busy', 'true');
+    this.storyboardStructureGeneration += 1; this.storyboardStructure = null;
+    this.cancelRender(); this.structure.dispose(); this.geometry.dispose(); this.nodes.preview.setAttribute('aria-busy', 'true');
     this.nodes.previewTitle.textContent = t('results.scientific'); this.nodes.previewDescription.textContent = ''; this.nodes.download.hidden = true;
     try { const current = await this.storyboard.mount(manifest.storyboard, manifest); if (current && generation === this.previewGeneration) this.markTab('storyboard'); }
     catch (error) { if (generation === this.previewGeneration) this.renderPreviewError((error as Error).message || t('results.storyboardUnavailable')); }
@@ -366,6 +371,7 @@ export class ResultWorkspace {
     let panel = slot.querySelector<HTMLElement>(':scope > .storyboard-structure-panel');
     if (!panel) { panel = element('section', 'storyboard-structure-panel'); slot.append(panel); }
     panel.setAttribute('aria-busy', 'true');
+    this.storyboardStructure = file;
     try { await this.renderStructure(file, panel); if (generation === this.storyboardStructureGeneration) panel.dataset.ready = 'true'; }
     catch (error) {
       if (generation !== this.storyboardStructureGeneration || (error as Error).name === 'AbortError') return;
@@ -375,7 +381,7 @@ export class ResultWorkspace {
 
   async openArtifact(artifact: ResultFile, requestedGeneration?: number): Promise<void> {
     const generation = requestedGeneration ?? ++this.previewGeneration;
-    this.storyboardStructureGeneration += 1;
+    this.storyboardStructureGeneration += 1; this.storyboardStructure = null;
     if ((this.nodes.rail as HTMLDialogElement).open) (this.nodes.rail as HTMLDialogElement).close();
     this.destroyViewRenderer(); this.geometry.dispose(); this.storyboard.destroy(); this.cancelRender(); this.selectArtifact(artifact); this.markTab(null);
     const fileName = resultFileName(artifact); this.nodes.previewTitle.textContent = localName(fileName); this.nodes.previewDescription.textContent = formatBytes(artifact.size);
@@ -582,7 +588,7 @@ export class ResultWorkspace {
   private renderPreviewError(message: string): void { this.resetPreview(); this.nodes.preview.replaceChildren(element('p', 'result-empty', message)); this.nodes.preview.setAttribute('aria-busy', 'false'); }
   private renderFatal(message: string): void { this.setState(t('results.fatalTitle'), message); this.renderPreviewError(t('results.fatalHint')); }
   private cancelRender(): void { this.renderController?.abort(); this.renderController = null; }
-  private resetPreview(): void { this.storyboardStructureGeneration += 1; this.destroyViewRenderer(); this.cancelRender(); this.storyboard.destroy(); this.structure.dispose(); this.geometry.dispose(); }
+  private resetPreview(): void { this.storyboardStructureGeneration += 1; this.storyboardStructure = null; this.destroyViewRenderer(); this.cancelRender(); this.storyboard.destroy(); this.structure.dispose(); this.geometry.dispose(); }
 
   destroy(): void {
     if (this.disposed) return; this.disposed = true; this.destroyViewRenderer(); this.cancelRender(); this.loadController?.abort(); this.storyboard.destroy(); this.structure.dispose(); this.geometry.dispose();

@@ -14,6 +14,12 @@ export interface RendererContext {
   // Apply the molecular selection a rendered row declares, in the workspace's own
   // structure vocabulary; absent for an embedder without a molecular stage.
   selectStructure?(selection: { chain: string; residue: number; numbering?: string }): void;
+  // Whether the embedding page already mounts this exact artifact in its own
+  // structure stage on the first screen (a Task Storyboard does, through
+  // `openFile`). The stage is one viewer showing one structure: a view that is
+  // told the page draws the artifact does not mount it a second time, and does
+  // not offer to, so no selection can dispossess the page's own stage.
+  drawsStructure?(artifact: ResultFile): boolean;
 }
 
 export interface ArtifactRenderer {

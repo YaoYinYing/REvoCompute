@@ -57,6 +57,13 @@ async function fetchText(file: ResultFile, signal: AbortSignal): Promise<string>
   catch (error) { if ((error as Error).name === 'AbortError') throw error; throw tooLarge(); }
 }
 
+/** A structure the page's own stage already draws: this view states it, never remounts it. */
+function pageDrawsStructureNote(): HTMLElement {
+  const note = document.createElement('p'); note.className = 'result-note';
+  note.textContent = t('results.candidates.drawnAbove');
+  return note;
+}
+
 /** Render a declared `candidate-collection` view through the shared CandidateSelector. */
 export function createCandidateCollectionViewRenderer(): ViewRenderer {
   return {
@@ -103,7 +110,8 @@ export function createCandidateCollectionViewRenderer(): ViewRenderer {
         label: (item) => item.name,
         onSelect: async (item, _index, request) => {
           detail.replaceChildren();
-          const showsStructure = !item.record && Boolean(context.openStructure)
+          const pageDrawsIt = !item.record && Boolean(item.file) && Boolean(context.drawsStructure?.(item.file!));
+          const showsStructure = !item.record && Boolean(context.openStructure) && !pageDrawsIt
             && ['structure', 'molecular_structure'].includes(artifactCapability(item.file!));
           // The stage belongs to the selection that opened it: a selection that is
           // not a structure removes it, and invalidates a mount still in flight so
@@ -111,6 +119,10 @@ export function createCandidateCollectionViewRenderer(): ViewRenderer {
           // opened the shared stage owns nothing to close: the storyboard's own
           // structure may already be mounted in it.
           if (!showsStructure && ownsStage) { stage.remove(); context.closeStructure?.(); ownsStage = false; }
+          // The page already draws this returned structure in its own stage on the
+          // first screen; mounting it here as well would dispossess that stage, so
+          // the download link is the whole statement this view makes of it.
+          if (!item.record && !showsStructure && pageDrawsIt) detail.append(pageDrawsStructureNote());
           if (!item.record) {
             const file = item.file!;
             const link = document.createElement('a'); link.className = 'result-button result-button-small';

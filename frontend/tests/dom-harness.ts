@@ -51,14 +51,17 @@ export class HarnessNode {
   readonly style = { setProperty: (): void => undefined };
   // A live view of the `data-*` attributes, as `dataset` is in the browser.
   private readonly datasetProxy = new Proxy({} as Record<string, string>, {
-    get: (_target, property: string) => this.attrs.get(`data-${property.replace(/[A-Z]/g, letter => `-${letter.toLowerCase()}`)}`),
+    get: (_target, property: string) => typeof property === 'symbol' ? undefined
+      : this.attrs.get(`data-${property.replace(/[A-Z]/g, letter => `-${letter.toLowerCase()}`)}`),
     set: (_target, property: string, value: unknown) => {
       this.attrs.set(`data-${property.replace(/[A-Z]/g, letter => `-${letter.toLowerCase()}`)}`, String(value));
       return true;
     },
-    has: (_target, property: string) => this.attrs.has(`data-${property.replace(/[A-Z]/g, letter => `-${letter.toLowerCase()}`)}`),
+    has: (_target, property: string) => typeof property !== 'symbol'
+      && this.attrs.has(`data-${property.replace(/[A-Z]/g, letter => `-${letter.toLowerCase()}`)}`),
     ownKeys: () => [...this.attrs.keys()].filter(name => name.startsWith('data-')),
     getOwnPropertyDescriptor: (_target, property: string) => {
+      if (typeof property === 'symbol') return undefined;
       const key = `data-${property.replace(/[A-Z]/g, letter => `-${letter.toLowerCase()}`)}`;
       return this.attrs.has(key) ? { configurable: true, enumerable: true, value: this.attrs.get(key) } : undefined;
     },
