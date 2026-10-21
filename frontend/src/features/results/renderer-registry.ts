@@ -1,4 +1,4 @@
-import { resultFileName, type ResultArtifact, type ResultFile, type PreviewCapability, type ResultView } from '../../api/result-types';
+import { isLogicalFile, resultFileName, type ResultArtifact, type ResultFile, type PreviewCapability, type ResultView } from '../../api/result-types';
 import { t } from '../../app/i18n';
 
 export interface RendererContext {
@@ -140,7 +140,7 @@ export function createBasicRenderers(): ArtifactRenderer[] {
         const name = resultFileName(artifact), encoded = name.split('/').map(encodeURIComponent).join('/');
         // A logical file carries the Server's bounded table URL or none; only a raw
         // published artifact lets the browser compose the bounded page route.
-        const url = artifact.table_url || (!('id' in artifact)
+        const url = artifact.table_url || (!isLogicalFile(artifact)
           ? `/compute/api/results/${encodeURIComponent(context.taskId)}/tables/${encoded}?limit=100`
           : null);
         if (!url) throw new Error(t('results.tableNoUrl'));

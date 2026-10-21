@@ -58,7 +58,8 @@ describe('loadTable', () => {
       .toContain('/tables/nested%20dir/scores.csv');
     // A logical file's published path is identity, not a route: without the
     // Server's own table URL the view asks for none.
-    expect(tableUrlOf({ id: 'scores', name: 'scores.csv', path: 'nested/scores.csv', url: '/files/scores?index=0' } as never,
+    expect(tableUrlOf({ id: 'scores', name: 'scores.csv', path: 'nested/scores.csv', viewer: 'table',
+      url: '/files/scores?index=0' } as never,
       'a'.repeat(32))).toBeUndefined();
     expect(tableUrlOf(undefined, 'a'.repeat(32))).toBeUndefined();
   });

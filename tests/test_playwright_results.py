@@ -560,7 +560,8 @@ def test_structure_switch_reuses_viewer_and_latest_success_finishes_last(page: P
 
 def test_structure_controls_fullscreen_png_source_and_storyboard_reopen(page: Page) -> None:
     structure = _structure("models/model.pdb")
-    logical = {"id": "structures", "name": "model.pdb", "size": 12, "media_type": "chemical/x-pdb", "role": "primary",
+    logical = {"id": "structures", "name": "model.pdb", "path": "models/model.pdb", "size": 12,
+               "media_type": "chemical/x-pdb", "role": "primary",
                "cardinality": "one", "viewer": "structure", "preview": "structure", "capability": "molecular_structure",
                "confidence_encoding": "plddt_bfactor", "url": structure["url"]}
     storyboard = {"identifier": "probe", "entrypoint": "index.js", "entrypoint_url": f"/compute/api/results/{TASK_ID}/storyboard/index.js", "requires": ["structures"], "optional": []}

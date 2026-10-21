@@ -7,7 +7,7 @@
  * browser memory. It reads only the rows the route returns and never infers meaning from a
  * filename: column names come from the page header and the mapping the Task declared.
  */
-import type { ResultFile } from '../../api/result-types';
+import { isLogicalFile, type ResultFile } from '../../api/result-types';
 import { t } from '../../app/i18n';
 
 /** The route refuses `limit` above 500 and `offset` above 10000. */
@@ -31,7 +31,7 @@ export function tableUrlOf(source: ResultFile | undefined, taskId: string): stri
   if (source.table_url) return source.table_url;
   // A logical file carries the Server's bounded table URL or nothing: its path is
   // published identity, not a route the browser may construct.
-  if ('id' in source) return undefined;
+  if (isLogicalFile(source)) return undefined;
   const encoded = source.path.split('/').map(encodeURIComponent).join('/');
   return `/compute/api/results/${encodeURIComponent(taskId)}/tables/${encoded}`;
 }
