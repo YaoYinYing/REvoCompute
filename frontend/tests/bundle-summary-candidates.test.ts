@@ -139,6 +139,22 @@ describe('candidate collection', () => {
     expect(host.textContent).toContain('vina_1.pdbqt');
   });
 
+  it('states a structure candidate that cannot be shown and leaves no empty stage', async () => {
+    installHarness(vi.stubGlobal);
+    const host = document.createElement('section') as unknown as HarnessNode;
+    const view = { id: 'models', plugin: 'candidate-collection', role: 'primary', title: 'Models',
+      sources: { candidates: ['predictions/model_0.cif'] }, mapping: {} };
+    await createCandidateCollectionViewRenderer().render(view as never,
+      { candidates: [artifact('predictions/model_0.cif')] } as never,
+      host as unknown as HTMLElement, {
+        signal: new AbortController().signal, taskId: 'a'.repeat(32),
+        openStructure: async () => { throw new Error('This structure exceeds the safe inline preview limit.'); },
+      });
+    await vi.waitFor(() => expect(host.textContent).toContain('exceeds the safe inline preview limit'));
+    expect(host.querySelector('.candidate-stage')).toBeNull();
+    expect(host.querySelector('a[download]')!.getAttribute('href')).toBe('/artifacts/predictions/model_0.cif');
+  });
+
   it('states a failed sequence read instead of a blank list', async () => {
     installHarness(vi.stubGlobal);
     serve('nope', 500);

@@ -26,13 +26,21 @@ export function parseFasta(text: string): FastaRecord[] {
   return records.filter((record) => record.sequence.length > 0);
 }
 
-/** A FASTA artifact's media type or name is enough to say it is a sequence collection. */
+/** A FASTA artifact's declared media type, or its name, identifies a sequence collection. */
 export function isSequenceCollection(file: ResultFile): boolean {
+  const mediaType = (file.media_type || '').toLowerCase();
+  if (mediaType === 'text/x-fasta' || mediaType === 'application/x-fasta') return true;
   return /(?:^|\/)(?:[^/]*\.(?:fasta|fa|fas|faa)|[^/]*\.a3m)$/i.test(resultFileName(file));
 }
 
+/** The most FASTA text read for one candidate collection; a larger file is stated, not truncated. */
+const MAX_SEQUENCE_BYTES = 1024 * 1024;
+
 async function fetchText(file: ResultFile, signal: AbortSignal): Promise<string> {
-  const response = await fetch(file.url, { credentials: 'same-origin', signal, headers: { Range: 'bytes=0-1048575' } });
+  // A collection over the bound is not parsed partially: a partial record would be
+  // reported with a wrong residue count, and the list would look complete.
+  if (file.size > MAX_SEQUENCE_BYTES) throw new Error(t('results.candidates.error.tooLarge', { name: resultFileName(file) }));
+  const response = await fetch(file.url, { credentials: 'same-origin', signal, headers: { Range: `bytes=0-${MAX_SEQUENCE_BYTES - 1}` } });
   if (!response.ok && response.status !== 206) throw new Error(t('results.candidates.error.unreadable', { name: resultFileName(file) }));
   return response.text();
 }
@@ -79,7 +87,7 @@ export function createCandidateCollectionViewRenderer(): ViewRenderer {
       const selector = new CandidateSelector(controls, {
         items,
         label: (item) => item.name,
-        onSelect: async (item) => {
+        onSelect: async (item, _index, request) => {
           detail.replaceChildren();
           if (!item.record) {
             const file = item.file!;
@@ -89,8 +97,17 @@ export function createCandidateCollectionViewRenderer(): ViewRenderer {
             detail.append(link);
             const capability = artifactCapability(file);
             if (context.openStructure && (capability === 'structure' || capability === 'molecular_structure')) {
-              if (!stage.isConnected) section.insertBefore(stage, detail);
-              await context.openStructure(file, stage);
+              if (stage.parentNode !== section) section.insertBefore(stage, detail);
+              // A candidate that cannot be shown states why and leaves no empty stage: the
+              // selection rejects here, and a superseded mount is not a failure to report.
+              try { await context.openStructure(file, stage); }
+              catch (error) {
+                if ((error as Error).name === 'AbortError' || !request.current()) return false;
+                stage.remove();
+                const note = document.createElement('p'); note.className = 'result-empty';
+                note.textContent = (error as Error).message || t('results.structureUnavailable');
+                detail.append(note);
+              }
             }
             return true;
           }

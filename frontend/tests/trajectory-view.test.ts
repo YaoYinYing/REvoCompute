@@ -117,6 +117,69 @@ describe('trajectory view renderer', () => {
     expect(nodes(host).status.textContent).toContain('Sample order is not physical time');
   });
 
+  it('pairs each topology with the coordinate whose stem the declaration names', async () => {
+    const host = installGlobals();
+    const loaded: string[] = [];
+    const renderer = createTrajectoryViewRenderer(async () => viewer({
+      loadTrajectory: async (options: { label?: string }) => {
+        loaded.push(String(options.label)); return { frame: 0, frameCount: 15 };
+      },
+    }), () => 'light');
+    const diffusion = {
+      ...view, id: 'diffusion_trajectory', plugin: 'trajectory', title: 'Diffusion trajectories',
+      sources: { topology: ['design_3.pdb'], coordinates: ['traj/design_0_pX0_traj.pdb', 'traj/design_3_pX0_traj.pdb'] },
+      mapping: { coordinate_format: 'pdb', frame_unit: 'diffusion step', timestep: 1, association: 'stem-prefix' },
+    };
+    await renderer.render(diffusion as never, {
+      topology: [source('design_3.pdb')],
+      // Publication order is not pair order: design_0's trajectory is listed first.
+      coordinates: [source('traj/design_0_pX0_traj.pdb'), source('traj/design_3_pX0_traj.pdb')],
+    }, host as never, { signal: new AbortController().signal, taskId: 'a'.repeat(32) });
+    expect(loaded).toEqual(['traj/design_3_pX0_traj.pdb']);
+  });
+
+  it('states that the declared design published no matching trajectory', async () => {
+    installGlobals();
+    const renderer = createTrajectoryViewRenderer(async () => viewer(), () => 'light');
+    const diffusion = {
+      ...view, id: 'diffusion_trajectory', plugin: 'trajectory', title: 'Diffusion trajectories',
+      mapping: { coordinate_format: 'pdb', frame_unit: 'diffusion step', timestep: 1, association: 'stem-prefix' },
+    };
+    await expect(renderer.render(diffusion as never, {
+      topology: [source('design_3.pdb')], coordinates: [source('traj/design_0_pX0_traj.pdb')],
+    }, new TestNode() as never, { signal: new AbortController().signal, taskId: 'a'.repeat(32) }))
+      .rejects.toThrow('no coordinate artifact');
+  });
+
+  it('plays the declared frames and stops on pause without claiming time', async () => {
+    vi.useFakeTimers();
+    try {
+      const host = installGlobals();
+      const steps: Array<[string, number]> = [];
+      const renderer = createTrajectoryViewRenderer(async () => viewer({
+        loadTrajectory: async () => ({ frame: 0, frameCount: 3 }),
+        setTrajectoryFrame: async (action, value) => { steps.push([action, value]); return { frame: Math.min(2, steps.length), frameCount: 3 }; },
+      }), () => 'light');
+      const handle = await renderer.render(view as never,
+        { topology: [source('topology.pdb')], coordinates: [source('samples.xtc')] }, host as never,
+        { signal: new AbortController().signal, taskId: 'a'.repeat(32) });
+      const play = host.all().find((node) => node.dataset.trajectory === 'play')!;
+      play.fire('click');
+      expect(play.textContent).toBe('Pause');
+      await vi.advanceTimersByTimeAsync(200);
+      expect(steps).toEqual([['advance', 1]]);
+      play.fire('click');
+      expect(play.textContent).toBe('Play');
+      await vi.advanceTimersByTimeAsync(600);
+      expect(steps).toEqual([['advance', 1]]);
+      expect(nodes(host).position.textContent).toBe('Sample index 2 of 3');
+      expect(nodes(host).status.textContent).toContain('Sample order is not physical time');
+      (handle as { destroy(): void }).destroy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('states a missing topology or a failed coordinate fetch explicitly', async () => {
     installGlobals();
     const renderer = createTrajectoryViewRenderer(async () => viewer(), () => 'light');

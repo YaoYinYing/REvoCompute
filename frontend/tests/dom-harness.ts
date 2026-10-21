@@ -114,6 +114,13 @@ export class HarnessNode {
   appendChild(node: HarnessNode): HarnessNode { this.append(node); return node; }
   prepend(...nodes: Array<HarnessNode | string>): this { const existing = this.nodes; this.nodes = []; return this.append(...nodes, ...existing); }
   replaceChildren(...nodes: Array<HarnessNode | string>): void { this.nodes = []; this.append(...nodes); }
+  insertBefore(node: HarnessNode, reference: HarnessNode | null): HarnessNode {
+    node.remove();
+    node.parent = this;
+    const index = reference ? this.nodes.indexOf(reference) : -1;
+    if (index === -1) this.nodes.push(node); else this.nodes.splice(index, 0, node);
+    return node;
+  }
   replaceChild(next: HarnessNode, previous: HarnessNode): void {
     const index = this.nodes.indexOf(previous);
     if (index === -1) return;

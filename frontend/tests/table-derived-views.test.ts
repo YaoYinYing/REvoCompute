@@ -135,6 +135,38 @@ describe('entity-table and metric-series renderers', () => {
     expect(host.textContent).toContain('Model value · natural log units');
   });
 
+  it('plots a declared JSON value path instead of asking for a table page', async () => {
+    installHarness(vi.stubGlobal);
+    const urls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      urls.push(url);
+      return new Response(JSON.stringify({ confidenceScore: [91.5, 87, null, 62.25] }), { status: 200 });
+    }));
+    const host = document.createElement('section') as unknown as HarnessNode;
+    const view = { id: 'residue_confidence', plugin: 'metric-series', role: 'evidence', title: 'Per-residue model confidence',
+      sources: { series: ['rank_1/confidence_model_1.json'] },
+      mapping: { format: 'json', value_path: 'confidenceScore', x_label: 'Residue position', y_label: 'pLDDT',
+        unit: 'score', direction: 'higher', y_min: 0, y_max: 100 } };
+    await createMetricSeriesViewRenderer().render(view as never,
+      { series: [{ path: 'rank_1/confidence_model_1.json', size: 512, sha256: 'a'.repeat(64),
+        url: '/artifacts/rank_1/confidence_model_1.json' }] } as never,
+      host as unknown as HTMLElement, { signal: new AbortController().signal, taskId: 'a'.repeat(32) });
+    expect(urls).toEqual(['/artifacts/rank_1/confidence_model_1.json']);
+    expect(host.querySelectorAll('svg path')).toHaveLength(1);
+    expect(host.textContent).toContain('pLDDT');
+  });
+
+  it('refuses a JSON value path that does not resolve to a numeric list', async () => {
+    installHarness(vi.stubGlobal);
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ confidenceScore: 'high' }), { status: 200 })));
+    const view = { id: 'residue_confidence', plugin: 'metric-series', role: 'evidence', title: 'Confidence',
+      sources: { series: ['confidence.json'] }, mapping: { format: 'json', value_path: 'confidenceScore' } };
+    await expect(createMetricSeriesViewRenderer().render(view as never,
+      { series: [{ path: 'confidence.json', size: 20, sha256: 'a'.repeat(64), url: '/a/confidence.json' }] } as never,
+      document.createElement('section') as unknown as HTMLElement,
+      { signal: new AbortController().signal, taskId: 'a'.repeat(32) })).rejects.toThrow('not a list');
+  });
+
   it('states the reason a declared column is missing instead of plotting another one', async () => {
     installHarness(vi.stubGlobal);
     servePages([['1', '-2.5']], ['position', 'log_prob'], 500);

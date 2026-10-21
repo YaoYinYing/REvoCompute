@@ -5,6 +5,7 @@
  * own `frame_unit`; it never invents physical time.
  */
 import type { ResultFile, ResultView } from '../../api/result-types';
+import { resultFileName } from '../../api/result-types';
 import { t } from '../../app/i18n';
 import { StructureController } from './molecular/structure-controller';
 import type { MolecularViewerFactory, TrajectoryInfo } from './molecular/viewer-contract';
@@ -17,11 +18,37 @@ export interface TrajectoryMapping {
   association?: string;
 }
 
+/** How long one frame stays on screen while playback runs. */
+const PLAYBACK_INTERVAL_MS = 200;
+
 function element<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, text?: string): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag);
   if (className) node.className = className;
   if (text != null) node.textContent = text;
   return node;
+}
+
+/** A published path's basename without its extension, as the server's stem-prefix rule reads it. */
+function stemOf(file: ResultFile): string {
+  const name = resultFileName(file).split('/').pop() || '';
+  return name.replace(/\.[^.]*$/, '');
+}
+
+/**
+ * The coordinate artifact declared for one topology.
+ *
+ * `stem-prefix` means the coordinate's own name starts with the topology's stem, so
+ * the pair is read from the declaration; positional pairing would show one design's
+ * topology over another design's frames when a design's trajectory was not written.
+ */
+export function associatedCoordinates(
+  topology: ResultFile,
+  coordinates: ResultFile[],
+  association: string | undefined,
+): ResultFile | undefined {
+  if (association !== 'stem-prefix') return coordinates[0];
+  const stem = stemOf(topology);
+  return coordinates.find((file) => (resultFileName(file).split('/').pop() || '').startsWith(`${stem}_`));
 }
 
 /** Render a declared `trajectory` view through the shared bounded structure stage. */
@@ -34,8 +61,9 @@ export function createTrajectoryViewRenderer(
     async render(view: ResultView, sources: ResolvedViewSources, host: HTMLElement, context) {
       const mapping = (view.mapping || {}) as TrajectoryMapping;
       const topology: ResultFile | undefined = sources.topology?.[0];
-      const coordinates: ResultFile | undefined = sources.coordinates?.[0];
+      const coordinateArtifacts = sources.coordinates ? [...sources.coordinates] : [];
       if (!topology) throw new Error(t('results.trajectory.topologyMissing'));
+      const coordinates: ResultFile | undefined = associatedCoordinates(topology, coordinateArtifacts, mapping.association);
       if (!coordinates) throw new Error(t('results.trajectory.coordinatesMissing'));
       const format = String(mapping.coordinate_format || '').toLowerCase();
       if (!format) throw new Error(t('results.trajectory.formatMissing'));
@@ -103,8 +131,28 @@ export function createTrajectoryViewRenderer(
       previous.addEventListener('click', () => void step('advance', -1));
       next.addEventListener('click', () => void step('advance', 1));
       scrubber.addEventListener('input', () => void step('set', Number(scrubber.value) - 1));
+      // Playback walks the declared frames at a fixed reading pace, labelled with
+      // the mapping's own unit; it does not turn the axis into physical time.
+      const play = navigationButton('play', t('results.trajectory.play'));
+      play.setAttribute('aria-pressed', 'false');
+      let timer: ReturnType<typeof setInterval> | null = null;
+      const stop = (): void => {
+        if (timer !== null) { clearInterval(timer); timer = null; }
+        play.textContent = t('results.trajectory.play');
+        play.setAttribute('aria-pressed', 'false');
+      };
+      play.addEventListener('click', () => {
+        if (timer !== null || !loaded) { stop(); return; }
+        if (loaded.frame + 1 >= loaded.frameCount) void step('set', 0);
+        play.textContent = t('results.trajectory.pause');
+        play.setAttribute('aria-pressed', 'true');
+        timer = setInterval(() => {
+          if (destroyed || !loaded || loaded.frame + 1 >= loaded.frameCount) { stop(); return; }
+          void step('advance', 1);
+        }, PLAYBACK_INTERVAL_MS);
+      });
       const controls = element('div', 'structure-toolbar-actions');
-      controls.append(previous, scrubber, next);
+      controls.append(previous, play, scrubber, next);
       toolbar.append(controls);
 
       try {
@@ -115,13 +163,13 @@ export function createTrajectoryViewRenderer(
       }
       return {
         get frameCount(): number { return loaded?.frameCount || 0; },
-        destroy: () => { destroyed = true; controller.dispose(); },
+        destroy: () => { destroyed = true; stop(); controller.dispose(); },
       };
     },
   };
 }
 
-function navigationButton(direction: 'previous' | 'next', label: string): HTMLButtonElement {
+function navigationButton(direction: 'previous' | 'next' | 'play', label: string): HTMLButtonElement {
   const button = element('button', 'result-button result-button-small') as HTMLButtonElement;
   button.type = 'button';
   button.dataset.trajectory = direction;

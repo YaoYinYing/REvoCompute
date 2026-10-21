@@ -8,13 +8,18 @@
  */
 import type { ResultView } from '../../api/result-types';
 import { LocalConfidenceSeries } from './scientific';
+import { resolveScalarPath } from './scalar-summary-view';
 import type { ResolvedViewSources, ViewRenderer } from './renderer-registry';
 import { column, loadTable, tableUrlOf } from './table-page';
+
+/** The server refuses a JSON scientific-view source above 8 MiB before publishing it. */
+const MAX_JSON_BYTES = 8 * 1024 * 1024;
 
 export interface MetricSeriesMapping {
   format?: string;
   x_column?: string;
   value_columns?: string[];
+  value_path?: string;
   x_label?: string;
   y_label?: string;
   unit?: string;
@@ -44,26 +49,59 @@ export function seriesRange(values: Array<number | null>, mapping: MetricSeriesM
 }
 
 /**
+ * Read a declared JSON series: the mapping's `value_path` resolves to the value list
+ * the server checked at publication, and each value's position is its x position.
+ */
+export async function loadJsonSeries(
+  url: string,
+  mapping: MetricSeriesMapping,
+  options: { signal?: AbortSignal } = {},
+): Promise<{ values: Array<number | null>; xValues: number[] }> {
+  const path = mapping.value_path;
+  if (!path) throw new TypeError('The metric series view declares no value path.');
+  const response = await fetch(url, { credentials: 'same-origin', signal: options.signal });
+  if (!response.ok) throw new Error('The metric series source could not be loaded.');
+  const raw: unknown = resolveScalarPath(await response.json(), path);
+  if (!Array.isArray(raw)) throw new Error('The metric series value path is not a list.');
+  const values = raw.map((value) => (value == null ? null : Number(value)));
+  if (values.some((value) => value !== null && !Number.isFinite(value))) {
+    throw new Error('The metric series value path is not numeric.');
+  }
+  return { values, xValues: values.map((_, index) => index + 1) };
+}
+
+/**
  * Render a declared `metric-series` view through the shared LocalConfidenceSeries primitive.
  *
- * Each declared `value_columns` entry becomes one series. The chart's own y-axis is drawn from
- * the union of the series, so the unit in the legend is the mapping's single declared unit --
- * a view whose columns carry different units must declare them per series instead.
+ * A `csv` mapping names its `x_column` and `value_columns`; a `json` mapping names the
+ * `value_path` the server validated, as AlphaFold-style confidence files do. Each declared
+ * value column becomes one series; the y-axis is drawn from their union, so the legend's unit
+ * is the mapping's single declared unit.
  */
 export function createMetricSeriesViewRenderer(): ViewRenderer {
   return {
     id: 'metric-series',
     async render(view: ResultView, sources: ResolvedViewSources, host: HTMLElement, context) {
       const mapping = (view.mapping || {}) as MetricSeriesMapping;
-      const url = tableUrlOf(sources.series?.[0], context.taskId);
-      const { page } = await loadTable(url, { signal: context.signal });
-      const xColumn = mapping.x_column;
-      if (!xColumn) throw new TypeError('The metric series view declares no x column.');
-      const xValues = column(page, xColumn).map((cell) => Number(cell.trim()));
-      if (xValues.some((value) => !Number.isFinite(value))) throw new Error('The metric series x column is not numeric.');
-      const names = mapping.value_columns || [];
-      if (!names.length) throw new TypeError('The metric series view declares no value columns.');
-      const series = names.map((name) => ({ label: name, values: seriesValues(column(page, name)) }));
+      const source = sources.series?.[0];
+      let xValues: number[];
+      let series: Array<{ label: string; values: Array<number | null> }>;
+      if (mapping.format === 'json') {
+        if (!source || !('url' in source)) throw new TypeError('The metric series view has no published source.');
+        if (source.size > MAX_JSON_BYTES) throw new Error('The metric series source is too large to plot.');
+        const loaded = await loadJsonSeries(source.url, mapping, { signal: context.signal });
+        xValues = loaded.xValues;
+        series = [{ label: mapping.y_label || view.title, values: loaded.values }];
+      } else {
+        const { page } = await loadTable(tableUrlOf(source, context.taskId), { signal: context.signal });
+        const xColumn = mapping.x_column;
+        if (!xColumn) throw new TypeError('The metric series view declares no x column.');
+        xValues = column(page, xColumn).map((cell) => Number(cell.trim()));
+        if (xValues.some((value) => !Number.isFinite(value))) throw new Error('The metric series x column is not numeric.');
+        const names = mapping.value_columns || [];
+        if (!names.length) throw new TypeError('The metric series view declares no value columns.');
+        series = names.map((name) => ({ label: name, values: seriesValues(column(page, name)) }));
+      }
       const range = seriesRange(series.flatMap((item) => item.values), mapping);
       const section = document.createElement('section'); section.className = 'metric-series-view';
       const chartHost = document.createElement('div');
