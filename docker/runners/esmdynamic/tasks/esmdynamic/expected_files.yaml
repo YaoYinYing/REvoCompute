@@ -47,8 +47,8 @@ result:
       type: image
       role: evidence
     native_contacts:
-      path: 2KL8/native/2KL8_native_contacts.png
-      cardinality: one
+      pattern: '*/native/*_native_contacts.png'
+      cardinality: many
       required: true
       type: image
       role: evidence

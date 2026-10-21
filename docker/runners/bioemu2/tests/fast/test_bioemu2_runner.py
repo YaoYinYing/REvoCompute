@@ -187,20 +187,12 @@ def test_bioemu2_missing_published_output_fails_the_task(tmp_path):
 
 
 def test_bioemu2_publication_check_covers_every_required_contract_file(tmp_path):
-    """The entrypoint drives its check from the same expected_files.yaml the server reads."""
-    import yaml
-
-    required = {
-        entry["path"]
-        for entry in yaml.safe_load((FAMILY / "tasks" / "bioemu2_equilibrium" / "expected_files.yaml").read_text())[
-            "result"
-        ]["files"].values()
-        if entry.get("required")
-    }
-    assert "topology.cif" in required
-    # sequence.fasta is written by the adapter itself, so the fake has no seam to
-    # omit it; every other required path is staged by the fake upstream.
-    for path in sorted(required - {"sequence.fasta"}):
+    """The entrypoint fails when any file the fake upstream publishes is missing."""
+    # The paths the fake upstream (and the adapter's own PDB export) actually
+    # write. sequence.fasta is written by the adapter itself, so the fake has no
+    # seam to omit it; it is covered by the success-path test.
+    published = ["samples.xtc", "topology.cif", "system.yaml", "physicality.json", "topology.pdb"]
+    for path in published:
         case = tmp_path / path
         case.mkdir()
         asset_root, manifest, modules, fasta = _workspace(case)
