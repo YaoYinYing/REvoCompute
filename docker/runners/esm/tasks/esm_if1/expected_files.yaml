@@ -1,0 +1,39 @@
+# Logical result files published by the ESM-IF1 Task.
+#
+# Derived from the production result recorded in the Task's evidence packet:
+# one sampled-sequence FASTA, plus the run's input structure, submission,
+# citation and execution provenance. The candidates are sequences, not
+# structures, so they declare `type: fasta` (the Server projects that to the
+# `text` capability the candidate view reads).
+result:
+  files:
+    designs:
+      pattern: '*_designs.fasta'
+      cardinality: one
+      required: true
+      type: fasta
+      role: evidence
+    input_structure:
+      pattern: 'debug/inputs/structure/*.pdb'
+      cardinality: one
+      required: true
+      type: structure
+      role: provenance
+    submission:
+      path: debug/submission.json
+      cardinality: one
+      required: true
+      type: json
+      role: provenance
+    citations:
+      path: citations.bib
+      cardinality: one
+      required: true
+      type: text
+      role: provenance
+    execution_records:
+      pattern: 'execution/*'
+      cardinality: many
+      required: true
+      type: text
+      role: diagnostic

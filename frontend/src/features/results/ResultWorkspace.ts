@@ -9,6 +9,10 @@ import { artifactCapability, createBasicRenderers, firstViewSource, RendererRegi
 import { createTrajectoryViewRenderer } from './trajectory-view';
 import { createMatrixViewRenderer } from './matrix-view';
 import { createScalarSummaryViewRenderer } from './scalar-summary-view';
+import { createEntityTableViewRenderer } from './entity-table-view';
+import { createMetricSeriesViewRenderer } from './metric-series-view';
+import { createEvidenceBundleViewRenderer } from './evidence-bundle-view';
+import { createCandidateCollectionViewRenderer } from './candidate-collection-view';
 import type { MolecularViewerFactory } from './molecular/viewer-contract';
 import { StructureController } from './molecular/structure-controller';
 import { installScientificPrimitives } from './scientific';
@@ -105,8 +109,12 @@ export class ResultWorkspace {
     createBasicRenderers().forEach((renderer) => this.rendererRegistry.register(renderer));
     this.rendererRegistry.register({ id: 'structure', render: (artifact, host) => this.renderStructure(artifact, host) });
     this.viewRenderers.register(createMatrixViewRenderer());
-    this.viewRenderers.register(createScalarSummaryViewRenderer());
     this.viewRenderers.register(createTrajectoryViewRenderer(createViewer, theme));
+    this.viewRenderers.register(createEntityTableViewRenderer());
+    this.viewRenderers.register(createMetricSeriesViewRenderer());
+    this.viewRenderers.register(createScalarSummaryViewRenderer());
+    this.viewRenderers.register(createEvidenceBundleViewRenderer());
+    this.viewRenderers.register(createCandidateCollectionViewRenderer());
     this.bind();
   }
 

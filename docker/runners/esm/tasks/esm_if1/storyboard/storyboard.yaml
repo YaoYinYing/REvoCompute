@@ -1,0 +1,9 @@
+identifier: esm-if1-result
+entrypoint: ./index.js
+requires:
+  - designs
+optional:
+  - input_structure
+  - submission
+  - citations
+  - execution_records

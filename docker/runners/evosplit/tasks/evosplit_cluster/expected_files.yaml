@@ -1,0 +1,82 @@
+# Logical result files published by the EvoSplit clustering Task.
+#
+# Derived from the production result recorded in the Task's evidence packet: one
+# query-anchored A3M per cluster (the primary view's items), the per-sequence
+# assignment table, the contact-probability matrix and its rendered PNG, the run
+# summary, the processed alignment and the pinned model-asset record. The
+# optional `supervised_clusters/reference_*.a3m` items exist only in supervised
+# mode, so they are declared optional.
+result:
+  files:
+    cluster_alignments:
+      pattern: 'clusters/cluster_*.a3m'
+      cardinality: many
+      required: true
+      type: alignment
+      role: evidence
+    reference_alignments:
+      pattern: 'supervised_clusters/reference_*.a3m'
+      cardinality: many
+      required: false
+      type: alignment
+      role: evidence
+    sequence_assignments:
+      path: sequence_assignments.csv
+      cardinality: one
+      required: true
+      type: table
+      role: evidence
+    contact_probabilities:
+      path: contact_probabilities.csv
+      cardinality: one
+      required: true
+      type: table
+      role: evidence
+    contact_map_image:
+      path: contact_probabilities.png
+      cardinality: one
+      required: true
+      type: image
+      role: evidence
+    clustering_summary:
+      path: summary.json
+      cardinality: one
+      required: true
+      type: json
+      role: evidence
+    processed_alignment:
+      path: processed_alignment.a3m
+      cardinality: one
+      required: true
+      type: alignment
+      role: artifact
+    model_assets:
+      path: evosplit-model-assets.json
+      cardinality: one
+      required: true
+      type: json
+      role: provenance
+    input_alignment:
+      pattern: 'debug/inputs/alignment/*.a3m'
+      cardinality: one
+      required: true
+      type: alignment
+      role: provenance
+    submission:
+      path: debug/submission.json
+      cardinality: one
+      required: true
+      type: json
+      role: provenance
+    citations:
+      path: citations.bib
+      cardinality: one
+      required: true
+      type: text
+      role: provenance
+    execution_records:
+      pattern: 'execution/*'
+      cardinality: many
+      required: true
+      type: text
+      role: diagnostic

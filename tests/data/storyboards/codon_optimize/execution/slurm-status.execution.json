@@ -1,0 +1,1 @@
+{"source": "slurm_adapter", "schema_version": 1, "task_id": "0c1a643ac802b38207dfd04832c65f4a", "logs": {"stdout": "REVODESIGN_JOB_ID=311454\nREVODESIGN_ALLOCATION_LIVE=311454\nREVODESIGN_STAGE:codon_optimize\n\n", "stderr": ""}}

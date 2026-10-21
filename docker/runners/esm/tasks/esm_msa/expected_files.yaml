@@ -1,0 +1,43 @@
+# Logical result files published by the ESM-MSA Task.
+#
+# Derived from the production result recorded in the Task's evidence packet
+# (2KL8, 79 positions): a per-position profile table and its summary JSON, plus
+# the run's alignment, submission, citation and execution provenance.
+result:
+  files:
+    residue_profile:
+      path: msa1b_profile.csv
+      cardinality: one
+      required: true
+      type: table
+      role: evidence
+    profile_summary:
+      path: msa1b_summary.json
+      cardinality: one
+      required: true
+      type: json
+      role: evidence
+    input_alignment:
+      pattern: 'debug/inputs/alignment/*.a3m'
+      cardinality: one
+      required: true
+      type: alignment
+      role: provenance
+    submission:
+      path: debug/submission.json
+      cardinality: one
+      required: true
+      type: json
+      role: provenance
+    citations:
+      path: citations.bib
+      cardinality: one
+      required: true
+      type: text
+      role: provenance
+    execution_records:
+      pattern: 'execution/*'
+      cardinality: many
+      required: true
+      type: text
+      role: diagnostic

@@ -1,0 +1,9 @@
+identifier: esm-1v-result
+entrypoint: ./index.js
+requires:
+  - mutation_scores
+optional:
+  - query_sequence
+  - submission
+  - citations
+  - execution_records

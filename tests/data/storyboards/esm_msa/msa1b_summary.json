@@ -1,0 +1,7 @@
+{
+  "model": "esm_msa1b_t12_100M_UR50S",
+  "sequence_length": 79,
+  "msa_rows": 1,
+  "mean_entropy": 2.4999139308929443,
+  "mean_log_prob": -2.2544448375701904
+}

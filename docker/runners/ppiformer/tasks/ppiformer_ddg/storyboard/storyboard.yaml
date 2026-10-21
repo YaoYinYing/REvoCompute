@@ -1,0 +1,10 @@
+identifier: ppiformer-ddg-result
+entrypoint: ./index.js
+requires:
+  - ddg_predictions
+optional:
+  - run_metadata
+  - input_complex
+  - submission
+  - citations
+  - execution_records

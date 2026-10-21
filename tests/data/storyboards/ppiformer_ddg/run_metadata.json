@@ -1,0 +1,20 @@
+{
+  "mode": "ddg",
+  "source_repository": "https://github.com/anton-bushuiev/PPIformer",
+  "source_revision": "e324f5f30dd0dae55d194ac6b4d18c772219c3ee",
+  "model_record_doi": "10.5281/zenodo.12789167",
+  "input": {
+    "name": "1abc_A_B.pdb",
+    "sha256": "d9246c6bd74f0b5dce39db2cb7db6af8842cb40edb986ffd9c83e1ad081a2beb"
+  },
+  "checkpoint_sha256": {
+    "weights/ddg_regression/0.ckpt": "cdd2732dc88936270686bd52a52b7021f679055ead43baacc852e027578c08a8",
+    "weights/ddg_regression/1.ckpt": "46d5353f33b29e63b75c98fab3c0aced687355cb399681fe75353bf5736f1313",
+    "weights/ddg_regression/2.ckpt": "9a6f6b8b71e6e52f071fbe6e05b6ed9e0739641ed09973297b47d001e12bf54b"
+  },
+  "device": "cuda",
+  "mutations": [
+    "AA1V"
+  ],
+  "impute_missing": false
+}

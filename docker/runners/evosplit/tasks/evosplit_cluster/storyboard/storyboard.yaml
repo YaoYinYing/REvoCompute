@@ -1,0 +1,16 @@
+identifier: evosplit-cluster-result
+entrypoint: ./index.js
+requires:
+  - cluster_alignments
+  - sequence_assignments
+  - contact_probabilities
+  - clustering_summary
+optional:
+  - reference_alignments
+  - contact_map_image
+  - processed_alignment
+  - model_assets
+  - input_alignment
+  - submission
+  - citations
+  - execution_records
