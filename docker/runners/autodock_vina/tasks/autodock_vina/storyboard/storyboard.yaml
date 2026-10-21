@@ -1,0 +1,13 @@
+identifier: autodock-vina-result
+entrypoint: ./index.js
+requires:
+  - scores
+  - summary
+  - poses
+optional:
+  - run_record
+  - pose_logs
+  - prepared
+  - receptor
+  - ligands
+  - citations
