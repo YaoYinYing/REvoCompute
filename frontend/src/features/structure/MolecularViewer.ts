@@ -19,6 +19,8 @@ import { PluginConfig } from 'molstar/lib/mol-plugin/config.js';
 import { loadTrajectory as loadPluginTrajectory } from 'molstar/lib/extensions/plugin/loaders.js';
 import { createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+import { PresetTrajectoryHierarchy } from 'molstar/lib/mol-plugin-state/builder/structure/hierarchy-preset.js';
+import { ParamDefinition as PD } from 'molstar/lib/mol-util/param-definition.js';
 import 'molstar/build/viewer/molstar.css';
 import { t } from '../../app/i18n';
 
@@ -240,7 +242,13 @@ export class MolecularViewer {
             format: source.coordinateFormat,
           },
           coordinatesLabel: source.label || 'coordinates',
-          preset: 'default',
+          // Coordinate frames can legitimately carry a zero box (BioEmu writes
+          // one). Mol* then attaches an empty unit cell to every frame and its
+          // default preset decorates the model with a hidden unit-cell shape,
+          // whose instance grid is sized from NaN bounds and throws
+          // `RangeError: Invalid typed array length` outside the load task. The
+          // cell is hidden anyway, so leave it out of this preset.
+          preset: { ...PresetTrajectoryHierarchy.default, params: () => ({ showUnitcell: PD.Boolean(false) }) },
         } as any);
         // Mol* resolves the preset to nothing when the coordinate stream fails to
         // parse; without this check the topology's own single-frame model would
