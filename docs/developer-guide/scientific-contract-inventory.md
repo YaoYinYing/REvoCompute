@@ -195,7 +195,7 @@ Two caveats are load-bearing and are carried in the report itself:
 The audit's defect set is orthogonal to its coverage partition, and it is
 The audit's defect set is orthogonal to its coverage partition, and it is
 currently **empty**: `defective: []`, `ok: true`, with the coverage partition
-at 44 covered / 12 unaudited. An empty defect set is not a clean bill of
+at 45 covered / 12 unaudited. An empty defect set is not a clean bill of
 health — all 12 unaudited Tasks still report
 `result.required_source_undeclared_tree`, because no shipped tree exists to check
 their required sources against. The partition and the defect set are read off the
