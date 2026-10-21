@@ -1,5 +1,5 @@
 {
- "bundle_digest": "sha256:20fcabe69404a64df124ce590174537e8e2baa3a442295f352f4c539a4bab377",
+ "bundle_digest": "sha256:268f10391b0c4898d7ddb6cdb37126fadee7cd66b13a46483c3d9a6ad576a4a4",
  "bundle_version": 1,
  "excluded": [
   {
@@ -436,6 +436,7 @@
  "provenance": {
   "capture": {
    "captured_from": "authenticated production artifact API; the deployment result root was not readable by the capturing user, so no result-root capture was possible",
+   "host_path_scan": "captured_before_host_path_scan",
    "mode": "synthetic",
    "payload_source": "GET /compute/api/results/<task>/artifacts/<path> with a Bearer token; every byte checked against the served manifest sha256",
    "production_task_id": "f7d61fa4af9453758cfd57c0e0aa4b70",

@@ -909,6 +909,47 @@ def test_a_host_local_path_inside_an_artifact_payload_is_not_checked_in(tmp_path
     assert "/var/lib/revodesign" not in json.dumps(bundle)
 
 
+@pytest.mark.parametrize(
+    ('text', 'root'),
+    (
+        ('staged production result (/tmp/rc/prodrop)', '/tmp/rc/prodrop'),
+        ('{"weights": "/mnt/db/revocompute/chai1"}', '/mnt/db/revocompute/chai1'),
+        ('model_path=/mnt/db/weights/ligandmpnn/model.pt', '/mnt/db/weights/ligandmpnn/model.pt'),
+    ),
+)
+def test_a_host_path_after_a_quote_paren_or_equals_is_scrubbed_and_rejected(text: str, root: str) -> None:
+    """A host-local path is caught wherever it opens, not only after whitespace."""
+    from frontend_fixtures.replay_bundle import _assert_no_host_paths, sanitize
+
+    scrubbed = sanitize(text)
+    assert root not in scrubbed
+    assert '[host-path-omitted]' in scrubbed
+    with pytest.raises(ReplayBundleError, match='host-local path leaked'):
+        _assert_no_host_paths({'provenance': {'note': text}})
+
+
+def test_a_host_path_needs_a_bundle_declared_pre_scan_record_to_load(tmp_path: Path) -> None:
+    """The exemption for an authentic pre-scan capture is its own persisted record."""
+    from frontend_fixtures import bundle_digest
+
+    bundle = capture_replay_bundle(task_id=TASK_ID, result_root=_write_result_root(tmp_path, _synthetic_fixture()))
+    (tmp_path / 'forged').mkdir()
+    forged = capture_replay_bundle(
+        task_id=TASK_ID,
+        result_root=_write_result_root(tmp_path / 'forged', _synthetic_fixture()),
+        provenance={'capture': {'host_path_scan': 'captured_before_host_path_scan'}},
+    )
+    # A caller cannot mint the exemption: the capture strips it from provenance.
+    assert 'host_path_scan' not in forged['provenance']['capture']
+    bundle['provenance']['note'] = 'staged production result (/tmp/rc/prodrop)'
+    bundle['bundle_digest'] = bundle_digest(bundle)
+    with pytest.raises(ReplayBundleError, match='host-local path leaked'):
+        load_bundle(bundle)
+    bundle['provenance']['capture']['host_path_scan'] = 'captured_before_host_path_scan'
+    bundle['bundle_digest'] = bundle_digest(bundle)
+    assert load_bundle(bundle)['provenance']['capture']['host_path_scan'] == 'captured_before_host_path_scan'
+
+
 # ── provenance pointer (degradable against the receipt contract) ─────────────
 
 

@@ -1,5 +1,5 @@
 {
-  "bundle_digest": "sha256:a8622f94def14b892c375a482c72ce89a4202da6c2e606e40c4881c64ce68c5a",
+  "bundle_digest": "sha256:46be8cc22b52e2ada780175c15ebbf5d1ad96f510b602e5beba02ed192424d05",
   "bundle_version": 1,
   "excluded": [],
   "kind": "real_runner_result_replay",
@@ -55,7 +55,7 @@
       "num_samples": 24
     },
     "slurm_job_id": "309738",
-    "source": "read-only staged production result (/tmp/rc/prodrop)",
+    "source": "read-only staged production result under the deployment result root",
     "task_id": "115a4a8af225b37c002f1c1a88e9d82c",
     "task_type": "bioemu"
   },

@@ -241,7 +241,21 @@ _SECRET_VALUE = re.compile(
 # Host-local absolute paths (e.g. a deploy stamp's backup directory) are not
 # part of a bundle's contract and must not leak into a checked-in artifact. Any
 # string carrying one -- whole or as a fragment -- is dropped to a placeholder.
-_HOST_PATH = re.compile(r"(?:^|\s)(?:/(?:mnt|opt|home|var|srv|etc|root|tmp)/[^\s\"']+)")
+# A path opens at the start of the string or after whitespace, a JSON quote, an
+# assignment ``=``, a mapping ``:``, a parenthesis, or a JSON array bracket, so a
+# provenance clause ``(/tmp/...)`` and a ``"key": "/mnt/..."`` value are caught.
+_HOST_PATH = re.compile(r"(?:(?<=[\s\"'=:(\[])|^)/(?:mnt|opt|home|var|srv|etc|root|tmp)/[^\s\"')\]]+")
+
+#: The capture record a bundle checked in before the host-path scan recognized a
+#: quoted, parenthesized, or ``key=``-prefixed path carries under
+#: ``provenance.capture``: :data:`CAPTURE_BEFORE_HOST_PATH_SCAN` and nothing else.
+#: Those bundles carry an authentic published payload byte for byte, so the
+#: loader lets them through; a bundle without the record must carry no host path
+#: at all. The capture strips the key from whatever a caller supplies and never
+#: writes it itself, so only an already-persisted bundle can hold it and a new
+#: capture can never acquire the exemption.
+CAPTURE_BEFORE_HOST_PATH_SCAN = "captured_before_host_path_scan"
+_CAPTURE_OWNED_KEYS = ("mode", "captured_from", "task_source", "publication_anchor", "host_path_scan")
 
 
 def _scrub_host_path(value: str) -> str:
@@ -354,7 +368,7 @@ def capture_replay_bundle(
     if not isinstance(capture_block, dict):
         capture_block = {}
         capture_provenance["capture"] = capture_block
-    for owned in ("mode", "captured_from", "task_source", "publication_anchor"):
+    for owned in _CAPTURE_OWNED_KEYS:
         capture_block.pop(owned, None)
     if publication is None:
         capture_block["mode"] = CAPTURE_MODE_SYNTHETIC
@@ -395,7 +409,9 @@ def _assert_no_host_paths(bundle: Mapping[str, Any]) -> None:
 
     Sanitization rewrites the paths it recognizes; this is the negative check
     that the persisted bundle carries none at all, so a field that smuggles one
-    in is caught at capture time rather than by a reviewer.
+    in is caught at capture time rather than by a reviewer. A captured payload
+    is a published artifact, not bundle metadata, so the negative check covers
+    the bundle's own fields; reading a payload refuses one that embeds a path.
     """
     leaked = _HOST_PATH.findall(json.dumps(bundle, ensure_ascii=True))
     if leaked:
@@ -850,7 +866,26 @@ def load_bundle(source: str | Path | Mapping[str, Any]) -> dict[str, Any]:
     _validate_served(response)
     _verify_payloads(bundle)
     _verify_provenance_task_identity(bundle)
+    _verify_no_undeclared_host_paths(bundle)
     return bundle
+
+
+def _verify_no_undeclared_host_paths(bundle: Mapping[str, Any]) -> None:
+    """A checked-in bundle carries no host path unless it declares why it predates the scan.
+
+    An authentic published payload may embed an operator path, and those bytes
+    are never rewritten; the bundle that carries one records
+    ``provenance.capture.host_path_scan = captured_before_host_path_scan``
+    instead. Every other bundle is refused, so a new capture -- which cannot
+    write that record -- can never check in a path the widened scan catches.
+    """
+    capture = bundle.get("provenance") if isinstance(bundle.get("provenance"), Mapping) else {}
+    capture = capture.get("capture") if isinstance(capture.get("capture"), Mapping) else {}
+    if capture.get("host_path_scan") == CAPTURE_BEFORE_HOST_PATH_SCAN:
+        return
+    leaked = _HOST_PATH.findall(json.dumps(bundle, ensure_ascii=True))
+    if leaked:
+        raise ReplayBundleError(f"a host-local path leaked into the bundle: {leaked[0].strip()!r}")
 
 
 def _verify_provenance_task_identity(bundle: Mapping[str, Any]) -> None:

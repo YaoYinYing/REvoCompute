@@ -19,10 +19,11 @@ and its `result_publications` manifest anchor.
 - `topology.pdb` 31702 bytes sha256 `45b172920650c482cd06cbfd6a5d5f93a7228dd46da7070e8169b8914946f9e1`
 
 The bundle carries only the two required view sources (`topology.pdb` as text,
-`samples.xtc` as base64) and the empty SLURM stderr diagnostic. Everything else —
-the four `batch_*.npz` files, `sequence.fasta`, `citations.bib`, the execution
-JSON — is recorded in `excluded` with its hash and size; the capture never
-invents bytes it did not read.
+`samples.xtc` as base64) and the empty SLURM stderr diagnostic. The remaining
+artifacts — the four `batch_*.npz` files, `sequence.fasta`, `citations.bib`, the
+execution JSON — appear in the served manifest's artifact list only: no bytes
+were captured for them and `excluded` is empty. The capture never invents bytes
+it did not read.
 
 ## What is authentic and what is not
 
