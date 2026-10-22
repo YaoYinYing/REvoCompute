@@ -1,9 +1,26 @@
 import { isLogicalFile, resultFileName, type ResultArtifact, type ResultFile, type PreviewCapability, type ResultView } from '../../api/result-types';
 import { t } from '../../app/i18n';
 
+/**
+ * The user's opened result folder, as views read it.
+ *
+ * A local view reads the file at an archived path; it never composes a Server URL, because a
+ * local result has no Task id and no route. `readUtf8` refuses a file larger than `maxBytes`
+ * rather than materialising it. A source that implements this shape is structurally
+ * compatible, whichever module declares it.
+ */
+export interface LocalSourceFiles {
+  readonly label: string;
+  file(path: string): File | null;
+  readUtf8(path: string, maxBytes: number): Promise<string>;
+}
+
 export interface RendererContext {
   signal: AbortSignal;
   taskId: string;
+  // The opened local result folder, present only for a local source. A view with one reads
+  // its sources from that folder; it must not fall back to a `/compute/api/` route.
+  localSource?: LocalSourceFiles;
   // Mount one structure artifact into `host` through the workspace's own molecular
   // stage; absent for an embedder that has none. A view renderer that shows a
   // candidate as a structure uses this instead of carrying a second viewer.
