@@ -184,6 +184,10 @@ export function requestResultArchive(url: string): Promise<Record<string, unknow
 }
 
 export function downloadUrl(artifact: ResultFile): string {
+  // A local result's file is a `blob:` handle to the reader's own file, not a
+  // Server route: the download flag means nothing to it, and Chromium cancels a
+  // download of a blob URL that carries a query.
+  if (artifact.url.startsWith('blob:')) return artifact.url;
   const separator = artifact.url.includes('?') ? '&' : '?';
   return `${artifact.url}${separator}download=1`;
 }
