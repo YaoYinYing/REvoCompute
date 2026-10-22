@@ -215,7 +215,10 @@ jobs:
     needs: ClassifyChanges
     if: ${{ !cancelled() && needs.ClassifyChanges.outputs.browser != 'false' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # The contracts take about 13 minutes and the Mol* CSP qualification about
+    # one more; at 15 the job clock cancelled the second step after the first
+    # had already passed.
+    timeout-minutes: 25
     permissions:
       contents: read
 
