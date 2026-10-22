@@ -1,7 +1,9 @@
 .DS_Store
 .venv/
 .venv_*/
-node_modules/
+# `node_modules` without the trailing slash so a worktree's convenience symlink
+# to a shared install is ignored too, not only a real directory.
+node_modules
 frontend/dist/
 revocompute/static/vendor/molstar/
 revocompute/static/app/
