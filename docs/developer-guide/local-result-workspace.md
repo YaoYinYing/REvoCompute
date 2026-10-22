@@ -145,6 +145,27 @@ Two capabilities must not be conflated:
 application delivery (e.g., packaged client or carefully scoped service-worker
 cache) is a separate future decision, not a promise of this document.
 
+### Archive JavaScript and HTML stay inert
+
+A local folder is bytes, not code. Nothing in it is imported, evaluated,
+navigated to, or framed: the trusted Storyboard module stays deployment-owned,
+and an archived HTML report is only ever offered as a download link.
+
+### Measured CSP prerequisite
+
+Reading local artifacts goes through the shared renderers, which `fetch()` the
+`blob:` URL a local file is exposed at. Measured in the repository's Chromium:
+the app CSP in `revocompute/app.py` had `default-src 'self'` with
+`img-src 'self' data: blob:` and `worker-src 'self' blob:` but **no
+`connect-src`**, so a `fetch()` of a `blob:` URL fell back to `default-src` and
+was blocked, while `<img src=blob:>` already worked. The slice adds the single
+directive `connect-src 'self' blob:` to that policy; no other header changes.
+
+The page itself is served at `/compute/local_results`, one explicit Flask route
+beside `/compute/quota` that returns the same inert frontend entry behind
+`login_required`. It carries no server state: the folder is chosen in the
+browser and nothing about it reaches the server.
+
 ## Campaign delivery and independent review
 
 Commander captures two real downloaded ZIPs (structure/trajectory and table-
