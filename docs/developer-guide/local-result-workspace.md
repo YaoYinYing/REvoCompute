@@ -1,9 +1,15 @@
-# Local Result Workspace — deferred requirement
+# Local Result Workspace — PR #86 Campaign Design Record
 
-> **Status: proposed / parked.** This document records a future product requirement.
-> It is not an implementation plan, not a release commitment, and does not
-> authorize changes to the production Result Workspace, archive format, storage
-> deletion semantics, or authentication model.
+> **Status: planned/authorized Campaign — not yet implemented or deployed.**
+> The earlier documentation-only parking decision is superseded by PR #86's
+> maintainer-directed Campaign. Result deletion, quota semantics and production
+> promotion remain separate decisions.
+
+This proposal targets the **post-PR #104 Result Workspace**. See the branch's
+temporary root `TODO.md`, [Single-PR Campaign Protocol](../agents/single-pr-campaign.md)
+and [Evidence Retention](evidence-retention.md). The remote ResultManifest v3,
+Task Storyboards and shared renderers are not automatically portable to a ZIP.
+A local ZIP is untrusted; it never inherits server publication authority.
 
 ## User need
 
@@ -139,6 +145,22 @@ Two capabilities must not be conflated:
 application delivery (e.g., packaged client or carefully scoped service-worker
 cache) is a separate future decision, not a promise of this document.
 
+## Campaign delivery and independent review
+
+Commander captures two real downloaded ZIPs (structure/trajectory and table-
+linked scientific result) before source-adapter design. Owners implement only
+against the observed archive/manifest paths and trust boundaries. Adviser
+reviews architecture and science; independent Examiner performs real browser
+and screenshot acceptance. A **separate independent Campaign Acceptance Auditor**
+must verify the exact final commits, changed files, PR claims, CI, reviewer
+verdicts and cleanup ledger, and post its own PASS before the Commander can
+report `READY_FOR_FINAL_REVIEW`. The maintainer alone decides merge/deployment.
+
+For large repeatedly reused **CI-independent** data, immutable and
+hash-verified external archives such as GitHub Releases may be considered
+after licensing and privacy review. **Never remove required CI fixtures
+solely to reduce repository size.**
+
 ## Future acceptance questions
 
 When this becomes an authorized implementation project, require evidence for:
@@ -162,13 +184,9 @@ When this becomes an authorized implementation project, require evidence for:
 
 ## Implementation boundaries
 
-**Do not implement this as part of the current Daylight Bench visual
-exploration.** The art-direction study should remain focused on visual and
-scientific interaction quality.
-
-When eventually scheduled, investigate this feature as its own vertical slice,
-with independent product approval, threat modeling, archive-format review,
-browser support assessment, and tests.
+This Campaign is separate from Daylight Bench art-direction work.
+Implement a small vertical slice only after real ZIP feasibility and the
+local-file threat model; no automatic server deletion or fully offline app.
 
 Related current documentation:
 
