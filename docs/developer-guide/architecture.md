@@ -52,6 +52,17 @@ effects, while access entitlement and transient scheduler capacity remain
 separate decisions. This separation keeps Core generic and makes provenance,
 receipts, and recovery auditable.
 
+## Result-source ownership after PR #104
+
+The remote Result Workspace uses Task-owned Storyboards, shared scientific
+renderers, published ResultManifest v3 and authenticated logical result files.
+A locally extracted ZIP is untrusted; it cannot impersonate a server-published
+Task or grant execution authority to bundled JavaScript. PR #86 proposes
+a bounded browser-local source adapter, not Runner-name branches in Core.
+See [Local Result Workspace](local-result-workspace.md),
+[Evidence Retention](evidence-retention.md) and the
+[Single-PR Campaign Protocol](../agents/single-pr-campaign.md).
+
 ## Ownership Boundary
 
 REvoCompute owns user identity, Runner access and readiness, Task execution,
