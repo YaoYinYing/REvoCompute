@@ -42,6 +42,15 @@ task; only target-host live acceptance can issue promotable receipts or prove
 Runner readiness. Fewer pytest cases are expected when static assertions are
 removed.
 
+The [Evidence Retention and External Archives](evidence-retention.md)
+policy distinguishes mandatory CI fixtures from large, reusable
+**CI-independent** scientific files. Do not remove captured outputs from
+`tests/data/storyboards/` merely because the frontend does not display
+them: required finalization may match them through implicit
+`expected_files.yaml` globs. The separate final
+[Campaign Acceptance Auditor](../agents/single-pr-campaign.md) validates
+actual committed outputs, CI, reviewer verdicts and the cleanup ledger.
+
 ## Frontend Runner fixtures
 
 Runner-facing browser tests must not depend on whether the current host can
