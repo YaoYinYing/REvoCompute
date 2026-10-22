@@ -110,12 +110,13 @@ async function readManifest(file: File): Promise<Record<string, unknown>> {
  * than the remote one.
  */
 function projectedCapability(preview: unknown, logicalType: unknown): string {
-  const declared = typeof logicalType === 'string' && logicalType ? logicalType
-    : typeof preview === 'string' && preview ? preview : null;
+  // `logical_type or preview`, exactly as the Server evaluates it: an empty declared type is
+  // absent, and a declared value that is neither renderable nor a model projects to `unknown`.
+  const declared: unknown = logicalType || preview;
   if (declared === 'structure') return 'molecular_structure';
-  if (declared && ['table', 'plot', 'image', 'text', 'archive'].includes(declared)) return declared;
-  if (declared && ['alignment', 'fasta', 'json'].includes(declared)) return 'text';
-  if (declared === 'model' || declared === null) return 'download_only';
+  if (declared && ['table', 'plot', 'image', 'text', 'archive'].includes(declared as string)) return declared as string;
+  if (declared && ['alignment', 'fasta', 'json'].includes(declared as string)) return 'text';
+  if (declared === 'model' || declared == null) return 'download_only';
   return 'unknown';
 }
 
