@@ -1,0 +1,39 @@
+# Logical result files published by the ESM-1v Task.
+#
+# Derived from the production result recorded in the Task's evidence packet
+# (2KL8, 79 residues): one per-substitution score table plus the run's input,
+# submission, citation and execution provenance. `primary` is absent on purpose:
+# the primary view selects the score table, so the Server publishes that
+# artifact as the primary role.
+result:
+  files:
+    mutation_scores:
+      pattern: '*_esm1v_scores.csv'
+      cardinality: one
+      required: true
+      type: table
+      role: evidence
+    query_sequence:
+      pattern: 'debug/inputs/sequence/*.fasta'
+      cardinality: one
+      required: true
+      type: fasta
+      role: provenance
+    submission:
+      path: debug/submission.json
+      cardinality: one
+      required: true
+      type: json
+      role: provenance
+    citations:
+      path: citations.bib
+      cardinality: one
+      required: true
+      type: text
+      role: provenance
+    execution_records:
+      pattern: 'execution/*'
+      cardinality: many
+      required: true
+      type: text
+      role: diagnostic

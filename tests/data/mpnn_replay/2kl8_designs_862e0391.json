@@ -1,0 +1,521 @@
+{
+  "bundle_digest": "sha256:4a52e5dc2fc0907442b356a33d91b39ffe4626e54bebd62a5558fdea7522b2e6",
+  "bundle_version": 1,
+  "excluded": [
+    {
+      "media_type": "chemical/x-pdb",
+      "path": "debug/inputs/structure/2KL8.pdb",
+      "reason": "declared artifact not captured by this capture",
+      "sha256": "035c78fb64880cfac5f721a1831ea45a54b453741fbbc4785d738be83c19c15e",
+      "size": 105871
+    },
+    {
+      "media_type": "application/json",
+      "path": "debug/submission.json",
+      "reason": "declared artifact not captured by this capture",
+      "sha256": "3c2b565796102a0d428dcd785991c70148a3cbcf67421422e5a8f9f28c4a5be7",
+      "size": 762
+    },
+    {
+      "media_type": "application/json",
+      "path": "execution/slurm-status.execution.json",
+      "reason": "declared artifact not captured by this capture",
+      "sha256": "fe3468d8ffc17d750f75fcdf29e2166c68527e4fa5dabb3e3f9e0206cf8e8355",
+      "size": 1013
+    },
+    {
+      "media_type": "application/json",
+      "path": "execution/slurm-unknown-user-proteinmpnn-862e0391b7b72b68f24fef1e86ebedb3.resource.json",
+      "reason": "declared artifact not captured by this capture",
+      "sha256": "8a0c3cfe438f9d08e7d05de987bbd691e2d0cc9bd6d2adba21109085ba06e00e",
+      "size": 452
+    },
+    {
+      "media_type": "text/plain",
+      "path": "execution/slurm-unknown-user-proteinmpnn-862e0391b7b72b68f24fef1e86ebedb3.stderr.log",
+      "reason": "declared artifact not captured by this capture",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size": 0
+    },
+    {
+      "media_type": "text/plain",
+      "path": "execution/slurm-unknown-user-proteinmpnn-862e0391b7b72b68f24fef1e86ebedb3.stdout.log",
+      "reason": "declared artifact not captured by this capture",
+      "sha256": "ad9a7af1f42b631e2cb0c41572a1ce0ed09ca69f0e3f3c733bfbc166b4fb6d2f",
+      "size": 855
+    }
+  ],
+  "kind": "real_runner_result_replay",
+  "logical_files": {
+    "citations": [
+      {
+        "path": "citations.bib",
+        "sha256": "4c3552e239b58099dcb086f11ec0a0888dc615f6a5a3ab543a6f3488d5754faa",
+        "size": 732
+      }
+    ],
+    "designs": [
+      {
+        "path": "seqs/2KL8.fa",
+        "sha256": "0e54564cc9e6427b095c1b7a7563bd46fe2262ea2b0d6ee7b07e4eb391a89c9c",
+        "size": 363
+      }
+    ],
+    "execution_records": [
+      {
+        "path": "execution/slurm-status.execution.json",
+        "sha256": "fe3468d8ffc17d750f75fcdf29e2166c68527e4fa5dabb3e3f9e0206cf8e8355",
+        "size": 1013
+      },
+      {
+        "path": "execution/slurm-unknown-user-proteinmpnn-862e0391b7b72b68f24fef1e86ebedb3.resource.json",
+        "sha256": "8a0c3cfe438f9d08e7d05de987bbd691e2d0cc9bd6d2adba21109085ba06e00e",
+        "size": 452
+      },
+      {
+        "path": "execution/slurm-unknown-user-proteinmpnn-862e0391b7b72b68f24fef1e86ebedb3.stdout.log",
+        "sha256": "ad9a7af1f42b631e2cb0c41572a1ce0ed09ca69f0e3f3c733bfbc166b4fb6d2f",
+        "size": 855
+      }
+    ],
+    "input_structure": [
+      {
+        "path": "debug/inputs/structure/2KL8.pdb",
+        "sha256": "035c78fb64880cfac5f721a1831ea45a54b453741fbbc4785d738be83c19c15e",
+        "size": 105871
+      }
+    ],
+    "submission": [
+      {
+        "path": "debug/submission.json",
+        "sha256": "3c2b565796102a0d428dcd785991c70148a3cbcf67421422e5a8f9f28c4a5be7",
+        "size": 762
+      }
+    ]
+  },
+  "payloads": {
+    "citations.bib": {
+      "media_type": "application/octet-stream",
+      "payload": "@article{Dauparas_2022, title={Robust deep learning\u2013based protein sequence design using ProteinMPNN}, volume={378}, ISSN={1095-9203}, url={http://dx.doi.org/10.1126/science.add2187}, DOI={10.1126/science.add2187}, number={6615}, journal={Science}, publisher={American Association for the Advancement of Science (AAAS)}, author={Dauparas, J. and Anishchenko, I. and Bennett, N. and Bai, H. and Ragotte, R. J. and Milles, L. F. and Wicky, B. I. M. and Courbet, A. and de Haas, R. J. and Bethel, N. and Leung, P. J. Y. and Huddy, T. F. and Pellock, S. and Tischer, D. and Chan, F. and Koepnick, B. and Nguyen, H. and Kang, A. and Sankaran, B. and Bera, A. K. and King, N. P. and Baker, D.}, year={2022}, month=Oct, pages={49\u201356} }\n",
+      "sha256": "4c3552e239b58099dcb086f11ec0a0888dc615f6a5a3ab543a6f3488d5754faa",
+      "size": 732
+    },
+    "seqs/2KL8.fa": {
+      "media_type": "text/x-fasta",
+      "payload": ">2KL8, score=1.9034, global_score=1.9034, fixed_chains=[], designed_chains=['A'], model_name=v_48_020, git_hash=unknown, seed=924\nMEMDIRFRGDDLEAFEKALKEMIRQARKFAGTVTYTLDGNDLEIRITGVPEQVRKELAKEAERLAKEFNITVTYTIRLE\n>T=0.1, sample=1, score=0.9964, global_score=0.9964, seq_recovery=0.2911\nMDLIITFSGEKEEQYKEALEKLKEILKNYNAEVTYEKKGNKLSVTIKGISEEKLKEIIELAKELAEKYGIKVEVEVIKP\n",
+      "sha256": "0e54564cc9e6427b095c1b7a7563bd46fe2262ea2b0d6ee7b07e4eb391a89c9c",
+      "size": 363
+    }
+  },
+  "provenance": {
+    "capture": {
+      "captured_from": "authenticated production artifact API; the deployment result root was not readable by the capturing user, so no result-root capture was possible",
+      "mode": "synthetic",
+      "payload_source": "GET /compute/api/results/<task>/artifacts/<path> with a Bearer token; every byte checked against the served manifest sha256",
+      "production_task_id": "862e0391b7b72b68f24fef1e86ebedb3",
+      "production_task_type": "proteinmpnn",
+      "served_manifest_sha256": "3ef3da0597249b751ed28cb45c16f0b7e632b06a1d6d4551105e17fcb85f8a93",
+      "task_source": "none - the deployment task store publication anchor was not readable"
+    },
+    "production_finished_at": "2026-10-21T00:28:32.080252+08:00",
+    "production_started_at": "2026-10-21T00:28:18.850480+08:00",
+    "runner_family": "mpnn",
+    "runner_revision": "deployment 57c8114; campaign base eae170d",
+    "storyboard_sha256": "6a9a8f19037d6300aa2182dfebcb6b499a6cf69b449ad87adcdd7810ec5c3fd3"
+  },
+  "response": {
+    "archive": {
+      "download_url": null,
+      "ready": false,
+      "request_url": "/compute/api/results/862e0391b7b72b68f24fef1e86ebedb3/archive"
+    },
+    "artifacts": [
+      {
+        "capability": "text",
+        "media_type": "application/octet-stream",
+        "path": "citations.bib",
+        "preview": "text",
+        "role": "provenance",
+        "sha256": "4c3552e239b58099dcb086f11ec0a0888dc615f6a5a3ab543a6f3488d5754faa",
+        "size": 732,
+        "url": "/compute/api/results/862e0391b7b72b68f24fef1e86ebedb3/artifacts/citations.bib"
+      },
+      {
+        "capability": "molecular_structure",
+        "media_type": "application/octet-stream",
+        "path": "debug/inputs/structure/2KL8.pdb",
+        "preview": "structure",
+        "role": "provenance",
+        "sha256": "035c78fb64880cfac5f721a1831ea45a54b453741fbbc4785d738be83c19c15e",
+        "size": 105871,
+        "url": "/compute/api/results/862e0391b7b72b68f24fef1e86ebedb3/artifacts/debug/inputs/structure/2KL8.pdb"
+      },
+      {
+        "capability": "text",
+        "media_type": "application/json",
+        "ndarray_url": "/compute/api/results/862e0391b7b72b68f24fef1e86ebedb3/ndarrays/debug/submission.json",
+        "path": "debug/submission.json",
+        "preview": "text",
+        "role": "provenance",
+        "sha256": "3c2b565796102a0d428dcd785991c70148a3cbcf67421422e5a8f9f28c4a5be7",
+        "size": 762,
+        "url": "/compute/api/results/862e0391b7b72b68f24fef1e86ebedb3/artifacts/debug/submission.json"
+      },
+      {
+        "capability": "text",
+        "media_type": "application/json",
+        "ndarray_url": "/compute/api/results/862e0391b7b72b68f24fef1e86ebedb3/ndarrays/execution/slurm-status.execution.json",
+        "path": "execution/slurm-status.execution.json",
+        "preview": "text",
+        "role": "diagnostic",
+        "sha256": "fe3468d8ffc17d750f75fcdf29e2166c68527e4fa5dabb3e3f9e0206cf8e8355",
+        "size": 1013,
+        "url": "/compute/api/results/862e0391b7b72b68f24fef1e86ebedb3/artifacts/execution/slurm-status.execution.json"
+      },
+      {
+        "capability": "text",
+        "media_type": "application/json",
+        "ndarray_url": "/compute/api/results/862e0391b7b72b68f24fef1e86ebedb3/ndarrays/execution/slurm-unknown-user-proteinmpnn-862e0391b7b72b68f24fef1e86ebedb3.resource.json",
+        "path": "execution/slurm-unknown-user-proteinmpnn-862e0391b7b72b68f24fef1e86ebedb3.resource.json",
+        "preview": "text",
+        "role": "diagnostic",
+        "sha256": "8a0c3cfe438f9d08e7d05de987bbd691e2d0cc9bd6d2adba21109085ba06e00e",
+        "size": 452,
+        "url": "/compute/api/results/862e0391b7b72b68f24fef1e86ebedb3/artifacts/execution/slurm-unknown-user-proteinmpnn-862e0391b7b72b68f24fef1e86ebedb3.resource.json"
+      },
+      {
+        "capability": "text",
+        "media_type": "application/octet-stream",
+        "path": "execution/slurm-unknown-user-proteinmpnn-862e0391b7b72b68f24fef1e86ebedb3.stderr.log",
+        "preview": "text",
+        "role": "diagnostic",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "size": 0,
+        "url": "/compute/api/results/862e0391b7b72b68f24fef1e86ebedb3/artifacts/execution/slurm-unknown-user-proteinmpnn-862e0391b7b72b68f24fef1e86ebedb3.stderr.log"
+      },
+      {
+        "capability": "text",
+        "media_type": "application/octet-stream",
+        "path": "execution/slurm-unknown-user-proteinmpnn-862e0391b7b72b68f24fef1e86ebedb3.stdout.log",
+        "preview": "text",
+        "role": "diagnostic",
+        "sha256": "ad9a7af1f42b631e2cb0c41572a1ce0ed09ca69f0e3f3c733bfbc166b4fb6d2f",
+        "size": 855,
+        "url": "/compute/api/results/862e0391b7b72b68f24fef1e86ebedb3/artifacts/execution/slurm-unknown-user-proteinmpnn-862e0391b7b72b68f24fef1e86ebedb3.stdout.log"
+      },
+      {
+        "capability": "text",
+        "media_type": "application/octet-stream",
+        "path": "seqs/2KL8.fa",
+        "preview": "text",
+        "role": "primary",
+        "sha256": "0e54564cc9e6427b095c1b7a7563bd46fe2262ea2b0d6ee7b07e4eb391a89c9c",
+        "size": 363,
+        "url": "/compute/api/results/862e0391b7b72b68f24fef1e86ebedb3/artifacts/seqs/2KL8.fa"
+      }
+    ],
+    "created_at": "2026-10-21T00:28:32.080252+08:00",
+    "error": null,
+    "limitations": [
+      "Generated sequences require structural and experimental evaluation."
+    ],
+    "outcome": null,
+    "output_check": {
+      "checks": [
+        {
+          "matched": 1,
+          "required": true,
+          "source": "candidates",
+          "status": "passed",
+          "view_id": "designed_sequences"
+        }
+      ],
+      "problems": [],
+      "state": "passed"
+    },
+    "result": {
+      "files": {
+        "citations": [
+          {
+            "capability": "text",
+            "cardinality": "one",
+            "id": "citations",
+            "media_type": "application/octet-stream",
+            "name": "citations.bib",
+            "path": "citations.bib",
+            "preview": "text",
+            "role": "provenance",
+            "size": 732,
+            "url": "/compute/api/results/862e0391b7b72b68f24fef1e86ebedb3/files/citations?index=0",
+            "viewer": "text"
+          }
+        ],
+        "designs": [
+          {
+            "capability": "text",
+            "cardinality": "many",
+            "id": "designs",
+            "media_type": "application/octet-stream",
+            "name": "2KL8.fa",
+            "path": "seqs/2KL8.fa",
+            "preview": "text",
+            "role": "primary",
+            "size": 363,
+            "url": "/compute/api/results/862e0391b7b72b68f24fef1e86ebedb3/files/designs?index=0",
+            "viewer": "text"
+          }
+        ],
+        "execution_records": [
+          {
+            "capability": "text",
+            "cardinality": "many",
+            "id": "execution_records",
+            "media_type": "application/json",
+            "name": "slurm-status.execution.json",
+            "ndarray_url": "/compute/api/results/862e0391b7b72b68f24fef1e86ebedb3/ndarrays/execution/slurm-status.execution.json",
+            "path": "execution/slurm-status.execution.json",
+            "preview": "text",
+            "role": "diagnostic",
+            "size": 1013,
+            "url": "/compute/api/results/862e0391b7b72b68f24fef1e86ebedb3/files/execution_records?index=0",
+            "viewer": "text"
+          },
+          {
+            "capability": "text",
+            "cardinality": "many",
+            "id": "execution_records",
+            "media_type": "application/json",
+            "name": "slurm-unknown-user-proteinmpnn-862e0391b7b72b68f24fef1e86ebedb3.resource.json",
+            "ndarray_url": "/compute/api/results/862e0391b7b72b68f24fef1e86ebedb3/ndarrays/execution/slurm-unknown-user-proteinmpnn-862e0391b7b72b68f24fef1e86ebedb3.resource.json",
+            "path": "execution/slurm-unknown-user-proteinmpnn-862e0391b7b72b68f24fef1e86ebedb3.resource.json",
+            "preview": "text",
+            "role": "diagnostic",
+            "size": 452,
+            "url": "/compute/api/results/862e0391b7b72b68f24fef1e86ebedb3/files/execution_records?index=1",
+            "viewer": "text"
+          },
+          {
+            "capability": "text",
+            "cardinality": "many",
+            "id": "execution_records",
+            "media_type": "application/octet-stream",
+            "name": "slurm-unknown-user-proteinmpnn-862e0391b7b72b68f24fef1e86ebedb3.stdout.log",
+            "path": "execution/slurm-unknown-user-proteinmpnn-862e0391b7b72b68f24fef1e86ebedb3.stdout.log",
+            "preview": "text",
+            "role": "diagnostic",
+            "size": 855,
+            "url": "/compute/api/results/862e0391b7b72b68f24fef1e86ebedb3/files/execution_records?index=2",
+            "viewer": "text"
+          }
+        ],
+        "input_structure": [
+          {
+            "capability": "molecular_structure",
+            "cardinality": "one",
+            "id": "input_structure",
+            "media_type": "application/octet-stream",
+            "name": "2KL8.pdb",
+            "path": "debug/inputs/structure/2KL8.pdb",
+            "preview": "structure",
+            "role": "provenance",
+            "size": 105871,
+            "url": "/compute/api/results/862e0391b7b72b68f24fef1e86ebedb3/files/input_structure?index=0",
+            "viewer": "structure"
+          }
+        ],
+        "submission": [
+          {
+            "capability": "text",
+            "cardinality": "one",
+            "id": "submission",
+            "media_type": "application/json",
+            "name": "submission.json",
+            "ndarray_url": "/compute/api/results/862e0391b7b72b68f24fef1e86ebedb3/ndarrays/debug/submission.json",
+            "path": "debug/submission.json",
+            "preview": "json",
+            "role": "provenance",
+            "size": 762,
+            "url": "/compute/api/results/862e0391b7b72b68f24fef1e86ebedb3/files/submission?index=0",
+            "viewer": "json"
+          }
+        ]
+      }
+    },
+    "run": {
+      "citations": [
+        {
+          "doi": "10.1126/science.add2187",
+          "num": 1,
+          "title": "Robust deep learning\u2013based protein sequence design using ProteinMPNN",
+          "url": "https://doi.org/10.1126/science.add2187"
+        }
+      ],
+      "finished_at": "2026-10-21T00:28:32.080252+08:00",
+      "inputs": [
+        {
+          "format": "pdb",
+          "logical_type": "protein_structure",
+          "path": "2KL8.pdb",
+          "role": "structure",
+          "sha256": "035c78fb64880cfac5f721a1831ea45a54b453741fbbc4785d738be83c19c15e"
+        }
+      ],
+      "method": {
+        "id": "proteinmpnn",
+        "name": "ProteinMPNN",
+        "output_summary": "Designed FASTA sequences and optional scores or residue probabilities.",
+        "summary": "ProteinMPNN sequence design for the given backbone."
+      },
+      "parameters": [
+        {
+          "label": "Num Seq Per Target",
+          "name": "num_seq_per_target",
+          "unit": "",
+          "value": 1
+        },
+        {
+          "label": "Sampling Temp",
+          "name": "sampling_temp",
+          "unit": "",
+          "value": "0.1"
+        },
+        {
+          "label": "Model Name",
+          "name": "model_name",
+          "unit": "",
+          "value": "v_48_020"
+        },
+        {
+          "label": "Batch Size",
+          "name": "batch_size",
+          "unit": "",
+          "value": 1
+        },
+        {
+          "label": "Seed",
+          "name": "seed",
+          "unit": "",
+          "value": 0
+        },
+        {
+          "label": "Pdb Path Chains",
+          "name": "pdb_path_chains",
+          "unit": "",
+          "value": ""
+        },
+        {
+          "label": "Ca Only",
+          "name": "ca_only",
+          "unit": "",
+          "value": false
+        },
+        {
+          "label": "Backbone Noise",
+          "name": "backbone_noise",
+          "unit": "",
+          "value": 0.0
+        },
+        {
+          "label": "Max Length",
+          "name": "max_length",
+          "unit": "",
+          "value": 200000
+        },
+        {
+          "label": "Omit Aas",
+          "name": "omit_AAs",
+          "unit": "",
+          "value": "X"
+        },
+        {
+          "label": "Save Score",
+          "name": "save_score",
+          "unit": "",
+          "value": 0
+        },
+        {
+          "label": "Save Probs",
+          "name": "save_probs",
+          "unit": "",
+          "value": 0
+        },
+        {
+          "label": "Score Only",
+          "name": "score_only",
+          "unit": "",
+          "value": 0
+        },
+        {
+          "label": "Conditional Probs Only",
+          "name": "conditional_probs_only",
+          "unit": "",
+          "value": 0
+        },
+        {
+          "label": "Conditional Probs Only Backbone",
+          "name": "conditional_probs_only_backbone",
+          "unit": "",
+          "value": 0
+        },
+        {
+          "label": "Unconditional Probs Only",
+          "name": "unconditional_probs_only",
+          "unit": "",
+          "value": 0
+        },
+        {
+          "label": "Suppress Print",
+          "name": "suppress_print",
+          "unit": "",
+          "value": 0
+        }
+      ],
+      "started_at": "2026-10-21T00:28:18.850480+08:00",
+      "submitted_at": "2026-10-20T16:28:18.799518+00:00",
+      "walltime_seconds": 13.229771852493286
+    },
+    "schema_version": 3,
+    "status": "finished",
+    "storyboard": {
+      "entrypoint": "index.js",
+      "entrypoint_url": "/compute/api/results/862e0391b7b72b68f24fef1e86ebedb3/storyboard/index.js",
+      "identifier": "proteinmpnn-designs",
+      "optional": [
+        "input_structure",
+        "citations"
+      ],
+      "requires": [
+        "designs"
+      ]
+    },
+    "task_id": "862e0391b7b72b68f24fef1e86ebedb3",
+    "task_type": "proteinmpnn",
+    "terminal": true,
+    "total_size": 110048,
+    "views": [
+      {
+        "description": "Designed sequences in the order published by the MPNN runner.",
+        "id": "designed_sequences",
+        "mapping": {},
+        "plugin": "candidate-collection",
+        "role": "primary",
+        "sources": {
+          "candidates": [
+            "seqs/2KL8.fa"
+          ]
+        },
+        "title": "Designed sequences"
+      }
+    ]
+  },
+  "storyboard": {
+    "entrypoint": "index.js",
+    "sha256": "6a9a8f19037d6300aa2182dfebcb6b499a6cf69b449ad87adcdd7810ec5c3fd3",
+    "source": "/* ProteinMPNN: the designed sequences, their caveat, and the run's provenance. */\n/* SPDX-License-Identifier: GPL-3.0-only */\nconst STYLE = `.seq-result{display:grid;gap:16px;min-width:0;font:14px/1.5 var(--font-sans)}.seq-result h2,.seq-result h3,.seq-result p{margin:0}.seq-result h2{font:500 24px var(--font-display)}.seq-section{display:grid;gap:8px;min-width:0}.seq-note{color:var(--app-muted);line-height:1.7;max-width:78ch}.seq-stage{border:1px solid var(--app-line);border-radius:8px;background:var(--app-surface);padding:12px;overflow-x:auto}.seq-stage:empty{display:none}.seq-downloads{display:flex;flex-wrap:wrap;gap:8px}.seq-downloads button{font:14px var(--font-sans);min-height:34px;padding:7px 12px;border:1px solid var(--app-line-strong);border-radius:4px;color:var(--app-ink);background:var(--app-raised);cursor:pointer}`;\nconst list = value => Array.isArray(value) ? value : value ? [value] : [];\nconst first = (context, id) => list(context.files.get(id))[0] || null;\nfunction el(tag, className = '', text) { const node = document.createElement(tag); node.className = className; if (text != null) node.textContent = String(text); return node; }\n\nexport default {\n  async mount(host, context) {\n    const services = context.services || {};\n    const abort = new AbortController();\n    const views = list(context.views);\n    const root = el('div', 'seq-result');\n    const style = el('style'); style.textContent = STYLE; root.append(style);\n    root.append(el('h2', '', 'Designed sequences'));\n    root.append(el('p', 'seq-note', 'Each published sequence is a model sample of the submitted backbone at the requested temperature; every design still needs independent folding and experimental validation. The FASTA also carries the wild-type query, so the design is the record after it.'));\n    for (const view of views) {\n      const section = el('section', 'seq-section'); section.dataset.viewId = view.id;\n      section.append(el('h3', '', view.title));\n      if (view.description) section.append(el('p', 'seq-note', view.description));\n      section.append(el('div', 'seq-stage')); root.append(section);\n    }\n    const downloads = el('div', 'seq-downloads'); downloads.setAttribute('role', 'group'); downloads.setAttribute('aria-label', 'Result downloads');\n    const download = (id, label) => { const file = first(context, id); const button = el('button', '', label); button.type = 'button'; button.disabled = !file; button.onclick = () => file && services.downloadFile?.(file); downloads.append(button); };\n    download('designs', 'Download designed sequences (FASTA)');\n    download('input_structure', 'Download input structure (PDB)');\n    download('citations', 'Download citations (BibTeX)');\n    const status = el('p', 'result-note', 'Loading the published sequences\u2026'); status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');\n    root.append(status, downloads); host.replaceChildren(root);\n    const mounted = [];\n    try {\n      if (!services.mountView) throw new Error('The declared sequence view is unavailable.');\n      for (const section of root.querySelectorAll('[data-view-id]')) {\n        mounted.push(await services.mountView(section.dataset.viewId, section.querySelector('.seq-stage'), abort.signal) || null);\n      }\n      status.textContent = 'Sequence identities and residue counts are read from the published FASTA headers.';\n    } catch (error) {\n      if (error.name !== 'AbortError') { status.textContent = 'The sequences could not be rendered; the downloads above remain available.'; status.className = 'result-note seq-error'; }\n    }\n    return { destroy() { abort.abort(); mounted.forEach(item => item?.destroy?.()); } };\n  },\n};\n"
+  },
+  "task": {
+    "display_name": "2KL8.pdb",
+    "id": "862e0391b7b72b68f24fef1e86ebedb3",
+    "type": "proteinmpnn"
+  }
+}

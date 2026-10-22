@@ -5,6 +5,13 @@ import { StructureController } from '../src/features/results/molecular/structure
 import type { MolecularViewer } from '../src/features/results/molecular/viewer-contract';
 
 const file = (path: string): ResultArtifact => ({ path, size: 8, sha256: 'a'.repeat(64), url: `/${path}`, media_type: 'chemical/x-pdb', preview: 'structure', capability: 'molecular_structure', role: 'primary' });
+
+/** A host stub over a small tree: `contains` walks real parent/child relations, no DOM needed. */
+function holder(children: HTMLElement[] = []): HTMLElement {
+  const node = { contains: (other: unknown): boolean => other === node || children.some((child) => (child.contains as (node: unknown) => boolean)(other)) };
+  return node as unknown as HTMLElement;
+}
+
 afterEach(() => vi.unstubAllGlobals());
 
 describe('StructureController', () => {
@@ -17,6 +24,29 @@ describe('StructureController', () => {
     const first = controller.mount(host, file('first.pdb'), 'light'); await vi.waitFor(() => expect(loaded).toEqual(['first.pdb']));
     const second = controller.mount(host, file('second.pdb'), 'light'); releaseFirst(); await Promise.all([first, second]);
     expect(loaded).toEqual(['first.pdb', 'second.pdb']);
+  });
+
+  it('lets a newer mount on the same host adopt a viewer a stale mount is still awaiting', async () => {
+    let releaseViewer!: () => void; const viewerReady = new Promise<void>((resolve) => { releaseViewer = resolve; });
+    let disposed = false; const loaded: string[] = [];
+    const guard = (): void => { if (disposed) throw new Error('MolecularViewer is not mounted'); };
+    const viewer: MolecularViewer = {
+      setRepresentation: async () => guard(), setColor: async () => guard(), setTheme: () => {}, resize: () => {}, captureImage: async () => '',
+      dispose: () => { disposed = true; },
+      loadStructure: async (source) => { guard(); loaded.push(source.label || ''); },
+    };
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => new Response(url)));
+    const controller = new StructureController(async () => { await viewerReady; return viewer; }); const host = {} as HTMLElement;
+
+    // Both mounts start while viewer creation is pending; the older one resumes first.
+    const stale = controller.mount(host, file('first.pdb'), 'light');
+    const current = controller.mount(host, file('second.pdb'), 'light');
+    await Promise.resolve();
+    releaseViewer();
+    await Promise.all([stale, current]);
+
+    expect(disposed).toBe(false);
+    expect(loaded).toEqual(['second.pdb']);
   });
 
   it('retries viewer creation after an isolated mount failure', async () => {
@@ -71,5 +101,30 @@ describe('StructureController', () => {
     expect(select).toHaveBeenCalledWith({ residues });
     expect(residues[0]!.insertionCode).toBe('A');
     expect('insertionCode' in residues[1]!).toBe(false);
+  });
+
+  it('closes a stage only for the host that owns it', async () => {
+    let disposed = 0;
+    const viewer: MolecularViewer = { setRepresentation: async () => {}, setColor: async () => {}, setTheme: () => {},
+      resize: () => {}, captureImage: async () => '', loadStructure: async () => {}, dispose: () => { disposed += 1; } };
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => new Response(url)));
+    // The controller mounts the inner host; the callers pass the outer stage that
+    // contains it, so an ancestor of the mounted host must close too.
+    const child = holder(); const mounted = holder([child]); const stage = holder([mounted]);
+    const sibling = holder(); const foreignStage = holder([sibling]);
+    const controller = new StructureController(async () => viewer);
+    await controller.mount(mounted, file('first.pdb'), 'light');
+
+    // Another owner has since mounted elsewhere in the same workspace: the first
+    // view's late close must not blank a stage it no longer owns, nor a host
+    // nested inside the one it mounted.
+    controller.disposeIfIn(foreignStage);
+    expect(disposed).toBe(0);
+    controller.disposeIfIn(sibling);
+    expect(disposed).toBe(0);
+    controller.disposeIfIn(child);
+    expect(disposed).toBe(0);
+    controller.disposeIfIn(stage);
+    expect(disposed).toBe(1);
   });
 });

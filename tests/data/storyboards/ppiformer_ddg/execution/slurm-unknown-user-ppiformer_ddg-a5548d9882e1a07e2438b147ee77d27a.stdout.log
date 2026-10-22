@@ -1,0 +1,25 @@
+REVODESIGN_JOB_ID=311219
+REVODESIGN_ALLOCATION_LIVE=311219
+REVODESIGN_STAGE:ppiformer_ddg
+[10/20/26 23:55:16] WARNING  To use the Graphein submodule      ]8;id=658775;file://[path redacted]\embeddings.py]8;;\:]8;id=470355;file://[path redacted]#45\45]8;;\
+                             graphein.protein.features.sequence                 
+                             .embeddings, you need to install:                  
+                             biovec                                             
+                             To do so, use the following                        
+                             command: pip install biovec                        
+                             Alternatively, you can install                     
+                             graphein with the extras:                          
+                                                                                
+                             pip install graphein[extras]                       
+[10/20/26 23:55:19] WARNING  To use the Graphein submodule   ]8;id=783567;file://[path redacted]\visualisation.py]8;;\:]8;id=575472;file://[path redacted]#36\36]8;;\
+                             graphein.protein.visualisation,                    
+                             you need to install: pytorch3d                     
+                             pytorch3d cannot be installed                      
+                             via pip                                            
+                    WARNING  To use the Graphein submodule          ]8;id=794976;file://[path redacted]\meshes.py]8;;\:]8;id=933945;file://[path redacted]#30\30]8;;\
+                             graphein.protein.meshes, you need to               
+                             install: pytorch3d                                 
+                             To do so, use the following command:               
+                             pip install pytorch3d                              
+1 PPIs loaded: PPIInMemoryDataset(, n_muts=1)
+

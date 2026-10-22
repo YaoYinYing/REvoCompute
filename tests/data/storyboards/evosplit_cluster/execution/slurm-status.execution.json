@@ -1,0 +1,1 @@
+{"source": "slurm_adapter", "schema_version": 1, "task_id": "58f93e0a7e452c80da71041b8414c407", "logs": {"stdout": "REVODESIGN_JOB_ID=311043\nREVODESIGN_ALLOCATION_LIVE=311043\nREVODESIGN_STAGE:evosplit_cluster\n\n", "stderr": ""}}

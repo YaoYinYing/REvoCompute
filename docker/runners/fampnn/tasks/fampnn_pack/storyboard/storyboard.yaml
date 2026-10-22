@@ -1,0 +1,8 @@
+identifier: fampnn-packed-structures
+entrypoint: ./index.js
+requires:
+  - structures
+optional:
+  - config
+  - input_structure
+  - citations

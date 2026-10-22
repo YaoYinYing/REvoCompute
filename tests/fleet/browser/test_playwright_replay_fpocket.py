@@ -159,7 +159,8 @@ def test_replayed_ranked_pockets_table_consumes_the_real_normalized_table(page: 
 
     page.locator(".result-view-menu > summary").click()
     page.locator(".result-tab", has_text="Ranked pockets").click()
-    table = page.locator(".result-preview table").first
+    # The declared entity-table view renders through the shared entity renderer.
+    table = page.locator(".result-preview .entity-table-view table.entity-result-table")
     expect(table).to_be_visible()
     # The header row is the real normalized columns, not a fixture's guess.
     for column in ("pocket", "rank", "druggability_score"):
@@ -167,9 +168,9 @@ def test_replayed_ranked_pockets_table_consumes_the_real_normalized_table(page: 
 
     served = requests.matching(f"/compute/api/results/{replay.task_id}/tables/pockets.csv")
     assert served, "the ranked-pockets view never read the replayed table"
-    # The rendered body row count equals the captured table's data rows.
+    # The rendered selectable rows equal the captured table's data rows.
     expected_rows = replay.payload("pockets.csv")[0].decode("utf-8").strip().splitlines()
-    rows = table.locator("tbody tr")
+    rows = table.locator("tr[aria-selected]")
     expect(rows).to_have_count(len(expected_rows) - 1)
     table_rows = replay.payload("pockets.csv")[0].decode("utf-8").strip().splitlines()
     expected_first = table_rows[1].split(",")
@@ -187,19 +188,15 @@ def test_replayed_detection_summary_renders_the_real_scalar_values(page: Page) -
     page.locator(".result-view-menu > summary").click()
     page.locator(".result-tab", has_text="Detection summary").click()
     summary = json.loads(replay.payload("summary.json")[0])
-    preview = page.locator(".result-preview")
-    # The scalar-summary view has no dedicated view renderer, so it falls back to
-    # the generic renderer for its first resolved source: the captured summary.json
-    # the real normalizer wrote. Assert the RENDERED body carries the captured
-    # bytes, so a renderer showing nothing -- or a different file -- would not pass.
-    field_path = next(
-        view["mapping"]["fields"][0]["path"]
-        for view in replay.manifest["views"]
-        if view["plugin"] == "scalar-summary"
-    )
-    assert field_path in summary, "the declared scalar path must exist in the captured summary"
-    expect(preview).to_contain_text(f'"{field_path}"')
-    expect(preview).to_contain_text(str(summary[field_path]))
+    view = next(candidate for candidate in replay.manifest["views"] if candidate["plugin"] == "scalar-summary")
+    field = view["mapping"]["fields"][0]
+    assert field["path"] in summary, "the declared scalar path must exist in the captured summary"
+    # The shared scalar-summary renderer reads the captured summary.json the real
+    # normalizer wrote and shows the declared field through the scalar grid.
+    grid = page.locator("section.scalar-summary-view dl.scalar-grid")
+    expect(grid).to_be_visible()
+    expect(grid.locator("dt")).to_have_text([field["label"]])
+    expect(grid.locator("dd")).to_have_text([f'{summary[field["path"]]} {field["unit"]}'])
 
 
 def test_replayed_evidence_bundle_exposes_the_raw_fpocket_output(page: Page) -> None:
@@ -209,16 +206,22 @@ def test_replayed_evidence_bundle_exposes_the_raw_fpocket_output(page: Page) -> 
 
     page.locator(".result-view-menu > summary").click()
     page.locator(".result-tab", has_text="Raw fpocket output").click()
-    # The evidence-bundle view has no dedicated view renderer, so it falls back to
-    # the generic renderer for its first resolved source: fpocket's own global
-    # descriptor file. Assert the RENDERED body is that captured file -- not that
-    # the fixture dictionary merely contains a key, which an empty renderer would
-    # also satisfy.
-    info = replay.payload("work/1SUO_out/1SUO_info.txt")[0].decode("utf-8")
-    marker = info.splitlines()[0].strip()          # "Pocket 1 :"
+    # The declared evidence-bundle view lists every published source of the
+    # captured result with its capability and a download link, so fpocket's own
+    # descriptor file and per-pocket geometry remain reachable from the result.
+    # A source the Task also publishes as a logical file is stated by its
+    # declared name; a source only the raw artifact tree carries keeps its path,
+    # which is its identity.
     preview = page.locator(".result-preview")
-    expect(preview).to_contain_text(marker)
-    expect(preview).to_contain_text("Druggability Score")
+    items = next(view["sources"]["items"] for view in replay.manifest["views"] if view["id"] == "raw_fpocket_output")
+    declared = {
+        artifact["path"]: artifact["name"]
+        for files in replay.manifest["result"]["files"].values()
+        for artifact in files
+    }
+    for path in items:
+        expect(preview).to_contain_text(declared.get(path, path))
+    expect(preview.locator("a[download]")).to_have_count(len(items))
 
 
 def test_replayed_download_returns_the_exact_captured_bytes(page: Page) -> None:

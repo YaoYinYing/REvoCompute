@@ -11,6 +11,7 @@ from playwright.sync_api import Page, expect
 import pytest
 
 from browser_frontend_assets import install_scientific_assets
+from storyboard_first_screen import assert_first_screen
 
 pytestmark = pytest.mark.browser
 
@@ -41,7 +42,7 @@ async (payload) => {
 
 def _mount(page: Page, family: str, task_type: str, files: dict, responses: dict, delays: dict | None = None) -> None:
     source = (ROOT / "docker/runners" / family / "storyboard/index.js").read_text(encoding="utf-8")
-    page.set_viewport_size({"width": 1200, "height": 1100})
+    page.set_viewport_size({"width": 1280, "height": 1000})
     page.set_content("<div id='host'></div>")
     install_scientific_assets(page)
     page.evaluate(MOUNT, {"source": source, "taskType": task_type, "files": files, "responses": responses, "delays": delays or {}})
@@ -67,6 +68,9 @@ def test_esmfold2_uses_persisted_scale_and_bounded_matrix_projection(page: Page)
     expect(page.locator(".matrix-readout")).to_contain_text("1.0 angstrom")
     assert "/local" not in page.evaluate("window.__foldStoryboard.requests")
     assert "/pae" not in page.evaluate("window.__foldStoryboard.requests")
+    # The sample reaches the stage on mount; the PAE matrix is beside it.
+    assert page.evaluate("window.__foldStoryboard.opened") == ["/structure"]
+    assert_first_screen(page, hero=".esmfold-hero", slot=".esmfold-stage", figure=".esmfold-side .esmfold-figure")
 
 
 def test_boltz_reads_named_npz_members_through_bounded_api(page: Page) -> None:
@@ -93,6 +97,9 @@ def test_boltz_reads_named_npz_members_through_bounded_api(page: Page) -> None:
         "/arrays/plddt?max_elements=1048576&key=plddt",
         "/arrays/pae?max_elements=1048576&key=pae",
     ]
+    # The model reaches the stage on mount, and its PAE matrix is in the hero.
+    assert page.evaluate("window.__foldStoryboard.opened") == ["/structure"]
+    assert_first_screen(page, hero=".boltz-hero", slot=".boltz-stage", figure=".boltz-side .boltz-figure")
 
 
 def test_chai_rejects_oversized_matrix_projection_without_partial_plot(page: Page) -> None:
@@ -114,6 +121,12 @@ def test_chai_rejects_oversized_matrix_projection_without_partial_plot(page: Pag
     expect(page.locator(".matrix-readout").first).to_contain_text("exceeds the bounded interactive limit")
     expect(page.locator(".matrix-readout").nth(1)).to_contain_text("0.1 angstrom")
     assert all(".npy" not in target for target in page.evaluate("window.__foldStoryboard.requests"))
+    # The PAE projection was refused, so the local-confidence series beside the
+    # stage is the in-hero evidence on the first screen; the PDE matrix that did
+    # load stays below the hero.
+    assert page.evaluate("window.__foldStoryboard.opened") == ["/structure"]
+    assert_first_screen(page, hero=".chai-hero", slot=".chai-stage", figure=".chai-side [role=img]")
+    expect(page.locator(".chai-result > .chai-section .chai-figure")).to_be_visible()
 
 
 def test_boltz_loads_a_matrix_larger_than_the_legacy_page_size_once(page: Page) -> None:
@@ -166,6 +179,9 @@ def test_fold_storyboards_clear_all_candidate_views_after_failed_replacement(pag
             responses[f"/{artifact}?max_elements=1048576"] = {"kind": "numeric", "dtype": "<f8", "key": None, "shape": shape, "total_elements": len(data), "data": data}
     _mount(page, family, family, files, responses, delays={"/summary-0": 100})
     expect(page.locator(".scalar-grid")).to_have_count(1)
+    # Mount still hands the first candidate to the stage, even when the evidence
+    # for the next candidate fails to load.
+    assert page.evaluate("window.__foldStoryboard.opened") == ["/structure-0"]
 
     page.locator(".candidate-open").nth(0).click()
     page.locator(".candidate-open").nth(1).click()

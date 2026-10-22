@@ -1,0 +1,54 @@
+# Logical result files published by the fampnn_design Task.
+#
+# FAMPNN designs a sequence and its full-atom side chains together. The FASTA and
+# the structure are named by the same sample stem, so both are the primary view's
+# candidates. `sample_pkls` is the model's own serialized sample: it is published
+# for download but no viewer reads it, so it is an artifact rather than evidence.
+result:
+  files:
+    designs:
+      pattern: 'fastas/*.fasta'
+      cardinality: many
+      required: true
+      role: evidence
+    structures:
+      pattern: 'samples/*.pdb'
+      cardinality: many
+      required: true
+      type: structure
+      role: evidence
+    samples:
+      pattern: 'sample_pkls/*.pkl'
+      cardinality: many
+      required: false
+      role: artifact
+    config:
+      path: config.yaml
+      cardinality: one
+      required: true
+      type: text
+      role: provenance
+    input_structure:
+      pattern: 'debug/inputs/structure/*.pdb'
+      cardinality: one
+      required: true
+      type: structure
+      role: provenance
+    submission:
+      path: debug/submission.json
+      cardinality: one
+      required: true
+      type: json
+      role: provenance
+    citations:
+      path: citations.bib
+      cardinality: one
+      required: true
+      type: text
+      role: provenance
+    execution_records:
+      pattern: 'execution/*'
+      cardinality: many
+      required: true
+      type: text
+      role: diagnostic

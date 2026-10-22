@@ -1,6 +1,6 @@
 import { resultFileName, type ResultFile } from '../../../api/result-types';
 import { t } from '../../../app/i18n';
-import type { MolecularViewer, MolecularViewerFactory } from './viewer-contract';
+import type { MolecularViewer, MolecularViewerFactory, TrajectoryInfo } from './viewer-contract';
 
 const MAX_STRUCTURE_BYTES = 64 * 1024 * 1024;
 
@@ -19,6 +19,10 @@ const NON_ASCII = /[^\x00-\x7f]/;
 function structureFormat(path: string): 'pdb' | 'mmcif' | 'pqr' {
   if (/\.pqr(?:\.gz)?$/i.test(path)) return 'pqr';
   return /\.(?:cif|mmcif)(?:\.gz)?$/i.test(path) ? 'mmcif' : 'pdb';
+}
+
+function aborted(): DOMException {
+  return new DOMException('The trajectory load was superseded.', 'AbortError');
 }
 
 function readSource(path: string, response: Response): Promise<string> {
@@ -41,6 +45,51 @@ async function boundedWhole(compressed: boolean, response: Response): Promise<st
   // measure the streamed path applies.
   if (encodedLength(text) > MAX_STRUCTURE_BYTES) throw new Error(t('results.structure.tooLarge'));
   return text;
+}
+
+/**
+ * Read a byte stream into a binary payload, refusing anything past `limit`.
+ *
+ * Coordinate frames (XTC/DCD) are binary and must reach Mol* byte-for-byte, so
+ * unlike a structure they are never decoded. The accepted byte count is both
+ * the declared and the streamed size: the limit is the same 64 MiB the
+ * structure preview applies, and a body without a readable stream is measured
+ * whole.
+ */
+async function boundedBinary(response: Response, limit: number): Promise<Uint8Array> {
+  if (!response.body) {
+    const payload = new Uint8Array(await response.arrayBuffer());
+    if (payload.byteLength > limit) throw new Error(t('results.structure.tooLarge'));
+    return payload;
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let received = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      received += value.byteLength;
+      if (received > limit) throw new Error(t('results.structure.tooLarge'));
+      chunks.push(value);
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+  const payload = new Uint8Array(received);
+  let offset = 0;
+  for (const chunk of chunks) { payload.set(chunk, offset); offset += chunk.byteLength; }
+  return payload;
+}
+
+/**
+ * Read a coordinate body as the text a multi-model PDB coordinate source is.
+ * The XTC/DCD path stays binary; only a text coordinate format is decoded, with
+ * the same bounded measure a structure string gets.
+ */
+async function readCoordinates(path: string, response: Response): Promise<Uint8Array | string> {
+  if (/\.pdb(?:\.gz)?$/i.test(path)) return readSource(path, response);
+  return boundedBinary(response, MAX_STRUCTURE_BYTES);
 }
 
 /** A byte stream whose gzip payload is inflated as it is read. */
@@ -106,7 +155,7 @@ function encodedLength(text: string): number {
  * -- is accepted now. What the text check additionally refuses is input whose
  * decode expands past the limit, which is not a structure at all.
  */
-async function boundedText(stream: ReadableStream<Uint8Array>, limit: number): Promise<string> {
+export async function boundedText(stream: ReadableStream<Uint8Array>, limit: number): Promise<string> {
   const reader = stream.getReader();
   const decoder = new TextDecoder();
   let text = '';
@@ -168,26 +217,16 @@ export class StructureController {
         this.disposeViewer();
         this.host = host;
       }
-      if (!this.viewer && !this.viewerMount) {
-        this.viewerMount = this.createViewer(host, {
-          theme, selectionEnabled: this.options.selectionEnabled, controlsCollapsed: this.options.controlsCollapsed,
-        });
-      }
       if (!this.viewer) {
-        const pending = this.viewerMount!;
-        let created: MolecularViewer;
-        try { created = await pending; } finally { if (this.viewerMount === pending) this.viewerMount = null; }
-        if (this.host !== host) return;
-        if (generation !== this.generation) return;
-        this.viewer = created;
-        if (this.options.onSelectionChanged) this.selectionUnsubscribe = created.onSelectionChanged?.(this.options.onSelectionChanged) || null;
+        const created = await this.viewerFor(host, generation, theme);
+        if (!created) return;
       }
       const response = await fetch(artifact.url, { credentials: 'same-origin', signal: controller.signal });
       if (!response.ok) throw new Error(t('results.structure.downloadFailed', { status: response.status }));
       const name = resultFileName(artifact);
       const data = await readSource(name, response);
       if (generation !== this.generation) return;
-      const viewer = this.viewer;
+      const viewer = this.viewer!;
       const apply = async (): Promise<void> => {
         if (generation !== this.generation || viewer !== this.viewer) return;
         await viewer.setRepresentation(this.representation);
@@ -213,6 +252,108 @@ export class StructureController {
         if (masksExistingViewer && host.dataset) delete host.dataset.loading;
       }
     }
+  }
+
+  /**
+   * Mount one topology plus binary coordinate frames in a single Mol* stage.
+   *
+   * The topology is read as bounded text and the coordinates as bounded bytes;
+   * both are fetched under one abort signal, so leaving the view cancels the
+   * download rather than letting it finish into a detached viewer. One stage is
+   * mounted and every later frame change is a state update, never a remount.
+   */
+  async mountTrajectory(
+    host: HTMLElement,
+    topology: ResultFile,
+    coordinates: ResultFile,
+    format: string,
+    theme: 'light' | 'dark',
+  ): Promise<TrajectoryInfo> {
+    if (topology.size > MAX_STRUCTURE_BYTES || coordinates.size > MAX_STRUCTURE_BYTES) {
+      throw new Error(t('results.structure.tooLarge'));
+    }
+    const generation = ++this.generation;
+    const controller = new AbortController();
+    this.controller?.abort(); this.controller = controller;
+    this.loading = true; this.pendingFocus = null; this.pendingSelection = null;
+    try {
+      if (this.host !== host) { this.disposeViewer(); this.host = host; }
+      const viewer = await this.viewerFor(host, generation, theme);
+      if (!viewer) throw aborted();
+      if (!viewer.loadTrajectory) throw new Error(t('results.trajectory.unavailable'));
+      const [topologyResponse, coordinatesResponse] = await Promise.all([
+        fetch(topology.url, { credentials: 'same-origin', signal: controller.signal }),
+        fetch(coordinates.url, { credentials: 'same-origin', signal: controller.signal }),
+      ]);
+      if (!topologyResponse.ok) throw new Error(t('results.trajectory.topologyFailed', { status: topologyResponse.status }));
+      if (!coordinatesResponse.ok) {
+        throw new Error(t('results.trajectory.coordinatesFailed', { status: coordinatesResponse.status }));
+      }
+      const topologyName = resultFileName(topology);
+      const coordinateName = resultFileName(coordinates);
+      const [topologyText, frames] = await Promise.all([
+        readSource(topologyName, topologyResponse),
+        readCoordinates(coordinateName, coordinatesResponse),
+      ]);
+      if (generation !== this.generation) throw aborted();
+      const apply = async (): Promise<TrajectoryInfo> => {
+        if (generation !== this.generation || viewer !== this.viewer) throw aborted();
+        await viewer.setRepresentation(this.representation);
+        await viewer.setColor(this.color === 'confidence' ? 'plddt' : this.color);
+        const info = await viewer.loadTrajectory!({
+          topology: topologyText, coordinates: frames, coordinateFormat: format.toLowerCase(), label: coordinateName,
+        });
+        if (generation !== this.generation || viewer !== this.viewer) throw aborted();
+        if (!info || !(info.frameCount > 0)) throw new Error(t('results.trajectory.empty'));
+        viewer.resize();
+        return info;
+      };
+      const completed = this.operation.then(apply, apply);
+      this.operation = completed.then(() => undefined, () => undefined);
+      return await completed;
+    } finally {
+      if (this.controller === controller) this.controller = null;
+      if (generation === this.generation && this.host === host) { await this.operation; this.loading = false; }
+    }
+  }
+
+  /** Advance or set the current frame of the mounted trajectory. */
+  async setTrajectoryFrame(action: 'set' | 'advance', value: number): Promise<TrajectoryInfo> {
+    const viewer = this.viewer;
+    if (!viewer?.setTrajectoryFrame) throw new Error(t('results.trajectory.unavailable'));
+    return viewer.setTrajectoryFrame(action, value);
+  }
+
+  /** Empty the stage, superseding any in-flight trajectory load. */
+  async clear(): Promise<void> {
+    this.generation += 1;
+    this.controller?.abort(); this.controller = null;
+    this.loading = false;
+    const viewer = this.viewer;
+    if (!viewer) return;
+    const completed = this.operation.then(() => viewer.clear?.(), () => viewer.clear?.());
+    this.operation = completed.then(() => undefined, () => undefined);
+    await completed;
+  }
+
+  private async viewerFor(host: HTMLElement, generation: number, theme: 'light' | 'dark'): Promise<MolecularViewer | null> {
+    if (!this.viewer && !this.viewerMount) {
+      this.viewerMount = this.createViewer(host, {
+        theme, selectionEnabled: this.options.selectionEnabled, controlsCollapsed: this.options.controlsCollapsed,
+      });
+    }
+    if (this.viewer) return this.viewer;
+    const pending = this.viewerMount;
+    if (!pending) return null;
+    let created: MolecularViewer;
+    try { created = await pending; } finally { if (this.viewerMount === pending) this.viewerMount = null; }
+    // A stale generation on the same host is superseded by a newer mount awaiting
+    // this same viewer, so only a viewer created for a host we no longer use is disposed.
+    if (this.host !== host) { created.dispose(); return null; }
+    if (generation !== this.generation) return null;
+    this.viewer = created;
+    if (this.options.onSelectionChanged) this.selectionUnsubscribe = created.onSelectionChanged?.(this.options.onSelectionChanged) || null;
+    return created;
   }
 
   setRepresentation(mode: string): Promise<void> {
@@ -248,6 +389,18 @@ export class StructureController {
   captureImage(): Promise<string> {
     if (!this.viewer) return Promise.reject(new Error(t('results.structure.notReady')));
     return this.viewer.captureImage();
+  }
+
+  /**
+   * Dispose the shared viewer only when it is the stage inside `host`.
+   *
+   * A view renderer owns the stage it mounted, not the workspace's one molecular
+   * stage: when another owner has since mounted there, closing is not this
+   * view's to do, and doing it anyway would blank a stage it never opened.
+   */
+  disposeIfIn(host: HTMLElement): void {
+    const current = this.host;
+    if (current && (current === host || host.contains(current))) this.dispose();
   }
 
   dispose(): void {

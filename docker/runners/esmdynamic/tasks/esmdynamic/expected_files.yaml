@@ -1,0 +1,96 @@
+# Logical result files published by the ESM Dynamic Task.
+#
+# Derived from the production result recorded in the Task's evidence packet: for
+# each of five temperatures (320K–450K) a dynamic-confidence table and its
+# rendered plot, plus the frequency, kinetics, off-class and non-native series
+# and the predicted structure. The three PNGs the primary view selects are the
+# 320K dynamic, frequency and kinetics plots; every other per-temperature figure
+# is an artifact. Opaque `.npz` probability arrays and the 4.6 MB plot HTML are
+# download-only artifacts. `execution/*` and the input copy are the run's
+# provenance and diagnostics.
+result:
+  files:
+    temperature_plots:
+      pattern: '*/dynamic/*_dynamic_confidence_*.png'
+      cardinality: many
+      required: true
+      type: image
+      role: evidence
+    confidence_tables:
+      pattern: '*/dynamic/*_dynamic_confidence_*.csv'
+      cardinality: many
+      required: true
+      type: table
+      role: evidence
+    frequency_plots:
+      pattern: '*/frequency/*_frequency_*.png'
+      cardinality: many
+      required: true
+      type: image
+      role: evidence
+    kinetics_plots:
+      pattern: '*/kinetics/*_kinetics_*.png'
+      cardinality: many
+      required: true
+      type: image
+      role: evidence
+    kinetics_tables:
+      pattern: '*/kinetics/*_kinetics_*.csv'
+      cardinality: many
+      required: true
+      type: table
+      role: evidence
+    nonnative_plots:
+      pattern: '*/dynamic_nonnative/*_dynamic_nonnative_*.png'
+      cardinality: many
+      required: true
+      type: image
+      role: evidence
+    native_contacts:
+      pattern: '*/native/*_native_contacts.png'
+      cardinality: many
+      required: true
+      type: image
+      role: evidence
+    predicted_structure:
+      pattern: '*/*.pdb'
+      cardinality: one
+      required: true
+      type: structure
+      role: artifact
+    probability_arrays:
+      pattern: '*/kinetics/*_probabilities_*.npz'
+      cardinality: many
+      required: true
+      type: model
+      role: artifact
+    plot_html:
+      pattern: '*/*/*.html'
+      cardinality: many
+      required: true
+      type: archive
+      role: artifact
+    input_sequence:
+      pattern: 'debug/inputs/sequence/*.fasta'
+      cardinality: one
+      required: true
+      type: fasta
+      role: provenance
+    submission:
+      path: debug/submission.json
+      cardinality: one
+      required: true
+      type: json
+      role: provenance
+    citations:
+      path: citations.bib
+      cardinality: one
+      required: true
+      type: text
+      role: provenance
+    execution_records:
+      pattern: 'execution/*'
+      cardinality: many
+      required: true
+      type: text
+      role: diagnostic

@@ -4,8 +4,24 @@ export interface StructureSource {
   label?: string;
 }
 
+export interface TrajectorySource {
+  /** Topology text the coordinate frames are read against. */
+  topology: string;
+  /** Coordinate frames, kept binary (XTC/DCD) or text (multi-model PDB). */
+  coordinates: string | Uint8Array;
+  coordinateFormat: string;
+  label?: string;
+}
+
+export interface TrajectoryInfo {
+  frame: number;
+  frameCount: number;
+}
+
 export interface MolecularViewer {
   loadStructure(source: StructureSource): Promise<void>;
+  loadTrajectory?(source: TrajectorySource): Promise<TrajectoryInfo>;
+  setTrajectoryFrame?(action: 'set' | 'advance', value: number): Promise<TrajectoryInfo>;
   setRepresentation(mode: string): Promise<void>;
   setColor(mode: string): Promise<void>;
   setTheme(theme: 'light' | 'dark'): void;

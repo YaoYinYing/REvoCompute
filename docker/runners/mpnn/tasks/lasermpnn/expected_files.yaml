@@ -1,0 +1,43 @@
+# Logical result files published by the LASErMPNN Task.
+#
+# LASErMPNN publishes one all-atom designed structure per input under
+# `<stem>/design_<n>.pdb` and one sequence file beside it. The structure is the
+# primary view's candidate source; `designs.fasta` is the same design as a
+# sequence, so both are declared and the view names them together.
+result:
+  files:
+    designs:
+      pattern: '*/design_*.pdb'
+      cardinality: many
+      required: false
+      type: structure
+      role: evidence
+    sequences:
+      path: designs.fasta
+      cardinality: one
+      required: true
+      role: evidence
+    input_structure:
+      pattern: 'debug/inputs/structure/*.pdb'
+      cardinality: one
+      required: true
+      type: structure
+      role: provenance
+    submission:
+      path: debug/submission.json
+      cardinality: one
+      required: true
+      type: json
+      role: provenance
+    citations:
+      path: citations.bib
+      cardinality: one
+      required: true
+      type: text
+      role: provenance
+    execution_records:
+      pattern: 'execution/*'
+      cardinality: many
+      required: true
+      type: text
+      role: diagnostic

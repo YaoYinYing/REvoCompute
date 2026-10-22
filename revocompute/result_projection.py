@@ -78,6 +78,7 @@ def project_result_manifest(
             {
                 "id": file_id,
                 "name": os.path.basename(artifact["path"]),
+                "path": artifact["path"],
                 "media_type": artifact["media_type"],
                 "size": artifact["size"],
                 "role": artifact["role"],

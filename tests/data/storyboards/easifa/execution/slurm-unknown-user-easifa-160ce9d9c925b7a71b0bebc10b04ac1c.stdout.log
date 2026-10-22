@@ -1,0 +1,23 @@
+REVODESIGN_JOB_ID=311052
+REVODESIGN_ALLOCATION_LIVE=311052
+REVODESIGN_STAGE:easifa
+
+############################################################
+# EasIFA MODEL NAME     : wo_reactions
+# CHECKPOINT            : [path redacted]
+# DEVICE                : cuda:0
+############################################################
+
+
+======================================================================
+Inference Summary:
+======================================================================
+Model used: wo_reactions
+Sequence length: 79 residues
+
+Predicted active site residues:
+  Total sites :    0 residues (0.0%)
+  Non-sites   :   79 residues (100.0%)
+======================================================================
+EasIFA2 complete.
+

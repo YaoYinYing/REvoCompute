@@ -1,0 +1,43 @@
+# Logical result files published by the CodonTransformer Task.
+#
+# Derived from the production result recorded in the Task's evidence packet: the
+# optimized coding FASTA and the machine-readable prediction metadata, plus the
+# input protein, submission, citation and execution provenance.
+result:
+  files:
+    optimized_sequences:
+      path: optimized_sequences.fasta
+      cardinality: one
+      required: true
+      type: fasta
+      role: evidence
+    results:
+      path: results.json
+      cardinality: one
+      required: true
+      type: json
+      role: evidence
+    input_sequence:
+      pattern: 'debug/inputs/sequence/*.fasta'
+      cardinality: one
+      required: true
+      type: fasta
+      role: provenance
+    submission:
+      path: debug/submission.json
+      cardinality: one
+      required: true
+      type: json
+      role: provenance
+    citations:
+      path: citations.bib
+      cardinality: one
+      required: true
+      type: text
+      role: provenance
+    execution_records:
+      pattern: 'execution/*'
+      cardinality: many
+      required: true
+      type: text
+      role: diagnostic

@@ -19,8 +19,11 @@ import { PluginConfig } from 'molstar/lib/mol-plugin/config.js';
 import { loadTrajectory as loadPluginTrajectory } from 'molstar/lib/extensions/plugin/loaders.js';
 import { createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+import { PresetTrajectoryHierarchy } from 'molstar/lib/mol-plugin-state/builder/structure/hierarchy-preset.js';
+import { ParamDefinition as PD } from 'molstar/lib/mol-util/param-definition.js';
 import 'molstar/build/viewer/molstar.css';
 import { t } from '../../app/i18n';
+import { normalizePdbFrameDelimiters } from './pdb-frames';
 
 const REPRESENTATIONS: Record<string, string> = {
   cartoon: 'cartoon',
@@ -227,11 +230,18 @@ export class MolecularViewer {
       this.removeSphereGeometry();
       await this.plugin.clear();
       if (source.coordinateFormat === 'pdb') {
-        const raw = await this.plugin.builders.data.rawData({ data: source.coordinates, label: source.label || 'trajectory' });
+        // Some runners delimit frames with ENDMDL alone (RFdiffusion's pX0 and
+        // Xt-1 trajectories do). Mol* 5.12.0's PDB reader starts a model only at
+        // a `MODEL ` record, so such a file collapses to one frame and the later
+        // ENDMDL records would silently disappear. The delimiter is made explicit
+        // before parsing; a file that already carries MODEL records is untouched.
+        const text = typeof source.coordinates === 'string' ? source.coordinates : new TextDecoder().decode(source.coordinates);
+        const normalized = normalizePdbFrameDelimiters(text);
+        const raw = await this.plugin.builders.data.rawData({ data: normalized, label: source.label || 'trajectory' });
         const trajectory = await this.plugin.builders.structure.parseTrajectory(raw, 'pdb');
         await this.plugin.builders.structure.hierarchy.applyPreset(trajectory, 'default');
       } else {
-        await loadPluginTrajectory(this.plugin, {
+        const loaded = await loadPluginTrajectory(this.plugin, {
           model: { kind: 'model-data', data: source.topology, format: 'pdb' },
           modelLabel: 'Declared topology',
           coordinates: {
@@ -240,10 +250,24 @@ export class MolecularViewer {
             format: source.coordinateFormat,
           },
           coordinatesLabel: source.label || 'coordinates',
-          preset: 'default',
+          // Coordinate frames can legitimately carry a zero box (BioEmu writes
+          // one). Mol* then attaches an empty unit cell to every frame and its
+          // default preset decorates the model with a hidden unit-cell shape,
+          // whose instance grid is sized from NaN bounds and throws
+          // `RangeError: Invalid typed array length` outside the load task. The
+          // cell is hidden anyway, so leave it out of this preset.
+          preset: { ...PresetTrajectoryHierarchy.default, params: () => ({ showUnitcell: PD.Boolean(false) }) },
         } as any);
+        // Mol* resolves the preset to nothing when the coordinate stream fails to
+        // parse; without this check the topology's own single-frame model would
+        // be reported as a one-frame trajectory instead of an explicit error.
+        if (!(loaded.preset as { model?: unknown } | undefined)?.model) throw new Error(t('results.trajectory.corrupted'));
       }
-      return this.trajectoryInfo();
+      this.appliedRepresentation = null;
+      await this.applyPresentation();
+      const info = this.trajectoryInfo();
+      if (!info) throw new Error('Mol* did not create a trajectory');
+      return { frame: info.frame, frameCount: info.frameCount };
     });
   }
 
@@ -531,14 +555,17 @@ export class MolecularViewer {
   private trajectoryInfo() {
     if (!this.plugin) return null;
     const state = this.plugin.state.data;
-    const models = state.selectQ((query: any) => query.ofTransformer(StateTransforms.Model.ModelFromTrajectory));
-    if (!models.length) return null;
-    const model = models[0];
-    const trajectory = state.cells.get(model.transform.parent);
+    let best: { model: any; frameCount: number } | null = null;
+    for (const model of state.selectQ((query: any) => query.ofTransformer(StateTransforms.Model.ModelFromTrajectory))) {
+      const trajectory = state.cells.get(model.transform.parent);
+      const frames = Number(trajectory?.obj?.data?.frameCount || 0);
+      if (!best || frames > best.frameCount) best = { model, frameCount: frames };
+    }
+    if (!best || best.frameCount < 1) return null;
     return {
-      model,
-      frame: Number(model.params.values.modelIndex || 0),
-      frameCount: Number(trajectory?.obj?.data?.frameCount || 1),
+      model: best.model,
+      frame: Number(best.model.params.values.modelIndex || 0),
+      frameCount: best.frameCount,
     };
   }
 }

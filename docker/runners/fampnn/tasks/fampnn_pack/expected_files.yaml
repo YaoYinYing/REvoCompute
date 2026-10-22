@@ -1,0 +1,43 @@
+# Logical result files published by the fampnn_pack Task.
+#
+# Side-chain packing publishes one full-atom structure per input sample, with the
+# model confidence in the B-factor field. That structure is the primary view's
+# candidate source.
+result:
+  files:
+    structures:
+      pattern: 'samples/*.pdb'
+      cardinality: many
+      required: true
+      type: structure
+      role: evidence
+    config:
+      path: config.yaml
+      cardinality: one
+      required: true
+      type: text
+      role: provenance
+    input_structure:
+      pattern: 'debug/inputs/structure/*.pdb'
+      cardinality: one
+      required: true
+      type: structure
+      role: provenance
+    submission:
+      path: debug/submission.json
+      cardinality: one
+      required: true
+      type: json
+      role: provenance
+    citations:
+      path: citations.bib
+      cardinality: one
+      required: true
+      type: text
+      role: provenance
+    execution_records:
+      pattern: 'execution/*'
+      cardinality: many
+      required: true
+      type: text
+      role: diagnostic

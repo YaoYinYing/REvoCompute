@@ -1283,8 +1283,15 @@ class SlurmJob(Job):
         # --cleanenv: host env is dropped; only the APPTAINERENV_* variables
         # exported above are forwarded. All required mounts are the explicit
         # --bind entries, so containment costs nothing for these images.
-        # --no-home is explicit belt-and-braces over --containall's private
-        # HOME, and mirrors the Tool runtime's flags.
+        # HOME is --containall's private, writable tmpfs (64 MiB on Apptainer
+        # 1.4.5), and that writability is the contract: a scientific tool
+        # resolves its cache under $HOME (torch/huggingface/triton/dgl/prody),
+        # and a Runner whose image has no explicit cache redirection has nowhere
+        # else to write. Adding --no-home on top removes HOME entirely, so the
+        # first mkdir fails with ENOENT rather than on anything scientific (six
+        # families did). The tmpfs is private to the container and nothing
+        # written there reaches the host home, so isolation is unchanged; a
+        # heavy cache still belongs in the bound task scratch (foundry, bioemu2).
         # Network is a *declared* capability: --containall does NOT create a
         # network namespace, so without an explicit flag a runner would inherit
         # the host namespace and reach the worker's Redis broker, the gateway,
@@ -1298,7 +1305,7 @@ class SlurmJob(Job):
         # entrypoints and arguments cannot be silently ignored by the adapter.
         command = " ".join(_sh_quote(part) for part in self.execution_plan.command)
         cmd = (
-            f"apptainer exec{gpu_flag} --containall --cleanenv --no-home{net_flag} "
+            f"apptainer exec{gpu_flag} --containall --cleanenv{net_flag} "
             f"{' '.join(bind_parts)} {_sh_quote(sif_image)} {command}"
         )
         for arg in self.execution_plan.arguments:

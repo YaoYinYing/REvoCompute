@@ -1,0 +1,17 @@
+{
+  "mode": "embed",
+  "source_repository": "https://github.com/anton-bushuiev/PPIformer",
+  "source_revision": "e324f5f30dd0dae55d194ac6b4d18c772219c3ee",
+  "model_record_doi": "10.5281/zenodo.12789167",
+  "input": {
+    "name": "1abc_A_B.pdb",
+    "sha256": "d9246c6bd74f0b5dce39db2cb7db6af8842cb40edb986ffd9c83e1ad081a2beb"
+  },
+  "checkpoint_sha256": {
+    "weights/masked_modeling.ckpt": "3bc26cc5e6628cee5f9e28d59a5324598ec52ae68f687f404a9e240e6a2aa44c"
+  },
+  "device": "cuda",
+  "residue_count": 8,
+  "embedding_dimension": 128,
+  "pooling": "mean"
+}

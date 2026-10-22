@@ -81,6 +81,7 @@ from .replay_bundle import (
     capture_replay_bundle,
     load_bundle,
     normalize,
+    payload_bytes,
     project_manifest_for_serve,
     required_view_sources,
     write_bundle,
@@ -100,6 +101,7 @@ from .scenarios import (
     DemoFileSpec,
     DemoSpec,
     RunnerScenario,
+    bioemu_runner,
     controlled_runner,
     controlled_scenario,
     gremlin_lh_runner,
@@ -118,6 +120,7 @@ from .scenarios import (
 # the fixtures, not a text scan) so the enforcement set cannot drift from the
 # helpers it guards: a helper listed here is fleet-only without a second list.
 AUTHENTIC_SCENARIOS = frozenset({
+    bioemu_runner,
     gremlin_lh_runner,
     production_receipt_pointer,
     pssm_gremlin_scenario,
@@ -201,6 +204,7 @@ __all__ = [
     "load_bundle",
     "mount_scenario",
     "normalize",
+    "payload_bytes",
     "openapi_spec",
     "preflight_fixture",
     "production_receipt_pointer",

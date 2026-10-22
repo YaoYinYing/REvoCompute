@@ -7,7 +7,12 @@ export interface StoryboardServices {
   downloadFile(artifact: LogicalResultFile): void;
   /** Navigate to one of the task's own declared result views by manifest id. */
   openView?(viewId: string): Promise<void>;
-  mountView?(viewId: string, host: HTMLElement, signal: AbortSignal): Promise<void | { destroy(): void; selectCell?(xLabel: string, yLabel: string): void }>;
+  mountView?(viewId: string, host: HTMLElement, signal: AbortSignal): Promise<void | {
+    destroy(): void;
+    selectCell?(xLabel: string, yLabel: string): void;
+    /** Frame count of a mounted trajectory view, when the view declares one. */
+    frameCount?: number;
+  }>;
   focusStructure?(selection: unknown): boolean;
   selectStructure?(selection: unknown): boolean;
   resetStructure?(): void;

@@ -1,0 +1,19 @@
+{
+  "inputs": [
+    {
+      "name": "2KL8.pdb",
+      "role": "structure",
+      "sha256": "035c78fb64880cfac5f721a1831ea45a54b453741fbbc4785d738be83c19c15e",
+      "size": 105871
+    }
+  ],
+  "params": {
+    "chains": "",
+    "checkpoint": "fireprot",
+    "positions": "",
+    "quiet": true
+  },
+  "submitted_at": "2026-10-20T16:25:16.771418+00:00",
+  "task_type": "frustrampnn",
+  "username": "tester"
+}

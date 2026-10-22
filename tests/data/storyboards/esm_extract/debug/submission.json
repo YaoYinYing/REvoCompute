@@ -1,0 +1,20 @@
+{
+  "inputs": [
+    {
+      "name": "2KL8.fasta",
+      "role": "sequence",
+      "sha256": "511d73a16c00fb6a26376e1100317348973a956295ba753098e6ff08cdd53392",
+      "size": 85
+    }
+  ],
+  "params": {
+    "include": "mean contacts",
+    "model": "esm2_t33_650M_UR50D",
+    "repr_layers": "33",
+    "toks_per_batch": 128,
+    "truncation_seq_length": 1022
+  },
+  "submitted_at": "2026-10-20T15:30:10.366753+00:00",
+  "task_type": "esm_extract",
+  "username": "tester"
+}

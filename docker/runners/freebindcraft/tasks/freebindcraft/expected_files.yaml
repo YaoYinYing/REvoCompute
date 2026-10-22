@@ -1,0 +1,98 @@
+# Logical result files published by the FreeBindCraft Task.
+#
+# A binder campaign publishes ranked binder complexes, the campaign's own design
+# statistics table, and the intermediate trajectories and plots that produced
+# them. Only `accepted_binders` and `design_metrics` are the declared views'
+# sources. The ranked structures are the primary view's candidates; the
+# Accepted/ copies are the same structures before ranking, so they are declared
+# as artifacts rather than a second candidate identity.
+#
+# Trajectory/Animation.zip is published on every run and is an empty 22-byte zip
+# in the observed result. It is declared as an artifact like any other published
+# file the views do not read; nothing here claims it holds frames.
+result:
+  files:
+    ranked_binders:
+      pattern: 'Accepted/Ranked/*.pdb'
+      cardinality: many
+      required: false
+      type: structure
+      role: evidence
+    accepted_binders:
+      pattern: 'Accepted/*.pdb'
+      cardinality: many
+      required: false
+      type: structure
+      role: artifact
+    design_metrics:
+      path: final_design_stats.csv
+      cardinality: one
+      required: true
+      type: table
+      role: evidence
+    mpnn_designs:
+      pattern: 'MPNN/*/*.pdb'
+      cardinality: many
+      required: false
+      type: structure
+      role: artifact
+    trajectory_structures:
+      pattern: 'Trajectory/*/*.pdb'
+      cardinality: many
+      required: false
+      type: structure
+      role: artifact
+    trajectory_plots:
+      path: Trajectory/Plots.zip
+      cardinality: one
+      required: false
+      type: archive
+      role: artifact
+    trajectory_animation:
+      path: Trajectory/Animation.zip
+      cardinality: one
+      required: false
+      type: archive
+      role: artifact
+    design_plots:
+      pattern: 'Accepted/Plots/*.png'
+      cardinality: many
+      required: false
+      type: image
+      role: artifact
+    run_settings:
+      path: advanced.json
+      cardinality: one
+      required: true
+      type: json
+      role: provenance
+    target_settings:
+      path: target.json
+      cardinality: one
+      required: true
+      type: json
+      role: provenance
+    input_structure:
+      pattern: 'debug/inputs/structure/*.pdb'
+      cardinality: one
+      required: true
+      type: structure
+      role: provenance
+    submission:
+      path: debug/submission.json
+      cardinality: one
+      required: true
+      type: json
+      role: provenance
+    citations:
+      path: citations.bib
+      cardinality: one
+      required: true
+      type: text
+      role: provenance
+    execution_records:
+      pattern: 'execution/*'
+      cardinality: many
+      required: true
+      type: text
+      role: diagnostic

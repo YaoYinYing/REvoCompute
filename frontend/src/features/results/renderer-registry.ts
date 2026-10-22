@@ -1,9 +1,27 @@
-import { resultFileName, type ResultArtifact, type ResultFile, type PreviewCapability, type ResultView } from '../../api/result-types';
+import { isLogicalFile, resultFileName, type ResultArtifact, type ResultFile, type PreviewCapability, type ResultView } from '../../api/result-types';
 import { t } from '../../app/i18n';
 
 export interface RendererContext {
   signal: AbortSignal;
   taskId: string;
+  // Mount one structure artifact into `host` through the workspace's own molecular
+  // stage; absent for an embedder that has none. A view renderer that shows a
+  // candidate as a structure uses this instead of carrying a second viewer.
+  openStructure?(artifact: ResultFile, host: HTMLElement): Promise<void>;
+  // Close the shared molecular stage this view mounted into `host`; a view renderer
+  // calls this when the structure it opened is superseded by a selection that is not
+  // a structure, and passes the host it mounted into so another owner's stage is left
+  // alone. A view that never mounted a stage closes nothing.
+  closeStructure?(host: HTMLElement): void;
+  // Apply the molecular selection a rendered row declares, in the workspace's own
+  // structure vocabulary; absent for an embedder without a molecular stage.
+  selectStructure?(selection: { chain: string; residue: number; numbering?: string }): void;
+  // Whether the embedding page already mounts this exact artifact in its own
+  // structure stage on the first screen (a Task Storyboard does, through
+  // `openFile`). The stage is one viewer showing one structure: a view that is
+  // told the page draws the artifact does not mount it a second time, and does
+  // not offer to, so no selection can dispossess the page's own stage.
+  drawsStructure?(artifact: ResultFile): boolean;
 }
 
 export interface ArtifactRenderer {
@@ -12,16 +30,34 @@ export interface ArtifactRenderer {
 }
 
 /**
+ * Every declared source of one view, resolved to the manifest artifacts that
+ * satisfy it, keyed by the source name the Server declared (``topology``,
+ * ``coordinates``, ``matrices``, ...). Source names and their resolved order
+ * are preserved end to end; a missing source resolves to an empty list rather
+ * than being dropped, so a renderer can state which source is absent.
+ */
+export type ResolvedViewSources = Record<string, ResultFile[]>;
+
+/** The first published artifact across a view's sources, in declared order. */
+export function firstViewSource(sources: ResolvedViewSources): ResultFile | null {
+  for (const artifacts of Object.values(sources)) {
+    if (artifacts.length) return artifacts[0]!;
+  }
+  return null;
+}
+
+/**
  * A server-declared result view's renderer, keyed by its declared `plugin`.
  *
- * A view renderer receives the view's own manifest definition and the first
- * resolved source artifact; it never branches on a task or runner name.
+ * A view renderer receives the view's own manifest definition and every source
+ * it declares, each resolved to artifacts; it never branches on a task or
+ * runner name.
  */
 export interface ViewRenderer {
   id: string;
   render(
     view: ResultView,
-    artifact: ResultFile | null,
+    sources: ResolvedViewSources,
     host: HTMLElement,
     context: RendererContext,
   ): Promise<void | { destroy(): void }>;
@@ -102,7 +138,9 @@ export function createBasicRenderers(): ArtifactRenderer[] {
       id: 'table',
       async render(artifact, host, context) {
         const name = resultFileName(artifact), encoded = name.split('/').map(encodeURIComponent).join('/');
-        const url = artifact.table_url || ('path' in artifact
+        // A logical file carries the Server's bounded table URL or none; only a raw
+        // published artifact lets the browser compose the bounded page route.
+        const url = artifact.table_url || (!isLogicalFile(artifact)
           ? `/compute/api/results/${encodeURIComponent(context.taskId)}/tables/${encoded}?limit=100`
           : null);
         if (!url) throw new Error(t('results.tableNoUrl'));

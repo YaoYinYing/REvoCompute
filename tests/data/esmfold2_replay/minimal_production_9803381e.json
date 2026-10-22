@@ -1,0 +1,766 @@
+{
+  "bundle_digest": "sha256:7404cf75a396329255b02049686d1f23b83d45e976f80a527b0e5d5bb162c3e7",
+  "bundle_version": 1,
+  "excluded": [
+    {
+      "media_type": "application/octet-stream",
+      "path": "citations.bib",
+      "reason": "declared artifact not checked in by this capture",
+      "sha256": "c2986b63247a948111863589265dff09aa04fce5f3758465c8e52e60b6b9a0ce",
+      "size": 1058
+    },
+    {
+      "media_type": "text/x-fasta",
+      "path": "debug/inputs/sequence/minimal.fasta",
+      "reason": "declared artifact not checked in by this capture",
+      "sha256": "6a2134f4b4b1fabd218c9ba994889a4281e773de30fe8c1dd5b96f6d72594b29",
+      "size": 35
+    },
+    {
+      "media_type": "text/plain",
+      "path": "execution/slurm-unknown-user-esmfold2_predict-9803381e59eeb152b0c654dcd1c4d871.stderr.log",
+      "reason": "declared artifact not checked in by this capture",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size": 0
+    },
+    {
+      "media_type": "text/plain",
+      "path": "execution/slurm-unknown-user-esmfold2_predict-9803381e59eeb152b0c654dcd1c4d871.stdout.log",
+      "reason": "declared artifact not checked in by this capture",
+      "sha256": "194436addd0cf709d78368f79ea45bc94f7582e246cbe9ee667915ca1a0c7314",
+      "size": 269
+    }
+  ],
+  "kind": "real_runner_result_replay",
+  "logical_files": {
+    "local_confidence": [
+      {
+        "path": "mini_protein/sample_001_plddt.csv",
+        "sha256": "b7b98567fccf88b6b3a62fb24f60652c4cf2a1e8f2864977e4c7a9ccecd4cd22",
+        "size": 473
+      }
+    ],
+    "pae": [
+      {
+        "path": "mini_protein/sample_001_pae.json",
+        "sha256": "bb9eba13293e75e3ea1d4ca9b0b3fbd4e9ab73c5f25a0c5e0cc80f9c9d0d81ba",
+        "size": 7456
+      }
+    ],
+    "structures": [
+      {
+        "path": "mini_protein/sample_001.cif",
+        "sha256": "4588469db40d34b772ff887b77f94e332daafa105058edf4eda7e6789d088f73",
+        "size": 18527
+      }
+    ],
+    "summaries": [
+      {
+        "path": "mini_protein/sample_001_confidence.json",
+        "sha256": "bba453471acfe465eda76dd6342d9e0d33735e05539ac609c1086b5177c0e7e9",
+        "size": 120
+      }
+    ]
+  },
+  "payloads": {
+    "debug/submission.json": {
+      "media_type": "application/json",
+      "payload": "{\n  \"inputs\": [\n    {\n      \"name\": \"minimal.fasta\",\n      \"role\": \"sequence\",\n      \"sha256\": \"6a2134f4b4b1fabd218c9ba994889a4281e773de30fe8c1dd5b96f6d72594b29\",\n      \"size\": 35\n    }\n  ],\n  \"params\": {\n    \"include_embeddings\": false,\n    \"kernel_backend\": \"cuequivariance\",\n    \"lm_dropout\": 0.0,\n    \"lm_mask_pct\": 0.0,\n    \"model_variant\": \"fast\",\n    \"msa_column_mask_rate\": 0.1,\n    \"msa_max_depth\": 1024,\n    \"num_diffusion_samples\": 1,\n    \"num_loops\": 1,\n    \"num_sampling_steps\": 2,\n    \"seed\": 0\n  },\n  \"submitted_at\": \"2026-10-20T16:59:36.983858+00:00\",\n  \"task_type\": \"esmfold2_predict\",\n  \"username\": \"tester\"\n}\n",
+      "sha256": "1dd721678dc187cb2729febf7289a7809e4d0d4c161542642aa58bdbde75312f",
+      "size": 628
+    },
+    "execution/slurm-status.execution.json": {
+      "media_type": "application/json",
+      "payload": "{\"source\": \"slurm_adapter\", \"schema_version\": 1, \"task_id\": \"9803381e59eeb152b0c654dcd1c4d871\", \"logs\": {\"stdout\": \"REVODESIGN_JOB_ID=311754\\nREVODESIGN_ALLOCATION_LIVE=311754\\nREVODESIGN_STAGE:esmfold2_predict\\nREVODESIGN_STAGE:model_loading\\nLoading CCD dictionary from [path redacted]\\nREVODESIGN_STAGE:esmfold2_predict\\nREVODESIGN_STAGE:output_validation\\nESMFold 2 prediction complete.\\n\\n\", \"stderr\": \"\"}}",
+      "sha256": "3c813ad3c36393b98357372aceaf490fd35e5cd928ac8721301ec8260098593b",
+      "size": 411
+    },
+    "execution/slurm-unknown-user-esmfold2_predict-9803381e59eeb152b0c654dcd1c4d871.resource.json": {
+      "media_type": "application/json",
+      "payload": "{\n  \"allocated_cpus_per_task\": 8,\n  \"allocated_gpu_ids\": \"0\",\n  \"allocated_gpus_on_node\": \"1\",\n  \"allocated_tasks\": 1,\n  \"elapsed_seconds\": 147.77,\n  \"exit_code\": 0,\n  \"gpu_memory_peak_mib\": 13731,\n  \"gpu_utilization_peak_percent\": 100,\n  \"job_id\": \"311754\",\n  \"max_rss_kib\": 18522948,\n  \"schema_version\": 1,\n  \"scratch_guard.exceeded\": 0,\n  \"scratch_guard.peak_bytes\": 77824,\n  \"scratch_guard.samples\": 30,\n  \"source\": \"allocation_wrapper\",\n  \"system_cpu_seconds\": 32.74,\n  \"user_cpu_seconds\": 116.26,\n  \"visible_gpu_devices\": \"0\"\n}\n",
+      "sha256": "9d6abf714f1147a1ecf17c9900f2a0577921e3653976b6127f636cfef9619a36",
+      "size": 534
+    },
+    "mini_protein/prediction.json": {
+      "media_type": "application/json",
+      "payload": "{\n  \"chains\": [\n    {\n      \"id\": \"mini_protein\",\n      \"length\": 20\n    }\n  ],\n  \"effective\": {\n    \"batch_size\": 1,\n    \"cache_clear\": false,\n    \"group_seeds\": [\n      0\n    ],\n    \"kernel_backend\": \"cuequivariance\",\n    \"plan_label\": \"\",\n    \"plan_title\": \"(1 of 1 requested samples per group)\",\n    \"sample_group_size\": 1,\n    \"sample_groups\": [\n      1\n    ],\n    \"sample_seeds\": [\n      0\n    ],\n    \"seed\": 0\n  },\n  \"input\": {\n    \"fasta\": \"minimal.fasta\",\n    \"fasta_sha256\": \"6a2134f4b4b1fabd218c9ba994889a4281e773de30fe8c1dd5b96f6d72594b29\",\n    \"msa\": null,\n    \"msa_sha256\": null\n  },\n  \"item\": {\n    \"id\": \"mini_protein\",\n    \"length\": 20,\n    \"order\": 0\n  },\n  \"models\": {\n    \"asset_manifest_sha256\": \"c6c396ca03459cad1f59f6561423045ecf34127708e27c8372809cb8a3697dba\",\n    \"esmc_revision\": \"45b0fa5d7fb06faefbd5e3b89bdcef35d564e79a\",\n    \"variant_revision\": \"c6c7958d63f5f2f1f0fed0bb9462316f8ccceea6\"\n  },\n  \"parameters\": {\n    \"include_embeddings\": false,\n    \"kernel_backend\": \"cuequivariance\",\n    \"lm_dropout\": 0.0,\n    \"lm_mask_pct\": 0.0,\n    \"model_variant\": \"fast\",\n    \"msa_column_mask_rate\": 0.1,\n    \"msa_max_depth\": 1024,\n    \"num_diffusion_samples\": 1,\n    \"num_loops\": 1,\n    \"num_sampling_steps\": 2,\n    \"seed\": 0\n  },\n  \"runtime_fingerprint\": \"torch=2.11.0+cu128|cuda=12.8|model=bf343ba/fast|backend=cuequivariance\",\n  \"samples\": [\n    {\n      \"iptm\": 0.0,\n      \"mean_plddt\": 0.3149751201272011,\n      \"num_tokens\": 20,\n      \"ptm\": 0.053740616887807846,\n      \"sample\": 1\n    }\n  ],\n  \"software\": {\n    \"commit\": \"bf343ba264b650dff7a073643725f9aaa1fdbe8d\",\n    \"repository\": \"https://github.com/Biohub/esm\",\n    \"version\": \"3.4.1\"\n  }\n}\n",
+      "sha256": "d73487b214e3714ece7d8772fe7a8022cf3a2da1f0cf6970f849fc13c770450f",
+      "size": 1670
+    },
+    "mini_protein/sample_001.cif": {
+      "media_type": "chemical/x-cif",
+      "payload": "data_esmfold2_prediction\n#\nloop_\n_atom_site.group_PDB \n_atom_site.type_symbol \n_atom_site.label_atom_id \n_atom_site.label_alt_id \n_atom_site.label_comp_id \n_atom_site.label_asym_id \n_atom_site.label_entity_id \n_atom_site.label_seq_id \n_atom_site.pdbx_PDB_ins_code \n_atom_site.auth_seq_id \n_atom_site.auth_comp_id \n_atom_site.auth_asym_id \n_atom_site.auth_atom_id \n_atom_site.B_iso_or_equiv \n_atom_site.occupancy \n_atom_site.Cartn_x \n_atom_site.Cartn_y \n_atom_site.Cartn_z \n_atom_site.pdbx_PDB_model_num \n_atom_site.id \nATOM N N   . ALA mini_protein 1 1  . 1  ALA mini_protein N   25.49 1.0 -138.894 -54.375  169.969  1 1\nATOM C CA  . ALA mini_protein 1 1  . 1  ALA mini_protein CA  25.49 1.0 -118.583 -95.434  -38.890  1 2\nATOM C C   . ALA mini_protein 1 1  . 1  ALA mini_protein C   25.49 1.0 13.915   71.759   -13.857  1 3\nATOM O O   . ALA mini_protein 1 1  . 1  ALA mini_protein O   25.49 1.0 -183.232 -39.077  -29.247  1 4\nATOM C CB  . ALA mini_protein 1 1  . 1  ALA mini_protein CB  25.49 1.0 83.165   106.181  49.647   1 5\nATOM N N   . CYS mini_protein 1 2  . 2  CYS mini_protein N   30.05 1.0 73.756   -82.730  -163.457 1 6\nATOM C CA  . CYS mini_protein 1 2  . 2  CYS mini_protein CA  30.05 1.0 -205.267 -16.781  -94.212  1 7\nATOM C C   . CYS mini_protein 1 2  . 2  CYS mini_protein C   30.05 1.0 113.423  6.041    0.512    1 8\nATOM O O   . CYS mini_protein 1 2  . 2  CYS mini_protein O   30.05 1.0 7.026    413.736  166.768  1 9\nATOM C CB  . CYS mini_protein 1 2  . 2  CYS mini_protein CB  30.05 1.0 137.605  -95.045  -75.483  1 10\nATOM S SG  . CYS mini_protein 1 2  . 2  CYS mini_protein SG  30.05 1.0 125.467  87.688   -134.925 1 11\nATOM N N   . ASP mini_protein 1 3  . 3  ASP mini_protein N   34.51 1.0 286.411  70.878   75.070   1 12\nATOM C CA  . ASP mini_protein 1 3  . 3  ASP mini_protein CA  34.51 1.0 -256.246 -71.397  172.334  1 13\nATOM C C   . ASP mini_protein 1 3  . 3  ASP mini_protein C   34.51 1.0 -75.100  -11.742  -90.164  1 14\nATOM O O   . ASP mini_protein 1 3  . 3  ASP mini_protein O   34.51 1.0 -171.066 106.405  200.760  1 15\nATOM C CB  . ASP mini_protein 1 3  . 3  ASP mini_protein CB  34.51 1.0 -143.245 -9.309   225.333  1 16\nATOM C CG  . ASP mini_protein 1 3  . 3  ASP mini_protein CG  34.51 1.0 149.702  -106.663 -106.612 1 17\nATOM O OD1 . ASP mini_protein 1 3  . 3  ASP mini_protein OD1 34.51 1.0 353.879  130.253  400.906  1 18\nATOM O OD2 . ASP mini_protein 1 3  . 3  ASP mini_protein OD2 34.51 1.0 25.925   -14.953  75.491   1 19\nATOM N N   . GLU mini_protein 1 4  . 4  GLU mini_protein N   36.35 1.0 -230.808 25.253   -415.550 1 20\nATOM C CA  . GLU mini_protein 1 4  . 4  GLU mini_protein CA  36.35 1.0 119.354  49.198   79.262   1 21\nATOM C C   . GLU mini_protein 1 4  . 4  GLU mini_protein C   36.35 1.0 227.753  -110.082 -138.652 1 22\nATOM O O   . GLU mini_protein 1 4  . 4  GLU mini_protein O   36.35 1.0 -204.952 -18.573  34.684   1 23\nATOM C CB  . GLU mini_protein 1 4  . 4  GLU mini_protein CB  36.35 1.0 -148.265 -41.491  95.881   1 24\nATOM C CG  . GLU mini_protein 1 4  . 4  GLU mini_protein CG  36.35 1.0 -96.742  -39.732  85.105   1 25\nATOM C CD  . GLU mini_protein 1 4  . 4  GLU mini_protein CD  36.35 1.0 60.622   -50.748  -185.847 1 26\nATOM O OE1 . GLU mini_protein 1 4  . 4  GLU mini_protein OE1 36.35 1.0 240.223  -13.768  -196.329 1 27\nATOM O OE2 . GLU mini_protein 1 4  . 4  GLU mini_protein OE2 36.35 1.0 174.491  -157.863 -70.283  1 28\nATOM N N   . PHE mini_protein 1 5  . 5  PHE mini_protein N   34.47 1.0 112.242  -42.365  -44.092  1 29\nATOM C CA  . PHE mini_protein 1 5  . 5  PHE mini_protein CA  34.47 1.0 27.503   -124.525 -93.365  1 30\nATOM C C   . PHE mini_protein 1 5  . 5  PHE mini_protein C   34.47 1.0 13.403   94.069   -13.649  1 31\nATOM O O   . PHE mini_protein 1 5  . 5  PHE mini_protein O   34.47 1.0 104.097  -94.323  -159.644 1 32\nATOM C CB  . PHE mini_protein 1 5  . 5  PHE mini_protein CB  34.47 1.0 64.001   210.315  -52.533  1 33\nATOM C CG  . PHE mini_protein 1 5  . 5  PHE mini_protein CG  34.47 1.0 20.751   154.838  158.050  1 34\nATOM C CD1 . PHE mini_protein 1 5  . 5  PHE mini_protein CD1 34.47 1.0 199.555  -102.904 98.141   1 35\nATOM C CD2 . PHE mini_protein 1 5  . 5  PHE mini_protein CD2 34.47 1.0 66.157   -181.285 -20.556  1 36\nATOM C CE1 . PHE mini_protein 1 5  . 5  PHE mini_protein CE1 34.47 1.0 175.450  -10.204  -118.951 1 37\nATOM C CE2 . PHE mini_protein 1 5  . 5  PHE mini_protein CE2 34.47 1.0 209.421  -103.458 -60.700  1 38\nATOM C CZ  . PHE mini_protein 1 5  . 5  PHE mini_protein CZ  34.47 1.0 -17.086  -60.464  -242.767 1 39\nATOM N N   . GLY mini_protein 1 6  . 6  GLY mini_protein N   35.33 1.0 137.675  -266.578 -143.289 1 40\nATOM C CA  . GLY mini_protein 1 6  . 6  GLY mini_protein CA  35.33 1.0 -161.517 7.742    -8.491   1 41\nATOM C C   . GLY mini_protein 1 6  . 6  GLY mini_protein C   35.33 1.0 -29.389  -130.985 -108.316 1 42\nATOM O O   . GLY mini_protein 1 6  . 6  GLY mini_protein O   35.33 1.0 -10.166  -81.731  125.104  1 43\nATOM N N   . HIS mini_protein 1 7  . 7  HIS mini_protein N   31.47 1.0 132.245  -90.402  -51.996  1 44\nATOM C CA  . HIS mini_protein 1 7  . 7  HIS mini_protein CA  31.47 1.0 66.909   33.075   138.325  1 45\nATOM C C   . HIS mini_protein 1 7  . 7  HIS mini_protein C   31.47 1.0 101.934  -194.390 -98.178  1 46\nATOM O O   . HIS mini_protein 1 7  . 7  HIS mini_protein O   31.47 1.0 81.606   -135.949 235.676  1 47\nATOM C CB  . HIS mini_protein 1 7  . 7  HIS mini_protein CB  31.47 1.0 -4.834   -249.783 -119.235 1 48\nATOM C CG  . HIS mini_protein 1 7  . 7  HIS mini_protein CG  31.47 1.0 -101.025 -340.959 226.632  1 49\nATOM N ND1 . HIS mini_protein 1 7  . 7  HIS mini_protein ND1 31.47 1.0 93.115   262.239  -98.333  1 50\nATOM C CD2 . HIS mini_protein 1 7  . 7  HIS mini_protein CD2 31.47 1.0 119.863  218.720  237.516  1 51\nATOM C CE1 . HIS mini_protein 1 7  . 7  HIS mini_protein CE1 31.47 1.0 271.113  -175.949 111.764  1 52\nATOM N NE2 . HIS mini_protein 1 7  . 7  HIS mini_protein NE2 31.47 1.0 -29.959  -276.577 -22.314  1 53\nATOM N N   . ILE mini_protein 1 8  . 8  ILE mini_protein N   31.22 1.0 -188.679 -34.332  -154.829 1 54\nATOM C CA  . ILE mini_protein 1 8  . 8  ILE mini_protein CA  31.22 1.0 22.662   145.130  73.049   1 55\nATOM C C   . ILE mini_protein 1 8  . 8  ILE mini_protein C   31.22 1.0 -66.157  4.464    -85.395  1 56\nATOM O O   . ILE mini_protein 1 8  . 8  ILE mini_protein O   31.22 1.0 -7.094   73.964   -51.205  1 57\nATOM C CB  . ILE mini_protein 1 8  . 8  ILE mini_protein CB  31.22 1.0 6.991    80.482   -12.661  1 58\nATOM C CG1 . ILE mini_protein 1 8  . 8  ILE mini_protein CG1 31.22 1.0 -57.029  -129.628 63.826   1 59\nATOM C CG2 . ILE mini_protein 1 8  . 8  ILE mini_protein CG2 31.22 1.0 -64.265  164.691  -48.850  1 60\nATOM C CD1 . ILE mini_protein 1 8  . 8  ILE mini_protein CD1 31.22 1.0 7.294    35.534   14.735   1 61\nATOM N N   . LYS mini_protein 1 9  . 9  LYS mini_protein N   30.49 1.0 19.081   -33.236  310.117  1 62\nATOM C CA  . LYS mini_protein 1 9  . 9  LYS mini_protein CA  30.49 1.0 -32.551  -107.479 -195.215 1 63\nATOM C C   . LYS mini_protein 1 9  . 9  LYS mini_protein C   30.49 1.0 -160.459 153.014  209.458  1 64\nATOM O O   . LYS mini_protein 1 9  . 9  LYS mini_protein O   30.49 1.0 -121.003 73.513   93.320   1 65\nATOM C CB  . LYS mini_protein 1 9  . 9  LYS mini_protein CB  30.49 1.0 36.746   -50.072  34.929   1 66\nATOM C CG  . LYS mini_protein 1 9  . 9  LYS mini_protein CG  30.49 1.0 35.044   -155.270 27.810   1 67\nATOM C CD  . LYS mini_protein 1 9  . 9  LYS mini_protein CD  30.49 1.0 -90.432  216.402  199.654  1 68\nATOM C CE  . LYS mini_protein 1 9  . 9  LYS mini_protein CE  30.49 1.0 44.988   -174.491 13.784   1 69\nATOM N NZ  . LYS mini_protein 1 9  . 9  LYS mini_protein NZ  30.49 1.0 215.274  -36.488  -66.478  1 70\nATOM N N   . LEU mini_protein 1 10 . 10 LEU mini_protein N   30.92 1.0 -128.038 267.170  20.971   1 71\nATOM C CA  . LEU mini_protein 1 10 . 10 LEU mini_protein CA  30.92 1.0 76.139   -60.795  -54.524  1 72\nATOM C C   . LEU mini_protein 1 10 . 10 LEU mini_protein C   30.92 1.0 -194.772 156.231  100.298  1 73\nATOM O O   . LEU mini_protein 1 10 . 10 LEU mini_protein O   30.92 1.0 169.771  112.839  -64.364  1 74\nATOM C CB  . LEU mini_protein 1 10 . 10 LEU mini_protein CB  30.92 1.0 37.049   -36.649  53.936   1 75\nATOM C CG  . LEU mini_protein 1 10 . 10 LEU mini_protein CG  30.92 1.0 -94.031  39.697   52.410   1 76\nATOM C CD1 . LEU mini_protein 1 10 . 10 LEU mini_protein CD1 30.92 1.0 -146.977 -172.696 114.024  1 77\nATOM C CD2 . LEU mini_protein 1 10 . 10 LEU mini_protein CD2 30.92 1.0 9.310    -9.370   78.603   1 78\nATOM N N   . MET mini_protein 1 11 . 11 MET mini_protein N   30.83 1.0 -94.608  -151.810 -141.199 1 79\nATOM C CA  . MET mini_protein 1 11 . 11 MET mini_protein CA  30.83 1.0 -21.199  187.742  -65.474  1 80\nATOM C C   . MET mini_protein 1 11 . 11 MET mini_protein C   30.83 1.0 143.587  -36.044  77.785   1 81\nATOM O O   . MET mini_protein 1 11 . 11 MET mini_protein O   30.83 1.0 -208.739 -62.052  85.183   1 82\nATOM C CB  . MET mini_protein 1 11 . 11 MET mini_protein CB  30.83 1.0 51.212   -29.103  -161.577 1 83\nATOM C CG  . MET mini_protein 1 11 . 11 MET mini_protein CG  30.83 1.0 -152.207 270.329  146.114  1 84\nATOM S SD  . MET mini_protein 1 11 . 11 MET mini_protein SD  30.83 1.0 24.381   198.815  169.021  1 85\nATOM C CE  . MET mini_protein 1 11 . 11 MET mini_protein CE  30.83 1.0 5.800    65.824   205.400  1 86\nATOM N N   . ASN mini_protein 1 12 . 12 ASN mini_protein N   32.54 1.0 44.130   16.424   -0.649   1 87\nATOM C CA  . ASN mini_protein 1 12 . 12 ASN mini_protein CA  32.54 1.0 -157.680 -103.669 -148.553 1 88\nATOM C C   . ASN mini_protein 1 12 . 12 ASN mini_protein C   32.54 1.0 -246.081 -69.534  -70.660  1 89\nATOM O O   . ASN mini_protein 1 12 . 12 ASN mini_protein O   32.54 1.0 -233.916 -48.532  157.389  1 90\nATOM C CB  . ASN mini_protein 1 12 . 12 ASN mini_protein CB  32.54 1.0 -182.440 -104.717 44.974   1 91\nATOM C CG  . ASN mini_protein 1 12 . 12 ASN mini_protein CG  32.54 1.0 39.292   50.282   -112.057 1 92\nATOM O OD1 . ASN mini_protein 1 12 . 12 ASN mini_protein OD1 32.54 1.0 67.110   -100.746 177.257  1 93\nATOM N ND2 . ASN mini_protein 1 12 . 12 ASN mini_protein ND2 32.54 1.0 53.727   19.699   -250.240 1 94\nATOM N N   . PRO mini_protein 1 13 . 13 PRO mini_protein N   32.20 1.0 -58.303  36.885   217.903  1 95\nATOM C CA  . PRO mini_protein 1 13 . 13 PRO mini_protein CA  32.20 1.0 -101.938 250.769  -158.922 1 96\nATOM C C   . PRO mini_protein 1 13 . 13 PRO mini_protein C   32.20 1.0 -194.391 -325.005 -324.933 1 97\nATOM O O   . PRO mini_protein 1 13 . 13 PRO mini_protein O   32.20 1.0 -30.082  164.232  -192.429 1 98\nATOM C CB  . PRO mini_protein 1 13 . 13 PRO mini_protein CB  32.20 1.0 6.422    -116.505 -133.088 1 99\nATOM C CG  . PRO mini_protein 1 13 . 13 PRO mini_protein CG  32.20 1.0 42.854   -21.359  43.841   1 100\nATOM C CD  . PRO mini_protein 1 13 . 13 PRO mini_protein CD  32.20 1.0 121.433  28.758   136.220  1 101\nATOM N N   . GLN mini_protein 1 14 . 14 GLN mini_protein N   32.55 1.0 -135.817 218.608  -4.769   1 102\nATOM C CA  . GLN mini_protein 1 14 . 14 GLN mini_protein CA  32.55 1.0 39.694   52.900   -212.846 1 103\nATOM C C   . GLN mini_protein 1 14 . 14 GLN mini_protein C   32.55 1.0 -279.912 100.462  116.453  1 104\nATOM O O   . GLN mini_protein 1 14 . 14 GLN mini_protein O   32.55 1.0 -22.735  94.400   -85.271  1 105\nATOM C CB  . GLN mini_protein 1 14 . 14 GLN mini_protein CB  32.55 1.0 7.575    28.197   324.913  1 106\nATOM C CG  . GLN mini_protein 1 14 . 14 GLN mini_protein CG  32.55 1.0 -20.250  -156.751 11.938   1 107\nATOM C CD  . GLN mini_protein 1 14 . 14 GLN mini_protein CD  32.55 1.0 76.963   -82.956  31.800   1 108\nATOM O OE1 . GLN mini_protein 1 14 . 14 GLN mini_protein OE1 32.55 1.0 -9.408   363.854  -12.266  1 109\nATOM N NE2 . GLN mini_protein 1 14 . 14 GLN mini_protein NE2 32.55 1.0 -10.049  132.155  124.576  1 110\nATOM N N   . ARG mini_protein 1 15 . 15 ARG mini_protein N   31.28 1.0 19.953   -115.537 164.624  1 111\nATOM C CA  . ARG mini_protein 1 15 . 15 ARG mini_protein CA  31.28 1.0 -28.845  238.760  -83.366  1 112\nATOM C C   . ARG mini_protein 1 15 . 15 ARG mini_protein C   31.28 1.0 125.078  -2.512   62.684   1 113\nATOM O O   . ARG mini_protein 1 15 . 15 ARG mini_protein O   31.28 1.0 -52.349  -79.432  -214.159 1 114\nATOM C CB  . ARG mini_protein 1 15 . 15 ARG mini_protein CB  31.28 1.0 241.895  9.161    -15.396  1 115\nATOM C CG  . ARG mini_protein 1 15 . 15 ARG mini_protein CG  31.28 1.0 -32.613  -257.038 -36.355  1 116\nATOM C CD  . ARG mini_protein 1 15 . 15 ARG mini_protein CD  31.28 1.0 -85.595  75.651   48.643   1 117\nATOM N NE  . ARG mini_protein 1 15 . 15 ARG mini_protein NE  31.28 1.0 -129.024 -160.982 60.503   1 118\nATOM C CZ  . ARG mini_protein 1 15 . 15 ARG mini_protein CZ  31.28 1.0 5.934    -19.110  71.935   1 119\nATOM N NH1 . ARG mini_protein 1 15 . 15 ARG mini_protein NH1 31.28 1.0 -6.644   -177.337 -270.353 1 120\nATOM N NH2 . ARG mini_protein 1 15 . 15 ARG mini_protein NH2 31.28 1.0 -297.997 -46.684  72.814   1 121\nATOM N N   . SER mini_protein 1 16 . 16 SER mini_protein N   29.93 1.0 213.946  -29.819  -230.250 1 122\nATOM C CA  . SER mini_protein 1 16 . 16 SER mini_protein CA  29.93 1.0 250.784  -138.504 0.034    1 123\nATOM C C   . SER mini_protein 1 16 . 16 SER mini_protein C   29.93 1.0 -82.662  157.539  42.493   1 124\nATOM O O   . SER mini_protein 1 16 . 16 SER mini_protein O   29.93 1.0 88.909   -57.475  -23.070  1 125\nATOM C CB  . SER mini_protein 1 16 . 16 SER mini_protein CB  29.93 1.0 38.189   10.540   -83.939  1 126\nATOM O OG  . SER mini_protein 1 16 . 16 SER mini_protein OG  29.93 1.0 46.251   -23.231  138.644  1 127\nATOM N N   . THR mini_protein 1 17 . 17 THR mini_protein N   29.80 1.0 -151.887 -3.790   -79.497  1 128\nATOM C CA  . THR mini_protein 1 17 . 17 THR mini_protein CA  29.80 1.0 148.824  -132.997 -118.393 1 129\nATOM C C   . THR mini_protein 1 17 . 17 THR mini_protein C   29.80 1.0 -174.285 145.940  -193.893 1 130\nATOM O O   . THR mini_protein 1 17 . 17 THR mini_protein O   29.80 1.0 350.768  -115.253 -39.327  1 131\nATOM C CB  . THR mini_protein 1 17 . 17 THR mini_protein CB  29.80 1.0 -28.395  -20.849  -37.789  1 132\nATOM O OG1 . THR mini_protein 1 17 . 17 THR mini_protein OG1 29.80 1.0 230.137  -85.121  44.814   1 133\nATOM C CG2 . THR mini_protein 1 17 . 17 THR mini_protein CG2 29.80 1.0 54.645   -39.800  20.397   1 134\nATOM N N   . VAL mini_protein 1 18 . 18 VAL mini_protein N   30.94 1.0 -142.341 8.026    42.574   1 135\nATOM C CA  . VAL mini_protein 1 18 . 18 VAL mini_protein CA  30.94 1.0 238.032  -121.502 249.827  1 136\nATOM C C   . VAL mini_protein 1 18 . 18 VAL mini_protein C   30.94 1.0 -46.375  109.964  15.303   1 137\nATOM O O   . VAL mini_protein 1 18 . 18 VAL mini_protein O   30.94 1.0 -56.803  105.752  318.003  1 138\nATOM C CB  . VAL mini_protein 1 18 . 18 VAL mini_protein CB  30.94 1.0 133.831  -74.973  -87.840  1 139\nATOM C CG1 . VAL mini_protein 1 18 . 18 VAL mini_protein CG1 30.94 1.0 -17.881  47.842   162.862  1 140\nATOM C CG2 . VAL mini_protein 1 18 . 18 VAL mini_protein CG2 30.94 1.0 224.130  45.959   -101.272 1 141\nATOM N N   . TRP mini_protein 1 19 . 19 TRP mini_protein N   30.62 1.0 -17.659  -34.488  -115.447 1 142\nATOM C CA  . TRP mini_protein 1 19 . 19 TRP mini_protein CA  30.62 1.0 -283.808 150.566  170.768  1 143\nATOM C C   . TRP mini_protein 1 19 . 19 TRP mini_protein C   30.62 1.0 7.095    -116.916 -43.754  1 144\nATOM O O   . TRP mini_protein 1 19 . 19 TRP mini_protein O   30.62 1.0 162.414  166.906  -27.817  1 145\nATOM C CB  . TRP mini_protein 1 19 . 19 TRP mini_protein CB  30.62 1.0 40.425   290.911  -70.237  1 146\nATOM C CG  . TRP mini_protein 1 19 . 19 TRP mini_protein CG  30.62 1.0 -103.994 177.643  114.193  1 147\nATOM C CD1 . TRP mini_protein 1 19 . 19 TRP mini_protein CD1 30.62 1.0 104.014  129.342  3.430    1 148\nATOM C CD2 . TRP mini_protein 1 19 . 19 TRP mini_protein CD2 30.62 1.0 -60.679  14.927   -37.542  1 149\nATOM N NE1 . TRP mini_protein 1 19 . 19 TRP mini_protein NE1 30.62 1.0 -8.379   -138.850 -44.913  1 150\nATOM C CE2 . TRP mini_protein 1 19 . 19 TRP mini_protein CE2 30.62 1.0 12.494   52.422   -152.378 1 151\nATOM C CE3 . TRP mini_protein 1 19 . 19 TRP mini_protein CE3 30.62 1.0 -94.067  168.532  39.017   1 152\nATOM C CZ2 . TRP mini_protein 1 19 . 19 TRP mini_protein CZ2 30.62 1.0 143.801  267.806  -223.778 1 153\nATOM C CZ3 . TRP mini_protein 1 19 . 19 TRP mini_protein CZ3 30.62 1.0 -235.603 -42.060  -178.438 1 154\nATOM C CH2 . TRP mini_protein 1 19 . 19 TRP mini_protein CH2 30.62 1.0 -30.706  216.733  -39.515  1 155\nATOM N N   . TYR mini_protein 1 20 . 20 TYR mini_protein N   28.94 1.0 -123.176 139.193  -205.384 1 156\nATOM C CA  . TYR mini_protein 1 20 . 20 TYR mini_protein CA  28.94 1.0 46.243   107.388  149.416  1 157\nATOM C C   . TYR mini_protein 1 20 . 20 TYR mini_protein C   28.94 1.0 -108.525 44.692   -89.178  1 158\nATOM O O   . TYR mini_protein 1 20 . 20 TYR mini_protein O   28.94 1.0 122.665  -75.228  -0.933   1 159\nATOM C CB  . TYR mini_protein 1 20 . 20 TYR mini_protein CB  28.94 1.0 -96.601  243.653  230.509  1 160\nATOM C CG  . TYR mini_protein 1 20 . 20 TYR mini_protein CG  28.94 1.0 132.817  -14.275  100.597  1 161\nATOM C CD1 . TYR mini_protein 1 20 . 20 TYR mini_protein CD1 28.94 1.0 61.575   -249.380 -233.937 1 162\nATOM C CD2 . TYR mini_protein 1 20 . 20 TYR mini_protein CD2 28.94 1.0 -99.482  -96.967  -66.884  1 163\nATOM C CE1 . TYR mini_protein 1 20 . 20 TYR mini_protein CE1 28.94 1.0 -404.954 -108.589 199.201  1 164\nATOM C CE2 . TYR mini_protein 1 20 . 20 TYR mini_protein CE2 28.94 1.0 -74.586  -82.543  -186.026 1 165\nATOM C CZ  . TYR mini_protein 1 20 . 20 TYR mini_protein CZ  28.94 1.0 44.112   -3.206   -81.612  1 166\nATOM O OH  . TYR mini_protein 1 20 . 20 TYR mini_protein OH  28.94 1.0 -168.030 -176.350 98.790   1 167\n#\n_entity.id                 1\n_entity.type               polymer\n_entity.pdbx_description   'Polymer entity 1 (protein)'\n#\n_struct_asym.id          mini_protein\n_struct_asym.entity_id   1\n#\n_entity_poly.entity_id                      1\n_entity_poly.type                           polypeptide(L)\n_entity_poly.pdbx_strand_id                 mini_protein\n_entity_poly.pdbx_seq_one_letter_code_can   ACDEFGHIKLMNPQRSTVWY\n#\nloop_\n_entity_poly_seq.entity_id \n_entity_poly_seq.num \n_entity_poly_seq.mon_id \n_entity_poly_seq.hetero \n1 1  ALA n\n1 2  CYS n\n1 3  ASP n\n1 4  GLU n\n1 5  PHE n\n1 6  GLY n\n1 7  HIS n\n1 8  ILE n\n1 9  LYS n\n1 10 LEU n\n1 11 MET n\n1 12 ASN n\n1 13 PRO n\n1 14 GLN n\n1 15 ARG n\n1 16 SER n\n1 17 THR n\n1 18 VAL n\n1 19 TRP n\n1 20 TYR n\n#\n",
+      "sha256": "4588469db40d34b772ff887b77f94e332daafa105058edf4eda7e6789d088f73",
+      "size": 18527
+    },
+    "mini_protein/sample_001_confidence.json": {
+      "media_type": "application/json",
+      "payload": "{\n  \"iptm\": 0.0,\n  \"mean_plddt\": 0.3149751201272011,\n  \"num_tokens\": 20,\n  \"ptm\": 0.053740616887807846,\n  \"sample\": 1\n}\n",
+      "sha256": "bba453471acfe465eda76dd6342d9e0d33735e05539ac609c1086b5177c0e7e9",
+      "size": 120
+    },
+    "mini_protein/sample_001_pae.json": {
+      "media_type": "application/json",
+      "payload": "{\"pae\":[[0.2527787983417511,3.218120813369751,6.934325695037842,9.607389450073242,11.172221183776855,14.3162841796875,15.246220588684082,16.23052978515625,15.91638469696045,18.407236099243164,19.07698631286621,22.67389488220215,25.061981201171875,25.441131591796875,26.016590118408203,26.14617156982422,27.258790969848633,28.136295318603516,27.85830307006836,28.67390251159668],[2.308959722518921,0.27307242155075073,3.151987314224243,6.5774335861206055,10.516180038452148,14.602065086364746,15.301165580749512,17.26373863220215,17.569318771362305,19.236209869384766,21.32501983642578,21.90673828125,24.51685333251953,25.833847045898438,24.89673614501953,25.001344680786133,26.048728942871094,27.73778533935547,27.940166473388672,28.507368087768555],[4.7412519454956055,2.0698249340057373,0.2534121870994568,3.1042895317077637,9.005471229553223,12.20679759979248,14.570432662963867,14.868826866149902,16.72915267944336,18.733352661132812,20.95091438293457,22.644941329956055,24.76657485961914,26.05455780029297,26.364276885986328,25.96627426147461,26.809146881103516,27.5008544921875,28.134536743164062,27.807416915893555],[8.662160873413086,5.910957336425781,2.5484495162963867,0.2572360038757324,3.3121137619018555,5.767823219299316,10.649541854858398,12.56850814819336,13.720819473266602,13.509329795837402,16.782623291015625,19.631376266479492,22.144550323486328,24.13845443725586,24.605907440185547,24.670207977294922,27.44073486328125,27.8570556640625,27.426345825195312,27.86579132080078],[12.841683387756348,9.613876342773438,8.125991821289062,2.241624355316162,0.27080944180488586,1.4278223514556885,9.532776832580566,10.68022632598877,12.870124816894531,13.152515411376953,15.785962104797363,19.779809951782227,22.3671875,24.785188674926758,25.075775146484375,26.102020263671875,27.422515869140625,28.074356079101562,27.38739013671875,27.388648986816406],[15.263087272644043,12.189595222473145,10.479479789733887,9.239180564880371,3.729717969894409,0.25126543641090393,3.218356132507324,6.368405818939209,9.474300384521484,11.43252944946289,13.096294403076172,16.205589294433594,19.695423126220703,22.501968383789062,22.836225509643555,24.54985809326172,26.365663528442383,27.378692626953125,26.753173828125,26.846899032592773],[16.87816047668457,13.937376976013184,13.584441184997559,11.336088180541992,7.638336181640625,0.9359703660011292,0.2597689926624298,2.3625729084014893,5.334972381591797,7.234901428222656,9.627917289733887,11.552831649780273,14.841330528259277,18.771345138549805,21.68926239013672,23.913095474243164,25.384565353393555,26.01680564880371,27.373794555664062,25.69454574584961],[16.146629333496094,13.633813858032227,12.258240699768066,11.601895332336426,8.184908866882324,4.945921421051025,1.883836269378662,0.25789010524749756,2.9733457565307617,4.8060221672058105,6.995354652404785,8.773080825805664,11.94823932647705,15.927957534790039,18.86931037902832,21.224754333496094,22.519973754882812,25.23000717163086,24.806598663330078,25.52192497253418],[17.087011337280273,16.01824951171875,14.21094036102295,12.56424331665039,9.918554306030273,8.059351921081543,5.479185104370117,2.2128443717956543,0.25391116738319397,2.84549617767334,5.217063903808594,6.869482040405273,10.500626564025879,14.05039119720459,17.518178939819336,20.65131187438965,22.27019691467285,24.404464721679688,24.763092041015625,25.31032943725586],[17.121654510498047,14.748189926147461,14.268255233764648,12.375823020935059,10.529363632202148,9.316542625427246,7.13686466217041,5.846816062927246,1.9296910762786865,0.26127108931541443,3.2802681922912598,5.71735143661499,8.265545845031738,12.468230247497559,15.385880470275879,18.883459091186523,21.663482666015625,23.93122673034668,22.701221466064453,24.270891189575195],[18.45203399658203,17.173452377319336,15.319604873657227,15.722015380859375,13.477762222290039,12.128060340881348,10.388833045959473,7.257011890411377,5.110055923461914,2.259700059890747,0.2600143253803253,3.245490789413452,5.55013370513916,10.298443794250488,13.480415344238281,16.499841690063477,21.378414154052734,22.838468551635742,21.23174476623535,23.2877197265625],[20.14712905883789,19.222612380981445,17.279993057250977,17.53338623046875,17.0216064453125,13.449872970581055,11.815857887268066,9.804004669189453,6.549635410308838,5.567914009094238,2.0901129245758057,0.25442633032798767,3.152653455734253,11.912945747375488,12.20463752746582,15.136079788208008,16.7645263671875,20.714282989501953,20.2784366607666,22.616178512573242],[22.531360626220703,21.261619567871094,19.596805572509766,20.724597930908203,19.597652435302734,18.10744285583496,14.48921012878418,12.294641494750977,9.782976150512695,6.707211017608643,5.090478420257568,2.386094808578491,0.25691789388656616,3.8355371952056885,9.349287033081055,11.538531303405762,15.193166732788086,18.637941360473633,18.608306884765625,20.774240493774414],[25.24626922607422,22.902385711669922,21.099246978759766,23.383813858032227,22.794849395751953,20.566062927246094,18.403339385986328,15.230123519897461,12.804393768310547,12.09798812866211,8.979217529296875,10.209223747253418,7.50719690322876,0.2593039572238922,3.8091537952423096,7.671506881713867,8.842469215393066,13.27511215209961,13.966121673583984,15.522904396057129],[26.735511779785156,25.44347381591797,24.009668350219727,25.714336395263672,25.75958824157715,23.978832244873047,22.192981719970703,21.05736541748047,16.79228401184082,16.802867889404297,13.17047119140625,11.29777717590332,9.628152847290039,3.874241590499878,0.2614791691303253,3.7917959690093994,6.033770561218262,9.321846961975098,11.90149211883545,13.185145378112793],[27.681991577148438,26.280895233154297,25.147586822509766,26.922134399414062,26.965782165527344,26.02394676208496,24.73390769958496,23.322917938232422,20.028474807739258,19.730709075927734,16.04961585998535,12.705915451049805,10.767719268798828,8.79055118560791,2.609626054763794,0.2580755054950714,3.5435597896575928,6.008443832397461,8.577259063720703,10.478073120117188],[26.816770553588867,25.741641998291016,25.74417495727539,27.125839233398438,26.75619888305664,26.32560157775879,25.17652702331543,24.730445861816406,22.08887481689453,22.387466430664062,17.598791122436523,14.21743392944336,12.024307250976562,8.78207015991211,6.30685567855835,2.4184062480926514,0.25523847341537476,2.6660420894622803,4.650923728942871,7.004238605499268],[26.66679573059082,25.78131103515625,25.383602142333984,26.943958282470703,26.130748748779297,25.91870880126953,25.127267837524414,24.60784912109375,21.833053588867188,22.288169860839844,18.45309829711914,17.1246280670166,14.706684112548828,11.815532684326172,8.007064819335938,6.4534173011779785,1.9314228296279907,0.255725622177124,2.612016439437866,4.840807914733887],[27.80614471435547,27.135515213012695,26.939682006835938,28.068363189697266,26.680126190185547,26.81793212890625,26.238895416259766,25.79654312133789,22.717172622680664,23.34063720703125,19.39924430847168,18.6814022064209,16.738853454589844,13.489818572998047,10.773502349853516,8.53962230682373,5.364534378051758,2.313401222229004,0.2965027391910553,3.270448684692383],[28.23147201538086,26.963409423828125,26.594825744628906,28.31375503540039,27.237401962280273,27.559776306152344,24.98439598083496,25.528377532958984,23.60537338256836,23.908002853393555,20.033464431762695,19.538253784179688,19.62808609008789,14.785845756530762,12.780437469482422,10.906850814819336,8.091889381408691,6.105032920837402,3.116081953048706,0.31969016790390015]]}\n",
+      "sha256": "bb9eba13293e75e3ea1d4ca9b0b3fbd4e9ab73c5f25a0c5e0cc80f9c9d0d81ba",
+      "size": 7456
+    },
+    "mini_protein/sample_001_plddt.csv": {
+      "media_type": "text/csv",
+      "payload": "token_index,plddt\r\n1,0.2549140751361847\r\n2,0.3005145192146301\r\n3,0.3450523316860199\r\n4,0.3635460436344147\r\n5,0.34473177790641785\r\n6,0.3533181846141815\r\n7,0.3147321045398712\r\n8,0.31216785311698914\r\n9,0.30491703748703003\r\n10,0.30924639105796814\r\n11,0.308347225189209\r\n12,0.32536637783050537\r\n13,0.322020947933197\r\n14,0.325509250164032\r\n15,0.31279662251472473\r\n16,0.2993333041667938\r\n17,0.2980062663555145\r\n18,0.3093591332435608\r\n19,0.3062174916267395\r\n20,0.2894054651260376\r\n",
+      "sha256": "b7b98567fccf88b6b3a62fb24f60652c4cf2a1e8f2864977e4c7a9ccecd4cd22",
+      "size": 473
+    },
+    "work_items.json": {
+      "media_type": "application/json",
+      "payload": "{\n  \"created_at\": 1792515581.220623,\n  \"input_snapshot\": \"6a2134f4b4b1fabd218c9ba994889a4281e773de30fe8c1dd5b96f6d72594b29\",\n  \"items\": [\n    {\n      \"attempts\": 1,\n      \"error\": null,\n      \"finished_at\": 1792515716.9080708,\n      \"id\": \"mini_protein\",\n      \"name\": \"mini_protein\",\n      \"order\": 0,\n      \"output_path\": \"mini_protein/\",\n      \"recovery\": [\n        {\n          \"action\": \"\",\n          \"attempt\": 1,\n          \"effective_parameters\": {\n            \"group_seeds\": [\n              0\n            ],\n            \"include_embeddings\": false,\n            \"kernel_backend\": \"cuequivariance\",\n            \"lm_dropout\": 0.0,\n            \"lm_mask_pct\": 0.0,\n            \"model_variant\": \"fast\",\n            \"msa_column_mask_rate\": 0.1,\n            \"msa_max_depth\": 1024,\n            \"num_diffusion_samples\": 1,\n            \"num_loops\": 1,\n            \"num_sampling_steps\": 2,\n            \"sample_group_size\": 1,\n            \"sample_groups\": [\n              1\n            ],\n            \"sample_seeds\": [\n              0\n            ],\n            \"seed\": 0\n          },\n          \"plan_label\": \"\",\n          \"resources\": {}\n        }\n      ],\n      \"resource_events\": [\n        {\n          \"action\": \"\",\n          \"attempt\": 1,\n          \"available_mb\": 26849,\n          \"baseline_mb\": 13094,\n          \"created_at\": 1792515716.9087095,\n          \"device\": {\n            \"compute_capability\": \"8.0\",\n            \"mig_profile\": \"\",\n            \"model\": \"NVIDIA A100-PCIE-40GB\",\n            \"total_vram_mb\": 40442,\n            \"vendor\": \"nvidia\"\n          },\n          \"error_class\": \"\",\n          \"features\": {\n            \"batch_size\": 1,\n            \"concurrent_samples\": 1,\n            \"model_revision\": \"bf343ba/fast\",\n            \"parameters\": {},\n            \"runner\": \"esmfold2\",\n            \"runtime_fingerprint\": \"torch=2.11.0+cu128|cuda=12.8|model=bf343ba/fast|backend=cuequivariance\",\n            \"sample_count\": 1,\n            \"sequence_count\": 1,\n            \"sequence_length\": 20\n          },\n          \"model_revision\": \"bf343ba/fast\",\n          \"outcome\": \"success\",\n          \"peak_allocated_mb\": 12981,\n          \"peak_process_mb\": 13176,\n          \"peak_reserved_mb\": 13176,\n          \"plan_label\": \"\",\n          \"runner\": \"esmfold2\",\n          \"runner_version\": \"1\",\n          \"runtime_fingerprint\": \"torch=2.11.0+cu128|cuda=12.8|model=bf343ba/fast|backend=cuequivariance\",\n          \"runtime_seconds\": 6.481,\n          \"schema_version\": 1,\n          \"task_id\": \"9803381e59eeb152b0c654dcd1c4d871\",\n          \"work_item\": \"mini_protein\"\n        }\n      ],\n      \"started_at\": 1792515710.4268053,\n      \"status\": \"SUCCEEDED\"\n    }\n  ],\n  \"outcome\": \"SUCCESS\",\n  \"runner\": \"esmfold2\",\n  \"skipped_known_failure_plans\": [],\n  \"task_id\": \"9803381e59eeb152b0c654dcd1c4d871\",\n  \"version\": 1\n}\n",
+      "sha256": "5ab52c4a3593f66cd5e9d45d2e02606658d134e8d1d18c0ea158a7624f57243f",
+      "size": 2813
+    }
+  },
+  "provenance": {
+    "capture": {
+      "captured_from": "authenticated production artifact API; the deployment result root is not readable by this capture user, so no result-root capture was possible",
+      "mode": "synthetic",
+      "payload_source": "GET /compute/api/results/<task>/artifacts/<path> with a Bearer token; every byte checked against the served manifest sha256",
+      "production_task_id": "9803381e59eeb152b0c654dcd1c4d871",
+      "production_task_type": "esmfold2_predict",
+      "served_manifest_sha256": "a07a41390013d1d8a84794d319f26a043d4b078bea96756065a03a9dbc69f1ff",
+      "task_source": "none - the deployment task store publication anchor was not readable"
+    },
+    "production_finished_at": "2026-10-21T01:02:10.649274+08:00",
+    "production_started_at": "2026-10-21T00:59:37.024024+08:00",
+    "runner_family": "esmfold2",
+    "runner_revision": "deploy 57c8114; campaign base eae170d",
+    "storyboard_sha256": "1d9fa4579cb62a260b6038557a97eb17adb6dcde8d5566d51c5341d950255e2a"
+  },
+  "response": {
+    "archive": {
+      "download_url": null,
+      "ready": false,
+      "request_url": "/compute/api/results/9803381e59eeb152b0c654dcd1c4d871/archive"
+    },
+    "artifacts": [
+      {
+        "capability": "text",
+        "media_type": "application/octet-stream",
+        "path": "citations.bib",
+        "preview": "text",
+        "role": "provenance",
+        "sha256": "c2986b63247a948111863589265dff09aa04fce5f3758465c8e52e60b6b9a0ce",
+        "size": 1058,
+        "url": "/compute/api/results/9803381e59eeb152b0c654dcd1c4d871/artifacts/citations.bib"
+      },
+      {
+        "capability": "text",
+        "media_type": "application/octet-stream",
+        "path": "debug/inputs/sequence/minimal.fasta",
+        "preview": "text",
+        "role": "provenance",
+        "sha256": "6a2134f4b4b1fabd218c9ba994889a4281e773de30fe8c1dd5b96f6d72594b29",
+        "size": 35,
+        "url": "/compute/api/results/9803381e59eeb152b0c654dcd1c4d871/artifacts/debug/inputs/sequence/minimal.fasta"
+      },
+      {
+        "capability": "text",
+        "media_type": "application/json",
+        "ndarray_url": "/compute/api/results/9803381e59eeb152b0c654dcd1c4d871/ndarrays/debug/submission.json",
+        "path": "debug/submission.json",
+        "preview": "text",
+        "role": "provenance",
+        "sha256": "1dd721678dc187cb2729febf7289a7809e4d0d4c161542642aa58bdbde75312f",
+        "size": 628,
+        "url": "/compute/api/results/9803381e59eeb152b0c654dcd1c4d871/artifacts/debug/submission.json"
+      },
+      {
+        "capability": "text",
+        "media_type": "application/json",
+        "ndarray_url": "/compute/api/results/9803381e59eeb152b0c654dcd1c4d871/ndarrays/execution/slurm-status.execution.json",
+        "path": "execution/slurm-status.execution.json",
+        "preview": "text",
+        "role": "diagnostic",
+        "sha256": "3c813ad3c36393b98357372aceaf490fd35e5cd928ac8721301ec8260098593b",
+        "size": 411,
+        "url": "/compute/api/results/9803381e59eeb152b0c654dcd1c4d871/artifacts/execution/slurm-status.execution.json"
+      },
+      {
+        "capability": "text",
+        "media_type": "application/json",
+        "ndarray_url": "/compute/api/results/9803381e59eeb152b0c654dcd1c4d871/ndarrays/execution/slurm-unknown-user-esmfold2_predict-9803381e59eeb152b0c654dcd1c4d871.resource.json",
+        "path": "execution/slurm-unknown-user-esmfold2_predict-9803381e59eeb152b0c654dcd1c4d871.resource.json",
+        "preview": "text",
+        "role": "diagnostic",
+        "sha256": "9d6abf714f1147a1ecf17c9900f2a0577921e3653976b6127f636cfef9619a36",
+        "size": 534,
+        "url": "/compute/api/results/9803381e59eeb152b0c654dcd1c4d871/artifacts/execution/slurm-unknown-user-esmfold2_predict-9803381e59eeb152b0c654dcd1c4d871.resource.json"
+      },
+      {
+        "capability": "text",
+        "media_type": "application/octet-stream",
+        "path": "execution/slurm-unknown-user-esmfold2_predict-9803381e59eeb152b0c654dcd1c4d871.stderr.log",
+        "preview": "text",
+        "role": "diagnostic",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "size": 0,
+        "url": "/compute/api/results/9803381e59eeb152b0c654dcd1c4d871/artifacts/execution/slurm-unknown-user-esmfold2_predict-9803381e59eeb152b0c654dcd1c4d871.stderr.log"
+      },
+      {
+        "capability": "text",
+        "media_type": "application/octet-stream",
+        "path": "execution/slurm-unknown-user-esmfold2_predict-9803381e59eeb152b0c654dcd1c4d871.stdout.log",
+        "preview": "text",
+        "role": "diagnostic",
+        "sha256": "194436addd0cf709d78368f79ea45bc94f7582e246cbe9ee667915ca1a0c7314",
+        "size": 269,
+        "url": "/compute/api/results/9803381e59eeb152b0c654dcd1c4d871/artifacts/execution/slurm-unknown-user-esmfold2_predict-9803381e59eeb152b0c654dcd1c4d871.stdout.log"
+      },
+      {
+        "capability": "text",
+        "media_type": "application/json",
+        "ndarray_url": "/compute/api/results/9803381e59eeb152b0c654dcd1c4d871/ndarrays/mini_protein/prediction.json",
+        "path": "mini_protein/prediction.json",
+        "preview": "text",
+        "role": "evidence",
+        "sha256": "d73487b214e3714ece7d8772fe7a8022cf3a2da1f0cf6970f849fc13c770450f",
+        "size": 1670,
+        "url": "/compute/api/results/9803381e59eeb152b0c654dcd1c4d871/artifacts/mini_protein/prediction.json"
+      },
+      {
+        "capability": "molecular_structure",
+        "confidence_encoding": "plddt_bfactor",
+        "media_type": "application/octet-stream",
+        "path": "mini_protein/sample_001.cif",
+        "preview": "structure",
+        "role": "primary",
+        "sha256": "4588469db40d34b772ff887b77f94e332daafa105058edf4eda7e6789d088f73",
+        "size": 18527,
+        "url": "/compute/api/results/9803381e59eeb152b0c654dcd1c4d871/artifacts/mini_protein/sample_001.cif"
+      },
+      {
+        "capability": "text",
+        "media_type": "application/json",
+        "ndarray_url": "/compute/api/results/9803381e59eeb152b0c654dcd1c4d871/ndarrays/mini_protein/sample_001_confidence.json",
+        "path": "mini_protein/sample_001_confidence.json",
+        "preview": "text",
+        "role": "evidence",
+        "sha256": "bba453471acfe465eda76dd6342d9e0d33735e05539ac609c1086b5177c0e7e9",
+        "size": 120,
+        "url": "/compute/api/results/9803381e59eeb152b0c654dcd1c4d871/artifacts/mini_protein/sample_001_confidence.json"
+      },
+      {
+        "capability": "text",
+        "media_type": "application/json",
+        "ndarray_url": "/compute/api/results/9803381e59eeb152b0c654dcd1c4d871/ndarrays/mini_protein/sample_001_pae.json",
+        "path": "mini_protein/sample_001_pae.json",
+        "preview": "text",
+        "role": "evidence",
+        "sha256": "bb9eba13293e75e3ea1d4ca9b0b3fbd4e9ab73c5f25a0c5e0cc80f9c9d0d81ba",
+        "size": 7456,
+        "url": "/compute/api/results/9803381e59eeb152b0c654dcd1c4d871/artifacts/mini_protein/sample_001_pae.json"
+      },
+      {
+        "capability": "table",
+        "media_type": "text/csv",
+        "ndarray_url": "/compute/api/results/9803381e59eeb152b0c654dcd1c4d871/ndarrays/mini_protein/sample_001_plddt.csv",
+        "path": "mini_protein/sample_001_plddt.csv",
+        "preview": "table",
+        "role": "evidence",
+        "sha256": "b7b98567fccf88b6b3a62fb24f60652c4cf2a1e8f2864977e4c7a9ccecd4cd22",
+        "size": 473,
+        "table_url": "/compute/api/results/9803381e59eeb152b0c654dcd1c4d871/tables/mini_protein/sample_001_plddt.csv",
+        "url": "/compute/api/results/9803381e59eeb152b0c654dcd1c4d871/artifacts/mini_protein/sample_001_plddt.csv"
+      },
+      {
+        "capability": "text",
+        "media_type": "application/json",
+        "ndarray_url": "/compute/api/results/9803381e59eeb152b0c654dcd1c4d871/ndarrays/work_items.json",
+        "path": "work_items.json",
+        "preview": "text",
+        "role": "artifact",
+        "sha256": "5ab52c4a3593f66cd5e9d45d2e02606658d134e8d1d18c0ea158a7624f57243f",
+        "size": 2813,
+        "url": "/compute/api/results/9803381e59eeb152b0c654dcd1c4d871/artifacts/work_items.json"
+      }
+    ],
+    "created_at": "2026-10-21T01:02:10.649274+08:00",
+    "error": null,
+    "limitations": [
+      "Predicted structures and confidence values are computational estimates and require scientific interpretation.",
+      "The fast model is single-sequence only; use the standard model when supplying an MSA.",
+      "An optional A3M conditions the single chain the FASTA must then contain, at the model's released alignment defaults.",
+      "Runtime and accelerator memory grow with total token count and with the number of diffusion samples.",
+      "Each FASTA record is an independent work item; a record that exhausts its accelerator memory fails alone and the remaining sequences still complete."
+    ],
+    "outcome": "SUCCESS",
+    "output_check": {
+      "checks": [
+        {
+          "matched": 1,
+          "required": true,
+          "source": "candidates",
+          "status": "passed",
+          "view_id": "predicted_structures"
+        },
+        {
+          "matched": 0,
+          "required": false,
+          "source": "candidates",
+          "status": "passed",
+          "view_id": "predicted_structures"
+        },
+        {
+          "matched": 1,
+          "required": true,
+          "source": "data",
+          "status": "passed",
+          "view_id": "global_confidence"
+        },
+        {
+          "matched": 0,
+          "required": false,
+          "source": "data",
+          "status": "passed",
+          "view_id": "global_confidence"
+        },
+        {
+          "matched": 1,
+          "required": true,
+          "source": "series",
+          "status": "passed",
+          "view_id": "residue_confidence"
+        },
+        {
+          "matched": 0,
+          "required": false,
+          "source": "series",
+          "status": "passed",
+          "view_id": "residue_confidence"
+        },
+        {
+          "matched": 1,
+          "required": true,
+          "source": "matrices",
+          "status": "passed",
+          "view_id": "predicted_aligned_error"
+        },
+        {
+          "matched": 0,
+          "required": false,
+          "source": "matrices",
+          "status": "passed",
+          "view_id": "predicted_aligned_error"
+        },
+        {
+          "matched": 1,
+          "required": true,
+          "source": "items",
+          "status": "passed",
+          "view_id": "prediction_record"
+        },
+        {
+          "matched": 0,
+          "required": false,
+          "source": "items",
+          "status": "passed",
+          "view_id": "prediction_record"
+        },
+        {
+          "matched": 0,
+          "required": false,
+          "source": "items",
+          "status": "passed",
+          "view_id": "prediction_record"
+        },
+        {
+          "matched": 0,
+          "required": false,
+          "source": "items",
+          "status": "passed",
+          "view_id": "prediction_record"
+        },
+        {
+          "file_id": "structures",
+          "matched": 1,
+          "required": true,
+          "status": "passed"
+        },
+        {
+          "file_id": "summaries",
+          "matched": 1,
+          "required": true,
+          "status": "passed"
+        },
+        {
+          "file_id": "local_confidence",
+          "matched": 1,
+          "required": true,
+          "status": "passed"
+        },
+        {
+          "file_id": "pae",
+          "matched": 1,
+          "required": true,
+          "status": "passed"
+        }
+      ],
+      "problems": [],
+      "state": "passed"
+    },
+    "progress": {
+      "completed_items": 1,
+      "current_item": null,
+      "failed_items": 0,
+      "pending_items": 0,
+      "running_items": 0,
+      "total_items": 1
+    },
+    "result": {
+      "files": {
+        "local_confidence": [
+          {
+            "capability": "table",
+            "cardinality": "many",
+            "id": "local_confidence",
+            "media_type": "text/csv",
+            "name": "sample_001_plddt.csv",
+            "ndarray_url": "/compute/api/results/9803381e59eeb152b0c654dcd1c4d871/ndarrays/mini_protein/sample_001_plddt.csv",
+            "path": "mini_protein/sample_001_plddt.csv",
+            "preview": "table",
+            "role": "evidence",
+            "size": 473,
+            "table_url": "/compute/api/results/9803381e59eeb152b0c654dcd1c4d871/tables/mini_protein/sample_001_plddt.csv",
+            "url": "/compute/api/results/9803381e59eeb152b0c654dcd1c4d871/files/local_confidence?index=0",
+            "viewer": "table"
+          }
+        ],
+        "pae": [
+          {
+            "capability": "text",
+            "cardinality": "many",
+            "id": "pae",
+            "media_type": "application/json",
+            "name": "sample_001_pae.json",
+            "ndarray_url": "/compute/api/results/9803381e59eeb152b0c654dcd1c4d871/ndarrays/mini_protein/sample_001_pae.json",
+            "path": "mini_protein/sample_001_pae.json",
+            "preview": "json",
+            "role": "evidence",
+            "size": 7456,
+            "url": "/compute/api/results/9803381e59eeb152b0c654dcd1c4d871/files/pae?index=0",
+            "viewer": "json"
+          }
+        ],
+        "structures": [
+          {
+            "capability": "molecular_structure",
+            "cardinality": "many",
+            "confidence_encoding": "plddt_bfactor",
+            "id": "structures",
+            "media_type": "application/octet-stream",
+            "name": "sample_001.cif",
+            "path": "mini_protein/sample_001.cif",
+            "preview": "structure",
+            "role": "primary",
+            "size": 18527,
+            "url": "/compute/api/results/9803381e59eeb152b0c654dcd1c4d871/files/structures?index=0",
+            "viewer": "structure"
+          }
+        ],
+        "summaries": [
+          {
+            "capability": "text",
+            "cardinality": "many",
+            "id": "summaries",
+            "media_type": "application/json",
+            "name": "sample_001_confidence.json",
+            "ndarray_url": "/compute/api/results/9803381e59eeb152b0c654dcd1c4d871/ndarrays/mini_protein/sample_001_confidence.json",
+            "path": "mini_protein/sample_001_confidence.json",
+            "preview": "json",
+            "role": "evidence",
+            "size": 120,
+            "url": "/compute/api/results/9803381e59eeb152b0c654dcd1c4d871/files/summaries?index=0",
+            "viewer": "json"
+          }
+        ]
+      }
+    },
+    "run": {
+      "citations": [
+        {
+          "doi": "10.64898/2026.06.03.729735",
+          "num": 1,
+          "title": "Language Modeling Materializes a World Model of Protein Biology",
+          "url": "https://doi.org/10.64898/2026.06.03.729735"
+        }
+      ],
+      "finished_at": "2026-10-21T01:02:10.649274+08:00",
+      "inputs": [
+        {
+          "format": "fasta",
+          "logical_type": "protein_sequence",
+          "path": "minimal.fasta",
+          "role": "sequence",
+          "sha256": "6a2134f4b4b1fabd218c9ba994889a4281e773de30fe8c1dd5b96f6d72594b29"
+        }
+      ],
+      "method": {
+        "id": "esmfold2_predict",
+        "name": "ESMFold 2 structure prediction",
+        "output_summary": "Per-record mmCIF structures, one per diffusion sample, with global confidence, per-token pLDDT, PAE, and provenance.",
+        "summary": "Predict all-atom protein structures with ESMFold 2 from sequence and optional MSA context."
+      },
+      "parameters": [
+        {
+          "label": "Model Variant",
+          "name": "model_variant",
+          "unit": "",
+          "value": "fast"
+        },
+        {
+          "label": "Num Loops",
+          "name": "num_loops",
+          "unit": "",
+          "value": 1
+        },
+        {
+          "label": "Num Sampling Steps",
+          "name": "num_sampling_steps",
+          "unit": "",
+          "value": 2
+        },
+        {
+          "label": "Num Diffusion Samples",
+          "name": "num_diffusion_samples",
+          "unit": "",
+          "value": 1
+        },
+        {
+          "label": "Seed",
+          "name": "seed",
+          "unit": "",
+          "value": 0
+        },
+        {
+          "label": "Lm Dropout",
+          "name": "lm_dropout",
+          "unit": "",
+          "value": 0.0
+        },
+        {
+          "label": "Lm Mask Pct",
+          "name": "lm_mask_pct",
+          "unit": "",
+          "value": 0.0
+        },
+        {
+          "label": "Msa Max Depth",
+          "name": "msa_max_depth",
+          "unit": "",
+          "value": 1024
+        },
+        {
+          "label": "Msa Column Mask Rate",
+          "name": "msa_column_mask_rate",
+          "unit": "",
+          "value": 0.1
+        },
+        {
+          "label": "Kernel Backend",
+          "name": "kernel_backend",
+          "unit": "",
+          "value": "cuequivariance"
+        },
+        {
+          "label": "Include Embeddings",
+          "name": "include_embeddings",
+          "unit": "",
+          "value": false
+        }
+      ],
+      "started_at": "2026-10-21T00:59:37.024024+08:00",
+      "submitted_at": "2026-10-20T16:59:36.983858+00:00",
+      "walltime_seconds": 153.62525057792664
+    },
+    "schema_version": 3,
+    "status": "finished",
+    "storyboard": {
+      "entrypoint": "index.js",
+      "entrypoint_url": "/compute/api/results/9803381e59eeb152b0c654dcd1c4d871/storyboard/index.js",
+      "identifier": "esmfold2-result",
+      "optional": [],
+      "requires": [
+        "structures",
+        "summaries",
+        "local_confidence",
+        "pae"
+      ]
+    },
+    "task_id": "9803381e59eeb152b0c654dcd1c4d871",
+    "task_type": "esmfold2_predict",
+    "terminal": true,
+    "total_size": 33994,
+    "views": [
+      {
+        "description": "All-atom ESMFold 2 samples in deterministic sample order.",
+        "id": "predicted_structures",
+        "mapping": {
+          "confidence_encoding": "plddt_bfactor"
+        },
+        "plugin": "candidate-collection",
+        "role": "primary",
+        "sources": {
+          "candidates": [
+            "mini_protein/sample_001.cif"
+          ]
+        },
+        "title": "Predicted structures"
+      },
+      {
+        "description": "Per-sample pLDDT, pTM, and ipTM summary values.",
+        "id": "global_confidence",
+        "mapping": {
+          "fields": [
+            {
+              "direction": "higher",
+              "label": "Mean pLDDT",
+              "path": "mean_plddt",
+              "unit": "score"
+            },
+            {
+              "direction": "higher",
+              "label": "pTM",
+              "nullable": true,
+              "path": "ptm",
+              "unit": "score"
+            },
+            {
+              "direction": "higher",
+              "label": "ipTM",
+              "nullable": true,
+              "path": "iptm",
+              "unit": "score"
+            }
+          ]
+        },
+        "plugin": "scalar-summary",
+        "role": "evidence",
+        "sources": {
+          "data": [
+            "mini_protein/sample_001_confidence.json"
+          ]
+        },
+        "title": "Global confidence"
+      },
+      {
+        "description": "ESMFold 2 pLDDT confidence in input token order.",
+        "id": "residue_confidence",
+        "mapping": {
+          "direction": "higher",
+          "format": "csv",
+          "missing": "empty cell",
+          "unit": "score",
+          "value_columns": [
+            "plddt"
+          ],
+          "x_column": "token_index",
+          "x_label": "Token index",
+          "y_label": "pLDDT",
+          "y_max": 1,
+          "y_min": 0
+        },
+        "plugin": "metric-series",
+        "role": "evidence",
+        "sources": {
+          "series": [
+            "mini_protein/sample_001_plddt.csv"
+          ]
+        },
+        "title": "Per-token confidence"
+      },
+      {
+        "description": "Pairwise predicted aligned error for each structure sample.",
+        "id": "predicted_aligned_error",
+        "mapping": {
+          "direction": "lower",
+          "format": "json",
+          "scale": "sequential",
+          "unit": "angstrom",
+          "value_path": "pae",
+          "x_label": "Aligned token",
+          "y_label": "Scored token"
+        },
+        "plugin": "matrix",
+        "role": "evidence",
+        "sources": {
+          "matrices": [
+            "mini_protein/sample_001_pae.json"
+          ]
+        },
+        "title": "Predicted aligned error"
+      },
+      {
+        "description": "Exact scientific settings, model revisions, input identity, and optional embeddings.",
+        "id": "prediction_record",
+        "mapping": {},
+        "plugin": "evidence-bundle",
+        "role": "evidence",
+        "sources": {
+          "items": [
+            "mini_protein/prediction.json"
+          ]
+        },
+        "title": "Prediction record"
+      }
+    ],
+    "work_items": [
+      {
+        "attempts": 1,
+        "error": null,
+        "id": "mini_protein",
+        "output_path": "mini_protein/",
+        "recovery": [
+          {
+            "action": "",
+            "attempt": 1,
+            "effective_parameters": {
+              "group_seeds": [
+                0
+              ],
+              "include_embeddings": false,
+              "kernel_backend": "cuequivariance",
+              "lm_dropout": 0.0,
+              "lm_mask_pct": 0.0,
+              "model_variant": "fast",
+              "msa_column_mask_rate": 0.1,
+              "msa_max_depth": 1024,
+              "num_diffusion_samples": 1,
+              "num_loops": 1,
+              "num_sampling_steps": 2,
+              "sample_group_size": 1,
+              "sample_groups": [
+                1
+              ],
+              "sample_seeds": [
+                0
+              ],
+              "seed": 0
+            },
+            "plan_label": "",
+            "resources": {}
+          }
+        ],
+        "recovery_action": "",
+        "status": "SUCCEEDED"
+      }
+    ]
+  },
+  "storyboard": {
+    "entrypoint": "index.js",
+    "sha256": "1d9fa4579cb62a260b6038557a97eb17adb6dcde8d5566d51c5341d950255e2a",
+    "source": "/* ESMFold 2 scientific result composition. */\n/* SPDX-License-Identifier: GPL-3.0-only */\n\nconst STYLE = `\n.esmfold-result { display: grid; gap: 1rem; padding: 1rem; }\n.esmfold-result h2, .esmfold-result h3, .esmfold-result p { margin: 0; }\n.esmfold-section { display: grid; gap: 0.55rem; min-width: 0; }\n.esmfold-candidates, .esmfold-actions { display: flex; flex-wrap: wrap; gap: 0.45rem; }\n.esmfold-candidates button[aria-current=\"true\"] { outline: 2px solid var(--accent); outline-offset: 2px; }\n.esmfold-columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 26rem), 1fr)); gap: 1rem; }\n.esmfold-figure { position: relative; overflow: hidden; }\n.esmfold-figure canvas { display: block; max-width: 100%; }\n.esmfold-figure .pair-matrix-label { position: absolute; color: var(--muted); font-size: 11px; }\n.esmfold-figure .af3-label-x { transform: translateX(-50%); }\n.esmfold-figure .af3-label-y { transform: translateY(-50%); }\n.esmfold-figure .af3-title { color: var(--ink); font-size: 12px; }\n.esmfold-figure .af3-title-y { transform: translate(-50%, -50%) rotate(-90deg); white-space: nowrap; }\n`;\n\nfunction list(value) { return Array.isArray(value) ? value : value ? [value] : []; }\nfunction section(title, note) { const node = document.createElement(\"section\"); node.className = \"esmfold-section\"; const heading = document.createElement(\"h3\"); heading.textContent = title; node.appendChild(heading); if (note) { const text = document.createElement(\"p\"); text.className = \"scientific-note\"; text.textContent = note; node.appendChild(text); } return node; }\nfunction message(text) { const node = document.createElement(\"p\"); node.className = \"preview-message\"; node.textContent = text; return node; }\nasync function response(artifact, signal) { const value = window.REvoDesignAuth ? await window.REvoDesignAuth.authFetch(artifact.url, { signal }) : await fetch(artifact.url, { credentials: \"same-origin\", signal }); if (!value.ok) throw new Error(\"ESMFold 2 evidence could not be loaded.\"); return value; }\nfunction square(values) { return Array.isArray(values) && values.length && values.every((row) => Array.isArray(row) && row.length === values.length); }\n\nexport default {\n  async mount(host, context) {\n    const Scientific = window.REvoComputeScientific; if (!Scientific) throw new Error(\"Scientific result components are unavailable.\");\n    const structures = list(context.files.get(\"structures\")); const summaries = list(context.files.get(\"summaries\")); const locals = list(context.files.get(\"local_confidence\")); const paeFiles = list(context.files.get(\"pae\"));\n    const aligned = [summaries, locals, paeFiles].every((items) => items.length === structures.length);\n    const abort = new AbortController(); let local = null; let matrix = null;\n    const root = document.createElement(\"div\"); root.className = \"esmfold-result\"; const style = document.createElement(\"style\"); style.textContent = STYLE;\n    const heading = document.createElement(\"h2\"); heading.textContent = \"ESMFold 2 prediction\"; const intro = document.createElement(\"p\"); intro.textContent = \"Diffusion samples with model-native confidence on its persisted 0 to 1 scale.\"; root.append(style, heading, intro);\n    const candidateSection = section(\"Structure samples\", \"Candidate order follows the runner's deterministic sample order.\"); const candidateHost = document.createElement(\"div\"); candidateHost.className = \"esmfold-candidates\"; const actions = document.createElement(\"div\"); actions.className = \"esmfold-actions\"; candidateSection.append(candidateHost, actions); root.appendChild(candidateSection);\n    const columns = document.createElement(\"div\"); columns.className = \"esmfold-columns\"; const metrics = section(\"Global confidence\", \"Values belong to the selected sample; model confidence estimates, not experimental validation.\"); const metricHost = document.createElement(\"div\"); metrics.appendChild(metricHost); const confidence = section(\"Local confidence\", \"Per-token pLDDT as persisted by ESMFold 2; higher is better.\"); const confidenceHost = document.createElement(\"div\"); confidence.appendChild(confidenceHost); columns.append(metrics, confidence); root.appendChild(columns);\n    const pae = section(\"Predicted aligned error\", \"Pairwise token error in angstroms; lower is better.\"); const figure = document.createElement(\"div\"); figure.className = \"esmfold-figure\"; const canvas = document.createElement(\"canvas\"); canvas.tabIndex = 0; canvas.setAttribute(\"role\", \"grid\"); const readout = document.createElement(\"p\"); readout.className = \"matrix-readout\"; readout.setAttribute(\"role\", \"status\"); figure.appendChild(canvas); pae.append(figure, readout); root.appendChild(pae); host.replaceChildren(root);\n    matrix = new Scientific.PairMatrix({ figure, canvas, readout, minimum: 0, unit: \"angstrom\", xTitle: \"Aligned token\", yTitle: \"Scored token\", legendTitle: \"PAE\", decimals: 1 });\n    function clearCandidate(text) {\n      actions.replaceChildren(); metricHost.replaceChildren(message(text)); confidenceHost.replaceChildren(); figure.hidden = true; readout.textContent = \"\";\n      if (local) { local.destroy(); local = null; }\n    }\n    async function select(structure, index, request) {\n      clearCandidate(\"Loading candidate evidence...\");\n      if (!aligned) { clearCandidate(\"Candidate evidence counts do not align.\"); return; }\n      try {\n        const signal = request.signal || abort.signal; const [summaryResponse, tokenProjection, confidenceProjection, paeProjection] = await Promise.all([\n          response(summaries[index], signal),\n          Scientific.loadNumericProjection(locals[index], { key: \"token_index\", signal }),\n          Scientific.loadNumericProjection(locals[index], { key: \"plddt\", signal }),\n          Scientific.loadNumericProjection(paeFiles[index], { key: \"pae\", signal }),\n        ]);\n        const summary = await summaryResponse.json(); if (!request.current()) return;\n        const values = paeProjection.shape.length === 2 ? Array.from({ length: paeProjection.shape[0] }, (_, row) => paeProjection.values.slice(row * paeProjection.shape[1], (row + 1) * paeProjection.shape[1])) : null;\n        if (!square(values)) throw new Error(\"The selected sample did not publish a square PAE matrix.\");\n        const open = document.createElement(\"button\"); open.type = \"button\"; open.className = \"btn btn-soft\"; open.textContent = \"Open selected structure\"; open.addEventListener(\"click\", () => context.services.openFile(structure)); actions.replaceChildren(open);\n        new Scientific.ScalarMetricGrid(metricHost, [{ label: \"Mean pLDDT\", value: summary.mean_plddt, unit: \"score\", meaning: \"Higher is better\" }, { label: \"pTM\", value: summary.ptm, unit: \"score\", meaning: \"Higher is better\" }, { label: \"ipTM\", value: summary.iptm, unit: \"score\", meaning: \"Higher is better\" }]);\n        local = new Scientific.LocalConfidenceSeries(confidenceHost, { series: [{ label: \"pLDDT\", values: confidenceProjection.values }], xValues: tokenProjection.values, xLabel: \"Token index\", yLabel: \"pLDDT\", unit: \"score\", direction: \"higher is better\", yMin: 0, yMax: 1 });\n        figure.hidden = false; const labels = values.map((_, token) => String(token + 1)); matrix.setData({ values, xLabels: labels, yLabels: labels });\n        return true;\n      } catch (error) { if (error.name !== \"AbortError\" && request.current()) clearCandidate(error.message || \"ESMFold 2 evidence could not be loaded.\"); }\n    }\n    const selector = new Scientific.CandidateSelector(candidateHost, { items: structures, store: context.selection, label: (_, index) => \"Sample \" + (index + 1), onSelect: select });\n    if (structures.length) await selector.select(0); else candidateHost.replaceChildren(message(\"No structure sample was published.\"));\n    return { destroy() { abort.abort(); selector.destroy(); if (local) local.destroy(); if (matrix) matrix.destroy(); } };\n  },\n};\n"
+  },
+  "task": {
+    "display_name": "minimal.fasta",
+    "id": "9803381e59eeb152b0c654dcd1c4d871",
+    "type": "esmfold2_predict"
+  }
+}

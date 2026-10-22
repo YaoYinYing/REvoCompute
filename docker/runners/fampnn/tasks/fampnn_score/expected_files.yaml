@@ -1,0 +1,42 @@
+# Logical result files published by the fampnn_score Task.
+#
+# The single-mutation score table is the only scored output; the primary
+# entity-table view reads it. Every other file records the run.
+result:
+  files:
+    mutation_scores:
+      path: all_scores.csv
+      cardinality: one
+      required: true
+      type: table
+      role: evidence
+    config:
+      path: config.yaml
+      cardinality: one
+      required: true
+      type: text
+      role: provenance
+    input_structure:
+      pattern: 'debug/inputs/structure/*.pdb'
+      cardinality: one
+      required: true
+      type: structure
+      role: provenance
+    submission:
+      path: debug/submission.json
+      cardinality: one
+      required: true
+      type: json
+      role: provenance
+    citations:
+      path: citations.bib
+      cardinality: one
+      required: true
+      type: text
+      role: provenance
+    execution_records:
+      pattern: 'execution/*'
+      cardinality: many
+      required: true
+      type: text
+      role: diagnostic

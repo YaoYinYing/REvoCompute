@@ -1,0 +1,8 @@
+identifier: ligandmpnn-designs
+entrypoint: ./index.js
+requires:
+  - designs
+optional:
+  - packed_structures
+  - input_structure
+  - citations

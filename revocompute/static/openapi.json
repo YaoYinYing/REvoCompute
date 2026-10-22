@@ -2805,10 +2805,11 @@
       },
       "LogicalResultFile": {
         "type": "object",
-        "required": ["id", "name", "media_type", "size", "role", "cardinality", "viewer", "preview", "capability", "url"],
+        "required": ["id", "name", "path", "media_type", "size", "role", "cardinality", "viewer", "preview", "capability", "url"],
         "properties": {
           "id": {"type": "string"},
           "name": {"type": "string"},
+          "path": {"type": "string", "description": "Published artifact path this logical file resolves to. It is the artifact's identity: two logical files with the same basename in different directories name different paths."},
           "media_type": {"type": "string"},
           "size": {"type": "integer", "minimum": 0},
           "role": {"type": "string", "enum": ["primary", "evidence", "provenance", "diagnostic", "artifact"]},

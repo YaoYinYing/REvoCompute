@@ -1,0 +1,19 @@
+{
+  "inputs": [
+    {
+      "name": "2KL8.fasta",
+      "role": "sequence",
+      "sha256": "511d73a16c00fb6a26376e1100317348973a956295ba753098e6ff08cdd53392",
+      "size": 85
+    }
+  ],
+  "params": {
+    "batch_size": 1,
+    "chunk_size": 64,
+    "low_memory": false,
+    "num_recycles": 1
+  },
+  "submitted_at": "2026-10-20T15:32:06.871578+00:00",
+  "task_type": "esmdynamic",
+  "username": "tester"
+}

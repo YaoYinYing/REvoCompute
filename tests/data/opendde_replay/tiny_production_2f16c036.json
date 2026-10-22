@@ -1,0 +1,541 @@
+{
+  "bundle_digest": "sha256:37f8d314622616a433d00d50248598d487e53f66239662b9f2033f3d199f3278",
+  "bundle_version": 1,
+  "excluded": [
+    {
+      "media_type": "application/octet-stream",
+      "path": "citations.bib",
+      "reason": "declared artifact not checked in by this capture",
+      "sha256": "416b7bf85390f16df516c29ebf83020c87f7eaf17925de6bbcfc43f2820f5c3d",
+      "size": 530
+    },
+    {
+      "media_type": "text/plain",
+      "path": "execution/slurm-unknown-user-opendde-2f16c036ae748053fe93825e17e464d4.stderr.log",
+      "reason": "declared artifact not checked in by this capture",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size": 0
+    },
+    {
+      "media_type": "text/plain",
+      "path": "execution/slurm-unknown-user-opendde-2f16c036ae748053fe93825e17e464d4.stdout.log",
+      "reason": "declared artifact not checked in by this capture",
+      "sha256": "52f7762376a4890c17421b2a2f226dd1fe10e1ecd07e820f31e37cbd88808abe",
+      "size": 280
+    }
+  ],
+  "kind": "real_runner_result_replay",
+  "logical_files": {
+    "full_confidences": [
+      {
+        "path": "tiny/seed_101/predictions/tiny_full_data_sample_0.json",
+        "sha256": "2a7e5b4bfaea7fb48df881c3e16a0406cabc7b4d878ec1c83bfeb9d4f8d1a062",
+        "size": 6111
+      }
+    ],
+    "structures": [
+      {
+        "path": "tiny/seed_101/predictions/tiny_sample_0.cif",
+        "sha256": "584393fdeec18457d7587c2fe1ad26ac978fb260d6884db45f5dbc5bf17d66af",
+        "size": 8035
+      }
+    ],
+    "summaries": [
+      {
+        "path": "tiny/seed_101/predictions/tiny_summary_confidence_sample_0.json",
+        "sha256": "a2ed544482d5d8f4d5907d00e011a76c6be79fbb81e8231679c526231409343b",
+        "size": 705
+      }
+    ]
+  },
+  "payloads": {
+    "debug/inputs/specification/opendde_tiny.json": {
+      "media_type": "application/json",
+      "payload": "[\n  {\n    \"name\": \"tiny\",\n    \"modelSeeds\": [101],\n    \"sequences\": [\n      {\n        \"proteinChain\": {\n          \"sequence\": \"ACDEFGHIK\",\n          \"count\": 1\n        }\n      }\n    ]\n  }\n]\n",
+      "sha256": "e6872dbc4567999081d3436f2d5687fd955671b7035061ddfbe39fbbe94d4fd3",
+      "size": 190
+    },
+    "debug/submission.json": {
+      "media_type": "application/json",
+      "payload": "{\n  \"inputs\": [\n    {\n      \"name\": \"opendde_tiny.json\",\n      \"role\": \"specification\",\n      \"sha256\": \"e6872dbc4567999081d3436f2d5687fd955671b7035061ddfbe39fbbe94d4fd3\",\n      \"size\": 190\n    }\n  ],\n  \"params\": {\n    \"checkpoint\": \"released\",\n    \"deterministic\": false,\n    \"dtype\": \"fp32\",\n    \"enable_cache\": true,\n    \"enable_tf32\": true,\n    \"model_name\": \"opendde_v1\",\n    \"need_atom_confidence\": true,\n    \"num_cycles\": 1,\n    \"num_samples\": 1,\n    \"num_steps\": 10,\n    \"seeds\": \"\",\n    \"use_default_params\": false,\n    \"use_msa\": false,\n    \"use_template\": false,\n    \"use_tfg_guidance\": false\n  },\n  \"submitted_at\": \"2026-10-20T15:27:22.750611+00:00\",\n  \"task_type\": \"opendde\",\n  \"username\": \"tester\"\n}\n",
+      "sha256": "a1d4928394d9a7efca2a6d25e80ddca3b80e0718501c76348258640207386868",
+      "size": 714
+    },
+    "execution/slurm-status.execution.json": {
+      "media_type": "application/json",
+      "payload": "{\"source\": \"slurm_adapter\", \"schema_version\": 1, \"task_id\": \"2f16c036ae748053fe93825e17e464d4\", \"logs\": {\"stdout\": \"REVODESIGN_JOB_ID=310985\\nREVODESIGN_ALLOCATION_LIVE=310985\\nProcessing [path redacted] ...\\nOutput directory: [path redacted]\\nModel: opendde_v1  Checkpoint: released  Samples: 1  Steps: 10  Cycles: 1\\nMSA: false  Template: false\\nREVODESIGN_STAGE:opendde\\nOpenDDE inference complete.\\n\\n\", \"stderr\": \"\"}}",
+      "sha256": "461d746273fc175b247c9b920d17eaeb768605853734f789785d36bce0ea1db3",
+      "size": 422
+    },
+    "execution/slurm-unknown-user-opendde-2f16c036ae748053fe93825e17e464d4.resource.json": {
+      "media_type": "application/json",
+      "payload": "{\n  \"allocated_cpus_per_task\": 8,\n  \"allocated_gpu_ids\": \"0\",\n  \"allocated_gpus_on_node\": \"1\",\n  \"allocated_tasks\": 1,\n  \"elapsed_seconds\": 49.19,\n  \"exit_code\": 0,\n  \"gpu_memory_peak_mib\": 5699,\n  \"gpu_utilization_peak_percent\": 33,\n  \"job_id\": \"310985\",\n  \"max_rss_kib\": 3757976,\n  \"schema_version\": 1,\n  \"scratch_guard.exceeded\": 0,\n  \"scratch_guard.peak_bytes\": 12288,\n  \"scratch_guard.samples\": 10,\n  \"source\": \"allocation_wrapper\",\n  \"system_cpu_seconds\": 9.54,\n  \"user_cpu_seconds\": 39.26,\n  \"visible_gpu_devices\": \"0\"\n}\n",
+      "sha256": "dcd649e540d403dfa8ba4b5634004fa59add66957554dede557de229c284e5e3",
+      "size": 528
+    },
+    "tiny/seed_101/predictions/tiny_full_data_sample_0.json": {
+      "media_type": "application/json",
+      "payload": "{\"atom_plddt\": [0.9200000166893005, 0.9300000071525574, 0.9300000071525574, 0.9100000262260437, 0.9200000166893005, 0.9399999976158142, 0.9399999976158142, 0.9399999976158142, 0.9300000071525574, 0.949999988079071, 0.9399999976158142, 0.9300000071525574, 0.9399999976158142, 0.9300000071525574, 0.9300000071525574, 0.9399999976158142, 0.949999988079071, 0.949999988079071, 0.949999988079071, 0.949999988079071, 0.949999988079071, 0.949999988079071, 0.9399999976158142, 0.9599999785423279, 0.949999988079071, 0.949999988079071, 0.949999988079071, 0.9399999976158142, 0.9399999976158142, 0.9399999976158142, 0.9399999976158142, 0.9399999976158142, 0.949999988079071, 0.949999988079071, 0.949999988079071, 0.949999988079071, 0.9399999976158142, 0.949999988079071, 0.949999988079071, 0.9399999976158142, 0.9399999976158142, 0.9399999976158142, 0.9300000071525574, 0.9399999976158142, 0.9399999976158142, 0.9300000071525574, 0.9300000071525574, 0.949999988079071, 0.9599999785423279, 0.9599999785423279, 0.9599999785423279, 0.949999988079071, 0.9599999785423279, 0.9399999976158142, 0.9399999976158142, 0.9300000071525574, 0.9300000071525574, 0.949999988079071, 0.949999988079071, 0.949999988079071, 0.9399999976158142, 0.8700000047683716, 0.8700000047683716, 0.8700000047683716, 0.8600000143051147, 0.8399999737739563, 0.800000011920929, 0.7799999713897705, 0.7300000190734863, 0.699999988079071, 0.6800000071525574], \"token_pair_pde\": [[0.41999998688697815, 0.33000001311302185, 0.49000000953674316, 0.6499999761581421, 0.5199999809265137, 0.5, 0.5699999928474426, 0.7900000214576721, 0.8199999928474426], [0.33000001311302185, 0.3400000035762787, 0.4399999976158142, 0.38999998569488525, 0.41999998688697815, 0.4300000071525574, 0.47999998927116394, 0.6700000166893005, 0.8899999856948853], [0.49000000953674316, 0.4399999976158142, 0.3100000023841858, 0.3499999940395355, 0.4699999988079071, 0.5099999904632568, 0.6299999952316284, 0.6000000238418579, 0.699999988079071], [0.6499999761581421, 0.38999998569488525, 0.3499999940395355, 0.33000001311302185, 0.3100000023841858, 0.3799999952316284, 0.4000000059604645, 0.3499999940395355, 0.5299999713897705], [0.5199999809265137, 0.41999998688697815, 0.4699999988079071, 0.3100000023841858, 0.3499999940395355, 0.30000001192092896, 0.38999998569488525, 0.44999998807907104, 0.5799999833106995], [0.5, 0.4300000071525574, 0.5099999904632568, 0.3799999952316284, 0.30000001192092896, 0.3199999928474426, 0.3700000047683716, 0.33000001311302185, 0.47999998927116394], [0.5699999928474426, 0.47999998927116394, 0.6299999952316284, 0.4000000059604645, 0.38999998569488525, 0.3700000047683716, 0.5699999928474426, 0.3100000023841858, 0.41999998688697815], [0.7900000214576721, 0.6700000166893005, 0.6000000238418579, 0.3499999940395355, 0.44999998807907104, 0.33000001311302185, 0.3100000023841858, 0.3799999952316284, 0.3499999940395355], [0.8199999928474426, 0.8899999856948853, 0.699999988079071, 0.5299999713897705, 0.5799999833106995, 0.47999998927116394, 0.41999998688697815, 0.3499999940395355, 0.3700000047683716]], \"token_pair_pae\": [[0.7699999809265137, 0.9800000190734863, 1.8200000524520874, 2.4700000286102295, 3.640000104904175, 1.8700000047683716, 2.75, 3.240000009536743, 3.450000047683716], [0.6000000238418579, 0.699999988079071, 1.149999976158142, 1.5, 1.7999999523162842, 1.5299999713897705, 1.940000057220459, 1.7200000286102295, 3.259999990463257], [1.399999976158142, 0.9900000095367432, 0.3499999940395355, 0.3799999952316284, 0.5799999833106995, 1.2200000286102295, 2.6600000858306885, 1.8200000524520874, 1.3600000143051147], [1.690000057220459, 1.7699999809265137, 0.8199999928474426, 0.3400000035762787, 0.7900000214576721, 1.1399999856948853, 0.8899999856948853, 1.2999999523162842, 1.840000033378601], [2.680000066757202, 1.2000000476837158, 0.9200000166893005, 0.47999998927116394, 0.3799999952316284, 0.4099999964237213, 0.6700000166893005, 1.7699999809265137, 2.390000104904175], [1.8200000524520874, 1.4299999475479126, 3.440000057220459, 0.9900000095367432, 0.6000000238418579, 0.41999998688697815, 0.699999988079071, 0.8100000023841858, 2.5], [1.909999966621399, 1.399999976158142, 2.359999895095825, 1.7100000381469727, 1.0199999809265137, 0.5, 0.44999998807907104, 0.47999998927116394, 0.9599999785423279], [2.049999952316284, 0.8799999952316284, 1.9299999475479126, 2.359999895095825, 1.9299999475479126, 0.8299999833106995, 0.41999998688697815, 0.41999998688697815, 0.6399999856948853], [3.0, 4.25, 3.450000047683716, 2.4600000381469727, 3.2100000381469727, 2.5899999141693115, 1.2400000095367432, 0.9399999976158142, 0.5600000023841858]], \"contact_probs\": [[1.0, 1.0, 0.75, 0.009999999776482582, 0.009999999776482582, 0.009999999776482582, 0.03999999910593033, 0.8700000047683716, 0.949999988079071], [1.0, 1.0, 1.0, 0.6299999952316284, 0.07000000029802322, 0.6100000143051147, 0.8199999928474426, 0.9599999785423279, 0.5799999833106995], [0.75, 1.0, 1.0, 1.0, 0.9800000190734863, 0.9900000095367432, 0.029999999329447746, 0.6299999952316284, 0.9100000262260437], [0.009999999776482582, 0.6299999952316284, 1.0, 1.0, 1.0, 1.0, 0.07000000029802322, 0.0, 0.0], [0.009999999776482582, 0.07000000029802322, 0.9800000190734863, 1.0, 1.0, 1.0, 1.0, 0.03999999910593033, 0.03999999910593033], [0.009999999776482582, 0.6100000143051147, 0.9900000095367432, 1.0, 1.0, 1.0, 1.0, 0.8100000023841858, 0.019999999552965164], [0.03999999910593033, 0.8199999928474426, 0.029999999329447746, 0.07000000029802322, 1.0, 1.0, 1.0, 1.0, 0.9900000095367432], [0.8700000047683716, 0.9599999785423279, 0.6299999952316284, 0.0, 0.03999999910593033, 0.8100000023841858, 1.0, 1.0, 1.0], [0.949999988079071, 0.5799999833106995, 0.9100000262260437, 0.0, 0.03999999910593033, 0.019999999552965164, 0.9900000095367432, 1.0, 1.0]], \"token_has_frame\": [1, 1, 1, 1, 1, 1, 1, 1, 1], \"token_asym_id\": [0, 0, 0, 0, 0, 0, 0, 0, 0], \"atom_to_token_idx\": [0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 7, 7, 7, 7, 7, 7, 7, 7, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8]}",
+      "sha256": "2a7e5b4bfaea7fb48df881c3e16a0406cabc7b4d878ec1c83bfeb9d4f8d1a062",
+      "size": 6111
+    },
+    "tiny/seed_101/predictions/tiny_sample_0.cif": {
+      "media_type": "chemical/x-cif",
+      "payload": "data_tiny_sample_0_predicted_by_opendde\n#\n_entry.id   tiny\n#\nloop_\n_chem_comp.id \n_chem_comp.type \n_chem_comp.mon_nstd_flag \n_chem_comp.name \n_chem_comp.pdbx_synonyms \n_chem_comp.formula \n_chem_comp.formula_weight \nALA 'L-PEPTIDE LINKING' y ALANINE         ? 'C3 H7 N O2'   89.093\nASP 'L-PEPTIDE LINKING' y 'ASPARTIC ACID' ? 'C4 H7 N O4'   133.103\nCYS 'L-PEPTIDE LINKING' y CYSTEINE        ? 'C3 H7 N O2 S' 121.158\nGLU 'L-PEPTIDE LINKING' y 'GLUTAMIC ACID' ? 'C5 H9 N O4'   147.129\nGLY 'PEPTIDE LINKING'   y GLYCINE         ? 'C2 H5 N O2'   75.067\nHIS 'L-PEPTIDE LINKING' y HISTIDINE       ? 'C6 H10 N3 O2' 156.162\nILE 'L-PEPTIDE LINKING' y ISOLEUCINE      ? 'C6 H13 N O2'  131.173\nLYS 'L-PEPTIDE LINKING' y LYSINE          ? 'C6 H15 N2 O2' 147.195\nPHE 'L-PEPTIDE LINKING' y PHENYLALANINE   ? 'C9 H11 N O2'  165.189\n#\n_entity.id                 1\n_entity.pdbx_description   .\n_entity.type               polymer\n#\n_entity_poly.entity_id        1\n_entity_poly.pdbx_strand_id   A\n_entity_poly.type             polypeptide(L)\n#\nloop_\n_entity_poly_seq.entity_id \n_entity_poly_seq.hetero \n_entity_poly_seq.mon_id \n_entity_poly_seq.num \n1 n ALA 1\n1 n CYS 2\n1 n ASP 3\n1 n GLU 4\n1 n PHE 5\n1 n GLY 6\n1 n HIS 7\n1 n ILE 8\n1 n LYS 9\n#\nloop_\n_atom_site.group_PDB \n_atom_site.type_symbol \n_atom_site.label_atom_id \n_atom_site.label_alt_id \n_atom_site.label_comp_id \n_atom_site.label_asym_id \n_atom_site.label_entity_id \n_atom_site.label_seq_id \n_atom_site.pdbx_PDB_ins_code \n_atom_site.auth_seq_id \n_atom_site.auth_comp_id \n_atom_site.auth_asym_id \n_atom_site.auth_atom_id \n_atom_site.B_iso_or_equiv \n_atom_site.Cartn_x \n_atom_site.Cartn_y \n_atom_site.Cartn_z \n_atom_site.pdbx_PDB_model_num \n_atom_site.id \n_atom_site.occupancy \nATOM N N   . ALA A 1 1 . 1 ALA A N   92.46 -8.710172   11.979652    -2.28401    1 1  1.0\nATOM C CA  . ALA A 1 1 . 1 ALA A CA  92.57 -2.909203   6.2221394    -0.915262   1 2  1.0\nATOM C C   . ALA A 1 1 . 1 ALA A C   92.55 1.0694308   3.5222301    -2.1582906  1 3  1.0\nATOM O O   . ALA A 1 1 . 1 ALA A O   91.37 -0.21237314 4.2990417    0.11459369  1 4  1.0\nATOM C CB  . ALA A 1 1 . 1 ALA A CB  91.9  -3.8699493  7.8651857    -1.4771469  1 5  1.0\nATOM N N   . CYS A 1 2 . 2 CYS A N   93.65 -4.6011     5.1316814    -2.398717   1 6  1.0\nATOM C CA  . CYS A 1 2 . 2 CYS A CA  94.33 -4.4714193  3.5412898    -3.3625348  1 7  1.0\nATOM C C   . CYS A 1 2 . 2 CYS A C   93.7  -3.6409955  3.5883331    -3.9008632  1 8  1.0\nATOM O O   . CYS A 1 2 . 2 CYS A O   93.36 -3.4534326  4.8360763    -4.7172804  1 9  1.0\nATOM C CB  . CYS A 1 2 . 2 CYS A CB  94.61 -6.0961027  3.536244     -2.7713306  1 10 1.0\nATOM S SG  . CYS A 1 2 . 2 CYS A SG  94.29 -9.725729   5.2515326    -5.6559396  1 11 1.0\nATOM N N   . ASP A 1 3 . 3 ASP A N   93.42 3.0914602   1.7451513    -2.1875155  1 12 1.0\nATOM C CA  . ASP A 1 3 . 3 ASP A CA  94.05 2.0881057   1.659789     0.40441254  1 13 1.0\nATOM C C   . ASP A 1 3 . 3 ASP A C   93.21 1.7216675   -0.08436431  -0.41391256 1 14 1.0\nATOM O O   . ASP A 1 3 . 3 ASP A O   92.87 -4.707137   -0.022525582 -3.8060386  1 15 1.0\nATOM C CB  . ASP A 1 3 . 3 ASP A CB  94.23 1.4874306   2.2489293    -0.05781108 1 16 1.0\nATOM C CG  . ASP A 1 3 . 3 ASP A CG  95.17 2.8104305   2.1497452    -0.40561473 1 17 1.0\nATOM O OD1 . ASP A 1 3 . 3 ASP A OD1 95.36 3.5327296   -0.38667738  1.3072207   1 18 1.0\nATOM O OD2 . ASP A 1 3 . 3 ASP A OD2 94.99 3.0417287   3.115874     -1.2834754  1 19 1.0\nATOM N N   . GLU A 1 4 . 4 GLU A N   94.91 3.938523    -8.662027    -2.1123445  1 20 1.0\nATOM C CA  . GLU A 1 4 . 4 GLU A CA  95.35 2.742258    -2.9468076   -0.12700146 1 21 1.0\nATOM C C   . GLU A 1 4 . 4 GLU A C   94.77 1.5293331   -3.020229    -1.300441   1 22 1.0\nATOM O O   . GLU A 1 4 . 4 GLU A O   94.41 1.4003227   -3.1027813   -2.5922775  1 23 1.0\nATOM C CB  . GLU A 1 4 . 4 GLU A CB  95.51 3.0470228   -3.1957293   1.5134034   1 24 1.0\nATOM C CG  . GLU A 1 4 . 4 GLU A CG  95.36 3.9835265   -3.9036634   1.3590086   1 25 1.0\nATOM C CD  . GLU A 1 4 . 4 GLU A CD  95.2  5.422374    -3.5728827   1.7879871   1 26 1.0\nATOM O OE1 . GLU A 1 4 . 4 GLU A OE1 94.76 5.757527    -3.9102974   1.6210498   1 27 1.0\nATOM O OE2 . GLU A 1 4 . 4 GLU A OE2 93.93 6.053769    -3.5378842   0.8217864   1 28 1.0\nATOM N N   . PHE A 1 5 . 5 PHE A N   94.02 0.8779458   -2.4268832   -0.5774268  1 29 1.0\nATOM C CA  . PHE A 1 5 . 5 PHE A CA  94.5  -0.10380032 -3.8185954   -0.32990432 1 30 1.0\nATOM C C   . PHE A 1 5 . 5 PHE A C   93.68 -0.5975347  -3.494621    -3.3248708  1 31 1.0\nATOM O O   . PHE A 1 5 . 5 PHE A O   93.55 -13.885065  -9.847574    -4.225378   1 32 1.0\nATOM C CB  . PHE A 1 5 . 5 PHE A CB  94.82 -0.60430753 -5.2335787   -0.20999938 1 33 1.0\nATOM C CG  . PHE A 1 5 . 5 PHE A CG  95.37 0.5880256   -5.855012    0.35234547  1 34 1.0\nATOM C CD1 . PHE A 1 5 . 5 PHE A CD1 94.98 1.5821626   -6.0456      -0.52364624 1 35 1.0\nATOM C CD2 . PHE A 1 5 . 5 PHE A CD2 94.92 0.17808527  -6.73172     1.8437738   1 36 1.0\nATOM C CE1 . PHE A 1 5 . 5 PHE A CE1 94.16 2.782288    -6.63296     -0.02514574 1 37 1.0\nATOM C CE2 . PHE A 1 5 . 5 PHE A CE2 94.8  1.8766896   -6.8136473   2.0474675   1 38 1.0\nATOM C CZ  . PHE A 1 5 . 5 PHE A CZ  95.33 2.9801888   -6.983774    1.2771188   1 39 1.0\nATOM N N   . GLY A 1 6 . 6 GLY A N   93.56 2.905879    -2.7664492   -4.290621   1 40 1.0\nATOM C CA  . GLY A 1 6 . 6 GLY A CA  93.67 -0.8521772  0.14813703   -0.15240425 1 41 1.0\nATOM C C   . GLY A 1 6 . 6 GLY A C   93.54 -1.0780624  2.0101566    -1.3423023  1 42 1.0\nATOM O O   . GLY A 1 6 . 6 GLY A O   93.04 -2.9629135  -0.8292594   -0.98124874 1 43 1.0\nATOM N N   . HIS A 1 7 . 7 HIS A N   93.79 -1.8775828  1.786098     0.32141888  1 44 1.0\nATOM C CA  . HIS A 1 7 . 7 HIS A CA  94.36 -3.287457   1.9992394    0.2639633   1 45 1.0\nATOM C C   . HIS A 1 7 . 7 HIS A C   93.34 -3.9201396  2.524796     0.054878436 1 46 1.0\nATOM O O   . HIS A 1 7 . 7 HIS A O   92.92 -3.8925521  1.9595306    0.28267077  1 47 1.0\nATOM C CB  . HIS A 1 7 . 7 HIS A CB  94.88 -3.310905   -1.8863766   2.222107    1 48 1.0\nATOM C CG  . HIS A 1 7 . 7 HIS A CG  96.15 -4.5657363  1.4684105    0.40366715  1 49 1.0\nATOM N ND1 . HIS A 1 7 . 7 HIS A ND1 95.65 -13.051367  -4.808273    -1.9476743  1 50 1.0\nATOM C CD2 . HIS A 1 7 . 7 HIS A CD2 95.55 -1.451104   -2.2255116   -0.9356912  1 51 1.0\nATOM C CE1 . HIS A 1 7 . 7 HIS A CE1 95.3  -2.380374   -3.0902872   1.2291136   1 52 1.0\nATOM N NE2 . HIS A 1 7 . 7 HIS A NE2 95.86 -4.503973   -2.7312117   1.0371009   1 53 1.0\nATOM N N   . ILE A 1 8 . 8 ILE A N   93.91 -4.186304   3.880294     -1.0678253  1 54 1.0\nATOM C CA  . ILE A 1 8 . 8 ILE A CA  94.39 -2.3123121  7.3964643    0.18926463  1 55 1.0\nATOM C C   . ILE A 1 8 . 8 ILE A C   93.44 -4.6992054  2.462028     0.38549143  1 56 1.0\nATOM O O   . ILE A 1 8 . 8 ILE A O   93.49 -7.566079   -0.025854472 2.348343    1 57 1.0\nATOM C CB  . ILE A 1 8 . 8 ILE A CB  95.01 -7.3826656  7.5778556    1.2717361   1 58 1.0\nATOM C CG1 . ILE A 1 8 . 8 ILE A CG1 94.99 -6.5317993  4.952606     -1.6737757  1 59 1.0\nATOM C CG2 . ILE A 1 8 . 8 ILE A CG2 95.37 -7.8145127  6.7115545    0.59429115  1 60 1.0\nATOM C CD1 . ILE A 1 8 . 8 ILE A CD1 94.12 -11.07336   -1.5249445   -5.6744747  1 61 1.0\nATOM N N   . LYS A 1 9 . 9 LYS A N   86.82 -3.4785948  5.7142334    1.2962329   1 62 1.0\nATOM C CA  . LYS A 1 9 . 9 LYS A CA  86.51 6.49909     -0.18065909  2.1366878   1 63 1.0\nATOM C C   . LYS A 1 9 . 9 LYS A C   87.25 -3.6391435  9.11278      1.3635213   1 64 1.0\nATOM O O   . LYS A 1 9 . 9 LYS A O   85.62 -9.263465   6.839551     8.407251    1 65 1.0\nATOM C CB  . LYS A 1 9 . 9 LYS A CB  84.19 -4.69733    4.4553595    5.3264203   1 66 1.0\nATOM C CG  . LYS A 1 9 . 9 LYS A CG  79.97 -2.1235332  5.173684     4.153187    1 67 1.0\nATOM C CD  . LYS A 1 9 . 9 LYS A CD  77.53 -2.6176255  6.7298684    4.3247313   1 68 1.0\nATOM C CE  . LYS A 1 9 . 9 LYS A CE  72.65 -0.43731058 8.258474     -1.9667945  1 69 1.0\nATOM N NZ  . LYS A 1 9 . 9 LYS A NZ  69.88 -0.6432862  5.7259603    3.7741287   1 70 1.0\nATOM O OXT . LYS A 1 9 . 9 LYS A OXT 68.26 0.40812504  9.366734     0.18477154  1 71 1.0\n#\n",
+      "sha256": "584393fdeec18457d7587c2fe1ad26ac978fb260d6884db45f5dbc5bf17d66af",
+      "size": 8035
+    },
+    "tiny/seed_101/predictions/tiny_summary_confidence_sample_0.json": {
+      "media_type": "application/json",
+      "payload": "{\n    \"plddt\": 92.21775817871094,\n    \"gpde\": 0.45348620414733887,\n    \"ptm\": 0.180607870221138,\n    \"iptm\": 0.0,\n    \"chain_gpde\": [\n        0.45348620414733887\n    ],\n    \"chain_pair_gpde\": [\n        [\n            0.0\n        ]\n    ],\n    \"chain_ptm\": [\n        0.180607870221138\n    ],\n    \"chain_iptm\": [\n        0.0\n    ],\n    \"chain_pair_iptm\": [\n        [\n            0.0\n        ]\n    ],\n    \"chain_pair_iptm_global\": [\n        [\n            0.0\n        ]\n    ],\n    \"chain_plddt\": [\n        0.9221776127815247\n    ],\n    \"chain_pair_plddt\": [\n        [\n            0.0\n        ]\n    ],\n    \"has_clash\": false,\n    \"disorder\": 0.0,\n    \"ranking_score\": 0.03612157329916954,\n    \"num_recycles\": 1\n}",
+      "sha256": "a2ed544482d5d8f4d5907d00e011a76c6be79fbb81e8231679c526231409343b",
+      "size": 705
+    }
+  },
+  "provenance": {
+    "capture": {
+      "captured_from": "authenticated production artifact API; the deployment result root is not readable by this capture user, so no result-root capture was possible",
+      "mode": "synthetic",
+      "payload_source": "GET /compute/api/results/<task>/artifacts/<path> with a Bearer token; every byte checked against the served manifest sha256",
+      "production_task_id": "2f16c036ae748053fe93825e17e464d4",
+      "production_task_type": "opendde",
+      "served_manifest_sha256": "42ca915ddca1502e136f4a747e2dcac163026f31e1874ea36bce1c6e7f2c268d",
+      "task_source": "none - the deployment task store publication anchor was not readable"
+    },
+    "production_finished_at": "2026-10-20T23:28:16.257775+08:00",
+    "production_started_at": "2026-10-20T23:27:22.799965+08:00",
+    "runner_family": "opendde",
+    "runner_revision": "deploy 57c8114; campaign base eae170d",
+    "storyboard_sha256": "0f029448f6166a5fa3bc790bfc746218009dba8a03f037a7850853f796374f09"
+  },
+  "response": {
+    "archive": {
+      "download_url": null,
+      "ready": false,
+      "request_url": "/compute/api/results/2f16c036ae748053fe93825e17e464d4/archive"
+    },
+    "artifacts": [
+      {
+        "capability": "text",
+        "media_type": "application/octet-stream",
+        "path": "citations.bib",
+        "preview": "text",
+        "role": "provenance",
+        "sha256": "416b7bf85390f16df516c29ebf83020c87f7eaf17925de6bbcfc43f2820f5c3d",
+        "size": 530,
+        "url": "/compute/api/results/2f16c036ae748053fe93825e17e464d4/artifacts/citations.bib"
+      },
+      {
+        "capability": "text",
+        "media_type": "application/json",
+        "ndarray_url": "/compute/api/results/2f16c036ae748053fe93825e17e464d4/ndarrays/debug/inputs/specification/opendde_tiny.json",
+        "path": "debug/inputs/specification/opendde_tiny.json",
+        "preview": "text",
+        "role": "provenance",
+        "sha256": "e6872dbc4567999081d3436f2d5687fd955671b7035061ddfbe39fbbe94d4fd3",
+        "size": 190,
+        "url": "/compute/api/results/2f16c036ae748053fe93825e17e464d4/artifacts/debug/inputs/specification/opendde_tiny.json"
+      },
+      {
+        "capability": "text",
+        "media_type": "application/json",
+        "ndarray_url": "/compute/api/results/2f16c036ae748053fe93825e17e464d4/ndarrays/debug/submission.json",
+        "path": "debug/submission.json",
+        "preview": "text",
+        "role": "provenance",
+        "sha256": "a1d4928394d9a7efca2a6d25e80ddca3b80e0718501c76348258640207386868",
+        "size": 714,
+        "url": "/compute/api/results/2f16c036ae748053fe93825e17e464d4/artifacts/debug/submission.json"
+      },
+      {
+        "capability": "text",
+        "media_type": "application/json",
+        "ndarray_url": "/compute/api/results/2f16c036ae748053fe93825e17e464d4/ndarrays/execution/slurm-status.execution.json",
+        "path": "execution/slurm-status.execution.json",
+        "preview": "text",
+        "role": "diagnostic",
+        "sha256": "461d746273fc175b247c9b920d17eaeb768605853734f789785d36bce0ea1db3",
+        "size": 422,
+        "url": "/compute/api/results/2f16c036ae748053fe93825e17e464d4/artifacts/execution/slurm-status.execution.json"
+      },
+      {
+        "capability": "text",
+        "media_type": "application/json",
+        "ndarray_url": "/compute/api/results/2f16c036ae748053fe93825e17e464d4/ndarrays/execution/slurm-unknown-user-opendde-2f16c036ae748053fe93825e17e464d4.resource.json",
+        "path": "execution/slurm-unknown-user-opendde-2f16c036ae748053fe93825e17e464d4.resource.json",
+        "preview": "text",
+        "role": "diagnostic",
+        "sha256": "dcd649e540d403dfa8ba4b5634004fa59add66957554dede557de229c284e5e3",
+        "size": 528,
+        "url": "/compute/api/results/2f16c036ae748053fe93825e17e464d4/artifacts/execution/slurm-unknown-user-opendde-2f16c036ae748053fe93825e17e464d4.resource.json"
+      },
+      {
+        "capability": "text",
+        "media_type": "application/octet-stream",
+        "path": "execution/slurm-unknown-user-opendde-2f16c036ae748053fe93825e17e464d4.stderr.log",
+        "preview": "text",
+        "role": "diagnostic",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "size": 0,
+        "url": "/compute/api/results/2f16c036ae748053fe93825e17e464d4/artifacts/execution/slurm-unknown-user-opendde-2f16c036ae748053fe93825e17e464d4.stderr.log"
+      },
+      {
+        "capability": "text",
+        "media_type": "application/octet-stream",
+        "path": "execution/slurm-unknown-user-opendde-2f16c036ae748053fe93825e17e464d4.stdout.log",
+        "preview": "text",
+        "role": "diagnostic",
+        "sha256": "52f7762376a4890c17421b2a2f226dd1fe10e1ecd07e820f31e37cbd88808abe",
+        "size": 280,
+        "url": "/compute/api/results/2f16c036ae748053fe93825e17e464d4/artifacts/execution/slurm-unknown-user-opendde-2f16c036ae748053fe93825e17e464d4.stdout.log"
+      },
+      {
+        "capability": "text",
+        "media_type": "application/json",
+        "ndarray_url": "/compute/api/results/2f16c036ae748053fe93825e17e464d4/ndarrays/tiny/seed_101/predictions/tiny_full_data_sample_0.json",
+        "path": "tiny/seed_101/predictions/tiny_full_data_sample_0.json",
+        "preview": "text",
+        "role": "artifact",
+        "sha256": "2a7e5b4bfaea7fb48df881c3e16a0406cabc7b4d878ec1c83bfeb9d4f8d1a062",
+        "size": 6111,
+        "url": "/compute/api/results/2f16c036ae748053fe93825e17e464d4/artifacts/tiny/seed_101/predictions/tiny_full_data_sample_0.json"
+      },
+      {
+        "capability": "molecular_structure",
+        "confidence_encoding": "plddt_bfactor",
+        "media_type": "application/octet-stream",
+        "path": "tiny/seed_101/predictions/tiny_sample_0.cif",
+        "preview": "structure",
+        "role": "primary",
+        "sha256": "584393fdeec18457d7587c2fe1ad26ac978fb260d6884db45f5dbc5bf17d66af",
+        "size": 8035,
+        "url": "/compute/api/results/2f16c036ae748053fe93825e17e464d4/artifacts/tiny/seed_101/predictions/tiny_sample_0.cif"
+      },
+      {
+        "capability": "text",
+        "media_type": "application/json",
+        "ndarray_url": "/compute/api/results/2f16c036ae748053fe93825e17e464d4/ndarrays/tiny/seed_101/predictions/tiny_summary_confidence_sample_0.json",
+        "path": "tiny/seed_101/predictions/tiny_summary_confidence_sample_0.json",
+        "preview": "text",
+        "role": "evidence",
+        "sha256": "a2ed544482d5d8f4d5907d00e011a76c6be79fbb81e8231679c526231409343b",
+        "size": 705,
+        "url": "/compute/api/results/2f16c036ae748053fe93825e17e464d4/artifacts/tiny/seed_101/predictions/tiny_summary_confidence_sample_0.json"
+      }
+    ],
+    "created_at": "2026-10-20T23:28:16.257775+08:00",
+    "error": null,
+    "limitations": [
+      "The JSON schema and optional MSA/template settings must match the pinned OpenDDE runner."
+    ],
+    "outcome": null,
+    "output_check": {
+      "checks": [
+        {
+          "matched": 1,
+          "required": true,
+          "source": "candidates",
+          "status": "passed",
+          "view_id": "predicted_structures"
+        },
+        {
+          "matched": 1,
+          "required": true,
+          "source": "data",
+          "status": "passed",
+          "view_id": "model_confidence"
+        },
+        {
+          "file_id": "structures",
+          "matched": 1,
+          "required": true,
+          "status": "passed"
+        },
+        {
+          "file_id": "summaries",
+          "matched": 1,
+          "required": true,
+          "status": "passed"
+        },
+        {
+          "file_id": "full_confidences",
+          "matched": 1,
+          "required": false,
+          "status": "passed"
+        }
+      ],
+      "problems": [],
+      "state": "passed"
+    },
+    "result": {
+      "files": {
+        "full_confidences": [
+          {
+            "capability": "text",
+            "cardinality": "many",
+            "id": "full_confidences",
+            "media_type": "application/json",
+            "name": "tiny_full_data_sample_0.json",
+            "ndarray_url": "/compute/api/results/2f16c036ae748053fe93825e17e464d4/ndarrays/tiny/seed_101/predictions/tiny_full_data_sample_0.json",
+            "path": "tiny/seed_101/predictions/tiny_full_data_sample_0.json",
+            "preview": "json",
+            "role": "artifact",
+            "size": 6111,
+            "url": "/compute/api/results/2f16c036ae748053fe93825e17e464d4/files/full_confidences?index=0",
+            "viewer": "json"
+          }
+        ],
+        "structures": [
+          {
+            "capability": "molecular_structure",
+            "cardinality": "many",
+            "confidence_encoding": "plddt_bfactor",
+            "id": "structures",
+            "media_type": "application/octet-stream",
+            "name": "tiny_sample_0.cif",
+            "path": "tiny/seed_101/predictions/tiny_sample_0.cif",
+            "preview": "structure",
+            "role": "primary",
+            "size": 8035,
+            "url": "/compute/api/results/2f16c036ae748053fe93825e17e464d4/files/structures?index=0",
+            "viewer": "structure"
+          }
+        ],
+        "summaries": [
+          {
+            "capability": "text",
+            "cardinality": "many",
+            "id": "summaries",
+            "media_type": "application/json",
+            "name": "tiny_summary_confidence_sample_0.json",
+            "ndarray_url": "/compute/api/results/2f16c036ae748053fe93825e17e464d4/ndarrays/tiny/seed_101/predictions/tiny_summary_confidence_sample_0.json",
+            "path": "tiny/seed_101/predictions/tiny_summary_confidence_sample_0.json",
+            "preview": "json",
+            "role": "evidence",
+            "size": 705,
+            "url": "/compute/api/results/2f16c036ae748053fe93825e17e464d4/files/summaries?index=0",
+            "viewer": "json"
+          }
+        ]
+      }
+    },
+    "run": {
+      "citations": [
+        {
+          "doi": "10.48550/arXiv.2607.03787",
+          "num": 1,
+          "title": "Folding, Reasoning, and Scaling with Open-source Drug Discovery Engine",
+          "url": "https://doi.org/10.48550/arXiv.2607.03787"
+        }
+      ],
+      "finished_at": "2026-10-20T23:28:16.257775+08:00",
+      "inputs": [
+        {
+          "format": "json",
+          "logical_type": "opendde_specification",
+          "path": "opendde_tiny.json",
+          "role": "specification",
+          "sha256": "e6872dbc4567999081d3436f2d5687fd955671b7035061ddfbe39fbbe94d4fd3"
+        }
+      ],
+      "method": {
+        "id": "opendde",
+        "name": "OpenDDE",
+        "output_summary": "Predicted all-atom structures and model confidence outputs produced by OpenDDE.",
+        "summary": "All-atom structure prediction with MSA and template guidance (OpenDDE)."
+      },
+      "parameters": [
+        {
+          "label": "Model Name",
+          "name": "model_name",
+          "unit": "",
+          "value": "opendde_v1"
+        },
+        {
+          "label": "Checkpoint",
+          "name": "checkpoint",
+          "unit": "",
+          "value": "released"
+        },
+        {
+          "label": "Num Samples",
+          "name": "num_samples",
+          "unit": "",
+          "value": 1
+        },
+        {
+          "label": "Num Steps",
+          "name": "num_steps",
+          "unit": "",
+          "value": 10
+        },
+        {
+          "label": "Num Cycles",
+          "name": "num_cycles",
+          "unit": "",
+          "value": 1
+        },
+        {
+          "label": "Use Msa",
+          "name": "use_msa",
+          "unit": "",
+          "value": false
+        },
+        {
+          "label": "Use Template",
+          "name": "use_template",
+          "unit": "",
+          "value": false
+        },
+        {
+          "label": "Seeds",
+          "name": "seeds",
+          "unit": "",
+          "value": ""
+        },
+        {
+          "label": "Dtype",
+          "name": "dtype",
+          "unit": "",
+          "value": "fp32"
+        },
+        {
+          "label": "Use Default Params",
+          "name": "use_default_params",
+          "unit": "",
+          "value": false
+        },
+        {
+          "label": "Enable Cache",
+          "name": "enable_cache",
+          "unit": "",
+          "value": true
+        },
+        {
+          "label": "Enable Tf32",
+          "name": "enable_tf32",
+          "unit": "",
+          "value": true
+        },
+        {
+          "label": "Deterministic",
+          "name": "deterministic",
+          "unit": "",
+          "value": false
+        },
+        {
+          "label": "Need Atom Confidence",
+          "name": "need_atom_confidence",
+          "unit": "",
+          "value": true
+        },
+        {
+          "label": "Use Tfg Guidance",
+          "name": "use_tfg_guidance",
+          "unit": "",
+          "value": false
+        }
+      ],
+      "started_at": "2026-10-20T23:27:22.799965+08:00",
+      "submitted_at": "2026-10-20T15:27:22.750611+00:00",
+      "walltime_seconds": 53.457809925079346
+    },
+    "schema_version": 3,
+    "status": "finished",
+    "storyboard": {
+      "entrypoint": "index.js",
+      "entrypoint_url": "/compute/api/results/2f16c036ae748053fe93825e17e464d4/storyboard/index.js",
+      "identifier": "opendde-result",
+      "optional": [
+        "full_confidences"
+      ],
+      "requires": [
+        "structures",
+        "summaries"
+      ]
+    },
+    "task_id": "2f16c036ae748053fe93825e17e464d4",
+    "task_type": "opendde",
+    "terminal": true,
+    "total_size": 17515,
+    "views": [
+      {
+        "description": "OpenDDE structure samples in the deterministic artifact order declared by the run.",
+        "id": "predicted_structures",
+        "mapping": {
+          "confidence_encoding": "plddt_bfactor"
+        },
+        "plugin": "candidate-collection",
+        "role": "primary",
+        "sources": {
+          "candidates": [
+            "tiny/seed_101/predictions/tiny_sample_0.cif"
+          ]
+        },
+        "title": "Predicted all-atom structures"
+      },
+      {
+        "description": "Per-sample confidence and ranking values published by OpenDDE.",
+        "id": "model_confidence",
+        "mapping": {
+          "fields": [
+            {
+              "direction": "higher",
+              "label": "pLDDT",
+              "path": "plddt",
+              "unit": "score"
+            },
+            {
+              "direction": "lower",
+              "label": "gPDE",
+              "path": "gpde",
+              "unit": "score"
+            },
+            {
+              "direction": "higher",
+              "label": "pTM",
+              "path": "ptm",
+              "unit": "score"
+            },
+            {
+              "direction": "higher",
+              "label": "ipTM",
+              "path": "iptm",
+              "unit": "score"
+            },
+            {
+              "direction": "higher",
+              "label": "Ranking score",
+              "path": "ranking_score",
+              "unit": "score"
+            },
+            {
+              "direction": "lower",
+              "label": "Clash",
+              "path": "has_clash",
+              "unit": "boolean"
+            }
+          ]
+        },
+        "plugin": "scalar-summary",
+        "role": "evidence",
+        "sources": {
+          "data": [
+            "tiny/seed_101/predictions/tiny_summary_confidence_sample_0.json"
+          ]
+        },
+        "title": "Model confidence summary"
+      }
+    ]
+  },
+  "storyboard": {
+    "entrypoint": "index.js",
+    "sha256": "0f029448f6166a5fa3bc790bfc746218009dba8a03f037a7850853f796374f09",
+    "source": "/* OpenDDE scientific result composition. */\n/* SPDX-License-Identifier: GPL-3.0-only */\n\nconst MATRIX_TYPES = [\n  { key: \"token_pair_pae\", label: \"Predicted aligned error\", short: \"PAE\", unit: \"\u00c5\", direction: \"Lower is better\" },\n  { key: \"token_pair_pde\", label: \"Predicted distance error\", short: \"PDE\", unit: \"\u00c5\", direction: \"Lower is better\" },\n  { key: \"contact_probs\", label: \"Contact probability\", short: \"Contact probability\", unit: \"probability\", direction: \"Higher is better\" },\n];\nconst STYLE = `\n.opendde-result { display: grid; gap: 1rem; padding: 1rem; }\n.opendde-result h2, .opendde-result h3, .opendde-result p { margin: 0; }\n.opendde-section { display: grid; gap: 0.55rem; }\n.opendde-section[hidden] { display: none; }\n.opendde-candidates, .opendde-actions { display: flex; flex-wrap: wrap; gap: 0.45rem; }\n.opendde-candidates button[aria-current=\"true\"] { outline: 2px solid var(--accent); outline-offset: 2px; }\n`;\n\nfunction list(value) { return Array.isArray(value) ? value : value ? [value] : []; }\nfunction name(artifact) { return artifact.name || String(artifact.path || \"\").split(\"/\").pop(); }\nfunction label(artifact, index) { const sample = name(artifact).match(/_sample_(\\d+)\\.cif$/); return sample ? \"Candidate \" + (index + 1) + \" - sample \" + sample[1] : \"Candidate \" + (index + 1); }\nfunction section(title, note) { const node = document.createElement(\"section\"); node.className = \"opendde-section\"; const heading = document.createElement(\"h3\"); heading.textContent = title; node.appendChild(heading); if (note) { const text = document.createElement(\"p\"); text.className = \"scientific-note\"; text.textContent = note; node.appendChild(text); } return node; }\nfunction message(text) { const node = document.createElement(\"p\"); node.className = \"preview-message\"; node.textContent = text; return node; }\nasync function fetchSummary(artifact, signal) { const response = window.REvoDesignAuth ? await window.REvoDesignAuth.authFetch(artifact.url, { signal }) : await fetch(artifact.url, { credentials: \"same-origin\", signal }); if (!response.ok) throw new Error(\"The OpenDDE confidence summary could not be loaded.\"); return response.json(); }\nfunction matrixRows(projection) { if (!projection || projection.shape.length !== 2) return null; const [rows, columns] = projection.shape; if (rows < 1 || columns !== rows) return null; return Array.from({ length: rows }, (_, row) => projection.values.slice(row * columns, (row + 1) * columns)); }\n\nexport default {\n  async mount(host, context) {\n    const Scientific = window.REvoComputeScientific;\n    if (!Scientific || typeof Scientific.loadNumericProjection !== \"function\") throw new Error(\"Scientific result components are unavailable.\");\n    const structures = list(context.files.get(\"structures\")); const summaries = list(context.files.get(\"summaries\")); const full = list(context.files.get(\"full_confidences\"));\n    const summariesAligned = summaries.length === structures.length; const fullAligned = full.length === structures.length;\n    let generation = 0; let confidencePlot = null; let pairMatrix = null;\n    const root = document.createElement(\"div\"); root.className = \"opendde-result\"; const style = document.createElement(\"style\"); style.textContent = STYLE;\n    const heading = document.createElement(\"h2\"); heading.textContent = \"OpenDDE prediction\"; const intro = document.createElement(\"p\"); intro.textContent = \"All-atom structure samples with candidate-matched confidence reported by OpenDDE.\"; root.append(style, heading, intro);\n    const candidates = section(\"Structure samples\", \"Selecting a sample updates its structure controls and every available confidence view.\"); const candidateHost = document.createElement(\"div\"); candidateHost.className = \"opendde-candidates\"; candidates.appendChild(candidateHost); const actions = document.createElement(\"div\"); actions.className = \"opendde-actions\"; candidates.appendChild(actions); root.appendChild(candidates);\n    const metrics = section(\"Model confidence\", \"Published values are shown without client-side rescaling. pLDDT and pTM are model confidence estimates, not experimental validation.\"); const metricHost = document.createElement(\"div\"); metrics.appendChild(metricHost); root.appendChild(metrics);\n    const local = section(\"Atom confidence\", \"OpenDDE atom pLDDT is shown on its published 0-1 scale.\"); const localHost = document.createElement(\"div\"); localHost.className = \"metric-chart\"; local.appendChild(localHost); local.hidden = true; root.appendChild(local);\n    const pairs = section(\"Pairwise confidence\", null); pairs.hidden = true; const pairToolbar = document.createElement(\"div\"); pairToolbar.className = \"scientific-toolbar\"; const pairLabel = document.createElement(\"label\"); pairLabel.textContent = \"Matrix \"; const pairSelect = document.createElement(\"select\"); pairSelect.setAttribute(\"aria-label\", \"Pairwise confidence matrix\"); pairLabel.appendChild(pairSelect); pairToolbar.appendChild(pairLabel); pairs.appendChild(pairToolbar);\n    const pairWarning = document.createElement(\"p\"); pairWarning.className = \"preview-message\"; pairWarning.hidden = true; pairs.appendChild(pairWarning);\n    const pairNote = document.createElement(\"p\"); pairNote.className = \"scientific-note\"; pairs.appendChild(pairNote); const plot = document.createElement(\"div\"); plot.className = \"pair-matrix-plot\"; const figure = document.createElement(\"div\"); figure.className = \"pair-matrix-figure\"; const canvas = document.createElement(\"canvas\"); canvas.className = \"pair-matrix-canvas\"; canvas.tabIndex = 0; canvas.setAttribute(\"role\", \"grid\"); figure.appendChild(canvas); plot.appendChild(figure); pairs.appendChild(plot); const readout = document.createElement(\"p\"); readout.className = \"matrix-readout\"; readout.setAttribute(\"role\", \"status\"); pairs.appendChild(readout); root.appendChild(pairs); host.replaceChildren(root);\n\n    async function optionalProjection(artifact, key, signal) {\n      if (!artifact || !artifact.ndarray_url) return { projection: null, error: null };\n      try { return { projection: await Scientific.loadNumericProjection(artifact, { key, signal }), error: null }; }\n      catch (error) {\n        if (error.name === \"AbortError\") throw error;\n        return { projection: null, error };\n      }\n    }\n    function showMatrix(entry) {\n      if (pairMatrix) pairMatrix.destroy();\n      const values = matrixRows(entry.projection); const xLabels = Array.from({ length: entry.projection.shape[1] }, (_, index) => String(index + 1)); const yLabels = Array.from({ length: entry.projection.shape[0] }, (_, index) => String(index + 1));\n      pairMatrix = new Scientific.PairMatrix({ figure, canvas, readout, observe: plot, minimum: 0, decimals: entry.type.unit === \"probability\" ? 2 : 1, xTitle: \"Aligned token\", yTitle: \"Scored token\", legendTitle: entry.type.short, unit: entry.type.unit, formatReadout: ({ xLabel, yLabel, value }) => \"Aligned token \" + xLabel + \" \u00b7 Scored token \" + yLabel + \" \u00b7 \" + (Number.isFinite(value) ? value.toFixed(entry.type.unit === \"probability\" ? 2 : 1) + \" \" + entry.type.unit : \"N/A\") });\n      pairMatrix.setData({ values, xLabels, yLabels }); pairNote.textContent = entry.type.label + \" for \" + entry.projection.shape[0] + \" \u00d7 \" + entry.projection.shape[1] + \" tokens. \" + entry.type.direction + \".\";\n    }\n    function clearCandidate(messageText) {\n      actions.replaceChildren(); metricHost.replaceChildren(message(messageText));\n      if (confidencePlot) { confidencePlot.destroy(); confidencePlot = null; }\n      localHost.replaceChildren(); local.hidden = true;\n      pairSelect.replaceChildren(); pairToolbar.hidden = true; pairWarning.hidden = true; pairWarning.textContent = \"\";\n      pairNote.textContent = \"\"; plot.hidden = true; readout.hidden = true; readout.textContent = \"\"; pairs.hidden = true;\n      if (pairMatrix) { pairMatrix.destroy(); pairMatrix = null; }\n    }\n    async function select(structure, index, request) {\n      const current = ++generation; const summary = summariesAligned ? summaries[index] : null; const fullArtifact = fullAligned ? full[index] : null;\n      clearCandidate(\"Loading candidate confidence...\");\n      if (!summary) { clearCandidate(\"No confidence summary matches this sample.\"); return; }\n      try {\n        const payload = await fetchSummary(summary, request.signal); const atomResult = await optionalProjection(fullArtifact, \"atom_plddt\", request.signal); const matrixValues = [];\n        for (const type of MATRIX_TYPES) matrixValues.push(await optionalProjection(fullArtifact, type.key, request.signal));\n        if (current !== generation || !request.current()) return;\n        actions.replaceChildren(); const open = document.createElement(\"button\"); open.type = \"button\"; open.className = \"btn btn-soft\"; open.textContent = \"Open selected structure\"; open.addEventListener(\"click\", () => context.services.openFile(structure)); actions.appendChild(open); if (fullArtifact) { const download = document.createElement(\"button\"); download.type = \"button\"; download.className = \"btn btn-soft\"; download.textContent = \"Download full confidence\"; download.addEventListener(\"click\", () => context.services.downloadFile(fullArtifact)); actions.appendChild(download); }\n        new Scientific.ScalarMetricGrid(metricHost, [{ label: \"pLDDT\", value: payload.plddt, unit: \"score\", meaning: \"Higher is better\" }, { label: \"pTM\", value: payload.ptm, unit: \"score\", meaning: \"Higher is better\" }, { label: \"ipTM\", value: payload.iptm, unit: \"score\", meaning: \"Higher is better\" }, { label: \"gPDE\", value: payload.gpde, unit: \"score\", meaning: \"Lower is better\" }, { label: \"Ranking score\", value: payload.ranking_score, unit: \"score\", meaning: \"Higher is better\" }, { label: \"Clash\", value: payload.has_clash == null ? null : (payload.has_clash ? \"Yes\" : \"No\") }]);\n        if (confidencePlot) { confidencePlot.destroy(); confidencePlot = null; }\n        local.hidden = false; localHost.replaceChildren();\n        const atomConfidence = atomResult.projection;\n        if (atomConfidence && atomConfidence.shape.length === 1 && atomConfidence.values.length) {\n          try { confidencePlot = new Scientific.LocalConfidenceSeries(localHost, { series: [{ label: \"Atom pLDDT\", values: atomConfidence.values }], xLabel: \"Atom index\", yLabel: \"Atom pLDDT\", yMin: 0, yMax: 1, unit: \"score\", direction: \"Higher is better\" }); }\n          catch (_error) { localHost.replaceChildren(message(\"Atom confidence could not be displayed.\")); }\n        } else if (atomResult.error) localHost.replaceChildren(message(\"Atom confidence could not be displayed.\"));\n        else local.hidden = true;\n        const entries = MATRIX_TYPES.map((type, position) => ({ type, projection: matrixValues[position].projection, error: matrixValues[position].error }));\n        const available = entries.filter((entry) => matrixRows(entry.projection)); const hasFailure = entries.some((entry) => entry.error || (entry.projection && !matrixRows(entry.projection)));\n        pairs.hidden = !available.length && !hasFailure; pairWarning.hidden = !hasFailure; pairWarning.textContent = hasFailure ? \"Some pairwise confidence data could not be displayed.\" : \"\";\n        pairSelect.replaceChildren(); available.forEach((entry, position) => { const option = document.createElement(\"option\"); option.value = String(position); option.textContent = entry.type.short; pairSelect.appendChild(option); }); if (available.length) { pairToolbar.hidden = false; plot.hidden = false; readout.hidden = false; pairSelect.onchange = () => showMatrix(available[Number(pairSelect.value)]); try { showMatrix(available[0]); } catch (_error) { pairWarning.hidden = false; pairWarning.textContent = \"Some pairwise confidence data could not be displayed.\"; plot.hidden = true; readout.hidden = true; } } else { pairToolbar.hidden = true; plot.hidden = true; readout.hidden = true; if (pairMatrix) { pairMatrix.destroy(); pairMatrix = null; } }\n        return true;\n      } catch (error) { if (error.name === \"AbortError\" || !request.current()) return; clearCandidate(error.message || \"OpenDDE confidence could not be loaded.\"); }\n    }\n    const selector = new Scientific.CandidateSelector(candidateHost, { items: structures, store: context.selection, label, onSelect: select }); if (structures.length) await selector.select(0); else candidateHost.replaceChildren(message(\"No structure sample was published.\"));\n    return { destroy() { generation += 1; selector.destroy(); if (confidencePlot) confidencePlot.destroy(); if (pairMatrix) pairMatrix.destroy(); } };\n  },\n};\n"
+  },
+  "task": {
+    "display_name": "opendde_tiny.json",
+    "id": "2f16c036ae748053fe93825e17e464d4",
+    "type": "opendde"
+  }
+}

@@ -29,13 +29,20 @@ def production_bundle(monkeypatch):
 
 
 def capture(page: Page, tmp_path: Path, name: str) -> None:
+    """Save evidence screenshots at each width.
+
+    The captures are evidence, not assertions, and software-GL ``Page.captureScreenshot``
+    costs 10-25 s apiece for the fpocket stage on a loaded two-core runner. Playwright's
+    30 s default therefore fails the case on load alone (it does so on ``main`` too); the
+    budget below is four times the slowest successful capture measured under contention.
+    """
     page.evaluate('document.fonts.ready')
     for width in (1440, 1024, 390):
         page.set_viewport_size({'width': width, 'height': 1050 if name.startswith('fpocket') else 1080})
         page.evaluate('scrollTo(0, 0)')
-        page.screenshot(path=str(tmp_path / f'{name}-{width}-viewport.png'))
+        page.screenshot(path=str(tmp_path / f'{name}-{width}-viewport.png'), timeout=120_000)
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), (name, page.evaluate("[...document.querySelectorAll('body *')].filter(n=>n.getBoundingClientRect().right>innerWidth+1).slice(0,10).map(n=>[n.className,Math.round(n.getBoundingClientRect().right)])"))
-        page.screenshot(path=str(tmp_path / f'{name}-{width}.png'), full_page=True)
+        page.screenshot(path=str(tmp_path / f'{name}-{width}.png'), full_page=True, timeout=120_000)
 
 
 def test_preparation_and_matrix_use_the_production_bundle(page: Page, production_bundle, tmp_path: Path) -> None:

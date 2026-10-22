@@ -1,0 +1,45 @@
+# Logical result files published by the PLACER Task.
+#
+# PLACER publishes one protein–ligand complex per sample beside one table of the
+# same sample's metrics. The complex is the primary view's candidate source; the
+# metrics table is the evidence view's table. `structures` is the declared input
+# role's name and holds more than one uploaded complex, so the input snapshot is
+# declared as a provenance set rather than a single file.
+result:
+  files:
+    complexes:
+      pattern: '*_model.pdb'
+      cardinality: many
+      required: true
+      type: structure
+      role: evidence
+    model_scores:
+      pattern: '*.csv'
+      cardinality: one
+      required: true
+      type: table
+      role: evidence
+    input_structures:
+      pattern: 'debug/inputs/structures/*'
+      cardinality: many
+      required: true
+      type: structure
+      role: provenance
+    submission:
+      path: debug/submission.json
+      cardinality: one
+      required: true
+      type: json
+      role: provenance
+    citations:
+      path: citations.bib
+      cardinality: one
+      required: true
+      type: text
+      role: provenance
+    execution_records:
+      pattern: 'execution/*'
+      cardinality: many
+      required: true
+      type: text
+      role: diagnostic

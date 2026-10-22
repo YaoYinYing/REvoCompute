@@ -4,8 +4,15 @@ import { resultFileName, type ArtifactRole, type LogicalResultFile, type ResultA
 import { setButtonIcon } from '../../components/icons';
 import { t } from '../../app/i18n';
 import { buildArtifactTree, filterArtifacts, localName, type ArtifactTreeNode } from './artifact-tree';
-import { artifactCapability, createBasicRenderers, RendererRegistry, ViewRendererRegistry } from './renderer-registry';
+import { artifactCapability, createBasicRenderers, firstViewSource, RendererRegistry, ViewRendererRegistry,
+  type ResolvedViewSources, type RendererContext } from './renderer-registry';
+import { createTrajectoryViewRenderer } from './trajectory-view';
 import { createMatrixViewRenderer } from './matrix-view';
+import { createScalarSummaryViewRenderer } from './scalar-summary-view';
+import { createEntityTableViewRenderer } from './entity-table-view';
+import { createMetricSeriesViewRenderer } from './metric-series-view';
+import { createEvidenceBundleViewRenderer } from './evidence-bundle-view';
+import { createCandidateCollectionViewRenderer } from './candidate-collection-view';
 import type { MolecularViewerFactory } from './molecular/viewer-contract';
 import { StructureController } from './molecular/structure-controller';
 import { installScientificPrimitives } from './scientific';
@@ -50,6 +57,9 @@ export class ResultWorkspace {
   private readonly rendererRegistry = new RendererRegistry();
   private readonly viewRenderers = new ViewRendererRegistry();
   private readonly structure: StructureController;
+  // A declared view's candidate is a different structure from the page's own, so a
+  // view stage is a second, independent viewer rather than the page's one.
+  private viewStructure: StructureController | null = null;
   private readonly nodes: WorkspaceNodes;
   private readonly storyboard: StoryboardHost;
   private manifest: ResultManifest | null = null;
@@ -66,13 +76,19 @@ export class ResultWorkspace {
   private readonly geometry: StructureController;
   private previewGeneration = 0;
   private storyboardStructureGeneration = 0;
+  private storyboardStructure: LogicalResultFile | null = null;
   private structureRepresentation = 'cartoon_ligand';
   private structureColor = 'rainbow';
   private structureTheme = theme();
+  // A view stage's toolbar settings are its own, so driving one stage never
+  // changes how the page's stage (or the next view's) is drawn.
+  private viewStructureRepresentation = 'cartoon_ligand';
+  private viewStructureColor = 'rainbow';
+  private viewStructureTheme = theme();
   private readonly directoryExpansion = new Map<string, boolean>();
   private readonly listeners = new AbortController();
 
-  constructor(private readonly root: HTMLElement, createViewer: MolecularViewerFactory) {
+  constructor(private readonly root: HTMLElement, private readonly createViewer: MolecularViewerFactory) {
     installScientificPrimitives(); this.geometry = new StructureController(createViewer, { controlsCollapsed: true }); this.structure = new StructureController(createViewer, {
       selectionEnabled: true, controlsCollapsed: true,
       onSelectionChanged: (residues) => this.storyboard.setMolecularSelection(residues),
@@ -83,11 +99,12 @@ export class ResultWorkspace {
       mountView: async (viewId, host, signal) => {
         const view = this.manifest?.views?.find(item => item.id === viewId);
         if (!view) throw new Error(t('results.viewNoArtifact'));
-        const artifact = this.artifactForView(view);
+        const sources = this.sourcesForView(view);
+        const artifact = firstViewSource(sources);
         if (!artifact) throw new Error(t('results.viewNoArtifact'));
-        const context = { signal, taskId: this.taskId };
+        const context = this.rendererContext(signal);
         const renderer = this.viewRenderers.resolve(view);
-        if (renderer) return renderer.render(view, artifact, host, context);
+        if (renderer) return renderer.render(view, sources, host, context);
         return this.rendererRegistry.resolve(artifact)?.render(artifact, host, context);
       },
       focusStructure: (selection) => this.structure.focus(selection), selectStructure: (selection) => this.structure.select(selection),
@@ -99,8 +116,14 @@ export class ResultWorkspace {
       closeGeometry: () => { this.geometry.dispose(); this.nodes.preview.querySelector('.storyboard-geometry-panel')?.remove(); },
     });
     createBasicRenderers().forEach((renderer) => this.rendererRegistry.register(renderer));
-    this.rendererRegistry.register({ id: 'structure', render: (artifact, host) => this.renderStructure(artifact, host) });
+    this.rendererRegistry.register({ id: 'structure', render: (artifact, host) => this.renderStructure(artifact, host, this.structure) });
     this.viewRenderers.register(createMatrixViewRenderer());
+    this.viewRenderers.register(createTrajectoryViewRenderer(createViewer, theme));
+    this.viewRenderers.register(createEntityTableViewRenderer());
+    this.viewRenderers.register(createMetricSeriesViewRenderer());
+    this.viewRenderers.register(createScalarSummaryViewRenderer());
+    this.viewRenderers.register(createEvidenceBundleViewRenderer());
+    this.viewRenderers.register(createCandidateCollectionViewRenderer());
     this.bind();
   }
 
@@ -173,9 +196,9 @@ export class ResultWorkspace {
     this.syncRail();
   }
 
-  private readonly resize = (): void => this.structure.resize();
+  private readonly resize = (): void => { this.structure.resize(); this.viewStructure?.resize(); };
   private readonly pagehide = (event: PageTransitionEvent): void => { if (!event.persisted) this.destroy(); };
-  private readonly pageshow = (event: PageTransitionEvent): void => { if (event.persisted) this.structure.resize(); };
+  private readonly pageshow = (event: PageTransitionEvent): void => { if (event.persisted) this.resize(); };
 
   private renderPending(payload: TaskStatus): void {
     const terminal = payload.terminal === true; const status = payload.status || 'running';
@@ -229,7 +252,8 @@ export class ResultWorkspace {
   private primaryArtifact(): ResultArtifact | null {
     const artifacts = this.manifest?.artifacts || [];
     const view = this.manifest?.views?.find((item) => item.role === 'primary');
-    const path = view ? this.artifactForView(view)?.path : null;
+    const source = view ? firstViewSource(this.sourcesForView(view)) : null;
+    const path = source && 'path' in source ? source.path : null;
     return artifacts.find((artifact) => artifact.path === path) || artifacts.find((artifact) => artifact.role === 'primary') || artifacts[0] || null;
   }
 
@@ -246,7 +270,8 @@ export class ResultWorkspace {
 
   private async openView(view: ResultView): Promise<void> {
     const generation = ++this.previewGeneration;
-    const artifact = this.artifactForView(view);
+    const sources = this.sourcesForView(view);
+    const artifact = firstViewSource(sources);
     if (!artifact) {
       // Leave no previous renderer observing above the error message.
       this.destroyViewRenderer(); this.storyboard.destroy();
@@ -255,13 +280,46 @@ export class ResultWorkspace {
       this.renderPreviewError(t('results.viewNoArtifact'));
       return;
     }
-    await this.renderView(view, artifact, generation); if (generation !== this.previewGeneration) return;
+    await this.renderView(view, sources, artifact, generation); if (generation !== this.previewGeneration) return;
     this.markTab(view.id);
   }
 
-  private artifactForView(view: ResultView): ResultArtifact | null {
-    const path = Object.values(view.sources || {}).flat()[0];
-    return this.manifest?.artifacts.find((item) => item.path === path) || null;
+  /**
+   * Resolve every declared source of a view, in declared order.
+   *
+   * The Server already resolved each selector to published paths; the browser
+   * only joins those paths to the manifest artifacts. A source whose paths are
+   * absent resolves to an empty list so a renderer can say which source is
+   * missing instead of silently receiving a different one.
+   */
+  private sourcesForView(view: ResultView): ResolvedViewSources {
+    const artifacts = this.manifest?.artifacts || [];
+    const byPath = new Map(artifacts.map((artifact) => [artifact.path, artifact]));
+    // A declared path that is also a logical file is that file to a reader: the view
+    // then keeps the Task-declared name, the file route, and its table URL. The join
+    // is the exact published path, so an artifact no logical file publishes keeps its
+    // own path -- that path is its identity, not a name to be shortened.
+    const logical = new Map<string, LogicalResultFile>();
+    for (const files of Object.values(this.manifest?.result?.files || {})) {
+      for (const file of files) if (!logical.has(file.path)) logical.set(file.path, file);
+    }
+    const sources: ResolvedViewSources = {};
+    for (const [name, paths] of Object.entries(view.sources || {})) {
+      sources[name] = (paths || []).flatMap((path) => logical.get(path) || byPath.get(path) || []);
+    }
+    return sources;
+  }
+
+  // A view's candidate is not the page's structure: it opens in a view-owned stage,
+  // with its own viewer and toolbar, so mounting one leaves the page's stage drawn.
+  // The one suppression that remains is a structure the page already draws.
+  private rendererContext(signal: AbortSignal): RendererContext {
+    const structure = this.viewStructure
+      || (this.viewStructure = new StructureController(this.createViewer, { selectionEnabled: true, controlsCollapsed: true }));
+    return { signal, taskId: this.taskId, openStructure: (artifact, host) => this.renderStructure(artifact, host, structure),
+      closeStructure: (host) => structure.disposeIfIn(host), selectStructure: (selection) => structure.select(selection),
+      drawsStructure: (artifact) => this.storyboardStructure !== null
+        && this.storyboardStructure.path === artifact.path };
   }
 
   private openViewById(viewId: string): Promise<void> {
@@ -273,7 +331,7 @@ export class ResultWorkspace {
   // (no table, malformed data, over budget, request failure) states the reason and falls back
   // to the generic artifact renderer, so a view is never blanker than its source artifact.
   // Every declared view keeps its own title and description, including on that fallback.
-  private async renderView(view: ResultView, artifact: ResultFile, generation: number): Promise<void> {
+  private async renderView(view: ResultView, sources: ResolvedViewSources, artifact: ResultFile, generation: number): Promise<void> {
     const renderer = this.viewRenderers.resolve(view);
     if (!renderer) {
       await this.openArtifact(artifact, generation);
@@ -281,15 +339,15 @@ export class ResultWorkspace {
       this.nodes.previewTitle.textContent = view.title; this.nodes.previewDescription.textContent = view.description || '';
       return;
     }
-    this.storyboardStructureGeneration += 1;
+    this.storyboardStructureGeneration += 1; this.storyboardStructure = null;
     if ((this.nodes.rail as HTMLDialogElement).open) (this.nodes.rail as HTMLDialogElement).close();
-    this.destroyViewRenderer(); this.geometry.dispose(); this.storyboard.destroy(); this.cancelRender(); this.selectArtifact(artifact); this.markTab(null);
+    this.destroyViewRenderer(); this.geometry.dispose(); this.storyboard.destroy(); this.cancelRender(); this.structure.dispose(); this.selectArtifact(artifact); this.markTab(null);
     const fileName = resultFileName(artifact);
     this.nodes.previewTitle.textContent = view.title; this.nodes.previewDescription.textContent = view.description || '';
     this.nodes.download.hidden = false; this.nodes.download.href = downloadUrl(artifact); this.nodes.download.title = fileName;
     this.nodes.download.textContent = t('results.downloadNamed', { name: localName(fileName) });
     const controller = new AbortController(); this.renderController = controller; this.nodes.preview.setAttribute('aria-busy', 'true');
-    try { this.viewRenderer = (await renderer.render(view, artifact, this.nodes.preview, { signal: controller.signal, taskId: this.taskId })) || null; }
+    try { this.viewRenderer = (await renderer.render(view, sources, this.nodes.preview, this.rendererContext(controller.signal))) || null; }
     catch (error) {
       if ((error as Error).name === 'AbortError' || generation !== this.previewGeneration) return;
       this.destroyViewRenderer();
@@ -306,12 +364,16 @@ export class ResultWorkspace {
     this.nodes.preview.prepend(element('p', 'result-note', t('results.viewFallback', { reason })));
   }
 
-  private destroyViewRenderer(): void { this.viewRenderer?.destroy(); this.viewRenderer = null; }
+  private destroyViewRenderer(): void {
+    this.viewRenderer?.destroy(); this.viewRenderer = null;
+    this.viewStructure?.dispose(); this.viewStructure = null;
+  }
 
   private async openStoryboard(): Promise<void> {
     const manifest = this.manifest; if (!manifest?.storyboard) return;
     const generation = ++this.previewGeneration;
-    this.storyboardStructureGeneration += 1; this.cancelRender(); this.structure.dispose(); this.geometry.dispose(); this.nodes.preview.setAttribute('aria-busy', 'true');
+    this.storyboardStructureGeneration += 1; this.storyboardStructure = null;
+    this.destroyViewRenderer(); this.cancelRender(); this.structure.dispose(); this.geometry.dispose(); this.nodes.preview.setAttribute('aria-busy', 'true');
     this.nodes.previewTitle.textContent = t('results.scientific'); this.nodes.previewDescription.textContent = ''; this.nodes.download.hidden = true;
     try { const current = await this.storyboard.mount(manifest.storyboard, manifest); if (current && generation === this.previewGeneration) this.markTab('storyboard'); }
     catch (error) { if (generation === this.previewGeneration) this.renderPreviewError((error as Error).message || t('results.storyboardUnavailable')); }
@@ -329,7 +391,12 @@ export class ResultWorkspace {
     let panel = slot.querySelector<HTMLElement>(':scope > .storyboard-structure-panel');
     if (!panel) { panel = element('section', 'storyboard-structure-panel'); slot.append(panel); }
     panel.setAttribute('aria-busy', 'true');
-    try { await this.renderStructure(file, panel); if (generation === this.storyboardStructureGeneration) panel.dataset.ready = 'true'; }
+    try {
+      await this.renderStructure(file, panel, this.structure);
+      // Only a mount that actually landed makes this the structure the page draws;
+      // a failed mount must not suppress the declared view's own stage.
+      if (generation === this.storyboardStructureGeneration) { this.storyboardStructure = file; panel.dataset.ready = 'true'; }
+    }
     catch (error) {
       if (generation !== this.storyboardStructureGeneration || (error as Error).name === 'AbortError') return;
       this.structure.dispose(); panel.replaceChildren(element('p', 'result-empty', (error as Error).message || t('results.structureUnavailable')));
@@ -338,7 +405,7 @@ export class ResultWorkspace {
 
   async openArtifact(artifact: ResultFile, requestedGeneration?: number): Promise<void> {
     const generation = requestedGeneration ?? ++this.previewGeneration;
-    this.storyboardStructureGeneration += 1;
+    this.storyboardStructureGeneration += 1; this.storyboardStructure = null;
     if ((this.nodes.rail as HTMLDialogElement).open) (this.nodes.rail as HTMLDialogElement).close();
     this.destroyViewRenderer(); this.geometry.dispose(); this.storyboard.destroy(); this.cancelRender(); this.selectArtifact(artifact); this.markTab(null);
     const fileName = resultFileName(artifact); this.nodes.previewTitle.textContent = localName(fileName); this.nodes.previewDescription.textContent = formatBytes(artifact.size);
@@ -352,21 +419,27 @@ export class ResultWorkspace {
     finally { if (!controller.signal.aborted && generation === this.previewGeneration) this.nodes.preview.setAttribute('aria-busy', 'false'); }
   }
 
-  private async renderStructure(artifact: ResultFile, host: HTMLElement): Promise<void> {
-    let viewport = host.querySelector<HTMLElement>('.structure-viewport'); let viewerHost = viewport?.querySelector<HTMLElement>('.structure-host');
+  private async renderStructure(artifact: ResultFile, host: HTMLElement, controller: StructureController): Promise<void> {
+    // A stage left by another view renderer (the trajectory stage shares these
+    // classes) is not reused: the new renderer starts from its own viewport.
+    let viewport = host.querySelector<HTMLElement>('.structure-viewport:not(.trajectory-viewport)');
+    let viewerHost = viewport?.querySelector<HTMLElement>('.structure-host');
     if (!viewport || !viewerHost) {
       viewport = element('section', 'structure-viewport');
       viewerHost = element('div', 'structure-host'); viewerHost.setAttribute('role', 'region'); viewerHost.setAttribute('aria-label', t('results.structure.viewerLabel'));
       viewport.append(viewerHost); host.replaceChildren(viewport);
     }
     viewport.querySelector('.structure-toolbar')?.remove();
-    const shelf = this.nodes.preview.querySelector<HTMLElement>('[data-structure-tools]');
-    if (shelf) shelf.replaceChildren(this.structureToolbar(artifact, viewport));
-    else viewport.prepend(this.structureToolbar(artifact, viewport));
-    await this.structure.mount(viewerHost, artifact, this.structureTheme);
+    // The page stage puts its toolbar in the storyboard's own shelf; a view stage
+    // keeps its toolbar in its own viewport, so the controls drive its own viewer.
+    const shelf = controller === this.structure ? this.nodes.preview.querySelector<HTMLElement>('[data-structure-tools]') : null;
+    if (shelf) shelf.replaceChildren(this.structureToolbar(artifact, viewport, controller));
+    else viewport.prepend(this.structureToolbar(artifact, viewport, controller));
+    await controller.mount(viewerHost, artifact, controller === this.structure ? this.structureTheme : this.viewStructureTheme);
   }
 
-  private structureToolbar(artifact: ResultFile, viewport: HTMLElement): HTMLElement {
+  private structureToolbar(artifact: ResultFile, viewport: HTMLElement, owner: StructureController): HTMLElement {
+    const own = owner === this.structure;
     const toolbar = element('div', 'structure-toolbar'); toolbar.setAttribute('role', 'toolbar'); toolbar.setAttribute('aria-label', t('results.structure.controls'));
     const representations: Array<[string, string]> = [['cartoon', t('results.structure.cartoon')], ['cartoon_ligand', t('results.structure.cartoonLigand')], ['sticks', t('results.structure.sticks')], ['surface_ligand', t('results.structure.surface')]];
     const selectControl = (label: string, options: Array<[string, string]>, value: string, changed: (value: string) => void): HTMLElement => {
@@ -374,17 +447,28 @@ export class ResultWorkspace {
       for (const [id, title] of options) select.append(new Option(title, id, false, id === value));
       select.addEventListener('change', () => changed(select.value)); field.append(select); return field;
     };
-    const representationGroup = selectControl(t('results.structure.representation'), representations, this.structureRepresentation, value => { this.structureRepresentation = value; void this.structure.setRepresentation(value); });
+    const representationGroup = selectControl(t('results.structure.representation'), representations, own ? this.structureRepresentation : this.viewStructureRepresentation, value => {
+      if (own) this.structureRepresentation = value; else this.viewStructureRepresentation = value;
+      void owner.setRepresentation(value);
+    });
     const colours: Array<[string, string]> = [['rainbow', t('results.structure.sequence')], ['chain', t('results.structure.chain')]];
     if ('confidence_encoding' in artifact && artifact.confidence_encoding) colours.push(['confidence', t('results.structure.confidence')]);
-    if (this.structureColor === 'confidence' && colours.length === 2) this.structureColor = 'rainbow';
-    const colorGroup = selectControl(t('results.structure.colour'), colours, this.structureColor, value => { this.structureColor = value; void this.structure.setColor(value); const legend = this.nodes.preview.querySelector<HTMLElement>('[data-structure-legend]'); if (legend) legend.textContent = value === 'rainbow' ? 'Sequence N → C' : colours.find(([id]) => id === value)?.[1] || value; });
+    if ((own ? this.structureColor : this.viewStructureColor) === 'confidence' && colours.length === 2) {
+      if (own) this.structureColor = 'rainbow'; else this.viewStructureColor = 'rainbow';
+    }
+    const colorGroup = selectControl(t('results.structure.colour'), colours, own ? this.structureColor : this.viewStructureColor, value => {
+      if (own) this.structureColor = value; else this.viewStructureColor = value;
+      void owner.setColor(value); const legend = this.nodes.preview.querySelector<HTMLElement>('[data-structure-legend]'); if (legend) legend.textContent = value === 'rainbow' ? 'Sequence N → C' : colours.find(([id]) => id === value)?.[1] || value;
+    });
     const actions = element('div', 'structure-toolbar-actions');
-    const reset = element('button', 'result-button result-button-small', t('results.structure.whole')) as HTMLButtonElement; reset.type = 'button'; reset.title = t('results.structure.whole'); reset.setAttribute('aria-label', t('results.structure.whole')); reset.addEventListener('click', () => { this.structure.resetCamera(); viewport.closest('[data-molecular-workspace]')?.dispatchEvent(new Event('structure-reset')); });
+    const reset = element('button', 'result-button result-button-small', t('results.structure.whole')) as HTMLButtonElement; reset.type = 'button'; reset.title = t('results.structure.whole'); reset.setAttribute('aria-label', t('results.structure.whole')); reset.addEventListener('click', () => { owner.resetCamera(); viewport.closest('[data-molecular-workspace]')?.dispatchEvent(new Event('structure-reset')); });
     const themeButton = element('button', 'result-button result-button-small') as HTMLButtonElement; themeButton.type = 'button';
-    const syncThemeButton = (): void => { const dark = this.structureTheme === 'dark'; themeButton.textContent = dark ? t('results.structure.lightCanvas') : t('results.structure.darkCanvas'); themeButton.setAttribute('aria-pressed', String(dark)); };
-    syncThemeButton(); themeButton.addEventListener('click', () => { this.structureTheme = this.structureTheme === 'dark' ? 'light' : 'dark'; this.structure.setTheme(this.structureTheme); syncThemeButton(); });
-    const image = element('button', 'result-button result-button-small', t('results.structure.savePng')) as HTMLButtonElement; image.type = 'button'; image.addEventListener('click', async () => beginDownload(await this.structure.captureImage()));
+    const syncThemeButton = (): void => { const dark = (own ? this.structureTheme : this.viewStructureTheme) === 'dark'; themeButton.textContent = dark ? t('results.structure.lightCanvas') : t('results.structure.darkCanvas'); themeButton.setAttribute('aria-pressed', String(dark)); };
+    syncThemeButton(); themeButton.addEventListener('click', () => {
+      if (own) this.structureTheme = this.structureTheme === 'dark' ? 'light' : 'dark'; else this.viewStructureTheme = this.viewStructureTheme === 'dark' ? 'light' : 'dark';
+      owner.setTheme(own ? this.structureTheme : this.viewStructureTheme); syncThemeButton();
+    });
+    const image = element('button', 'result-button result-button-small', t('results.structure.savePng')) as HTMLButtonElement; image.type = 'button'; image.addEventListener('click', async () => beginDownload(await owner.captureImage()));
     const source = element('button', 'result-button result-button-small', t('results.download')) as HTMLButtonElement; source.type = 'button'; source.addEventListener('click', () => beginDownload(downloadUrl(artifact)));
     const fullscreen = element('button', 'result-button result-button-small') as HTMLButtonElement; fullscreen.type = 'button';
     const syncFullscreen = (): void => { const expanded = document.fullscreenElement === (viewport.closest('[data-molecular-workspace]') || viewport); const label = expanded ? t('results.structure.exitFullscreen') : t('results.structure.enterFullscreen'); fullscreen.title = label; fullscreen.setAttribute('aria-label', label); fullscreen.setAttribute('aria-pressed', String(expanded)); fullscreen.textContent = expanded ? label : t('results.structure.expandStage'); };
@@ -524,11 +608,13 @@ export class ResultWorkspace {
       dialog.showModal();
     }
     if (!this.nodes.railDetails.open && dialog.open) dialog.close();
-    this.structure.resize();
+    this.resize();
   };
   private selectArtifact(artifact: ResultFile): void {
-    this.selected = artifact; const fileName = resultFileName(artifact);
-    this.nodes.fileList.querySelectorAll<HTMLElement>('[data-artifact-path]').forEach((node) => node.setAttribute('aria-current', node.dataset.artifactPath === fileName ? 'true' : 'false'));
+    // Rows are keyed by published path, so selection is matched by the same identity
+    // the initial paint uses — never by the name a reader sees.
+    this.selected = artifact; const path = artifact.path;
+    this.nodes.fileList.querySelectorAll<HTMLElement>('[data-artifact-path]').forEach((node) => node.setAttribute('aria-current', String(node.dataset.artifactPath === path)));
   }
   // `status` is the task lifecycle; `quiet` is the runner's own success outcome, which the header states instead.
   private setState(status: string, message: string, quiet = false): void {
@@ -542,7 +628,7 @@ export class ResultWorkspace {
   private renderPreviewError(message: string): void { this.resetPreview(); this.nodes.preview.replaceChildren(element('p', 'result-empty', message)); this.nodes.preview.setAttribute('aria-busy', 'false'); }
   private renderFatal(message: string): void { this.setState(t('results.fatalTitle'), message); this.renderPreviewError(t('results.fatalHint')); }
   private cancelRender(): void { this.renderController?.abort(); this.renderController = null; }
-  private resetPreview(): void { this.storyboardStructureGeneration += 1; this.destroyViewRenderer(); this.cancelRender(); this.storyboard.destroy(); this.structure.dispose(); this.geometry.dispose(); }
+  private resetPreview(): void { this.storyboardStructureGeneration += 1; this.storyboardStructure = null; this.destroyViewRenderer(); this.cancelRender(); this.storyboard.destroy(); this.structure.dispose(); this.geometry.dispose(); }
 
   destroy(): void {
     if (this.disposed) return; this.disposed = true; this.destroyViewRenderer(); this.cancelRender(); this.loadController?.abort(); this.storyboard.destroy(); this.structure.dispose(); this.geometry.dispose();

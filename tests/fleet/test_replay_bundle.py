@@ -52,6 +52,50 @@ def _sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _trajectory_fixture() -> ResultFixture:
+    """A declared trajectory view whose coordinates are binary (XTC)."""
+    return ResultFixture(
+        name="replay_trajectory",
+        task_type="bioemu",
+        output_check=OutputCheckSpec(
+            state="passed",
+            checks=(
+                (("view_id", "conformational_ensemble"), ("source", "topology"), ("required", True), ("status", "passed"), ("matched", 1)),
+                (("view_id", "conformational_ensemble"), ("source", "coordinates"), ("required", True), ("status", "passed"), ("matched", 1)),
+            ),
+        ),
+        artifacts=(
+            ResultArtifactSpec(
+                "topology.pdb", role="artifact", capability="molecular_structure",
+                media_type="chemical/x-pdb", body="ATOM      1  CA  ALA A   1       0.000   0.000   0.000\n",
+            ),
+            ResultArtifactSpec(
+                "samples.xtc", role="evidence", capability="download_only",
+                media_type="application/octet-stream",
+            ),
+            ResultArtifactSpec(
+                "diagnostic.bin", role="diagnostic", capability="download_only",
+                media_type="application/octet-stream",
+            ),
+        ),
+        logical_files=(("topology", ("topology.pdb",)), ("coordinates", ("samples.xtc",))),
+        views=(
+            view_entry(
+                "trajectory", "conformational_ensemble", "Sampled conformational ensemble",
+                {"topology": ["topology.pdb"], "coordinates": ["samples.xtc"]},
+                role="primary", coordinate_format="xtc", frame_unit="sample", timestep=1, association="single",
+            ),
+        ),
+    )
+
+
+def _trajectory_root(tmp_path: Path) -> tuple[Path, bytes]:
+    coordinates = bytes(range(256)) * 4  # not UTF-8 decodable
+    return _write_result_root(tmp_path, _trajectory_fixture(), binary={
+        "samples.xtc": coordinates, "diagnostic.bin": b"\x00\xff" * 8,
+    }), coordinates
+
+
 def _synthetic_fixture() -> ResultFixture:
     """A small canonical result fixture spanning matrix, table, text, JSON.
 
@@ -108,12 +152,19 @@ def _synthetic_fixture() -> ResultFixture:
     )
 
 
-def _write_result_root(tmp_path: Path, fixture: ResultFixture, *, task_id: str = TASK_ID) -> Path:
+def _write_result_root(
+    tmp_path: Path,
+    fixture: ResultFixture,
+    *,
+    task_id: str = TASK_ID,
+    binary: dict[str, bytes] | None = None,
+) -> Path:
     """Persist a canonical manifest plus real artifact bytes at a result root.
 
     The manifest's per-artifact ``size``/``sha256`` are recomputed from the
     bytes actually written, because the capture re-hashes them and refuses a
-    bundle whose declared hash disagrees with disk.
+    bundle whose declared hash disagrees with disk. ``binary`` supplies the bytes
+    of artifacts whose payload is not UTF-8 text.
     """
     root = tmp_path / "result"
     root.mkdir()
@@ -121,7 +172,9 @@ def _write_result_root(tmp_path: Path, fixture: ResultFixture, *, task_id: str =
     by_path = {artifact["path"]: artifact for artifact in manifest["artifacts"]}
     for artifact in manifest["artifacts"]:
         spec = fixture.artifact_for(artifact["path"])
-        body = (spec.body or "").encode("utf-8")
+        body = (binary or {}).get(artifact["path"])
+        if body is None:
+            body = (spec.body or "").encode("utf-8")
         target = root / artifact["path"]
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(body)
@@ -397,6 +450,75 @@ def test_logical_file_identity_resolves_to_the_captured_payload(tmp_path: Path) 
     assert replay.logical_artifact_path("raw_matrix", 0) == "couplings/raw_scores.csv"
     assert replay.logical_artifact_path("raw_matrix", 5) is None
     assert replay.payload(replay.logical_artifact_path("raw_matrix", 0))[0] == (root / "couplings/raw_scores.csv").read_bytes()
+
+
+# ── binary view sources ───────────────────────────────────────────────────────
+
+
+def test_a_required_binary_view_source_round_trips_as_decoded_bytes(tmp_path: Path) -> None:
+    """An XTC coordinate stream is checked in as base64 and served as its bytes.
+
+    A trajectory view's coordinates are binary, so a text-only payload model
+    could not carry them. The payload is base64 with the decoded byte count and
+    sha256; the route hands the renderer the decoded bytes, byte for byte.
+    """
+    root, coordinates = _trajectory_root(tmp_path)
+    bundle = capture_replay_bundle(task_id=TASK_ID, result_root=root, storyboard_dirs=())
+    entry = bundle["payloads"]["samples.xtc"]
+    assert entry["encoding"] == "base64"
+    assert entry["size"] == len(coordinates)
+    assert entry["sha256"] == _sha(coordinates)
+    assert "encoding" not in bundle["payloads"]["topology.pdb"]
+    replay = ReplayBundle.load(write_bundle(tmp_path / "bundle.json", bundle))
+    body = replay.payload("samples.xtc")
+    assert body is not None and body[0] == coordinates
+    assert body[1] == "application/octet-stream"
+
+
+def test_an_optional_binary_artifact_is_still_excluded(tmp_path: Path) -> None:
+    """Only a view source the renderer needs earns a checked-in binary payload."""
+    root, _ = _trajectory_root(tmp_path)
+    bundle = capture_replay_bundle(task_id=TASK_ID, result_root=root)
+    excluded = {entry["path"]: entry for entry in bundle["excluded"]}
+    assert excluded["diagnostic.bin"]["reason"] == "binary payload is not checked in"
+    assert excluded["diagnostic.bin"]["sha256"] == _sha(b"\x00\xff" * 8)
+    assert "diagnostic.bin" not in bundle["payloads"]
+
+
+def test_load_refuses_an_undecodable_base64_payload(tmp_path: Path) -> None:
+    from frontend_fixtures import bundle_digest
+
+    root, _ = _trajectory_root(tmp_path)
+    bundle = capture_replay_bundle(task_id=TASK_ID, result_root=root)
+    bundle["payloads"]["samples.xtc"]["payload"] = "not base64!!!"
+    bundle["bundle_digest"] = bundle_digest(bundle)
+    with pytest.raises(ReplayBundleError, match="not decodable"):
+        load_bundle(bundle)
+
+
+def test_load_refuses_an_unknown_payload_encoding(tmp_path: Path) -> None:
+    from frontend_fixtures import bundle_digest
+
+    root, _ = _trajectory_root(tmp_path)
+    bundle = capture_replay_bundle(task_id=TASK_ID, result_root=root)
+    bundle["payloads"]["topology.pdb"]["encoding"] = "rot13"
+    bundle["bundle_digest"] = bundle_digest(bundle)
+    with pytest.raises(ReplayBundleError, match="unknown replay payload encoding"):
+        load_bundle(bundle)
+
+
+def test_a_binary_payload_that_decodes_to_other_bytes_is_refused(tmp_path: Path) -> None:
+    """The decoded bytes, not the base64 text, are what the artifact hash proves."""
+    import base64
+
+    from frontend_fixtures import bundle_digest
+
+    root, coordinates = _trajectory_root(tmp_path)
+    bundle = capture_replay_bundle(task_id=TASK_ID, result_root=root)
+    bundle["payloads"]["samples.xtc"]["payload"] = base64.b64encode(coordinates[:-8]).decode("ascii")
+    bundle["bundle_digest"] = bundle_digest(bundle)
+    with pytest.raises(ReplayBundleError, match="does not match its own sha256"):
+        load_bundle(bundle)
 
 
 # ── task scoping ──────────────────────────────────────────────────────────────
@@ -787,6 +909,47 @@ def test_a_host_local_path_inside_an_artifact_payload_is_not_checked_in(tmp_path
     assert "/var/lib/revodesign" not in json.dumps(bundle)
 
 
+@pytest.mark.parametrize(
+    ('text', 'root'),
+    (
+        ('staged production result (/tmp/rc/prodrop)', '/tmp/rc/prodrop'),
+        ('{"weights": "/mnt/db/revocompute/chai1"}', '/mnt/db/revocompute/chai1'),
+        ('model_path=/mnt/db/weights/ligandmpnn/model.pt', '/mnt/db/weights/ligandmpnn/model.pt'),
+    ),
+)
+def test_a_host_path_after_a_quote_paren_or_equals_is_scrubbed_and_rejected(text: str, root: str) -> None:
+    """A host-local path is caught wherever it opens, not only after whitespace."""
+    from frontend_fixtures.replay_bundle import _assert_no_host_paths, sanitize
+
+    scrubbed = sanitize(text)
+    assert root not in scrubbed
+    assert '[host-path-omitted]' in scrubbed
+    with pytest.raises(ReplayBundleError, match='host-local path leaked'):
+        _assert_no_host_paths({'provenance': {'note': text}})
+
+
+def test_a_host_path_needs_a_bundle_declared_pre_scan_record_to_load(tmp_path: Path) -> None:
+    """The exemption for an authentic pre-scan capture is its own persisted record."""
+    from frontend_fixtures import bundle_digest
+
+    bundle = capture_replay_bundle(task_id=TASK_ID, result_root=_write_result_root(tmp_path, _synthetic_fixture()))
+    (tmp_path / 'forged').mkdir()
+    forged = capture_replay_bundle(
+        task_id=TASK_ID,
+        result_root=_write_result_root(tmp_path / 'forged', _synthetic_fixture()),
+        provenance={'capture': {'host_path_scan': 'captured_before_host_path_scan'}},
+    )
+    # A caller cannot mint the exemption: the capture strips it from provenance.
+    assert 'host_path_scan' not in forged['provenance']['capture']
+    bundle['provenance']['note'] = 'staged production result (/tmp/rc/prodrop)'
+    bundle['bundle_digest'] = bundle_digest(bundle)
+    with pytest.raises(ReplayBundleError, match='host-local path leaked'):
+        load_bundle(bundle)
+    bundle['provenance']['capture']['host_path_scan'] = 'captured_before_host_path_scan'
+    bundle['bundle_digest'] = bundle_digest(bundle)
+    assert load_bundle(bundle)['provenance']['capture']['host_path_scan'] == 'captured_before_host_path_scan'
+
+
 # ── provenance pointer (degradable against the receipt contract) ─────────────
 
 
@@ -1061,3 +1224,48 @@ def test_real_fpocket_bundle_records_its_oversized_artifacts_with_hashes() -> No
     # exists to avoid, so a re-capture cannot quietly reintroduce a huge fixture.
     assert len(replay.bundle["payloads"]) <= 20
     assert FPOCKET_BUNDLE.stat().st_size < 200_000
+
+
+# ── the checked-in BioEmu2 bundle ────────────────────────────────────────────
+
+BIOEMU2_BUNDLE = ROOT / "tests/data/bioemu2_replay/2kl8_production_4d77ffcc.json"
+
+
+def test_real_bioemu2_bundle_round_trips_with_its_published_verdicts() -> None:
+    """The checked-in BioEmu2 bundle loads and serves what the run published.
+
+    The run is a contract demonstration, not a converged ensemble: both of its
+    two samples are rejected by upstream physicality. That is the fact the
+    browser acceptance binds to, so it is asserted here against the captured
+    bytes rather than restated in the test.
+    """
+    if not BIOEMU2_BUNDLE.is_file():
+        pytest.skip("the captured BioEmu2 replay bundle is not present")
+    replay = ReplayBundle.load(BIOEMU2_BUNDLE)
+    assert replay.bundle["task"]["type"] == "bioemu2_equilibrium"
+    assert replay.provenance["capture"]["mode"] == "reproduced_real_result"
+    parameters = {item["name"]: item["value"] for item in replay.manifest["run"]["parameters"]}
+    assert parameters["num_samples"] == 2 and parameters["num_steps"] == 4
+
+    (view,) = replay.manifest["views"]
+    assert (view["id"], view["plugin"], view["role"]) == ("conformational_ensemble", "trajectory", "primary")
+    assert view["mapping"]["frame_unit"] == "sample"
+    for _, _, path in required_view_sources(replay.manifest):
+        assert path in replay.bundle["payloads"], path
+
+    report = json.loads(replay.payload("physicality.json")[0])
+    assert [(entry["frame"], entry["status"], entry["reason"]) for entry in report] == [
+        (0, "rejected", "bad_bonds_sidechain"),
+        (1, "rejected", "bad_bonds_sidechain"),
+    ]
+    # The published logical files are the six this Task declares, each resolving
+    # to a captured payload whose bytes still match its recorded digest.
+    assert set(replay.bundle["logical_files"]) == {
+        "coordinates", "topology", "upstream_topology", "physicality", "system", "sequence",
+    }
+    for file_id in replay.bundle["logical_files"]:
+        path = replay.logical_artifact_path(file_id, 0)
+        assert path is not None, file_id
+        body = replay.payload(path)
+        assert body is not None, path
+        assert _sha(body[0]) == replay.bundle["payloads"][path]["sha256"], path

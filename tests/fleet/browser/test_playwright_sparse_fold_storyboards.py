@@ -11,6 +11,7 @@ from playwright.sync_api import Page, expect
 import pytest
 
 from browser_frontend_assets import install_scientific_assets
+from storyboard_first_screen import assert_first_screen
 
 pytestmark = pytest.mark.browser
 
@@ -41,7 +42,7 @@ async (payload) => {
 
 def _mount(page: Page, family: str, task_type: str, files: dict, responses: dict, delays: dict | None = None) -> None:
     source = (ROOT / "docker/runners" / family / "storyboard/index.js").read_text(encoding="utf-8")
-    page.set_viewport_size({"width": 1200, "height": 1000})
+    page.set_viewport_size({"width": 1280, "height": 1000})
     page.set_content("<div id='host'></div>")
     install_scientific_assets(page)
     page.evaluate(MOUNT, {"source": source, "taskType": task_type, "files": files, "responses": responses, "delays": delays or {}})
@@ -67,6 +68,11 @@ def test_alphafold2_joins_rank_to_model_identity_before_loading_evidence(page: P
     expect(page.get_by_role("img", name="pLDDT by Residue position")).to_be_visible()
     expect(page.locator(".matrix-readout")).to_contain_text("1.0 angstrom")
     assert page.evaluate("window.__sparseStoryboard.requests") == ["/ranking", "/confidence-2", "/pae-2?max_elements=1048576&key=0.predicted_aligned_error"]
+    # The stage holds the first ranked model and the local-confidence series is
+    # on the first screen beside it.
+    assert page.evaluate("window.__sparseStoryboard.opened") == ["/ranked-0"]
+    expect(page.locator(".af2-stage-label")).to_have_text("ranked_0.pdb")
+    assert_first_screen(page, hero=".af2-hero", slot=".af2-stage", figure=".af2-side .af2-figure")
 
 
 def test_simplefold_pairs_optional_confidence_by_sample_stem(page: Page) -> None:
@@ -85,6 +91,10 @@ def test_simplefold_pairs_optional_confidence_by_sample_stem(page: Page) -> None
     page.get_by_role("button", name="mini_sampled_1").click()
     expect(page.get_by_role("img", name="pLDDT by Residue position")).to_be_visible()
     assert page.evaluate("window.__sparseStoryboard.requests") == ["/confidence-1"]
+    # Each sampled structure reaches the stage, on mount and after a selection.
+    assert page.evaluate("window.__sparseStoryboard.opened") == ["/sample-0", "/sample-1"]
+    expect(page.locator(".simplefold-stage-label")).to_have_text("mini_sampled_1.cif")
+    assert_first_screen(page, hero=".simplefold-hero", slot=".simplefold-stage", figure=".simplefold-side [role=img]")
 
 
 @pytest.mark.parametrize("family", ["alphafold", "simplefold"])

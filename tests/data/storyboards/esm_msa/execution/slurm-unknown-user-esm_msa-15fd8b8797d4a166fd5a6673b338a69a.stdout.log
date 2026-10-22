@@ -1,0 +1,8 @@
+REVODESIGN_JOB_ID=311021
+REVODESIGN_ALLOCATION_LIVE=311021
+Processing [path redacted] ...
+Output directory: [path redacted]
+REVODESIGN_STAGE:esm_msa
+msa1b profile complete: 79 positions, mean entropy 2.4999
+ESM esm_msa complete.
+

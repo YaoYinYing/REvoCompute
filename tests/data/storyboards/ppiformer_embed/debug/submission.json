@@ -1,0 +1,14 @@
+{
+  "inputs": [
+    {
+      "name": "1abc_A_B.pdb",
+      "role": "complex",
+      "sha256": "d9246c6bd74f0b5dce39db2cb7db6af8842cb40edb986ffd9c83e1ad081a2beb",
+      "size": 2926
+    }
+  ],
+  "params": {},
+  "submitted_at": "2026-10-20T15:55:47.733244+00:00",
+  "task_type": "ppiformer_embed",
+  "username": "tester"
+}

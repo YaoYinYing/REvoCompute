@@ -1,0 +1,26 @@
+{
+  "inputs": [
+    {
+      "name": "2KL8.pdb",
+      "role": "structure",
+      "sha256": "035c78fb64880cfac5f721a1831ea45a54b453741fbbc4785d738be83c19c15e",
+      "size": 105871
+    }
+  ],
+  "params": {
+    "avoid_motifs": "",
+    "batch_size": 1,
+    "number_of_batches": 1,
+    "pI_dead_zone": 0.0,
+    "pI_strength": 0.5,
+    "pI_urgency": 1.0,
+    "sampling_temp": 0.1,
+    "seed": 0,
+    "surface_patch_center_jitter": 20.0,
+    "surface_patch_lock": false,
+    "surface_search_radius": 12.0
+  },
+  "submitted_at": "2026-10-20T16:24:34.265812+00:00",
+  "task_type": "dynamicmpnn",
+  "username": "tester"
+}

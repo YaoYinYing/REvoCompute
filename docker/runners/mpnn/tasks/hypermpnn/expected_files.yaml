@@ -1,0 +1,35 @@
+# Logical result files published by the HyperMPNN Task.
+#
+# Same published shape as ProteinMPNN: the design FASTA is the primary view's
+# candidate source, the remaining files are provenance and diagnostics.
+result:
+  files:
+    designs:
+      pattern: 'seqs/*.fa'
+      cardinality: many
+      required: true
+      role: evidence
+    input_structure:
+      pattern: 'debug/inputs/structure/*.pdb'
+      cardinality: one
+      required: true
+      type: structure
+      role: provenance
+    submission:
+      path: debug/submission.json
+      cardinality: one
+      required: true
+      type: json
+      role: provenance
+    citations:
+      path: citations.bib
+      cardinality: one
+      required: true
+      type: text
+      role: provenance
+    execution_records:
+      pattern: 'execution/*'
+      cardinality: many
+      required: true
+      type: text
+      role: diagnostic

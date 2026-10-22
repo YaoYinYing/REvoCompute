@@ -1,0 +1,52 @@
+# Logical result files published by the EasIFA active-site Task.
+#
+# Derived from the production result recorded in the Task's evidence packet: the
+# residue-level active-site table and the annotated enzyme structure the primary
+# view pairs it with, the full prediction JSON, plus the input structure,
+# submission, citation and execution provenance. The output PDB is byte-identical
+# to the input in the observed run, but it is a separate published artifact and
+# is declared as such.
+result:
+  files:
+    active_sites:
+      path: active_sites.csv
+      cardinality: one
+      required: true
+      type: table
+      role: evidence
+    enzyme_structure:
+      path: enzyme_structure.pdb
+      cardinality: one
+      required: true
+      type: structure
+      role: evidence
+    prediction:
+      path: easifa_result.json
+      cardinality: one
+      required: true
+      type: json
+      role: artifact
+    input_structure:
+      pattern: 'debug/inputs/structure/*.pdb'
+      cardinality: one
+      required: true
+      type: structure
+      role: provenance
+    submission:
+      path: debug/submission.json
+      cardinality: one
+      required: true
+      type: json
+      role: provenance
+    citations:
+      path: citations.bib
+      cardinality: one
+      required: true
+      type: text
+      role: provenance
+    execution_records:
+      pattern: 'execution/*'
+      cardinality: many
+      required: true
+      type: text
+      role: diagnostic

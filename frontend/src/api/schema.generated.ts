@@ -2805,6 +2805,8 @@ export interface components {
         LogicalResultFile: {
             id: string;
             name: string;
+            /** @description Published artifact path this logical file resolves to. It is the artifact's identity: two logical files with the same basename in different directories name different paths. */
+            path: string;
             media_type: string;
             size: number;
             /** @enum {string} */

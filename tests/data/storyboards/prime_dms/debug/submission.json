@@ -1,0 +1,14 @@
+{
+  "inputs": [
+    {
+      "name": "2KL8.fasta",
+      "role": "sequences",
+      "sha256": "511d73a16c00fb6a26376e1100317348973a956295ba753098e6ff08cdd53392",
+      "size": 85
+    }
+  ],
+  "params": {},
+  "submitted_at": "2026-10-20T15:54:17.361232+00:00",
+  "task_type": "prime_dms",
+  "username": "tester"
+}

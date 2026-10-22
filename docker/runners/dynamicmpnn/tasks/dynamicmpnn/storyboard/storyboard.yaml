@@ -1,0 +1,10 @@
+identifier: dynamicmpnn-result
+entrypoint: ./index.js
+requires:
+  - designs
+optional:
+  - backbones
+  - input_structure
+  - submission
+  - citations
+  - execution_records

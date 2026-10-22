@@ -1,0 +1,130 @@
+display_name: BioEmu2 equilibrium ensemble
+category: structure
+id: bioemu2_equilibrium
+summary: Sample a protein equilibrium conformational ensemble with BioEmu2.
+use_when: Use this to generate a diverse all-atom ensemble of one protein chain from its
+  sequence with the released BioEmu2 checkpoint.
+input_summary: One protein sequence as FASTA.
+output_summary: Sampled all-atom frames, the matching topology, per-frame physicality
+  results, and the resolved sampling system.
+considerations:
+- BioEmu2 samples a model distribution; the ensemble is not a measured thermodynamic population and its populations are uncalibrated.
+- Sample order is generation order, not physical time or a kinetic trajectory.
+- Physicality checking reports per-frame results in physicality.json; every generated frame is retained and no frame is removed because of the report.
+- BioEmu2 queries the public ColabFold MMseqs2 service (api.colabfold.com) for the sequence alignment on every run.
+- The released checkpoint is a preview; upstream tested it with an 80 GB A100 as the smallest device.
+# Without a supplied alignment upstream's get_msa queries its hosted MMseqs2
+# service, so the capability is declared unconditionally.
+requires_network: true
+gpus: true
+inputs:
+  sequence:
+    title: Protein sequence
+    type: protein_sequence
+    cardinality: {min: 1, max: 1}
+    formats: [fasta]
+    description: Exactly one FASTA record with a non-empty header; residues must
+      be the 20 standard amino acids or X.
+input_workspace:
+  steps:
+  - id: material
+    title: Provide the protein sequence
+    description: Upload a FASTA file or paste one protein sequence
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: Sequence files
+    - plugin: sequence
+      id: sequence_editor
+      title: Paste a sequence
+      options: {role: sequence}
+  - id: settings
+    title: Set the experiment
+    description: Adjust only the controls that matter for this run
+    capabilities:
+    - plugin: parameters
+      id: task_parameters
+      title: Method settings
+  - id: review
+    title: Review and run
+    description: Check the sequence and settings before creating the task snapshot
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Experiment review
+      options:
+        show_paths: true
+result_workspace:
+  views:
+  - plugin: trajectory
+    id: conformational_ensemble
+    role: primary
+    title: Sampled conformational ensemble
+    description: BioEmu2 samples associated with the declared PDB topology; sample order
+      is not physical time.
+    sources:
+      topology:
+      - path: topology.pdb
+        required: true
+      coordinates:
+      - path: samples.xtc
+        required: true
+    mapping:
+      coordinate_format: xtc
+      frame_unit: sample
+      timestep: 1
+      association: single
+stage_markers:
+  bioemu2_equilibrium: BioEmu2 equilibrium sampling
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties:
+    num_samples:
+      type: integer
+      description: Number of equilibrium conformations to generate.
+      default: 8
+      minimum: 1
+      maximum: 1000
+    sampler:
+      type: string
+      description: Sampling algorithm; edm is unsteered, edm_gd uses gradient guidance,
+        edm_fk adds Feynman-Kac resampling, and edm_fkc uses the Feynman-Kac corrector
+        with the default physicality potentials.
+      default: edm
+      enum:
+      - edm
+      - edm_gd
+      - edm_fk
+      - edm_fkc
+    num_steps:
+      type: integer
+      description: Number of denoising steps; when omitted the sampler's configured step
+        count applies.
+      minimum: 1
+      maximum: 1000
+    batch_size:
+      type: integer
+      description: Number of conformations denoised together; when omitted the sample
+        count is used.
+      minimum: 1
+      maximum: 1000
+    physicality_mode:
+      type: string
+      description: Physicality thresholds reported per frame for invalid bond lengths,
+        clashes, chirality, and chain breaks; no_filter still writes physicality.json
+        with each frame's status reported as not checked, and no frame is removed.
+      default: high_quality
+      enum:
+      - no_filter
+      - no_violations
+      - high_quality
+      - high_quality_per_residue
+    seed:
+      type: integer
+      x-ui-control: {kind: seed}
+      description: Optional random seed; when omitted repeated runs generally produce
+        different samples.
+      minimum: 0
+      maximum: 2147483647

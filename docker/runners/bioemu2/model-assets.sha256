@@ -1,0 +1,6 @@
+# Files the BioEmu2 adapter verifies before every run, relative to the read-only
+# checkpoint mount. Both are published at
+# https://huggingface.co/microsoft/bioemu2/tree/main/checkpoints/bioemu2-preview
+# (checkpoint.ckpt is an LFS object with the same SHA-256).
+3b4ba9236b7b458f47b40b694847b6bb4110c744becd6d2c53de7b1d04c07a81  checkpoints/bioemu2-preview/checkpoint.ckpt
+90326e3b77e524420f5aad68a777355ecbbbe07bc006ddf88f7ee921b0f772e3  checkpoints/bioemu2-preview/config.yaml

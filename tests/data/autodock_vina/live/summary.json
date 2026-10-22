@@ -1,0 +1,8 @@
+{
+  "ligand_count": 1,
+  "pose_count": 2,
+  "ranking_metric": "affinity_kcal_mol",
+  "ranking_order": "ascending",
+  "runner": "autodock_vina",
+  "scores_file": "scores.csv"
+}

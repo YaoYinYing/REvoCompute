@@ -159,6 +159,38 @@ def test_incompatible_renderer_and_source_type_is_reported(tmp_path):
     assert "result.renderer_source_kind_mismatch" in _codes(findings)
 
 
+def test_candidate_collection_accepts_a_published_sequence_source(tmp_path):
+    """The design families publish FASTA candidates; the renderer reads either kind."""
+    family = _write_family(
+        tmp_path,
+        view_yaml=(
+            "result_workspace:\n  views:\n"
+            "  - plugin: candidate-collection\n    id: m1\n    role: primary\n    title: M\n    description: d\n"
+            "    sources:\n      candidates: [{path: designs.fasta, required: true}]\n"
+            "    mapping: {}\n"
+        ),
+        tree_yaml=(
+            "result:\n  files:\n    designs:\n      path: designs.fasta\n"
+            "      cardinality: one\n      required: true\n      type: fasta\n"
+        ),
+    )
+    assert _audit(family, tmp_path) == []
+    family = _write_family(
+        tmp_path / "bad",
+        view_yaml=(
+            "result_workspace:\n  views:\n"
+            "  - plugin: candidate-collection\n    id: m1\n    role: primary\n    title: M\n    description: d\n"
+            "    sources:\n      candidates: [{path: designs.csv, required: true}]\n"
+            "    mapping: {}\n"
+        ),
+        tree_yaml=(
+            "result:\n  files:\n    designs:\n      path: designs.csv\n"
+            "      cardinality: one\n      required: true\n      type: table\n"
+        ),
+    )
+    assert "result.renderer_source_kind_mismatch" in _codes(_audit(family, tmp_path / "bad"))
+
+
 def test_format_and_source_extension_mismatch_is_reported(tmp_path):
     family = _write_family(tmp_path, view_yaml=_matrix_view("matrix", "matrix.pdb"))
     findings = _audit(family, tmp_path)
