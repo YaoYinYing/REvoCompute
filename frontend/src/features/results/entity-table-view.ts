@@ -10,7 +10,7 @@ import type { ResultView } from '../../api/result-types';
 import { t } from '../../app/i18n';
 import { EntitySummaryTable } from './scientific';
 import type { ResolvedViewSources, ViewRenderer } from './renderer-registry';
-import { loadTable, tableUrlOf } from './table-page';
+import { loadTable, localTableRead, tableUrlOf } from './table-page';
 
 /** Declared view mapping keys, in the server's own snake_case vocabulary. */
 export interface EntityTableMapping {
@@ -38,8 +38,10 @@ export function createEntityTableViewRenderer(): ViewRenderer {
     id: 'entity-table',
     async render(view: ResultView, sources: ResolvedViewSources, host: HTMLElement, context) {
       const mapping = (view.mapping || {}) as EntityTableMapping;
-      const url = tableUrlOf(sources.table?.[0], context.taskId);
-      const { page, truncated } = await loadTable(url, { signal: context.signal });
+      const source = sources.table?.[0];
+      // A local source resolves no Server URL at all; its read is never `undefined`.
+      const read = localTableRead(context.localSource, source) ?? tableUrlOf(source, context.taskId);
+      const { page, truncated } = await loadTable(read, { signal: context.signal });
       const columns = entityColumns(mapping, page.columns);
       const indices = columns.map((name) => page.columns.indexOf(name));
       const rows = page.rows.map((row) => indices.map((index) => row[index]));
