@@ -7,7 +7,7 @@
  */
 import { resultFileName, type ResultFile, type ResultView } from '../../api/result-types';
 import { t } from '../../app/i18n';
-import { artifactCapability } from './renderer-registry';
+import { artifactCapability, type LocalSourceFiles } from './renderer-registry';
 import { CandidateSelector } from './scientific';
 import { boundedText } from './molecular/structure-controller';
 import type { ResolvedViewSources, ViewRenderer } from './renderer-registry';
@@ -37,10 +37,11 @@ export function isSequenceCollection(file: ResultFile): boolean {
 /** The most FASTA text read for one candidate collection; a larger file is stated, not truncated. */
 const MAX_SEQUENCE_BYTES = 1024 * 1024;
 
-async function fetchText(file: ResultFile, signal: AbortSignal): Promise<string> {
+async function fetchText(file: ResultFile, signal: AbortSignal, local?: LocalSourceFiles): Promise<string> {
   // A collection over the bound is not parsed partially: a partial record would be
   // reported with a wrong residue count, and the list would look complete.
   if (file.size > MAX_SEQUENCE_BYTES) throw new Error(t('results.candidates.error.tooLarge', { name: resultFileName(file) }));
+  if (local) return local.readUtf8(file.path, MAX_SEQUENCE_BYTES);
   const response = await fetch(file.url, { credentials: 'same-origin', signal, headers: { Range: `bytes=0-${MAX_SEQUENCE_BYTES - 1}` } });
   if (!response.ok && response.status !== 206) throw new Error(t('results.candidates.error.unreadable', { name: resultFileName(file) }));
   // The declared size is not a bound on what is read: a Range-ignoring server
@@ -88,7 +89,7 @@ export function createCandidateCollectionViewRenderer(): ViewRenderer {
       const sequences = files.filter(isSequenceCollection);
       const records: Array<{ name: string; sequence: string; file: ResultFile }> = [];
       for (const file of sequences) {
-        for (const record of parseFasta(await fetchText(file, context.signal))) {
+        for (const record of parseFasta(await fetchText(file, context.signal, context.localSource))) {
           records.push({ ...record, file });
         }
       }
