@@ -149,17 +149,10 @@ cache) is a separate future decision, not a promise of this document.
 
 Commander captures two real downloaded ZIPs (structure/trajectory and table-
 linked scientific result) before source-adapter design. Owners implement only
-against the observed archive/manifest paths and trust boundaries. Adviser
-reviews architecture and science; independent Examiner performs real browser
-and screenshot acceptance. A **separate independent Campaign Acceptance Auditor**
-must verify the exact final commits, changed files, PR claims, CI, reviewer
-verdicts and cleanup ledger, and post its own PASS before the Commander can
-report `READY_FOR_FINAL_REVIEW`. The maintainer alone decides merge/deployment.
-
-For large repeatedly reused **CI-independent** data, immutable and
-hash-verified external archives such as GitHub Releases may be considered
-after licensing and privacy review. **Never remove required CI fixtures
-solely to reduce repository size.**
+against the observed archive/manifest paths and trust boundaries; the Adviser
+and Examiner roles and the mandatory Acceptance Auditor PASS are defined once in
+the [Single-PR Campaign Protocol](../agents/single-pr-campaign.md). The
+maintainer alone decides merge and deployment.
 
 ## Campaign acceptance questions
 
@@ -187,6 +180,18 @@ The current authorized Campaign must demonstrate:
 This Campaign is separate from Daylight Bench art-direction work.
 Implement a small vertical slice only after real ZIP feasibility and the
 local-file threat model; no automatic server deletion or fully offline app.
+
+## Deferred (P2)
+
+Accepted limitations; none is a promise of a later slice.
+
+- Storyboards for a local result need an app-bundled, versioned, allowlisted
+  renderer module; archive JavaScript is never executed.
+- Local ndarray projections await a bounded browser-side reader design.
+- Candidate FASTA has no decided 1 MiB bound.
+- One structure stage at a time: the workspace keeps a shared
+  StructureController.
+- Restoring a prior Storyboard selection is not designed for local sources.
 
 Related current documentation:
 
