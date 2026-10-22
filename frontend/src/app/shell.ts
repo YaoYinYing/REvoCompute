@@ -1,5 +1,5 @@
 import { DAYLIGHT_MARK } from './assets';
-import { Bell, ChartLine, FileText, Gauge, KeyRound, LayoutDashboard, LogOut, Menu, X, PanelLeft, PanelLeftClose, Plus, Scale, ServerCog, Settings, ShieldCheck, UserCog, UserRound, UsersRound, Workflow, createIcons } from 'lucide';
+import { Bell, ChartLine, FileText, FolderOpen, Gauge, KeyRound, LayoutDashboard, LogOut, Menu, X, PanelLeft, PanelLeftClose, Plus, Scale, ServerCog, Settings, ShieldCheck, UserCog, UserRound, UsersRound, Workflow, createIcons } from 'lucide';
 import type { CurrentUser } from '../api/app-api';
 import { authorizedJson, clearSessionCredential } from './session';
 import { ADMIN_DESTINATIONS } from './admin-destinations';
@@ -22,7 +22,7 @@ export interface AppShell {
 const railKey = 'revocompute-rail';
 type RailState = 'collapsed' | 'expanded';
 const shellIcons = {
-  Bell, ChartLine, FileText, Gauge, KeyRound, LayoutDashboard, LogOut, Menu, X, PanelLeft, PanelLeftClose, Plus,
+  Bell, ChartLine, FileText, FolderOpen, Gauge, KeyRound, LayoutDashboard, LogOut, Menu, X, PanelLeft, PanelLeftClose, Plus,
   Scale, ServerCog, Settings, ShieldCheck, UserCog, UserRound, UsersRound, Workflow,
 };
 
@@ -91,6 +91,8 @@ export function mountShell(root: HTMLElement): AppShell {
   const staticCompute: Array<NavDestination> = [
     ['/runners', 'workflow', t('shell.nav.runners')],
     ['/compute/dashboard', 'layout-dashboard', t('shell.nav.dashboard')],
+    // A local result is read beside the reader's Remote results, not inside a Task.
+    ['/compute/local_results', 'folder-open', t('shell.nav.localResults')],
   ];
   for (const [href, icon, label] of staticCompute) groups.compute.items.append(navLink(href, icon, label));
   // The Account region rests on the session: signed in it reaches the user's own
