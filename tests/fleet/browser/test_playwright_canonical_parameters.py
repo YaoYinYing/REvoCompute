@@ -37,7 +37,7 @@ pytestmark = pytest.mark.browser
 ORIGIN = "https://revocompute.example"
 CSP = (
     "default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; "
-    "script-src 'self'; img-src 'self' data: blob:; worker-src 'self' blob:"
+    "script-src 'self'; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' blob:"
 )
 ROOT = Path(__file__).resolve().parents[3]
 

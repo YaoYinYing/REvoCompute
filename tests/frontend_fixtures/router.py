@@ -31,7 +31,7 @@ _HTML_HEADERS = {
     "Content-Type": "text/html; charset=utf-8",
     "Content-Security-Policy": (
         "default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; script-src 'self'; "
-        "img-src 'self' data: blob:; worker-src 'self' blob:"
+        "img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' blob:"
     ),
     "Referrer-Policy": "no-referrer",
 }
