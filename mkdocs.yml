@@ -94,7 +94,8 @@ nav:
       - Result View Protocols: developer-guide/result-view-protocols.md
       - Scientific Result Inventory: developer-guide/result-inventory.md
       - Input and Result Workspace: developer-guide/input-result-workspace.md
-      - Local Result Workspace (Future Requirement): developer-guide/local-result-workspace.md
+      - Local Result Workspace (PR #86 Campaign): developer-guide/local-result-workspace.md
+      - Evidence Retention: developer-guide/evidence-retention.md
       - Levin Structure-View Notes: developer-guide/levin-structure-view-notes.md
       - Frontend Design Language: developer-guide/frontend-design-language.md
       - Frontend Art Direction: developer-guide/frontend-art-direction.md
@@ -114,3 +115,4 @@ nav:
       - Overview: agents/index.md
       - Architecture Invariants: agents/architecture-invariants.md
       - Long-task Handling: agents/long-task-handling.md
+      - Single-PR Campaign Protocol: agents/single-pr-campaign.md
