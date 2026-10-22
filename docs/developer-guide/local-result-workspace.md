@@ -79,19 +79,27 @@ per-logical-file `blob:` URLs, and the literal Task identity `local`.
 A folder is refused before anything renders when it does not match its own
 manifest. Declared paths must be relative (`/`, `\`, NUL, empty, `.` and `..`
 segments are refused), two files may not share a path, the manifest must be
-schema version 3 and at most 8 MiB, and the selection (or the folder it sits
-in) must contain exactly one manifest.
+schema version 3 and at most 8 MiB, and one folder or folder selection holds
+one result: a manifest nested inside the chosen one is not opened, and two
+manifests at the same depth are refused as ambiguous.
 
-Every declared artifact must be present and match its declared size; every file
-at or below 8 MiB must also match its declared SHA-256. A refusal names the
-paths that differ, up to five plus a count. Files past the hash budget are
-reported as verified by size only, so the page never overstates what it checked.
+Every path a view can reach must be present and match its declared size, and
+every such file at or below 8 MiB must also match its declared SHA-256. That is
+the union of `manifest.artifacts` and the logical files under `result.files`:
+an archive writes both, and a view resolves a declared path to whichever one
+names it. A refusal names the differing paths, up to five plus a count. Files
+past the hash budget are reported as verified by size only, so the page never
+overstates what it checked. Where the browser has no `crypto.subtle` (a
+non-secure origin), every file is verified by size only and the page says so.
 
 ### Transport
 
 - Each declared path becomes one `blob:` object URL created from the reader's
   own file; no copy is uploaded, and every URL is revoked when the workspace is
   closed or the page is left.
+- A download control points straight at that handle. The Server's `?download=1`
+  flag means nothing to a `blob:` URL, and Chromium cancels a download whose
+  blob URL carries a query, so a local download is the bare handle.
 - Nothing in the folder is imported, evaluated, navigated to or framed. An
   archived HTML report stays download-only, as it is for a remote result.
 - Shared table views read the local file through the bounded local reader in

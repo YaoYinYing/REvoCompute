@@ -35,7 +35,7 @@ const MANIFEST = 'manifest.json';
 const UTF8 = new TextDecoder('utf-8', { fatal: true });
 
 export interface LocalVerification {
-  /** Declared artifacts whose file is present with its declared length. */
+  /** Declared paths (artifacts and logical files) whose file is present with its declared length. */
   readonly present: number;
   /** Files whose SHA-256 was compared with the manifest. */
   readonly hashed: number;
@@ -138,17 +138,24 @@ export async function openLocalResult({ files, label }: LocalFolderSelection): P
   const unsafe = [...declared, ...Object.values(logicalFiles).flat()].map((record) => record.path).filter((path) => !safePath(path));
   if (unsafe.length) throw new Error(t('results.local.unsafePath', { path: describe(unsafe.map(String)) }));
 
+  // A logical file declares its own size and digest, and a view may reach it by that path even
+  // when the artifact list does not name it. Verify the union, so every path a renderer can be
+  // handed a handle to is a path this folder was checked against.
+  const declaredByPath = new Map<string, Record<string, unknown>>();
+  for (const record of [...declared, ...Object.values(logicalFiles).flat()]) {
+    if (!declaredByPath.has(String(record.path))) declaredByPath.set(String(record.path), record);
+  }
+
   const missing: string[] = []; const resized: string[] = []; const changed: string[] = []; const unchecked: string[] = [];
   const hashAvailable = typeof crypto?.subtle?.digest === 'function';
   let hashed = 0;
-  for (const artifact of declared) {
-    const path = String(artifact.path);
+  for (const [path, declaration] of declaredByPath) {
     const file = byPath.get(path);
     if (!file) { missing.push(path); continue; }
-    if (file.size !== Number(artifact.size)) { resized.push(path); continue; }
+    if (file.size !== Number(declaration.size)) { resized.push(path); continue; }
     if (!hashAvailable || file.size > HASH_MAX_BYTES) { unchecked.push(path); continue; }
     try {
-      if (await digest(file) === String(artifact.sha256).toLowerCase()) hashed += 1;
+      if (await digest(file) === String(declaration.sha256).toLowerCase()) hashed += 1;
       else changed.push(path);
     } catch { unchecked.push(path); }
   }
@@ -197,7 +204,7 @@ export async function openLocalResult({ files, label }: LocalFolderSelection): P
     taskId: LOCAL_TASK_ID,
     label,
     manifest: parsed,
-    verification: { present: declared.length, hashed, unchecked },
+    verification: { present: declaredByPath.size, hashed, unchecked },
     storyboard,
     sourceTaskId: typeof raw.task_id === 'string' && raw.task_id && raw.task_id !== LOCAL_TASK_ID ? raw.task_id : null,
     file: (path) => byPath.get(path) || null,

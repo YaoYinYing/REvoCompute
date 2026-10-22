@@ -12,7 +12,7 @@ import { installHarness } from './dom-harness';
  * The fixtures here are shaped exactly like a real REvoCompute export: `manifest.json` at the
  * folder root plus one member per declared artifact, with the served fields (status, archive,
  * entrypoint URL) absent because an archive never contained them. See
- * `docs/developer-guide/local-result-workspace.md` and the Gate 0 evidence in `TODO.md`.
+ * `docs/developer-guide/local-result-workspace.md` and the six authentic exports it records.
  */
 
 const TASK = '0123456789abcdef0123456789abcdef';
@@ -116,6 +116,30 @@ describe('a local result source', () => {
     const escaped = [new File([JSON.stringify(manifest)], 'manifest.json'), ...files.slice(1)];
     await expect(openLocalResult({ files: escaped, label: 'demo-result' }))
       .rejects.toThrow(/unsafe path/);
+  });
+
+  it('verifies a logical file whose path the artifact list does not name', async () => {
+    // A view reaches a logical file by its own path, so a path only `result.files`
+    // declares is still a path a renderer can be handed: it must be checked too.
+    const files = await archive([{ path: 'scores.csv', text: 'name,score\na,1\n' }]);
+    const manifest = JSON.parse(await files[0]!.text());
+    manifest.result.files = { structures: [{ path: 'extra.txt', size: 10, sha256: await sha('unverified'), preview: 'structure', capability: 'molecular_structure', cardinality: 'many', media_type: 'chemical/x-cif', role: 'primary' }] };
+    const withManifest = new File([JSON.stringify(manifest)], 'manifest.json');
+    Object.defineProperty(withManifest, 'webkitRelativePath', { value: 'demo-result/manifest.json' });
+    const member = (text: string): File => {
+      const file = new File([text], 'extra.txt');
+      Object.defineProperty(file, 'webkitRelativePath', { value: 'demo-result/extra.txt' });
+      return file;
+    };
+    const folder = (extra: File): File[] => [withManifest, files[1]!, extra];
+    const local = await openLocalResult({ files: folder(member('unverified')), label: 'demo-result' });
+    try {
+      // Two declared paths were present and hashed, not only the one artifact.
+      expect(local.verification).toEqual({ present: 2, hashed: 2, unchecked: [] });
+    } finally { local.close(); }
+    // The same folder with that logical file altered is refused by its digest.
+    await expect(openLocalResult({ files: folder(member('evil-bytes')), label: 'demo-result' }))
+      .rejects.toThrow(/differ from the manifest.*extra\.txt/);
   });
 
   it('reads a local table page through the same bounded loader the route uses', async () => {
