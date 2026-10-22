@@ -161,9 +161,9 @@ hash-verified external archives such as GitHub Releases may be considered
 after licensing and privacy review. **Never remove required CI fixtures
 solely to reduce repository size.**
 
-## Future acceptance questions
+## Campaign acceptance questions
 
-When this becomes an authorized implementation project, require evidence for:
+The current authorized Campaign must demonstrate:
 
 1. Opening an authentic extracted REvoCompute result archive in the normal
    Result Workspace, using browser-local files without reupload.
