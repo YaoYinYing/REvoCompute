@@ -417,6 +417,22 @@ def quota_page():
     return _serve_frontend_entry(private=True)
 
 
+@app.route("/compute/local_results", methods=["GET"])
+@login_required
+def local_results_page():
+    """The Local Result Workspace, an inert frontend-shell page.
+
+    The page reads a result folder the reader chooses on their own computer, so
+    its content comes from local files and never from server state. The route
+    therefore carries no state of its own: it serves the same entry document
+    every other page route serves, so a hard refresh or a shared deep link lands
+    on a real page instead of a 404. It is a signed-in destination because the
+    workspace sits beside the reader's Remote results; opening a folder starts no
+    Task, Runner, or Tool.
+    """
+    return _serve_frontend_entry(private=True)
+
+
 @app.route("/compute/api/workspace/plugins/<owner>/<plugin_id>", methods=["GET"])
 @optional_user
 def workspace_plugin_descriptor_api(owner: str, plugin_id: str):

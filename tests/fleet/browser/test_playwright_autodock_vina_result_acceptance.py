@@ -43,7 +43,7 @@ STORYBOARD = ROOT / "docker" / "runners" / "autodock_vina" / "tasks" / "autodock
 ORIGIN = "https://revocompute.example"
 CSP = (
     "default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; "
-    "script-src 'self'; img-src 'self' data: blob:; worker-src 'self' blob:"
+    "script-src 'self'; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' blob:"
 )
 
 

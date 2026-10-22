@@ -40,7 +40,7 @@ INPUT_STRUCTURE = ROOT / "tests/data/pdb/1SUO.pdb"
 ORIGIN = "https://revocompute.example"
 CSP = (
     "default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; "
-    "script-src 'self'; img-src 'self' data: blob:; worker-src 'self' blob:"
+    "script-src 'self'; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' blob:"
 )
 
 

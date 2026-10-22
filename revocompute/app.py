@@ -101,7 +101,8 @@ def _add_security_headers(response):
         "font-src 'self'; "
         "script-src 'self'; "
         "img-src 'self' data: blob:; "
-        "worker-src 'self' blob:",
+        "worker-src 'self' blob:; "
+        "connect-src 'self' blob:",
     )
     # Authenticated HTML and API responses can contain user task data.  In
     # addition to preventing ordinary HTTP caching, this discourages browsers

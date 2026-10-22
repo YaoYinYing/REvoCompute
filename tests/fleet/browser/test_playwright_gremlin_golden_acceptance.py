@@ -57,7 +57,7 @@ if not MANIFEST_PATH.is_file():
 # The document CSP the Server emits (revocompute/app.py) governs the whole flow.
 CSP = (
     "default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; "
-    "script-src 'self'; img-src 'self' data: blob:; worker-src 'self' blob:"
+    "script-src 'self'; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' blob:"
 )
 
 def _projected_manifest() -> dict:
