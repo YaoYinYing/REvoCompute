@@ -321,8 +321,31 @@ def test_frontend_entry_csp_allows_only_local_scripts_styles_and_fonts(monkeypat
     assert directives["script-src"] == ["'self'"]
     assert directives["font-src"] == ["'self'"]
     assert directives["style-src"] == ["'self'", "'unsafe-inline'"]
+    # The Local Result Workspace reads a user-chosen folder through blob: URLs
+    # with the shared renderers' fetch(); without this the browser refuses it.
+    assert directives["connect-src"] == ["'self'", "blob:"]
     assert "'unsafe-eval'" not in csp
     assert "https:" not in csp
+
+
+def test_local_results_page_serves_the_shell_only_to_a_signed_in_reader(monkeypatch, tmp_path):
+    """The Local Result Workspace is a signed-in page and starts no server state.
+
+    Its content comes from a folder the reader picks on their own computer, so
+    the route must serve the one inert entry document and nothing else, and must
+    refuse an anonymous visitor before any folder is chosen.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    entry = _install_frontend_entry(module, tmp_path)
+    client = module.app.test_client()
+
+    assert client.get("/compute/local_results").status_code == 401
+
+    response = client.get("/compute/local_results", headers=_test_client_auth(module))
+    assert response.status_code == 200
+    assert response.content_type == "text/html; charset=utf-8"
+    assert response.get_data(as_text=True) == entry
+    assert response.headers["Cache-Control"] == "private, no-store"
 
 
 def test_openapi_describes_public_auth_and_legal_contracts(monkeypatch, tmp_path):
