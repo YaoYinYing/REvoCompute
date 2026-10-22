@@ -33,6 +33,7 @@ import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import urlsplit
 
 import pytest
 from frontend_fixtures import ReplayBundle, RunnerDefinition, mount_scenario, replay_scenario
@@ -184,9 +185,18 @@ def test_the_hero_stage_mounts_the_declared_trajectory_view(page: Page) -> None:
     expect(page.locator(".be2-stage .trajectory-status")).to_contain_text(
         f"{_sample_count(replay)} frames loaded", timeout=180_000
     )
-    # Every declared source came from the replay artifact routes.
+    # Every declared source was fetched from the route the Server publishes for
+    # it: a source the Task declares as a logical file is served by that file's
+    # route, and one the capture publishes only as a raw artifact by its path.
+    served = _served_manifest(replay)
+    route_of = {
+        artifact["path"]: artifact["url"]
+        for files in served["result"]["files"].values()
+        for artifact in files
+    }
     for path in view["sources"]["topology"] + view["sources"]["coordinates"]:
-        assert router.requests.matching(f"/compute/api/results/{replay.task_id}/artifacts/{path}"), path
+        route = urlsplit(route_of.get(path, f"/compute/api/results/{replay.task_id}/artifacts/{path}")).path
+        assert router.requests.matching(route), path
 
 
 def test_stepping_to_the_second_sample_changes_the_stage(page: Page) -> None:
