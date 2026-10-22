@@ -27,8 +27,12 @@ roles refer to entries in the manifest's approved artifact list. The server
 validates identifiers and ordering before publication; clients should treat
 unknown fields as opaque and ignore unsupported view kinds.
 
-Current composition kinds include `candidate-collection`, `entity-table`, and
-`evidence-bundle`, plus the `matrix` view documented below. Generic format
+The post-PR #104 registry includes `candidate-collection`, `entity-table`,
+`evidence-bundle`, `alignment`, `trajectory`, `metric-series`, `scalar-summary`
+and `matrix` where published source capabilities permit them. Trusted Task
+Storyboards compose these shared renderers. A downloaded local archive cannot
+authorize execution of its own storyboard JavaScript; see
+[Local Result Workspace](local-result-workspace.md). Generic format
 viewers remain available for text, tables,
 images, structures, and authenticated downloads. An artifact whose format has no
 generic viewer — standalone HTML, for example — falls back to an explanatory
@@ -86,8 +90,9 @@ frame axis is labelled with the mapping's own `frame_unit`.
 A view whose declared `plugin` is `matrix` renders through the shared
 `PairMatrix` primitive rather than the generic table renderer. The browser
 dispatches on `plugin` alone — never on a task or runner name — through the
-result feature's view renderer registry; `ResultWorkspace` registers the matrix
-renderer and no view renderer branch inspects the runner.
+result feature's view renderer registry; `ResultWorkspace` registers the
+shared scientific view renderers, including matrix, and no view renderer
+branch inspects the runner.
 
 The primitive draws from the artifact's server-supplied bounded `table_url`,
 which the server supplies only for table artifacts (`.csv`/`.tsv`). A matrix
