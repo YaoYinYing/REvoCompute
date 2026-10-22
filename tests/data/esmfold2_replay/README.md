@@ -37,9 +37,10 @@ is read by a declared view, and nothing is truncated.
 ## Honest limitation
 
 The bundle carries the artifacts the views and storyboard read; it is not the
-complete result directory. The storyboard module is the current checked-in source,
-not the byte-for-byte module the production result page served: the Server reads it
-from the deploying runner tree, which this capture user could not read.
+complete result directory. The storyboard module is the source as it stood at
+capture time, not the byte-for-byte module the production result page served and
+not the current checked-in file: the Server reads it from the deploying runner
+tree, which this capture user could not read, and later commits revised it.
 
 The run published one sample. pLDDT is persisted by ESMFold 2 on its own 0–1
 scale and the page shows it on that scale rather than rescaling it to 0–100; pTM is

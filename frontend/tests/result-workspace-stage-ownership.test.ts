@@ -152,22 +152,33 @@ describe('ResultWorkspace molecular stage ownership', () => {
       if (url.endsWith(`/results/${TASK}`)) return new Response(JSON.stringify(storyboardManifest));
       return new Response('ATOM');
     }));
-    let mounts = 0; const loaded: string[] = [];
-    const viewer = (): MolecularViewer => ({ setRepresentation: async () => {}, setColor: async () => {}, setTheme: () => {},
+    let mounts = 0; const loads: Array<{ host: unknown; label: string }> = [];
+    const viewer = (host: unknown): MolecularViewer => ({ setRepresentation: async () => {}, setColor: async () => {}, setTheme: () => {},
       resize: () => {}, captureImage: async () => '', dispose: () => {},
-      loadStructure: async (source) => { loaded.push(source.label || ''); } });
+      loadStructure: async (source) => { loads.push({ host, label: source.label || '' }); } });
     const root = document.createElement('div') as unknown as HarnessNode;
-    const workspace = new ResultWorkspace(root as unknown as HTMLElement, async () => { mounts += 1; return viewer(); });
+    const workspace = new ResultWorkspace(root as unknown as HTMLElement,
+      async (host) => { mounts += 1; return viewer(host); });
     (root.querySelector('.result-search') as unknown as { value: string }).value = '';
 
     try {
       await workspace.load();
       await vi.waitFor(() => expect(root.querySelector('.candidate-stage .structure-host')).not.toBeNull());
-      // The page's own stage stays mounted and the declared view mounts its own.
-      expect(root.querySelector('[data-structure-slot] .structure-host')).not.toBeNull();
-      expect(loaded).toContain('run1/model_0.cif');
+      // Each structure lands in its own stage: the page's slot keeps the artifact it
+      // draws, and the declared view's stage receives only its own candidate. The
+      // page labels its logical file by the declared name; the view's candidate is a
+      // raw artifact, labelled by its published path.
+      const slot = root.querySelector('[data-structure-slot] .structure-host');
+      expect(loads.map((load) => load.host)).toEqual([slot, root.querySelector('.candidate-stage .structure-host')]);
+      expect(loads.map((load) => load.label)).toEqual(['model_0.cif', 'run1/model_0.cif']);
       expect(root.textContent).not.toContain('drawn in the page’s own structure stage above');
       expect(mounts).toBe(2);
+      // The structure the storyboard opened is the row marked current, matched by
+      // its published path rather than by the basename both files share.
+      const current = [...root.querySelectorAll('[data-artifact-path]')]
+        .filter((node) => node.getAttribute('aria-current') === 'true')
+        .map((node) => (node as unknown as { dataset: { artifactPath: string } }).dataset.artifactPath);
+      expect(current).toEqual(['run2/model_0.cif']);
     } finally { globalThis.__storyboardDrawnPath = undefined; }
   });
 

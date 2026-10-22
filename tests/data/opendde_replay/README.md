@@ -40,10 +40,10 @@ its 9 x 9 PAE, PDE, and contact-probability matrices from the captured values.
 ## Honest limitation
 
 The bundle carries the artifacts the views and storyboard read; it is not the
-complete result directory. The storyboard module is the current checked-in
-source, not the byte-for-byte module the production result page served: the
-Server reads it from the deploying runner tree, which this capture user could not
-read.
+complete result directory. The storyboard module is the source as it stood at
+capture time, not the byte-for-byte module the production result page served and
+not the current checked-in file: the Server reads it from the deploying runner
+tree, which this capture user could not read, and later commits revised it.
 
 The run had one sample (`seed_101`), so the candidate list shows one entry. Its
 values are shown without client-side rescaling. pLDDT, gPDE, pTM, and ipTM are

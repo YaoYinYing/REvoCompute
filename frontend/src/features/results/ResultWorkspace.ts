@@ -577,8 +577,10 @@ export class ResultWorkspace {
     this.structure.resize();
   };
   private selectArtifact(artifact: ResultFile): void {
-    this.selected = artifact; const fileName = resultFileName(artifact);
-    this.nodes.fileList.querySelectorAll<HTMLElement>('[data-artifact-path]').forEach((node) => node.setAttribute('aria-current', node.dataset.artifactPath === fileName ? 'true' : 'false'));
+    // Rows are keyed by published path, so selection is matched by the same identity
+    // the initial paint uses — never by the name a reader sees.
+    this.selected = artifact; const path = artifact.path;
+    this.nodes.fileList.querySelectorAll<HTMLElement>('[data-artifact-path]').forEach((node) => node.setAttribute('aria-current', String(node.dataset.artifactPath === path)));
   }
   // `status` is the task lifecycle; `quiet` is the runner's own success outcome, which the header states instead.
   private setState(status: string, message: string, quiet = false): void {

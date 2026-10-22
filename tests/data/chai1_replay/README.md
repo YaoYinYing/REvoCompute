@@ -44,9 +44,10 @@ values through the server's bounded projection route rather than a placeholder.
 ## Honest limitation
 
 The bundle carries the artifacts the views and storyboard read; it is not the
-complete result directory. The storyboard module is the current checked-in source,
-not the byte-for-byte module the production result page served: the Server reads it
-from the deploying runner tree, which this capture user could not read.
+complete result directory. The storyboard module is the source as it stood at
+capture time, not the byte-for-byte module the production result page served and
+not the current checked-in file: the Server reads it from the deploying runner
+tree, which this capture user could not read, and later commits revised it.
 
 This was a single-chain run, so the published `iptm` is 0.0, which is the value the
 page shows; the bundle does not relabel it as an interface quality. pLDDT (shown on
