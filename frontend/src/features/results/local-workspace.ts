@@ -29,7 +29,7 @@ export function mountLocalResultWorkspace(root: HTMLElement): LocalWorkspace {
   const header = element('header', 'result-header');
   const identity = element('div', 'result-identity');
   const title = element('h1', '', t('results.local.title'));
-  const intro = element('p', 'result-meta', t('results.local.intro'));
+  const intro = element('p', 'result-muted', t('results.local.intro'));
   identity.append(title, intro);
   header.append(identity);
 
