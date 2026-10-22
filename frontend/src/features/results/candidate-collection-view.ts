@@ -5,6 +5,7 @@
  * A candidate is presented by its published name and, when it is a sequence collection, by
  * each record's own header and residue count. Nothing here ranks candidates or infers a score.
  */
+import { downloadName } from '../../api/result-api';
 import { resultFileName, type ResultFile, type ResultView } from '../../api/result-types';
 import { t } from '../../app/i18n';
 import { artifactCapability, type LocalSourceFiles } from './renderer-registry';
@@ -127,7 +128,7 @@ export function createCandidateCollectionViewRenderer(): ViewRenderer {
           if (!item.record) {
             const file = item.file!;
             const link = document.createElement('a'); link.className = 'result-button result-button-small';
-            link.href = file.url; link.setAttribute('download', '');
+            link.href = file.url; link.setAttribute('download', downloadName(file));
             link.textContent = t('results.candidates.download', { name: resultFileName(file) });
             detail.append(link);
             if (showsStructure) {
@@ -156,7 +157,7 @@ export function createCandidateCollectionViewRenderer(): ViewRenderer {
           sequence.setAttribute('aria-label', t('results.candidates.sequence'));
           facts.append(length);
           const download = document.createElement('a'); download.className = 'result-button result-button-small';
-          download.href = item.record.file.url; download.setAttribute('download', '');
+          download.href = item.record.file.url; download.setAttribute('download', downloadName(item.record.file));
           download.textContent = t('results.candidates.downloadFile', { name: resultFileName(item.record.file) });
           detail.append(facts, sequence, download);
           return true;

@@ -1,5 +1,6 @@
 import type { components } from './schema.generated';
 import type { ArtifactRole, LogicalResultFile, PreviewCapability, ResultArtifact, ResultFile, ResultManifest, ResultStoryboardDeclaration, ResultView, TaskStatus } from './result-types';
+import { resultFileName } from './result-types';
 import { ApiError, authorizedJson } from '../app/session';
 import { t } from '../app/i18n';
 export { ApiError } from '../app/session';
@@ -192,10 +193,23 @@ export function downloadUrl(artifact: ResultFile): string {
   return `${artifact.url}${separator}download=1`;
 }
 
-export function beginDownload(url: string): void {
+/**
+ * The filename a download is saved under.
+ *
+ * A Server route names the file itself in `Content-Disposition`. A `blob:` handle carries no
+ * name, so the browser falls back to the opaque URL and saves `vina_1.pdbqt` as `<uuid>.txt`;
+ * for those the folder's own name for the file is stated instead.
+ */
+export function downloadName(artifact: ResultFile): string {
+  if (!artifact.url.startsWith('blob:')) return '';
+  const parts = resultFileName(artifact).split('/').filter(Boolean);
+  return parts.at(-1) || '';
+}
+
+export function beginDownload(url: string, name = ''): void {
   const link = document.createElement('a');
   link.href = url;
-  link.download = '';
+  link.download = name;
   link.hidden = true;
   document.body.append(link);
   link.click();

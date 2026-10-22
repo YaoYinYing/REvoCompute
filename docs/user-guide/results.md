@@ -56,11 +56,14 @@ pick the extracted folder — the one containing `manifest.json`.
   from task*, as provenance only.
 - Every declared file must be present and match the size and SHA-256 the
   manifest records; otherwise the page names the files that differ and opens
-  nothing. Larger files past the browser's hashing budget are checked by size
-  only, and the page says so.
-- Declared views, files and downloads work as they do for a remote result. A
-  declared Storyboard is named but not run: its code is not loaded from a
-  folder, so the declared views are shown instead.
+  nothing. Files past the browser's hashing budget — and every file on a
+  non-secure origin, where the browser cannot hash — are checked by size only,
+  and the page says so.
+- Declared views, files and downloads work as they do for a remote result, and
+  a download keeps the file's own name. A declared Storyboard is named but not
+  run: its code is not loaded from a folder, so the declared views are shown
+  instead. A citation links only to an `https:` address or a DOI, so a crafted
+  folder cannot hand you an executable link.
 - Nothing is uploaded and no Task, Runner or Tool is started. The browser asks
   for the folder again after a reload.
 

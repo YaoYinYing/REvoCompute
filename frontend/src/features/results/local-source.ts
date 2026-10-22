@@ -69,8 +69,10 @@ function relativePath(file: File, root: string | null): string {
 /**
  * The one shallowest `manifest.json`, and the folder it sits in.
  *
- * A reader may pick the extracted folder or a directory containing it. Two manifests at the same
- * depth are two results in one selection, which is ambiguous rather than one result.
+ * A selection holds one result: the manifest is taken from the folder that holds it, a manifest
+ * nested deeper is not opened, and two manifests at the same depth are two results rather than
+ * one. Picking a directory *above* the result is refused — the declared paths are relative to
+ * the manifest's folder, so every one of them would miss.
  */
 function findRoot(files: File[]): { root: string | null; manifest: File } {
   const matches = files.filter((file) => relativePath(file, null).split('/').pop() === MANIFEST);
@@ -97,6 +99,24 @@ async function readManifest(file: File): Promise<Record<string, unknown>> {
   catch { throw new Error(t('results.local.manifestInvalid')); }
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(t('results.local.manifestInvalid'));
   return value as Record<string, unknown>;
+}
+
+/**
+ * The renderer capability of a logical file, as `revocompute/result_projection.py::artifact_capability`
+ * derives it. An archive's logical record inherits the *artifact's* preview, which is guessed from
+ * the file extension; a table without one (`pssm_msa/*_ascii_mtx_file`) is `download_only` there
+ * and `table` once its declared `type` is read. The Server re-derives it when it serves the same
+ * manifest, so the folder's projection has to derive it the same way or a local result shows less
+ * than the remote one.
+ */
+function projectedCapability(preview: unknown, logicalType: unknown): string {
+  const declared = typeof logicalType === 'string' && logicalType ? logicalType
+    : typeof preview === 'string' && preview ? preview : null;
+  if (declared === 'structure') return 'molecular_structure';
+  if (declared && ['table', 'plot', 'image', 'text', 'archive'].includes(declared)) return declared;
+  if (declared && ['alignment', 'fasta', 'json'].includes(declared)) return 'text';
+  if (declared === 'model' || declared === null) return 'download_only';
+  return 'unknown';
 }
 
 async function digest(file: File): Promise<string> {
@@ -141,21 +161,25 @@ export async function openLocalResult({ files, label }: LocalFolderSelection): P
   // A logical file declares its own size and digest, and a view may reach it by that path even
   // when the artifact list does not name it. Verify the union, so every path a renderer can be
   // handed a handle to is a path this folder was checked against.
-  const declaredByPath = new Map<string, Record<string, unknown>>();
+  const declaredByPath = new Map<string, Array<Record<string, unknown>>>();
   for (const record of [...declared, ...Object.values(logicalFiles).flat()]) {
-    if (!declaredByPath.has(String(record.path))) declaredByPath.set(String(record.path), record);
+    const path = String(record.path);
+    declaredByPath.set(path, [...(declaredByPath.get(path) ?? []), record]);
   }
 
   const missing: string[] = []; const resized: string[] = []; const changed: string[] = []; const unchecked: string[] = [];
   const hashAvailable = typeof crypto?.subtle?.digest === 'function';
   let hashed = 0;
-  for (const [path, declaration] of declaredByPath) {
+  for (const [path, records] of declaredByPath) {
     const file = byPath.get(path);
     if (!file) { missing.push(path); continue; }
-    if (file.size !== Number(declaration.size)) { resized.push(path); continue; }
+    // An artifact and a logical file may both name one path. Both are the folder's declaration
+    // of that file, so a file that fits only one of them is not the file either describes.
+    if (records.some((record) => file.size !== Number(record.size))) { resized.push(path); continue; }
     if (!hashAvailable || file.size > HASH_MAX_BYTES) { unchecked.push(path); continue; }
     try {
-      if (await digest(file) === String(declaration.sha256).toLowerCase()) hashed += 1;
+      const actual = await digest(file);
+      if (records.every((record) => String(record.sha256).toLowerCase() === actual)) hashed += 1;
       else changed.push(path);
     } catch { unchecked.push(path); }
   }
@@ -179,6 +203,7 @@ export async function openLocalResult({ files, label }: LocalFolderSelection): P
       name: String(entry.path).split('/').pop() || String(entry.path),
       viewer: entry.logical_type || entry.preview || 'download',
       preview: entry.logical_type || entry.preview || null,
+      capability: projectedCapability(entry.preview, entry.logical_type),
       url: url(String(entry.path)),
     }));
   }
@@ -186,10 +211,14 @@ export async function openLocalResult({ files, label }: LocalFolderSelection): P
     ? String((raw.storyboard as { identifier?: unknown }).identifier || '') || null : null;
   // The archived Storyboard is reported by identifier and never loaded: its entrypoint is code
   // from the folder, and a folder is bytes, not an installer.
+  // An archive records why the output check was not assessed only by leaving it unassessed, which
+  // the Server writes exactly when the run itself failed. The folder can therefore state that
+  // outcome, rather than presenting a failed run as a finished one.
+  const outputState = (raw.output_check as { state?: unknown } | undefined)?.state;
   const parsed = parseResultManifest({
     ...raw,
     task_id: LOCAL_TASK_ID,
-    status: 'finished',
+    status: outputState === 'not_assessed' ? 'failed' : 'finished',
     terminal: true,
     error: null,
     outcome: raw.outcome ?? null,

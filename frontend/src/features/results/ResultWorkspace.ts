@@ -1,4 +1,4 @@
-import { ApiError, beginDownload, downloadUrl, getResultManifest, loadAuthorizedResult, requestResultArchive, taskIdFromLocation } from '../../api/result-api';
+import { ApiError, beginDownload, downloadName, downloadUrl, getResultManifest, loadAuthorizedResult, requestResultArchive, taskIdFromLocation } from '../../api/result-api';
 import { resultFileName, type ArtifactRole, type LogicalResultFile, type ResultArtifact, type ResultFile, type ResultManifest,
   type ResultView, type TaskStatus } from '../../api/result-types';
 import { setButtonIcon } from '../../components/icons';
@@ -44,6 +44,22 @@ function isResultManifest(value: TaskStatus | ResultManifest): value is ResultMa
 const QUIET_OUTCOMES = new Set(['success', 'succeeded', 'completed', 'complete', 'ready']);
 const isQuietOutcome = (manifest: ResultManifest): boolean => manifest.status === 'finished' &&
   (!manifest.outcome || QUIET_OUTCOMES.has(manifest.outcome.trim().toLowerCase()));
+
+/**
+ * The one address a citation may link to.
+ *
+ * A citation comes from the manifest, and a local result's manifest is a folder's bytes. Only an
+ * absolute `https:` address (or a DOI, from which the Server's own form is derived) becomes a
+ * live anchor in this origin, so a `javascript:` or `data:` URL can never be clicked into
+ * execution on the results page.
+ */
+const citationHref = (citation: { url?: string; doi?: string }): string | null => {
+  if (citation.url) {
+    try { const parsed = new URL(citation.url); if (parsed.protocol === 'https:') return parsed.href; }
+    catch { /* a relative or malformed address is not a citation locator */ }
+  }
+  return citation.doi ? `https://doi.org/${encodeURIComponent(citation.doi)}` : null;
+};
 
 interface WorkspaceNodes {
   status: HTMLElement; outcome: HTMLElement; badge: HTMLElement; title: HTMLElement; meta: HTMLElement; tabs: HTMLElement;
@@ -106,7 +122,7 @@ export class ResultWorkspace {
       onSelectionChanged: (residues) => this.storyboard.setMolecularSelection(residues),
     });
     this.nodes = this.buildShell(); this.storyboard = new StoryboardHost(this.nodes.preview, {
-      openFile: (file) => this.openLogicalFile(file), downloadFile: (file) => beginDownload(file.url),
+      openFile: (file) => this.openLogicalFile(file), downloadFile: (file) => beginDownload(file.url, downloadName(file)),
       openView: (viewId) => this.openViewById(viewId),
       mountView: async (viewId, host, signal) => {
         const view = this.manifest?.views?.find(item => item.id === viewId);
@@ -177,9 +193,10 @@ export class ResultWorkspace {
     this.nodes.badge.title = t('results.local.badgeTitle', { label: local.label });
     this.nodes.badge.hidden = false;
     this.renderManifest(manifest);
-    this.nodes.archiveStatus.replaceChildren(element('p', 'result-note', local.verification.unchecked.length
-      ? t('results.local.verifiedPartial', { verified: local.verification.hashed, sizeOnly: local.verification.unchecked.length })
-      : t('results.local.verified', { verified: local.verification.hashed })));
+    const { hashed, unchecked } = local.verification;
+    this.nodes.archiveStatus.replaceChildren(element('p', 'result-note', unchecked.length
+      ? t('results.local.verifiedPartial', { verified: hashed, sizeOnly: unchecked.length })
+      : t(hashed === 1 ? 'results.local.verifiedOne' : 'results.local.verified', { verified: hashed })));
     this.nodes.archiveStatus.dataset.error = 'false';
     if (local.storyboard) {
       this.nodes.status.replaceChildren(element('strong', '', t('results.local.scientific')),
@@ -267,7 +284,8 @@ export class ResultWorkspace {
     this.nodes.meta.title = this.local ? this.local.label : t('results.taskIdTitle', { id: manifest.task_id });
     this.nodes.meta.dataset.source = this.local ? 'local' : 'remote';
     const quiet = isQuietOutcome(manifest);
-    this.renderDiagnostics(manifest.status === 'failed');
+    // Task diagnostics read the Server's task routes; a folder has no Task to ask about.
+    this.renderDiagnostics(!this.local && manifest.status === 'failed');
     this.setState(quiet ? manifest.status : manifest.outcome || manifest.status, manifest.error || '', quiet);
     if (manifest.output_check.state === 'failed') {
       this.nodes.status.hidden = false;
@@ -393,7 +411,7 @@ export class ResultWorkspace {
     this.destroyViewRenderer(); this.geometry.dispose(); this.storyboard.destroy(); this.cancelRender(); this.structure.dispose(); this.selectArtifact(artifact); this.markTab(null);
     const fileName = resultFileName(artifact);
     this.nodes.previewTitle.textContent = view.title; this.nodes.previewDescription.textContent = view.description || '';
-    this.nodes.download.hidden = false; this.nodes.download.href = downloadUrl(artifact); this.nodes.download.title = fileName;
+    this.nodes.download.hidden = false; this.nodes.download.href = downloadUrl(artifact); this.nodes.download.setAttribute('download', downloadName(artifact)); this.nodes.download.title = fileName;
     this.nodes.download.textContent = t('results.downloadNamed', { name: localName(fileName) });
     const controller = new AbortController(); this.renderController = controller; this.nodes.preview.setAttribute('aria-busy', 'true');
     try { this.viewRenderer = (await renderer.render(view, sources, this.nodes.preview, this.rendererContext(controller.signal))) || null; }
@@ -458,7 +476,7 @@ export class ResultWorkspace {
     if ((this.nodes.rail as HTMLDialogElement).open) (this.nodes.rail as HTMLDialogElement).close();
     this.destroyViewRenderer(); this.geometry.dispose(); this.storyboard.destroy(); this.cancelRender(); this.selectArtifact(artifact); this.markTab(null);
     const fileName = resultFileName(artifact); this.nodes.previewTitle.textContent = localName(fileName); this.nodes.previewDescription.textContent = formatBytes(artifact.size);
-    this.nodes.download.hidden = false; this.nodes.download.href = downloadUrl(artifact); this.nodes.download.title = fileName;
+    this.nodes.download.hidden = false; this.nodes.download.href = downloadUrl(artifact); this.nodes.download.setAttribute('download', downloadName(artifact)); this.nodes.download.title = fileName;
     this.nodes.download.textContent = t('results.downloadNamed', { name: localName(fileName) });
     const renderer = this.rendererRegistry.resolve(artifact); if (!renderer) { this.renderPreviewError(t('results.noInlinePreview')); return; }
     if (artifactCapability(artifact) !== 'structure' && artifactCapability(artifact) !== 'molecular_structure') this.structure.dispose();
@@ -518,7 +536,7 @@ export class ResultWorkspace {
       owner.setTheme(own ? this.structureTheme : this.viewStructureTheme); syncThemeButton();
     });
     const image = element('button', 'result-button result-button-small', t('results.structure.savePng')) as HTMLButtonElement; image.type = 'button'; image.addEventListener('click', async () => beginDownload(await owner.captureImage()));
-    const source = element('button', 'result-button result-button-small', t('results.download')) as HTMLButtonElement; source.type = 'button'; source.addEventListener('click', () => beginDownload(downloadUrl(artifact)));
+    const source = element('button', 'result-button result-button-small', t('results.download')) as HTMLButtonElement; source.type = 'button'; source.addEventListener('click', () => beginDownload(downloadUrl(artifact), downloadName(artifact)));
     const fullscreen = element('button', 'result-button result-button-small') as HTMLButtonElement; fullscreen.type = 'button';
     const syncFullscreen = (): void => { const expanded = document.fullscreenElement === (viewport.closest('[data-molecular-workspace]') || viewport); const label = expanded ? t('results.structure.exitFullscreen') : t('results.structure.enterFullscreen'); fullscreen.title = label; fullscreen.setAttribute('aria-label', label); fullscreen.setAttribute('aria-pressed', String(expanded)); fullscreen.textContent = expanded ? label : t('results.structure.expandStage'); };
     syncFullscreen();
@@ -570,7 +588,7 @@ export class ResultWorkspace {
     const selectedPath = this.selected && 'path' in this.selected ? this.selected.path : null;
     open.setAttribute('aria-current', String(selectedPath === artifact.path));
     const meta = element('span', '', formatBytes(artifact.size)); open.append(name, meta); open.addEventListener('click', () => void this.openArtifact(artifact));
-    const download = element('a', 'result-file-download') as HTMLAnchorElement; download.href = downloadUrl(artifact); download.download = ''; download.title = t('results.fileDownload', { name: artifact.path }); download.setAttribute('aria-label', t('results.fileDownload', { name: artifact.path })); setButtonIcon(download, 'Download');
+    const download = element('a', 'result-file-download') as HTMLAnchorElement; download.href = downloadUrl(artifact); download.setAttribute('download', downloadName(artifact)); download.title = t('results.fileDownload', { name: artifact.path }); download.setAttribute('aria-label', t('results.fileDownload', { name: artifact.path })); setButtonIcon(download, 'Download');
     row.append(open, download); return row;
   }
 
@@ -586,7 +604,8 @@ export class ResultWorkspace {
     const title = element('h2', '', t('results.run.title')); const list = element('dl', 'result-definition-list');
     values.forEach(([term, value]) => list.append(element('dt', '', term), element('dd', '', value))); this.nodes.run.append(title, list);
     if (manifest.run?.citations?.length) { const citations = element('ul', 'result-citations'); manifest.run.citations.forEach((citation) => { const item = element('li');
-      if (citation.url || citation.doi) { const link = element('a', '', citation.title) as HTMLAnchorElement; link.href = citation.url || `https://doi.org/${encodeURIComponent(citation.doi || '')}`; link.rel = 'noopener'; item.append(link); } else item.textContent = citation.title; citations.append(item); }); this.nodes.run.append(citations); }
+      const href = citationHref(citation);
+      if (href) { const link = element('a', '', citation.title) as HTMLAnchorElement; link.href = href; link.rel = 'noopener noreferrer'; item.append(link); } else item.textContent = citation.title; citations.append(item); }); this.nodes.run.append(citations); }
   }
 
   private renderIntegrity(): void {

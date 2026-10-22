@@ -9,10 +9,12 @@ import { installHarness } from './dom-harness';
 /*
  * The Local Result Workspace: an extracted archive read as a result.
  *
- * The fixtures here are shaped exactly like a real REvoCompute export: `manifest.json` at the
- * folder root plus one member per declared artifact, with the served fields (status, archive,
- * entrypoint URL) absent because an archive never contained them. See
- * `docs/developer-guide/local-result-workspace.md` and the six authentic exports it records.
+ * The fixtures here follow a real REvoCompute export: `manifest.json` at the folder root plus
+ * one member per declared artifact, with the served fields (status, archive, entrypoint URL)
+ * absent because an archive never contains them. A few fixtures deliberately go beyond what an
+ * export writes — a logical file with no artifact twin, a folder-authored citation — because a
+ * folder is ordinary bytes a reader may have edited, and the workspace is what refuses that.
+ * See `docs/developer-guide/local-result-workspace.md` and the six authentic exports it records.
  */
 
 const TASK = '0123456789abcdef0123456789abcdef';
@@ -142,6 +144,38 @@ describe('a local result source', () => {
       .rejects.toThrow(/differ from the manifest.*extra\.txt/);
   });
 
+  it('reads a logical file\'s capability from its declared type, as the Server does', async () => {
+    // An archive's logical record inherits the artifact's extension-guessed preview, so a table
+    // with no extension is `download_only` there. The Server re-derives the capability from the
+    // declared `type` when it serves the same manifest; a folder has to derive it the same way
+    // or the same result shows less locally than remotely.
+    const files = await archive([{ path: 'pssm_msa/query_ascii_mtx_file', text: 'A 1 2\n' }]);
+    const manifest = JSON.parse(await files[0]!.text());
+    const [artifact] = manifest.artifacts;
+    artifact.preview = null;
+    artifact.capability = 'download_only';
+    manifest.result.files = { pssm: [{ path: artifact.path, size: artifact.size, sha256: artifact.sha256,
+      logical_type: 'table', preview: null, capability: 'download_only', cardinality: 'one',
+      media_type: 'application/octet-stream', role: 'primary' }] };
+    const withManifest = new File([JSON.stringify(manifest)], 'manifest.json');
+    Object.defineProperty(withManifest, 'webkitRelativePath', { value: 'demo-result/manifest.json' });
+    const local = await openLocalResult({ files: [withManifest, files[1]!], label: 'demo-result' });
+    try {
+      expect(local.manifest.result.files.pssm?.[0]?.capability).toBe('table');
+    } finally { local.close(); }
+  });
+
+  it('states a run whose output was never assessed as failed, not finished', async () => {
+    // The Server writes `not_assessed` exactly when the run itself failed, so a folder that
+    // carries it must not present the run as a finished result.
+    const files = await archive([{ path: 'scores.csv', text: 'name,score\n' }],
+      { output_check: { state: 'not_assessed', checks: [], problems: [] } });
+    const local = await openLocalResult({ files, label: 'demo-result' });
+    try {
+      expect(local.manifest.status).toBe('failed');
+    } finally { local.close(); }
+  });
+
   it('reads a local table page through the same bounded loader the route uses', async () => {
     const files = await archive([{ path: 'scores.csv', text: 'name,score\na,1\nb,2\n' }]);
     const local = await openLocalResult({ files, label: 'demo-result' });
@@ -188,13 +222,41 @@ describe('the Local Result Workspace page', () => {
       await workspace.load();
       expect(fetches).toBe(0);
       expect(root.querySelector('.result-source-badge')?.textContent).toBe('Local');
-      expect(root.textContent).toContain('1 files match the sizes and SHA-256 hashes');
+      expect(root.textContent).toContain('1 file matches the size and SHA-256 hash');
       // The archive's Task identity is the archive's provenance, never this page's own:
       // the identity line names the folder, and the run record names the exported Task.
       expect(root.querySelector('.result-meta')?.textContent).toBe('Demo method · demo-result');
       expect(root.textContent).toContain('Exported from task');
       expect(root.querySelector('.result-record')?.textContent).toContain(TASK);
       expect(root.querySelector('.result-archive-action')).toBeNull();
+      // A blob handle carries no filename, so the row states the folder's own name for the file.
+      expect(root.querySelector('.result-file-download')?.getAttribute('download')).toBe('scores.csv');
+    } finally { local.close(); workspace.destroy(); }
+  });
+
+  it('never turns a folder-authored citation into an executable link', async () => {
+    noFetch();
+    const files = await archive([{ path: 'scores.csv', text: 'name,score\n' }], {
+      run: { method: { name: 'Demo method' }, inputs: [], parameters: [], citations: [
+        { num: 1, doi: '10.1000/x', title: 'Paper', url: 'javascript:alert(document.cookie)' },
+        { num: 2, doi: '10.1000/y', title: 'Real paper', url: 'https://doi.org/10.1000/y' },
+      ] },
+    });
+    const local = await openLocalResult({ files, label: 'demo-result' });
+    const root = document.createElement('div');
+    const workspace = new ResultWorkspace(root, async () => { throw new Error('no viewer'); }, local);
+    (root.querySelector('.result-search') as unknown as { value: string }).value = '';
+    try {
+      await workspace.load();
+      // Only an absolute `https:` locator (or a DOI) becomes an anchor; the folder's other
+      // address is stated as plain text, so it cannot be clicked into execution here.
+      // The folder's `javascript:` address is never emitted; the citation falls back to its
+      // DOI, which is the same https locator the Server would have derived.
+      const anchors = [...root.querySelectorAll('.result-citations a')] as unknown as Array<{ getAttribute(name: string): string | null }>;
+      expect(anchors.map((anchor) => anchor.getAttribute('href'))).toEqual([
+        'https://doi.org/10.1000%2Fx', 'https://doi.org/10.1000/y',
+      ]);
+      expect(root.querySelector('.result-citations')?.textContent).toContain('Paper');
     } finally { local.close(); workspace.destroy(); }
   });
 

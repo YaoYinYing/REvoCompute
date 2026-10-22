@@ -5,6 +5,7 @@
  * The bundle carries raw artifacts by path, so this renderer states each item's published
  * type and size; it never inspects bytes to decide what they mean.
  */
+import { downloadName } from '../../api/result-api';
 import { resultFileName, type ResultFile, type ResultView } from '../../api/result-types';
 import { t } from '../../app/i18n';
 import { artifactCapability } from './renderer-registry';
@@ -52,7 +53,7 @@ export function createEvidenceBundleViewRenderer(): ViewRenderer {
         const meta = document.createElement('span'); meta.className = 'result-note';
         meta.textContent = `${item.capability} · ${formatBytes(item.file.size)}`;
         const link = document.createElement('a'); link.className = 'result-button result-button-small';
-        link.href = item.file.url; link.setAttribute('download', ''); link.textContent = t('results.evidenceBundle.download');
+        link.href = item.file.url; link.setAttribute('download', downloadName(item.file)); link.textContent = t('results.evidenceBundle.download');
         link.dataset.download = name;
         row.append(title, meta, link);
         if (item.capability === 'image') {

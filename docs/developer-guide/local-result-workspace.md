@@ -59,9 +59,17 @@ reaches the server.
 The folder is read as a **projection of the same ResultManifest v3** the Server
 publishes (`frontend/src/features/results/local-source.ts`), handed to the
 ordinary `ResultWorkspace` — one workspace, two sources. The projection
-supplies only what the Server adds at serve time: `status: finished`,
-`terminal: true`, `error: null`, an empty archive record, per-artifact and
-per-logical-file `blob:` URLs, and the literal Task identity `local`.
+supplies only what the Server adds at serve time: `terminal: true`,
+`error: null`, an empty archive record, per-artifact and per-logical-file
+`blob:` URLs, and the literal Task identity `local`.
+
+The archive carries no lifecycle status, and the folder does not invent a
+`finished` one: the Server writes `output_check.state: not_assessed` exactly
+when the run itself failed, so that state is projected as `failed` and any
+other is `finished`. A logical file's renderer capability is re-derived from
+its declared `type` with the Server's own projection rule, because the archived
+record inherited an extension-guessed capability that the Server replaces when
+it serves the same manifest.
 
 ### Identity and truthfulness
 
@@ -79,18 +87,24 @@ per-logical-file `blob:` URLs, and the literal Task identity `local`.
 A folder is refused before anything renders when it does not match its own
 manifest. Declared paths must be relative (`/`, `\`, NUL, empty, `.` and `..`
 segments are refused), two files may not share a path, the manifest must be
-schema version 3 and at most 8 MiB, and one folder or folder selection holds
-one result: a manifest nested inside the chosen one is not opened, and two
-manifests at the same depth are refused as ambiguous.
+schema version 3 and at most 8 MiB, and one selection holds one result: the
+manifest is taken from the folder that holds it, a manifest nested deeper is
+not opened, and two manifests at the same depth are refused as ambiguous.
+Picking a directory *above* the result folder is refused too — the declared
+paths are relative to the manifest's own folder, so every one of them misses.
 
 Every path a view can reach must be present and match its declared size, and
 every such file at or below 8 MiB must also match its declared SHA-256. That is
-the union of `manifest.artifacts` and the logical files under `result.files`:
-an archive writes both, and a view resolves a declared path to whichever one
-names it. A refusal names the differing paths, up to five plus a count. Files
-past the hash budget are reported as verified by size only, so the page never
-overstates what it checked. Where the browser has no `crypto.subtle` (a
-non-secure origin), every file is verified by size only and the page says so.
+the union of `manifest.artifacts` and the logical files under `result.files`,
+and a path both lists name must satisfy both records. A refusal names the
+differing paths, up to five plus a count. Files past the hash budget — and every
+file where the browser has no `crypto.subtle`, as on a non-secure origin — are
+reported as checked by size only, so the page never overstates what it checked.
+
+Verification is a single pass when the folder is opened. A view then reads the
+file it was handed: the text readers bound its size against the size declared
+here, and the bounded table reader holds the same row, column and page-byte
+ceilings as the remote path. Neither re-hashes per read.
 
 ### Transport
 
@@ -100,8 +114,15 @@ non-secure origin), every file is verified by size only and the page says so.
 - A download control points straight at that handle. The Server's `?download=1`
   flag means nothing to a `blob:` URL, and Chromium cancels a download whose
   blob URL carries a query, so a local download is the bare handle.
+- A `blob:` handle carries no filename, so each local download control names the
+  file itself in its `download` attribute; a Server route keeps relying on its
+  own `Content-Disposition`, whose filename is the artifact's basename.
 - Nothing in the folder is imported, evaluated, navigated to or framed. An
   archived HTML report stays download-only, as it is for a remote result.
+- A citation becomes a link only at an absolute `https:` address, or at the
+  `https://doi.org/` locator derived from its DOI. Any other scheme a folder's
+  manifest names is shown as plain text, so a crafted archive cannot hand a
+  reader a click-to-execute address inside this origin.
 - Shared table views read the local file through the bounded local reader in
   `table-page.ts` (same row, column and page-byte ceilings as the remote path).
 
