@@ -260,8 +260,11 @@ def test_the_rfdiffusion_bundle_serves_the_endmdl_only_trajectory_verbatim(page:
 
 def test_a_missing_required_source_states_the_error_and_keeps_downloads(page: Page) -> None:
     replay = open_result(page, "mpnn_replay/2kl8_designs_862e0391.json", "proteinmpnn")
+    # The view's source is a logical file, so its bytes are served by the file
+    # route; that is what a failed read has to come from here.
+    designs = replay.manifest["result"]["files"]["designs"][0]
     page.route(
-        f"{ORIGIN}/compute/api/results/{replay.task_id}/artifacts/seqs/2KL8.fa",
+        f"{ORIGIN}{designs['url']}",
         lambda route: route.fulfill(status=404, json={"error": "Artifact not found"}),
     )
     page.locator(".result-view-menu > summary").click()
@@ -270,7 +273,7 @@ def test_a_missing_required_source_states_the_error_and_keeps_downloads(page: Pa
     # rendering an empty answer, and the published artifact stays downloadable.
     expect(page.locator(".result-preview")).to_contain_text("Text preview could not be loaded", timeout=30_000)
     expect(page.locator(".result-preview-header a[download]")).to_have_attribute(
-        "href", f"/compute/api/results/{replay.task_id}/artifacts/seqs/2KL8.fa?download=1")
+        "href", f"{designs['url']}&download=1")
 
 
 def test_the_result_page_raises_no_console_or_csp_error(page: Page) -> None:

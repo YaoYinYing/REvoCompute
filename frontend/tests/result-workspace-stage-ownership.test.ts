@@ -60,6 +60,26 @@ class OptionNode extends HarnessNode {
   constructor(text: string, value: string) { super('option'); this.text = text; this.value = value; }
 }
 
+/** One fake viewer per StructureController: its `dispose` empties only its own host. */
+interface FakeStage { host: HarnessNode; label: string; disposed: boolean }
+const liveStages = (stages: FakeStage[]): FakeStage[] =>
+  stages.filter((stage) => !stage.disposed && stage.host.querySelector('canvas') !== null);
+function stageFactory(stages: FakeStage[]) {
+  return async (element: HTMLElement): Promise<MolecularViewer> => {
+    const host = element as unknown as HarnessNode;
+    const stage: FakeStage = { host, label: '', disposed: false }; stages.push(stage);
+    const alive = (): void => { if (stage.disposed) throw new Error('viewer disposed'); };
+    return {
+      setRepresentation: async () => { alive(); }, setColor: async () => { alive(); }, setTheme: () => { alive(); },
+      resize: () => {}, captureImage: async () => '',
+      loadStructure: async (source) => { alive(); stage.label = source.label || ''; host.replaceChildren(new HarnessNode('canvas')); },
+      dispose: () => { if (stage.disposed) return; stage.disposed = true; host.replaceChildren(); },
+    };
+  };
+}
+
+const click = (node: HarnessNode): void => node.dispatch('click', { type: 'click' });
+
 afterEach(() => vi.unstubAllGlobals());
 
 describe('ResultWorkspace molecular stage ownership', () => {
@@ -98,9 +118,8 @@ describe('ResultWorkspace molecular stage ownership', () => {
   it('does not let a declared view dispossess the structure the page already draws', async () => {
     // The Task Storyboard mounts `models/model_0.cif` in its own slot through
     // openFile, then mounts its declared candidate-collection view, which lists
-    // that same artifact. One shared StructureController mounts one host, so a
-    // mount into the view's `.candidate-stage` would dispose the page's own stage
-    // and leave the slot empty while the declared view showed the model.
+    // that same artifact. The view states the artifact instead of mounting it,
+    // and the page's own stage is never touched.
     installHarness(vi.stubGlobal, { pathname: `/compute/results/${TASK}` });
     vi.stubGlobal('Option', OptionNode);
     const storyboard = { identifier: 'demo', entrypoint: 'index.js', entrypoint_url: 'storyboard-probe', requires: ['models'], optional: [] };
@@ -112,11 +131,9 @@ describe('ResultWorkspace molecular stage ownership', () => {
       if (url.endsWith(`/results/${TASK}`)) return new Response(JSON.stringify(storyboardManifest));
       return new Response('ATOM');
     }));
-    let mounts = 0; let disposals = 0;
-    const viewer = (): MolecularViewer => ({ setRepresentation: async () => {}, setColor: async () => {}, setTheme: () => {},
-      resize: () => {}, captureImage: async () => '', loadStructure: async () => {}, dispose: () => { disposals += 1; } });
+    const stages: FakeStage[] = [];
     const root = document.createElement('div') as unknown as HarnessNode;
-    const workspace = new ResultWorkspace(root as unknown as HTMLElement, async () => { mounts += 1; return viewer(); });
+    const workspace = new ResultWorkspace(root as unknown as HTMLElement, stageFactory(stages));
     (root.querySelector('.result-search') as unknown as { value: string }).value = '';
 
     // `load()` renders the manifest through the storyboard, as the route does.
@@ -126,17 +143,18 @@ describe('ResultWorkspace molecular stage ownership', () => {
 
     // The storyboard's own slot keeps the one mounted stage, and the declared
     // view states the artifact instead of mounting it a second time.
-    expect(root.querySelector('[data-structure-slot] .structure-host')).not.toBeNull();
+    const slotStage = stages[0]!;
+    expect(slotStage.host).toBe(root.querySelector('[data-structure-slot] .structure-host'));
     expect(root.querySelector('.candidate-stage')).toBeNull();
-    expect(mounts).toBe(1);
-    expect(disposals).toBe(0);
+    expect(stages).toHaveLength(1);
+    expect(slotStage.disposed).toBe(false);
     expect(root.textContent).toContain('drawn in the page’s own structure stage above');
   });
 
-  it('mounts a candidate whose published path only shares a basename with the drawn structure', async () => {
+  it('keeps the page stage drawn while a same-basename candidate mounts beside it', async () => {
     // The Storyboard draws `run2/model_0.cif`; the declared view lists
-    // `run1/model_0.cif`. Same basename, different published artifact: the page
-    // does not draw this one, so the view must mount the selected structure.
+    // `run1/model_0.cif` and the drawn `run2` artifact. Same basename, different
+    // published artifact, so the view stages `run1` in its own viewer.
     installHarness(vi.stubGlobal, { pathname: `/compute/results/${TASK}` });
     vi.stubGlobal('Option', OptionNode);
     globalThis.__storyboardDrawnPath = 'run2/model_0.cif';
@@ -144,7 +162,7 @@ describe('ResultWorkspace molecular stage ownership', () => {
     const listed = artifact('run1/model_0.cif', { media_type: 'chemical/x-cif', preview: 'structure', capability: 'molecular_structure' });
     const storyboard = { identifier: 'demo', entrypoint: 'index.js', entrypoint_url: 'storyboard-probe', requires: ['models'], optional: [] };
     const storyboardManifest = { ...manifest, artifacts: [drawn, listed],
-      views: [{ ...views[0]!, sources: { candidates: [listed.path] } }], storyboard,
+      views: [{ ...views[0]!, sources: { candidates: [listed.path, drawn.path] } }], storyboard,
       result: { files: { models: [{ ...drawn, id: 'models', name: 'model_0.cif', path: drawn.path, cardinality: 'one', viewer: 'structure' }] } } };
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       if (url.includes('/auth/me')) return new Response(JSON.stringify({ id: 1, username: 'owner' }));
@@ -152,33 +170,36 @@ describe('ResultWorkspace molecular stage ownership', () => {
       if (url.endsWith(`/results/${TASK}`)) return new Response(JSON.stringify(storyboardManifest));
       return new Response('ATOM');
     }));
-    let mounts = 0; const loads: Array<{ host: unknown; label: string }> = [];
-    const viewer = (host: unknown): MolecularViewer => ({ setRepresentation: async () => {}, setColor: async () => {}, setTheme: () => {},
-      resize: () => {}, captureImage: async () => '', dispose: () => {},
-      loadStructure: async (source) => { loads.push({ host, label: source.label || '' }); } });
+    const stages: FakeStage[] = [];
     const root = document.createElement('div') as unknown as HarnessNode;
-    const workspace = new ResultWorkspace(root as unknown as HTMLElement,
-      async (host) => { mounts += 1; return viewer(host); });
+    const workspace = new ResultWorkspace(root as unknown as HTMLElement, stageFactory(stages));
     (root.querySelector('.result-search') as unknown as { value: string }).value = '';
 
     try {
       await workspace.load();
-      await vi.waitFor(() => expect(root.querySelector('.candidate-stage .structure-host')).not.toBeNull());
-      // Each structure lands in its own stage: the page's slot keeps the artifact it
-      // draws, and the declared view's stage receives only its own candidate. The
-      // page labels its logical file by the declared name; the view's candidate is a
-      // raw artifact, labelled by its published path.
-      const slot = root.querySelector('[data-structure-slot] .structure-host');
-      expect(loads.map((load) => load.host)).toEqual([slot, root.querySelector('.candidate-stage .structure-host')]);
-      expect(loads.map((load) => load.label)).toEqual(['model_0.cif', 'run1/model_0.cif']);
-      expect(root.textContent).not.toContain('drawn in the page’s own structure stage above');
-      expect(mounts).toBe(2);
-      // The structure the storyboard opened is the row marked current, matched by
-      // its published path rather than by the basename both files share.
-      const current = [...root.querySelectorAll('[data-artifact-path]')]
-        .filter((node) => node.getAttribute('aria-current') === 'true')
-        .map((node) => (node as unknown as { dataset: { artifactPath: string } }).dataset.artifactPath);
-      expect(current).toEqual(['run2/model_0.cif']);
+      await vi.waitFor(() => expect(root.querySelector('.candidate-stage canvas')).not.toBeNull());
+      // Two owners, two stages: the page's slot still draws `run2`, and the view's
+      // own stage drew its `run1` candidate. Neither mount dispossessed the other.
+      const slotStage = stages[0]!;
+      const viewStage = stages[1]!;
+      expect(slotStage.host).toBe(root.querySelector('[data-structure-slot] .structure-host'));
+      expect(viewStage.host).toBe(root.querySelector('.candidate-stage .structure-host'));
+      expect(slotStage.label).toBe('model_0.cif');
+      expect(viewStage.label).toBe('run1/model_0.cif');
+      expect(liveStages(stages)).toEqual([slotStage, viewStage]);
+
+      // Selecting the artifact the page already draws closes only the view's own
+      // stage; the page's stage keeps its own load and its canvas.
+      const buttons = root.querySelectorAll('.candidate-list button');
+      expect(buttons).toHaveLength(2);
+      click(buttons[1]!);
+      await vi.waitFor(() => expect(root.querySelector('.candidate-stage')).toBeNull());
+      expect(viewStage.disposed).toBe(true);
+      expect(slotStage.disposed).toBe(false);
+      expect(slotStage.label).toBe('model_0.cif');
+      expect(root.querySelector('[data-structure-slot] .structure-host canvas')).not.toBeNull();
+      expect(liveStages(stages)).toEqual([slotStage]);
+      expect(root.textContent).toContain('drawn in the page’s own structure stage above');
     } finally { globalThis.__storyboardDrawnPath = undefined; }
   });
 
@@ -202,19 +223,67 @@ describe('ResultWorkspace molecular stage ownership', () => {
       }
       return new Response('ATOM');
     }));
-    let mounts = 0; const loaded: string[] = [];
-    const viewer = (): MolecularViewer => ({ setRepresentation: async () => {}, setColor: async () => {}, setTheme: () => {},
-      resize: () => {}, captureImage: async () => '', dispose: () => {},
-      loadStructure: async (source) => { loaded.push(source.label || ''); } });
+    const stages: FakeStage[] = [];
     const root = document.createElement('div') as unknown as HarnessNode;
-    const workspace = new ResultWorkspace(root as unknown as HTMLElement, async () => { mounts += 1; return viewer(); });
+    const workspace = new ResultWorkspace(root as unknown as HTMLElement, stageFactory(stages));
     (root.querySelector('.result-search') as unknown as { value: string }).value = '';
 
     await workspace.load();
-    await vi.waitFor(() => expect(root.querySelector('.candidate-stage .structure-host')).not.toBeNull());
+    await vi.waitFor(() => expect(root.querySelector('.candidate-stage .structure-host canvas')).not.toBeNull());
     // The declared candidate was mounted into its own stage after the page's
-    // failed attempt left nothing drawn.
-    expect(loaded).toEqual([candidate.path]);
-    expect(mounts).toBe(2);
+    // failed attempt left nothing drawn, under the Task-declared name its logical
+    // file publishes rather than the artifact path it resolves to.
+    expect(stages.map((stage) => stage.label)).toEqual(['', 'model_0.cif']);
+  });
+
+  it('names a declared candidate by its logical file and downloads through the file route', async () => {
+    // The view declares a path the Task also publishes as a logical file: the
+    // candidate is that named file, not the storage path it lives at, so the list,
+    // the detail link and the download all use the declared identity.
+    installHarness(vi.stubGlobal, { pathname: `/compute/results/${TASK}` });
+    vi.stubGlobal('Option', OptionNode);
+    const report = artifact('docs/report.txt', { media_type: 'text/plain', preview: 'text', capability: 'text' });
+    const modelPath = 'predictions/model_0.pdb';
+    const model = artifact(modelPath, { media_type: 'chemical/x-pdb', preview: 'structure', capability: 'molecular_structure' });
+    const logical = [
+      { id: 'report', name: 'report.txt', path: report.path, media_type: 'text/plain', size: 8, role: 'evidence',
+        cardinality: 'one', viewer: 'text', preview: 'text', capability: 'text', url: `/compute/api/results/${TASK}/files/report?index=0` },
+      { id: 'models', name: 'model_0.pdb', path: modelPath, media_type: 'chemical/x-pdb', size: 8, role: 'primary',
+        cardinality: 'one', viewer: 'structure', preview: 'structure', capability: 'molecular_structure',
+        url: `/compute/api/results/${TASK}/files/models?index=0` },
+    ];
+    const logicalManifest = { ...manifest, artifacts: [report, model],
+      views: [
+        { ...views[0]!, sources: { candidates: [modelPath] } },
+        { ...views[1]!, sources: { items: [report.path] } },
+      ],
+      result: { files: { report: [logical[0]], models: [logical[1]] } } };
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.includes('/auth/me')) return new Response(JSON.stringify({ id: 1, username: 'owner' }));
+      if (url.includes('/running/')) return new Response(JSON.stringify(status));
+      if (url.endsWith(`/results/${TASK}`)) return new Response(JSON.stringify(logicalManifest));
+      return new Response('ATOM');
+    }));
+    const stages: FakeStage[] = [];
+    const root = document.createElement('div') as unknown as HarnessNode;
+    const workspace = new ResultWorkspace(root as unknown as HTMLElement, stageFactory(stages));
+    (root.querySelector('.result-search') as unknown as { value: string }).value = '';
+
+    await workspace.load();
+    await vi.waitFor(() => expect(root.querySelector('.candidate-stage canvas')).not.toBeNull());
+    // The candidate list names the declared file; the detail link downloads it
+    // through the file route, labelled by the same declared name.
+    expect(root.querySelectorAll('.candidate-list button').map((button) => button.textContent)).toEqual(['model_0.pdb']);
+    const detailLink = root.querySelector('.candidate-detail a')!;
+    expect(detailLink.textContent).toBe('Download model_0.pdb');
+    expect(detailLink.getAttribute('href')).toBe(`/compute/api/results/${TASK}/files/models?index=0`);
+    expect(root.textContent).not.toContain(modelPath);
+
+    // An evidence item declared as a logical file is titled by its declared name too.
+    await (workspace as unknown as { openView(view: unknown): Promise<void> })
+      .openView((logicalManifest.views as unknown[])[1]);
+    const row = root.querySelector('.evidence-bundle-item strong')!;
+    expect(row.textContent).toBe('report.txt');
+    expect(root.textContent).not.toContain(report.path);
   });
 });

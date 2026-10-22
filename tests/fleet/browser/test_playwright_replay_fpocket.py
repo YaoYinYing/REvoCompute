@@ -209,10 +209,18 @@ def test_replayed_evidence_bundle_exposes_the_raw_fpocket_output(page: Page) -> 
     # The declared evidence-bundle view lists every published source of the
     # captured result with its capability and a download link, so fpocket's own
     # descriptor file and per-pocket geometry remain reachable from the result.
+    # A source the Task also publishes as a logical file is stated by its
+    # declared name; a source only the raw artifact tree carries keeps its path,
+    # which is its identity.
     preview = page.locator(".result-preview")
     items = next(view["sources"]["items"] for view in replay.manifest["views"] if view["id"] == "raw_fpocket_output")
+    declared = {
+        artifact["path"]: artifact["name"]
+        for files in replay.manifest["result"]["files"].values()
+        for artifact in files
+    }
     for path in items:
-        expect(preview).to_contain_text(path)
+        expect(preview).to_contain_text(declared.get(path, path))
     expect(preview.locator("a[download]")).to_have_count(len(items))
 
 
