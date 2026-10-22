@@ -2,14 +2,14 @@ identifier: gremlin-lh-result
 entrypoint: ./index.js
 requires:
   - summary
-  - mrf_model
-  - profile
-  - alignment_statistics
-  - model_metadata
   - pairwise_scores
   - raw_matrix
   - apc_matrix
 optional:
+  - mrf_model
+  - profile
+  - alignment_statistics
+  - model_metadata
   - query
   - alignment
   - sequence_weights

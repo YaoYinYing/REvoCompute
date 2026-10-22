@@ -1,0 +1,1 @@
+{"source": "slurm_adapter", "schema_version": 1, "task_id": "86adfa8e017342d0f31dbef62a8e8a5f", "logs": {"stdout": "REVODESIGN_JOB_ID=311027\nREVODESIGN_ALLOCATION_LIVE=311027\nREVODESIGN_STAGE:esmdynamic\nESMDynamic prediction complete.\n\n", "stderr": ""}}

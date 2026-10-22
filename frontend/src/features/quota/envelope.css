@@ -1,0 +1,14 @@
+/* The canonical resource envelope, read only. It reuses the credit dialog's
+   fact-strip grammar so one account's position reads the same wherever it is
+   opened, and adds no control of its own. */
+.resource-envelope h3 { margin: 1.1rem 0 .5rem; font: 600 .95rem/1.2 var(--font-display); }
+.resource-envelope h3:first-child { margin-top: 0; }
+.resource-envelope h4 { margin: 1.1rem 0 .5rem; font: 600 .875rem/1.2 var(--font-display); }
+.resource-envelope-table td:not(:first-child), .resource-envelope-table th:not(:first-child) { font-variant-numeric: tabular-nums; }
+.resource-storage-facts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .6rem; margin: 0; border-top: 1px solid var(--app-line); border-bottom: 1px solid var(--app-line); }
+.resource-storage-facts > div { min-width: 0; display: grid; gap: .15rem; padding: .65rem; border-right: 1px solid var(--app-line); }
+.resource-storage-facts > div:last-child { border-right: 0; }
+.resource-storage-facts dt { color: var(--app-muted); font-size: .875rem; }
+.resource-storage-facts dd { margin: 0; font-size: .875rem; font-weight: 700; overflow-wrap: anywhere; }
+.resource-storage-facts .is-attention dd { color: var(--app-danger); }
+@media (max-width: 48rem) { .resource-storage-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); } .resource-storage-facts > div { border-right: 0; } }

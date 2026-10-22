@@ -1,0 +1,23 @@
+{
+  "inputs": [
+    {
+      "name": "minimal.fasta",
+      "role": "sequence",
+      "sha256": "7f6837f983af9fa93371b99066cc3671b6e1991c0ae1abb2386cdbbbe304f2c5",
+      "size": 30
+    }
+  ],
+  "params": {
+    "attention_type": "original_full",
+    "deterministic": true,
+    "match_protein": true,
+    "num_sequences": 1,
+    "organism": "Escherichia coli general",
+    "seed": 0,
+    "temperature": 0.2,
+    "top_p": 0.95
+  },
+  "submitted_at": "2026-10-20T16:23:53.222891+00:00",
+  "task_type": "codon_optimize",
+  "username": "tester"
+}

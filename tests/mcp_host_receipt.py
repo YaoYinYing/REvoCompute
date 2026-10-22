@@ -9,10 +9,11 @@ Python SDK.  This script produces the receipts for the two *other* hosts the PR
 claims -- the official MCP Inspector CLI and Claude Code -- so those claims are
 reproducible from the tree rather than asserted from an interactive session.
 
-It reuses the acceptance bootstrap, starts the real web process with the MCP
-companion listener, drives each available host against the endpoint, and writes
-one JSON receipt per host.  A host that is not installed is recorded as
-unavailable and does not fail the run.
+It reuses the acceptance bootstrap, starts the MCP surface as its own process
+(``python -m revocompute.mcp``, the ``mcp`` service ``docker-compose.mcp.yml``
+declares), drives each available host against the endpoint, and writes one JSON
+receipt per host.  A host that is not installed is recorded as unavailable and
+does not fail the run.
 
 Usage::
 
@@ -36,7 +37,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from tests.mcp_live_acceptance import _isolated_env, _seed_finished_task
+from tests.mcp_live_acceptance import _build_deployment, _mcp_service_env, _seed_finished_task
 
 
 def _wait_for_port(port: int, deadline_seconds: float = 30.0) -> bool:
@@ -173,26 +174,48 @@ def main(argv: list[str] | None = None) -> int:
     receipts: dict[str, dict] = {}
     with tempfile.TemporaryDirectory(prefix="mcp-host-receipts-") as tmp:
         root = Path(tmp)
-        _isolated_env(root)
-        os.environ["MCP_ENABLED"] = "true"
+        _build_deployment(root)
         os.environ["MCP_PORT"] = str(args.port)
-        os.environ["MCP_LOG_LEVEL"] = "warning"
-
+        # The canonical application owns the user database the seeded token is
+        # written into; importing it here starts no MCP listener.
         import revocompute.app as module
-
-        if not _wait_for_port(args.port):
-            print("MCP listener did not start", file=sys.stderr)
-            return 1
 
         class _Queued:
             id = "mcp-host-receipt-queued"
 
-        module.task_runtime.run_compute_task.apply_async = lambda *_a, **_k: _Queued()
+        from revocompute.task_runtime import run_compute_task
+
+        run_compute_task.apply_async = lambda *_a, **_k: _Queued()
         _task_id, token = _seed_finished_task(module)
 
-        url = f"http://127.0.0.1:{args.port}/k/mcp"
-        receipts["mcp-inspector-cli"] = _inspector_receipt(url, token)
-        receipts["claude-code"] = _claude_receipt(url, token, root)
+        # The MCP surface is its own process, so the receipt is produced against
+        # the service the deployment starts rather than against this process.
+        service = subprocess.Popen(
+            [sys.executable, "-m", "revocompute.mcp"],
+            env={**os.environ, **_mcp_service_env(root, port=args.port)},
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            if not _wait_for_port(args.port):
+                print(
+                    f"MCP service did not start: {(service.stderr.read() if service.stderr else '')[-2000:]}",
+                    file=sys.stderr,
+                )
+                return 1
+            url = f"http://127.0.0.1:{args.port}/k/mcp"
+            receipts["mcp-inspector-cli"] = _inspector_receipt(url, token)
+            receipts["claude-code"] = _claude_receipt(url, token, root)
+        finally:
+            service.terminate()
+            try:
+                service.wait(timeout=15)
+            except subprocess.TimeoutExpired:  # pragma: no cover - a hung service is a bug
+                service.kill()
+                service.wait(timeout=15)
+            if service.stderr is not None:
+                service.stderr.close()
 
     out_dir = Path(args.receipt_dir)
     for name, receipt in receipts.items():

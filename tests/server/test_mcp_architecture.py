@@ -170,6 +170,13 @@ def test_adapter_reaches_the_application_only_through_canonical_modules():
         'revocompute.config',
         'revocompute.db',
         'revocompute.operational_events',
+        # The canonical process-role leaf module.  The MCP service imports the
+        # canonical application to project the MCP protocol over it, and that
+        # application runs one startup pass which belongs to the service that
+        # owns it.  The adapter therefore declares what this process *is* through
+        # the canonical marker rather than inventing a second one, so the shared
+        # application's restart pass is not repeated by a second importer.
+        'revocompute.process_role',
         'revocompute.result_projection',
         'revocompute.storage',
         'revocompute.task_runtime',

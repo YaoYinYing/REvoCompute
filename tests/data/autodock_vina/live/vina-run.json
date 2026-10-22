@@ -1,0 +1,43 @@
+{
+  "task_type": "autodock_vina",
+  "runtime_network": false,
+  "inputs": {
+    "ligands": [
+      {
+        "format": "sdf",
+        "logical_type": "small_molecule_3d",
+        "original_name": "ethanol.sdf",
+        "path": "/workspace/inputs/ligands/ethanol.sdf",
+        "relative_path": "ethanol.sdf",
+        "sha256": "f90b5e1a06fbb1961f13c85bd199ed7420b0e4c4f118a8f138801cd737e6c328",
+        "validation": {
+          "status": "valid"
+        }
+      }
+    ],
+    "receptor": [
+      {
+        "format": "pdb",
+        "logical_type": "protein_structure",
+        "original_name": "1abc_A_B.pdb",
+        "path": "/workspace/inputs/receptor/1abc_A_B.pdb",
+        "relative_path": "1abc_A_B.pdb",
+        "sha256": "d9246c6bd74f0b5dce39db2cb7db6af8842cb40edb986ffd9c83e1ad081a2beb",
+        "validation": {
+          "status": "valid"
+        }
+      }
+    ]
+  },
+  "parameters": {
+    "center_x": 5.0,
+    "center_y": 5.0,
+    "center_z": 1.0,
+    "exhaustiveness": 1,
+    "num_modes": 3,
+    "seed": 1,
+    "size_x": 20.0,
+    "size_y": 20.0,
+    "size_z": 20.0
+  }
+}

@@ -218,7 +218,7 @@ export function executorNotice(executor: RunnerFleet['executor']): { title: stri
   }
   return {
     title: 'Host executor unavailable',
-    detail: ` ${executor.unavailable_reason || 'Readiness, capacity, access, and history stay available; mutating actions are disabled for every family until the host executor is reachable. This is a host capability, not a problem with any family below.'}`,
+    detail: ` ${executor.unavailable_reason || 'Readiness, capacity, access, and history stay available; mutating actions are disabled until the host executor is reachable.'}`,
   };
 }
 
@@ -286,7 +286,9 @@ export class FleetAdmin {
   private executorBanner = element('aside', 'fleet-executor');
   private summary = element('section', 'fleet-summary');
   private refreshButton = button('Refresh');
-  private readonly detail = element('section', 'fleet-detail');
+  private readonly detail = element('dialog', 'fleet-detail fleet-evidence-dialog');
+  private detailGeneration = 0;
+  private detailPhase = 'Lifecycle';
 
   constructor(private readonly shell: AppShell) {}
 
@@ -322,7 +324,7 @@ export class FleetAdmin {
     const table = element('table', 'admin-table');
     const head = element('thead');
     const headRow = element('tr');
-    for (const label of ['Runner family', 'Readiness', 'Capacity', 'Access', 'In flight']) headRow.append(text('th', label));
+    for (const label of ['Runner family', 'Build', 'Live test', 'Active image', 'Freshness']) headRow.append(text('th', label));
     head.append(headRow);
     table.append(head, this.table);
     scroll.append(table);
@@ -359,7 +361,8 @@ export class FleetAdmin {
     const notice = executorNotice(this.executor);
     this.executorBanner.replaceChildren();
     this.executorBanner.classList.toggle('is-warning', !this.executor.available);
-    this.executorBanner.append(text('strong', notice.title), text('span', notice.detail));
+    const evidence = element('details'); evidence.append(text('summary', 'Host capability evidence'), text('p', notice.detail));
+    this.executorBanner.append(text('strong', notice.title), text('span', this.executor.available ? ' Supported host operations are available.' : ' Viewing evidence only.'), evidence);
   }
 
   /**
@@ -424,31 +427,34 @@ export class FleetAdmin {
     open.addEventListener('click', () => void this.openDetail(row.runner_family));
     name.append(open, text('small', row.readiness.next_action === 'none' ? 'No action required' : `Recommended: ${workflowLabel(row.readiness.next_action)}`));
 
-    const readiness = element('td');
-    readiness.append(statusBadge(row.readiness.status), text('small', reasonText(row.readiness)));
-
-    const capacity = element('td');
-    capacity.append(text('span', capacityLabel(row.capacity.reason, row.capacity.available), `admin-badge ${row.capacity.available ? 'is-good' : ''}`.trim()));
-
-    const access = element('td');
-    access.append(text('span', row.access.restricted ? (row.access.granted ? 'Granted' : 'Restricted') : 'Open', 'admin-badge'));
-
-    const flight = element('td');
-    flight.append(row.in_flight
-      ? text('span', `${workflowLabel(row.in_flight.action.replace('runner.', ''))} · ${row.in_flight.status}`, 'admin-badge is-attention')
-      : text('span', 'Idle', 'admin-badge'));
-
-    tr.append(name, readiness, capacity, access, flight);
+    const evidence = row.readiness.evidence;
+    const cell = (label: string, phase: string): HTMLTableCellElement => {
+      const td = element('td'); const control = button(label, 'fleet-evidence-cell');
+      control.setAttribute('aria-label', `${row.runner_family} · ${phase}: ${label}`);
+      control.addEventListener('click', () => void this.openDetail(row.runner_family, phase)); td.append(control); return td;
+    };
+    const known = (value: boolean | undefined, yes: string, no: string) => value === true ? yes : value === false ? no : 'Unknown';
+    const build = cell(known(evidence.sif_exists, 'Built', 'Not built'), 'Build');
+    const test = cell(evidence.receipt_valid === true ? 'Validated' : evidence.receipt_exists === true ? 'Receipt stale' : known(evidence.receipt_exists, 'Recorded', 'No receipt'), 'Live test');
+    const active = cell(known(evidence.sif_exists, 'Image present', 'No active image'), 'Active image');
+    const freshness = cell(statusLabel(row.readiness.status), 'Freshness');
+    if (row.in_flight) name.append(text('small', `Management operation: ${workflowLabel(row.in_flight.action.replace('runner.', ''))} · ${row.in_flight.status}`));
+    tr.append(name, build, test, active, freshness);
     return tr;
   }
 
-  private async openDetail(family: string): Promise<void> {
-    this.detail.replaceChildren(text('p', 'Loading Runner evidence…', 'admin-empty'));
+  private async openDetail(family: string, phase = 'Lifecycle'): Promise<void> {
+    this.detailPhase = phase;
+    const generation = ++this.detailGeneration;
+    const cancel = button('Close'); cancel.addEventListener('click', () => this.detail.close());
+    this.detail.setAttribute('aria-label', `${family} — ${phase} evidence`);
+    this.detail.replaceChildren(text('p', 'Loading Runner evidence…', 'admin-empty'), cancel);
+    if (!this.detail.open) this.detail.showModal();
     try {
       const detail = await adminApi.getRunnerDetail(family);
-      this.renderDetail(detail);
+      if (generation === this.detailGeneration && this.detail.open) this.renderDetail(detail);
     } catch (error) {
-      this.detail.replaceChildren(empty((error as Error).message || 'Unable to load Runner detail.', true));
+      if (generation === this.detailGeneration && this.detail.open) this.detail.replaceChildren(empty((error as Error).message || 'Unable to load Runner detail.', true), cancel);
     }
   }
 
@@ -456,7 +462,7 @@ export class FleetAdmin {
     const panel = element('article', 'fleet-detail-panel');
     const head = element('header', 'admin-section-heading');
     const title = element('div', '');
-    title.append(text('h2', detail.runner_family), text('p', reasonText(detail.readiness), 'admin-section-copy'));
+    title.append(text('h2', `${detail.runner_family} · ${this.detailPhase} evidence`), text('p', reasonText(detail.readiness), 'admin-section-copy'));
     head.append(title, statusBadge(detail.readiness.status));
 
     // Derived evidence first: every field is a fact the server read, and each is
@@ -484,7 +490,7 @@ export class FleetAdmin {
     const actions = element('div', 'fleet-actions');
     actions.append(text('h3', 'Corrective actions'));
     const list = element('div', 'fleet-action-list');
-    for (const action of detail.actions) list.append(this.renderAction(detail, action));
+    for (const action of detail.actions.filter(action => action.tier !== 'activate' && !/promote|rollback|activate|restore/i.test(action.id))) list.append(this.renderAction(detail, action));
     actions.append(list);
 
     const history = element('div', 'fleet-history');
@@ -494,7 +500,7 @@ export class FleetAdmin {
     history.append(historyList);
 
     const close = button('Close');
-    close.addEventListener('click', () => this.detail.replaceChildren());
+    close.addEventListener('click', () => this.detail.close());
     panel.append(head, facts, actions, history, close);
     this.detail.replaceChildren(panel);
     void this.loadHistory(detail.runner_family, historyList);

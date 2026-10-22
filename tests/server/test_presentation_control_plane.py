@@ -250,6 +250,66 @@ def test_registration_capability_is_public_and_server_authoritative(monkeypatch,
     }
 
 
+def test_mcp_capability_is_public_absent_by_default_and_reachable_only_when_listening(monkeypatch, tmp_path):
+    # The capability answers the one question the Home page asks before it offers a
+    # live MCP endpoint: is the surface *really operational*? Unset is the default
+    # and must report the surface absent — the repository shipping MCP code is
+    # never presented as deployed support.
+    disabled = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    client = disabled.app.test_client()
+    response = client.get("/compute/api/mcp")
+    assert response.status_code == 200
+    assert response.get_json() == {
+        "listener_ready": False,
+        "route_configured": False,
+        "gateway_verified": None,
+        "operational": False,
+        "enabled": False,
+        "endpoint": None,
+        "detail": None,
+    }
+
+    # The switch is set and the route file is written, but nothing answers at the
+    # destination this deployment dials for the MCP service (the failure this
+    # deployment has when the overlay was never layered or the service is not
+    # running). A route file is read only for the route fact, never as proof the
+    # gateway serves MCP, so the surface must not be advertised however healthy
+    # the other facts look.
+    enabled = _load_pssm_module(
+        monkeypatch,
+        tmp_path / "enabled",
+        extra_env={
+            "RUNNER_UID": "1234",
+            "RUNNER_GID": "5678",
+            "MCP_ENABLED": "true",
+            "MCP_SERVICE": "127.0.0.1",
+            "MCP_PORT": "1",
+        },
+    )
+    route_dir = Path(enabled.CONFIG.server_dir) / "mcp-gateway"
+    route_dir.mkdir(parents=True, exist_ok=True)
+    (route_dir / "mcp.conf").write_text("location /k/ { proxy_pass http://mcp:8081; }", encoding="utf-8")
+    payload = enabled.app.test_client().get("/compute/api/mcp").get_json()
+    assert payload["listener_ready"] is False
+    assert payload["route_configured"] is True
+    # This deployment does not reach for its own public edge here, so reachability
+    # is unverified rather than asserted, and no endpoint is advertised on a route
+    # file alone.
+    assert payload["gateway_verified"] is None
+    assert payload["operational"] is False
+    assert payload["enabled"] is False
+    assert payload["endpoint"] is None
+    assert payload["detail"] == "the MCP service is not answering on this deployment"
+
+
+def test_mcp_capability_declares_its_openapi_contract(monkeypatch, tmp_path):
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    client = module.app.test_client()
+    spec = client.get("/openapi.json").get_json()
+    assert "get" in spec["paths"]["/compute/api/mcp"]
+    _validate_openapi_payload(spec, "McpCapability", client.get("/compute/api/mcp").get_json())
+
+
 def test_frontend_entry_csp_allows_only_local_scripts_styles_and_fonts(monkeypatch, tmp_path):
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     _install_frontend_entry(module, tmp_path)

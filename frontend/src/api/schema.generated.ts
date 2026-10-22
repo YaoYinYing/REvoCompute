@@ -4,6 +4,40 @@
  */
 
 export interface paths {
+    "/compute/api/tasks/{task_id}/diagnostics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read bounded safe execution failure evidence for an owned Task */
+        get: operations["getTaskDiagnostics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/compute/api/tasks/{task_id}/diagnostics/{stream}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download an authorized redacted bounded stdout or stderr excerpt */
+        get: operations["downloadTaskDiagnosticExcerpt"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/openapi.json": {
         parameters: {
             query?: never;
@@ -73,6 +107,26 @@ export interface paths {
          * @description Reports the server-owned registration switch and email-service availability without exposing deployment configuration.
          */
         get: operations["getRegistrationCapability"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/compute/api/mcp": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get agent MCP capability
+         * @description Reports whether an agent host can actually reach this deployment's agent Model Context Protocol surface, so a client is offered the entry only when the endpoint answers rather than when a switch was set or a route file exists. It reports the facts it observed separately: whether the MCP service answered a real MCP initialize handshake at the destination this deployment dials for it (listener_ready), whether the deployment gateway route state declares a /k/ route (route_configured), and whether the deployment's own public endpoint answered the same handshake through the gateway (gateway_verified, null when this deployment does not probe its own edge). The surface is operational - and the endpoint advertised - only when the public endpoint was genuinely reached; an answering MCP service plus a route file is not sufficient, and reachability that cannot be determined is reported unverified rather than asserted. It is a deployment-capability projection, never an authorization: what a credential may do over MCP is decided per request by the canonical account, entitlement, admission, and result rules.
+         */
+        get: operations["getMcpCapability"];
         put?: never;
         post?: never;
         delete?: never;
@@ -347,6 +401,46 @@ export interface paths {
         };
         /** Get one task type */
         get: operations["getTaskType"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/compute/api/types/{name}/demos": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List a task type's declared demo inputs
+         * @description Returns the deployment-controlled demo presets the enabled TaskType declares in its own demo manifest. A demo is a redistributable fixture plus the named input roles and typed parameters that make it a working example; reading the catalog creates, reserves, and authorizes nothing. An unknown or disabled TaskType is a 404, exactly as for the canonical parameter schema.
+         */
+        get: operations["getTaskDemos"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/compute/api/types/{name}/demos/{demo_id}/files/{asset}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download one declared demo fixture
+         * @description Serves one fixture file a demo declaration already validated for an enabled TaskType. The request is resolved by allowlist membership only: only a path the declaration names can be served, so a traversal, an absolute path, or an undeclared file is concealed as not found. The server never fetches a remote dataset.
+         */
+        get: operations["getTaskDemoFile"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1637,6 +1731,26 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        TaskDiagnostics: {
+            task_id: string;
+            /** @enum {string} */
+            availability: "available" | "unavailable" | "expired";
+            summary: string;
+            /** @enum {string|null} */
+            reason_code: "timeout" | "out_of_memory" | "allocation_failed" | "nonzero_exit" | "missing_result" | "submission_failed" | "job_id_unavailable" | "allocation_unrecorded" | "admission_failed" | "execution_exception" | "publication_failed" | "runner_validation_failed" | null;
+            exit_code: number | null;
+            /** @enum {string|null} */
+            exit_code_source: "srun" | null;
+            scheduler_state: string | null;
+            stage: string | null;
+            logs: {
+                /** @enum {string} */
+                stream: "stdout" | "stderr";
+                preview: string;
+                truncated: boolean;
+                download_url: string;
+            }[];
+        };
         /** @example 0123456789abcdef0123456789abcdef */
         TaskId: string;
         LoginRequest: {
@@ -1652,6 +1766,22 @@ export interface components {
         RegistrationCapability: {
             enabled: boolean;
             email_available: boolean;
+        };
+        McpCapability: {
+            /** @description Whether the MCP service answered a real MCP initialize handshake at the fixed destination this deployment dials for it. */
+            listener_ready: boolean;
+            /** @description Whether the deployment gateway route state on disk declares a /k/ route. This is a file fact, never proof the gateway serves the route. */
+            route_configured: boolean;
+            /** @description Whether the deployment's own public endpoint answered an MCP handshake through the gateway; null when this deployment does not probe its own edge, so external reachability is unverified rather than asserted. */
+            gateway_verified: boolean | null;
+            /** @description Whether the surface is genuinely reachable: the public endpoint answered. False whenever reachability is unverified or absent, in particular when only the MCP service and a route file are present. */
+            operational: boolean;
+            /** @description Whether a client is offered the endpoint. Equal to operational: never true on a route file or an answering MCP service alone. */
+            enabled: boolean;
+            /** @description Same-origin path of the MCP endpoint when the surface is operational, otherwise null. */
+            endpoint: string | null;
+            /** @description Fixed, role-based reason the surface is not operational, otherwise null. Never carries a credential, filesystem error string, host path, or internal port. */
+            detail: string | null;
         };
         CaptchaChallenge: {
             question: string;
@@ -2323,6 +2453,44 @@ export interface components {
             };
             allocations: components["schemas"]["GPUAllocationReview"][];
         };
+        TaskDemoCatalog: {
+            /** @constant */
+            version: 1;
+            task_type: string;
+            demos: components["schemas"]["TaskDemo"][];
+        };
+        TaskDemo: {
+            id: string;
+            title: string;
+            purpose: string;
+            context: string;
+            source: components["schemas"]["TaskDemoSource"];
+            license: components["schemas"]["TaskDemoLicense"];
+            /** @description Named input roles to bind, keyed by the role ID the owning task.yaml declares. */
+            inputs: {
+                [key: string]: components["schemas"]["TaskDemoFile"][];
+            };
+            parameters: {
+                [key: string]: unknown;
+            };
+        };
+        TaskDemoSource: {
+            name: string;
+            url: string;
+        };
+        TaskDemoLicense: {
+            id: string;
+            name: string;
+            url: string;
+        };
+        TaskDemoFile: {
+            role: string;
+            path: string;
+            sha256: string;
+            size: number;
+            media_type: string;
+            download_url: string;
+        };
         TaskCatalog: {
             /** @constant */
             version: 3;
@@ -2637,6 +2805,8 @@ export interface components {
         LogicalResultFile: {
             id: string;
             name: string;
+            /** @description Published artifact path this logical file resolves to. It is the artifact's identity: two logical files with the same basename in different directories name different paths. */
+            path: string;
             media_type: string;
             size: number;
             /** @enum {string} */
@@ -3286,6 +3456,55 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    getTaskDiagnostics: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Confirmed execution facts and bounded redacted log context; unavailable or expired evidence is explicit */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskDiagnostics"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    downloadTaskDiagnosticExcerpt: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+                stream: "stdout" | "stderr";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description At most 64 KiB of redacted execution context, delivered as a text attachment */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
     getOpenApiContract: {
         parameters: {
             query?: never;
@@ -3381,6 +3600,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RegistrationCapability"];
+                };
+            };
+        };
+    };
+    getMcpCapability: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current agent MCP capability */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpCapability"];
                 };
             };
         };
@@ -3823,6 +4062,57 @@ export interface operations {
             };
             404: components["responses"]["NotFound"];
             503: components["responses"]["Unavailable"];
+        };
+    };
+    getTaskDemos: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @example gremlin */
+                name: components["parameters"]["TaskTypeName"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The TaskType's declared demo presets, empty when it declares none */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskDemoCatalog"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    getTaskDemoFile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @example gremlin */
+                name: components["parameters"]["TaskTypeName"];
+                demo_id: string;
+                asset: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The declared demo fixture bytes, served with the declared media type */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            404: components["responses"]["NotFound"];
         };
     };
     getWorkspacePlugin: {

@@ -1,0 +1,16 @@
+REVODESIGN_JOB_ID=311206
+REVODESIGN_ALLOCATION_LIVE=311206
+ProPrime_650M_OGT_Prediction-91490f95c707/config.json: OK
+ProPrime_650M_OGT_Prediction-91490f95c707/configuration_proprime.py: OK
+ProPrime_650M_OGT_Prediction-91490f95c707/modeling_proprime.py: OK
+ProPrime_650M_OGT_Prediction-91490f95c707/tokenization_proprime.py: [redacted]
+Prime_690M-7b75010748d2/config.json: OK
+Prime_690M-7b75010748d2/configuration_proprime.py: OK
+Prime_690M-7b75010748d2/modeling_proprime.py: OK
+Prime_690M-7b75010748d2/tokenization_proprime.py: [redacted]
+REVODESIGN_STAGE:prime
+Loading ProPrime_650M_OGT_Prediction on cuda
+Loaded 1 sequences
+Done: [path redacted]
+Pro-Prime complete.
+

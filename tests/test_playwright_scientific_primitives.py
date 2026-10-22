@@ -110,7 +110,7 @@ def test_pair_matrix_resizes_and_keeps_pointer_and_keyboard_mapping(page: Page) 
 
 
 def test_pair_matrix_fits_below_320_pixels_without_losing_axes(page: Page) -> None:
-    _open(page, "<div id='plot' style='width:280px'><div id='figure'><canvas id='matrix' tabindex='0'></canvas></div></div><p id='readout'></p>")
+    _open(page, "<div id='plot' style='width:280px'><div id='figure' class='pair-matrix-figure'><canvas id='matrix' tabindex='0'></canvas></div></div><p id='readout'></p>")
     page.evaluate(
         """() => {
           const matrix = new REvoComputeScientific.PairMatrix({
@@ -128,7 +128,10 @@ def test_pair_matrix_fits_below_320_pixels_without_losing_axes(page: Page) -> No
     boxes = page.locator(".pair-matrix-title").evaluate_all(
         "nodes => nodes.map(node => { const box = node.getBoundingClientRect(); return {left: box.left, right: box.right, top: box.top, bottom: box.bottom}; })"
     )
-    assert all(box["left"] >= 0 and box["right"] <= 280 for box in boxes)
+    figure = page.locator("#figure").bounding_box()
+    assert figure
+    assert all(box["left"] >= figure["x"] and box["right"] <= figure["x"] + figure["width"] for box in boxes), boxes
+    assert all(box["top"] >= figure["y"] and box["bottom"] <= figure["y"] + figure["height"] for box in boxes), boxes
     assert all(
         first["right"] <= second["left"] or second["right"] <= first["left"]
         or first["bottom"] <= second["top"] or second["bottom"] <= first["top"]
@@ -160,7 +163,7 @@ def test_pair_matrix_renders_a_symmetric_diverging_range_and_repaints_on_theme(p
     _open(
         page,
         "<style>:root { --ink: #111; }</style>"
-        "<div id='plot' style='width:400px'><div id='figure'><canvas id='matrix' tabindex='0'></canvas></div></div>"
+        "<div id='plot' style='width:400px'><div id='figure' class='pair-matrix-figure'><canvas id='matrix' tabindex='0'></canvas></div></div>"
         "<p id='readout'></p>",
     )
     drawn = page.evaluate(

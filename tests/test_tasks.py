@@ -82,6 +82,7 @@ def test_public_openapi_exposes_the_client_contract(monkeypatch, tmp_path):
     assert {
         "/compute/api/auth/login": {"post"},
         "/compute/api/auth/registration": {"get"},
+        "/compute/api/mcp": {"get"},
         "/compute/api/auth/captcha": {"get"},
         "/compute/api/auth/register": {"post"},
         "/compute/api/auth/forgot-password": {"post"},
@@ -98,6 +99,8 @@ def test_public_openapi_exposes_the_client_contract(monkeypatch, tmp_path):
         "/skills.md": {"get"},
         "/compute/api/types": {"get"},
         "/compute/api/types/{name}": {"get"},
+        "/compute/api/types/{name}/demos": {"get"},
+        "/compute/api/types/{name}/demos/{demo_id}/files/{asset}": {"get"},
         "/compute/api/workspace/plugins/{owner}/{plugin_id}": {"get"},
         "/compute/api/workspace/assets/{owner}/{plugin_id}/{asset}": {"get"},
         "/compute/api/task-parameters/{task_type}": {"get"},
@@ -155,6 +158,8 @@ def test_public_openapi_exposes_the_client_contract(monkeypatch, tmp_path):
         "/compute/api/post": {"post"},
         "/compute/api/preflight/{task_type}": {"post"},
         "/compute/api/tasks": {"get"},
+        "/compute/api/tasks/{task_id}/diagnostics": {"get"},
+        "/compute/api/tasks/{task_id}/diagnostics/{stream}": {"get"},
         "/compute/api/running/{task_id}": {"get"},
         "/compute/api/cancel/{task_id}": {"post"},
         "/compute/api/delete/{task_id}": {"delete"},
@@ -1054,7 +1059,9 @@ def test_cpu_runner_logical_file_api_preserves_declared_viewer_and_download(monk
     assert pssm["capability"] == "table"
     assert pssm["table_url"].endswith("/tables/pssm_msa/input_ascii_mtx_file")
     assert pssm["cardinality"] == "one"
-    assert "path" not in pssm
+    # The logical file names its published path: that is its identity, and the
+    # name a reader sees stays the declared one.
+    assert pssm["path"] == "pssm_msa/input_ascii_mtx_file"
     raw_pssm = next(artifact for artifact in manifest["artifacts"] if artifact["path"].endswith("input_ascii_mtx_file"))
     assert raw_pssm["capability"] == "download_only"
     assert logical_download.status_code == 200
@@ -1797,7 +1804,9 @@ def test_failed_status_masks_host_paths_in_api_error(monkeypatch, tmp_path):
     assert response.status_code == 200
     payload = response.get_json()
     assert payload["status"] == "failed"
-    assert "/srv/REvoDesign/compute/upload/2KL8.fasta" in payload["error"]
+    assert "Unable to read sequence" in payload["error"]
+    assert "[path redacted]" in payload["error"]
+    assert "/srv/REvoDesign/compute" not in payload["error"]
     assert "/home/server-user/REvoDesign" not in payload["error"]
 
 

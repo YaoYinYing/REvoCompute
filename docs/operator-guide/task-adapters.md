@@ -692,6 +692,11 @@ format inspection to server FileViewers. Do not place task-specific result code
 in `revocompute/`, and do not put browser assets in compute images or task
 output directories.
 
+Put those two in the Task's own `tasks/<task-id>/` directory when only that Task
+publishes the tree, and at the family root when every Task in the family shares
+it. One Task takes its logical files and its Storyboard from the same directory;
+see [Where a Task's result contract lives](../runner-guide/adding-a-runner.md#where-a-tasks-result-contract-lives).
+
 The `.def` builds directly from an upstream source:
 
 ```def

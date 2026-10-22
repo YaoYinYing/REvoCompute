@@ -56,6 +56,31 @@ only from that declaration, never from the file extension. See
 [Structure Presentation Contract](../runner-guide/structure-presentation.md) for
 what a Runner may declare.
 
+## Metric series view
+
+A view whose declared `plugin` is `metric-series` plots through the shared
+`LocalConfidenceSeries` primitive. A `csv` mapping names its `x_column` and
+`value_columns` and is read through the bounded table pages described below. A
+`json` mapping names the `value_path` the server resolved and validated at
+publication — the shape AlphaFold, ColabFold, SimpleFold and RF3 fold confidence
+files use — and is fetched from the artifact's own authenticated URL, bounded by
+the same 8 MiB source limit the server enforces. Each value's position is its x
+position; the y-axis is drawn from the declared `y_min`/`y_max` when present and
+the observed extent otherwise. A series that cannot be read (absent value path,
+non-numeric values, source over the bound, request failure) states the reason
+and falls back to the generic renderer for its source artifact.
+
+## Trajectory view
+
+A view whose declared `plugin` is `trajectory` mounts one bounded stage fed by a
+declared `topology` and a `coordinates` artifact. `association: single` pairs the
+one declared topology with the one declared coordinate; `association:
+stem-prefix` pairs a topology with the coordinate artifact whose basename starts
+with the topology's own stem, as the server validates it at publication, rather
+than with whichever coordinate the manifest lists first. A topology with no
+matching coordinate states that instead of showing another design's frames. The
+frame axis is labelled with the mapping's own `frame_unit`.
+
 ## Matrix view
 
 A view whose declared `plugin` is `matrix` renders through the shared

@@ -11,5 +11,8 @@ export async function mountResultWorkspace(root: HTMLElement): Promise<ResultWor
   // An in-progress guided tour resumes on the surface it advanced to. The result
   // step is only reachable with a concrete task id, which the Dashboard records.
   guidedTour.resumeIfActive();
+  // A result page that really loaded offers its own tour — this is the only kind
+  // of page where a results flow makes sense, and it is offered only here.
+  guidedTour.offer();
   return loaded;
 }

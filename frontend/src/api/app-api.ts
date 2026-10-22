@@ -15,6 +15,7 @@ export type ResourceLedgerEntry = components['schemas']['ResourceLedgerEntry'];
 export type RunnerAccess = components['schemas']['RunnerAccess'];
 
 export type RegistrationCapability = components['schemas']['RegistrationCapability'];
+export type McpCapability = components['schemas']['McpCapability'];
 export type CaptchaChallenge = components['schemas']['CaptchaChallenge'];
 export type RegistrationRequest = components['schemas']['RegisterRequest'];
 export type LegalDocument = components['schemas']['LegalDocument'];
@@ -30,7 +31,8 @@ const jsonRequest = <T>(url: string, body: unknown): Promise<T> => requestJson(u
 
 export interface ParameterDefinition {
   type?: string | string[]; title?: string; description?: string; default?: unknown; enum?: unknown[];
-  minimum?: number; maximum?: number; unit?: string; advanced?: boolean;
+  minimum?: number; maximum?: number; exclusiveMinimum?: number; exclusiveMaximum?: number; unit?: string; advanced?: boolean;
+  'x-unit'?: string; 'x-advanced'?: boolean;
 }
 export interface ParameterSchema { properties?: Record<string, ParameterDefinition>; required?: string[] }
 
@@ -65,6 +67,10 @@ export const verifyEmail = (token: string): Promise<components['schemas']['Verif
   jsonRequest('/compute/api/auth/verify-email', { token });
 export const getTerms = (): Promise<LegalDocument> => requestJson('/compute/api/legal/terms');
 export const getSystemNotices = (): Promise<SystemNotices> => requestJson('/compute/api/system/notices');
+// Whether this deployment serves the agent MCP endpoint: a public read of one
+// deployment fact, so the Home page offers the live endpoint only when it answers.
+export const getMcpCapability = (signal?: AbortSignal): Promise<McpCapability> =>
+  requestJson('/compute/api/mcp', { signal });
 
 export const updatePassword = (currentPassword: string, newPassword: string): Promise<ApiMessage> =>
   authorizedJson('/compute/api/auth/me', {
@@ -101,3 +107,7 @@ export const deleteTaskBatch = (taskIds: string[]): Promise<Record<string, unkno
   method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ md5sums: taskIds }),
 });
 export const prepareArchive = (url: string): Promise<Record<string, unknown>> => authorizedJson(url, { method: 'POST' });
+
+export type TaskDiagnostics = components['schemas']['TaskDiagnostics'];
+export const getTaskDiagnostics = (taskId: string, signal?: AbortSignal): Promise<TaskDiagnostics> =>
+  requestJson(`/compute/api/tasks/${encodeURIComponent(taskId)}/diagnostics`, { signal });

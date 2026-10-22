@@ -1,0 +1,18 @@
+identifier: esmdynamic-result
+entrypoint: ./index.js
+requires:
+  - temperature_plots
+  - frequency_plots
+  - kinetics_plots
+optional:
+  - confidence_tables
+  - kinetics_tables
+  - nonnative_plots
+  - native_contacts
+  - predicted_structure
+  - probability_arrays
+  - plot_html
+  - input_sequence
+  - submission
+  - citations
+  - execution_records

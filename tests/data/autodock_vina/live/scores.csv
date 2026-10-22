@@ -1,0 +1,3 @@
+ligand,pose_rank,affinity_kcal_mol,rmsd_lb_angstrom,rmsd_ub_angstrom,pose_file
+ethanol.sdf,1,-1.331,0,0,vina_1.pdbqt#MODEL=1
+ethanol.sdf,2,-0.997,5.791,5.997,vina_1.pdbqt#MODEL=2

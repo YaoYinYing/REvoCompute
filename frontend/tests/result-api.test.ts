@@ -36,23 +36,35 @@ describe('Result API boundary', () => {
     expect((result as ResultManifest).filename).toBe('safe model.cif');
   });
 
-  it('parses the server AF3 logical-file shape without inventing a path', () => {
+  it('keeps a failed Task addressable when its advertised manifest is unavailable', async () => {
+    const responses = [
+      { id: 1, username: 'owner' },
+      { task_id: 'a'.repeat(32), task_type: 'example', display_name: 'run', status: 'failed', terminal: true,
+        status_url: '/status', results_url: '/result', result_available: true, error: 'Publication failed' },
+    ];
+    vi.stubGlobal('fetch', vi.fn(async () => responses.length
+      ? new Response(JSON.stringify(responses.shift()), { status: 200 })
+      : new Response(JSON.stringify({ error: 'Unavailable' }), { status: 404 })));
+    await expect(loadAuthorizedResult('a'.repeat(32))).resolves.toMatchObject({ status: 'failed', error: 'Publication failed' });
+  });
+
+  it('parses the server logical-file shape and keeps the published path it names', () => {
     const manifest = parseResultManifest({
       schema_version: 3, task_id: 'a'.repeat(32), task_type: 'alphafold3', created_at: '2026-09-29T00:00:00Z',
       status: 'finished', terminal: true, error: null, run: {}, output_check: { state: 'passed', checks: [], problems: [] },
       limitations: [], views: [], artifacts: [{ path: 'seed-1/model.cif', size: 9, sha256: 'f'.repeat(64), url: '/artifact',
         media_type: 'chemical/x-mmcif', preview: 'structure', capability: 'molecular_structure', role: 'primary', confidence_encoding: 'plddt_bfactor' }],
-      result: { files: { structures: [{ id: 'model', name: 'model.cif', size: 9, media_type: 'chemical/x-mmcif', role: 'primary',
-        cardinality: 'one', viewer: 'structure', preview: 'structure', capability: 'molecular_structure', url: '/logical/model',
+      result: { files: { structures: [{ id: 'model', name: 'model.cif', path: 'seed-1/model.cif', size: 9, media_type: 'chemical/x-mmcif',
+        role: 'primary', cardinality: 'one', viewer: 'structure', preview: 'structure', capability: 'molecular_structure', url: '/logical/model',
         table_url: '/logical/model/table', confidence_encoding: 'plddt_bfactor' }] } },
       storyboard: { identifier: 'alphafold3', entrypoint: 'storyboard.mjs', entrypoint_url: '/storyboard/storyboard.mjs', requires: ['structures'], optional: [] },
       outcome: 'SUCCESS', total_size: 9, archive: { ready: false, request_url: '/archive' },
     });
     const result = manifest as ResultManifest;
     expect(result.result.files.structures?.[0]).toEqual(expect.objectContaining({
-      id: 'model', name: 'model.cif', url: '/logical/model', table_url: '/logical/model/table', confidence_encoding: 'plddt_bfactor',
+      id: 'model', name: 'model.cif', path: 'seed-1/model.cif', url: '/logical/model', table_url: '/logical/model/table',
+      confidence_encoding: 'plddt_bfactor',
     }));
-    expect('path' in (result.result.files.structures?.[0] || {})).toBe(false);
   });
 
   it('preserves the sanitized terminal task error', () => {

@@ -58,8 +58,22 @@ def test_gremlin_lh_runner_contract_projects_into_catalog_create_task_and_result
     expect(page.get_by_role("heading", name="GREMLIN_LH Potts model", exact=True)).to_be_visible()
 
     _open_result_after_lifecycle(page, ("queued", "running"), "finished")
-    expect(page.get_by_role("heading", name="GREMLIN_LH Potts model", exact=True)).to_be_visible()
+    # The Result workspace leads with the specimen: a task whose manifest carries
+    # exactly one named input takes that input's name as its title, and the method
+    # identity stays stated beside it. Both halves are asserted, so a workspace
+    # that dropped the method name would not pass.
+    expect(page.get_by_role("heading", name="alignment.a3m", exact=True)).to_be_visible()
+    expect(page.locator(".result-meta")).to_contain_text("GREMLIN_LH Potts model")
+    expect(page.locator(".result-meta")).to_contain_text(TASK_ID)
+
+    # Every declared view keeps its own tab, and the tabs are a disclosure.
+    page.locator(".result-view-menu > summary").click()
     expect(page.locator(".result-tab")).to_have_count(5)
     expect(page.locator(".result-tab", has_text="Coupling strength (raw Frobenius)")).to_be_visible()
     expect(page.locator(".result-tab", has_text="Coupling strength (average-product corrected)")).to_be_visible()
+
+    # The file rail is a dialog; opening it names the role groups the Server
+    # projects, including the run's own Diagnostics entry.
+    page.get_by_role("button", name="Open Files and diagnostics", exact=True).click()
+    expect(page.get_by_role("dialog", name="Files and diagnostics")).to_be_visible()
     expect(page.locator(".result-file-group", has_text="Diagnostics")).to_be_visible()

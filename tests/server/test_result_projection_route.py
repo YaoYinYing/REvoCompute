@@ -162,4 +162,45 @@ def test_result_route_projects_capabilities_and_urls_for_the_full_view(monkeypat
     assert body["terminal"] is True
     assert body["status"] == "finished"
     assert body["result"]["files"]["summary"][0]["url"] == f"/compute/api/results/{md5sum}/files/summary?index=0"
+    # The logical file names the published artifact it resolves to, so a consumer
+    # joining a Storyboard file to a candidate reads identity, not a basename.
+    assert body["result"]["files"]["summary"][0]["path"] == "results/summary.txt"
     assert "execution/slurm.stdout" in {artifact["path"] for artifact in body["artifacts"]}
+
+
+def test_logical_files_distinguish_same_basename_artifacts(monkeypatch, tmp_path) -> None:
+    """Two published artifacts that share a basename are different identities.
+
+    ``name`` is a basename, so it cannot tell ``run1/model_0.cif`` from
+    ``run2/model_0.cif``; the projected ``path`` is the published identity a
+    consumer joins on.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    client = module.app.test_client()
+    headers = _admin_client_auth(module)
+    md5sum, root = _finished_task_with_result(module, tmp_path)
+    published = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+    published["artifacts"] = [
+        {
+            "path": f"run{run}/model_0.cif",
+            "size": len(b"ATOM\n"),
+            "sha256": "0" * 63 + str(run),
+            "media_type": "chemical/x-cif",
+            "preview": "structure",
+            "role": "primary",
+        }
+        for run in (1, 2)
+    ]
+    published["result"]["files"]["models"] = [
+        {**artifact, "cardinality": "many", "logical_type": "structure"}
+        for artifact in published["artifacts"]
+    ]
+    (root / "manifest.json").write_text(json.dumps(published), encoding="utf-8")
+    # Publication is bound to the manifest bytes, so re-anchor the amended result.
+    _anchor_result_publication(module, md5sum)
+
+    body = client.get(f"/compute/api/results/{md5sum}", headers=headers).get_json()
+
+    logical = body["result"]["files"]["models"]
+    assert [entry["name"] for entry in logical] == ["model_0.cif", "model_0.cif"]
+    assert [entry["path"] for entry in logical] == ["run1/model_0.cif", "run2/model_0.cif"]

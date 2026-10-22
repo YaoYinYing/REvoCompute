@@ -62,6 +62,8 @@ def main() -> None:
         fail(f"Operator asset manifest has no valid SHA-256 for {args.asset_id}")
     if not isinstance(size, int) or size <= 0:
         fail(f"Operator asset manifest has no valid size for {args.asset_id}")
+    if checksum != expected.get("sha256") or size != expected.get("size"):
+        fail(f"Operator asset identity does not match the pinned registry for {args.asset_id}")
     checkpoint = args.asset_root / expected["filename"]
     if not checkpoint.is_file() or checkpoint.stat().st_size != size:
         fail(f"Foundry checkpoint is missing or has the wrong size: {checkpoint}")

@@ -1,0 +1,9 @@
+identifier: prime-dms-result
+entrypoint: ./index.js
+requires:
+  - mutation_scores
+optional:
+  - input_sequences
+  - submission
+  - citations
+  - execution_records

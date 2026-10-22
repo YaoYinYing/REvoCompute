@@ -1,0 +1,30 @@
+demos:
+- id: protein_monomer_16mer
+  title: Single-chain 16-residue protein
+  purpose: Fold one short protein sequence without an MSA or template.
+  context: >-
+    This synthetic monomer exercises RF3's direct JSON sequence path. Short
+    unaligned sequences may trigger the model's confidence-based early stop,
+    which is a valid metrics-only result rather than a fabricated structure.
+  source:
+    name: REvoCompute Foundry demo corpus
+    url: https://github.com/YaoYinYing/REvoCompute
+  license:
+    id: cc0-1.0
+    name: CC0 1.0 Universal (public domain dedication)
+    url: https://creativecommons.org/publicdomain/zero/1.0/
+  inputs:
+    specification:
+    - path: files/monomer.json
+      sha256: 8ff1dc0080e175b30193abdf398c411342bb56f4a5620f73ceb4914a047e455e
+      media_type: application/json
+  parameters:
+    num_designs: 1
+    diffusion_steps: 50
+    num_recycles: 5
+    seed: 0
+    early_stopping_plddt_threshold: 0.5
+    dump_trajectories: false
+    template_noise_scale: 0.00001
+    add_missing_atoms: true
+    annotate_b_factor_with_plddt: true

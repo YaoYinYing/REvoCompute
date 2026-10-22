@@ -2,46 +2,53 @@ import { createIcons, X } from 'lucide';
 import { t } from './i18n';
 
 /*
- * Guided learning: a hands-on path through the REvoCompute conceptual model
+ * Guided learning: hands-on paths through the REvoCompute conceptual model
  * (Runner → input → Task → execution → result → artifacts/provenance).
+ *
+ * There are three job-oriented flows, not one generic welcome carousel, and each
+ * owns its own progress state: finishing or dismissing the create-your-first-Task
+ * tour never marks the result or the admin tour done. A flow is only ever offered
+ * where its job is: the create tour from the Dashboard register, the result tour
+ * from a result workspace that actually exists, the admin tour from the
+ * administrator surfaces.
  *
  * It is not a consumer "welcome carousel". Each step anchors to a real element
  * and explains the concept that element represents; steps that cannot anchor on
  * the current route, role, or viewport are skipped rather than faked. A step
  * whose surface is one concrete object — the result workspace needs a real task
  * id — is skipped cleanly when no such object exists; the tour never invents an
- * identifier. Progress is stored locally, the tour is restartable, and it never
- * takes over the page.
+ * identifier, and no step ever submits, cancels, or mutates anything.
  *
  * Step copy is frontend-owned and lives in the i18n catalogs, so a locale change
  * localizes the tour exactly as it localizes the surrounding chrome.
  */
 
-const doneKey = 'revocompute-tour-done';
-const stepKey = 'revocompute-tour-step';
-const resultKey = 'revocompute-tour-result';
+const DOCS_HREF = 'https://yaoyinying.github.io/REvoCompute/';
+
+/** Which flow is in progress. Written when a flow starts, cleared when it ends. */
+const activeKey = 'revocompute-tour-flow';
 
 /**
- * The event an in-document route change dispatches so a tour does not outlive its
- * page.
+ * The event a route change dispatches to end the tour that was on the page left.
  *
- * A tour decorates the page it belongs to, so it must not survive leaving that
- * page. The two ways of leaving differ, and only one of them needs telling. A
- * document navigation fires `pagehide`, which the tour already hears: the page is
- * gone, but the tour itself may have asked for that navigation — a step whose
- * surface is another route advances by navigating — so its progress is left in
- * place for the far side to resume.
+ * A guided tour decorates the page it belongs to, so it must not survive leaving
+ * that page. A document navigation fires `pagehide` and the tour ends itself; an
+ * in-document route change does not, so the navigation layer announces it
+ * instead: dispatch `new Event(GUIDED_TOUR_ABORT_EVENT)` when the outlet is
+ * replaced. The tour listens for it once for its own lifetime, so a page that
+ * never opened a tour pays nothing, and no navigation layer has to import the
+ * tour module to end one. It is a plain Event rather than a callback registry:
+ * one signal, no shared mutable navigation state.
  *
- * An in-document route change fires no such event, so the navigation layer
- * announces it instead. That is the reader leaving of their own accord, so the
- * tour ends there, remembered progress included: a surface the reader walked to
- * themselves must not reopen a tour they walked away from.
- *
- * The signal is a plain document event rather than a callback registry: the
- * navigation layer never has to own a registry of live tours, and a page that
- * never opened one pays nothing for the one listener it installs.
+ * The signal ends the *flow*, not merely its overlay, and it exempts the tour's
+ * own step navigation through the `selfNavigating` flag: a step that hops to the
+ * route it belongs to is the tour walking its reader forward, while an abort the
+ * tour did not ask for is the reader leaving, which ends the flow with whatever
+ * progress it had.
  */
 export const GUIDED_TOUR_ABORT_EVENT = 'revocompute:tour-abort';
+
+export type TourFlowId = 'create' | 'results' | 'admin';
 
 interface TourStep {
   /** Route prefix that identifies the step's surface. */
@@ -55,155 +62,393 @@ interface TourStep {
   needsResult?: boolean;
 }
 
-const steps: TourStep[] = [
-  {
-    route: '/compute/dashboard',
-    anchor: '.dashboard-stats',
-    titleKey: 'tour.step.dashboard.title',
-    bodyKey: 'tour.step.dashboard.body',
-  },
-  {
-    route: '/compute/dashboard',
-    anchor: '.task-card, .task-list',
-    titleKey: 'tour.step.lifecycle.title',
-    bodyKey: 'tour.step.lifecycle.body',
-  },
-  {
-    route: '/runners',
-    anchor: '.runner-catalog',
-    titleKey: 'tour.step.runners.title',
-    bodyKey: 'tour.step.runners.body',
-  },
-  {
-    route: '/compute/create_task',
-    anchor: '.ct-workbench, .ct-chooser',
-    titleKey: 'tour.step.create.title',
-    bodyKey: 'tour.step.create.body',
-  },
-  {
-    route: '/compute/results',
-    anchor: '.result-preview, .result-app',
-    titleKey: 'tour.step.result.title',
-    bodyKey: 'tour.step.result.body',
-    docHref: 'https://yaoyinying.github.io/REvoCompute/',
-    needsResult: true,
-  },
-];
+interface TourFlow {
+  id: TourFlowId;
+  /**
+   * Separate progress state per flow. The three flows never share a key, so a
+   * completion in one is not a completion in another.
+   */
+  doneKey: string;
+  stepKey: string;
+  /** The create flow's recorded result target; only that flow stores one. */
+  targetKey?: string;
+  /** Launcher label for a flow that has never run. */
+  entryKey: string;
+  /** Routes on which this flow's entry is offered. */
+  entryRoutes: string[];
+  /**
+   * The identity this flow's completion is bound to. A flow bound to an object
+   * (a result) is offered again for a different object, so a completed tour
+   * cannot be stale evidence about a result the reader has never seen.
+   */
+  scope: () => string;
+  steps: TourStep[];
+}
+
+const createFlow: TourFlow = {
+  id: 'create',
+  doneKey: 'revocompute-tour-done',
+  stepKey: 'revocompute-tour-step',
+  targetKey: 'revocompute-tour-result',
+  entryKey: 'tour.entry',
+  // The create tour is a path through the register, so its entry lives on the
+  // register. The Dashboard mounts it explicitly; `offer` is a no-op there.
+  entryRoutes: ['/compute/dashboard'],
+  scope: () => 'true',
+  steps: [
+    {
+      route: '/compute/dashboard',
+      anchor: '.dashboard-stats',
+      titleKey: 'tour.step.dashboard.title',
+      bodyKey: 'tour.step.dashboard.body',
+    },
+    {
+      route: '/compute/dashboard',
+      anchor: '.task-card, .task-list',
+      titleKey: 'tour.step.lifecycle.title',
+      bodyKey: 'tour.step.lifecycle.body',
+    },
+    {
+      route: '/runners',
+      anchor: '.runner-catalog',
+      titleKey: 'tour.step.runners.title',
+      bodyKey: 'tour.step.runners.body',
+    },
+    {
+      route: '/compute/create_task',
+      anchor: '.ct-workbench, .ct-chooser',
+      titleKey: 'tour.step.create.title',
+      bodyKey: 'tour.step.create.body',
+    },
+    {
+      route: '/compute/results',
+      anchor: '.result-preview, .result-app',
+      titleKey: 'tour.step.result.title',
+      bodyKey: 'tour.step.result.body',
+      docHref: DOCS_HREF,
+      needsResult: true,
+    },
+  ],
+};
+
+/**
+ * The concrete result page this session is looking at, read from the route the
+ * reader actually opened. Empty when the address is not a task result, which is
+ * also what makes a stored completion for a *different* result inapplicable.
+ */
+function resultScope(): string {
+  const match = /^\/compute\/results\/([0-9a-f]{32})$/i.exec(location.pathname);
+  return match ? match[1]!.toLowerCase() : '';
+}
+
+const resultsFlow: TourFlow = {
+  id: 'results',
+  doneKey: 'revocompute-tour-results-done',
+  stepKey: 'revocompute-tour-results-step',
+  entryKey: 'tour.entry.results',
+  // The result flow is offered on a concrete result page, and only when the
+  // reader can actually be on one — the entry never appears as a default path
+  // for a first-time user who has no finished result to read.
+  entryRoutes: ['/compute/results/'],
+  scope: resultScope,
+  steps: [
+    {
+      route: '/compute/results/',
+      anchor: '.result-header',
+      titleKey: 'tour.step.resultHeader.title',
+      bodyKey: 'tour.step.resultHeader.body',
+      docHref: DOCS_HREF,
+    },
+    {
+      route: '/compute/results/',
+      anchor: '.result-preview',
+      titleKey: 'tour.step.resultPreview.title',
+      bodyKey: 'tour.step.resultPreview.body',
+      docHref: DOCS_HREF,
+    },
+    {
+      route: '/compute/results/',
+      anchor: '.result-record',
+      titleKey: 'tour.step.resultRecord.title',
+      bodyKey: 'tour.step.resultRecord.body',
+      docHref: DOCS_HREF,
+    },
+  ],
+};
+
+const adminFlow: TourFlow = {
+  id: 'admin',
+  doneKey: 'revocompute-tour-admin-done',
+  stepKey: 'revocompute-tour-admin-step',
+  entryKey: 'tour.entry.admin',
+  // Offered on every Administration destination, and never anywhere else.
+  entryRoutes: ['/compute/runner_fleet', '/compute/user_control', '/compute/configuration', '/compute/logs'],
+  scope: () => 'true',
+  // Administration is read-only here: every step names what a status, a capacity
+  // figure, or a log line means and how to read it. No step activates, promotes,
+  // repairs, resets a credit, or opens a privileged mutation.
+  steps: [
+    {
+      route: '/compute/runner_fleet',
+      anchor: '.admin-table-scroll',
+      titleKey: 'tour.step.fleet.title',
+      bodyKey: 'tour.step.fleet.body',
+      docHref: DOCS_HREF,
+    },
+    {
+      route: '/compute/user_control',
+      anchor: '.user-admin-table',
+      titleKey: 'tour.step.users.title',
+      bodyKey: 'tour.step.users.body',
+      docHref: DOCS_HREF,
+    },
+    {
+      route: '/compute/configuration',
+      anchor: '.config-type-list',
+      titleKey: 'tour.step.configuration.title',
+      bodyKey: 'tour.step.configuration.body',
+      docHref: DOCS_HREF,
+    },
+    {
+      route: '/compute/logs',
+      anchor: '.admin-log-output',
+      titleKey: 'tour.step.logs.title',
+      bodyKey: 'tour.step.logs.body',
+      docHref: DOCS_HREF,
+    },
+  ],
+};
+
+const flows: TourFlow[] = [createFlow, resultsFlow, adminFlow];
+
+function flowFor(id: string | null): TourFlow | null {
+  return flows.find(flow => flow.id === id) ?? null;
+}
+
+/** Whether a route belongs to the flow's own surfaces. */
+function ownsRoute(flow: TourFlow, pathname: string): boolean {
+  return flow.steps.some(step => pathname.startsWith(step.route));
+}
+
+/** Whether this route is a legitimate place to offer the flow's entry. */
+function offersEntry(flow: TourFlow, pathname: string): boolean {
+  return flow.entryRoutes.some(route => pathname.startsWith(route));
+}
 
 export class GuidedTour {
   private callout: HTMLElement | null = null;
-  private index = 0;
+  private anchored: HTMLElement | null = null;
+  private cleanup: (() => void) | null = null;
+  private disposal: ((event: Event) => void) | null = null;
+  /**
+   * A tour step's own navigation, which is not the reader leaving the page.
+   *
+   * A step whose surface is another route advances by navigating, so the route
+   * change that follows is the tour walking its own reader forward and must not
+   * tear the tour down and mark it abandoned. The flag is raised for the length of
+   * the navigation the tour itself requested and consumed by abort, so exactly one
+   * route change — the tour's own — is exempt; a reader who navigates afterwards is
+   * leaving, and the flow ends there. The navigation normally completes in a fresh
+   * document (`location.assign`), where this instance and its flag are gone and the
+   * far side resumes from the stored step; under a persistent in-document router
+   * the same instance sees the abort signal and stays instead. Only a `pagehide`
+   * also consumes the flag: a document navigation the tour asked for is the tour
+   * advancing, so a `pagehide` carrying an already-consumed abort must not end the
+   * flow the far side is about to resume.
+   */
+  private selfNavigating = false;
 
+  // The callout is appended under body, where a route render cannot reach it: it
+  // lives outside the outlet the next route replaces, so a route change would
+  // otherwise leave a stale overlay and its listeners attached to the new page.
+  // Two signals end the flow: a document navigation fires `pagehide`, and an
+  // in-document route change dispatches the abort event named above. One listener
+  // each, installed once for the tour's lifetime, so a page that only changes its
+  // view really does lose the overlay and its progress. A bfcache restore keeps
+  // the document, so `pagehide` with `persisted` is left alone.
   constructor() {
     if (typeof document === 'undefined' || !document.addEventListener) return;
-    // Two signals remove the overlay: a document navigation fires `pagehide`, and
-    // an in-document route change dispatches the abort event. One listener each,
-    // installed for the tour's lifetime, so the page that owns the anchor stops
-    // being decorated the moment the reader leaves it. A bfcache restore keeps the
-    // document and brings the page back, so a persisted `pagehide` is left alone.
-    document.addEventListener('pagehide', event => { if (!(event as PageTransitionEvent).persisted) this.close(); });
-    document.addEventListener(GUIDED_TOUR_ABORT_EVENT, () => this.abort());
+    this.disposal = event => {
+      // The tour's own navigation is the tour advancing, not the reader leaving.
+      // Consumed here so exactly the one route change it asked for is exempt,
+      // whether that change is announced as an abort (a persistent router) or as
+      // a `pagehide` (a fresh document).
+      if (this.selfNavigating) {
+        this.selfNavigating = false;
+        return;
+      }
+      if (event.type === 'pagehide' && (event as PageTransitionEvent).persisted) return;
+      // A reader's own navigation ends the flow where it stands: the far side has
+      // nothing to resume unless the tour itself walked the reader forward.
+      this.endFlow();
+    };
+    document.addEventListener('pagehide', this.disposal);
+    document.addEventListener(GUIDED_TOUR_ABORT_EVENT, this.disposal);
   }
 
-  private get done(): boolean { return localStorage.getItem(doneKey) === 'true'; }
-
-  private storedStep(): number {
-    const value = Number(localStorage.getItem(stepKey));
-    return Number.isInteger(value) && value >= 0 && value < steps.length ? value : 0;
+  /** A flow is done when its completion matches the object it is bound to. */
+  private isDone(flow: TourFlow): boolean {
+    const scope = flow.scope();
+    return scope !== '' && localStorage.getItem(flow.doneKey) === scope;
   }
 
-  /** The Dashboard entry: visible but not dominant, and restartable later. */
-  launcher(): HTMLButtonElement {
+  private inProgress(flow: TourFlow): boolean {
+    return localStorage.getItem(flow.stepKey) !== null;
+  }
+
+  private storedStep(flow: TourFlow): number {
+    const value = Number(localStorage.getItem(flow.stepKey));
+    return Number.isInteger(value) && value >= 0 && value < flow.steps.length ? value : 0;
+  }
+
+  /** The entry for one flow: visible but not dominant, and restartable later. */
+  launcher(flowId: TourFlowId = 'create'): HTMLButtonElement {
+    const flow = flowFor(flowId)!;
     const button = document.createElement('button');
-    button.type = 'button'; button.className = 'ghost-button tour-launcher'; button.dataset.tourStart = '';
-    button.textContent = this.done || localStorage.getItem(stepKey) !== null ? t('tour.restart') : t('tour.entry');
-    button.addEventListener('click', () => this.start(0));
+    button.type = 'button'; button.className = 'ghost-button tour-launcher';
+    button.dataset.tourStart = flow.id;
+    button.textContent = this.isDone(flow) || this.inProgress(flow) ? t('tour.restart') : t(flow.entryKey);
+    button.addEventListener('click', () => this.start(flow.id, 0));
     return button;
   }
 
-  /** Resume an in-progress tour after a route change; do nothing once finished. */
+  /**
+   * Offer the flow that belongs on this route, without taking the page over.
+   *
+   * The register mounts its own entry explicitly; this is the automatic half for
+   * the flows whose surface is a page the reader lands on rather than a register
+   * they act from: a result workspace offers its tour, and every Administration
+   * destination offers the admin tour. A flow already in progress resumes through
+   * :meth:`resumeIfActive` and is never offered a second entry, and the entry is
+   * only *added* — the page keeps every control it already had.
+   */
+  offer(): void {
+    // The create flow's register mounts its own entry explicitly, so only the
+    // flows whose surface is a page the reader lands on are offered here.
+    const flow = flows.find(candidate => candidate.id !== 'create' && offersEntry(candidate, location.pathname));
+    if (!flow || this.inProgress(flow) || this.isDone(flow)) return;
+    const host = document.querySelector<HTMLElement>('main.result-app, main.admin-page .page-heading');
+    if (!host || host.querySelector('.tour-launcher')) return;
+    const actions = host.querySelector<HTMLElement>('.result-help-actions') || host.querySelector<HTMLElement>('.result-header-actions, .page-actions');
+    (actions ?? host).append(this.launcher(flow.id));
+  }
+
+  /**
+   * Resume the flow this route belongs to after a route change.
+   *
+   * Only the flow that is in progress *and* whose current step lives on this
+   * route resumes: an unfinished tour must never pull a reader off an unrelated
+   * page, and a completed one stays completed.
+   */
   resumeIfActive(): void {
-    const step = localStorage.getItem(stepKey);
-    if (step === null || this.done) return;
-    this.show(this.storedStep());
+    const flow = flowFor(localStorage.getItem(activeKey));
+    if (!flow || this.isDone(flow) || !this.inProgress(flow)) return;
+    const index = this.storedStep(flow);
+    const step = flow.steps[index];
+    if (!step || !location.pathname.startsWith(step.route)) return;
+    this.show(flow, index);
   }
 
-  start(index: number): void {
-    localStorage.removeItem(doneKey);
-    this.show(index);
+  /**
+   * Start a flow from its first step. A flow only starts on a surface it owns,
+   * so a stray call cannot walk an administrator into the reader's tour or the
+   * reverse.
+   */
+  start(flowId: TourFlowId, index: number): void {
+    const flow = flowFor(flowId);
+    if (!flow || !ownsRoute(flow, location.pathname)) return;
+    localStorage.setItem(activeKey, flow.id);
+    localStorage.removeItem(flow.doneKey);
+    this.show(flow, index);
   }
 
-  private show(index: number): void {
+  private show(flow: TourFlow, index: number): void {
     this.close();
-    const step = steps[index];
-    if (!step) return this.finish();
+    const step = flow.steps[index];
+    if (!step) return this.finish(flow, index);
     if (step.needsResult) {
       // A result page addresses one concrete task. Use a real result URL when the
       // tour entry recorded one; otherwise there is no object to show, so the step
       // is skipped rather than navigating to an id-less, nonexistent route.
-      const target = this.resultTarget();
-      if (!target) return this.show(index + 1);
+      const target = this.target(flow);
+      if (!target) return this.show(flow, index + 1);
       if (location.pathname !== target) {
-        localStorage.setItem(stepKey, String(index));
+        localStorage.setItem(flow.stepKey, String(index));
+        this.selfNavigating = true;
         location.assign(target);
         return;
       }
     } else if (!location.pathname.startsWith(step.route)) {
       // The step belongs to another surface: remember where we are and go there.
-      localStorage.setItem(stepKey, String(index));
-      location.assign(step.route);
+      // Re-assigning the current address would reload the page without advancing
+      // the tour, so a step that already matches its own route never navigates.
+      localStorage.setItem(flow.stepKey, String(index));
+      if (location.pathname !== step.route) {
+        // Marked before the navigation so the abort signal that follows a
+        // persistent router's route change is read as the tour advancing rather
+        // than the reader abandoning the flow.
+        this.selfNavigating = true;
+        location.assign(step.route);
+      }
       return;
     }
     const anchor = document.querySelector<HTMLElement>(step.anchor);
     if (!anchor) {
       // Skip a step whose element is absent because of role, viewport, or state.
-      return this.show(index + 1);
+      return this.show(flow, index + 1);
     }
-    localStorage.setItem(stepKey, String(index));
-    this.index = index;
-    this.render(anchor, step, index);
+    localStorage.setItem(flow.stepKey, String(index));
+    this.render(flow, anchor, step, index);
   }
-
-  /** The concrete result page recorded at tour entry, gated to a real task id. */
-  private resultTarget(): string | null {
-    const url = localStorage.getItem(resultKey);
+  /** The concrete result page recorded at create-tour entry, gated to a real id. */
+  private target(flow: TourFlow): string | null {
+    if (!flow.targetKey) return null;
+    const url = localStorage.getItem(flow.targetKey);
     return url && /^\/compute\/results\/[a-f0-9]{32}$/i.test(url) ? url : null;
   }
 
-  private render(anchor: HTMLElement, step: TourStep, index: number): void {
+  private render(flow: TourFlow, anchor: HTMLElement, step: TourStep, index: number): void {
     const title = t(step.titleKey), body = t(step.bodyKey);
     anchor.classList.add('tour-anchor');
+    this.anchored = anchor;
     const callout = document.createElement('section');
     callout.className = 'tour-callout'; callout.setAttribute('role', 'dialog'); callout.setAttribute('aria-modal', 'false');
     callout.setAttribute('aria-label', title);
     callout.setAttribute('tabindex', '-1');
-    const count = document.createElement('p'); count.className = 'tour-step-count'; count.textContent = t('tour.stepOf', { current: index + 1, total: steps.length });
+    const count = document.createElement('p'); count.className = 'tour-step-count'; count.textContent = t('tour.stepOf', { current: index + 1, total: flow.steps.length });
     const heading = document.createElement('h2'); heading.textContent = title;
     const copy = document.createElement('p'); copy.className = 'tour-copy'; copy.textContent = body;
     const close = document.createElement('button'); close.type = 'button'; close.className = 'icon-button tour-close'; close.title = t('tour.close'); close.setAttribute('aria-label', t('tour.close')); close.innerHTML = '<i data-lucide="x" aria-hidden="true"></i>';
-    close.addEventListener('click', () => this.finish());
+    close.addEventListener('click', () => this.finish(flow, index));
     const footer = document.createElement('footer');
-    const dismiss = document.createElement('button'); dismiss.type = 'button'; dismiss.className = 'ghost-button'; dismiss.textContent = t('tour.dismiss'); dismiss.addEventListener('click', () => this.dismiss());
-    const skip = document.createElement('button'); skip.type = 'button'; skip.className = 'ghost-button'; skip.textContent = t('tour.skip'); skip.addEventListener('click', () => this.finish());
-    const back = document.createElement('button'); back.type = 'button'; back.className = 'secondary-button'; back.textContent = t('tour.back'); back.disabled = index === 0; back.addEventListener('click', () => this.show(index - 1));
-    const next = document.createElement('button'); next.type = 'button'; next.className = 'primary-button'; next.textContent = index === steps.length - 1 ? t('tour.finish') : t('tour.next'); next.addEventListener('click', () => this.show(index + 1));
+    const dismiss = document.createElement('button'); dismiss.type = 'button'; dismiss.className = 'ghost-button'; dismiss.textContent = t('tour.dismiss'); dismiss.addEventListener('click', () => this.dismiss(flow));
+    const skip = document.createElement('button'); skip.type = 'button'; skip.className = 'ghost-button'; skip.textContent = t('tour.skip'); skip.addEventListener('click', () => this.finish(flow, index));
+    const back = document.createElement('button'); back.type = 'button'; back.className = 'secondary-button'; back.textContent = t('tour.back'); back.disabled = index === 0; back.addEventListener('click', () => this.show(flow, index - 1));
+    const next = document.createElement('button'); next.type = 'button'; next.className = 'primary-button'; next.textContent = index === flow.steps.length - 1 ? t('tour.finish') : t('tour.next'); next.addEventListener('click', () => this.show(flow, index + 1));
     footer.append(dismiss, back, skip, next);
     callout.append(count, close, heading, copy);
     if (step.docHref) { const link = document.createElement('a'); link.href = step.docHref; link.textContent = t('public.nav.documentation'); callout.append(link); }
     callout.append(footer);
 
     callout.addEventListener('keydown', event => {
-      if (event.key === 'Escape') { event.preventDefault(); this.finish(); }
-      else if (event.key === 'ArrowRight') { event.preventDefault(); this.show(this.index + 1); }
-      else if (event.key === 'ArrowLeft') { event.preventDefault(); this.show(this.index - 1); }
+      if (event.key === 'Escape') { event.preventDefault(); this.finish(flow, index); }
+      else if (event.key === 'ArrowRight') { event.preventDefault(); this.show(flow, index + 1); }
+      else if (event.key === 'ArrowLeft') { event.preventDefault(); this.show(flow, index - 1); }
     });
 
     const position = (): void => {
       const rect = anchor.getBoundingClientRect();
       const width = Math.min(384, window.innerWidth - 32);
       const left = Math.min(Math.max(16, rect.left), window.innerWidth - width - 16);
+      // Below the anchor when the callout fits there, above it when it does not,
+      // and clamped to the viewport in either case. The height is measured rather
+      // than assumed: the callout grows with its copy, so a fixed allowance put the
+      // footer past the bottom edge when the anchor sat low on a long page, leaving
+      // Next and Finish unreachable.
+      const height = callout.getBoundingClientRect().height;
       const below = rect.bottom + 12;
-      const top = below + 240 < window.innerHeight ? below : Math.max(16, rect.top - 260);
+      const above = rect.top - height - 12;
+      const top = Math.max(16, below + height + 16 <= window.innerHeight ? below : Math.min(above, window.innerHeight - height - 16));
       callout.style.left = `${left}px`; callout.style.top = `${top}px`;
       // The shell owns the viewport's lower corner with its fixed feedback column
       // (notices and toasts). A callout that would land on that column keeps its
@@ -231,41 +476,58 @@ export class GuidedTour {
     this.cleanup = () => { window.removeEventListener('resize', position); clearance?.disconnect(); };
   }
 
-  private cleanup: (() => void) | null = null;
-
-  private close(): void {
+  /**
+   * Remove every overlay and listener this tour created. Safe to call twice.
+   *
+   * Called when a flow ends, when the document is navigated away from, and when
+   * a route change announces itself — the three ways the page that owns the
+   * anchor stops being the page the reader is on.
+   */
+  close(): void {
     this.cleanup?.(); this.cleanup = null;
-    document.querySelectorAll('.tour-anchor').forEach(node => node.classList.remove('tour-anchor'));
+    // Only the node this callout decorated: a route change may already have
+    // replaced the page, and clearing another surface's anchor would strip a
+    // mark this tour never made.
+    this.anchored?.classList.remove('tour-anchor');
+    this.anchored = null;
     this.callout?.remove(); this.callout = null;
   }
 
-  /**
-   * End the tour because the reader left the page it was decorating.
-   *
-   * The abort event is dispatched only by an in-document route change, which is
-   * always the reader's own move, so the tour ends there - remembered step
-   * included, or the surface they walked to would reopen a tour they left. A
-   * step's own hop to another route is a document navigation, announced by
-   * `pagehide`, which only removes the overlay and leaves the step to resume.
-   */
-  private abort(): void { localStorage.removeItem(stepKey); this.close(); }
+  private endFlow(): void {
+    // Whatever flow is live, or none: the reader leaving a page ends the tour
+    // that was decorating it, and a page with no live flow has nothing to end.
+    // The in-progress step is cleared here; the completion scope is not, so a
+    // flow the reader walked away from is offered again rather than marked done.
+    const flow = flowFor(localStorage.getItem(activeKey));
+    if (flow) {
+      localStorage.removeItem(flow.stepKey);
+      if (flow.targetKey) localStorage.removeItem(flow.targetKey);
+      localStorage.removeItem(activeKey);
+    }
+    this.close();
+  }
 
-  private dismiss(): void { localStorage.setItem(doneKey, 'true'); localStorage.removeItem(stepKey); localStorage.removeItem(resultKey); this.close(); }
-  private finish(): void { localStorage.removeItem(stepKey); localStorage.removeItem(resultKey); if (this.index >= steps.length - 1) localStorage.setItem(doneKey, 'true'); this.close(); }
+  private dismiss(flow: TourFlow): void { localStorage.setItem(flow.doneKey, flow.scope()); this.endFlow(); }
+  private finish(flow: TourFlow, index: number): void {
+    // Reaching the end of the flow is a completion; leaving early (skip, close,
+    // Escape) is not, so the entry stays for a reader who wants to come back.
+    if (index >= flow.steps.length - 1) localStorage.setItem(flow.doneKey, flow.scope());
+    this.endFlow();
+  }
 }
 
-/** One tour per page: the Dashboard launches it, navigation resumes it. */
+/** One tour per page: the surfaces launch a flow, navigation resumes it. */
 export const guidedTour = new GuidedTour();
 
 /**
- * Remember a concrete result URL so the result step can visit a real task rather
- * than a dangling route. The Dashboard records the first available result it knows
- * about before launching the tour. When it has no available result, the value left
- * by an earlier tour, a deleted task, or a previous session is cleared, so the step
- * can never navigate to a stale target.
+ * Remember a concrete result URL so the create flow's result step can visit a real
+ * task rather than a dangling route. The Dashboard records the first available
+ * result it knows about before launching the tour. When it has no available
+ * result, the value left by an earlier tour, a deleted task, or a previous session
+ * is cleared, so the step can never navigate to a stale target.
  */
 export function recordTourResult(url: string | null | undefined): void {
   const match = url ? /^\/compute\/results\/[a-f0-9]{32}$/i.exec(url) : null;
-  if (match) localStorage.setItem(resultKey, match[0]);
-  else localStorage.removeItem(resultKey);
+  if (match) localStorage.setItem('revocompute-tour-result', match[0]);
+  else localStorage.removeItem('revocompute-tour-result');
 }

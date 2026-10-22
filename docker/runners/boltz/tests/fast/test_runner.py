@@ -78,7 +78,7 @@ def _runner_env(
         (assets / name).write_bytes(content)
     checksums = tmp_path / "model-assets.sha256"
     checksums.write_text(
-        "".join(f"{hashlib.sha256(content).hexdigest()}  {assets / name}\n" for name, content in files.items()),
+        "".join(f"{hashlib.sha256(content).hexdigest()}  {name}\n" for name, content in files.items()),
         encoding="ascii",
     )
     source = tmp_path / "target.yaml"

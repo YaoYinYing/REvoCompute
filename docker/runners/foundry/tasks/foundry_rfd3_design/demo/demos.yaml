@@ -1,0 +1,32 @@
+demos:
+- id: unconditional_16mer
+  title: Unconditional 16-residue protein
+  purpose: Generate one compact protein backbone without a motif or uploaded structure.
+  context: >-
+    This synthetic specification fixes the design length at 16 residues. It is a
+    minimal functional RFD3 example, not a claim that a generated structure is
+    stable or experimentally validated.
+  source:
+    name: REvoCompute Foundry demo corpus
+    url: https://github.com/YaoYinYing/REvoCompute
+  license:
+    id: cc0-1.0
+    name: CC0 1.0 Universal (public domain dedication)
+    url: https://creativecommons.org/publicdomain/zero/1.0/
+  inputs:
+    specification:
+    - path: files/unconditional.json
+      sha256: c6a0bea4914a9e30484c1d159c72f576664a56516f65cbb78efe2e49375a9d1f
+      media_type: application/json
+  parameters:
+    num_designs: 1
+    diffusion_steps: 50
+    num_recycles: 2
+    seed: 0
+    low_memory_mode: false
+    dump_trajectories: false
+    inference_mode: fast
+    sampler_step_scale: 1.5
+    sampler_gamma_0: 0.6
+    classifier_free_guidance: false
+    centering: all

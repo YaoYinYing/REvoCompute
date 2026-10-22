@@ -21,29 +21,111 @@ ResultManifest, and artifact rules are the ones that apply.
 - Transport: MCP **streamable HTTP** (the official SDK transport). There is no
   stdio wrapper in a deployment.
 - Endpoint: `<base-url>/k/mcp` (the surface is mounted at `/k`).
-- The MCP endpoint is served from the **same process** as the HTTP API when a
-  deployment enables it, so the canonical rate limiter and application state are
-  shared rather than replicated: mixing HTTP and MCP requests from one client
-  address consumes one budget.
+- The MCP endpoint is served by a **dedicated service** (`mcp`) that imports the
+  canonical application. It is one deployment, not two: the MCP process reaches
+  the same canonical authorization, admission, readiness, quota and result code
+  the HTTP API runs, and shares the canonical Redis-backed rate limiter and the
+  SQLite stores both processes read under the shared server directory (user,
+  Task, admin config, Tool call, MCP handle, and Operator Job records).
+- With Redis available, an HTTP request and an MCP call from one client address
+  consume the same rate-limit budget, because the counter is the shared Redis one.
+  They do **not** share it while Redis is unavailable: the limiter then falls back
+  to a per-process in-memory counter, so each process limits its own traffic. That
+  fallback is the canonical limiter's documented degraded mode
+  (see [REvoCompute deployment control](../operator-guide/deployment-control.md)),
+  not an MCP behavior.
 
 ### Enabling the surface
 
-Enabling MCP is a **deployment-owned change**, not a flag on the checked-in
-deployment scripts: this repository's `run/restart.sh` and Compose stack do not
-yet wire it. A deployment turns it on by all three of
+Enabling MCP is a **deployment-owned opt-in** and is disabled by default: a
+deployment that never sets `MCP_ENABLED` runs exactly as it did before this
+setting existed, with no route, no overlay, and no MCP service. One switch,
+`MCP_ENABLED`, decides the whole opt-in, so "is MCP deployed?" cannot be
+answered two different ways. Turn it on by all three of
 
-1. installing the optional extra in the server image
-   (`uv pip install "/app/server[resend,mcp]"`),
+1. building the server image with the transport stack —
+   `REVOCOMPUTE_EXTRAS=resend,mcp` in the deployment env file (the shipped
+   default is `resend` alone); the transport is an image dependency, so the
+   image must be rebuilt, not merely re-flagged;
 2. setting `MCP_ENABLED=true` (and, if the default is unsuitable, `MCP_PORT`,
-   default `8081`) in the `web` service environment, and
-3. adding a gateway route to the MCP listener port alongside the HTTP API.
+   default `8081`) in the deployment env file; and
+3. running `bash run/restart.sh restart`, which layers
+   `docker-compose.mcp.yml`, reconciles the gateway `location /k/` route from
+   `MCP_ENABLED`, and starts the `mcp` service.
 
-Without all three, `revocompute.app` logs `MCP surface disabled` and the
-endpoint is simply absent — an ordinary deployment without the extra installs and
-runs exactly as before. A first-class `--with-mcp` deployment path is tracked as
-a follow-up; the surface is verified today through
-[interoperability testing](#interoperability-testing), which starts the real
-process with the listener enabled.
+If the web process can reach the deployment's own public base URL, also set
+`MCP_GATEWAY_PROBE=true` so the capability verifies the endpoint through the
+gateway rather than leaving it unverified (see below).
+
+`bash run/restart.sh mcp-status` reports the switch, whether the route is
+present, and whether the surface is really reachable. Reachability is not read
+from the switch, and it is not read from the route file either: `GET
+/compute/api/mcp` reports its facts separately -- whether the `mcp` service
+answered a real MCP `initialize` handshake at the destination this deployment
+dials for it (`listener_ready`),
+whether the gateway route state on disk declares a `/k/` route
+(`route_configured`), and whether the deployment's own public endpoint answered
+the same handshake through the gateway (`gateway_verified`). The surface is
+`operational` — and the endpoint is advertised, and Home offers "Connect an AI
+agent" — only when `gateway_verified` is `true`, that is, when the deployment's
+own endpoint really answered. An answering MCP service plus a route file is
+**not** sufficient: a route file is a file fact, never proof the gateway serves
+the route. `mcp-status` separately drives the same handshake through the gateway
+route an agent host will use, so the operator's receipt does not rest on the web
+process agreeing with itself.
+
+`gateway_verified` is `null` when the deployment does not probe its own edge
+(`MCP_GATEWAY_PROBE` unset), so a deployment that cannot reach its own public
+base URL — air-gapped, or split DNS — reports reachability *unverified* rather
+than asserting it, and advertises nothing. The destination is fixed by
+`SERVER_BASE_URL`, never a caller-supplied URL, and the probe is a single
+bounded request. The verdict it returns is held only briefly: a gateway answer
+older than the freshness window is re-probed, so a gateway that goes down stops
+being advertised and a gateway that is fixed starts being advertised again —
+both without restarting the web process. The window is short enough for an
+outage to be noticed and long enough that ordinary capability reads are answered
+from memory; while one read is re-probing, another read reports the reach as
+unverified rather than reusing the expired answer or starting a second probe. An
+MCP service that answers while the gateway route is missing or
+stale, a gateway that never reloaded after the route was written, or an upstream
+that is down is therefore reported not operational — the endpoint a client is
+given is reached through the gateway, not through the service directly. A switch
+set in the env file while nothing serves the surface (a missing `mcp` extra, a
+`mcp` service that is not running, a `restart` that has not run) is reported as an
+operator problem, with the reason, rather than silently as "disabled" or happily
+as "enabled". To roll back, set `MCP_ENABLED=false` and run
+`bash run/restart.sh restart`: the route is removed, the `mcp` service is stopped,
+and the deployment returns to its pre-MCP shape.
+
+Because the capability is a claim about *public* reachability, the Web
+application shows the "Connect an AI agent" entry — and names the endpoint — only
+when the capability says the endpoint really answers through the gateway. The
+entry is never offered on the strength of the switch, of an answering MCP service
+alone, of a route file, or of MCP code existing in the repository.
+
+While `MCP_ENABLED` is unset, the web process imports no MCP transport, the
+gateway's `include` of the route mask is empty, and the endpoint is absent rather
+than pointed at a dead port.
+
+#### Route and transport boundary
+
+- Service: the `mcp` service declared in `docker-compose.mcp.yml`, running the
+  existing `revocompute-mcp` entrypoint (`python -m revocompute.mcp`) on a
+  container-internal port (`MCP_PORT`, default `8081`). It is its own process on
+  purpose: the web service runs `gunicorn --preload`, so anything started at
+  import time would live in the pre-fork master and be re-forked on every worker
+  recycle. The MCP process imports the canonical application and shares the
+  canonical Redis limiter and the SQLite stores both processes read under the
+  shared server directory (user, Task, admin config, Tool call, MCP handle, and
+  Operator Job records); it does not share the limiter's per-process in-memory
+  fallback, and it does not own the application's Operator Job restart pass, so
+  starting or restarting the service cannot terminalize a job the web service is
+  running.
+- Route: the gateway exposes exactly one location, `/k/`, proxying to that
+  service over the compose network. That port is never published to the host, so
+  nothing outside the compose network can reach the service directly. The
+  canonical per-route rate limiter, admission path, and application state are the
+  ones that apply -- there is no shadow limiter and no second execution plane.
 
 ## Authentication
 
@@ -191,18 +273,28 @@ hosts.
 
 ## Interoperability testing
 
-`tests/mcp_live_acceptance.py` starts the canonical web process with the MCP
-surface enabled and drives the complete workflow — connect, discover, inspect,
-preflight, submit, track, results, artifact — plus the negative cases (unknown
-task type, invalid parameters, unentitled Runner, cross-user handle, cross-user
-artifact, traversal, missing artifact, oversized artifact, quarantined result,
-cancel, retried submission, invalid credentials, anonymous access) over a real
-streamable-HTTP client. It **asserts** those expectations and exits non-zero on
-any mismatch, printing a JSON receipt:
+`tests/mcp_live_acceptance.py` starts the MCP service the way the deployment
+does -- `python -m revocompute.mcp` as its own process, with the canonical
+application imported -- and drives the complete workflow -- connect, discover,
+inspect, preflight, submit, track, results, artifact -- plus the negative cases
+(unknown task type, invalid parameters, unentitled Runner, cross-user handle,
+cross-user artifact, traversal, missing artifact, oversized artifact,
+quarantined result, cancel, retried submission, invalid credentials, anonymous
+access) over a real streamable-HTTP client. It **asserts** those expectations
+and exits non-zero on any mismatch, printing a JSON receipt:
 
 ```bash
 uv run --extra mcp python tests/mcp_live_acceptance.py
 ```
+
+`tests/server/test_mcp_deployment_topology.py` starts the *deployed* process
+shape -- the production `gunicorn --preload -w 2` web command plus the MCP
+service -- on real sockets and asserts the topology facts no in-process test can
+see: no gunicorn process holds the MCP port, a real MCP client completes an
+`initialize` against the service, an authenticated call reaches canonical
+authorization while an anonymous one is refused as `AUTH_REQUIRED`, a worker
+recycle leaves the service serving with no duplicate listener, a clean shutdown
+leaves no orphan, and MCP is disabled by default.
 
 `tests/mcp_host_receipt.py` produces a JSON receipt per host:
 

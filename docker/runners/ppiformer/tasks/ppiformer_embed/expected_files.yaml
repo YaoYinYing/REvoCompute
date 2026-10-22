@@ -1,0 +1,63 @@
+# Logical result files published by the PPIformer embedding Task.
+#
+# Derived from the production result recorded in the Task's evidence packet: a
+# per-residue index table, the two opaque NumPy embedding arrays (download
+# only), and the JSON summary/metadata that describe their shape and source
+# revision, plus the input complex, submission, citation and execution
+# provenance.
+result:
+  files:
+    residue_index:
+      path: residue_index.csv
+      cardinality: one
+      required: true
+      type: table
+      role: evidence
+    residue_embeddings:
+      path: residue_embeddings.npy
+      cardinality: one
+      required: true
+      type: model
+      role: evidence
+    interface_embedding:
+      path: interface_embedding.npy
+      cardinality: one
+      required: true
+      type: model
+      role: evidence
+    embedding_summary:
+      path: embedding_summary.json
+      cardinality: one
+      required: true
+      type: json
+      role: evidence
+    run_metadata:
+      path: run_metadata.json
+      cardinality: one
+      required: true
+      type: json
+      role: evidence
+    input_complex:
+      pattern: 'debug/inputs/complex/*.pdb'
+      cardinality: one
+      required: true
+      type: structure
+      role: provenance
+    submission:
+      path: debug/submission.json
+      cardinality: one
+      required: true
+      type: json
+      role: provenance
+    citations:
+      path: citations.bib
+      cardinality: one
+      required: true
+      type: text
+      role: provenance
+    execution_records:
+      pattern: 'execution/*'
+      cardinality: many
+      required: true
+      type: text
+      role: diagnostic

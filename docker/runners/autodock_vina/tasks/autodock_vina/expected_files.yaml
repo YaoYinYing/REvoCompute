@@ -1,0 +1,72 @@
+# Logical result files published by the AutoDock Vina Task.
+#
+# Every entry names an output the family's own run.sh / normalize_results.py
+# writes for this Task (observed on a real production result), so the manifest,
+# the declared views, and the storyboard address files by what they are rather
+# than by an incidental path. `primary` is deliberately absent: it belongs to
+# the Task's declared primary view, which resolves it over `vina_*.pdbqt`.
+result:
+  files:
+    poses:
+      # Vina's native output: one PDBQT per ligand, each holding the ranked
+      # binding modes. PDBQT carries AutoDock atom types that the shared
+      # molecular viewer does not parse, so these are published download-only.
+      pattern: 'vina_*.pdbqt'
+      cardinality: many
+      required: true
+      role: artifact
+    scores:
+      # normalize_results.py's per-pose table, parsed from Vina's own log.
+      path: scores.csv
+      cardinality: one
+      required: true
+      type: table
+      role: evidence
+    summary:
+      # Pose count and the ranking metric/direction the normalizer recorded.
+      path: summary.json
+      cardinality: one
+      required: true
+      type: json
+      role: evidence
+    run_record:
+      # The resolved inputs and Vina parameters this run used.
+      path: vina-run.json
+      cardinality: one
+      required: true
+      type: json
+      role: provenance
+    pose_logs:
+      # Vina's own per-ligand search log (grid, atom counts, scored modes).
+      pattern: 'vina_*.log'
+      cardinality: many
+      required: true
+      type: text
+      role: artifact
+    prepared:
+      # The runner-prepared receptor and ligands actually docked. Preparation is
+      # separate from the immutable input snapshot under debug/inputs/.
+      pattern: 'prepared/*.pdbqt'
+      cardinality: many
+      required: true
+      role: artifact
+    receptor:
+      # The immutable input snapshot of the receptor, addressed by role
+      # directory rather than by the uploaded file name.
+      pattern: 'debug/inputs/receptor/*'
+      cardinality: one
+      required: false
+      type: structure
+      role: provenance
+    ligands:
+      pattern: 'debug/inputs/ligands/*'
+      cardinality: many
+      required: false
+      role: provenance
+    citations:
+      # Written by Core's finalization from the Task's declared citation.
+      path: citations.bib
+      cardinality: one
+      required: true
+      type: text
+      role: provenance

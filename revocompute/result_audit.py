@@ -65,10 +65,13 @@ from revocompute.task_types import ResultView, TaskType, isolated_discovery
 #: and source name. ``None`` means the source imposes no type constraint: an
 #: evidence bundle carries arbitrary bounded artifacts and a matrix/series/scalar
 #: source is parsed, so neither constrains the identity layer. A tree entry that
-#: declares no ``type`` is not constrained either.
-_REQUIRED_SOURCE_KIND: dict[str, dict[str, str | None]] = {
+#: declares no ``type`` is not constrained either. A tuple names the capabilities
+#: that all satisfy the source: a candidate may be a published structure or a
+#: published sequence (the design families publish FASTA records), and the
+#: candidate renderer reads either.
+_REQUIRED_SOURCE_KIND: dict[str, dict[str, str | tuple[str, ...] | None]] = {
     "structure": {"structure": "molecular_structure"},
-    "candidate-collection": {"candidates": "molecular_structure", "supporting": None},
+    "candidate-collection": {"candidates": ("molecular_structure", "text"), "supporting": None},
     "entity-table": {"table": "table", "structure": "molecular_structure"},
     "alignment": {"alignment": "text"},
     "trajectory": {"topology": "molecular_structure", "coordinates": None},
@@ -348,14 +351,15 @@ def _audit_view(task: TaskType, view: ResultView, tree: Mapping[str, Mapping[str
                 if "type" not in entry:
                     continue
                 actual = _declared_capability(entry)
-                if actual != expected_kind:
+                accepted = (expected_kind,) if isinstance(expected_kind, str) else expected_kind
+                if actual not in accepted:
                     findings.append(
                         ContractFinding(
                             "result.renderer_source_kind_mismatch",
                             task.name,
                             f"source {source_name!r} ({selector.value!r}) feeds a {view.plugin!r} view but "
                             f"logical file {logical_id!r} declares type {entry.get('type')!r} "
-                            f"({actual}), not {expected_kind}",
+                            f"({actual}), not {' or '.join(accepted)}",
                             view.id,
                         )
                     )

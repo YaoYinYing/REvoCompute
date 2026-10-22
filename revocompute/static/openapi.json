@@ -23,6 +23,110 @@
     {"name": "Administration reports", "description": "Bounded, read-only Admin reports over facts the canonical stores already own, and the placement dry run. Every unknown is reported as unknown rather than as zero."}
   ],
   "paths": {
+    "/compute/api/tasks/{task_id}/diagnostics": {
+      "get": {
+        "operationId": "getTaskDiagnostics",
+        "summary": "Read bounded safe execution failure evidence for an owned Task",
+        "security": [
+          {
+            "cookieAuth": []
+          },
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-fA-F0-9]{32}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Confirmed execution facts and bounded redacted log context; unavailable or expired evidence is explicit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskDiagnostics"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/compute/api/tasks/{task_id}/diagnostics/{stream}": {
+      "get": {
+        "operationId": "downloadTaskDiagnosticExcerpt",
+        "summary": "Download an authorized redacted bounded stdout or stderr excerpt",
+        "security": [
+          {
+            "cookieAuth": []
+          },
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-fA-F0-9]{32}$"
+            }
+          },
+          {
+            "name": "stream",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "stdout",
+                "stderr"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "At most 64 KiB of redacted execution context, delivered as a text attachment",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
     "/openapi.json": {
       "get": {
         "tags": ["Service discovery"],
@@ -76,6 +180,17 @@
         "operationId": "getRegistrationCapability",
         "responses": {
           "200": {"description": "Current registration capability", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/RegistrationCapability"}}}}
+        }
+      }
+    },
+    "/compute/api/mcp": {
+      "get": {
+        "tags": ["System"],
+        "summary": "Get agent MCP capability",
+        "description": "Reports whether an agent host can actually reach this deployment's agent Model Context Protocol surface, so a client is offered the entry only when the endpoint answers rather than when a switch was set or a route file exists. It reports the facts it observed separately: whether the MCP service answered a real MCP initialize handshake at the destination this deployment dials for it (listener_ready), whether the deployment gateway route state declares a /k/ route (route_configured), and whether the deployment's own public endpoint answered the same handshake through the gateway (gateway_verified, null when this deployment does not probe its own edge). The surface is operational - and the endpoint advertised - only when the public endpoint was genuinely reached; an answering MCP service plus a route file is not sufficient, and reachability that cannot be determined is reported unverified rather than asserted. It is a deployment-capability projection, never an authorization: what a credential may do over MCP is decided per request by the canonical account, entitlement, admission, and result rules.",
+        "operationId": "getMcpCapability",
+        "responses": {
+          "200": {"description": "Current agent MCP capability", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/McpCapability"}}}}
         }
       }
     },
@@ -288,6 +403,43 @@
           },
           "404": {"$ref": "#/components/responses/NotFound"},
           "503": {"$ref": "#/components/responses/Unavailable"}
+        }
+      }
+    },
+    "/compute/api/types/{name}/demos": {
+      "get": {
+        "tags": ["Task types"],
+        "summary": "List a task type's declared demo inputs",
+        "description": "Returns the deployment-controlled demo presets the enabled TaskType declares in its own demo manifest. A demo is a redistributable fixture plus the named input roles and typed parameters that make it a working example; reading the catalog creates, reserves, and authorizes nothing. An unknown or disabled TaskType is a 404, exactly as for the canonical parameter schema.",
+        "operationId": "getTaskDemos",
+        "parameters": [{"$ref": "#/components/parameters/TaskTypeName"}],
+        "responses": {
+          "200": {
+            "description": "The TaskType's declared demo presets, empty when it declares none",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TaskDemoCatalog"}}}
+          },
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "503": {"$ref": "#/components/responses/Unavailable"}
+        }
+      }
+    },
+    "/compute/api/types/{name}/demos/{demo_id}/files/{asset}": {
+      "get": {
+        "tags": ["Task types"],
+        "summary": "Download one declared demo fixture",
+        "description": "Serves one fixture file a demo declaration already validated for an enabled TaskType. The request is resolved by allowlist membership only: only a path the declaration names can be served, so a traversal, an absolute path, or an undeclared file is concealed as not found. The server never fetches a remote dataset.",
+        "operationId": "getTaskDemoFile",
+        "parameters": [
+          {"$ref": "#/components/parameters/TaskTypeName"},
+          {"name": "demo_id", "in": "path", "required": true, "schema": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"}},
+          {"name": "asset", "in": "path", "required": true, "schema": {"type": "string"}}
+        ],
+        "responses": {
+          "200": {
+            "description": "The declared demo fixture bytes, served with the declared media type",
+            "content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}}
+          },
+          "404": {"$ref": "#/components/responses/NotFound"}
         }
       }
     },
@@ -1424,6 +1576,119 @@
       "Unavailable": {"description": "Server, queue, or task policy unavailable", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}}
     },
     "schemas": {
+      "TaskDiagnostics": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "task_id",
+          "availability",
+          "summary",
+          "reason_code",
+          "exit_code",
+          "exit_code_source",
+          "scheduler_state",
+          "stage",
+          "logs"
+        ],
+        "properties": {
+          "task_id": {
+            "type": "string"
+          },
+          "availability": {
+            "type": "string",
+            "enum": [
+              "available",
+              "unavailable",
+              "expired"
+            ]
+          },
+          "summary": {
+            "type": "string"
+          },
+          "reason_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "timeout",
+              "out_of_memory",
+              "allocation_failed",
+              "nonzero_exit",
+              "missing_result",
+              "submission_failed",
+              "job_id_unavailable",
+              "allocation_unrecorded",
+              "admission_failed",
+              "execution_exception",
+              "publication_failed",
+              "runner_validation_failed",
+              null
+            ]
+          },
+          "exit_code": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "exit_code_source": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "srun",
+              null
+            ]
+          },
+          "scheduler_state": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stage": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "logs": {
+            "type": "array",
+            "maxItems": 2,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "stream",
+                "preview",
+                "truncated",
+                "download_url"
+              ],
+              "properties": {
+                "stream": {
+                  "type": "string",
+                  "enum": [
+                    "stdout",
+                    "stderr"
+                  ]
+                },
+                "preview": {
+                  "type": "string",
+                  "maxLength": 8192
+                },
+                "truncated": {
+                  "type": "boolean"
+                },
+                "download_url": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
       "TaskId": {"type": "string", "pattern": "^[0-9a-f]{32}$", "example": "0123456789abcdef0123456789abcdef"},
       "LoginRequest": {
         "type": "object",
@@ -1445,6 +1710,20 @@
         "properties": {
           "enabled": {"type": "boolean"},
           "email_available": {"type": "boolean"}
+        },
+        "additionalProperties": false
+      },
+      "McpCapability": {
+        "type": "object",
+        "required": ["listener_ready", "route_configured", "gateway_verified", "operational", "enabled", "endpoint", "detail"],
+        "properties": {
+          "listener_ready": {"type": "boolean", "description": "Whether the MCP service answered a real MCP initialize handshake at the fixed destination this deployment dials for it."},
+          "route_configured": {"type": "boolean", "description": "Whether the deployment gateway route state on disk declares a /k/ route. This is a file fact, never proof the gateway serves the route."},
+          "gateway_verified": {"type": ["boolean", "null"], "description": "Whether the deployment's own public endpoint answered an MCP handshake through the gateway; null when this deployment does not probe its own edge, so external reachability is unverified rather than asserted."},
+          "operational": {"type": "boolean", "description": "Whether the surface is genuinely reachable: the public endpoint answered. False whenever reachability is unverified or absent, in particular when only the MCP service and a route file are present."},
+          "enabled": {"type": "boolean", "description": "Whether a client is offered the endpoint. Equal to operational: never true on a route file or an answering MCP service alone."},
+          "endpoint": {"type": ["string", "null"], "description": "Same-origin path of the MCP endpoint when the surface is operational, otherwise null."},
+          "detail": {"type": ["string", "null"], "description": "Fixed, role-based reason the surface is not operational, otherwise null. Never carries a credential, filesystem error string, host path, or internal port."}
         },
         "additionalProperties": false
       },
@@ -2088,6 +2367,60 @@
         },
         "additionalProperties": false
       },
+      "TaskDemoCatalog": {
+        "type": "object",
+        "required": ["version", "task_type", "demos"],
+        "properties": {
+          "version": {"type": "integer", "const": 1},
+          "task_type": {"type": "string"},
+          "demos": {"type": "array", "items": {"$ref": "#/components/schemas/TaskDemo"}}
+        },
+        "additionalProperties": false
+      },
+      "TaskDemo": {
+        "type": "object",
+        "required": ["id", "title", "purpose", "context", "source", "license", "inputs", "parameters"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"},
+          "title": {"type": "string"},
+          "purpose": {"type": "string"},
+          "context": {"type": "string"},
+          "source": {"$ref": "#/components/schemas/TaskDemoSource"},
+          "license": {"$ref": "#/components/schemas/TaskDemoLicense"},
+          "inputs": {
+            "type": "object",
+            "description": "Named input roles to bind, keyed by the role ID the owning task.yaml declares.",
+            "additionalProperties": {"type": "array", "items": {"$ref": "#/components/schemas/TaskDemoFile"}}
+          },
+          "parameters": {"type": "object", "additionalProperties": true}
+        },
+        "additionalProperties": false
+      },
+      "TaskDemoSource": {
+        "type": "object",
+        "required": ["name", "url"],
+        "properties": {"name": {"type": "string"}, "url": {"type": "string"}},
+        "additionalProperties": false
+      },
+      "TaskDemoLicense": {
+        "type": "object",
+        "required": ["id", "name", "url"],
+        "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "url": {"type": "string"}},
+        "additionalProperties": false
+      },
+      "TaskDemoFile": {
+        "type": "object",
+        "required": ["role", "path", "sha256", "size", "media_type", "download_url"],
+        "properties": {
+          "role": {"type": "string"},
+          "path": {"type": "string"},
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "size": {"type": "integer", "minimum": 1},
+          "media_type": {"type": "string"},
+          "download_url": {"type": "string"}
+        },
+        "additionalProperties": false
+      },
       "TaskCatalog": {
         "type": "object",
         "required": ["version", "categories", "task_types"],
@@ -2472,10 +2805,11 @@
       },
       "LogicalResultFile": {
         "type": "object",
-        "required": ["id", "name", "media_type", "size", "role", "cardinality", "viewer", "preview", "capability", "url"],
+        "required": ["id", "name", "path", "media_type", "size", "role", "cardinality", "viewer", "preview", "capability", "url"],
         "properties": {
           "id": {"type": "string"},
           "name": {"type": "string"},
+          "path": {"type": "string", "description": "Published artifact path this logical file resolves to. It is the artifact's identity: two logical files with the same basename in different directories name different paths."},
           "media_type": {"type": "string"},
           "size": {"type": "integer", "minimum": 0},
           "role": {"type": "string", "enum": ["primary", "evidence", "provenance", "diagnostic", "artifact"]},

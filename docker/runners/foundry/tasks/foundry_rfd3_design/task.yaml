@@ -6,7 +6,8 @@ use_when: Use this for de novo protein, binder, motif-scaffolding, or all-atom i
 input_summary: One RFD3 JSON specification and any local structure or alignment files it references.
 output_summary: Designed compressed mmCIF structures, resolved specifications, and immutable run provenance.
 considerations:
-- Runtime and GPU memory increase with system size, diffusion steps, and design count.
+- Runtime and GPU memory increase with system size, diffusion steps, design count, and recycling iterations.
+- Fast mode uses Foundry 1.0's corrected pooling, compiled execution, and example-keyed random stream; legacy mode restores the original eager execution policy but not AtomWorks 2 preprocessing or bitwise historical coordinates.
 - Hydrogen-bond conditioning that depends on the separately licensed HBPLUS program is not enabled.
 - Outputs are computational designs and require independent validation.
 gpus: true
@@ -92,3 +93,8 @@ parameters:
     seed: {type: integer, x-ui-control: {kind: seed}, description: Random seed for reproducible sampling., default: 0, minimum: 0, maximum: 2147483647}
     low_memory_mode: {type: boolean, description: Use memory-efficient tokenization at reduced throughput., default: false}
     dump_trajectories: {type: boolean, description: Save large intermediate diffusion trajectories., default: false}
+    inference_mode: {type: string, description: Foundry 1.0 execution policy; fast enables corrected pooling and acceleration while legacy restores serial eager execution., default: fast, enum: [fast, legacy]}
+    sampler_step_scale: {type: number, description: Diffusion step scale; larger values favor more probable and generally less diverse designs., default: 1.5, exclusiveMinimum: 0.0}
+    sampler_gamma_0: {type: number, description: Initial churn factor; smaller values reduce sampling diversity., default: 0.6, minimum: 0.0, maximum: 1.0}
+    classifier_free_guidance: {type: boolean, description: Apply classifier-free guidance to the checkpoint-supported conditioning features., default: false}
+    centering: {type: string, description: Coordinate set used to center each diffusion sample., default: all, enum: [all, motif, diffuse]}

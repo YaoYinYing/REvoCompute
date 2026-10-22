@@ -11,6 +11,7 @@ from playwright.sync_api import Page, expect
 import pytest
 
 from browser_frontend_assets import install_scientific_assets
+from storyboard_first_screen import assert_first_screen
 
 pytestmark = pytest.mark.browser
 
@@ -86,8 +87,8 @@ def test_rf3_ranks_samples_and_loads_exact_matching_confidence(page: Page) -> No
     }
     responses.update([_page("/confidence-1", "atom_plddts", [2], [0.7, 0.8])])
     responses.update([_page("/confidence-1", "pae", [2, 2], [1, 2, 2, 1])])
-    source = (ROOT / "docker/runners/foundry/storyboard/index.js").read_text(encoding="utf-8")
-    page.set_viewport_size({"width": 1200, "height": 1100})
+    source = (ROOT / "docker/runners/foundry/tasks/foundry_rf3_fold/storyboard/index.js").read_text(encoding="utf-8")
+    page.set_viewport_size({"width": 1280, "height": 1000})
     page.set_content("<div id='host'></div>")
     install_scientific_assets(page)
     page.evaluate(MOUNT, {"source": source, "files": files, "responses": responses, "delays": {"/summary-1": 100}})
@@ -99,6 +100,10 @@ def test_rf3_ranks_samples_and_loads_exact_matching_confidence(page: Page) -> No
     requests = page.evaluate("window.__rf3Storyboard.requests")
     assert "/summary-0" not in requests
     assert "/confidence-0?max_elements=1048576&key=pae" not in requests
+    # The best-ranked sample reaches the stage on mount and its PAE matrix is in
+    # the hero; the second sample follows the selection.
+    assert page.evaluate("window.__rf3Storyboard.opened") == ["/model-1"]
+    assert_first_screen(page, hero=".rf3-hero", slot=".rf3-stage", figure=".rf3-side .rf3-figure")
 
     page.locator(".candidate-open").nth(0).click()
     page.locator(".candidate-open").nth(1).click()
@@ -108,6 +113,10 @@ def test_rf3_ranks_samples_and_loads_exact_matching_confidence(page: Page) -> No
     expect(page.locator(".rf3-figure")).to_be_hidden()
     page.wait_for_timeout(150)
     expect(page.locator(".scalar-grid")).to_have_count(0)
+    # The stage still followed the selection: the evidence a sample omits does
+    # not decide whether the reader can see it.
+    opened = page.evaluate("window.__rf3Storyboard.opened")
+    assert opened[0] == "/model-1" and opened[-1] == "/model-0", opened
 
 
 def test_rf3_early_stop_mounts_without_a_structure(page: Page) -> None:
@@ -119,7 +128,7 @@ def test_rf3_early_stop_mounts_without_a_structure(page: Page) -> None:
         "run_record": [{"url": "/run", "name": "foundry-run.json"}],
         "model_assets": [{"url": "/assets", "name": "foundry-model-assets.json"}],
     }
-    source = (ROOT / "docker/runners/foundry/storyboard/index.js").read_text(encoding="utf-8")
+    source = (ROOT / "docker/runners/foundry/tasks/foundry_rf3_fold/storyboard/index.js").read_text(encoding="utf-8")
     page.set_content("<div id='host'></div>")
     install_scientific_assets(page)
     page.evaluate(MOUNT, {"source": source, "files": files, "responses": {"/ranking": "early_stopped\ntrue\n"}})

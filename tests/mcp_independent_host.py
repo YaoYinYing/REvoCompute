@@ -12,11 +12,13 @@ codebase that speaks the MCP wire protocol with its own client, its own
 transport stack, and its own protocol library (``mcp`` 2.x, a different major
 line from the adapter's pinned ``mcp`` 1.x).
 
-The two halves run in *different* Python processes on purpose, and with
-different dependency sets:
+The halves run in *different* Python processes on purpose, and with different
+dependency sets:
 
-* the **server** half runs in this repository's environment and starts the
-  canonical web process with the MCP companion listener, exactly as
+* the **fixture/server** half runs in this repository's environment: it imports
+  the canonical application and starts the MCP surface the way the deployment
+  does (``python -m revocompute.mcp``, the ``mcp`` service
+  ``docker-compose.mcp.yml`` declares) as its own process, exactly as
   ``mcp_live_acceptance`` does;
 * the **client** half is spawned through an isolated ``uv`` environment that
   installs only ``fastmcp``, so the host under test cannot accidentally import
@@ -39,6 +41,7 @@ import hashlib
 import json
 import os
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -381,7 +384,7 @@ def _client_main(argv: list[str]) -> int:  # pragma: no cover - subprocess
 
 
 # ---------------------------------------------------------------------------
-# Server half -- the canonical process with the MCP companion listener
+# Server half -- the canonical application plus the MCP service process
 # ---------------------------------------------------------------------------
 
 
@@ -395,25 +398,52 @@ def _wait_for_port(port: int, deadline_seconds: float = 45.0) -> bool:
     return False
 
 
+def _stop_service(service: subprocess.Popen[str]) -> None:
+    """Stop the MCP service process and wait for it."""
+    service.terminate()
+    try:
+        service.wait(timeout=15)
+    except subprocess.TimeoutExpired:  # pragma: no cover - a hung service is a bug
+        service.kill()
+        service.wait(timeout=15)
+
+
 def _start_server(url_port: int, fixtures_path: Path) -> None:  # pragma: no cover - subprocess
-    from tests.mcp_live_acceptance import _isolated_env, _mint_handle, _second_user, _submission_target
+    from tests.mcp_live_acceptance import _build_deployment, _mint_handle, _second_user, _submission_target
 
     root = fixtures_path.parent
-    _isolated_env(root)
-    os.environ["MCP_ENABLED"] = "true"
+    _build_deployment(root)
     os.environ["MCP_PORT"] = str(url_port)
-    os.environ["MCP_LOG_LEVEL"] = "warning"
 
+    # The canonical application owns the user database the seeded tokens and
+    # handles are written into; importing it starts no MCP listener.
     import revocompute.app as module
-
-    if not _wait_for_port(url_port):
-        print("MCP listener did not start", file=sys.stderr)
-        raise SystemExit(1)
 
     class _Queued:
         id = "independent-host-acceptance"
 
     module.task_runtime.run_compute_task.apply_async = lambda *_a, **_k: _Queued()
+
+    # The MCP surface is its own process, exactly as the deployment runs it, so
+    # the independent host talks to the service over a real socket rather than to
+    # a listener this harness started in itself.
+    service = subprocess.Popen(
+        [sys.executable, "-m", "revocompute.mcp"],
+        env={**os.environ, "MCP_PORT": str(url_port)},
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if not _wait_for_port(url_port):
+        print(
+            f"MCP service did not start: {(service.stderr.read() if service.stderr else '')[-2000:]}",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    # The orchestrator stops this half with SIGTERM, which by default ends the
+    # process without touching its children -- so the service would be orphaned
+    # and keep the port.  Stop it explicitly before exiting.
+    signal.signal(signal.SIGTERM, lambda *_a: _stop_service(service))
 
     submit_type, submit_role = _submission_target(module)
     big_payload = b"z" * (200 * 1024)

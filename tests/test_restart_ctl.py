@@ -94,6 +94,10 @@ _DOCKER_SHIM = textwrap.dedent(
       printf "redis\\nweb\\ngateway\\nmaintenance\\nworker\\n"
       exit 0
     fi
+    if [[ "$1" == "compose" && "$*" == *" ps -a --services"* ]]; then
+      printf "%s\\n" ${SHIM_ALL_SERVICES:-redis web gateway maintenance worker}
+      exit 0
+    fi
     if [[ "$1" == "image" && "$2" == "inspect" && "$3" == "--format" ]]; then
       if [[ "$4" == "{{.Created}}" ]]; then
         printf '%s\\n' "${SHIM_CREATED:-2020-01-01T00:00:00Z}"
@@ -105,19 +109,30 @@ _DOCKER_SHIM = textwrap.dedent(
     fi
     if [[ "$1" == "run" ]]; then
       declare -a subs=()
+      declare -a script_args=()
       prev=""
+      seen_script=""
       for arg in "$@"; do
         if [[ "$prev" == "-v" ]]; then
           subs+=("-e" "s|${arg#*:}|${arg%%:*}|g")
         fi
+        # The throwaway container runs `sh -c <script> [args…]`: everything after
+        # the script is a positional parameter, not part of the program.
+        if [[ "$seen_script" == "next" ]]; then
+          script="$arg"
+          seen_script="done"
+        elif [[ -n "$seen_script" ]]; then
+          script_args+=("$arg")
+        elif [[ "$arg" == "-c" ]]; then
+          seen_script="next"
+        fi
         prev="$arg"
       done
-      script="${@: -1}"
       transformed="$script"
       for ((i=0; i<${#subs[@]}; i+=2)); do
         transformed="$(printf '%s' "$transformed" | sed "${subs[$i]}" "${subs[$((i+1))]}")"
       done
-      sh -c "$transformed"
+      sh -c "$transformed" "${script_args[@]}"
       exit $?
     fi
     if [[ "$1" == "build" && "${DOCKER_BUILD_FAIL:-0}" == "1" ]]; then exit 1; fi
@@ -1298,6 +1313,496 @@ def test_maintenance_sentinel_lifecycle(tmp_path, monkeypatch):
     assert (task_dir / ".maintenance").is_file()
     maintenance_mod.end_maintenance(state)
     assert not (task_dir / ".maintenance").exists()
+
+
+def test_mcp_gateway_route_is_written_only_when_opted_in_and_removed_on_rollback(tmp_path, monkeypatch):
+    from revocompute_ctl import mcp as mcp_mod
+
+    bin_dir = _write_shims(tmp_path)
+    task_dir, _auth_dir, _env = _deploy_env(tmp_path)
+    snippet = task_dir / "mcp-gateway" / "mcp.conf"
+
+    # Default: no switch means no route, and nothing is written to the deployment.
+    disabled, _log = _shimmed_state(monkeypatch, tmp_path, bin_dir, {}, SERVER_DIR=str(task_dir))
+    assert mcp_mod.apply_gateway(disabled) is False
+    assert not snippet.exists()
+
+    # Opt-in: the route is written through the deployment's own throwaway container,
+    # and the exact text — including the nginx variables the gateway expands — lands
+    # on disk without the host shell expanding it first.
+    enabled, _log = _shimmed_state(
+        monkeypatch, tmp_path, bin_dir, {}, SERVER_DIR=str(task_dir), MCP_ENABLED="true", MCP_PORT="8081"
+    )
+    assert mcp_mod.apply_gateway(enabled) is True
+    text = snippet.read_text(encoding="utf-8")
+    assert "location /k/ {" in text
+    assert "proxy_pass http://mcp:8081;" in text
+    # The route addresses the compose service on its container-internal port, and
+    # never a host port or an operator surface.
+    assert ":8081" in text and "location /compute" not in text
+    assert "$host" in text and "$remote_addr" in text
+
+    # Re-running with the route already present and unchanged is not a change, so
+    # the walk does not restart the gateway for nothing.
+    assert mcp_mod.apply_gateway(enabled) is False
+    # Changing the internal port changes the route, and that is reported.
+    moved = EnvState(str(tmp_path / "fake.env"), values={"SERVER_DIR": str(task_dir), "MCP_ENABLED": "true", "MCP_PORT": "9"})
+    assert mcp_mod.apply_gateway(moved) is True
+    assert "proxy_pass http://mcp:9;" in snippet.read_text(encoding="utf-8")
+    # Rollback removes the file and reports the change.
+    assert mcp_mod.apply_gateway(disabled) is True
+    assert not snippet.exists()
+    assert mcp_mod.apply_gateway(disabled) is False
+
+
+def test_the_mcp_service_joins_the_stack_only_while_the_switch_is_on(tmp_path):
+    # The ``mcp`` service exists only in the layered model, so the controller must
+    # name it wherever the stack is started, stopped, or waited on -- and the
+    # overlay's profile must be enabled for the same commands, or the model would
+    # not declare the service the controller names.  A deployment that never opted
+    # in gets exactly the model and the service list it always had.
+    from revocompute_ctl import compose as compose_mod
+
+    off = EnvState(str(tmp_path / "off.env"), values={"SERVER_DIR": str(tmp_path)})
+    args_off = compose_mod.compose_args(off)
+    assert not any("docker-compose.mcp.yml" in token for token in args_off)
+    assert "--profile" not in args_off
+    assert compose_mod.stack_services(off, "redis", "web", "gateway") == ["redis", "web", "gateway"]
+
+    on = EnvState(
+        str(tmp_path / "on.env"),
+        values={"SERVER_DIR": str(tmp_path), "MCP_ENABLED": "true", "MCP_PORT": "8081"},
+    )
+    args_on = compose_mod.compose_args(on)
+    assert any("docker-compose.mcp.yml" in token for token in args_on)
+    # The profile is what makes the layered model declare the ``mcp`` service, so
+    # it travels with the file rather than being left to the operator.
+    assert args_on[args_on.index("--profile") + 1] == "mcp"
+    assert compose_mod.stack_services(on, "redis", "web", "gateway") == ["redis", "web", "gateway", "mcp"]
+
+
+def test_a_rollback_down_removes_the_orphaned_mcp_container(monkeypatch, tmp_path):
+    # `down` on a model that just lost the overlay and its profile can no longer
+    # see the running ``mcp`` container, so a plain `down` would leave it running
+    # outside the stack.  Removing orphans is what actually stops it.
+    bin_dir = _write_shims(tmp_path)
+    _task_dir, _auth_dir, env_file = _deploy_env(tmp_path)
+    monkeypatch.setenv("SHIM_IDS", str(tmp_path / "ids.txt"))
+    monkeypatch.setenv("SHIM_LOG", str(tmp_path / "docker.log"))
+
+    result = _run_cli(monkeypatch, tmp_path, env_file, bin_dir, "down")
+
+    assert result.returncode == 0, result.stderr
+    commands = (tmp_path / "docker.log").read_text(encoding="utf-8").splitlines()
+    teardown = [command for command in commands if "down" in command.split()]
+    assert teardown, commands
+    assert any("--remove-orphans" in command for command in teardown), teardown
+
+
+def _rollback_restart(monkeypatch, tmp_path, *, enabled: str, project_services: str) -> tuple[list[str], Path]:
+    """Run the rollback restart and return (compose commands, the route file)."""
+    bin_dir = _write_shims(tmp_path)
+    task_dir, _auth_dir, env_file = _deploy_env(tmp_path)
+    with env_file.open("a", encoding="utf-8") as stream:
+        stream.write(f"MCP_ENABLED={enabled}\n")
+    monkeypatch.setenv("SHIM_IDS", str(tmp_path / "ids.txt"))
+    monkeypatch.setenv("SHIM_LOG", str(tmp_path / "docker.log"))
+    monkeypatch.setenv("SHIM_ALL_SERVICES", project_services)
+    # The route file a previous opt-in left behind, which this rollback undoes.
+    route = task_dir / "mcp-gateway" / "mcp.conf"
+    route.parent.mkdir(parents=True, exist_ok=True)
+    route.write_text("location /k/ {}\n", encoding="utf-8")
+    _run_cli(monkeypatch, tmp_path, env_file, bin_dir, "restart", "--mode=prepared", "--keep-gateway")
+    return (tmp_path / "docker.log").read_text(encoding="utf-8").splitlines(), route
+
+
+def _mcp_removals(commands: list[str]) -> list[str]:
+    """The commands that remove the ``mcp`` service, and nothing else."""
+    return [command for command in commands if "rm" in command.split() and "mcp" in command.split()]
+
+
+def test_keep_gateway_rollback_keeps_the_drain_and_sweep_before_it_removes_mcp(monkeypatch, tmp_path):
+    # The removal is an addition to the existing teardown, never a replacement:
+    # an in-flight Tool call is still drained and the SLURM preservation sweep
+    # still runs, and the order that guards the running work is unchanged.  The
+    # removal is the last thing the path does.
+    from revocompute_ctl import compose as compose_mod
+
+    state = EnvState(
+        str(tmp_path / "server.env"),
+        values={"SERVER_DIR": str(tmp_path / "server"), "ENABLED_TOOL_FAMILIES": "bioio", "MCP_ENABLED": "false"},
+    )
+    events: list[str] = []
+    monkeypatch.setattr(steps_mod, "require_env_file", lambda _state: None)
+    monkeypatch.setattr(steps_mod, "resolve_runner_identity", lambda _state: None)
+    monkeypatch.setattr(steps_mod, "enabled_tool_families", lambda _state: ("bioio",))
+    monkeypatch.setattr("revocompute_ctl.maintenance.begin_maintenance", lambda _state: events.append("begin"))
+    monkeypatch.setattr("revocompute_ctl.maintenance.end_maintenance", lambda _state: events.append("end"))
+    monkeypatch.setattr(steps_mod, "drain_tool_calls", lambda _state: events.append("drain"))
+    monkeypatch.setattr("revocompute_ctl.sweep.pre_stop_sweep_slurm", lambda *_args, **_kwargs: events.append("sweep"))
+
+    def phrase(argv: list[str]) -> str:
+        # The compose invocation from its verb on: the verb and the services it
+        # names are what this order is about.
+        for verb in ("up", "stop", "rm", "down"):
+            if verb in argv:
+                return " ".join(argv[argv.index(verb) :])
+        return " ".join(argv)
+
+    def fake_run(argv, **_kwargs):
+        if " ps -a --services" in " ".join(argv):
+            return subprocess.CompletedProcess(argv, 0, stdout="redis\nweb\ngateway\nmaintenance\nworker\nmcp\n")
+        events.append(phrase(argv))
+        return subprocess.CompletedProcess(argv, 0, stdout="")
+
+    monkeypatch.setattr(steps_mod, "run_cmd", fake_run)
+    monkeypatch.setattr(compose_mod, "run_cmd", fake_run)
+
+    steps_mod.cmd_down(state, ("docker", "compose"), keep_gateway=True)
+
+    assert events == [
+        "begin",
+        "drain",
+        "sweep",
+        "up -d --no-deps --force-recreate gateway",
+        "stop redis web maintenance worker tool-worker",
+        "rm --force --stop mcp",
+    ], events
+
+
+def test_keep_gateway_rollback_removes_the_mcp_service_it_no_longer_declares(monkeypatch, tmp_path):
+    # Flipping MCP_ENABLED off drops the overlay *and* its profile from the model,
+    # so `mcp` leaves the service list and a `stop` of the declared services
+    # cannot reach the container the deployment is still running.  The
+    # keep-gateway path has to remove it by name; the ordinary `down` path sweeps
+    # orphans, and that cannot be used here because the gateway must stay up.
+    commands, route = _rollback_restart(
+        monkeypatch, tmp_path, enabled="false", project_services="redis\nweb\ngateway\nmaintenance\nworker\nmcp\n"
+    )
+
+    removals = _mcp_removals(commands)
+    assert len(removals) == 1, commands
+    removal = removals[0]
+    tokens = removal.split()
+    # The disabled model cannot see the service, so this command layers the
+    # overlay -- with the profile that makes the overlay declare it.
+    assert "docker-compose.mcp.yml" in removal, removal
+    assert tokens[tokens.index("--profile") + 1] == "mcp", removal
+    assert tokens[-4:] == ["rm", "--force", "--stop", "mcp"], removal
+    # Named, not swept: this path keeps the gateway serving, so a project-wide
+    # orphan removal would be the wrong shape here.
+    assert not any("--remove-orphans" in command for command in commands), commands
+    # And the public route goes with the service.
+    assert not route.exists(), "the rollback left the MCP gateway route in place"
+
+
+def test_keep_gateway_rollback_leaves_the_gateway_serving(monkeypatch, tmp_path):
+    commands, _route = _rollback_restart(
+        monkeypatch, tmp_path, enabled="false", project_services="redis\nweb\ngateway\nmaintenance\nworker\nmcp\n"
+    )
+
+    # The gateway is refreshed and kept: it serves the maintenance page while the
+    # stack is down, which is exactly why this path cannot use `down`.
+    assert any("up -d --no-deps --force-recreate gateway" in command for command in commands), commands
+    assert not any("down" in command.split() for command in commands), commands
+    # It is never itself stopped or removed, and the stack stop still names every
+    # service the model declares -- with `mcp` no longer among them.
+    teardown = [command for command in commands if "stop" in command.split() or "rm" in command.split()]
+    assert teardown, commands
+    assert not any("gateway" in command.split() for command in teardown), teardown
+    stop = next(command for command in commands if "stop" in command.split())
+    assert stop.endswith("stop redis web maintenance worker tool-worker"), stop
+
+
+def test_a_never_opted_in_deployment_sends_no_mcp_command_at_all(monkeypatch, tmp_path):
+    # The common case: the surface was never enabled, so there is nothing to
+    # remove and the rollback issues no MCP command -- no overlay, no profile,
+    # and no service named anywhere.
+    commands, route = _rollback_restart(
+        monkeypatch, tmp_path, enabled="false", project_services="redis\nweb\ngateway\nmaintenance\nworker\n"
+    )
+
+    assert not any("mcp" in command.split() for command in commands), commands
+    assert not any("docker-compose.mcp.yml" in command for command in commands), commands
+    assert not any("--profile" in command.split() for command in commands), commands
+    assert not route.exists()
+
+
+def test_keep_gateway_with_the_surface_still_on_stops_mcp_with_the_stack(monkeypatch, tmp_path):
+    # Control: while the switch is on, `mcp` is a service the model declares, so
+    # the ordinary stop reaches it and no separate removal is issued.
+    commands, _route = _rollback_restart(
+        monkeypatch, tmp_path, enabled="true", project_services="redis\nweb\ngateway\nmaintenance\nworker\nmcp\n"
+    )
+
+    assert not _mcp_removals(commands), commands
+    stop = next(command for command in commands if "stop" in command.split())
+    assert stop.endswith("stop redis web maintenance worker tool-worker mcp"), stop
+
+
+def test_the_ordinary_down_path_sweeps_orphans_instead_of_naming_the_service(monkeypatch, tmp_path):
+    # The two teardown paths stay distinct: with no gateway to preserve, `down`
+    # still removes orphans rather than naming one service.
+    bin_dir = _write_shims(tmp_path)
+    _task_dir, _auth_dir, env_file = _deploy_env(tmp_path)
+    with env_file.open("a", encoding="utf-8") as stream:
+        stream.write("MCP_ENABLED=false\n")
+    monkeypatch.setenv("SHIM_IDS", str(tmp_path / "ids.txt"))
+    monkeypatch.setenv("SHIM_LOG", str(tmp_path / "docker.log"))
+    monkeypatch.setenv("SHIM_ALL_SERVICES", "redis\nweb\ngateway\nmaintenance\nworker\nmcp\n")
+
+    _run_cli(monkeypatch, tmp_path, env_file, bin_dir, "down")
+
+    commands = (tmp_path / "docker.log").read_text(encoding="utf-8").splitlines()
+    assert not _mcp_removals(commands), commands
+    teardown = [command for command in commands if "down" in command.split()]
+    assert teardown and all("--remove-orphans" in command for command in teardown), teardown
+
+
+def test_remove_mcp_service_is_scoped_idempotent_and_off_when_nothing_opted_in(tmp_path, monkeypatch):
+    # The helper's contract, driven directly: it decides from the project's own
+    # container list, so a repeated rollback is harmless and a switch that is on
+    # is left to the ordinary stop.
+    from revocompute_ctl import compose as compose_mod
+
+    issued: list[str] = []
+    containers = ["redis\nweb\ngateway\nmaintenance\nworker\nmcp\n"]
+
+    def fake_run(argv, **_kwargs):
+        if "-a" in argv and "--services" in argv:
+            return subprocess.CompletedProcess(argv, 0, stdout=containers[0])
+        issued.append(" ".join(argv))
+        return subprocess.CompletedProcess(argv, 0, stdout="")
+
+    monkeypatch.setattr(compose_mod, "run_cmd", fake_run)
+
+    off = EnvState(str(tmp_path / "off.env"), values={"SERVER_DIR": str(tmp_path), "MCP_ENABLED": "false"})
+    assert compose_mod.remove_mcp_service(off, ("docker", "compose")) is True
+    assert len(issued) == 1, issued
+    assert issued[0].endswith("rm --force --stop mcp"), issued
+    assert "docker-compose.mcp.yml" in issued[0], issued
+    # Idempotent: the project no longer lists the container, so nothing is issued.
+    containers[0] = "redis\nweb\ngateway\nmaintenance\nworker\n"
+    assert compose_mod.remove_mcp_service(off, ("docker", "compose")) is False
+    assert len(issued) == 1, issued
+
+    # A switch that is on: the stack owns the service, so the helper stands down.
+    containers[0] = "redis\nweb\ngateway\nmaintenance\nworker\nmcp\n"
+    on = EnvState(str(tmp_path / "on.env"), values={"SERVER_DIR": str(tmp_path), "MCP_ENABLED": "true"})
+    assert compose_mod.remove_mcp_service(on, ("docker", "compose")) is False
+    assert len(issued) == 1, issued
+
+    # An unanswerable question falls through: removing what is not there is
+    # harmless, leaving a live protocol process behind is not.
+    monkeypatch.setattr(
+        compose_mod, "run_cmd", lambda argv, **_kwargs: subprocess.CompletedProcess(argv, 1, stdout="")
+    )
+    assert compose_mod.remove_mcp_service(off, ("docker", "compose")) is True
+
+
+def test_mcp_gateway_route_dry_run_reports_without_writing(tmp_path, monkeypatch):
+    from revocompute_ctl import mcp as mcp_mod
+
+    bin_dir = _write_shims(tmp_path)
+    task_dir, _auth_dir, _env = _deploy_env(tmp_path)
+    state, _log = _shimmed_state(monkeypatch, tmp_path, bin_dir, {}, SERVER_DIR=str(task_dir), MCP_ENABLED="true")
+
+    assert mcp_mod.apply_gateway(state, dry_run=True) is False
+    assert not (task_dir / "mcp-gateway" / "mcp.conf").exists()
+
+
+def test_mcp_gateway_route_rejects_a_non_integer_port(tmp_path, monkeypatch):
+    from revocompute_ctl import mcp as mcp_mod
+
+    state = EnvState(str(tmp_path / "server.env"), values={"SERVER_DIR": str(tmp_path), "MCP_ENABLED": "true", "MCP_PORT": "eight-thousand"})
+    with pytest.raises(SystemExit):
+        mcp_mod.apply_gateway(state)
+
+
+def test_mcp_health_reads_the_route_file_the_web_process_reads(tmp_path):
+    # The web capability refuses to advertise the endpoint while this route file is
+    # absent, so the operator's diagnostic and the browser capability must consume
+    # the same route state or they can disagree about a deployment. The test holds
+    # the two modules to the same relative path under SERVER_DIR without naming it
+    # twice: whichever module owns the layout is the one both must agree with.
+    from revocompute.mcp import asgi
+    from revocompute_ctl import mcp as mcp_mod
+
+    state = EnvState(str(tmp_path / "server.env"), values={"SERVER_DIR": str(tmp_path), "MCP_ENABLED": "true"})
+    assert Path(mcp_mod.gateway_snippet_path(state)) == Path(state.server_dir()) / asgi.GATEWAY_ROUTE_DIR / asgi.GATEWAY_ROUTE_FILE
+
+
+def test_mcp_health_requires_a_real_initialize_handshake_not_the_flag(tmp_path):
+    # The defect this closes: mcp-status exited 0 on a surface whose endpoint
+    # nothing answered. The controller drives an MCP initialize over the route
+    # itself and accepts only a real MCP result — it never takes the capability's
+    # word for reachability, so a web process reporting the surface enabled while
+    # the gateway serves no /k/ is still a failure.
+    import http.server
+    import threading
+
+    from revocompute_ctl import mcp as mcp_mod
+
+    posts: list[dict] = []
+
+    class _Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802 - http.server's own spelling
+            # The web process reports the surface enabled...
+            payload = json.dumps(
+                {
+                    "listener_ready": True,
+                    "route_configured": True,
+                    "gateway_verified": True,
+                    "operational": True,
+                    "enabled": True,
+                    "endpoint": "/k/mcp",
+                    "detail": None,
+                }
+            ).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def do_POST(self) -> None:  # noqa: N802 - http.server's own spelling
+            length = int(self.headers.get("Content-Length", 0))
+            posts.append({"path": self.path, "body": json.loads(self.rfile.read(length).decode("utf-8"))})
+            # ...but the MCP route itself is not served: the gateway has no /k/.
+            self.send_error(404)
+
+        def log_message(self, *_args) -> None:  # noqa: D401 - silence the test server
+            return
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        state = EnvState(
+            str(tmp_path / "server.env"),
+            values={
+                "SERVER_DIR": str(tmp_path),
+                "MCP_ENABLED": "true",
+                "MCP_PORT": "8081",
+                "SERVER_BASE_URL": f"http://127.0.0.1:{server.server_address[1]}",
+            },
+        )
+        # The route is missing, so the handshake fails and the status is a failure
+        # even though the capability claimed the surface was enabled.
+        assert mcp_mod.mcp_health(state) == 1
+    finally:
+        server.shutdown()
+        server.server_close()
+    # It really drove the handshake at the endpoint a client uses, not a flag read.
+    assert posts and posts[0]["path"] == "/k/mcp"
+    assert posts[0]["body"]["method"] == "initialize"
+
+
+def test_mcp_health_accepts_a_real_initialize_result(tmp_path):
+    import http.server
+    import threading
+
+    from revocompute_ctl import mcp as mcp_mod
+
+    result = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {"tools": {}},
+            "serverInfo": {"name": "revocompute", "version": "1.0.0"},
+        },
+    }
+
+    class _Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802 - http.server's own spelling
+            payload = json.dumps(
+                {
+                    "listener_ready": True,
+                    "route_configured": True,
+                    "gateway_verified": True,
+                    "operational": True,
+                    "enabled": True,
+                    "endpoint": "/k/mcp",
+                    "detail": None,
+                }
+            ).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def do_POST(self) -> None:  # noqa: N802 - http.server's own spelling
+            length = int(self.headers.get("Content-Length", 0))
+            self.rfile.read(length)
+            payload = f"event: message\ndata: {json.dumps(result)}\n\n".encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *_args) -> None:  # noqa: D401 - silence the test server
+            return
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        state = EnvState(
+            str(tmp_path / "server.env"),
+            values={
+                "SERVER_DIR": str(tmp_path),
+                "MCP_ENABLED": "true",
+                "MCP_PORT": "8081",
+                "SERVER_BASE_URL": f"http://127.0.0.1:{server.server_address[1]}",
+            },
+        )
+        assert mcp_mod.mcp_health(state) == 0
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_mcp_health_reports_absent_without_the_switch(tmp_path):
+    # Nothing opted in: the surface is absent and that is exit 0, not a failure.
+    import http.server
+    import threading
+
+    from revocompute_ctl import mcp as mcp_mod
+
+    class _Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802 - http.server's own spelling
+            payload = json.dumps(
+                {
+                    "listener_ready": False,
+                    "route_configured": False,
+                    "gateway_verified": None,
+                    "operational": False,
+                    "enabled": False,
+                    "endpoint": None,
+                    "detail": None,
+                }
+            ).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *_args) -> None:  # noqa: D401 - silence the test server
+            return
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        state = EnvState(
+            str(tmp_path / "server.env"),
+            values={"SERVER_DIR": str(tmp_path), "SERVER_BASE_URL": f"http://127.0.0.1:{server.server_address[1]}"},
+        )
+        assert mcp_mod.mcp_health(state) == 0
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 def test_restart_resolves_named_service_identity_before_attestation_invalidation(tmp_path, monkeypatch):

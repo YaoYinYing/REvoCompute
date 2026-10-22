@@ -84,7 +84,24 @@ describe('frontend localization', () => {
   });
 
   it('localizes every guided-tour step, not only the tour controls', () => {
-    for (const key of ['dashboard', 'lifecycle', 'runners', 'create', 'result']) {
+    // Every step of every flow: the create path, the result workspace, and the
+    // administration surfaces. A step missing from this list would be a step that
+    // could still fall back to English under zh-CN.
+    const steps = [
+      'dashboard',
+      'lifecycle',
+      'runners',
+      'create',
+      'result',
+      'resultHeader',
+      'resultPreview',
+      'resultRecord',
+      'fleet',
+      'users',
+      'configuration',
+      'logs',
+    ];
+    for (const key of steps) {
       const title = 'tour.step.' + key + '.title';
       const body = 'tour.step.' + key + '.body';
       const englishTitle = translate('en', title);

@@ -71,6 +71,7 @@ from .models import (
 from .provenance import PROVENANCE_SOURCE, ProvenanceError, production_receipt_pointer
 from .replay import ReplayBundle
 from .replay_bundle import (
+    CAPTURE_MODES,
     DEFAULT_MAX_BUNDLE_BYTES,
     DEFAULT_MAX_PAYLOAD_BYTES,
     REPLAY_BUNDLE_KIND,
@@ -80,6 +81,7 @@ from .replay_bundle import (
     capture_replay_bundle,
     load_bundle,
     normalize,
+    payload_bytes,
     project_manifest_for_serve,
     required_view_sources,
     write_bundle,
@@ -96,13 +98,17 @@ from .scenarios import (
     CONTROLLED_ACCESS_POLICY,
     CONTROLLED_RUNNER_NAME,
     SEQUENCE_ROLE,
+    DemoFileSpec,
+    DemoSpec,
     RunnerScenario,
+    bioemu_runner,
     controlled_runner,
     controlled_scenario,
     gremlin_lh_runner,
     pssm_gremlin_scenario,
     replay_scenario,
     runner_scenario,
+    sequence_demo,
     structure_scenario,
 )
 
@@ -114,6 +120,7 @@ from .scenarios import (
 # the fixtures, not a text scan) so the enforcement set cannot drift from the
 # helpers it guards: a helper listed here is fleet-only without a second list.
 AUTHENTIC_SCENARIOS = frozenset({
+    bioemu_runner,
     gremlin_lh_runner,
     production_receipt_pointer,
     pssm_gremlin_scenario,
@@ -132,6 +139,7 @@ __all__ = [
     "DEFAULT_MAX_PAYLOAD_BYTES",
     "DEFAULT_ORIGIN",
     "DEFAULT_TASK_ID",
+    "CAPTURE_MODES",
     "EXPIRED_AUTH",
     "PREFLIGHT_FIXTURES",
     "PROVENANCE_SOURCE",
@@ -144,6 +152,8 @@ __all__ = [
     "AccessState",
     "ArchiveSpec",
     "Citation",
+    "DemoFileSpec",
+    "DemoSpec",
     "FrontendFixtureRouter",
     "InputRole",
     "LifecycleSpec",
@@ -194,6 +204,7 @@ __all__ = [
     "load_bundle",
     "mount_scenario",
     "normalize",
+    "payload_bytes",
     "openapi_spec",
     "preflight_fixture",
     "production_receipt_pointer",
@@ -207,6 +218,7 @@ __all__ = [
     "results",
     "runner_scenario",
     "scenarios",
+    "sequence_demo",
     "structure_scenario",
     "subject_id_for",
     "validate_manifest",

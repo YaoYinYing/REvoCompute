@@ -9,6 +9,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -16,6 +17,64 @@ from typing import Any
 
 TASK_MODELS = {"foundry_rfd3_design": "rfd3", "foundry_rfd3na_design": "rfd3na", "foundry_rf3_fold": "rf3"}
 PATH_KEYS = {"input", "path", "msa_path", "template_path"}
+SHA1_RE = re.compile(r"[0-9a-f]{40}")
+
+#: The one place a declared parameter becomes an upstream Hydra override.  The
+#: keys are exactly the owning ``task.yaml`` parameter vocabulary, which the
+#: server materializes -- with the schema default and range already applied --
+#: into the task manifest before dispatch.  Iterating this table builds the
+#: command, so a declared parameter cannot be silently dropped, and a manifest
+#: field with no override here is rejected instead of ignored.  The kind is the
+#: schema type, used to re-check the value the server already validated.
+PARAM_OVERRIDES: dict[str, dict[str, tuple[str, str]]] = {
+    "rfd3": {
+        "num_designs": ("diffusion_batch_size", "int"),
+        "diffusion_steps": ("inference_sampler.num_timesteps", "int"),
+        "num_recycles": ("inference_sampler.n_recycle", "int"),
+        "seed": ("seed", "int"),
+        "low_memory_mode": ("low_memory_mode", "bool"),
+        "dump_trajectories": ("dump_trajectories", "bool"),
+        "inference_mode": ("inference_mode", "str"),
+        "sampler_step_scale": ("inference_sampler.step_scale", "float"),
+        "sampler_gamma_0": ("inference_sampler.gamma_0", "float"),
+        "classifier_free_guidance": ("inference_sampler.use_classifier_free_guidance", "bool"),
+        "centering": ("inference_sampler.center_option", "str"),
+    },
+    # RFD3NA's ``SampleDiffusionConfig`` has no ``n_recycle`` field and its
+    # checkpoint fixes recycling, so RFD3NA declares no recycling control and
+    # there is no override to build for one.  ``+inference_sampler.n_recycle``
+    # would only append a key its sampler silently drops, which is exactly the
+    # false control this adapter must not offer.
+    "rfd3na": {
+        "num_designs": ("diffusion_batch_size", "int"),
+        "diffusion_steps": ("inference_sampler.num_timesteps", "int"),
+        "seed": ("seed", "int"),
+        "low_memory_mode": ("low_memory_mode", "bool"),
+        "dump_trajectories": ("dump_trajectories", "bool"),
+        "sampler_step_scale": ("inference_sampler.step_scale", "float"),
+        "sampler_gamma_0": ("inference_sampler.gamma_0", "float"),
+        "classifier_free_guidance": ("inference_sampler.use_classifier_free_guidance", "bool"),
+        "centering": ("inference_sampler.center_option", "str"),
+    },
+    "rf3": {
+        "num_designs": ("diffusion_batch_size", "int"),
+        "diffusion_steps": ("num_steps", "int"),
+        "num_recycles": ("n_recycles", "int"),
+        "seed": ("seed", "int"),
+        "early_stopping_plddt_threshold": ("early_stopping_plddt_threshold", "float"),
+        "dump_trajectories": ("dump_trajectories", "bool"),
+        "template_noise_scale": ("template_noise_scale", "float"),
+        "add_missing_atoms": ("add_missing_atoms", "bool"),
+        "annotate_b_factor_with_plddt": ("annotate_b_factor_with_plddt", "bool"),
+    },
+}
+
+#: Overrides this adapter fixes rather than exposing as a user parameter.
+FIXED_OVERRIDES: dict[str, tuple[str, ...]] = {
+    "rfd3": ("n_batches=1", "prevalidate_inputs=True", "skip_existing=False"),
+    "rfd3na": ("n_batches=1", "prevalidate_inputs=True", "skip_existing=False"),
+    "rf3": ("skip_existing=False",),
+}
 
 
 def die(message: str) -> None:
@@ -30,25 +89,48 @@ def sha256(path: Path) -> str:
     return value.hexdigest()
 
 
-def integer(params: dict[str, Any], name: str, default: int, minimum: int, maximum: int) -> int:
-    value = params.get(name, default)
-    if not isinstance(value, int) or isinstance(value, bool) or not minimum <= value <= maximum:
-        die(f"{name} must be an integer between {minimum} and {maximum}")
-    return value
+def override_value(params: dict[str, Any], name: str, kind: str) -> str:
+    """Render one declared parameter as its upstream Hydra override value.
+
+    The owning ``task.yaml`` schema is the single source of a parameter's
+    default and range, and the server applies both into the manifest before
+    dispatch, so this adapter never invents a default.  A manifest that omits a
+    declared parameter is malformed and fails closed here rather than silently
+    falling back to a second, divergent default.
+    """
+    if name not in params:
+        die(f"Missing {name} in the task manifest")
+    value = params[name]
+    if kind == "int":
+        if not isinstance(value, int) or isinstance(value, bool):
+            die(f"{name} must be an integer")
+        return str(value)
+    if kind == "bool":
+        if not isinstance(value, bool):
+            die(f"{name} must be a boolean")
+        return str(value)
+    if kind == "str":
+        if not isinstance(value, str):
+            die(f"{name} must be a string")
+        return value
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        die(f"{name} must be a number")
+    return f"{float(value):g}"
 
 
-def boolean(params: dict[str, Any], name: str, default: bool) -> bool:
-    value = params.get(name, default)
-    if not isinstance(value, bool):
-        die(f"{name} must be a boolean")
-    return value
-
-
-def number(params: dict[str, Any], name: str, default: float, minimum: float, maximum: float) -> float:
-    value = params.get(name, default)
-    if not isinstance(value, (int, float)) or isinstance(value, bool) or not minimum <= float(value) <= maximum:
-        die(f"{name} must be a number between {minimum} and {maximum}")
-    return float(value)
+def load_upstream_identity(path: Path) -> dict[str, str]:
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        die(f"Invalid Foundry upstream identity: {exc}")
+    commit = document.get("upstream_commit")
+    distribution = document.get("upstream_distribution")
+    version = document.get("upstream_version")
+    if not isinstance(commit, str) or not SHA1_RE.fullmatch(commit):
+        die("Foundry upstream identity has no immutable commit")
+    if not all(isinstance(value, str) and value for value in (distribution, version)):
+        die("Foundry upstream identity has no distribution version")
+    return {"commit": commit, "distribution": distribution, "version": version}
 
 
 def normalize_paths(value: Any, files: dict[str, Path]) -> Any:
@@ -115,51 +197,32 @@ def main() -> None:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     normalized, params, inputs = load_manifest(args.manifest, args.output_dir)
     model = TASK_MODELS[args.task_type]
-    allowed_params = {"num_designs", "diffusion_steps", "num_recycles", "seed", "dump_trajectories"}
-    allowed_params.add("early_stopping_plddt_threshold" if model == "rf3" else "low_memory_mode")
-    unknown_params = sorted(set(params) - allowed_params)
+    overrides = PARAM_OVERRIDES[model]
+    upstream = load_upstream_identity(
+        Path(os.environ.get("FOUNDRY_UPSTREAM_MANIFEST", "/app/revocompute/upstream.json"))
+    )
+    unknown_params = sorted(set(params) - set(overrides))
     if unknown_params:
         die(f"Unsupported {args.task_type} parameters: {', '.join(unknown_params)}")
-    designs = integer(params, "num_designs", 1, 1, 8)
-    steps = integer(params, "diffusion_steps", 50, 1, 200)
-    recycles = integer(params, "num_recycles", 2 if model != "rf3" else 5, 1, 20)
-    seed = integer(params, "seed", 0, 0, 2_147_483_647)
-    trajectories = boolean(params, "dump_trajectories", False)
     command = [os.environ.get("FOUNDRY_EXECUTABLE", model), "design" if model != "rf3" else "fold"]
     command.extend([f"inputs={normalized}", f"out_dir={args.output_dir}", f"ckpt_path={args.checkpoint}"])
-    if model == "rf3":
-        threshold = number(params, "early_stopping_plddt_threshold", 0.5, 0.0, 1.0)
-        command.extend(
-            [
-                f"diffusion_batch_size={designs}",
-                f"num_steps={steps}",
-                f"n_recycles={recycles}",
-                f"seed={seed}",
-                f"early_stopping_plddt_threshold={threshold:g}",
-            ]
-        )
-    else:
-        low_memory = boolean(params, "low_memory_mode", False)
-        command.extend(
-            [
-                f"diffusion_batch_size={designs}",
-                "n_batches=1",
-                f"inference_sampler.num_timesteps={steps}",
-            ]
-        )
-        # RFD3NA's SampleDiffusionConfig has no n_recycle field; recycling there
-        # is fixed by the checkpoint. RFD3's sampler accepts the override.
-        if model == "rfd3":
-            command.append(f"inference_sampler.n_recycle={recycles}")
-        command.extend([f"seed={seed}", f"low_memory_mode={str(low_memory)}", "prevalidate_inputs=True"])
-    command.extend(["skip_existing=False", f"dump_trajectories={str(trajectories)}"])
+    command.extend(FIXED_OVERRIDES[model])
+    # Every declared parameter becomes exactly one override, so the invocation
+    # cannot drift from the schema the user was shown.
+    parameter_overrides = []
+    for name, (key, kind) in overrides.items():
+        parameter_overrides.append(f"{key}={override_value(params, name, kind)}")
+    command.extend(parameter_overrides)
     provenance = {
         "task_type": args.task_type,
         "model": model,
-        "upstream_commit": "b02eed6a6bdf8f44d14a80cc36e3da13c9f2291c",
+        "upstream": upstream,
         "checkpoint": {"name": args.checkpoint.name, "sha256": sha256(args.checkpoint)},
         "inputs": inputs,
         "parameters": params,
+        "upstream_overrides": dict(
+            item.split("=", 1) for item in (*FIXED_OVERRIDES[model], *parameter_overrides)
+        ),
         "runtime_network": False,
     }
     (args.output_dir / "foundry-run.json").write_text(

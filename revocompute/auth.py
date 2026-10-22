@@ -35,7 +35,8 @@ from revocompute.config import env_int as _env_int
 from revocompute.config import env_str as _env_str
 from revocompute.redis_util import get_redis
 from revocompute.schema_epoch import require_current_schema
-from sqlalchemy.exc import IntegrityError
+from revocompute.sqlite_startup import enter_wal_mode
+from sqlalchemy.exc import IntegrityError, OperationalError
 from werkzeug.security import generate_password_hash
 
 # Pre-computed dummy hash used for constant-time comparison when a login
@@ -208,15 +209,31 @@ class UserDatabase:
     def _initialize(self) -> None:
         with self.engine.begin() as conn:
             conn.exec_driver_sql("PRAGMA busy_timeout=30000;")
-            conn.exec_driver_sql("PRAGMA journal_mode=WAL;")
-            conn.exec_driver_sql("PRAGMA synchronous=NORMAL;")
+            # The WAL conversion takes a brief exclusive lock, so a peer process
+            # running this same startup pass can make it raise "database is
+            # locked"; the shared helper retries that one case and re-raises
+            # anything else.
+            if not enter_wal_mode(conn.exec_driver_sql):
+                logging.warning(
+                    "User database pragma initialization is locked; proceeding with default pragmas for this process."
+                )
             require_current_schema(
                 conn,
                 {"users": {column.name for column in _users_table.columns}},
                 database_name="user database",
                 forbidden_columns={"runner_access_events": {"scope_type", "scope_id"}},
             )
-            _metadata.create_all(conn, checkfirst=True)
+            try:
+                _metadata.create_all(conn, checkfirst=True)
+            except OperationalError as exc:
+                # Every process of a multi-process deployment (the web service,
+                # the MCP service) runs this startup pass at once, so a peer can
+                # win the ``create_all`` race.  The loser observes an "already
+                # exists" error, which is benign; anything else is real schema
+                # drift and must still fail closed.
+                if "already exists" not in str(exc).lower():
+                    raise
+                logging.warning("User database metadata already present, skipping creation")
         try:
             os.chmod(self.path, 0o600)
         except OSError:

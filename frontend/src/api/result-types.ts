@@ -16,8 +16,16 @@ export interface ResultArtifact extends ApiArtifact {
   cardinality?: 'one' | 'many';
   id?: string;
 }
+/** A published artifact and a logical file both name their published path. */
 export type ResultFile = ResultArtifact | LogicalResultFile;
-export function resultFileName(file: ResultFile): string { return 'path' in file ? file.path : file.name; }
+/** Whether a result file is the Server's logical-file projection rather than a raw artifact.
+ *
+ * The parser assigns `path`, `name`, and `id` on both shapes, so a key test does
+ * not discriminate; `viewer` is projected only on a logical file.
+ */
+export function isLogicalFile(file: ResultFile): file is LogicalResultFile { return 'viewer' in file; }
+/** The name a result file is shown and labelled by: a logical file's declared name, an artifact's path. */
+export function resultFileName(file: ResultFile): string { return isLogicalFile(file) ? file.name : file.path; }
 
 export interface ResultManifest extends Omit<ApiResultManifest, 'artifacts'> {
   filename?: string;

@@ -32,6 +32,8 @@ def build_web_images(state, compose_cmd: tuple[str, ...], proxy_build_args: list
                 f"RUNNER_GROUP={group}",
                 "--build-arg",
                 f"PORT={state.get('PORT') or '8080'}",
+                "--build-arg",
+                f"REVOCOMPUTE_EXTRAS={state.get('REVOCOMPUTE_EXTRAS') or 'resend'}",
                 "-t",
                 state.get("SERVER_IMAGE") or "revodesign-revocompute-server",
                 "-f",
@@ -59,6 +61,13 @@ def cmd_build(
 ) -> None:
     """Materialize Runner manifests and optionally build server images."""
     from revocompute_ctl.steps import materialize_runner_families, materialize_tool_families
+
+    # The gateway route is deployment state reconciled from MCP_ENABLED, so it is
+    # resolved before anything starts a container that would read it.
+    from revocompute_ctl.mcp import apply_gateway
+
+    if not materialize:
+        apply_gateway(state)
 
     if materialize:
         materialize_runner_families(state)

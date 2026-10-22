@@ -1,0 +1,10 @@
+identifier: codon-optimize-result
+entrypoint: ./index.js
+requires:
+  - optimized_sequences
+  - results
+optional:
+  - input_sequence
+  - submission
+  - citations
+  - execution_records

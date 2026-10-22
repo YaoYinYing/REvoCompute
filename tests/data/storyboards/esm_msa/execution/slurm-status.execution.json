@@ -1,0 +1,1 @@
+{"source": "slurm_adapter", "schema_version": 1, "task_id": "15fd8b8797d4a166fd5a6673b338a69a", "logs": {"stdout": "REVODESIGN_JOB_ID=311021\nREVODESIGN_ALLOCATION_LIVE=311021\nProcessing [path redacted] ...\nOutput directory: [path redacted]\nREVODESIGN_STAGE:esm_msa\nmsa1b profile complete: 79 positions, mean entropy 2.4999\nESM esm_msa complete.\n\n", "stderr": ""}}

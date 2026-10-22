@@ -58,7 +58,13 @@ def _mount(page: Page) -> ReplayBundle:
 
 def _open(page: Page) -> None:
     page.goto(f"{ORIGIN}/compute/results/{TASK_ID}")
-    expect(page.locator(".result-workspace, .glh-result, .result-status").first).to_be_visible()
+    # The scientific surface is the one root these tests then exercise, and the only
+    # one whose visibility is stable once the manifest arrives. A union over the
+    # workspace, the storyboard root and the lifecycle band resolves ``.first`` to
+    # whichever of them the DOM happens to hold first, and the lifecycle band is
+    # appended ahead of the workspace and then hidden for a quiet outcome -- so the
+    # wait passed or failed on which side of that transition the retry landed.
+    expect(page.locator(".glh-result")).to_be_visible()
 
 
 def test_replayed_result_mounts_every_declared_view(page: Page) -> None:
@@ -67,9 +73,10 @@ def test_replayed_result_mounts_every_declared_view(page: Page) -> None:
     _open(page)
 
     # The task identity the URL carried is the captured identity, not a fixture id.
-    expect(page.locator(".result-meta")).to_contain_text(TASK_ID)
+    expect(page.locator(".result-meta")).to_have_attribute("title", f"Task ID {TASK_ID}")
     # The storyboard declares a primary surface, so it opens the page and each
     # declared view keeps its own tab.
+    page.locator(".result-view-menu > summary").click()
     expect(page.locator(".result-tab", has_text="Scientific result")).to_be_visible()
     for title in (
         "Coupling strength (raw Frobenius)",
@@ -86,12 +93,14 @@ def test_replayed_matrices_read_the_real_table_bytes(page: Page) -> None:
     page.set_viewport_size({"width": 1280, "height": 900})
     _open(page)
 
+    page.locator(".result-view-menu > summary").click()
     page.locator(".result-tab", has_text="Coupling strength (raw Frobenius)").click()
     expect(page.locator(".pair-matrix-view canvas")).to_be_visible()
     raw_calls = requests.matching(f"/compute/api/results/{TASK_ID}/tables/couplings/raw_scores.csv")
     assert raw_calls, "the matrix renderer never queried the replayed table route"
     assert all("matrix=1" in record.query for record in raw_calls)
 
+    page.locator(".result-view-menu > summary").click()
     page.locator(".result-tab", has_text="Coupling strength (average-product corrected)").click()
     expect(page.locator(".pair-matrix-view canvas")).to_be_visible()
     apc_calls = requests.matching(f"/compute/api/results/{TASK_ID}/tables/couplings/apc_scores.csv")
@@ -105,6 +114,7 @@ def test_replayed_ranked_pairs_table_consumes_the_real_table(page: Page) -> None
     page.set_viewport_size({"width": 1280, "height": 900})
     _open(page)
 
+    page.locator(".result-view-menu > summary").click()
     page.locator(".result-tab", has_text="Ranked residue pairs").click()
     table = page.locator(".result-preview table").first
     expect(table).to_be_visible()
@@ -120,6 +130,7 @@ def test_replayed_alignment_renders_the_captured_artifact(page: Page) -> None:
     page.set_viewport_size({"width": 1280, "height": 900})
     _open(page)
 
+    page.locator(".result-view-menu > summary").click()
     page.locator(".result-tab", has_text="Filtered alignment").click()
     preview = page.locator(".result-preview")
     expect(preview).to_contain_text("2KL8")
@@ -167,6 +178,7 @@ def test_replayed_result_raises_no_console_or_csp_error(page: Page) -> None:
     mount_scenario(page, replay_scenario(gremlin_lh_runner(), _replay()))
     page.set_viewport_size({"width": 1280, "height": 900})
     _open(page)
+    page.locator(".result-view-menu > summary").click()
     expect(page.locator(".result-tab", has_text="Scientific result")).to_be_visible()
     violations = page.evaluate("window.__cspViolations || []")
     assert errors == [], errors

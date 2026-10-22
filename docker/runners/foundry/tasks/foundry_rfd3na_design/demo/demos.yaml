@@ -1,0 +1,29 @@
+demos:
+- id: unconditional_rna_16mer
+  title: Unconditional 16-nucleotide RNA
+  purpose: Generate one RNA structure from an RFD3NA polymer-aware contig.
+  context: >-
+    The R suffix selects RNA for all 16 generated residues. This is a minimal
+    synthetic design case and does not assert biological function or stability.
+  source:
+    name: REvoCompute Foundry demo corpus
+    url: https://github.com/YaoYinYing/REvoCompute
+  license:
+    id: cc0-1.0
+    name: CC0 1.0 Universal (public domain dedication)
+    url: https://creativecommons.org/publicdomain/zero/1.0/
+  inputs:
+    specification:
+    - path: files/unconditional_rna.json
+      sha256: 2d4d8685aa92176837eb53456e6375b3d1c41793bb57a4fcf96d165db2192cb2
+      media_type: application/json
+  parameters:
+    num_designs: 1
+    diffusion_steps: 50
+    seed: 0
+    low_memory_mode: false
+    dump_trajectories: false
+    sampler_step_scale: 1.5
+    sampler_gamma_0: 0.6
+    classifier_free_guidance: false
+    centering: all

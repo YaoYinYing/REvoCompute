@@ -126,6 +126,9 @@ bash run/restart.sh live-test --all --collection smoke
 REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh api-receipt \
   --task <task-id>
 
+# Report the opt-in agent MCP surface (switch, route, and process capability)
+REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh mcp-status
+
 # Validate first, then stop/start and promote receipted candidates
 REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh restart --mode=prepared
 ```
@@ -134,6 +137,98 @@ REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh restart --mode=prepare
 result store, and deploy stamp and writes one machine-readable receipt under
 `<CONFIG_DIR>/api-receipts/`. It exits non-zero on incomplete evidence. See
 [Production API Acceptance Receipts](api-receipts.md).
+
+`mcp-status` is read-only and non-mutating, but it is not a flag read: it prints
+the `MCP_ENABLED` switch, whether the gateway route is present, the
+container-internal port of the `mcp` service, and then proves the surface is
+really reachable.
+Reachability has two parts — the running web process must report the surface
+`enabled` at the public `GET /compute/api/mcp` capability (which is itself derived
+from the deployment's *own public endpoint* having answered a real MCP
+`initialize` handshake through the gateway, and only from that), and `mcp-status`
+must then complete that same `initialize` handshake through the gateway route an
+agent host will use. An answering MCP service plus a route file is not
+enough: the route file is a file fact, never proof the gateway serves the route,
+so an MCP service that answers while the route is missing or stale -- or a gateway
+that never reloaded after the route was written -- is reported absent to the
+browser rather than advertised as an endpoint nothing external answers. When the
+web process cannot reach the deployment's own public base URL, set
+`MCP_GATEWAY_PROBE=true` so it verifies its own endpoint (one bounded request to
+a destination fixed by `SERVER_BASE_URL`, never a caller-supplied URL); with the
+probe unset, reachability is reported *unverified* and nothing is advertised.
+The web process holds that verdict only briefly, so a gateway that goes down
+after a healthy handshake stops being advertised, and one that is repaired
+starts being advertised again, without a `restart`; while the verdict is being
+refreshed a capability read reports the reach as unverified rather than reuse an
+expired answer. A
+deployment whose env file sets `MCP_ENABLED=true` while nothing
+serves the surface, or whose gateway route does not carry a working endpoint,
+is a failure (exit non-zero) rather than silently "disabled" or cheerfully
+"enabled", so a half-applied opt-in is visible. The handshake is unauthenticated
+because `initialize` is the pre-credential step; it carries and prints no
+credential. `mcp-status` holds no lock and starts no container.
+
+## Agent MCP surface
+
+The agent [MCP interface](../user-guide/mcp-interface.md) is **opt-in and
+disabled by default**. One switch, `MCP_ENABLED`, decides the whole deployment
+fact: when it is unset, no gateway route is written, the Compose overlay is not
+layered, and no MCP service exists, so the deployment serves the HTTP API and
+Web application exactly as before.
+
+Enabling it is three deliberate steps:
+
+```bash
+# 1. Build the server image with the transport stack (image dependency).
+#    In the deployment env file: REVOCOMPUTE_EXTRAS=resend,mcp
+
+# 2. In the deployment env file: MCP_ENABLED=true   (optional MCP_PORT, default 8081)
+
+# 3. Restart. The controller layers docker-compose.mcp.yml, reconciles the
+#    gateway route from MCP_ENABLED, and starts the `mcp` service.
+REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh restart
+
+# Confirm the opt-in took effect end to end
+REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh mcp-status
+```
+
+The gateway route is deployment state reconciled on every `restart` walk (and
+reported, not applied, under `--dry-run`): the controller writes
+`<SERVER_DIR>/mcp-gateway/mcp.conf`, which the nginx template picks up through an
+`include` mask that is empty when the route is absent. The gateway re-reads its
+configuration only at container start, so the walk restarts the gateway after
+`up` **only when the route state actually changed**.
+
+Boundaries that do not move:
+
+- The `mcp` service binds a container-internal port on the compose network only;
+  it is never published to the host. The sole entry point is the gateway
+  `location /k/`.
+- The service is a separate process from the Gunicorn web service, and that is
+  deliberate: the web service runs `--preload` with two workers, so a listener
+  started at import time would live in the pre-fork master -- unsupervised, and
+  re-forked on every worker recycle. Running the MCP surface as its own service
+  puts no fork anywhere in its path.
+- There is no shadow rate limiter and no second execution plane. The `mcp`
+  process imports the canonical application, so the canonical authentication,
+  entitlement, admission, readiness, quota, result authorization, and per-route
+  rate limiter all apply, and it shares the Redis-backed limiter and the SQLite
+  stores both processes read under the shared server directory (user, Task,
+  admin config, Tool call, MCP handle, and Operator Job records). It does not
+  repeat that application's startup pass -- the MCP entrypoint declares its role
+  before the import, so starting or restarting the service cannot terminalize an
+  Operator Job the web service is running. The limiter's in-memory fallback is
+  per process by construction and is used only while Redis is unavailable: HTTP
+  and MCP then each limit their own traffic rather than sharing one budget. That
+  degraded mode is the canonical limiter's documented behavior, not an
+  MCP-specific one.
+- The surface exposes no admin, host operation, GPU-credit mutation, or
+  arbitrary command/path capability.
+
+To roll back, set `MCP_ENABLED=false` and run `restart`: the route is removed, the
+`mcp` service is stopped, and the deployment returns to its pre-MCP shape. The
+image may keep the transport
+extra installed without consequence; only the switch governs the surface.
 
 `prepare` and `live-test` do not stop or recreate the healthy deployment. Run
 them as the deployment account, never via `sudo`; the deployment operator is

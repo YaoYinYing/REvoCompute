@@ -31,6 +31,35 @@ It also demonstrates the four change-impact paths:
 The canonical matrix with the full field list is in the
 [Runner change-impact model](../../../docs/runner-guide/adding-a-runner.md#runner-change-impact-model).
 
+## Task-scoped result contracts
+
+This family declares its result contract in the Task's own directory:
+
+```text
+docker/runners/example/tasks/sequence_statistics/expected_files.yaml
+docker/runners/example/tasks/sequence_statistics/storyboard/{storyboard.yaml,index.js}
+```
+
+A Task whose `tasks/<task-id>/` directory ships an `expected_files.yaml` is
+resolved entirely from that directory — logical files and Storyboard together.
+A Task that ships no tree of its own keeps the family-root contract. The two are
+never mixed, and a task directory that ships a `storyboard/` without its own
+`expected_files.yaml` is a contract error rather than a silent fallback. The
+scope is a position in the deployment tree, not a property read from a result
+file, so no result filename ever selects the contract that governs it.
+
+Migrating a family-scoped family to a Task-scoped one is a move, nothing more:
+
+```bash
+git mv docker/runners/<family>/expected_files.yaml docker/runners/<family>/tasks/<task-id>/
+git mv docker/runners/<family>/storyboard          docker/runners/<family>/tasks/<task-id>/
+```
+
+Move one Task when only it publishes a different tree, or every Task when the
+whole family agrees. The other Tasks keep their routing, output identity, and
+scientific replay unchanged. The rule and its migration are documented in
+[Where a Task's result contract lives](../../../docs/runner-guide/adding-a-runner.md#where-a-tasks-result-contract-lives).
+
 The two executable lists are a correctness boundary, not an inventory of the
 directory, and **which list a file belongs in is the important decision**:
 

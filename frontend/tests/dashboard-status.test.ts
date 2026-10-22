@@ -34,7 +34,7 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 /** Build a Dashboard whose card or Table view renders `tasks`, and return its root. */
-function render(tasks: TaskSummary[], layout: 'detailed' | 'table', role: 'user' | 'admin' = 'user'): HarnessNode {
+function render(tasks: TaskSummary[], layout: 'detailed' | 'compact' | 'table', role: 'user' | 'admin' = 'user'): HarnessNode {
   const root = document.createElement('div') as unknown as HarnessNode;
   const dashboard = new Dashboard(root as unknown as HTMLElement, { notify: vi.fn(), setUser: vi.fn() } as never, { role, username: 'tester' } as never);
   const view = dashboard as unknown as { tasks: TaskSummary[]; query: Record<string, unknown>; render(): void };
@@ -108,4 +108,17 @@ describe('Dashboard status vocabulary', () => {
     // machine-identity attribute for the row.
     expect(cell.textContent).toBe('SUCCESS');
   });
+});
+
+
+it('gives a failed Task a direct View error action in both Dashboard layouts', () => {
+  for (const layout of ['detailed', 'compact', 'table'] as const) {
+    const summary = task({ status: 'failed', outcome: null });
+    summary.result = { ...summary.result, available: false };
+    const root = render([summary], layout);
+    const action = root.querySelector('button[data-action="diagnostics"]');
+    expect(action?.textContent).toContain('View error');
+    expect(root.querySelector('a[href="/result"]')?.textContent).toContain('View details');
+    expect(root.querySelector('button[data-action="delete"]')).not.toBeNull();
+  }
 });

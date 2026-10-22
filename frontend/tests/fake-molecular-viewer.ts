@@ -10,6 +10,28 @@ export class MolecularViewer {
     };
     return viewer;
   }
+  async loadTrajectory(source: { topology: string; coordinates: string | Uint8Array; coordinateFormat: string; label?: string }) {
+    const state = window as any;
+    state.__viewerTrajectories ||= [];
+    const frames = source.coordinates instanceof Uint8Array ? source.coordinates.length : source.coordinates.length;
+    state.__viewerTrajectories.push({
+      topology: source.topology.slice(0, 6), format: source.coordinateFormat,
+      binary: source.coordinates instanceof Uint8Array, bytes: frames,
+    });
+    this.trajectory = { frame: 0, frameCount: Math.max(1, Math.min(24, Math.floor(frames / 4) || 1)) };
+    return this.trajectory;
+  }
+  async setTrajectoryFrame(action: 'set' | 'advance', value: number) {
+    if (!this.trajectory) throw new Error('No trajectory is loaded.');
+    const state = window as any;
+    const frameCount = this.trajectory.frameCount;
+    let frame = action === 'set' ? Number(value) : this.trajectory.frame + Number(value || 0);
+    frame = ((Math.round(frame) % frameCount) + frameCount) % frameCount;
+    this.trajectory.frame = frame;
+    state.__viewerFrames ||= []; state.__viewerFrames.push(frame);
+    return { frame, frameCount };
+  }
+  private trajectory: { frame: number; frameCount: number } | null = null;
   async loadStructure(source: { label?: string }): Promise<void> {
     const state = window as any; const label = source.label || '';
     state.__viewerLoads ||= []; state.__viewerLoads.push(label);

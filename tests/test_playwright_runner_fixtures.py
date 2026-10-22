@@ -164,7 +164,7 @@ def test_catalog_reports_infrastructure_readiness_without_hiding_methods(page: P
     page.goto(f"{ORIGIN}/runners")
     expect(page.get_by_role("heading", name="Runner catalog")).to_be_visible()
     readiness = page.locator(".readiness-state")
-    expect(readiness).to_have_text(banner)
+    expect(readiness).to_contain_text(banner)
     expect(readiness).to_have_attribute("data-status", status)
     # Readiness never implies the method does not exist.
     expect(page.get_by_role("heading", name="Sequence demo", exact=True)).to_be_visible()
@@ -235,11 +235,15 @@ def test_failed_lifecycle_surfaces_on_dashboard_and_in_result_diagnostics(page: 
     failed = page.locator(".task-card .status-failed")
     expect(failed).to_be_visible()
     expect(failed).to_have_text("failed")
+    page.get_by_role("button", name="View error", exact=True).click()
+    expect(page.get_by_role("dialog")).to_contain_text("Runner stopped before publishing a model")
+    page.keyboard.press("Escape")
     page.get_by_text("Execution error").click()
-    expect(page.get_by_text("Runner stopped before publishing a model")).to_be_visible()
+    expect(page.locator("#main-content").get_by_text("Runner stopped before publishing a model", exact=True)).to_be_visible()
 
     _open_result_after_lifecycle(page, ("queued", "running"), "Runner stopped before publishing a model")
     expect(page.locator(".result-status")).to_contain_text("Runner stopped before publishing a model")
+    page.get_by_role("button", name="Open Files and diagnostics", exact=True).click()
     expect(page.get_by_role("heading", name="Diagnostics")).to_be_visible()
     expect(page.locator(".result-file-list, .result-files").get_by_text("task_failed.txt", exact=True)).to_be_visible()
     assert requests.status_polls()
@@ -309,9 +313,8 @@ def test_restricted_access_state_is_reflected_without_navigation(
 
     page.get_by_role("link", name="View method").click()
     expect(page.locator(".access-banner")).to_contain_text(badge)
-    expect(page.get_by_role("link", name="Create task").first).to_be_visible()
-
-    page.get_by_role("link", name="Create task").first.click()
+    # The sidebar keeps input preparation reachable while the server-owned gate enforces pending access.
+    page.goto(f"{ORIGIN}/compute/create_task?task_type=sequence_demo")
     expect(page.locator(".ct-access-panel h2")).to_have_text(panel)
     # No in-place request control is offered once the policy is pending or granted.
     expect(page.get_by_role("button", name="Request access", exact=True)).to_have_count(0)
@@ -557,8 +560,8 @@ def test_catalog_density_switch_sizes_to_its_two_controls(page: Page, width: int
     [
         ("/runners", "Runner catalog"),
         ("/compute/create_task?task_type=sequence_demo", "Sequence demo"),
-        ("/compute/dashboard", "Dashboard"),
-        (f"/compute/results/{TASK_ID}", "Sequence demo"),
+        ("/compute/dashboard", "Tasks"),
+        (f"/compute/results/{TASK_ID}", "sample.fasta"),
     ],
 )
 def test_narrow_surfaces_keep_their_heading(page: Page, path: str, heading: str) -> None:
@@ -668,5 +671,5 @@ def test_gpu_structure_runner_is_exercisable_without_weights_or_inference(page: 
     _provide_sequence(page)
     _run_task(page).click()
 
-    expect(page.get_by_role("heading", name="Dashboard", exact=True)).to_be_visible()
+    expect(page.get_by_role("heading", name="Tasks", exact=True)).to_be_visible()
     assert requests.submit()

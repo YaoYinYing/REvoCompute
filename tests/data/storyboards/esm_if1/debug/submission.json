@@ -1,0 +1,18 @@
+{
+  "inputs": [
+    {
+      "name": "2KL8.pdb",
+      "role": "structure",
+      "sha256": "035c78fb64880cfac5f721a1831ea45a54b453741fbbc4785d738be83c19c15e",
+      "size": 105871
+    }
+  ],
+  "params": {
+    "chain": "A",
+    "num_samples": 1,
+    "temperature": 1.0
+  },
+  "submitted_at": "2026-10-20T15:30:54.847087+00:00",
+  "task_type": "esm_if1",
+  "username": "tester"
+}

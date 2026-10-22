@@ -1,0 +1,4 @@
+>2KL8, T=0.1, seed=51959, num_res=79, num_ligand_res=79, use_ligand_context=True, ligand_cutoff_distance=8.0, batch_size=1, number_of_batches=1, model_path=/mnt/db/weights/ligandmpnn/proteinmpnn_v_48_020.pt
+MEMDIRFRGDDLEAFEKALKEMIRQARKFAGTVTYTLDGNDLEIRITGVPEQVRKELAKEAERLAKEFNITVTYTIRLE
+>2KL8, id=1, T=0.1, seed=51959, overall_confidence=0.3804, ligand_confidence=0.3804, seq_rec=0.3291
+MDLVITFKGEKEEEYEKSLEKIKEIMEKLNAKVEYEKKGNELSVTIKGISEEDLKEILELAKELAKEYGMEVEAEVKEE

@@ -1,0 +1,11 @@
+identifier: easifa-result
+entrypoint: ./index.js
+requires:
+  - active_sites
+  - enzyme_structure
+optional:
+  - prediction
+  - input_structure
+  - submission
+  - citations
+  - execution_records

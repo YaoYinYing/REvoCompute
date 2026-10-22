@@ -1,0 +1,27 @@
+{
+  "inputs": [
+    {
+      "name": "minimal.a3m",
+      "role": "alignment",
+      "sha256": "264276d4dc5c76109ed9f11a6e1d1a36d4e9bce9a3a078a6764d7cc4df97a251",
+      "size": 140
+    }
+  ],
+  "params": {
+    "cluster_method": "kmeans",
+    "contact_cutoff": 8.0,
+    "dbscan_epsilon": 5.0,
+    "dbscan_min_samples": 2,
+    "gap_cutoff": 0.5,
+    "max_msa_depth": 8,
+    "mean_cluster_size": 2,
+    "reference_chain_1": "",
+    "reference_chain_2": "",
+    "seed": 0,
+    "supervised": false,
+    "top_l": 2.0
+  },
+  "submitted_at": "2026-10-20T15:34:05.371141+00:00",
+  "task_type": "evosplit_cluster",
+  "username": "tester"
+}

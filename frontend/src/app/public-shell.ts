@@ -1,7 +1,7 @@
 import { createIcons, LogIn, Menu, UserRound } from 'lucide';
 import type { CurrentUser } from '../api/app-api';
 import type { AppShell } from './shell';
-import { appAsset } from './assets';
+import { DAYLIGHT_MARK } from './assets';
 import { t } from './i18n';
 import { languageMenu, themeButton } from './localize';
 
@@ -12,7 +12,7 @@ export function mountPublicShell(root: HTMLElement): AppShell {
   const header = document.createElement('header');
   header.className = 'public-header';
   header.innerHTML = `
-    <a class="public-brand" href="/" aria-label="${t('public.home')}"><img src="${appAsset('logo.svg')}" alt="" width="36" height="36"><span>${t('public.brand')}</span></a>
+    <a class="public-brand" href="/" aria-label="${t('public.home')}"><span>${t('public.brand')}</span><span class="bench-mark">${DAYLIGHT_MARK}</span></a>
     <details class="public-navigation">
       <summary class="icon-button" aria-label="${t('public.nav.open')}"><i data-lucide="menu" aria-hidden="true"></i></summary>
       <nav aria-label="${t('public.nav.label')}">
@@ -41,6 +41,16 @@ export function mountPublicShell(root: HTMLElement): AppShell {
   feedback.append(notices);
   root.append(header, outlet, feedback);
   createIcons({ icons: publicIcons, root: header });
+  const navigation = header.querySelector<HTMLDetailsElement>('.public-navigation')!;
+  let desktop: boolean | null = null;
+  const syncNavigation = (): void => {
+    const style = getComputedStyle(header);
+    const available = header.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+    const wide = available > 66 * parseFloat(getComputedStyle(document.documentElement).fontSize);
+    if (desktop !== wide) { desktop = wide; navigation.open = wide; }
+  };
+  const resize = new ResizeObserver(syncNavigation); resize.observe(header); syncNavigation();
+
   return {
     outlet,
     notify(message, tone = 'info') {
@@ -57,12 +67,14 @@ export function mountPublicShell(root: HTMLElement): AppShell {
       account.innerHTML = `<i data-lucide="${user ? 'user-round' : 'log-in'}" aria-hidden="true"></i><span>${t(user ? 'shell.action.profile' : 'shell.action.signIn')}</span>`;
       createIcons({ icons: { LogIn, UserRound }, root: account });
     },
-    // The public header carries one account affordance and no navigation state to
-    // synchronize; the methods exist so the shared router can address either shell
-    // without knowing which one it mounted. Nothing here subscribes at the document
-    // level, so leaving the chrome has nothing of its own to release.
-    syncActive() {},
+    // The public header preserves its disclosure while the router changes pages.
+    syncActive() {
+      navigation.querySelectorAll<HTMLAnchorElement>('a').forEach(link => {
+        if (link.pathname === location.pathname && link.origin === location.origin) link.setAttribute('aria-current', 'page');
+        else link.removeAttribute('aria-current');
+      });
+    },
     refreshNotices() {},
-    destroy() {},
+    destroy() { resize.disconnect(); },
   };
 }

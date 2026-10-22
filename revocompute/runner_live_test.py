@@ -58,7 +58,7 @@ from revocompute.live_tests import (
     sha256_file,
 )
 from revocompute.manage_db import read_resource_database
-from revocompute.result_storyboard import load_expected_file_tree
+from revocompute.result_storyboard import declared_result_contracts
 from revocompute.placement import PlacementError, resolve_submission_placement
 from revocompute.resource_policy import (
     ResourcePolicyValues,
@@ -201,13 +201,16 @@ def load_validation_identity(
     manifest = next(item for item in load_plugin_families(plugin_root) if item.name == family.name)
     schemas: dict[str, dict[str, Any]] = {}
     definitions: dict[str, tuple[Any, Any]] = {}
+    task_dirs: dict[str, str] = {}
     plugin_doc = yaml.safe_load((manifest.root / "plugin.yaml").read_text(encoding="utf-8")) or {}
     for ref in plugin_doc.get("tasks", ()):
-        task_doc = yaml.safe_load((manifest.root / ref).read_text(encoding="utf-8")) or {}
-        task_id = str(task_doc.get("id") or Path(ref).parent.name)
+        ref_path = Path(str(ref))
+        task_doc = yaml.safe_load((manifest.root / ref_path).read_text(encoding="utf-8")) or {}
+        task_id = str(task_doc.get("id") or ref_path.parent.name)
         task_type, runner = get(task_id)
         definitions[task_id] = (task_type, runner)
         schemas[task_id] = task_type.schema
+        task_dirs[task_id] = ref_path.parent.as_posix() if ref_path.parent != Path(".") else ""
     plan = load_live_test_plan(
         manifest.root / "test.yaml",
         repo_root=repo_root,
@@ -311,7 +314,11 @@ def load_validation_identity(
         "runtime": {"entrypoint": manifest.entrypoint},
         "runners": runner_contracts,
         "tasks": task_contracts,
-        "expected_files": load_expected_file_tree(manifest.root / "expected_files.yaml"),
+        # The accepted-output contract, per owner: one record when every Task of
+        # the family resolves to the same logical-output contract, otherwise one
+        # per Task. Reading it through the shared resolver keeps this identity
+        # in step with the manifest finalization that decides acceptance.
+        "expected_files": declared_result_contracts(manifest.root, task_dirs),
         "policies": policies,
         "workspace_capabilities": _validation_workspace_capabilities(manifest.root, plugin_doc),
         "resources": required_resources,

@@ -1,0 +1,9 @@
+identifier: prime-ogt-result
+entrypoint: ./index.js
+requires:
+  - growth_temperature
+optional:
+  - input_sequence
+  - submission
+  - citations
+  - execution_records

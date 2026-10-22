@@ -1,0 +1,53 @@
+result:
+  files:
+    # RFD3 publishes one structure per diffusion batch member. RFD3Output.dump
+    # (pinned upstream rfd3/engine.py) writes
+    # to_cif_file(atom_array, f"{out_dir}/{example_id}", file_type="cif.gz"),
+    # where the dumped example_id is f"{pipeline example_id}_model_{idx}"
+    # (`_model_forward`), and AtomWorks 3 `_to_cif_file` really gzips and
+    # appends `.cif.gz`. launch.py runs with a single normalized input and
+    # n_batches=1, and rfd3._core exists handling is "is not None", so the pipeline's
+    # example_id is exactly the specification prefix
+    # f"{name}_{example}" from `_canonicalize_inputs`
+    # (name = input.json stem, example = the JSON's single key). The observed
+    # name is therefore "<stem>_<example>_model_<idx>.cif.gz".
+    #
+    # One upstream naming limit is declared rather than papered over: the opt-in
+    # dump_trajectories parameter makes the same dump write
+    # "..._model_<idx>_denoised_model_<n>.cif.gz" / "..._noisy_model_<n>.cif.gz".
+    # A glob cannot separate those from a design name -- they share the trailing
+    # "_model_<n>.cif.gz" -- so a trajectory run's intermediates join this logical
+    # file, exactly as it joins the existing RF3 tree. Trajectories are off by
+    # default and the split is deferred rather than guessed at.
+    designs:
+      pattern: '*.cif.gz'
+      cardinality: many
+      required: true
+      type: structure
+    # RFD3Output.dump writes f"{base_path}.json" whenever prediction metadata is
+    # present; dump_prediction_metadata_json is on in the base inference config.
+    # The `[0-7]` bound is the declared num_designs maximum, so this names the
+    # per-design spelling without inventing a range the task can exceed.
+    model_metadata:
+      pattern: '*_model_[0-7].json'
+      cardinality: many
+      required: false
+      type: json
+    run_record:
+      path: foundry-run.json
+      cardinality: one
+      required: true
+      type: json
+    model_assets:
+      path: foundry-model-assets.json
+      cardinality: one
+      required: true
+      type: json
+    # The specification launch.py normalizes and re-writes under
+    # normalized_inputs/, named input.json. It is declared so a reader can
+    # inspect exactly what RFD3 resolved each referenced path to.
+    normalized_inputs:
+      path: normalized_inputs/input.json
+      cardinality: one
+      required: false
+      type: json

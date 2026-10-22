@@ -23,6 +23,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 BASE_COMPOSE = ROOT / "docker-compose.yml"
 SLURM_COMPOSE = ROOT / "docker-compose.slurm.yml"
+MCP_COMPOSE = ROOT / "docker-compose.mcp.yml"
 
 SAFE_ENV = {
     "SERVER_DIR": str(ROOT),
@@ -176,3 +177,78 @@ def test_the_slurm_override_does_not_shadow_the_forwarded_settings() -> None:
     layered = _rendered_services({"TASK_SCRATCH_LIMIT_BYTES": "12345"})
     assert base_worker["TASK_SCRATCH_LIMIT_BYTES"] == "12345"
     assert _environment(layered, "worker")["TASK_SCRATCH_LIMIT_BYTES"] == "12345"
+
+
+def _render_mcp(extra_env: dict[str, str], *, profile: bool = False) -> subprocess.CompletedProcess[str]:
+    """Render the real stack with the MCP overlay layered, as the controller does.
+
+    ``profile=False`` matches a caller that layers the file without enabling the
+    profile (a bare ``docker compose config``); ``profile=True`` adds the
+    ``--profile mcp`` the deployment controller passes once a deployment opted in,
+    which is what makes the profile-gated ``mcp`` service part of the model.
+    """
+    environment = {k: v for k, v in os.environ.items() if k != "CONFIG_DIR"}
+    environment.update(SAFE_ENV)
+    environment.update(extra_env)
+    profile_args = ["--profile", "mcp"] if profile else []
+    return subprocess.run(
+        [*_compose_command(), "-f", str(BASE_COMPOSE), "-f", str(MCP_COMPOSE), *profile_args, "config"],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_the_mcp_overlay_adds_an_internal_service_and_never_a_published_port() -> None:
+    """The opt-in adds a container-internal ``mcp`` service, never a public port.
+
+    "MCP is a protocol projection, not a second execution plane" has a Compose
+    consequence: the surface is served by a service, but that service publishes
+    nothing, mounts nothing new, and runs the same image as ``web`` -- the one
+    entrypoint the HTTP API already runs.  The service is profile-gated, so it is
+    absent from a model that layers the file without enabling the profile, and the
+    web service's port and volume set is unchanged either way.  Each of those is an
+    assertion below, so an overlay that grew a published port or a differently
+    configured execution plane fails here rather than silently shipping.
+    """
+    base_run = subprocess.run(
+        [*_compose_command(), "-f", str(BASE_COMPOSE), "config"],
+        env={**SAFE_ENV},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert base_run.returncode == 0, base_run.stderr
+    base = yaml.safe_load(base_run.stdout)
+
+    # Layering the file on its own changes no service set: the profile keeps the
+    # ``mcp`` service out of a model nobody opted into.
+    unprofiled = _render_mcp({"MCP_ENABLED": "true", "MCP_PORT": "8081"})
+    assert unprofiled.returncode == 0, unprofiled.stderr
+    assert set(yaml.safe_load(unprofiled.stdout)["services"]) == set(base["services"])
+
+    completed = _render_mcp({"MCP_ENABLED": "true", "MCP_PORT": "8081"}, profile=True)
+    assert completed.returncode == 0, completed.stderr
+    layered = yaml.safe_load(completed.stdout)
+
+    assert set(layered["services"]) == set(base["services"]) | {"mcp"}
+    assert _environment(layered["services"], "web")["MCP_ENABLED"] == "true"
+    assert _environment(layered["services"], "web")["MCP_PORT"] == "8081"
+    mcp = layered["services"]["mcp"]
+    assert mcp["command"] == ["python", "-m", "revocompute.mcp"]
+    assert mcp["image"] == layered["services"]["web"]["image"]
+    assert mcp["build"] == layered["services"]["web"]["build"]
+    assert mcp["volumes"] == layered["services"]["web"]["volumes"]
+    # The MCP port is container-internal on the ``mcp`` service and nowhere else:
+    # the service publishes no host port, so nothing outside the compose network
+    # reaches it directly.  `!override` replaces the inherited `expose` list, so
+    # the service exposes the MCP port alone rather than the web port as well.
+    assert not (mcp.get("ports") or [])
+    assert [str(value) for value in (mcp.get("expose") or [])] == ["8081"]
+    # Enabling MCP adds no published port and no volume to any service.
+    for name, service in layered["services"].items():
+        assert service.get("ports") == base["services"].get(name, {}).get("ports"), name
+        if name != "mcp":
+            assert (service.get("volumes") or []) == (base["services"][name].get("volumes") or []), name
+

@@ -1,0 +1,43 @@
+# Logical result files published by the LigandMPNN Task.
+#
+# The design FASTA is the primary view's candidate source; the packed backbone
+# the runner writes when side-chain packing is enabled is the evidence view's
+# structure. `packed_structures` is optional in the view, so the tree declares it
+# optional too: a run with packing disabled publishes no backbone.
+result:
+  files:
+    designs:
+      pattern: 'seqs/*.fa'
+      cardinality: many
+      required: true
+      role: evidence
+    packed_structures:
+      pattern: 'backbones/*.pdb'
+      cardinality: many
+      required: false
+      type: structure
+      role: evidence
+    input_structure:
+      pattern: 'debug/inputs/structure/*.pdb'
+      cardinality: one
+      required: true
+      type: structure
+      role: provenance
+    submission:
+      path: debug/submission.json
+      cardinality: one
+      required: true
+      type: json
+      role: provenance
+    citations:
+      path: citations.bib
+      cardinality: one
+      required: true
+      type: text
+      role: provenance
+    execution_records:
+      pattern: 'execution/*'
+      cardinality: many
+      required: true
+      type: text
+      role: diagnostic

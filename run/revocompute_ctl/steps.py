@@ -25,7 +25,7 @@ from pathlib import Path
 
 import yaml
 
-from revocompute_ctl.compose import compose_args, run_cmd
+from revocompute_ctl.compose import compose_args, remove_mcp_service, run_cmd, stack_services
 from revocompute_ctl.attestation import clear_deployment_attestations
 from revocompute.runner_bundles import materialize_runner_bundles, runner_bundle_root
 from revocompute.runner_registry import (
@@ -614,7 +614,7 @@ def cmd_down(state, compose_cmd: tuple[str, ...], *, keep_gateway: bool = False)
             end_maintenance(state)
         raise
     print("Stopping services via docker compose...")
-    services = ["redis", "web", "maintenance", "worker", "tool-worker"]
+    services = stack_services(state, "redis", "web", "maintenance", "worker", "tool-worker")
     if keep_gateway:
         print("Refreshing gateway and keeping it running to serve the maintenance page.")
         run_cmd(
@@ -635,9 +635,28 @@ def cmd_down(state, compose_cmd: tuple[str, ...], *, keep_gateway: bool = False)
             [*compose_cmd, *compose_args(state), "--env-file", state.env_file, "stop", *services],
             env=state.exported(),
         )
+        # The gateway stays up on this path, so a switch that just turned off
+        # leaves a running ``mcp`` container the model above no longer declares.
+        # Stopping the declared services cannot reach it and an orphan sweep
+        # would be a whole-project operation in a path that must keep the
+        # gateway serving, so the service it can no longer see is removed by
+        # name, over the overlay that does declare it.
+        remove_mcp_service(state, compose_cmd)
         return
     run_cmd(
-        [*compose_cmd, *compose_args(state), "--env-file", state.env_file, "down"],
+        [
+            *compose_cmd,
+            *compose_args(state),
+            "--env-file",
+            state.env_file,
+            "down",
+            # A rollback turns the switch off, which drops the overlay *and* its
+            # profile from ``compose_args`` -- so a ``mcp`` container started while
+            # the switch was on is no longer a service the model declares, and a
+            # plain ``down`` would leave it running outside the stack.  Removing
+            # orphans is what actually stops it.
+            "--remove-orphans",
+        ],
         env=state.exported(),
     )
 
@@ -721,12 +740,7 @@ def cmd_up(
             "up",
             *(extra or []),
             "-d",
-            "redis",
-            "web",
-            "gateway",
-            "maintenance",
-            "worker",
-            "tool-worker",
+            *stack_services(state, "redis", "web", "gateway", "maintenance", "worker", "tool-worker"),
         ],
         env=state.exported(),
     )
@@ -739,7 +753,7 @@ def cmd_up(
 
 
 def wait_for_services(state, compose_cmd: tuple[str, ...]) -> None:
-    expected = {"redis", "web", "gateway", "maintenance", "worker", "tool-worker"}
+    expected = set(stack_services(state, "redis", "web", "gateway", "maintenance", "worker", "tool-worker"))
     for _attempt in range(30):
         running = run_cmd(
             [
@@ -885,6 +899,21 @@ def build_restart_plan(state, compose_cmd: tuple[str, ...], flags: RestartFlags)
         }
 
     steps: list[Step] = []
+    # The gateway route is deployment state reconciled from the one MCP_ENABLED
+    # switch, and it is read by containers this walk stops and starts. Reconcile
+    # before the stop so the instance that comes back up is the one the env file
+    # describes; the walk restarts the gateway afterwards only when the route
+    # state actually changed, because the gateway reads the mask at container
+    # start. Registered first so it runs under --dry-run too, where it reports the
+    # planned change without touching the deployment.
+    from revocompute_ctl.mcp import apply_gateway
+
+    route_changed_holder: list[bool] = [False]
+
+    def reconcile_mcp_route() -> None:
+        route_changed_holder[0] = apply_gateway(state, dry_run=flags.dry_run)
+
+    steps.append(Step("mcp-route", reconcile_mcp_route))
     if flags.keep_gateway:
         steps.append(Step("maintenance", lambda: begin_maintenance(state)))
     steps.extend(
@@ -935,7 +964,11 @@ def build_restart_plan(state, compose_cmd: tuple[str, ...], flags: RestartFlags)
             ),
         )
     )
-    if flags.keep_gateway:
+    if flags.keep_gateway or route_changed_holder[0]:
+        # The gateway generated its configuration at container start, so it must
+        # re-read the mask whenever the route state changed.  When nothing changed
+        # there is no restart: the ordinary restart already recreated the gateway
+        # through `up`, and a restart here would only add downtime.
         steps.append(
             Step(
                 "refresh-gateway",

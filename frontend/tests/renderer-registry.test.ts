@@ -12,8 +12,8 @@ class TestNode {
 }
 
 const logicalTable = (tableUrl?: string): LogicalResultFile => ({
-  id: 'scores', name: 'scores.csv', media_type: 'text/csv', size: 8, role: 'evidence', cardinality: 'one',
-  viewer: 'table', preview: 'table', capability: 'table', url: '/logical/scores', table_url: tableUrl,
+  id: 'scores', name: 'scores.csv', path: 'scores.csv', media_type: 'text/csv', size: 8, role: 'evidence',
+  cardinality: 'one', viewer: 'table', preview: 'table', capability: 'table', url: '/logical/scores', table_url: tableUrl,
 });
 
 afterEach(() => vi.unstubAllGlobals());

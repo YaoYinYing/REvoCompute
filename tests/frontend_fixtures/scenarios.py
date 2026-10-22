@@ -13,6 +13,7 @@ depends on wall-clock timing.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
@@ -35,9 +36,9 @@ from .models import (
     ResultArtifactSpec,
     ResultFixture,
     RunnerDefinition,
+    WorkflowStage,
     WorkspaceCapability,
     WorkspaceStep,
-    WorkflowStage,
 )
 
 CONTROLLED_RUNNER_NAME = "sequence_demo"
@@ -64,6 +65,73 @@ _MEDIA_TYPE_BY_SUFFIX = {
 
 
 @dataclass(frozen=True, slots=True)
+class DemoFileSpec:
+    """One declared demo fixture, as the owning Task publishes it."""
+
+    role: str
+    path: str
+    body: str
+    media_type: str
+    sha256: str = ""
+    aliases: tuple[str, ...] = ()
+
+    def payload(self, task_type: str, demo_id: str) -> dict[str, Any]:
+        return {
+            "role": self.role,
+            "path": self.path,
+            "sha256": self.sha256 or hashlib.sha256(self.body.encode("utf-8")).hexdigest(),
+            "size": len(self.body.encode("utf-8")),
+            "media_type": self.media_type,
+            "download_url": f"/compute/api/types/{task_type}/demos/{demo_id}/files/{self.path}",
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class DemoSpec:
+    """One supported input preset a Task declares: files to bind, parameters to set.
+
+    ``unavailable_asset`` makes the obtain route answer 404 for one declared
+    file, which is how a browser test drives the failure a reader meets when a
+    declared fixture cannot be served.
+    """
+
+    id: str
+    title: str
+    purpose: str
+    files: tuple[DemoFileSpec, ...]
+    parameters: Mapping[str, Any] = field(default_factory=dict)
+    context: str = ""
+    source_name: str = "Synthetic demo corpus"
+    source_url: str = "https://example.invalid/synthetic"
+    license_id: str = "cc0-1.0"
+    license_name: str = "CC0 1.0"
+    license_url: str = "https://example.invalid/cc0"
+    unavailable_asset: str | None = None
+
+    def payload(self, task_type: str) -> dict[str, Any]:
+        inputs: dict[str, list[dict[str, Any]]] = {}
+        for item in self.files:
+            inputs.setdefault(item.role, []).append(item.payload(task_type, self.id))
+        return {
+            "id": self.id,
+            "title": self.title,
+            "purpose": self.purpose,
+            "context": self.context,
+            "source": {"name": self.source_name, "url": self.source_url},
+            "license": {"id": self.license_id, "name": self.license_name, "url": self.license_url},
+            "inputs": inputs,
+            "parameters": dict(self.parameters),
+        }
+
+    def body_for(self, asset: str) -> tuple[str, str] | None:
+        """The declared bytes for one demo asset path, or ``None`` when unserved."""
+        if asset == self.unavailable_asset:
+            return None
+        item = next((entry for entry in self.files if entry.path == asset), None)
+        return None if item is None else (item.body, item.media_type)
+
+
+@dataclass(frozen=True, slots=True)
 class RunnerScenario:
     """One Runner, one readiness state, one lifecycle, one result fixture."""
 
@@ -76,9 +144,18 @@ class RunnerScenario:
     archive: ArchiveSpec = field(default_factory=ArchiveSpec)
     task_id: str = DEFAULT_TASK_ID
     extra_runners: tuple[RunnerDefinition, ...] = ()
+    demos: tuple[DemoSpec, ...] = ()
+    #: Task types this deployment discovers but disables. The demo catalog and
+    #: the fixture bytes are refused for them exactly as the server refuses them.
+    disabled_task_types: tuple[str, ...] = ()
     access_policies: tuple[AccessState, ...] = ()
     task_summaries: tuple[Mapping[str, Any], ...] = ()
     reject_password_update: bool = False
+    #: The deployment's own MCP capability projection. ``None`` is the default
+    #: deployment: the public capability read reports the surface as absent, so
+    #: the Home entry stays documentation-only. A served path means this
+    #: deployment really answers there.
+    mcp_endpoint: str | None = None
     #: A captured real-result bundle. When present it owns the result surface
     #: (manifest, artifacts, tables, logical files, storyboard) instead of the
     #: synthetic ``result`` fixture, so a test can drive the same
@@ -119,6 +196,14 @@ class RunnerScenario:
     def with_access(self, access: AccessState) -> RunnerScenario:
         return replace(self, runner=replace(self.runner, access=access))
 
+    def with_demos(self, demos: Iterable[DemoSpec]) -> RunnerScenario:
+        """Declare the supported input presets this deployment publishes."""
+        return replace(self, demos=tuple(demos))
+
+    def with_disabled(self, name: str) -> RunnerScenario:
+        """Discover one more Task type the operator has turned off."""
+        return replace(self, disabled_task_types=(*self.disabled_task_types, name))
+
     def with_catalog(self, definitions: Iterable[RunnerDefinition]) -> RunnerScenario:
         extras = tuple(definition for definition in definitions if definition.name != self.runner.name)
         return replace(self, extra_runners=extras)
@@ -131,6 +216,10 @@ class RunnerScenario:
 
     def with_password_rejection(self) -> RunnerScenario:
         return replace(self, reject_password_update=True)
+
+    def with_mcp_endpoint(self, endpoint: str | None) -> RunnerScenario:
+        """Declare the deployment's MCP capability projection for the Home entry."""
+        return replace(self, mcp_endpoint=endpoint)
 
     # -- catalog and Runner projections ------------------------------------
 
@@ -148,6 +237,32 @@ class RunnerScenario:
 
     def runner_or_none(self, name: str) -> RunnerDefinition | None:
         return next((definition for definition in self.runners() if definition.name == name), None)
+
+    def disabled(self, name: str) -> bool:
+        return name in self.disabled_task_types
+
+    def demo_catalog(self, name: str) -> dict[str, Any] | None:
+        """The declared demo catalog for one enabled Task, or ``None`` when absent.
+
+        An unknown or disabled Task has no catalog, exactly as on the server, so
+        a browser test cannot drive the picker against a method the deployment
+        would not have offered.
+        """
+        if self.runner_or_none(name) is None or self.disabled(name):
+            return None
+        payload = {"version": 1, "task_type": name, "demos": [demo.payload(name) for demo in self.demos]}
+        # The declarations are validated against the same published component the
+        # server's own response conforms to, so a fixture cannot assert a demo
+        # shape the client contract does not carry.
+        builders.validate_payload("TaskDemoCatalog", payload)
+        return payload
+
+    def demo_body(self, name: str, demo_id: str, asset: str) -> tuple[str, str] | None:
+        """The bytes one declared demo asset resolves to, or ``None`` when unserved."""
+        if self.runner_or_none(name) is None or self.disabled(name):
+            return None
+        demo = next((item for item in self.demos if item.id == demo_id), None)
+        return None if demo is None else demo.body_for(asset)
 
     def runner_for_task(self, task_id: str) -> RunnerDefinition | None:
         return self.runner if task_id == self.task_id else None
@@ -412,6 +527,35 @@ def controlled_scenario(**overrides: Any) -> RunnerScenario:
     return replace(RunnerScenario(runner=controlled_runner()), **overrides)
 
 
+# One small synthetic alignment the sequence Runner's own role accepts. It is
+# deliberately tiny and obviously synthetic: a demo fixture is a preset the Task
+# supports, never a stand-in for a scientific result.
+DEMO_FASTA = ">records\nACDEFGHIKL\n>second\nMNPQRSTVWY\n"
+
+
+def sequence_demo(
+    *,
+    identifier: str = "two_records",
+    title: str = "Two short sequences",
+    purpose: str = "Fill the form with a small pair of sequences.",
+    parameters: Mapping[str, Any] | None = None,
+    context: str = "",
+    **overrides: Any,
+) -> DemoSpec:
+    """One declared demo preset for the canonical sequence-input Task."""
+    return DemoSpec(
+        id=identifier,
+        title=title,
+        purpose=purpose,
+        context=context,
+        files=(
+            DemoFileSpec(role="sequence", path="files/records.fasta", body=DEMO_FASTA, media_type="text/x-fasta"),
+        ),
+        parameters=dict(parameters) if parameters is not None else {"iterations": 3},
+        **overrides,
+    )
+
+
 def runner_scenario(
     runner: RunnerDefinition,
     *,
@@ -461,6 +605,99 @@ def replay_scenario(
         task_id=bundle.task_id,
     )
     return scenario.with_bundle(bundle)
+
+
+def bioemu_runner() -> RunnerDefinition:
+    """The real ``bioemu`` declared contract, transcribed from ``task.yaml``.
+
+    The Runner identity, input role, workspace, parameters, considerations, and
+    citation are the source of truth for the catalog/detail surface. The replay
+    bundle supplies the real result; this helper supplies the declared contract
+    the result was produced under.
+    """
+    return RunnerDefinition(
+        name="bioemu",
+        display_name="BioEmu",
+        category="structure",
+        category_label="Structure prediction",
+        summary="Conformational ensemble sampling from sequence (BioEmu).",
+        use_when="Use this to sample a diverse conformational ensemble from one protein sequence.",
+        input_summary="One protein sequence as FASTA.",
+        output_summary="A filtered ensemble of sampled protein conformations and supporting artifacts.",
+        considerations=(
+            "A generated ensemble is a model sample and not a measured thermodynamic population.",
+            "Sample order is generation order, not physical time or a kinetic trajectory.",
+        ),
+        runtime_family="bioemu",
+        gpus=True,
+        requires_network=True,
+        inputs=(SEQUENCE_ROLE,),
+        parameters=(
+            ParameterSpec.integer(
+                "num_samples", default=10, has_default=True, minimum=1, maximum=1000,
+                description="Total number of equilibrium protein conformations to generate.",
+            ),
+            ParameterSpec.integer(
+                "batch_size_100", default=10, has_default=True, minimum=1, maximum=100,
+                description=(
+                    "Sampling batch size used for proteins of approximately 100 residues, "
+                    "scaled internally by sequence length."
+                ),
+            ),
+            ParameterSpec.enumeration(
+                "denoiser_type", ("dpm", "heun"), default="dpm", has_default=True,
+                description="Numerical denoising solver used during diffusion sampling.",
+            ),
+            ParameterSpec.boolean(
+                "filter_samples", default=True, has_default=True,
+                description="Rejects generated conformations that fail BioEmu physical-validity filters.",
+            ),
+            ParameterSpec.integer(
+                "base_seed", minimum=0, advanced=True, ui_control=(("kind", "seed"),),
+                description="Optional base random seed used to make sampling reproducible.",
+            ),
+        ),
+        workspace_steps=(
+            WorkspaceStep(
+                id="material",
+                title="Provide the protein sequence",
+                description="Upload FASTA files or paste one protein sequence",
+                capabilities=(
+                    WorkspaceCapability("files", "source_files", "Sequence files"),
+                    WorkspaceCapability(
+                        "sequence", "sequence_editor", "Paste a sequence", options=(("role", "sequence"),)
+                    ),
+                ),
+            ),
+            WorkspaceStep(
+                id="settings",
+                title="Set the experiment",
+                description="Adjust only the controls that matter for this run",
+                capabilities=(
+                    WorkspaceCapability("parameters", "task_parameters", "Method settings"),
+                ),
+            ),
+            WorkspaceStep(
+                id="review",
+                title="Review and run",
+                description="Check the sequence and settings before creating the task snapshot",
+                capabilities=(
+                    WorkspaceCapability(
+                        "review", "submission_review", "Experiment review", options=(("show_paths", True),)
+                    ),
+                ),
+            ),
+        ),
+        workflow=(WorkflowStage(name="bioemu", display_name="BioEmu structure sampling", requires_gpu=True),),
+        citations=(
+            Citation(
+                num=1,
+                doi="10.1126/science.adv9817",
+                title="Scalable emulation of protein equilibrium ensembles with generative deep learning",
+                url="https://doi.org/10.1126/science.adv9817",
+            ),
+        ),
+    )
 
 
 def gremlin_lh_runner() -> RunnerDefinition:
@@ -520,7 +757,7 @@ def gremlin_lh_runner() -> RunnerDefinition:
                 description="Coupling penalty: conventional squared L2, low-rank spectral LH, or group-sparse block LB.",
             ),
             ParameterSpec.number(
-                "lambda_l2",
+                "lambda_l2", advanced=True,
                 default=0.01,
                 has_default=True,
                 exclusive_minimum=0.0,
@@ -536,7 +773,7 @@ def gremlin_lh_runner() -> RunnerDefinition:
                 description="Low-rank spectral penalty strength used in LH mode.",
             ),
             ParameterSpec.number(
-                "lambda_lb",
+                "lambda_lb", advanced=True,
                 default=0.005,
                 has_default=True,
                 exclusive_minimum=0.0,
@@ -563,7 +800,7 @@ def gremlin_lh_runner() -> RunnerDefinition:
                 ),
             ),
             ParameterSpec.number(
-                "learning_rate",
+                "learning_rate", advanced=True,
                 default=1.0,
                 has_default=True,
                 exclusive_minimum=0.0,
@@ -571,7 +808,7 @@ def gremlin_lh_runner() -> RunnerDefinition:
                 description="Learning rate for the notebook's scalar-second-moment Adam optimizer.",
             ),
             ParameterSpec.number(
-                "identity_cutoff",
+                "identity_cutoff", advanced=True,
                 default=0.8,
                 has_default=True,
                 minimum=0.1,
@@ -579,7 +816,7 @@ def gremlin_lh_runner() -> RunnerDefinition:
                 description="Aligned-sequence identity threshold used to down-weight phylogenetically similar rows.",
             ),
             ParameterSpec.number(
-                "gap_cutoff",
+                "gap_cutoff", advanced=True,
                 default=0.5,
                 has_default=True,
                 minimum=0,
@@ -590,13 +827,13 @@ def gremlin_lh_runner() -> RunnerDefinition:
                 ),
             ),
             ParameterSpec.boolean(
-                "use_bias",
+                "use_bias", advanced=True,
                 default=True,
                 has_default=True,
                 description="Fit one-body residue fields in addition to pairwise couplings.",
             ),
             ParameterSpec.boolean(
-                "inverse_covariance_init",
+                "inverse_covariance_init", advanced=True,
                 default=False,
                 has_default=True,
                 description=(
@@ -605,13 +842,13 @@ def gremlin_lh_runner() -> RunnerDefinition:
                 ),
             ),
             ParameterSpec.boolean(
-                "exact_lh_eigenvalue",
+                "exact_lh_eigenvalue", advanced=True,
                 default=False,
                 has_default=True,
                 description="Use an exact eigendecomposition for LH instead of the notebook's faster one-step power estimate.",
             ),
             ParameterSpec.boolean(
-                "a3m",
+                "a3m", advanced=True,
                 default=True,
                 has_default=True,
                 description=(
@@ -620,7 +857,7 @@ def gremlin_lh_runner() -> RunnerDefinition:
                 ),
             ),
             ParameterSpec.integer(
-                "seed",
+                "seed", advanced=True,
                 default=0,
                 has_default=True,
                 minimum=0,
@@ -902,6 +1139,7 @@ __all__ = [
     "CONTROLLED_RUNNER_NAME",
     "SEQUENCE_ROLE",
     "RunnerScenario",
+    "bioemu_runner",
     "controlled_runner",
     "controlled_scenario",
     "gremlin_lh_runner",

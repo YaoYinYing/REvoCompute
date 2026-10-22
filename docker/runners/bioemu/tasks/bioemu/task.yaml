@@ -13,6 +13,7 @@ output_summary: A filtered ensemble of sampled protein conformations and support
   artifacts.
 considerations:
 - A generated ensemble is a model sample and not a measured thermodynamic population.
+- Sample order is generation order, not physical time or a kinetic trajectory.
 # The ensemble is sampled from ColabFold single/pair representations. The Task
 # takes a bare sequence and passes no MSA, so BioEmu queries its hosted
 # MMseqs2 service (api.colabfold.com) on every run — the capability is

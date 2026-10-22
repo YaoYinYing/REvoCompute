@@ -141,6 +141,7 @@ parameters:
       default: LH
       enum: [L2, LH, LB]
     lambda_l2:
+      x-advanced: true
       type: number
       description: L2 coupling strength; also regularizes fields when field terms are enabled.
       default: 0.01
@@ -153,6 +154,7 @@ parameters:
       exclusiveMinimum: 0
       maximum: 10
     lambda_lb:
+      x-advanced: true
       type: number
       description: Group-sparse block penalty strength used in LB mode.
       default: 0.005
@@ -171,40 +173,48 @@ parameters:
       minimum: 2
       maximum: 10000
     learning_rate:
+      x-advanced: true
       type: number
       description: Learning rate for the notebook's scalar-second-moment Adam optimizer.
       default: 1.0
       exclusiveMinimum: 0
       maximum: 10
     identity_cutoff:
+      x-advanced: true
       type: number
       description: Aligned-sequence identity threshold used to down-weight phylogenetically similar rows.
       default: 0.8
       minimum: 0.1
       maximum: 1.0
     gap_cutoff:
+      x-advanced: true
       type: number
       description: Columns whose gap-state fraction exceeds this value are excluded only when computing sequence similarity weights; they are still modeled.
       default: 0.5
       minimum: 0
       maximum: 1
     use_bias:
+      x-advanced: true
       type: boolean
       description: Fit one-body residue fields in addition to pairwise couplings.
       default: true
     inverse_covariance_init:
+      x-advanced: true
       type: boolean
       description: Initialize couplings from the regularized inverse covariance instead of zeros. The upstream notebook uses this initialization; zero initialization is the bounded production default.
       default: false
     exact_lh_eigenvalue:
+      x-advanced: true
       type: boolean
       description: Use an exact eigendecomposition for LH instead of the notebook's faster one-step power estimate.
       default: false
     a3m:
+      x-advanced: true
       type: boolean
       description: Remove lowercase A3M insertion residues and insertion-gap dots before validating alignment width; match-state deletion gaps are preserved.
       default: true
     seed:
+      x-advanced: true
       type: integer
       x-ui-control: {kind: seed}
       description: Random seed controlling mini-batch sampling.

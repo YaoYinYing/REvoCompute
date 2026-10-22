@@ -47,7 +47,7 @@ _PROFILE_FIELDS = frozenset({"full_name", "affiliation", "position", "pi_name"})
 _APP_PAGE = re.compile(
     r"/(?:api-docs|runners|runners/[^/]+|compute/terms"
     r"|compute/(?:login|register|reset_password|user_verify|profile|quota|account/[^/]+|user_control|configuration|logs"
-    r"|create_task|dashboard|results/[0-9a-fA-F]{32}))"
+    r"|runner_fleet|create_task|dashboard|results/[0-9a-fA-F]{32}))"
 )
 
 
@@ -147,6 +147,20 @@ class RequestCapture:
         if name is None:
             return records
         return tuple(record for record in records if record.path == f"/compute/api/types/{name}")
+
+    def demo_catalog(self, name: str | None = None) -> tuple[RequestRecord, ...]:
+        """Catalog reads for one Task, or for every Task when unnamed."""
+        suffix = f"/{name}/demos" if name is not None else "/demos"
+        return tuple(record for record in self._records if record.path.endswith(suffix))
+
+    def demo_files(self, name: str | None = None) -> tuple[RequestRecord, ...]:
+        """Obtain reads for one Task's declared demo fixtures."""
+        prefix = f"/compute/api/types/{name}/demos/" if name is not None else "/compute/api/types/"
+        return tuple(
+            record
+            for record in self._records
+            if record.path.startswith(prefix) and "/demos/" in record.path and "/files/" in record.path
+        )
 
     def navigation(self) -> tuple[RequestRecord, ...]:
         """Requests for application pages rather than API or static assets."""
@@ -351,6 +365,37 @@ class FrontendFixtureRouter:
     def _system_notices(self, route: Any, query: Any) -> None:
         return route.fulfill(json={"notices": []})
 
+    def _mcp_capability(self, route: Any, query: Any) -> None:
+        """The deployment's own MCP capability projection, as the real route serves it.
+
+        The public Home page reads this to decide whether its "Connect an AI agent"
+        entry may offer a live endpoint: a scenario that declares no endpoint is the
+        default deployment and reports the surface absent, which is what keeps the
+        entry documentation-only. The route is public, so it is declared here once
+        rather than repeated in every test that loads the public shell.
+        """
+        endpoint = self.scenario.mcp_endpoint
+        return route.fulfill(json=self._mcp_payload(endpoint))
+
+    @staticmethod
+    def _mcp_payload(endpoint: str | None) -> dict[str, Any]:
+        """The seven facts the real capability reports, for a fixture scenario.
+
+        The Home page reads only ``enabled`` to decide whether its "Connect an AI
+        agent" entry may offer a live endpoint, and a fixture scenario that declares
+        no endpoint is the default deployment whose surface is absent. The full
+        fact set is served so a fixture is the shape the real route returns.
+        """
+        return {
+            "listener_ready": endpoint is not None,
+            "route_configured": endpoint is not None,
+            "gateway_verified": True if endpoint is not None else None,
+            "operational": endpoint is not None,
+            "enabled": endpoint is not None,
+            "endpoint": endpoint,
+            "detail": None,
+        }
+
     # -- the account's own resource position --------------------------------
 
     def _resource_entitlement(self, route: Any, query: Any) -> None:
@@ -384,6 +429,19 @@ class FrontendFixtureRouter:
         if definition is None:
             return route.fulfill(status=404, json={"error": f"Unknown task type: {name!r}"})
         return route.fulfill(json=builders.build_parameter_schema(definition))
+
+    def _demo_catalog(self, route: Any, query: Any, name: str = "", **_: str) -> None:
+        payload = self.scenario.demo_catalog(name)
+        if payload is None:
+            return route.fulfill(status=404, json={"error": f"Unknown task type: {name!r}"})
+        return route.fulfill(json=payload)
+
+    def _demo_file(self, route: Any, query: Any, name: str = "", demo_id: str = "", asset: str = "", **_: str) -> None:
+        body = self.scenario.demo_body(name, demo_id, asset)
+        if body is None:
+            return route.fulfill(status=404, json={"error": "Demo file not found"})
+        content, media_type = body
+        return route.fulfill(status=200, content_type=media_type, body=content)
 
     def _workspace_normalize(self, route: Any, query: Any, name: str = "", **_: str) -> None:
         payload = _json_object(route.request.post_data) or {}
@@ -424,6 +482,17 @@ class FrontendFixtureRouter:
         return route.fulfill(status=200 if terminal else 202, json=payload)
 
     # -- results ------------------------------------------------------------
+
+    def _task_diagnostics(self, route: Any, query: Any, task_id: str = "", **_: str) -> None:
+        if self.scenario.runner_for_task(task_id) is None:
+            return route.fulfill(status=404, json={"error": "Task not found"})
+        manifest = self.scenario.result_for(task_id) or {}
+        return route.fulfill(json={
+            "task_id": task_id, "availability": "unavailable",
+            "summary": manifest.get("error") or "Diagnostic evidence is unavailable.",
+            "reason_code": None, "exit_code": None, "exit_code_source": None,
+            "scheduler_state": None, "stage": None, "logs": [],
+        })
 
     def _result_manifest(self, route: Any, query: Any, task_id: str = "", **_: str) -> None:
         manifest = self.scenario.result_for(task_id)
@@ -514,17 +583,21 @@ _API_ROUTES: tuple[tuple[re.Pattern[str], Any], ...] = (
     (re.compile(r"/compute/api/auth/register"), FrontendFixtureRouter._auth_register),
     (re.compile(r"/compute/api/legal/terms"), FrontendFixtureRouter._legal_terms),
     (re.compile(r"/compute/api/system/notices"), FrontendFixtureRouter._system_notices),
+    (re.compile(r"/compute/api/mcp"), FrontendFixtureRouter._mcp_capability),
     (re.compile(r"/compute/api/resource-entitlement"), FrontendFixtureRouter._resource_entitlement),
     (re.compile(r"/compute/api/resource-ledger"), FrontendFixtureRouter._resource_ledger),
     (re.compile(r"/compute/api/auth/admin/reports/resources"), FrontendFixtureRouter._admin_resource_report),
     (re.compile(r"/compute/api/infrastructure"), lambda self, route, query: route.fulfill(json=builders.build_infrastructure(self.scenario.readiness()))),
     (re.compile(r"/compute/api/types"), lambda self, route, query: route.fulfill(json=self.scenario.catalog())),
     (re.compile(r"/compute/api/types/(?P<name>[^/]+)/workspace/normalize"), FrontendFixtureRouter._workspace_normalize),
+    (re.compile(r"/compute/api/types/(?P<name>[^/]+)/demos/(?P<demo_id>[^/]+)/files/(?P<asset>.+)"), FrontendFixtureRouter._demo_file),
+    (re.compile(r"/compute/api/types/(?P<name>[^/]+)/demos"), FrontendFixtureRouter._demo_catalog),
     (re.compile(r"/compute/api/types/(?P<name>[^/]+)"), FrontendFixtureRouter._runner_detail),
     (re.compile(r"/compute/api/task-parameters/(?P<name>[^/]+)"), FrontendFixtureRouter._parameter_schema),
     (re.compile(r"/compute/api/preflight/(?P<name>[^/]+)"), FrontendFixtureRouter._preflight),
     (re.compile(r"/compute/api/post"), FrontendFixtureRouter._submit),
     (re.compile(r"/compute/api/tasks"), FrontendFixtureRouter._task_list),
+    (re.compile(r"/compute/api/tasks/(?P<task_id>[0-9a-fA-F]+)/diagnostics"), FrontendFixtureRouter._task_diagnostics),
     (re.compile(r"/compute/api/running/(?P<task_id>[0-9a-fA-F]+)"), FrontendFixtureRouter._status),
     (re.compile(r"/compute/api/results/(?P<task_id>[0-9a-fA-F]+)/archive"), FrontendFixtureRouter._archive_action),
     (re.compile(r"/compute/api/results/(?P<task_id>[0-9a-fA-F]+)/tables/(?P<path>.+)"), FrontendFixtureRouter._result_table),

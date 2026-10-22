@@ -1,0 +1,9 @@
+identifier: frustrampnn-result
+entrypoint: ./index.js
+requires:
+  - frustration_predictions
+optional:
+  - input_structure
+  - submission
+  - citations
+  - execution_records

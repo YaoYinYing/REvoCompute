@@ -1,0 +1,9 @@
+identifier: esm-extract-result
+entrypoint: ./index.js
+requires:
+  - embeddings
+optional:
+  - input_sequence
+  - submission
+  - citations
+  - execution_records

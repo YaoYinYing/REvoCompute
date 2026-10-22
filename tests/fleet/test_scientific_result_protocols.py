@@ -119,7 +119,12 @@ def test_bioemu_manifest_requires_explicit_topology_trajectory_pair(monkeypatch,
         tmp_path,
         "bioemu",
         "bioemu",
-        {"topology.pdb": "MODEL        1\nENDMDL\n", "samples.xtc": b"mock-trajectory"},
+        {
+            "topology.pdb": "MODEL        1\nENDMDL\n",
+            "samples.xtc": b"mock-trajectory",
+            "sequence.fasta": ">2KL8\nMKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQAPILSRVGDGTQDNLSGAEKAVQVKVKALPDAQFEVVHSLAKWKR\n",
+            "citations.bib": "@article{bioemu,\n  title={BioEmu}\n}\n",
+        },
     )
 
     assert manifest["output_check"]["state"] == "passed"

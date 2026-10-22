@@ -1,9 +1,11 @@
 {
   "code_license": "BSD-3-Clause",
   "repository": "https://github.com/RosettaCommons/foundry.git",
-  "upstream_commit": "b02eed6a6bdf8f44d14a80cc36e3da13c9f2291c",
-  "upstream_commit_date": "2026-09-01",
+  "previous_commit": "b02eed6a6bdf8f44d14a80cc36e3da13c9f2291c",
+  "upstream_commit": "d078b24d6d0e6f8607e9a0311128f4a897f83953",
+  "upstream_commit_date": "2026-10-16",
   "upstream_distribution": "rc-foundry",
+  "upstream_version": "1.0.0",
   "upstream_publishes_checkpoint_digests": false,
-  "upstream_publishes_checkpoint_license": false
+  "upstream_publishes_checkpoint_license": true
 }

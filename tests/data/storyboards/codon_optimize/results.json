@@ -1,0 +1,22 @@
+{
+  "input_name": "codontransformer_smoke",
+  "parameters": {
+    "attention_type": "original_full",
+    "deterministic": true,
+    "match_protein": true,
+    "num_sequences": 1,
+    "organism": "Escherichia coli general",
+    "seed": 0,
+    "temperature": 0.2,
+    "top_p": 0.95
+  },
+  "predictions": [
+    {
+      "organism": "Escherichia coli general",
+      "predicted_dna": "ATGTGGTGGATGTGGTGA",
+      "processed_input": "M_UNK W_UNK W_UNK M_UNK W_UNK __UNK",
+      "protein": "MWWMW",
+      "rank": 1
+    }
+  ]
+}

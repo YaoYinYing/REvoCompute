@@ -1,0 +1,654 @@
+{
+  "bundle_digest": "sha256:a9421e1f436c3b973441660104e956a40e1ddc4ec59832bc0219101c7e5b2b34",
+  "bundle_version": 1,
+  "excluded": [
+    {
+      "media_type": "chemical/x-pdb",
+      "path": "debug/inputs/structure/3fap_hf3_A_short_lig.pdb",
+      "reason": "declared artifact not captured by this capture",
+      "sha256": "09d52018dbb0d08ac4f93344b068db7ac296a51ba1ef94366d01fc37f43875d1",
+      "size": 10578
+    },
+    {
+      "media_type": "application/json",
+      "path": "debug/submission.json",
+      "reason": "declared artifact not captured by this capture",
+      "sha256": "0572998fc5fda6777084671d765200d5a25a72b9c8c6e69f279faeafb5f194b1",
+      "size": 1164
+    },
+    {
+      "media_type": "application/json",
+      "path": "execution/slurm-status.execution.json",
+      "reason": "declared artifact not captured by this capture",
+      "sha256": "4c655c7118c8310295c1ba7cc3402efc5c2096a9818dbdaaddb252530d496c26",
+      "size": 2118
+    },
+    {
+      "media_type": "application/json",
+      "path": "execution/slurm-unknown-user-ligandmpnn-7037d719743ba5aafb231526b02b1eb3.resource.json",
+      "reason": "declared artifact not captured by this capture",
+      "sha256": "bb14b64e44f3b6b4a18e4699aca10eddb307c2e0dde5dcd742d089722b21f7cf",
+      "size": 453
+    },
+    {
+      "media_type": "text/plain",
+      "path": "execution/slurm-unknown-user-ligandmpnn-7037d719743ba5aafb231526b02b1eb3.stderr.log",
+      "reason": "declared artifact not captured by this capture",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size": 0
+    },
+    {
+      "media_type": "text/plain",
+      "path": "execution/slurm-unknown-user-ligandmpnn-7037d719743ba5aafb231526b02b1eb3.stdout.log",
+      "reason": "declared artifact not captured by this capture",
+      "sha256": "15cd6d3a4ad50142577afe6a182ac3725d88473ecb9e4af2d9e7ef1a5f31dd8e",
+      "size": 1943
+    }
+  ],
+  "kind": "real_runner_result_replay",
+  "logical_files": {
+    "citations": [
+      {
+        "path": "citations.bib",
+        "sha256": "00f634b230f6031c72b089b7e14a89156888592c8a260253b0c387f3dada77e1",
+        "size": 494
+      }
+    ],
+    "designs": [
+      {
+        "path": "seqs/3fap_hf3_A_short_lig.fa",
+        "sha256": "b9ce0f5805f779d764527e59a118c7789780f53f140484ce6afada746ce8ea65",
+        "size": 376
+      }
+    ],
+    "execution_records": [
+      {
+        "path": "execution/slurm-status.execution.json",
+        "sha256": "4c655c7118c8310295c1ba7cc3402efc5c2096a9818dbdaaddb252530d496c26",
+        "size": 2118
+      },
+      {
+        "path": "execution/slurm-unknown-user-ligandmpnn-7037d719743ba5aafb231526b02b1eb3.resource.json",
+        "sha256": "bb14b64e44f3b6b4a18e4699aca10eddb307c2e0dde5dcd742d089722b21f7cf",
+        "size": 453
+      },
+      {
+        "path": "execution/slurm-unknown-user-ligandmpnn-7037d719743ba5aafb231526b02b1eb3.stdout.log",
+        "sha256": "15cd6d3a4ad50142577afe6a182ac3725d88473ecb9e4af2d9e7ef1a5f31dd8e",
+        "size": 1943
+      }
+    ],
+    "input_structure": [
+      {
+        "path": "debug/inputs/structure/3fap_hf3_A_short_lig.pdb",
+        "sha256": "09d52018dbb0d08ac4f93344b068db7ac296a51ba1ef94366d01fc37f43875d1",
+        "size": 10578
+      }
+    ],
+    "packed_structures": [
+      {
+        "path": "backbones/3fap_hf3_A_short_lig_0.pdb",
+        "sha256": "6f9fd5296bfd700f6afbc189220cfc69d6ed2b4dce8178e8641525639726988c",
+        "size": 6357
+      }
+    ],
+    "submission": [
+      {
+        "path": "debug/submission.json",
+        "sha256": "0572998fc5fda6777084671d765200d5a25a72b9c8c6e69f279faeafb5f194b1",
+        "size": 1164
+      }
+    ]
+  },
+  "payloads": {
+    "backbones/3fap_hf3_A_short_lig_0.pdb": {
+      "encoding": "base64",
+      "media_type": "chemical/x-pdb",
+      "payload": "UkVNQVJLIEF0b21NYXAgKFNlbGVjdGlvbiAnKGJhY2tib25lKSBhbmQgLi4ub2NjdXBhbmN5ID4gMCkpJykgKyAoU2VsZWN0aW9uICcobm90IHByb3RlaW4gYW4uLi4ob2NjdXBhbmN5ID4gMCknKQpBVE9NICAgICAgMSAgTiAgIEdMWSBBICAgMSAgICAgLTExLjA2NiAgIDAuMTkzICAtMC4xMjkgIDEuMDAgIDAuOTMgICAgICAgICAgIE4gIApBVE9NICAgICAgMiAgQ0EgIEdMWSBBICAgMSAgICAgLTEyLjM3NCAgLTAuMDQzICAtMC43NTAgIDEuMDAgIDAuOTMgICAgICAgICAgIEMgIApBVE9NICAgICAgMyAgQyAgIEdMWSBBICAgMSAgICAgLTEzLjQ5MCAgIDAuNjM2ICAgMC4wNTEgIDEuMDAgIDAuOTMgICAgICAgICAgIEMgIApBVE9NICAgICAgNCAgTyAgIEdMWSBBICAgMSAgICAgLTEzLjM3OSAgIDAuODc0ICAgMS4yNTMgIDEuMDAgIDAuOTMgICAgICAgICAgIE8gIApBVE9NICAgICAgNSAgTiAgIEdMVSBBICAgMiAgICAgLTE0LjU3NSAgIDAuOTIxICAtMC42NTMgIDEuMDAgIDAuMTYgICAgICAgICAgIE4gIApBVE9NICAgICAgNiAgQ0EgIEdMVSBBICAgMiAgICAgLTE1LjY4NCAgIDEuNjY3ICAtMC4wNTEgIDEuMDAgIDAuMTYgICAgICAgICAgIEMgIApBVE9NICAgICAgNyAgQyAgIEdMVSBBICAgMiAgICAgLTE2LjI0NSAgIDEuMDA4ICAgMS4yMjAgIDEuMDAgIDAuMTYgICAgICAgICAgIEMgIApBVE9NICAgICAgOCAgTyAgIEdMVSBBICAgMiAgICAgLTE2LjU5NiAgIDEuNjk4ICAgMi4xODYgIDEuMDAgIDAuMTYgICAgICAgICAgIE8gIApBVE9NICAgICAgOSAgTiAgIExZUyBBICAgMyAgICAgLTE2LjM0MiAgLTAuMzAwICAgMS4xOTUgIDEuMDAgIDAuMTUgICAgICAgICAgIE4gIApBVE9NICAgICAxMCAgQ0EgIExZUyBBICAgMyAgICAgLTE2Ljg2NiAgLTEuMDA1ICAgMi4zNjkgIDEuMDAgIDAuMTUgICAgICAgICAgIEMgIApBVE9NICAgICAxMSAgQyAgIExZUyBBICAgMyAgICAgLTE2LjA0NCAgLTAuNzUzICAgMy42NDMgIDEuMDAgIDAuMTUgICAgICAgICAgIEMgIApBVE9NICAgICAxMiAgTyAgIExZUyBBICAgMyAgICAgLTE2LjYwMSAgLTAuNzE1ICAgNC43NDQgIDEuMDAgIDAuMTUgICAgICAgICAgIE8gIApBVE9NICAgICAxMyAgTiAgIEFTUCBBICAgNCAgICAgLTE0Ljc1NiAgLTAuNTg1ICAgMy40NzIgIDEuMDAgIDAuMjQgICAgICAgICAgIE4gIApBVE9NICAgICAxNCAgQ0EgIEFTUCBBICAgNCAgICAgLTEzLjkxOCAgLTAuMjI3ICAgNC42MTQgIDEuMDAgIDAuMjQgICAgICAgICAgIEMgIApBVE9NICAgICAxNSAgQyAgIEFTUCBBICAgNCAgICAgLTE0LjA5MCAgIDEuMjM4ICAgNS4wMTEgIDEuMDAgIDAuMjQgICAgICAgICAgIEMgIApBVE9NICAgICAxNiAgTyAgIEFTUCBBICAgNCAgICAgLTE0LjE3NCAgIDEuNTQ4ICAgNi4yMDMgIDEuMDAgIDAuMjQgICAgICAgICAgIE8gIApBVE9NICAgICAxNyAgTiAgIFZBTCBBICAgNSAgICAgLTE0LjEyOSAgIDIuMTIyICAgNC4wMzEgIDEuMDAgIDAuMjAgICAgICAgICAgIE4gIApBVE9NICAgICAxOCAgQ0EgIFZBTCBBICAgNSAgICAgLTE0LjMzNSAgIDMuNTQxICAgNC4zNTAgIDEuMDAgIDAuMjAgICAgICAgICAgIEMgIApBVE9NICAgICAxOSAgQyAgIFZBTCBBICAgNSAgICAgLTE1LjYwMyAgIDMuNzQ3ICAgNS4xOTMgIDEuMDAgIDAuMjAgICAgICAgICAgIEMgIApBVE9NICAgICAyMCAgTyAgIFZBTCBBICAgNSAgICAgLTE1LjU3MyAgIDQuNDgwICAgNi4xODIgIDEuMDAgIDAuMjAgICAgICAgICAgIE8gIApBVE9NICAgICAyMSAgTiAgIFZBTCBBICAgNiAgICAgLTE2LjY2MiAgIDMuMTA5ICAgNC44MDUgIDEuMDAgIDAuMTQgICAgICAgICAgIE4gIApBVE9NICAgICAyMiAgQ0EgIFZBTCBBICAgNiAgICAgLTE3LjkxMyAgIDMuMjU0ICAgNS41NDMgIDEuMDAgIDAuMTQgICAgICAgICAgIEMgIApBVE9NICAgICAyMyAgQyAgIFZBTCBBICAgNiAgICAgLTE3Ljk2MiAgIDIuMzgwICAgNi43OTkgIDEuMDAgIDAuMTQgICAgICAgICAgIEMgIApBVE9NICAgICAyNCAgTyAgIFZBTCBBICAgNiAgICAgLTE4LjUwOSAgIDIuNzg2ICAgNy44MjAgIDEuMDAgIDAuMTQgICAgICAgICAgIE8gIApBVE9NICAgICAyNSAgTiAgIEdMWSBBICAgNyAgICAgLTE3LjQxNyAgIDEuMTk3ICAgNi43MDIgIDEuMDAgIDAuNTQgICAgICAgICAgIE4gIApBVE9NICAgICAyNiAgQ0EgIEdMWSBBICAgNyAgICAgLTE3LjUwNyAgIDAuMjc2ICAgNy44NTEgIDEuMDAgIDAuNTQgICAgICAgICAgIEMgIApBVE9NICAgICAyNyAgQyAgIEdMWSBBICAgNyAgICAgLTE2LjYwNyAgIDAuNjYxICAgOS4wMzUgIDEuMDAgIDAuNTQgICAgICAgICAgIEMgIApBVE9NICAgICAyOCAgTyAgIEdMWSBBICAgNyAgICAgLTE3LjA1MSAgIDAuNjYyICAxMC4xODMgIDEuMDAgIDAuNTQgICAgICAgICAgIE8gIApBVE9NICAgICAyOSAgTiAgIEFTTiBBICAgOCAgICAgLTE1LjM1MSAgIDAuOTY1ICAgOC43MzQgIDEuMDAgIDAuMTYgICAgICAgICAgIE4gIApBVE9NICAgICAzMCAgQ0EgIEFTTiBBICAgOCAgICAgLTE0LjQ0MiAgIDEuMjk0ICAgOS44MzMgIDEuMDAgIDAuMTYgICAgICAgICAgIEMgIApBVE9NICAgICAzMSAgQyAgIEFTTiBBICAgOCAgICAgLTE0LjgyNyAgIDIuNjE3ICAxMC41MTEgIDEuMDAgIDAuMTYgICAgICAgICAgIEMgIApBVE9NICAgICAzMiAgTyAgIEFTTiBBICAgOCAgICAgLTE0LjU3NiAgIDIuODA3ICAxMS43MjAgIDEuMDAgIDAuMTYgICAgICAgICAgIE8gIApBVE9NICAgICAzMyAgTiAgIEFMQSBBICAgOSAgICAgLTE1LjQ0NyAgIDMuNTEwICAgOS43NDkgIDEuMDAgIDAuNDggICAgICAgICAgIE4gIApBVE9NICAgICAzNCAgQ0EgIEFMQSBBICAgOSAgICAgLTE1LjkxOCAgIDQuNzcwICAxMC4zMjYgIDEuMDAgIDAuNDggICAgICAgICAgIEMgIApBVE9NICAgICAzNSAgQyAgIEFMQSBBICAgOSAgICAgLTE2Ljk1OCAgIDQuNTUyICAxMS40NTIgIDEuMDAgIDAuNDggICAgICAgICAgIEMgIApBVE9NICAgICAzNiAgTyAgIEFMQSBBICAgOSAgICAgLTE3LjEzNyAgIDUuNDI1ICAxMi4zMDggIDEuMDAgIDAuNDggICAgICAgICAgIE8gIApBVE9NICAgICAzNyAgTiAgIEdMTiBBICAxMCAgICAgLTE3LjYwOCAgIDMuNDE5ICAxMS40MzUgIDEuMDAgIDAuMzQgICAgICAgICAgIE4gIApBVE9NICAgICAzOCAgQ0EgIEdMTiBBICAxMCAgICAgLTE4LjYyMSAgIDMuMTA1ICAxMi40NzEgIDEuMDAgIDAuMzQgICAgICAgICAgIEMgIApBVE9NICAgICAzOSAgQyAgIEdMTiBBICAxMCAgICAgLTE4LjAyNyAgIDIuNDM5ICAxMy43MTEgIDEuMDAgIDAuMzQgICAgICAgICAgIEMgIApBVE9NICAgICA0MCAgTyAgIEdMTiBBICAxMCAgICAgLTE4Ljc2NCAgIDIuMTYxICAxNC42NjIgIDEuMDAgIDAuMzQgICAgICAgICAgIE8gIApBVE9NICAgICA0MSAgTiAgIExZUyBBICAxMSAgICAgLTE2Ljc0NSAgIDIuMTc5ICAxMy42OTAgIDEuMDAgIDAuMjcgICAgICAgICAgIE4gIApBVE9NICAgICA0MiAgQ0EgIExZUyBBICAxMSAgICAgLTE2LjExOCAgIDEuNDYyICAxNC43OTUgIDEuMDAgIDAuMjcgICAgICAgICAgIEMgIApBVE9NICAgICA0MyAgQyAgIExZUyBBICAxMSAgICAgLTE1LjQ0NCAgIDIuNDAxICAxNS43ODcgIDEuMDAgIDAuMjcgICAgICAgICAgIEMgIApBVE9NICAgICA0NCAgTyAgIExZUyBBICAxMSAgICAgLTE0Ljk1NCAgIDMuNDY2ICAxNS40MjcgIDEuMDAgIDAuMjcgICAgICAgICAgIE8gIApIRVRBVE0gICA0NSAgQzEgIGxpZyBCICAgMSAgICAgIC05LjQ3MCAgLTQuMjAwICAtOC4yMzkgIDEuMDAgIDAuMDAgICAgICAgICAgIEMgIApIRVRBVE0gICA0NiAgTjEgIGxpZyBCICAgMSAgICAgLTEwLjUwNCAgLTMuNzMwICAtNy4zNDEgIDEuMDAgIDAuMDAgICAgICAgICAgIE4gIApIRVRBVE0gICA0NyAgTzEgIGxpZyBCICAgMSAgICAgIC05LjYzMSAgLTQuNzQ3ICAtNS41MTUgIDEuMDAgIDAuMDAgICAgICAgICAgIE8gIApIRVRBVE0gICA0OCAgQzIgIGxpZyBCICAgMSAgICAgLTEwLjUxMiAgLTQuMDY5ICAtNi4wMTEgIDEuMDAgIDAuMDAgICAgICAgICAgIEMgIApIRVRBVE0gICA0OSAgTjIgIGxpZyBCICAgMSAgICAgLTEyLjYzMyAgLTIuNzg5ICAtNS42ODQgIDEuMDAgIDAuMDAgICAgICAgICAgIE4gIApIRVRBVE0gICA1MCAgQzMgIGxpZyBCICAgMSAgICAgLTExLjYwNyAgLTMuNTYzICAtNS4xODkgIDEuMDAgIDAuMDAgICAgICAgICAgIEMgIApIRVRBVE0gICA1MSAgTjMgIGxpZyBCICAgMSAgICAgLTEzLjQ2NiAgLTIuNTI4ICAtNC42ODMgIDEuMDAgIDAuMDAgICAgICAgICAgIE4gIApIRVRBVE0gICA1MiAgQzQgIGxpZyBCICAgMSAgICAgLTE0LjY2MCAgLTEuNzMzICAtNC44MzkgIDEuMDAgIDAuMDAgICAgICAgICAgIEMgIApIRVRBVE0gICA1MyAgTjQgIGxpZyBCICAgMSAgICAgLTExLjE1MiAgLTUuMTI5ICAtMC40MDMgIDEuMDAgIDAuMDAgICAgICAgICAgIE4gIApIRVRBVE0gICA1NCAgQzUgIGxpZyBCICAgMSAgICAgLTEzLjAxNyAgLTMuMTEwICAtMy41MjUgIDEuMDAgIDAuMDAgICAgICAgICAgIEMgIApIRVRBVE0gICA1NSAgTjUgIGxpZyBCICAgMSAgICAgIC05LjczMiAgLTYuMzQ1ICAgMC45MTMgIDEuMDAgIDAuMDAgICAgICAgICAgIE4gIApIRVRBVE0gICA1NiAgQzYgIGxpZyBCICAgMSAgICAgLTEzLjU1MCAgLTMuMTI5ICAtMi4yMTQgIDEuMDAgIDAuMDAgICAgICAgICAgIEMgIApIRVRBVE0gICA1NyAgTjYgIGxpZyBCICAgMSAgICAgIC05LjE2MSAgLTUuOTgwICAtMS4zNTQgIDEuMDAgIDAuMDAgICAgICAgICAgIE4gIApIRVRBVE0gICA1OCAgQzcgIGxpZyBCICAgMSAgICAgLTEyLjg5MCAgLTMuODI4ICAtMS4yMjMgIDEuMDAgIDAuMDAgICAgICAgICAgIEMgIApIRVRBVE0gICA1OSAgTjcgIGxpZyBCICAgMSAgICAgIC03LjE0MiAgLTYuNzgzICAtMi4zMjAgIDEuMDAgIDAuMDAgICAgICAgICAgIE4gIApIRVRBVE0gICA2MCAgQzggIGxpZyBCICAgMSAgICAgLTExLjcwNCAgLTQuNDc1ICAtMS40OTggIDEuMDAgIDAuMDAgICAgICAgICAgIEMgIApIRVRBVE0gICA2MSAgTjggIGxpZyBCICAgMSAgICAgIC01Ljg0MiAgLTUuOTgxICAtNS41NzIgIDEuMDAgIDAuMDAgICAgICAgICAgIE4gIApIRVRBVE0gICA2MiAgQzkgIGxpZyBCICAgMSAgICAgIC05Ljk5NCAgLTUuODE4ICAtMC4yOTUgIDEuMDAgIDAuMDAgICAgICAgICAgIEMgIApIRVRBVE0gICA2MyAgTjkgIGxpZyBCICAgMSAgICAgIC00LjYxMiAgLTIuODkwICAtNS43NjIgIDEuMDAgIDAuMDAgICAgICAgICAgIE4gIApIRVRBVE0gICA2NCAgQzEwIGxpZyBCICAgMSAgICAgIC04LjYwMyAgLTcuMDcyICAgMS4wODIgIDEuMDAgIDAuMDAgICAgICAgICAgIEMgIApIRVRBVE0gICA2NSAgTjEwIGxpZyBCICAgMSAgICAgIC01Ljk3OCAgLTcuNDQ3ICAtMi4yNzggIDEuMDAgIDAuMDAgICAgICAgICAgIE4gIApIRVRBVE0gICA2NiAgQzExIGxpZyBCICAgMSAgICAgIC03LjcxMCAgLTcuMjY3ICAgMC4wMjIgIDEuMDAgIDAuMDAgICAgICAgICAgIEMgIApIRVRBVE0gICA2NyAgQzEyIGxpZyBCICAgMSAgICAgIC04LjAxNCAgLTYuNjk2ICAtMS4yMjIgIDEuMDAgIDAuMDAgICAgICAgICAgIEMgIApIRVRBVE0gICA2OCAgQzEzIGxpZyBCICAgMSAgICAgIC03LjMxMCAgLTYuMTYzICAtMy41MzIgIDEuMDAgIDAuMDAgICAgICAgICAgIEMgIApIRVRBVE0gICA2OSAgQzE0IGxpZyBCICAgMSAgICAgIC02LjE3MyAgLTYuNDY1ICAtNC4yNjAgIDEuMDAgIDAuMDAgICAgICAgICAgIEMgIApIRVRBVE0gICA3MCAgQzE1IGxpZyBCICAgMSAgICAgIC02LjI0OSAgLTQuNjMxICAtNS45MjEgIDEuMDAgIDAuMDAgICAgICAgICAgIEMgIApIRVRBVE0gICA3MSAgQzE2IGxpZyBCICAgMSAgICAgIC01LjcwNiAgLTQuMjYyICAtNy4zMTEgIDEuMDAgIDAuMDAgICAgICAgICAgIEMgIApIRVRBVE0gICA3MiAgQzE3IGxpZyBCICAgMSAgICAgIC00LjY4NSAgLTMuMTk5ICAtNy4xNDMgIDEuMDAgIDAuMDAgICAgICAgICAgIEMgIApIRVRBVE0gICA3MyAgQzE4IGxpZyBCICAgMSAgICAgIC01LjY1NCAgLTMuNTcyICAtNS4wNTIgIDEuMDAgIDAuMDAgICAgICAgICAgIEMgIApIRVRBVE0gICA3NCAgQzE5IGxpZyBCICAgMSAgICAgIC01LjM4NSAgLTcuMjcwICAtMy40NjIgIDEuMDAgIDAuMDAgICAgICAgICAgIEMgIApIRVRBVE0gICA3NSAgQzIwIGxpZyBCICAgMSAgICAgIC00LjA3MyAgLTcuODU3ICAtMy44MTAgIDEuMDAgIDAuMDAgICAgICAgICAgIEMgIApIRVRBVE0gICA3NiAgQzIxIGxpZyBCICAgMSAgICAgLTExLjE2MiAgLTQuNDY2ICAtMi43ODYgIDEuMDAgIDAuMDAgICAgICAgICAgIEMgIApIRVRBVE0gICA3NyAgQzIyIGxpZyBCICAgMSAgICAgLTExLjgzMCAgLTMuNzgzICAtMy44MDUgIDEuMDAgIDAuMDAgICAgICAgICAgIEMgIApFTkQgICAK",
+      "sha256": "6f9fd5296bfd700f6afbc189220cfc69d6ed2b4dce8178e8641525639726988c",
+      "size": 6357
+    },
+    "citations.bib": {
+      "media_type": "application/octet-stream",
+      "payload": "@article{Dauparas_2025, title={Atomic context-conditioned protein sequence design using LigandMPNN}, volume={22}, ISSN={1548-7105}, url={http://dx.doi.org/10.1038/s41592-025-02626-1}, DOI={10.1038/s41592-025-02626-1}, number={4}, journal={Nature Methods}, publisher={Springer Science and Business Media LLC}, author={Dauparas, Justas and Lee, Gyu Rie and Pecoraro, Robert and An, Linna and Anishchenko, Ivan and Glasscock, Cameron and Baker, David}, year={2025}, month=Mar, pages={717\u2013723} }\n",
+      "sha256": "00f634b230f6031c72b089b7e14a89156888592c8a260253b0c387f3dada77e1",
+      "size": 494
+    },
+    "seqs/3fap_hf3_A_short_lig.fa": {
+      "media_type": "text/x-fasta",
+      "payload": ">3fap_hf3_A_short_lig, T=0.1, seed=90694, num_res=11, num_ligand_res=4, use_ligand_context=True, ligand_cutoff_distance=8.0, batch_size=1, number_of_batches=1, model_path=/mnt/db/weights/ligandmpnn/model_params/ligandmpnn_v_32_010_25.pt\nIRGWEEGVAQM\n>3fap_hf3_A_short_lig, id=0, T=0.1, seed=90694, overall_confidence=0.2727, ligand_confidence=0.2745, seq_rec=0.2727\nGEKDVVGNAQK",
+      "sha256": "b9ce0f5805f779d764527e59a118c7789780f53f140484ce6afada746ce8ea65",
+      "size": 376
+    }
+  },
+  "provenance": {
+    "capture": {
+      "captured_from": "authenticated production artifact API; the deployment result root was not readable by the capturing user, so no result-root capture was possible",
+      "host_path_scan": "captured_before_host_path_scan",
+      "mode": "synthetic",
+      "payload_source": "GET /compute/api/results/<task>/artifacts/<path> with a Bearer token; every byte checked against the served manifest sha256",
+      "production_task_id": "7037d719743ba5aafb231526b02b1eb3",
+      "production_task_type": "ligandmpnn",
+      "served_manifest_sha256": "c874156c8ed1b185e0b494d31d7c8b9a10aa5d53d771df7935b90741209eab6a",
+      "task_source": "none - the deployment task store publication anchor was not readable"
+    },
+    "production_finished_at": "2026-10-21T00:29:25.494310+08:00",
+    "production_started_at": "2026-10-21T00:29:07.222808+08:00",
+    "runner_family": "mpnn",
+    "runner_revision": "deployment 57c8114; campaign base eae170d",
+    "storyboard_sha256": "4e56f8542e51ce0788df4c2122ea05a01a2834560badfc02725ca202f4bd0cda"
+  },
+  "response": {
+    "archive": {
+      "download_url": null,
+      "ready": false,
+      "request_url": "/compute/api/results/7037d719743ba5aafb231526b02b1eb3/archive"
+    },
+    "artifacts": [
+      {
+        "capability": "molecular_structure",
+        "media_type": "application/octet-stream",
+        "path": "backbones/3fap_hf3_A_short_lig_0.pdb",
+        "preview": "structure",
+        "role": "evidence",
+        "sha256": "6f9fd5296bfd700f6afbc189220cfc69d6ed2b4dce8178e8641525639726988c",
+        "size": 6357,
+        "url": "/compute/api/results/7037d719743ba5aafb231526b02b1eb3/artifacts/backbones/3fap_hf3_A_short_lig_0.pdb"
+      },
+      {
+        "capability": "text",
+        "media_type": "application/octet-stream",
+        "path": "citations.bib",
+        "preview": "text",
+        "role": "provenance",
+        "sha256": "00f634b230f6031c72b089b7e14a89156888592c8a260253b0c387f3dada77e1",
+        "size": 494,
+        "url": "/compute/api/results/7037d719743ba5aafb231526b02b1eb3/artifacts/citations.bib"
+      },
+      {
+        "capability": "molecular_structure",
+        "media_type": "application/octet-stream",
+        "path": "debug/inputs/structure/3fap_hf3_A_short_lig.pdb",
+        "preview": "structure",
+        "role": "provenance",
+        "sha256": "09d52018dbb0d08ac4f93344b068db7ac296a51ba1ef94366d01fc37f43875d1",
+        "size": 10578,
+        "url": "/compute/api/results/7037d719743ba5aafb231526b02b1eb3/artifacts/debug/inputs/structure/3fap_hf3_A_short_lig.pdb"
+      },
+      {
+        "capability": "text",
+        "media_type": "application/json",
+        "ndarray_url": "/compute/api/results/7037d719743ba5aafb231526b02b1eb3/ndarrays/debug/submission.json",
+        "path": "debug/submission.json",
+        "preview": "text",
+        "role": "provenance",
+        "sha256": "0572998fc5fda6777084671d765200d5a25a72b9c8c6e69f279faeafb5f194b1",
+        "size": 1164,
+        "url": "/compute/api/results/7037d719743ba5aafb231526b02b1eb3/artifacts/debug/submission.json"
+      },
+      {
+        "capability": "text",
+        "media_type": "application/json",
+        "ndarray_url": "/compute/api/results/7037d719743ba5aafb231526b02b1eb3/ndarrays/execution/slurm-status.execution.json",
+        "path": "execution/slurm-status.execution.json",
+        "preview": "text",
+        "role": "diagnostic",
+        "sha256": "4c655c7118c8310295c1ba7cc3402efc5c2096a9818dbdaaddb252530d496c26",
+        "size": 2118,
+        "url": "/compute/api/results/7037d719743ba5aafb231526b02b1eb3/artifacts/execution/slurm-status.execution.json"
+      },
+      {
+        "capability": "text",
+        "media_type": "application/json",
+        "ndarray_url": "/compute/api/results/7037d719743ba5aafb231526b02b1eb3/ndarrays/execution/slurm-unknown-user-ligandmpnn-7037d719743ba5aafb231526b02b1eb3.resource.json",
+        "path": "execution/slurm-unknown-user-ligandmpnn-7037d719743ba5aafb231526b02b1eb3.resource.json",
+        "preview": "text",
+        "role": "diagnostic",
+        "sha256": "bb14b64e44f3b6b4a18e4699aca10eddb307c2e0dde5dcd742d089722b21f7cf",
+        "size": 453,
+        "url": "/compute/api/results/7037d719743ba5aafb231526b02b1eb3/artifacts/execution/slurm-unknown-user-ligandmpnn-7037d719743ba5aafb231526b02b1eb3.resource.json"
+      },
+      {
+        "capability": "text",
+        "media_type": "application/octet-stream",
+        "path": "execution/slurm-unknown-user-ligandmpnn-7037d719743ba5aafb231526b02b1eb3.stderr.log",
+        "preview": "text",
+        "role": "diagnostic",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "size": 0,
+        "url": "/compute/api/results/7037d719743ba5aafb231526b02b1eb3/artifacts/execution/slurm-unknown-user-ligandmpnn-7037d719743ba5aafb231526b02b1eb3.stderr.log"
+      },
+      {
+        "capability": "text",
+        "media_type": "application/octet-stream",
+        "path": "execution/slurm-unknown-user-ligandmpnn-7037d719743ba5aafb231526b02b1eb3.stdout.log",
+        "preview": "text",
+        "role": "diagnostic",
+        "sha256": "15cd6d3a4ad50142577afe6a182ac3725d88473ecb9e4af2d9e7ef1a5f31dd8e",
+        "size": 1943,
+        "url": "/compute/api/results/7037d719743ba5aafb231526b02b1eb3/artifacts/execution/slurm-unknown-user-ligandmpnn-7037d719743ba5aafb231526b02b1eb3.stdout.log"
+      },
+      {
+        "capability": "text",
+        "media_type": "application/octet-stream",
+        "path": "seqs/3fap_hf3_A_short_lig.fa",
+        "preview": "text",
+        "role": "primary",
+        "sha256": "b9ce0f5805f779d764527e59a118c7789780f53f140484ce6afada746ce8ea65",
+        "size": 376,
+        "url": "/compute/api/results/7037d719743ba5aafb231526b02b1eb3/artifacts/seqs/3fap_hf3_A_short_lig.fa"
+      }
+    ],
+    "created_at": "2026-10-21T00:29:25.494310+08:00",
+    "error": null,
+    "limitations": [
+      "Ligand identity, atom records, residue syntax, and structure preparation affect the design context."
+    ],
+    "outcome": null,
+    "output_check": {
+      "checks": [
+        {
+          "matched": 1,
+          "required": true,
+          "source": "candidates",
+          "status": "passed",
+          "view_id": "designed_sequences"
+        },
+        {
+          "matched": 1,
+          "required": false,
+          "source": "candidates",
+          "status": "passed",
+          "view_id": "packed_structures"
+        }
+      ],
+      "problems": [],
+      "state": "passed"
+    },
+    "result": {
+      "files": {
+        "citations": [
+          {
+            "capability": "text",
+            "cardinality": "one",
+            "id": "citations",
+            "media_type": "application/octet-stream",
+            "name": "citations.bib",
+            "path": "citations.bib",
+            "preview": "text",
+            "role": "provenance",
+            "size": 494,
+            "url": "/compute/api/results/7037d719743ba5aafb231526b02b1eb3/files/citations?index=0",
+            "viewer": "text"
+          }
+        ],
+        "designs": [
+          {
+            "capability": "text",
+            "cardinality": "many",
+            "id": "designs",
+            "media_type": "application/octet-stream",
+            "name": "3fap_hf3_A_short_lig.fa",
+            "path": "seqs/3fap_hf3_A_short_lig.fa",
+            "preview": "text",
+            "role": "primary",
+            "size": 376,
+            "url": "/compute/api/results/7037d719743ba5aafb231526b02b1eb3/files/designs?index=0",
+            "viewer": "text"
+          }
+        ],
+        "execution_records": [
+          {
+            "capability": "text",
+            "cardinality": "many",
+            "id": "execution_records",
+            "media_type": "application/json",
+            "name": "slurm-status.execution.json",
+            "ndarray_url": "/compute/api/results/7037d719743ba5aafb231526b02b1eb3/ndarrays/execution/slurm-status.execution.json",
+            "path": "execution/slurm-status.execution.json",
+            "preview": "text",
+            "role": "diagnostic",
+            "size": 2118,
+            "url": "/compute/api/results/7037d719743ba5aafb231526b02b1eb3/files/execution_records?index=0",
+            "viewer": "text"
+          },
+          {
+            "capability": "text",
+            "cardinality": "many",
+            "id": "execution_records",
+            "media_type": "application/json",
+            "name": "slurm-unknown-user-ligandmpnn-7037d719743ba5aafb231526b02b1eb3.resource.json",
+            "ndarray_url": "/compute/api/results/7037d719743ba5aafb231526b02b1eb3/ndarrays/execution/slurm-unknown-user-ligandmpnn-7037d719743ba5aafb231526b02b1eb3.resource.json",
+            "path": "execution/slurm-unknown-user-ligandmpnn-7037d719743ba5aafb231526b02b1eb3.resource.json",
+            "preview": "text",
+            "role": "diagnostic",
+            "size": 453,
+            "url": "/compute/api/results/7037d719743ba5aafb231526b02b1eb3/files/execution_records?index=1",
+            "viewer": "text"
+          },
+          {
+            "capability": "text",
+            "cardinality": "many",
+            "id": "execution_records",
+            "media_type": "application/octet-stream",
+            "name": "slurm-unknown-user-ligandmpnn-7037d719743ba5aafb231526b02b1eb3.stdout.log",
+            "path": "execution/slurm-unknown-user-ligandmpnn-7037d719743ba5aafb231526b02b1eb3.stdout.log",
+            "preview": "text",
+            "role": "diagnostic",
+            "size": 1943,
+            "url": "/compute/api/results/7037d719743ba5aafb231526b02b1eb3/files/execution_records?index=2",
+            "viewer": "text"
+          }
+        ],
+        "input_structure": [
+          {
+            "capability": "molecular_structure",
+            "cardinality": "one",
+            "id": "input_structure",
+            "media_type": "application/octet-stream",
+            "name": "3fap_hf3_A_short_lig.pdb",
+            "path": "debug/inputs/structure/3fap_hf3_A_short_lig.pdb",
+            "preview": "structure",
+            "role": "provenance",
+            "size": 10578,
+            "url": "/compute/api/results/7037d719743ba5aafb231526b02b1eb3/files/input_structure?index=0",
+            "viewer": "structure"
+          }
+        ],
+        "packed_structures": [
+          {
+            "capability": "molecular_structure",
+            "cardinality": "many",
+            "id": "packed_structures",
+            "media_type": "application/octet-stream",
+            "name": "3fap_hf3_A_short_lig_0.pdb",
+            "path": "backbones/3fap_hf3_A_short_lig_0.pdb",
+            "preview": "structure",
+            "role": "evidence",
+            "size": 6357,
+            "url": "/compute/api/results/7037d719743ba5aafb231526b02b1eb3/files/packed_structures?index=0",
+            "viewer": "structure"
+          }
+        ],
+        "submission": [
+          {
+            "capability": "text",
+            "cardinality": "one",
+            "id": "submission",
+            "media_type": "application/json",
+            "name": "submission.json",
+            "ndarray_url": "/compute/api/results/7037d719743ba5aafb231526b02b1eb3/ndarrays/debug/submission.json",
+            "path": "debug/submission.json",
+            "preview": "json",
+            "role": "provenance",
+            "size": 1164,
+            "url": "/compute/api/results/7037d719743ba5aafb231526b02b1eb3/files/submission?index=0",
+            "viewer": "json"
+          }
+        ]
+      }
+    },
+    "run": {
+      "citations": [
+        {
+          "doi": "10.1038/s41592-025-02626-1",
+          "num": 1,
+          "title": "Atomic context-conditioned protein sequence design using LigandMPNN",
+          "url": "https://doi.org/10.1038/s41592-025-02626-1"
+        }
+      ],
+      "finished_at": "2026-10-21T00:29:25.494310+08:00",
+      "inputs": [
+        {
+          "format": "pdb",
+          "logical_type": "protein_structure",
+          "path": "3fap_hf3_A_short_lig.pdb",
+          "role": "structure",
+          "sha256": "09d52018dbb0d08ac4f93344b068db7ac296a51ba1ef94366d01fc37f43875d1"
+        }
+      ],
+      "method": {
+        "id": "ligandmpnn",
+        "name": "LigandMPNN",
+        "output_summary": "Designed sequences, with optional packed structures and model statistics.",
+        "summary": "Ligand-aware sequence design (LigandMPNN)."
+      },
+      "parameters": [
+        {
+          "label": "Number Of Batches",
+          "name": "number_of_batches",
+          "unit": "",
+          "value": 1
+        },
+        {
+          "label": "Sampling Temp",
+          "name": "sampling_temp",
+          "unit": "",
+          "value": 0.1
+        },
+        {
+          "label": "Batch Size",
+          "name": "batch_size",
+          "unit": "",
+          "value": 1
+        },
+        {
+          "label": "Seed",
+          "name": "seed",
+          "unit": "",
+          "value": 0
+        },
+        {
+          "label": "Chains To Design",
+          "name": "chains_to_design",
+          "unit": "",
+          "value": ""
+        },
+        {
+          "label": "Parse These Chains Only",
+          "name": "parse_these_chains_only",
+          "unit": "",
+          "value": ""
+        },
+        {
+          "label": "Fixed Residues",
+          "name": "fixed_residues",
+          "unit": "",
+          "value": ""
+        },
+        {
+          "label": "Redesigned Residues",
+          "name": "redesigned_residues",
+          "unit": "",
+          "value": ""
+        },
+        {
+          "label": "Bias Aa",
+          "name": "bias_AA",
+          "unit": "",
+          "value": ""
+        },
+        {
+          "label": "Omit Aa",
+          "name": "omit_AA",
+          "unit": "",
+          "value": ""
+        },
+        {
+          "label": "Symmetry Residues",
+          "name": "symmetry_residues",
+          "unit": "",
+          "value": ""
+        },
+        {
+          "label": "Symmetry Weights",
+          "name": "symmetry_weights",
+          "unit": "",
+          "value": ""
+        },
+        {
+          "label": "Homo Oligomer",
+          "name": "homo_oligomer",
+          "unit": "",
+          "value": 0
+        },
+        {
+          "label": "Fasta Seq Separation",
+          "name": "fasta_seq_separation",
+          "unit": "",
+          "value": ":"
+        },
+        {
+          "label": "Zero Indexed",
+          "name": "zero_indexed",
+          "unit": "",
+          "value": 0
+        },
+        {
+          "label": "Verbose",
+          "name": "verbose",
+          "unit": "",
+          "value": 1
+        },
+        {
+          "label": "Save Stats",
+          "name": "save_stats",
+          "unit": "",
+          "value": 0
+        },
+        {
+          "label": "Ligand Mpnn Use Atom Context",
+          "name": "ligand_mpnn_use_atom_context",
+          "unit": "",
+          "value": 1
+        },
+        {
+          "label": "Ligand Mpnn Cutoff For Score",
+          "name": "ligand_mpnn_cutoff_for_score",
+          "unit": "",
+          "value": 8.0
+        },
+        {
+          "label": "Ligand Mpnn Use Side Chain Context",
+          "name": "ligand_mpnn_use_side_chain_context",
+          "unit": "",
+          "value": 0
+        },
+        {
+          "label": "Parse Atoms With Zero Occupancy",
+          "name": "parse_atoms_with_zero_occupancy",
+          "unit": "",
+          "value": 0
+        },
+        {
+          "label": "Pack Side Chains",
+          "name": "pack_side_chains",
+          "unit": "",
+          "value": 0
+        },
+        {
+          "label": "Number Of Packs Per Design",
+          "name": "number_of_packs_per_design",
+          "unit": "",
+          "value": 4
+        },
+        {
+          "label": "Sc Num Denoising Steps",
+          "name": "sc_num_denoising_steps",
+          "unit": "",
+          "value": 3
+        },
+        {
+          "label": "Sc Num Samples",
+          "name": "sc_num_samples",
+          "unit": "",
+          "value": 16
+        },
+        {
+          "label": "Repack Everything",
+          "name": "repack_everything",
+          "unit": "",
+          "value": 0
+        },
+        {
+          "label": "Force Hetatm",
+          "name": "force_hetatm",
+          "unit": "",
+          "value": 0
+        },
+        {
+          "label": "Packed Suffix",
+          "name": "packed_suffix",
+          "unit": "",
+          "value": "_packed"
+        },
+        {
+          "label": "Pack With Ligand Context",
+          "name": "pack_with_ligand_context",
+          "unit": "",
+          "value": 1
+        }
+      ],
+      "started_at": "2026-10-21T00:29:07.222808+08:00",
+      "submitted_at": "2026-10-20T16:29:07.194791+00:00",
+      "walltime_seconds": 18.271501541137695
+    },
+    "schema_version": 3,
+    "status": "finished",
+    "storyboard": {
+      "entrypoint": "index.js",
+      "entrypoint_url": "/compute/api/results/7037d719743ba5aafb231526b02b1eb3/storyboard/index.js",
+      "identifier": "ligandmpnn-designs",
+      "optional": [
+        "packed_structures",
+        "input_structure",
+        "citations"
+      ],
+      "requires": [
+        "designs"
+      ]
+    },
+    "task_id": "7037d719743ba5aafb231526b02b1eb3",
+    "task_type": "ligandmpnn",
+    "terminal": true,
+    "total_size": 23483,
+    "views": [
+      {
+        "description": "Designed sequences produced in the supplied ligand context.",
+        "id": "designed_sequences",
+        "mapping": {},
+        "plugin": "candidate-collection",
+        "role": "primary",
+        "sources": {
+          "candidates": [
+            "seqs/3fap_hf3_A_short_lig.fa"
+          ]
+        },
+        "title": "Ligand-aware designed sequences"
+      },
+      {
+        "description": "Structure outputs produced when side-chain packing is enabled.",
+        "id": "packed_structures",
+        "mapping": {},
+        "plugin": "candidate-collection",
+        "role": "evidence",
+        "sources": {
+          "candidates": [
+            "backbones/3fap_hf3_A_short_lig_0.pdb"
+          ]
+        },
+        "title": "Packed structures"
+      }
+    ]
+  },
+  "storyboard": {
+    "entrypoint": "index.js",
+    "sha256": "4e56f8542e51ce0788df4c2122ea05a01a2834560badfc02725ca202f4bd0cda",
+    "source": "/* LigandMPNN: ligand-context designs, the optional packed structure, and provenance. */\n/* SPDX-License-Identifier: GPL-3.0-only */\nconst STYLE = `.seq-result{display:grid;gap:16px;min-width:0;font:14px/1.5 var(--font-sans)}.seq-result h2,.seq-result h3,.seq-result p{margin:0}.seq-result h2{font:500 24px var(--font-display)}.seq-section{display:grid;gap:8px;min-width:0}.seq-note{color:var(--app-muted);line-height:1.7;max-width:78ch}.seq-stage{border:1px solid var(--app-line);border-radius:8px;background:var(--app-surface);padding:12px;overflow-x:auto}.seq-stage:empty{display:none}.seq-structure{display:grid;grid-template-rows:minmax(0,1fr) auto;height:480px;border:1px solid var(--app-line);border-radius:8px;background:var(--app-stage);overflow:hidden}.seq-structure-slot{position:relative;min-height:0}.seq-structure-tools{background:var(--app-surface)}.seq-downloads{display:flex;flex-wrap:wrap;gap:8px}.seq-downloads button{font:14px var(--font-sans);min-height:34px;padding:7px 12px;border:1px solid var(--app-line-strong);border-radius:4px;color:var(--app-ink);background:var(--app-raised);cursor:pointer}`;\nconst list = value => Array.isArray(value) ? value : value ? [value] : [];\nconst first = (context, id) => list(context.files.get(id))[0] || null;\nfunction el(tag, className = '', text) { const node = document.createElement(tag); node.className = className; if (text != null) node.textContent = String(text); return node; }\n\nexport default {\n  async mount(host, context) {\n    const services = context.services || {};\n    const abort = new AbortController();\n    const views = list(context.views);\n    const root = el('div', 'seq-result');\n    const style = el('style'); style.textContent = STYLE; root.append(style);\n    root.append(el('h2', '', 'Ligand-aware designed sequences'));\n    root.append(el('p', 'seq-note', 'Each published sequence is a model sample designed in the supplied ligand context. Ligand identity, atom records, and structure preparation all affect that context, and the FASTA headers carry the model\\'s own overall and ligand confidence \u2014 model scores, not measured success. Designs still need independent folding and experimental validation.'));\n    // The packed structure is the design's own all-atom model. The declared view\n    // lists candidates and mounts no viewer, so the structure is opened here, on\n    // the first screen, instead of staying behind a download.\n    const structure = first(context, 'packed_structures');\n    const structureNote = el('p', 'seq-note', structure ? `Loading ${structure.name || 'the packed structure'}\u2026` : 'This run published no packed structure.');\n    const structureStage = el('section', 'seq-structure');\n    const structureSlot = el('div', 'seq-structure-slot'); structureSlot.dataset.structureSlot = 'true';\n    const structureTools = el('div', 'seq-structure-tools'); structureTools.dataset.structureTools = 'true';\n    structureStage.append(structureSlot, structureTools);\n    root.append(structureNote);\n    if (structure) root.append(structureStage);\n    for (const view of views) {\n      const section = el('section', 'seq-section'); section.dataset.viewId = view.id;\n      section.append(el('h3', '', view.title));\n      if (view.description) section.append(el('p', 'seq-note', view.description));\n      section.append(el('div', 'seq-stage')); root.append(section);\n    }\n    const downloads = el('div', 'seq-downloads'); downloads.setAttribute('role', 'group'); downloads.setAttribute('aria-label', 'Result downloads');\n    const download = (id, label) => { const file = first(context, id); const button = el('button', '', label); button.type = 'button'; button.disabled = !file; button.onclick = () => file && services.downloadFile?.(file); downloads.append(button); };\n    download('designs', 'Download designed sequences (FASTA)');\n    download('packed_structures', 'Download packed structure (PDB)');\n    download('input_structure', 'Download input structure (PDB)');\n    download('citations', 'Download citations (BibTeX)');\n    const status = el('p', 'result-note', 'Loading the published sequences\u2026'); status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');\n    root.append(status, downloads); host.replaceChildren(root);\n    let structureMounted = false;\n    if (structure && typeof services.openFile === 'function') {\n      try { await services.openFile(structure); structureMounted = true; }\n      catch (error) { if (error.name === 'AbortError') { structureStage.remove(); return { destroy() { abort.abort(); } }; } }\n    }\n    if (!structureMounted) structureStage.remove();\n    structureNote.textContent = !structure ? 'This run published no packed structure.'\n      : structureMounted ? `The packed structure ${structure.name || ''} is the design model published with this run.`\n        : 'The packed structure could not be drawn here; it stays downloadable below.';\n    const mounted = [];\n    try {\n      if (!services.mountView) throw new Error('The declared sequence view is unavailable.');\n      for (const section of root.querySelectorAll('[data-view-id]')) {\n        mounted.push(await services.mountView(section.dataset.viewId, section.querySelector('.seq-stage'), abort.signal) || null);\n      }\n      status.textContent = structureMounted\n        ? 'Sequence identities are read from the published FASTA headers; the structure above is the same run\\'s design model.'\n        : 'Sequence identities are read from the published FASTA headers.';\n    } catch (error) {\n      if (error.name !== 'AbortError') { status.textContent = 'The sequences could not be rendered; the downloads above remain available.'; status.className = 'result-note seq-error'; }\n    }\n    return { destroy() { abort.abort(); mounted.forEach(item => item?.destroy?.()); } };\n  },\n};\n"
+  },
+  "task": {
+    "display_name": "3fap_hf3_A_short_lig.pdb",
+    "id": "7037d719743ba5aafb231526b02b1eb3",
+    "type": "ligandmpnn"
+  }
+}

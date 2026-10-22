@@ -152,7 +152,12 @@ from revocompute.storage import (
     PUBLICATION_NOT_FINALIZED,
     PUBLICATION_UNANCHORED,
 )
-from revocompute.result_storyboard import ResultContractError, expected_file_tree, runner_root, storyboard_declaration
+from revocompute.result_storyboard import (
+    ResultContractError,
+    expected_file_tree,
+    storyboard_asset_root,
+    storyboard_declaration,
+)
 from revocompute import runtime_bundle
 from revocompute.schemas import (
     AccessDecisionRequest,
@@ -208,6 +213,7 @@ from revocompute.task_types import (
     list_types,
     workspace_plugin_descriptor,
 )
+from revocompute.task_demos import DemoContractError, demo_root, load_task_demo, load_task_demos, resolve_demo_file
 from revocompute.workspace_contracts import WorkspaceValidationError, normalize_capability, validate_capability
 from revocompute.task_types import workspace_backend
 from revocompute.tool_calls import ToolAdmissionError, new_tool_call_id, normalize_tool_call_id
@@ -269,6 +275,40 @@ def runner_detail_page(name: str):
 def health():
     """Liveness probe — unauthenticated, empty 200 when the process answers."""
     return "", 200
+
+
+@app.route("/compute/api/mcp", methods=["GET"])
+def mcp_capability():
+    """Whether an agent host can actually reach this deployment's MCP surface.
+
+    A public read-only projection of what a client can reach, so the browser can
+    tell whether ``/k/mcp`` is really operational before offering an "Connect an
+    AI agent" entry: GitHub code existing must never be presented as deployed
+    support, and neither must a switch that was set without the MCP service
+    behind it, nor an answering MCP service behind a gateway that serves nothing.
+
+    The answer reports the deployment facts *separately* rather than reducing them
+    to one boolean -- whether the MCP service answered an ``initialize`` at the
+    fixed destination this deployment dials for it, whether the gateway route state
+    declares the MCP location, and whether this deployment reached its own public
+    endpoint through the gateway -- and advertises the endpoint only on that last,
+    genuinely observed fact. A
+    route *file* is not a route *served*: a stale config, a gateway that never
+    reloaded, or an upstream that is down all leave the service answering and the
+    file present while nothing external answers, so neither alone advertises an
+    endpoint.
+
+    Every fact is read from state the deployment owns, and the only outbound call
+    is to this deployment's own public base URL joined with the fixed MCP path —
+    never a caller-supplied target, so no SSRF surface is added. It is not an
+    authentication surface: what a client may *do* is still decided per request by
+    the canonical credential, entitlement, admission, and result rules. ``detail``
+    carries a fixed role-based reason, never a credential, host path, internal
+    port, or filesystem error string.
+    """
+    from revocompute import mcp
+
+    return jsonify(mcp.surface()), 200
 
 
 @app.route("/compute/api/infrastructure", methods=["GET"])
@@ -764,14 +804,9 @@ def task_types_list():
 @app.route("/compute/api/task-parameters/<task_type>", methods=["GET"])
 def task_parameter_schema(task_type: str):
     """Return the canonical task.yaml-owned JSON Schema for one enabled TaskType."""
-    try:
-        tt, _runner = _get_task_type(task_type)
-    except KeyError:
-        return jsonify({"error": f"Unknown task type: {task_type!r}"}), 404
-
-    manage_db = current_app.config.get("manage_db")
-    if manage_db is not None and manage_db.task_type_is_enabled(tt.name) is False:
-        return jsonify({"error": f"Task type {task_type!r} is disabled"}), 404
+    tt, refusal = _enabled_task_type_or_404(task_type)
+    if refusal is not None:
+        return refusal
     return jsonify(tt.schema)
 
 
@@ -1067,6 +1102,130 @@ def task_type_form(name: str):
             "input_workspace": workspace_payload,
         }
     )
+
+
+def _enabled_task_type_or_404(name: str):
+    """Resolve one enabled TaskType, or the response that refuses it.
+
+    Demo reads are public like ``/compute/api/task-parameters``, so they make the
+    same admission decision with the same code: an unknown name and a disabled
+    TaskType are both a 404, and demo loading never discloses a method the
+    catalog would not have offered.
+    """
+    try:
+        tt, _runner = _get_task_type(name)
+    except KeyError:
+        return None, (jsonify({"error": f"Unknown task type: {name!r}"}), 404)
+    manage_db = current_app.config.get("manage_db")
+    if manage_db is not None and manage_db.task_type_is_enabled(tt.name) is False:
+        return None, (jsonify({"error": f"Task type {name!r} is disabled"}), 404)
+    return tt, None
+
+
+def _demo_payload(tt: Any, demo: Any) -> dict[str, Any]:
+    """Project one declared demo into the client contract.
+
+    A demo is a preset, not a Task: the payload carries the named-role files to
+    bind, the typed parameters to set, and the provenance a scientist needs to
+    judge the fixture.  Nothing here reserves, submits, or authorizes.
+    """
+    inputs: dict[str, list[dict[str, Any]]] = {}
+    for item in demo.files:
+        inputs.setdefault(item.role, []).append(
+            {
+                "role": item.role,
+                "path": item.path,
+                "sha256": item.sha256,
+                "size": item.size,
+                "media_type": item.media_type,
+                "download_url": url_for(
+                    "task_demo_file", name=tt.name, demo_id=demo.id, asset=item.path
+                ),
+            }
+        )
+    return {
+        "id": demo.id,
+        "title": demo.title,
+        "purpose": demo.purpose,
+        "context": demo.context,
+        "source": {"name": demo.source, "url": demo.source_url},
+        "license": {"id": demo.license_id, "name": demo.license_name, "url": demo.license_url},
+        "inputs": inputs,
+        "parameters": demo.parameters,
+    }
+
+
+@app.route("/compute/api/types/<name>/demos", methods=["GET"])
+@optional_user
+def task_demo_catalog(name: str):
+    """Return the deployment-owned demo presets declared by one enabled Task.
+
+    Demos are read-only input presets: the response names the fixture files and
+    the parameter values a client may load into the preparation form.  No demo
+    is created, reserved, or submitted here, and the server resolves nothing
+    from a caller-supplied location -- every fixture is one the Task's own
+    declaration already validated.
+    """
+    tt, refusal = _enabled_task_type_or_404(name)
+    if refusal is not None:
+        return refusal
+    try:
+        demos = load_task_demos(tt)
+    except DemoContractError:
+        # A malformed declaration is an operator problem, not a client one: fail
+        # closed without echoing the declaration's own paths back to the caller.
+        logging.exception("Task %r declares an invalid demo manifest", tt.name)
+        return jsonify({"error": "Demo declarations are unavailable for this task"}), 503
+    return jsonify(
+        {
+            "version": 1,
+            "task_type": tt.name,
+            "demos": [_demo_payload(tt, demo) for demo in demos],
+        }
+    )
+
+
+@app.route("/compute/api/types/<name>/demos/<demo_id>/files/<path:asset>", methods=["GET"])
+@optional_user
+def task_demo_file(name: str, demo_id: str, asset: str):
+    """Serve one file an enabled Task's demo declaration already validated.
+
+    The request is resolved by allowlist membership only: the declared fixture
+    list is the sole source of paths, so a traversal, an absolute path, or an
+    undeclared file simply is not a member and is refused.  Serving re-reads the
+    same directory the declaration validated, and the response carries the
+    declared media type rather than a type guessed from the request.
+
+    The catalog and this route deliberately read the manifest at different scope,
+    and a caller should read the two together.  ``task_demo_catalog`` validates the
+    manifest whole and publishes nothing at all if *any* demo in it is invalid, so
+    a caller that saw a ``503`` there has no catalog.  This route resolves only the
+    demo the request names, so a demo that is itself valid is still served while a
+    sibling declared beside it is not.  An asset request is therefore not a claim
+    that the Task's catalog is publishable; it is a claim about the one declaration
+    the request names.
+    """
+    tt, refusal = _enabled_task_type_or_404(name)
+    if refusal is not None:
+        return refusal
+    try:
+        demo = load_task_demo(tt, demo_id)
+    except DemoContractError:
+        logging.exception("Task %r declares an invalid demo manifest", tt.name)
+        abort(404)
+    if demo is None:
+        abort(404)
+    declared = resolve_demo_file(demo, asset)
+    if declared is None:
+        abort(404)
+    root = demo_root(tt)
+    if root is None:
+        abort(404)
+    response = send_from_directory(root, declared.path, mimetype=declared.media_type, conditional=True)
+    # The fixture is a public, digest-declared sample, so it is cacheable; the
+    # declaration's own identity is what the client verifies it against.
+    response.headers["Cache-Control"] = "public, max-age=300"
+    return response
 
 
 @app.route("/compute/api/types/<name>/workspace/normalize", methods=["POST"])
@@ -2458,6 +2617,46 @@ def run_gremlin(md5sum):
     )
 
 
+def _diagnostics_for_task(task: dict[str, Any]) -> dict[str, Any]:
+    from revocompute.execution_diagnostics import diagnostic_payload
+
+    lifecycle = task_store.get_data_lifecycle(task["md5sum"])
+    data_owned = lifecycle is None or lifecycle["state"] in {"ACTIVE", "ARCHIVED"}
+    return diagnostic_payload(
+        current_app.config["storage_resolver"], task, data_owned=data_owned,
+        evidence=task_store.get_task_diagnostics(task["md5sum"]),
+    )
+
+
+@app.route("/compute/api/tasks/<md5sum>/diagnostics", methods=["GET"])
+@app.route("/compute/api/tasks/<md5sum>/diagnostics/<stream_name>", methods=["GET"])
+@optional_user
+def task_diagnostics(md5sum: str, stream_name: str | None = None):
+    """Task-owned, bounded diagnostic context with no filesystem path parameter."""
+    md5sum = _normalize_task_id(md5sum)
+    if md5sum is None:
+        return jsonify({"error": "Invalid task id"}), 400
+    task = task_store.get_task(md5sum)
+    if task is None or not _task_full_results_allowed(task):
+        return _task_not_found(md5sum)
+    if stream_name is not None and stream_name not in {"stdout", "stderr"}:
+        return jsonify({"error": "Diagnostic stream not found"}), 404
+    payload = _diagnostics_for_task(task)
+    if stream_name:
+        log = next((item for item in payload["logs"] if item["stream"] == stream_name), None)
+        if log is None:
+            return jsonify({"error": "Diagnostic stream not available"}), 404
+        response = current_app.response_class(log["text"], mimetype="text/plain")
+        response.headers.set("Content-Disposition", "attachment", filename=f"{md5sum}.{stream_name}.excerpt.log")
+        response.headers["Content-Security-Policy"] = "sandbox"
+    else:
+        for log in payload["logs"]:
+            log.pop("text", None)
+        response = jsonify(payload)
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
+
+
 @app.route("/compute/api/results/<md5sum>", methods=["GET"])
 @optional_user
 def get_results(md5sum):
@@ -2624,7 +2823,7 @@ def get_result_storyboard_asset(md5sum: str, asset: str):
         declaration = storyboard_declaration(
             task_type, CONFIG.server_dir, set(expected_file_tree(task_type, CONFIG.server_dir))
         )
-        root = runner_root(task_type, CONFIG.server_dir) / "storyboard"
+        root = storyboard_asset_root(task_type, CONFIG.server_dir)
         requested = asset.replace("\\", "/").strip("/")
         if (
             not declaration

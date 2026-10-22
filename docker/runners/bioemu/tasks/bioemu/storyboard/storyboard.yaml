@@ -1,0 +1,8 @@
+identifier: bioemu-ensemble
+entrypoint: ./index.js
+requires:
+  - topology
+  - coordinates
+  - sequence
+  - citations
+optional: []

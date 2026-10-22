@@ -1,0 +1,20 @@
+{
+  "allocated_cpus_per_task": 8,
+  "allocated_gpu_ids": "0",
+  "allocated_gpus_on_node": "1",
+  "allocated_tasks": 1,
+  "elapsed_seconds": 21.09,
+  "exit_code": 0,
+  "gpu_memory_peak_mib": 3365,
+  "gpu_utilization_peak_percent": 71,
+  "job_id": "311213",
+  "max_rss_kib": 5697248,
+  "schema_version": 1,
+  "scratch_guard.exceeded": 0,
+  "scratch_guard.peak_bytes": 4096,
+  "scratch_guard.samples": 5,
+  "source": "allocation_wrapper",
+  "system_cpu_seconds": 6.01,
+  "user_cpu_seconds": 20.07,
+  "visible_gpu_devices": "0"
+}

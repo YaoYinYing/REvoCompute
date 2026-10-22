@@ -1,5 +1,8 @@
 import { getTaskCatalog, getTaskDefinition, preflightTask, requestAccess, submitTask } from './api';
+import { fetchDemoFile, getTaskDemos } from './demo';
+import type { TaskDemo } from './demo';
 import { InputWorkspace } from './input-workspace/InputWorkspace';
+import type { PresetApplication, WorkspacePreset } from './input-workspace/InputWorkspace';
 import { buildSubmissionFormData } from './submission';
 import type { TaskCatalog, TaskFormDefinition, TaskPreflight, TaskSummary } from './types';
 import { t } from '../../app/i18n';
@@ -36,6 +39,11 @@ export class CreateTask {
   // the success-flavoured ready row while the status line reports the failure.
   private actionFailed = false;
   private change: HTMLButtonElement | null = null;
+  private demo: HTMLButtonElement | null = null;
+  // The picker is a top-layer element, so it lives beside the view rather than
+  // inside it and the view owns its lifetime explicitly: leaving the method
+  // takes it with it.
+  private demoDialog: HTMLDialogElement | null = null;
   private revision = 0;
 
   constructor(private readonly root: HTMLElement) {
@@ -126,7 +134,7 @@ export class CreateTask {
   }
 
   private async selectTask(name: string): Promise<void> {
-    this.loadController?.abort(); const controller = new AbortController(); this.loadController = controller; const generation = ++this.generation;
+    this.closeDemoDialog(); this.loadController?.abort(); const controller = new AbortController(); this.loadController = controller; const generation = ++this.generation;
     // The workbench swaps in for the chooser: the loading status that lived in the
     // chooser's now-hidden region has to be on screen, and the region must travel
     // with it or the loading message would be announced from a hidden panel. The
@@ -150,9 +158,14 @@ export class CreateTask {
     const form = this.definition!; this.workbench.replaceChildren();
     this.pageHeader.hidden = true;
     const header = node('header', 'ct-method-header');
-    const title = node('div'); title.append(node('p', 'ct-category', this.categoryLabel(form.category)), node('h1', '', form.display_name), node('p', 'ct-method-summary', form.summary));
+    const title = node('div'); title.append(node('p', 'ct-category', `${t('ct.title')} / ${this.categoryLabel(form.category)}`), node('h1', '', form.display_name), node('p', 'ct-method-summary', form.summary));
     const change = node('button', 'ct-secondary', t('ct.changeMethod')); change.type = 'button'; change.addEventListener('click', () => this.showChooser(t('ct.chooseAnother'))); this.change = change;
-    header.append(title, change);
+    // Loading an example is a second, non-destructive way to fill the form, so it
+    // sits with the method control rather than among the submit actions: reaching
+    // it is never one keystroke away from running the task.
+    const demo = node('button', 'ct-secondary', t('ct.demo.load')); demo.type = 'button'; demo.dataset.ctDemoOpen = ''; demo.addEventListener('click', () => void this.openDemoPicker()); this.demo = demo;
+    const controls = node('div', 'ct-method-controls'); controls.append(demo, change);
+    header.append(title, controls);
     const facts = node('details', 'ct-method-context');
     const factsSummary = node('summary', '', t('ct.methodContext')); const factsList = node('dl', 'ct-method-facts');
     const factRows: Array<[string, string]> = [
@@ -164,13 +177,12 @@ export class CreateTask {
     const access = this.renderAccess();
     const main = node('div', 'ct-workbench-grid');
     const protocol = node('div', 'ct-protocol'); protocol.append(this.workspaceRoot);
-    const snapshotPanel = node('aside', 'ct-snapshot-panel');
-    const label = node('p', 'ct-snapshot-label', t('ct.snapshot')); label.id = 'ct-snapshot-label';
+    const snapshotPanel = node('footer', 'ct-snapshot-panel');
+    const label = node('p', 'sr-only', t('ct.snapshot')); label.id = 'ct-snapshot-label';
     this.feedback.setAttribute('aria-labelledby', label.id);
-    snapshotPanel.append(label);
-    const identity = node('div', 'ct-snapshot-identity'); identity.append(node('p', 'ct-snapshot-method', form.display_name));
+    const review = node('details', 'ct-snapshot-details'); review.append(node('summary', '', t('ct.snapshot')), this.snapshot);
     const actions = node('div', 'ct-actions'); actions.append(this.clear, this.action);
-    snapshotPanel.append(identity, this.snapshot, this.feedback, actions);
+    snapshotPanel.append(label, this.feedback, actions, review);
     main.append(protocol, snapshotPanel); this.workbench.append(header, facts); if (access) this.workbench.append(access); this.workbench.append(main);
   }
 
@@ -285,12 +297,131 @@ export class CreateTask {
     } catch (error) { if (generation !== this.generation) return; this.actionFailed = true; this.setStatus(t('ct.submissionFailed', { message: error instanceof Error ? error.message : String(error) }), 'error'); this.preflight = null; this.setBusy(false); this.refreshValidation(); }
   }
 
+  /** Load an example into the form: a local edit, never a submission. */
+  private async openDemoPicker(): Promise<void> {
+    const definition = this.definition; if (!definition) return;
+    const generation = this.generation;
+    if (this.demoDialog) return;
+    const dialog = node('dialog', 'ct-dialog ct-demo-dialog'); this.demoDialog = dialog;
+    const form = node('form'); form.method = 'dialog';
+    form.append(node('h2', '', t('ct.demo.heading')), node('p', 'ct-help', t('ct.demo.intro')));
+    const list = node('div', 'ct-demo-list'); form.append(list);
+    const empty = node('p', 'ct-help', t('ct.demo.empty')); empty.hidden = true; empty.dataset.ctDemoEmpty = ''; form.append(empty);
+    const status = node('p', 'ct-status'); form.append(status);
+    const close = node('button', 'ct-secondary', t('ct.cancel')); close.type = 'button'; close.addEventListener('click', () => dialog.close('cancel'));
+    const actions = node('div', 'ct-actions'); actions.append(close); form.append(actions);
+    dialog.append(form); document.body.append(dialog);
+    // The picker serves one decision and then leaves the document, whether it
+    // was dismissed, answered, or closed by leaving the method, so a stale
+    // dialog can never shadow a later one or outlive the method it belonged to.
+    dialog.addEventListener('close', () => {
+      dialog.remove();
+      if (this.demoDialog === dialog) this.demoDialog = null;
+    }, { once: true });
+    dialog.showModal();
+    let demos: TaskDemo[];
+    try { demos = await getTaskDemos(definition.name); }
+    catch (error) { status.textContent = error instanceof Error ? error.message : String(error); status.className = 'ct-status error'; return; }
+    if (generation !== this.generation) { dialog.close('cancel'); return; }
+    if (!demos.length) { empty.hidden = false; return; }
+    demos.forEach(demo => list.append(this.demoOption(demo, dialog)));
+  }
+
+  /** Close and forget any dialog the demo flow owns. */
+  private closeDemoDialog(): void {
+    const dialog = this.demoDialog; this.demoDialog = null;
+    if (dialog) { dialog.close('cancel'); dialog.remove(); }
+  }
+
+  private demoOption(demo: TaskDemo, dialog: HTMLDialogElement): HTMLElement {
+    const card = node('article', 'ct-demo');
+    const choose = node('button', 'ct-secondary', t('ct.demo.load')); choose.type = 'button'; choose.dataset.ctDemoChoose = '';
+    choose.addEventListener('click', () => { dialog.close('load'); void this.applyDemo(demo); });
+    card.append(node('h3', '', demo.title), node('p', '', demo.purpose));
+    if (demo.context) card.append(node('p', 'ct-help', demo.context));
+    const provenance = node('p', 'ct-demo-provenance', t('ct.demo.attribution'));
+    const source = demo.source.url ? node('a', '', demo.source.name) : node('span', '', demo.source.name);
+    if (source instanceof HTMLAnchorElement) { source.href = demo.source.url; source.rel = 'noopener noreferrer'; source.target = '_blank'; }
+    const licence = demo.license.url ? node('a', '', demo.license.name) : node('span', '', demo.license.name);
+    if (licence instanceof HTMLAnchorElement) { licence.href = demo.license.url; licence.rel = 'noopener noreferrer'; licence.target = '_blank'; }
+    provenance.append(source, node('span', '', ' · '), licence);
+    const summary = node('dl', 'ct-demo-summary');
+    Object.entries(demo.inputs).forEach(([role, files]) => { summary.append(node('dt', '', role), node('dd', '', files.map(file => file.path).join(', '))); });
+    Object.entries(demo.parameters).forEach(([name, value]) => { summary.append(node('dt', '', name), node('dd', '', String(value))); });
+    card.append(provenance, summary, choose);
+    return card;
+  }
+
+  private async applyDemo(demo: TaskDemo): Promise<void> {
+    const definition = this.definition; if (!definition) return;
+    // Choosing an example is the one load a slower earlier one may not overwrite:
+    // each selection takes the next generation, so a download that finishes after
+    // a later selection - or after the workspace was cleared - observes a mismatch
+    // and applies nothing. The picker's own controls stay enabled while a load is
+    // in flight because the load is cancellable this way rather than by waiting.
+    const generation = ++this.generation;
+    // A non-empty form is not replaced silently: the reader either confirms the
+    // replacement or keeps what they entered. The prior state is captured after
+    // that decision, so it is what the replacement actually replaced, and it is
+    // held so the replacement can be undone.
+    const dirty = this.workspace.isModified();
+    if (dirty && !(await this.confirmDemoReplace(demo))) return;
+    if (generation !== this.generation) return;
+    const previous = dirty ? this.workspace.snapshot() : null;
+    this.setStatus(t('ct.demo.loading'), 'busy');
+    const preset: WorkspacePreset = { files: new Map(), parameters: {} };
+    try {
+      const entries = await Promise.all(Object.entries(demo.inputs).map(async ([role, files]) => [role, await Promise.all(files.map(file => fetchDemoFile(file)))] as const));
+      entries.forEach(([role, files]) => preset.files.set(role, files));
+      Object.entries(demo.parameters).forEach(([name, value]) => { preset.parameters[name] = String(value); });
+    } catch (error) {
+      if (generation !== this.generation) return;
+      this.setStatus(error instanceof Error ? error.message : String(error), 'error'); return;
+    }
+    if (generation !== this.generation) return;
+    const application = this.workspace.apply(preset);
+    this.setStatus(t('ct.demo.loaded', { title: demo.title }), 'ok');
+    this.reportDemoApplication(application, previous);
+  }
+
+  /** Show what the example changed and offer to put the previous state back. */
+  private reportDemoApplication(application: PresetApplication, previous: WorkspacePreset | null): void {
+    const roles = this.definition?.inputs.length || 0;
+    const filled = application.files.filter(entry => entry.names.length).length;
+    const panel = node('div', 'ct-demo-applied');
+    panel.append(node('p', '', t('ct.demo.applied')), node('p', 'ct-help', t('ct.demo.files', { count: filled, total: roles })));
+    const list = node('ul', 'ct-demo-changes');
+    application.changes.forEach(change => list.append(node('li', '', t('ct.demo.change', { label: change.label, before: change.before || '—', after: change.after }))));
+    if (application.changes.length) panel.append(node('p', 'ct-help', t('ct.demo.changes')), list);
+    if (previous) {
+      const undo = node('button', 'ct-secondary', t('ct.demo.undo')); undo.type = 'button';
+      undo.addEventListener('click', () => { this.workspace.restore(previous); panel.remove(); this.setStatus(t('ct.demo.restored'), 'ok'); });
+      panel.append(undo);
+    }
+    this.status.after(panel);
+  }
+
+  private confirmDemoReplace(demo: TaskDemo): Promise<boolean> {
+    const dialog = node('dialog', 'ct-dialog'); const form = node('form'); form.method = 'dialog';
+    const keep = node('button', 'ct-secondary', t('ct.demo.keep')); keep.type = 'button'; keep.addEventListener('click', () => dialog.close('keep'));
+    const replace = node('button', 'ct-primary', t('ct.demo.confirmReplace')); replace.type = 'button'; replace.addEventListener('click', () => dialog.close('replace'));
+    const actions = node('div', 'ct-actions'); actions.append(keep, replace);
+    form.append(node('h2', '', t('ct.demo.load')), node('p', '', t('ct.demo.replace', { title: demo.title })), actions);
+    dialog.append(form); document.body.append(dialog); dialog.showModal();
+    return new Promise(resolve => dialog.addEventListener('close', () => { const accepted = dialog.returnValue === 'replace'; dialog.remove(); resolve(accepted); }, { once: true }));
+  }
+
   private async clearWorkspace(): Promise<void> {
-    if (!this.definition) return; const generation = this.generation; this.preflight = null; this.actionFailed = false; this.revision++; await this.workspace.mount(this.definition);
+    this.closeDemoDialog();
+
+    // Clearing invalidates any demo load still in flight exactly as leaving the
+    // method does: the cleared form is the state the reader asked for, and an
+    // older download must not be able to fill it back in afterwards.
+    if (!this.definition) return; this.generation++; const generation = this.generation; this.preflight = null; this.actionFailed = false; this.revision++; await this.workspace.mount(this.definition);
     if (generation !== this.generation) return; this.setStatus(t('ct.cleared'), 'ok'); this.refreshValidation();
   }
 
-  private setBusy(value: boolean): void { this.busy = value; this.action.disabled = value; this.clear.disabled = value; if (this.change) this.change.disabled = value; this.action.setAttribute('aria-busy', String(value)); }
+  private setBusy(value: boolean): void { this.busy = value; this.action.disabled = value; this.clear.disabled = value; if (this.change) this.change.disabled = value; if (this.demo) this.demo.disabled = value; this.action.setAttribute('aria-busy', String(value)); }
   private setStatus(message: string, kind: 'busy' | 'ok' | 'error' | '' = ''): void {
     this.status.textContent = message; this.status.className = `ct-status ${kind}`;
     // An error is announced assertively; the region itself is the polite default.
@@ -299,7 +430,7 @@ export class CreateTask {
   private categoryLabel(name: string): string { return this.catalog?.categories.find(category => category.name === name)?.label || name; }
 
   private showChooser(message: string): void {
-    this.loadController?.abort(); this.generation++; this.definition = null; this.preflight = null; this.setBusy(false); this.checking = false; this.workspace.destroy();
+    this.loadController?.abort(); this.generation++; this.definition = null; this.preflight = null; this.setBusy(false); this.checking = false; this.closeDemoDialog(); this.workspace.destroy();
     this.chooser.hidden = false; this.pageHeader.hidden = false; this.workbench.hidden = true;
     // The region and the chooser's methods come home with the state, so the
     // chooser's own status message is always inside the live region, whether or
@@ -310,5 +441,5 @@ export class CreateTask {
     this.chooser.querySelector<HTMLInputElement>('input[type="search"]')?.focus();
   }
 
-  destroy(): void { this.loadController?.abort(); this.workspace.destroy(); this.root.replaceChildren(); }
+  destroy(): void { this.loadController?.abort(); this.closeDemoDialog(); this.workspace.destroy(); this.root.replaceChildren(); }
 }

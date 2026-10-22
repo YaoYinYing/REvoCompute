@@ -33,6 +33,7 @@ Per-task canonical fields override global canonical defaults. Use
 
 from __future__ import annotations
 
+import logging
 import os
 import sqlite3
 import threading
@@ -47,6 +48,7 @@ from revocompute.resource_policy import (
     resolve_resources,
     serialize_resource_value,
 )
+from revocompute.sqlite_startup import enter_wal_mode
 
 _ALL_TASK_TYPE_FIELDS = CANONICAL_TASK_FIELDS
 
@@ -84,8 +86,17 @@ class ManageDatabase:
         os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
         self._lock = threading.Lock()
         self._conn = sqlite3.connect(self.path, check_same_thread=False)
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.execute("PRAGMA synchronous=NORMAL")
+        # Busy handler first: every service of a multi-process deployment runs
+        # this startup pass at once, and a peer converting the same fresh file to
+        # WAL holds the exclusive lock this needs.  A WAL conversion is a lock
+        # upgrade, so SQLite refuses to wait for it and raises "database is
+        # locked" immediately; the shared helper retries exactly that case, so the
+        # pass tolerates the peer instead of exiting the process on first boot.
+        self._conn.execute("PRAGMA busy_timeout=30000")
+        if not enter_wal_mode(self._conn.execute):
+            logging.warning(
+                "Admin config pragma initialization is locked; proceeding with default pragmas for this process."
+            )
         self._conn.execute("PRAGMA busy_timeout=5000")
         self._conn.execute(
             "CREATE TABLE IF NOT EXISTS task_type_config ("

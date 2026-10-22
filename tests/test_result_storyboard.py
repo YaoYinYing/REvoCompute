@@ -4,10 +4,25 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
+import yaml
 
 from revocompute import result_storyboard
-from revocompute.result_storyboard import ResultContractError, expected_file_tree, resolve_expected_files, runner_root
+from revocompute.result_storyboard import (
+    ResultContractError,
+    contract_dir,
+    contract_directory,
+    declared_result_contracts,
+    expected_file_tree,
+    resolve_expected_files,
+    runner_root,
+    storyboard_asset_root,
+    storyboard_declaration,
+)
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_expected_file_tree_resolves_logical_files_without_paths() -> None:
@@ -63,3 +78,189 @@ def test_expected_file_tree_rejects_logical_ids_outside_route_grammar(monkeypatc
 
     with pytest.raises(ResultContractError, match="Invalid logical result file"):
         expected_file_tree(object(), "")
+
+
+# ── Task-scoped contract resolution ──────────────────────────────────────────
+#
+# The family below mirrors the shape that forced the split: one runtime family
+# hosting a fold Task and a design Task whose published file names cannot be
+# described by one tree. Nothing here names a real TaskType; the resolver is
+# exercised through positions, which is the whole point of the rule.
+
+_TREE = "result:\n  files:\n    outputs:\n      pattern: '{pattern}'\n      required: true\n      type: structure\n"
+_STORYBOARD = (
+    "identifier: synthetic-{name}\n"
+    "entrypoint: ./index.js\n"
+    "requires: [outputs]\n"
+    "optional: []\n"
+)
+
+
+def _family(tmp_path: Path, monkeypatch) -> Path:
+    """A family with a family-scoped tree and two Task directories.
+
+    ``tasks/fold`` ships no contract of its own (family-scoped); ``tasks/design``
+    ships both its own tree and its own Storyboard. ``RUNNERS_DIR`` points at the
+    synthetic runner root so the resolver validates these candidates exactly as
+    it validates a deployment's, rather than reading the shipped fleet.
+    """
+    runners = tmp_path / "runners"
+    monkeypatch.setenv("RUNNERS_DIR", str(runners))
+    family = runners / "synthetic"
+    (family / "tasks" / "fold").mkdir(parents=True)
+    (family / "tasks" / "design" / "storyboard").mkdir(parents=True)
+    (family / "expected_files.yaml").write_text(_TREE.format(pattern="*.cif"), encoding="utf-8")
+    (family / "storyboard").mkdir()
+    (family / "storyboard" / "index.js").write_text("export default {};\n", encoding="utf-8")
+    (family / "storyboard" / "storyboard.yaml").write_text(_STORYBOARD.format(name="fold"), encoding="utf-8")
+    (family / "tasks" / "fold" / "task.yaml").write_text("id: synthetic_fold\n", encoding="utf-8")
+    (family / "tasks" / "design" / "task.yaml").write_text("id: synthetic_design\n", encoding="utf-8")
+    (family / "tasks" / "design" / "expected_files.yaml").write_text(
+        _TREE.format(pattern="*.cif.gz"), encoding="utf-8"
+    )
+    (family / "tasks" / "design" / "storyboard" / "index.js").write_text("export default {};\n", encoding="utf-8")
+    (family / "tasks" / "design" / "storyboard" / "storyboard.yaml").write_text(
+        _STORYBOARD.format(name="design"), encoding="utf-8"
+    )
+    return family
+
+
+def _drop_task_contract(family: Path) -> None:
+    """Remove one Task's own contract, leaving the family-scoped one in place."""
+    task = family / "tasks" / "design"
+    (task / "expected_files.yaml").unlink()
+    for child in (task / "storyboard").iterdir():
+        child.unlink()
+    (task / "storyboard").rmdir()
+
+
+def _task(family: Path, task_dir: str):
+    runtime = type("Runtime", (), {"root": str(family), "definition": "synthetic.def"})()
+    return type("TaskType", (), {"runtime": runtime, "task_dir": task_dir})()
+
+
+def test_a_task_contract_is_resolved_from_the_directory_beside_its_manifest(tmp_path, monkeypatch) -> None:
+    family = _family(tmp_path, monkeypatch)
+    fold, design = _task(family, "tasks/fold"), _task(family, "tasks/design")
+
+    assert expected_file_tree(fold, "")["outputs"]["pattern"] == "*.cif"
+    assert expected_file_tree(design, "")["outputs"]["pattern"] == "*.cif.gz"
+    # ... and each Task's Storyboard comes from the same directory as its tree:
+    # no Task can take its logical files from one place and its module from another.
+    assert storyboard_declaration(fold, "", {"outputs"})["identifier"] == "synthetic-fold"
+    assert storyboard_declaration(design, "", {"outputs"})["identifier"] == "synthetic-design"
+    assert storyboard_asset_root(fold, "") == (family / "storyboard").resolve()
+    assert storyboard_asset_root(design, "") == (family / "tasks" / "design" / "storyboard").resolve()
+
+
+def test_a_task_without_its_own_tree_keeps_the_family_contract_unchanged(tmp_path, monkeypatch) -> None:
+    """The migration is additive: an existing family-scoped family is untouched."""
+    family = _family(tmp_path, monkeypatch)
+    _drop_task_contract(family)
+
+    for task_dir in ("", "tasks/fold", "tasks/design"):
+        task = _task(family, task_dir)
+        assert expected_file_tree(task, "")["outputs"]["pattern"] == "*.cif"
+        assert storyboard_declaration(task, "", {"outputs"})["identifier"] == "synthetic-fold"
+
+
+@pytest.mark.parametrize("task_dir", ["../escape", "tasks/../../escape", "/absolute", "tasks/./fold", "tasks//fold"])
+def test_a_task_directory_cannot_escape_its_family(tmp_path, monkeypatch, task_dir: str) -> None:
+    family = _family(tmp_path, monkeypatch)
+    with pytest.raises(ResultContractError, match="beneath its runner family"):
+        contract_directory(family, task_dir)
+
+
+def test_a_task_directory_that_is_not_a_directory_is_refused(tmp_path, monkeypatch) -> None:
+    family = _family(tmp_path, monkeypatch)
+    (family / "tasks" / "file").write_text("not a directory\n", encoding="utf-8")
+    with pytest.raises(ResultContractError, match="beneath its runner family"):
+        contract_directory(family, "tasks/file")
+
+
+def test_a_task_directory_symlinked_out_of_the_family_is_refused(tmp_path, monkeypatch) -> None:
+    family = _family(tmp_path, monkeypatch)
+    outside = tmp_path / "outside"
+    (outside / "storyboard").mkdir(parents=True)
+    (outside / "expected_files.yaml").write_text(_TREE.format(pattern="*.xyz"), encoding="utf-8")
+    (family / "tasks" / "linked").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ResultContractError, match="beneath its runner family"):
+        contract_directory(family, "tasks/linked")
+
+
+def test_a_storyboard_without_its_own_tree_is_a_contract_error(tmp_path, monkeypatch) -> None:
+    """A Task's module binds to logical files *this* Task declares.
+
+    Answering such a Task from the family tree would bind its module to
+    identities it never declared, so the declaration is refused instead.
+    """
+    family = _family(tmp_path, monkeypatch)
+    (family / "tasks" / "design" / "expected_files.yaml").unlink()
+
+    with pytest.raises(ResultContractError, match="needs its own expected_files.yaml"):
+        contract_dir(_task(family, "tasks/design"), "")
+
+
+def test_a_split_family_records_one_contract_per_owner(tmp_path, monkeypatch) -> None:
+    """The live-test identity follows the owning declaration, not a re-derivation."""
+    family = _family(tmp_path, monkeypatch)
+    contracts = declared_result_contracts(family, {"synthetic_fold": "tasks/fold", "synthetic_design": "tasks/design"})
+
+    assert sorted(contracts) == ["synthetic_design", "synthetic_fold"]
+    assert contracts["synthetic_fold"]["outputs"]["pattern"] == "*.cif"
+    assert contracts["synthetic_design"]["outputs"]["pattern"] == "*.cif.gz"
+
+
+def test_an_unsplit_family_records_one_shared_contract(tmp_path, monkeypatch) -> None:
+    """A family that adopts no split keeps the byte-identical record it had."""
+    family = _family(tmp_path, monkeypatch)
+    (family / "tasks" / "design" / "expected_files.yaml").write_text(_TREE.format(pattern="*.cif"), encoding="utf-8")
+    _drop_task_contract(family)
+
+    contracts = declared_result_contracts(family, {"synthetic_fold": "tasks/fold", "synthetic_design": "tasks/design"})
+
+    assert contracts == result_storyboard.load_expected_file_tree(family / "expected_files.yaml")
+    assert contracts["outputs"]["pattern"] == "*.cif"
+
+
+def test_moving_an_identical_contract_to_every_task_keeps_the_same_record(tmp_path, monkeypatch) -> None:
+    """The recorded contract reflects the accepted outputs, not where they sit.
+
+    A family whose Tasks all resolve to one tree records that tree and nothing
+    else. Migrating the declaration from the family root into each owner's
+    directory -- the move #93 documents, and the move a single-Task family such
+    as ``example`` actually took -- leaves every Task's accepted outputs exactly
+    as they were, so the record (and the live-test receipt digest computed from
+    it) must be identical. Reading the position instead of the trees would
+    invalidate a current receipt for a change no Runner can observe.
+    """
+    family = _family(tmp_path, monkeypatch)
+    task_dirs = {"synthetic_fold": "tasks/fold", "synthetic_design": "tasks/design"}
+    # Family scope: one tree at the root, which both Tasks resolve.
+    _drop_task_contract(family)
+    shared = declared_result_contracts(family, task_dirs)
+    # Task scope: the same declaration in every owner's directory, and the root
+    # empty -- `contract_directory`'s state after the documented `git mv`.
+    (family / "expected_files.yaml").unlink()
+    for task_dir in task_dirs.values():
+        (family / task_dir / "expected_files.yaml").write_text(_TREE.format(pattern="*.cif"), encoding="utf-8")
+    relocated = declared_result_contracts(family, task_dirs)
+
+    assert shared == result_storyboard.load_expected_file_tree(family / "tasks" / "fold" / "expected_files.yaml")
+    assert relocated == shared
+
+
+def test_a_contract_that_genuinely_differs_is_still_recorded_per_owner(tmp_path, monkeypatch) -> None:
+    """Collapsing identical owners must not collapse owners that actually differ.
+
+    The move above is only a move. A family whose Tasks really publish different
+    outputs still records one contract per owner, so the comparison is between
+    the resolved trees and never against the family root alone.
+    """
+    family = _family(tmp_path, monkeypatch)
+    contracts = declared_result_contracts(family, {"synthetic_fold": "tasks/fold", "synthetic_design": "tasks/design"})
+
+    assert sorted(contracts) == ["synthetic_design", "synthetic_fold"]
+    assert contracts["synthetic_fold"]["outputs"]["pattern"] == "*.cif"
+    assert contracts["synthetic_design"]["outputs"]["pattern"] == "*.cif.gz"

@@ -51,14 +51,17 @@ export class HarnessNode {
   readonly style = { setProperty: (): void => undefined };
   // A live view of the `data-*` attributes, as `dataset` is in the browser.
   private readonly datasetProxy = new Proxy({} as Record<string, string>, {
-    get: (_target, property: string) => this.attrs.get(`data-${property.replace(/[A-Z]/g, letter => `-${letter.toLowerCase()}`)}`),
+    get: (_target, property: string) => typeof property === 'symbol' ? undefined
+      : this.attrs.get(`data-${property.replace(/[A-Z]/g, letter => `-${letter.toLowerCase()}`)}`),
     set: (_target, property: string, value: unknown) => {
       this.attrs.set(`data-${property.replace(/[A-Z]/g, letter => `-${letter.toLowerCase()}`)}`, String(value));
       return true;
     },
-    has: (_target, property: string) => this.attrs.has(`data-${property.replace(/[A-Z]/g, letter => `-${letter.toLowerCase()}`)}`),
+    has: (_target, property: string) => typeof property !== 'symbol'
+      && this.attrs.has(`data-${property.replace(/[A-Z]/g, letter => `-${letter.toLowerCase()}`)}`),
     ownKeys: () => [...this.attrs.keys()].filter(name => name.startsWith('data-')),
     getOwnPropertyDescriptor: (_target, property: string) => {
+      if (typeof property === 'symbol') return undefined;
       const key = `data-${property.replace(/[A-Z]/g, letter => `-${letter.toLowerCase()}`)}`;
       return this.attrs.has(key) ? { configurable: true, enumerable: true, value: this.attrs.get(key) } : undefined;
     },
@@ -114,6 +117,13 @@ export class HarnessNode {
   appendChild(node: HarnessNode): HarnessNode { this.append(node); return node; }
   prepend(...nodes: Array<HarnessNode | string>): this { const existing = this.nodes; this.nodes = []; return this.append(...nodes, ...existing); }
   replaceChildren(...nodes: Array<HarnessNode | string>): void { this.nodes = []; this.append(...nodes); }
+  insertBefore(node: HarnessNode, reference: HarnessNode | null): HarnessNode {
+    node.remove();
+    node.parent = this;
+    const index = reference ? this.nodes.indexOf(reference) : -1;
+    if (index === -1) this.nodes.push(node); else this.nodes.splice(index, 0, node);
+    return node;
+  }
   replaceChild(next: HarnessNode, previous: HarnessNode): void {
     const index = this.nodes.indexOf(previous);
     if (index === -1) return;
