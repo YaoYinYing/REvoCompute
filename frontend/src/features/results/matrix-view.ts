@@ -6,7 +6,7 @@
 import type { ResultView } from '../../api/result-types';
 import { t } from '../../app/i18n';
 import { MAX_ELEMENTS, PairMatrix } from './scientific';
-import { MAX_OFFSET, PAGE_LIMIT } from './table-page';
+import { MAX_OFFSET, PAGE_LIMIT, localTableRead, readTablePage, type TableRead } from './table-page';
 import type { ResolvedViewSources, ViewRenderer } from './renderer-registry';
 
 /** A `matrix=1` page carries up to 512 value columns plus one leading row-label column. */
@@ -53,25 +53,22 @@ function numberOrNull(cell: unknown): number | null {
  * unbounded matrix fails with a clear error instead of exhausting memory.
  */
 export async function loadMatrixSeries(
-  tableUrl: string | undefined,
+  read: TableRead | undefined,
   mapping: MatrixMapping,
   options: { signal?: AbortSignal; maxElements?: number } = {},
 ): Promise<MatrixSeries> {
-  if (!tableUrl) throw new TypeError(t('results.matrix.error.noUrl'));
+  if (!read) throw new TypeError(t('results.matrix.error.noUrl'));
   const maximum = options.maxElements ?? MAX_ELEMENTS;
   if (!Number.isInteger(maximum) || maximum < 1 || maximum > MAX_ELEMENTS) {
     throw new RangeError(t('results.matrix.error.limits'));
   }
-  const base = tableUrl.includes('?') ? `${tableUrl}&` : `${tableUrl}?`;
   let columns: string[] | null = null;
   const rows: unknown[][] = [];
   let offset = 0;
   let valueColumns = 0;
   for (;;) {
     const query = new URLSearchParams({ matrix: '1', offset: String(offset), limit: String(PAGE_LIMIT) });
-    const response = await fetch(`${base}${query}`, { credentials: 'same-origin', signal: options.signal });
-    if (!response.ok) throw new Error(t('results.matrix.error.pageLoad'));
-    const page = await response.json() as TablePage;
+    const page = await readTablePage(read, query, options.signal, t('results.matrix.error.pageLoad')) as TablePage;
     const header = Array.isArray(page.columns) ? page.columns.map(String) : null;
     if (!header || header.length < 2 || header.length > MAX_COLUMNS || !Array.isArray(page.rows)) {
       throw new Error(t('results.matrix.error.malformed'));
@@ -182,8 +179,11 @@ export function createMatrixViewRenderer(): ViewRenderer {
     async render(view: ResultView, sources: ResolvedViewSources, host: HTMLElement, context) {
       const mapping = (view.mapping || {}) as MatrixMapping;
       const source = sources.matrices?.[0];
-      const tableUrl = source && 'table_url' in source ? source.table_url : undefined;
-      const series = await loadMatrixSeries(tableUrl, mapping, { signal: context.signal });
+      // The local folder's own file replaces the bounded route; a local source resolves no
+      // Server URL at all, so an archived `task_id` can never become an authenticated request.
+      const read = localTableRead(context.localSource, source)
+        ?? (source && 'table_url' in source ? source.table_url : undefined);
+      const series = await loadMatrixSeries(read, mapping, { signal: context.signal });
       const range = matrixRange(series.values, mapping);
       const xTitle = mapping.x_label || t('results.matrix.position');
       const yTitle = mapping.y_label || t('results.matrix.position');

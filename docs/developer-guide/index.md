@@ -14,6 +14,7 @@ execution boundaries, extension contracts, and the test policy.
 
 ## Extension contracts
 
+- [Evidence Retention and External Archives](evidence-retention.md) — CI-bound evidence versus reusable external scientific output.
 - [Result View Plugin Contract](result-view-plugins.md) — the server-owned
   scientific result composition boundary.
 - [Result View Protocols (Design Record)](result-view-protocols.md) — the
@@ -22,6 +23,9 @@ execution boundaries, extension contracts, and the test policy.
   semantics audit.
 - [Input and Result Workspace (Design Record)](input-result-workspace.md) — the
   pluggable input/result workspace design and its status.
+- [Local Result Workspace (PR #86)](local-result-workspace.md) — the
+  browser-local source for extracted result archives, its observed archive
+  contract, verification, and accepted limitations.
 - [Frontend Design Language](frontend-design-language.md) — the visual
   vocabulary (colour, surface, type, radius, shadow, control and status roles)
   that frontend changes are judged against.

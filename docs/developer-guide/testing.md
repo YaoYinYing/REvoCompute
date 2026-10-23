@@ -42,6 +42,12 @@ task; only target-host live acceptance can issue promotable receipts or prove
 Runner readiness. Fewer pytest cases are expected when static assertions are
 removed.
 
+Captured outputs under `tests/data/` are CI fixtures, not demo material: do not
+remove them merely because the frontend does not display them, and check the
+implicit `expected_files.yaml` globs first. See
+[Evidence Retention and External Archives](evidence-retention.md) and the
+[Campaign Acceptance Auditor](../agents/single-pr-campaign.md).
+
 ## Frontend Runner fixtures
 
 Runner-facing browser tests must not depend on whether the current host can

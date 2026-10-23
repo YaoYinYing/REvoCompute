@@ -101,9 +101,18 @@ export function createScalarSummaryViewRenderer(): ViewRenderer {
       const source = artifacts[0];
       if (!source || !('url' in source)) throw new Error(t('results.scalar.error.noSource'));
       if (source.size > MAX_SUMMARY_BYTES) throw new Error(t('results.scalar.error.tooLarge'));
-      const response = await fetch(source.url, { credentials: 'same-origin', signal: context.signal });
-      if (!response.ok) throw new Error(t('results.scalar.error.load'));
-      const metrics = scalarMetrics(await response.json(), fields);
+      // A local file is read from the opened folder: its `blob:` URL is a handle, not a route,
+      // and the folder's bytes are the source rather than a fetch of the document.
+      const local = context.localSource;
+      const text = local ? await local.readUtf8(source.path, MAX_SUMMARY_BYTES) : null;
+      let payload: unknown;
+      if (text !== null) { try { payload = JSON.parse(text); } catch { throw new Error(t('results.scalar.error.load')); } }
+      else {
+        const response = await fetch(source.url, { credentials: 'same-origin', signal: context.signal });
+        if (!response.ok) throw new Error(t('results.scalar.error.load'));
+        payload = await response.json();
+      }
+      const metrics = scalarMetrics(payload, fields);
       const section = document.createElement('section');
       section.className = 'scalar-summary-view';
       const gridHost = document.createElement('div');

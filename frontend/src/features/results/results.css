@@ -15,6 +15,7 @@
 .result-outcome { display: inline-flex; align-items: center; gap: .3rem; padding: .18rem .6rem; border: 1px solid color-mix(in srgb, var(--app-success) 40%, var(--result-line)); border-radius: var(--r-pill); color: var(--app-success); font-size: .875rem; font-weight: 650; text-transform: capitalize; }
 .result-outcome[data-tone="attention"] { border-color: color-mix(in srgb, var(--app-warning) 45%, var(--result-line)); color: var(--app-warning); }
 .result-meta, .result-muted, .result-note { margin: .3rem 0 0; color: var(--result-muted); font-size: .875rem; }
+.result-source-badge { display: inline-flex; align-items: center; margin-left: .6rem; padding: .1rem .5rem; border: 1px solid var(--result-line); border-radius: var(--r-pill); color: var(--result-muted); font-size: .75rem; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; vertical-align: middle; }
 /* The result's own identity leads the page: it is the loudest text in the workspace. */
 .result-header h1 { margin: .5rem 0 0; font-family: var(--font-display); font-size: clamp(1.95rem, 2.9vw, 2.5rem); font-weight: 600; line-height: 1.12; letter-spacing: -.02em; overflow-wrap: anywhere; }
 .result-header-actions { flex-wrap: wrap; justify-content: end; }

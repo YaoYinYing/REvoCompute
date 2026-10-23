@@ -1,11 +1,19 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { getCurrentUser, loadAuthorizedResult, parseResultManifest, requestResultArchive } from '../src/api/result-api';
+import { downloadUrl, getCurrentUser, loadAuthorizedResult, parseResultManifest, requestResultArchive } from '../src/api/result-api';
 import type { ResultManifest } from '../src/api/result-types';
 
 afterEach(() => vi.unstubAllGlobals());
 
 describe('Result API boundary', () => {
+  it('asks the artifact route for a download, and hands a local blob back unchanged', () => {
+    const artifact = { path: 'scores.csv', url: '/compute/api/results/x/artifacts/scores.csv' } as never;
+    expect(downloadUrl(artifact)).toBe('/compute/api/results/x/artifacts/scores.csv?download=1');
+    // A blob handle is the reader's own file; Chromium cancels a download of a
+    // blob URL that carries a query, so the local case must not gain one.
+    expect(downloadUrl({ path: 'scores.csv', url: 'blob:https://example/1234' } as never)).toBe('blob:https://example/1234');
+  });
+
   it('surfaces an expired browser session before concealed task reads', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'Authentication required' }), {
       status: 401, headers: { 'content-type': 'application/json' },

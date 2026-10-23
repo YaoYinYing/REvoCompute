@@ -1,6 +1,9 @@
 import { guidedTour } from '../../app/guided-tour';
 import { ResultWorkspace } from './ResultWorkspace';
+import { mountLocalResultWorkspace as mountLocal } from './local-workspace';
 import './results.css';
+
+export { mountLocal as mountLocalResultWorkspace };
 
 export async function mountResultWorkspace(root: HTMLElement): Promise<ResultWorkspace> {
   const workspace = new ResultWorkspace(root, async (host, options) => {

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { documentOrder, installHarness, type HarnessNode } from './dom-harness';
+import { translate } from '../src/app/i18n';
 
 /*
  * The shell's navigation regions are captions over their destinations, not document
@@ -79,5 +80,12 @@ describe('shell navigation structure', () => {
     const { root, outlet } = shellWithPageHeading();
     expect(root.querySelectorAll('nav.app-nav').length).toBe(1);
     expect(outlet.querySelector('h1')!.textContent).toBe('Dashboard');
+  });
+
+  it('reaches the local result workspace from the Compute region', () => {
+    const { root } = shellWithPageHeading();
+    const links = root.querySelectorAll('div.app-nav-group[data-nav-group="compute"] a');
+    const local = links.find(link => link.getAttribute('href') === '/compute/local_results');
+    expect(local?.getAttribute('title')).toBe(translate('en', 'shell.nav.localResults'));
   });
 });

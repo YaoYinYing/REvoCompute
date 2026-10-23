@@ -292,6 +292,9 @@ async function render(route: AppRoute, historyNavigation: boolean): Promise<void
       case 'dashboard': { const { mountDashboard } = await import('./features/dashboard/index.js'); const view = mountDashboard(mount.holder, shell, sessionUser!); mount.view = view; await view.load(); break; }
       case 'create-task': { const { mountCreateTask } = await import('./features/create-task/index.js'); await mountCreateTask(mount.holder); break; }
       case 'result': { const { mountResultWorkspace } = await import('./features/results/index.js'); mount.view = await mountResultWorkspace(mount.holder); break; }
+      // The Local Result Workspace reads a folder the reader chooses; it starts no Task,
+      // requests no result, and holds no server state of its own.
+      case 'local-results': { const { mountLocalResultWorkspace } = await import('./features/results/index.js'); mount.view = await mountLocalResultWorkspace(mount.holder); break; }
       case 'account': { const { mountAccount } = await import('./features/profile/index.js'); await mountAccount(mount.holder, shell, sessionUser!, route.section); break; }
       // The Quota page reads the reader's own position from the endpoints scoped
       // to them and returns a view, so it takes the same disposable mount the

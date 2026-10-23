@@ -1,5 +1,7 @@
 # Long-task Handling
 
+Single-PR multi-agent work additionally follows [Single-PR Campaign Protocol](single-pr-campaign.md), including the independently appointed final **Campaign Acceptance Auditor**. It complements, rather than replaces, this long-task and multi-PR methodology; `CLAUDE.md` remains normative.
+
 Use this protocol for work that cannot be completed reliably as a single local
 patch: large architectural refactors, migrations, and repository-wide redesigns,
 and coordinated multi-PR campaigns, which may consist of ordinary features

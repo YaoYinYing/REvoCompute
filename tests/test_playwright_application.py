@@ -226,7 +226,7 @@ def _install_app(page: Page) -> list[str]:
     page.on("request", lambda request: requested.append(request.url))
     html_headers = {
         "Content-Type": "text/html; charset=utf-8",
-        "Content-Security-Policy": "default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; script-src 'self'; img-src 'self' data: blob:; worker-src 'self' blob:",
+        "Content-Security-Policy": "default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; script-src 'self'; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' blob:",
         "Referrer-Policy": "no-referrer",
     }
     for pattern in (

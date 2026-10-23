@@ -45,6 +45,31 @@ non-empty, and structurally mappable. That check does not establish scientific
 or experimental validity. Task-owned limitations are recorded alongside the
 result and should be read before drawing conclusions.
 
+## Local result folders
+
+A downloaded ZIP can be extracted and read again without uploading it. Choose
+**Local result** in the Compute navigation, then **Open local result folder** and
+pick the extracted folder — the one containing `manifest.json`.
+
+- The page is marked **Local** and shows the folder's name instead of a Task
+  id. The Task the archive came from is listed in the run record as *Exported
+  from task*, as provenance only.
+- Every declared file must be present and match the size and SHA-256 the
+  manifest records; otherwise the page names the files that differ and opens
+  nothing. Files past the browser's hashing budget — and every file on a
+  non-secure origin, where the browser cannot hash — are checked by size only,
+  and the page says so.
+- Declared views, files and downloads work as they do for a remote result, and
+  a download keeps the file's own name. A declared Storyboard is named but not
+  run: its code is not loaded from a folder, so the declared views are shown
+  instead. A citation links only to an `https:` address or a DOI, so a crafted
+  folder cannot hand you an executable link.
+- Nothing is uploaded and no Task, Runner or Tool is started. The browser asks
+  for the folder again after a reload.
+
+See [Local Result Workspace](../developer-guide/local-result-workspace.md) for
+the archive contract and its limitations.
+
 ## Where the details live
 
 - [Task States and Result Delivery](task-states.md) — lifecycle states, what

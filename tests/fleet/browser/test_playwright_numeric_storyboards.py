@@ -41,7 +41,7 @@ FIXTURES = ROOT / "tests" / "data" / "storyboards"
 ORIGIN = "https://revocompute.example"
 CSP = (
     "default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; "
-    "script-src 'self'; img-src 'self' data: blob:; worker-src 'self' blob:"
+    "script-src 'self'; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' blob:"
 )
 # Every Task this Owner declared a Storyboard for, with the table column the
 # primary entity-table view must render from the published artifact.

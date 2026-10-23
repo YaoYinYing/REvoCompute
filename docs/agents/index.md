@@ -9,6 +9,7 @@ human reviewers.
   design. It deliberately does not restate the rules.
 - [Long-task Handling](long-task-handling.md) — the protocol for large
   refactors, migrations, and repository-wide redesigns.
+- [Single-PR Campaign Protocol](single-pr-campaign.md) — independent Adviser, Examiner and final Acceptance Auditor.
 
 ## Skills
 

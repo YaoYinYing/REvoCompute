@@ -10,7 +10,7 @@ import type { ResultView } from '../../api/result-types';
 import { LocalConfidenceSeries } from './scientific';
 import { resolveScalarPath } from './scalar-summary-view';
 import type { ResolvedViewSources, ViewRenderer } from './renderer-registry';
-import { column, loadTable, tableUrlOf } from './table-page';
+import { column, loadTable, localTableRead, tableUrlOf } from './table-page';
 
 /** The server refuses a JSON scientific-view source above 8 MiB before publishing it. */
 const MAX_JSON_BYTES = 8 * 1024 * 1024;
@@ -50,24 +50,34 @@ export function seriesRange(values: Array<number | null>, mapping: MetricSeriesM
 
 /**
  * Read a declared JSON series: the mapping's `value_path` resolves to the value list
- * the server checked at publication, and each value's position is its x position.
+ * the server checked at publication, and each value's position is its x position. A local
+ * source reads the opened folder's own bytes, so the view never depends on `fetch(blob:)`.
  */
 export async function loadJsonSeries(
   url: string,
   mapping: MetricSeriesMapping,
-  options: { signal?: AbortSignal } = {},
+  options: { signal?: AbortSignal; text?: string } = {},
 ): Promise<{ values: Array<number | null>; xValues: number[] }> {
   const path = mapping.value_path;
   if (!path) throw new TypeError('The metric series view declares no value path.');
-  const response = await fetch(url, { credentials: 'same-origin', signal: options.signal });
-  if (!response.ok) throw new Error('The metric series source could not be loaded.');
-  const raw: unknown = resolveScalarPath(await response.json(), path);
+  const raw: unknown = resolveScalarPath(parseJson(await readJsonText(url, options)), path);
   if (!Array.isArray(raw)) throw new Error('The metric series value path is not a list.');
   const values = raw.map((value) => (value == null ? null : Number(value)));
   if (values.some((value) => value !== null && !Number.isFinite(value))) {
     throw new Error('The metric series value path is not numeric.');
   }
   return { values, xValues: values.map((_, index) => index + 1) };
+}
+
+async function readJsonText(url: string, options: { signal?: AbortSignal; text?: string }): Promise<string> {
+  if (options.text !== undefined) return options.text;
+  const response = await fetch(url, { credentials: 'same-origin', signal: options.signal });
+  if (!response.ok) throw new Error('The metric series source could not be loaded.');
+  return await response.text();
+}
+
+function parseJson(text: string): unknown {
+  try { return JSON.parse(text); } catch { throw new Error('The metric series source is not valid JSON.'); }
 }
 
 /**
@@ -84,16 +94,23 @@ export function createMetricSeriesViewRenderer(): ViewRenderer {
     async render(view: ResultView, sources: ResolvedViewSources, host: HTMLElement, context) {
       const mapping = (view.mapping || {}) as MetricSeriesMapping;
       const source = sources.series?.[0];
+      // A local source resolves no Server route; it reads the opened folder's own file.
+      const local = context.localSource;
+      const tableRead = localTableRead(local, source) ?? tableUrlOf(source, context.taskId);
       let xValues: number[];
       let series: Array<{ label: string; values: Array<number | null> }>;
       if (mapping.format === 'json') {
-        if (!source || !('url' in source)) throw new TypeError('The metric series view has no published source.');
+        if (!source || (!local && !('url' in source))) throw new TypeError('The metric series view has no published source.');
         if (source.size > MAX_JSON_BYTES) throw new Error('The metric series source is too large to plot.');
-        const loaded = await loadJsonSeries(source.url, mapping, { signal: context.signal });
+        // A local file's URL is a `blob:` URL the app CSP refuses to fetch, so a local
+        // series is read through the source's own bounded text read instead.
+        const text = local ? await local.readUtf8(source.path, MAX_JSON_BYTES) : undefined;
+        const url = 'url' in source ? source.url : '';
+        const loaded = await loadJsonSeries(url, mapping, { signal: context.signal, text });
         xValues = loaded.xValues;
         series = [{ label: mapping.y_label || view.title, values: loaded.values }];
       } else {
-        const { page } = await loadTable(tableUrlOf(source, context.taskId), { signal: context.signal });
+        const { page } = await loadTable(tableRead, { signal: context.signal });
         const xColumn = mapping.x_column;
         if (!xColumn) throw new TypeError('The metric series view declares no x column.');
         xValues = column(page, xColumn).map((cell) => Number(cell.trim()));

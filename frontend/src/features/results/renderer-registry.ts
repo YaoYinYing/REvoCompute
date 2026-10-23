@@ -1,9 +1,27 @@
 import { isLogicalFile, resultFileName, type ResultArtifact, type ResultFile, type PreviewCapability, type ResultView } from '../../api/result-types';
 import { t } from '../../app/i18n';
+import { readLocalTablePage } from './table-page';
+
+/**
+ * The user's opened result folder, as views read it.
+ *
+ * A local view reads the file at an archived path; it never composes a Server URL, because a
+ * local result has no Task id and no route. `readUtf8` refuses a file larger than `maxBytes`
+ * rather than materialising it. A source that implements this shape is structurally
+ * compatible, whichever module declares it.
+ */
+export interface LocalSourceFiles {
+  readonly label: string;
+  file(path: string): File | null;
+  readUtf8(path: string, maxBytes: number): Promise<string>;
+}
 
 export interface RendererContext {
   signal: AbortSignal;
   taskId: string;
+  // The opened local result folder, present only for a local source. A view with one reads
+  // its sources from that folder; it must not fall back to a `/compute/api/` route.
+  localSource?: LocalSourceFiles;
   // Mount one structure artifact into `host` through the workspace's own molecular
   // stage; absent for an embedder that has none. A view renderer that shows a
   // candidate as a structure uses this instead of carrying a second viewer.
@@ -127,26 +145,39 @@ export function createBasicRenderers(): ArtifactRenderer[] {
       id: 'text',
       async render(artifact, host, context) {
         if (artifact.size > 262_144) throw new Error(t('results.textTooLarge'));
-        const response = await fetch(artifact.url, {
-          credentials: 'same-origin', signal: context.signal, headers: { Range: 'bytes=0-262143' },
-        });
-        if (!response.ok && response.status !== 206) throw new Error(t('results.textFailed'));
-        const pre = document.createElement('pre'); pre.textContent = await response.text(); host.replaceChildren(pre);
+        const pre = document.createElement('pre');
+        if (context.localSource) pre.textContent = await context.localSource.readUtf8(artifact.path, 262_144);
+        else {
+          const response = await fetch(artifact.url, {
+            credentials: 'same-origin', signal: context.signal, headers: { Range: 'bytes=0-262143' },
+          });
+          if (!response.ok && response.status !== 206) throw new Error(t('results.textFailed'));
+          pre.textContent = await response.text();
+        }
+        host.replaceChildren(pre);
       },
     },
     {
       id: 'table',
       async render(artifact, host, context) {
-        const name = resultFileName(artifact), encoded = name.split('/').map(encodeURIComponent).join('/');
-        // A logical file carries the Server's bounded table URL or none; only a raw
-        // published artifact lets the browser compose the bounded page route.
-        const url = artifact.table_url || (!isLogicalFile(artifact)
-          ? `/compute/api/results/${encodeURIComponent(context.taskId)}/tables/${encoded}?limit=100`
-          : null);
-        if (!url) throw new Error(t('results.tableNoUrl'));
-        const response = await fetch(url, { credentials: 'same-origin', signal: context.signal });
-        if (!response.ok) throw new Error(t('results.tableFailed'));
-        const page = await response.json() as { columns: unknown[]; rows: unknown[][]; has_more?: boolean };
+        // A local source reads the opened folder's own file through the same bounded page
+        // loader; it never composes a route, and stamping its `blob:` URL into a route would
+        // turn a handle into a Server request.
+        let page: { columns: unknown[]; rows: unknown[][]; has_more?: boolean };
+        if (context.localSource) {
+          page = await readLocalTablePage(context.localSource, artifact, { offset: 0, limit: 100 }, context.signal);
+        } else {
+          const name = resultFileName(artifact), encoded = name.split('/').map(encodeURIComponent).join('/');
+          // A logical file carries the Server's bounded table URL or none; only a raw
+          // published artifact lets the browser compose the bounded page route.
+          const url = artifact.table_url || (!isLogicalFile(artifact)
+            ? `/compute/api/results/${encodeURIComponent(context.taskId)}/tables/${encoded}?limit=100`
+            : null);
+          if (!url) throw new Error(t('results.tableNoUrl'));
+          const response = await fetch(url, { credentials: 'same-origin', signal: context.signal });
+          if (!response.ok) throw new Error(t('results.tableFailed'));
+          page = await response.json() as typeof page;
+        }
         const table = document.createElement('table'); table.className = 'result-table';
         const head = document.createElement('thead'); const heading = document.createElement('tr');
         page.columns.forEach((column) => { const cell = document.createElement('th'); cell.scope = 'col'; cell.textContent = String(column); heading.append(cell); });

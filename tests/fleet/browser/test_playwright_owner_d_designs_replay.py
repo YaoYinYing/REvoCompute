@@ -267,6 +267,9 @@ def test_a_missing_required_source_states_the_error_and_keeps_downloads(page: Pa
         f"{ORIGIN}{designs['url']}",
         lambda route: route.fulfill(status=404, json={"error": "Artifact not found"}),
     )
+    # The page mounts the declared Storyboard on load and closes the view menu when
+    # that render settles; opening the menu before then lets it close under the click.
+    expect(page.locator(".result-tab[data-view=storyboard]")).to_have_attribute("aria-pressed", "true", timeout=30_000)
     page.locator(".result-view-menu > summary").click()
     page.locator(".result-tab", has_text="Designed sequences").click()
     # The declared view cannot read its source; the failure is stated instead of

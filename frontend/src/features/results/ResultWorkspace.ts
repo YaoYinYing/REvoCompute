@@ -1,4 +1,4 @@
-import { ApiError, beginDownload, downloadUrl, getResultManifest, loadAuthorizedResult, requestResultArchive, taskIdFromLocation } from '../../api/result-api';
+import { ApiError, beginDownload, downloadName, downloadUrl, getResultManifest, loadAuthorizedResult, requestResultArchive, taskIdFromLocation } from '../../api/result-api';
 import { resultFileName, type ArtifactRole, type LogicalResultFile, type ResultArtifact, type ResultFile, type ResultManifest,
   type ResultView, type TaskStatus } from '../../api/result-types';
 import { setButtonIcon } from '../../components/icons';
@@ -18,6 +18,7 @@ import { StructureController } from './molecular/structure-controller';
 import { installScientificPrimitives } from './scientific';
 import { StoryboardHost } from './storyboard-host';
 import { mountTaskDiagnostics } from '../tasks/diagnostics';
+import type { LocalResultSource } from './local-source';
 
 function element<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, text?: string): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag); if (className) node.className = className; if (text != null) node.textContent = text; return node;
@@ -44,8 +45,24 @@ const QUIET_OUTCOMES = new Set(['success', 'succeeded', 'completed', 'complete',
 const isQuietOutcome = (manifest: ResultManifest): boolean => manifest.status === 'finished' &&
   (!manifest.outcome || QUIET_OUTCOMES.has(manifest.outcome.trim().toLowerCase()));
 
+/**
+ * The one address a citation may link to.
+ *
+ * A citation comes from the manifest, and a local result's manifest is a folder's bytes. Only an
+ * absolute `https:` address (or a DOI, from which the Server's own form is derived) becomes a
+ * live anchor in this origin, so a `javascript:` or `data:` URL can never be clicked into
+ * execution on the results page.
+ */
+const citationHref = (citation: { url?: string; doi?: string }): string | null => {
+  if (citation.url) {
+    try { const parsed = new URL(citation.url); if (parsed.protocol === 'https:') return parsed.href; }
+    catch { /* a relative or malformed address is not a citation locator */ }
+  }
+  return citation.doi ? `https://doi.org/${encodeURIComponent(citation.doi)}` : null;
+};
+
 interface WorkspaceNodes {
-  status: HTMLElement; outcome: HTMLElement; title: HTMLElement; meta: HTMLElement; tabs: HTMLElement;
+  status: HTMLElement; outcome: HTMLElement; badge: HTMLElement; title: HTMLElement; meta: HTMLElement; tabs: HTMLElement;
   previewTitle: HTMLElement; previewDescription: HTMLElement; preview: HTMLElement; download: HTMLAnchorElement;
   rail: HTMLElement; railDetails: HTMLDetailsElement; reopen: HTMLButtonElement; search: HTMLInputElement;
   fileList: HTMLElement; integrity: HTMLElement; artifactSummary: HTMLElement; archive: HTMLButtonElement; archiveStatus: HTMLElement;
@@ -53,7 +70,14 @@ interface WorkspaceNodes {
 }
 
 export class ResultWorkspace {
-  private readonly taskId = taskIdFromLocation();
+  private readonly taskId: string;
+  /**
+   * The opened result folder, when this workspace renders a Local result.
+   *
+   * A local workspace never requests a result: there is no Task to authorize and no route a
+   * folder could be read through, so `load()` projects the folder's own manifest instead.
+   */
+  private readonly local: LocalResultSource | null;
   private readonly rendererRegistry = new RendererRegistry();
   private readonly viewRenderers = new ViewRendererRegistry();
   private readonly structure: StructureController;
@@ -88,13 +112,17 @@ export class ResultWorkspace {
   private readonly directoryExpansion = new Map<string, boolean>();
   private readonly listeners = new AbortController();
 
-  constructor(private readonly root: HTMLElement, private readonly createViewer: MolecularViewerFactory) {
+  constructor(private readonly root: HTMLElement, private readonly createViewer: MolecularViewerFactory, local: LocalResultSource | null = null) {
+    this.local = local;
+    // The Task identity the page states: the source's own for a local folder, the URL's for a
+    // Task. No route is ever composed for the local one -- it is the literal `local`.
+    this.taskId = local ? local.taskId : taskIdFromLocation();
     installScientificPrimitives(); this.geometry = new StructureController(createViewer, { controlsCollapsed: true }); this.structure = new StructureController(createViewer, {
       selectionEnabled: true, controlsCollapsed: true,
       onSelectionChanged: (residues) => this.storyboard.setMolecularSelection(residues),
     });
     this.nodes = this.buildShell(); this.storyboard = new StoryboardHost(this.nodes.preview, {
-      openFile: (file) => this.openLogicalFile(file), downloadFile: (file) => beginDownload(file.url),
+      openFile: (file) => this.openLogicalFile(file), downloadFile: (file) => beginDownload(file.url, downloadName(file)),
       openView: (viewId) => this.openViewById(viewId),
       mountView: async (viewId, host, signal) => {
         const view = this.manifest?.views?.find(item => item.id === viewId);
@@ -108,7 +136,7 @@ export class ResultWorkspace {
         return this.rendererRegistry.resolve(artifact)?.render(artifact, host, context);
       },
       focusStructure: (selection) => this.structure.focus(selection), selectStructure: (selection) => this.structure.select(selection),
-      describeResult: description => { this.nodes.title.textContent = description.title; if (description.subtitle) this.nodes.meta.textContent = `${description.subtitle} · ${this.taskId}`; },
+      describeResult: description => { this.nodes.title.textContent = description.title; if (description.subtitle) this.nodes.meta.textContent = `${description.subtitle} · ${this.sourceLabel()}`; },
       setStructureGeometry: artifact => this.structure.setGeometry(artifact),
       resetStructure: () => this.structure.resetCamera(),
       annotateStructure: annotation => this.structure.annotate(annotation),
@@ -131,6 +159,7 @@ export class ResultWorkspace {
     this.loadController?.abort(); this.loadController = new AbortController();
     this.renderDiagnostics(false);
     this.setState(t('results.loadingTitle'), t('results.loadingBody'));
+    if (this.local) { this.renderLocal(this.local); return this; }
     try {
       const result = await loadAuthorizedResult(this.taskId, this.loadController.signal);
       if (!isResultManifest(result)) { this.renderPending(result); return this; }
@@ -145,13 +174,45 @@ export class ResultWorkspace {
     return this;
   }
 
+  /** The identity line's source: the folder for a local result, the Task id for a remote one. */
+  private sourceLabel(): string { return this.local ? this.local.label : this.taskId; }
+
+  /**
+   * Render an opened local folder as this page's result.
+   *
+   * The page states Local as its source, refuses to pretend it is the Task the archive came
+   * from (that Task is not this document's to authorize), and keeps a declared Storyboard as a
+   * stated limitation rather than loading code out of the folder.
+   */
+  private renderLocal(local: LocalResultSource): void {
+    const manifest = local.manifest;
+    this.manifest = manifest;
+    // The folder holds no Task: the Task its manifest records is the archive's provenance,
+    // not this page's identity, so the badge states the source instead of that Task's id.
+    this.nodes.badge.textContent = t('results.local.badge');
+    this.nodes.badge.title = t('results.local.badgeTitle', { label: local.label });
+    this.nodes.badge.hidden = false;
+    this.renderManifest(manifest);
+    const { hashed, unchecked } = local.verification;
+    this.nodes.archiveStatus.replaceChildren(element('p', 'result-note', unchecked.length
+      ? t('results.local.verifiedPartial', { verified: hashed, sizeOnly: unchecked.length })
+      : t(hashed === 1 ? 'results.local.verifiedOne' : 'results.local.verified', { verified: hashed })));
+    this.nodes.archiveStatus.dataset.error = 'false';
+    if (local.storyboard) {
+      this.nodes.status.replaceChildren(element('strong', '', t('results.local.scientific')),
+        element('span', '', t('results.local.storyboard', { identifier: local.storyboard })));
+      this.nodes.status.hidden = false;
+    }
+  }
+
   private buildShell(): WorkspaceNodes {
     this.root.replaceChildren(); const page = element('main', 'result-app');
     const header = element('header', 'result-header'); const identity = element('div', 'result-identity');
     const methodRow = element('p', 'result-method-row');
     const outcome = element('span', 'result-outcome'); outcome.hidden = true; methodRow.append(outcome);
-    const title = element('h1', '', t('results.taskTitle', { id: this.taskId }));
-    const meta = element('p', 'result-meta', this.taskId); identity.append(methodRow, title, meta);
+    const badge = element('span', 'result-source-badge'); badge.hidden = true; badge.dataset.source = 'local';
+    const title = element('h1', '', this.local ? t('results.title') : t('results.taskTitle', { id: this.taskId }));
+    const meta = element('p', 'result-meta', this.sourceLabel()); identity.append(methodRow, title, meta, badge);
     const actions = element('div', 'result-header-actions'); const dashboard = element('a', 'result-button', t('shell.nav.dashboard')); dashboard.href = '/compute/dashboard';
     const refresh = element('button', 'result-icon-button') as HTMLButtonElement; refresh.type = 'button'; refresh.title = t('results.refresh'); refresh.setAttribute('aria-label', t('results.refresh')); setButtonIcon(refresh, 'RefreshCw');
     refresh.addEventListener('click', () => void this.load()); actions.append(refresh); header.append(identity, actions);
@@ -182,7 +243,7 @@ export class ResultWorkspace {
     const integrity = element('div'); railDetails.append(summary, tools, fileList, integrity); rail.append(closeFiles, railDetails); actions.prepend(reopen);
     workspace.append(main); const record = element('dialog', 'result-record-dialog'); record.setAttribute('aria-label', t('results.run.title')); const recordSummary = element('h2', '', t('results.run.title')); const recordClose = element('button', 'result-button', t('ct.cancel')); recordClose.type = 'button'; recordClose.addEventListener('click', () => record.close()); const recordOpen = element('button', 'result-button', t('results.run.title')); recordOpen.type = 'button'; recordOpen.addEventListener('click', () => record.showModal()); actions.insertBefore(recordOpen, viewMenu); const recordBody = element('section', 'result-record'); const limitations = element('div'); const run = element('div'); recordBody.append(limitations, run); record.append(recordClose, recordSummary, recordBody);
     page.append(header, status, diagnostics, workspace, record, rail); this.root.append(page);
-    return { status, outcome, title, meta, tabs, previewTitle, previewDescription, preview, download, rail, railDetails, reopen, search, fileList, integrity, artifactSummary, archive, archiveStatus, limitations, run, diagnostics, viewError };
+    return { status, outcome, badge, title, meta, tabs, previewTitle, previewDescription, preview, download, rail, railDetails, reopen, search, fileList, integrity, artifactSummary, archive, archiveStatus, limitations, run, diagnostics, viewError };
   }
 
   private bind(): void {
@@ -217,9 +278,14 @@ export class ResultWorkspace {
     const method = manifest.run?.method?.name || manifest.task_type || t('results.scientific');
     const input = manifest.run?.inputs?.length === 1 ? manifest.run.inputs[0]?.path.split('/').pop() : null;
     this.nodes.title.textContent = input || method;
-    this.nodes.meta.textContent = `${method} · ${manifest.task_id}`; this.nodes.meta.title = t('results.taskIdTitle', { id: manifest.task_id });
+    // A local result states the folder it was read from: the Task identity the archive records
+    // is a Task that is not this document's, and a local page never names it as live.
+    this.nodes.meta.textContent = this.local ? `${method} · ${this.local.label}` : `${method} · ${manifest.task_id}`;
+    this.nodes.meta.title = this.local ? this.local.label : t('results.taskIdTitle', { id: manifest.task_id });
+    this.nodes.meta.dataset.source = this.local ? 'local' : 'remote';
     const quiet = isQuietOutcome(manifest);
-    this.renderDiagnostics(manifest.status === 'failed');
+    // Task diagnostics read the Server's task routes; a folder has no Task to ask about.
+    this.renderDiagnostics(!this.local && manifest.status === 'failed');
     this.setState(quiet ? manifest.status : manifest.outcome || manifest.status, manifest.error || '', quiet);
     if (manifest.output_check.state === 'failed') {
       this.nodes.status.hidden = false;
@@ -316,7 +382,8 @@ export class ResultWorkspace {
   private rendererContext(signal: AbortSignal): RendererContext {
     const structure = this.viewStructure
       || (this.viewStructure = new StructureController(this.createViewer, { selectionEnabled: true, controlsCollapsed: true }));
-    return { signal, taskId: this.taskId, openStructure: (artifact, host) => this.renderStructure(artifact, host, structure),
+    return { signal, taskId: this.taskId, localSource: this.local ?? undefined,
+      openStructure: (artifact, host) => this.renderStructure(artifact, host, structure),
       closeStructure: (host) => structure.disposeIfIn(host), selectStructure: (selection) => structure.select(selection),
       drawsStructure: (artifact) => this.storyboardStructure !== null
         && this.storyboardStructure.path === artifact.path };
@@ -344,7 +411,7 @@ export class ResultWorkspace {
     this.destroyViewRenderer(); this.geometry.dispose(); this.storyboard.destroy(); this.cancelRender(); this.structure.dispose(); this.selectArtifact(artifact); this.markTab(null);
     const fileName = resultFileName(artifact);
     this.nodes.previewTitle.textContent = view.title; this.nodes.previewDescription.textContent = view.description || '';
-    this.nodes.download.hidden = false; this.nodes.download.href = downloadUrl(artifact); this.nodes.download.title = fileName;
+    this.nodes.download.hidden = false; this.nodes.download.href = downloadUrl(artifact); this.nodes.download.setAttribute('download', downloadName(artifact)); this.nodes.download.title = fileName;
     this.nodes.download.textContent = t('results.downloadNamed', { name: localName(fileName) });
     const controller = new AbortController(); this.renderController = controller; this.nodes.preview.setAttribute('aria-busy', 'true');
     try { this.viewRenderer = (await renderer.render(view, sources, this.nodes.preview, this.rendererContext(controller.signal))) || null; }
@@ -409,12 +476,12 @@ export class ResultWorkspace {
     if ((this.nodes.rail as HTMLDialogElement).open) (this.nodes.rail as HTMLDialogElement).close();
     this.destroyViewRenderer(); this.geometry.dispose(); this.storyboard.destroy(); this.cancelRender(); this.selectArtifact(artifact); this.markTab(null);
     const fileName = resultFileName(artifact); this.nodes.previewTitle.textContent = localName(fileName); this.nodes.previewDescription.textContent = formatBytes(artifact.size);
-    this.nodes.download.hidden = false; this.nodes.download.href = downloadUrl(artifact); this.nodes.download.title = fileName;
+    this.nodes.download.hidden = false; this.nodes.download.href = downloadUrl(artifact); this.nodes.download.setAttribute('download', downloadName(artifact)); this.nodes.download.title = fileName;
     this.nodes.download.textContent = t('results.downloadNamed', { name: localName(fileName) });
     const renderer = this.rendererRegistry.resolve(artifact); if (!renderer) { this.renderPreviewError(t('results.noInlinePreview')); return; }
     if (artifactCapability(artifact) !== 'structure' && artifactCapability(artifact) !== 'molecular_structure') this.structure.dispose();
     const controller = new AbortController(); this.renderController = controller; this.nodes.preview.setAttribute('aria-busy', 'true');
-    try { await renderer.render(artifact, this.nodes.preview, { signal: controller.signal, taskId: this.taskId }); }
+    try { await renderer.render(artifact, this.nodes.preview, { signal: controller.signal, taskId: this.taskId, localSource: this.local ?? undefined }); }
     catch (error) { if ((error as Error).name !== 'AbortError' && generation === this.previewGeneration) this.renderPreviewError((error as Error).message || t('results.previewFailed')); }
     finally { if (!controller.signal.aborted && generation === this.previewGeneration) this.nodes.preview.setAttribute('aria-busy', 'false'); }
   }
@@ -469,7 +536,7 @@ export class ResultWorkspace {
       owner.setTheme(own ? this.structureTheme : this.viewStructureTheme); syncThemeButton();
     });
     const image = element('button', 'result-button result-button-small', t('results.structure.savePng')) as HTMLButtonElement; image.type = 'button'; image.addEventListener('click', async () => beginDownload(await owner.captureImage()));
-    const source = element('button', 'result-button result-button-small', t('results.download')) as HTMLButtonElement; source.type = 'button'; source.addEventListener('click', () => beginDownload(downloadUrl(artifact)));
+    const source = element('button', 'result-button result-button-small', t('results.download')) as HTMLButtonElement; source.type = 'button'; source.addEventListener('click', () => beginDownload(downloadUrl(artifact), downloadName(artifact)));
     const fullscreen = element('button', 'result-button result-button-small') as HTMLButtonElement; fullscreen.type = 'button';
     const syncFullscreen = (): void => { const expanded = document.fullscreenElement === (viewport.closest('[data-molecular-workspace]') || viewport); const label = expanded ? t('results.structure.exitFullscreen') : t('results.structure.enterFullscreen'); fullscreen.title = label; fullscreen.setAttribute('aria-label', label); fullscreen.setAttribute('aria-pressed', String(expanded)); fullscreen.textContent = expanded ? label : t('results.structure.expandStage'); };
     syncFullscreen();
@@ -521,20 +588,24 @@ export class ResultWorkspace {
     const selectedPath = this.selected && 'path' in this.selected ? this.selected.path : null;
     open.setAttribute('aria-current', String(selectedPath === artifact.path));
     const meta = element('span', '', formatBytes(artifact.size)); open.append(name, meta); open.addEventListener('click', () => void this.openArtifact(artifact));
-    const download = element('a', 'result-file-download') as HTMLAnchorElement; download.href = downloadUrl(artifact); download.download = ''; download.title = t('results.fileDownload', { name: artifact.path }); download.setAttribute('aria-label', t('results.fileDownload', { name: artifact.path })); setButtonIcon(download, 'Download');
+    const download = element('a', 'result-file-download') as HTMLAnchorElement; download.href = downloadUrl(artifact); download.setAttribute('download', downloadName(artifact)); download.title = t('results.fileDownload', { name: artifact.path }); download.setAttribute('aria-label', t('results.fileDownload', { name: artifact.path })); setButtonIcon(download, 'Download');
     row.append(open, download); return row;
   }
 
   private renderRecord(): void {
     const manifest = this.manifest; if (!manifest) return; this.nodes.limitations.replaceChildren(); this.nodes.run.replaceChildren();
     if (manifest.limitations?.length) { const title = element('h2', '', t('results.limitations')); const list = element('ul'); manifest.limitations.forEach((text) => list.append(element('li', '', text))); this.nodes.limitations.append(title, list); }
-    const values: Array<[string, string]> = [[t('dashboard.card.taskId'), manifest.task_id], [t('results.run.submitted'), manifest.run?.submitted_at || '-'], [t('results.run.started'), manifest.run?.started_at || '-'], [t('results.run.finished'), manifest.run?.finished_at || '-']];
+    const exported = this.local?.sourceTaskId;
+    const values: Array<[string, string]> = [exported
+      ? [t('results.local.exportedFrom'), exported]
+      : [t('dashboard.card.taskId'), manifest.task_id], [t('results.run.submitted'), manifest.run?.submitted_at || '-'], [t('results.run.started'), manifest.run?.started_at || '-'], [t('results.run.finished'), manifest.run?.finished_at || '-']];
     manifest.run?.inputs?.forEach((input) => values.push([input.role ? t('results.run.inputRole', { role: input.role }) : t('results.run.input'), `${input.path} [${input.sha256.slice(0, 12)}]`]));
     manifest.run?.parameters?.forEach((parameter) => values.push([parameter.label, `${String(parameter.value)}${parameter.unit ? ` ${parameter.unit}` : ''}`]));
     const title = element('h2', '', t('results.run.title')); const list = element('dl', 'result-definition-list');
     values.forEach(([term, value]) => list.append(element('dt', '', term), element('dd', '', value))); this.nodes.run.append(title, list);
     if (manifest.run?.citations?.length) { const citations = element('ul', 'result-citations'); manifest.run.citations.forEach((citation) => { const item = element('li');
-      if (citation.url || citation.doi) { const link = element('a', '', citation.title) as HTMLAnchorElement; link.href = citation.url || `https://doi.org/${encodeURIComponent(citation.doi || '')}`; link.rel = 'noopener'; item.append(link); } else item.textContent = citation.title; citations.append(item); }); this.nodes.run.append(citations); }
+      const href = citationHref(citation);
+      if (href) { const link = element('a', '', citation.title) as HTMLAnchorElement; link.href = href; link.rel = 'noopener noreferrer'; item.append(link); } else item.textContent = citation.title; citations.append(item); }); this.nodes.run.append(citations); }
   }
 
   private renderIntegrity(): void {
@@ -547,7 +618,9 @@ export class ResultWorkspace {
   }
 
   private syncArchive(): void {
-    const archive = this.manifest?.archive; const available = Boolean(archive?.request_url || archive?.download_url);
+    // A local result has no Server archive to prepare or download: the folder is the archive.
+    if (this.local) { this.nodes.archive.hidden = true; return; }
+    const archive = this.manifest?.archive;
     if (archive?.ready && archive.download_url) {
       this.archiveBusy = false;
       if (this.archiveTimer != null) clearTimeout(this.archiveTimer);
@@ -555,6 +628,7 @@ export class ResultWorkspace {
       this.nodes.archiveStatus.textContent = t('results.archiveReady');
       this.nodes.archiveStatus.dataset.error = 'false';
     }
+    const available = Boolean(archive?.request_url || archive?.download_url);
     this.nodes.archive.hidden = !available; this.nodes.archive.disabled = !available || this.archiveBusy;
     this.nodes.archive.textContent = archive?.ready && archive.download_url ? t('results.archiveDownload') : t(this.archiveBusy ? 'results.archiveBuilding' : 'results.archiveCreate');
   }
