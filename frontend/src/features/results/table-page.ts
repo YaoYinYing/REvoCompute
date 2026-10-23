@@ -180,16 +180,16 @@ export async function readLocalTablePage(
   const rows: string[][] = [];
   let skipped = 0;
   let hasMore = false;
-  for await (const row of readRecords(file, delimiter, signal)) {
+  for await (const row of readRecords(file, delimiter, maxColumns, signal)) {
     if (columns === null) {
-      pageBytes = PAGE_ENVELOPE_BYTES + rowCost(row, maxColumns);
+      pageBytes = PAGE_ENVELOPE_BYTES + rowCost(row);
       if (pageBytes > MAX_PAGE_BYTES) throw new Error(LOCAL_PAGE_TOO_LARGE);
       columns = row;
       continue;
     }
     if (skipped < offset) { skipped += 1; continue; }
     if (rows.length === limit) { hasMore = true; break; }
-    const cost = rowCost(row, maxColumns);
+    const cost = rowCost(row);
     if (pageBytes + cost > MAX_PAGE_BYTES) throw new Error(LOCAL_PAGE_TOO_LARGE);
     pageBytes += cost;
     rows.push(row);
@@ -197,15 +197,18 @@ export async function readLocalTablePage(
   return { columns: columns ?? [], rows, offset, limit, has_more: hasMore };
 }
 
-const encoder = new TextEncoder();
 const ASCII = /^[\x00-\x7f]*$/;
 
-/** The route's per-row cost: separators plus each cell's `ensure_ascii` JSON bytes. */
-function rowCost(row: string[], maxColumns: number): number {
-  if (row.length > maxColumns) throw new Error(LOCAL_TOO_WIDE);
+/**
+ * The route's per-row cost: separators plus each cell's `ensure_ascii` JSON bytes.
+ *
+ * The cell and column ceilings are enforced by `readRecords` as it accumulates, so a row that
+ * reaches this function is already inside both — including a row the page skips by `offset`,
+ * which never reaches this function at all and must still be refused.
+ */
+function rowCost(row: string[]): number {
   let cost = 2 + Math.max(0, row.length - 1);
   for (const cell of row) {
-    if (encoder.encode(cell).length > MAX_CELL_BYTES) throw new Error(LOCAL_CELL_TOO_LARGE);
     const json = JSON.stringify(cell);
     if (ASCII.test(json)) { cost += json.length; continue; }
     for (const char of json) cost += char.codePointAt(0)! < 0x80 ? 1 : char.codePointAt(0)! < 0x10000 ? 6 : 12;
@@ -220,21 +223,45 @@ function rowCost(row: string[], maxColumns: number): number {
  * or a doubled quote, and text after its closing quote continues the field; records end at
  * `\r\n`, `\r`, or `\n`; a blank line is one empty record. A quote that never closes is
  * malformed rather than guessed.
+ *
+ * The route's cell and column ceilings are enforced while a field and a row are built, not
+ * after the record is complete: the file is untrusted, an unterminated quote or one long
+ * unbroken field would otherwise accumulate the whole file before any check ran, and a row
+ * the page skips by `offset` never reaches a later check at all.
  */
 type FieldState = 'start' | 'text' | 'quoted' | 'closed';
 
-async function* readRecords(file: Blob, delimiter: string, signal?: AbortSignal): AsyncGenerator<string[]> {
+/** The UTF-8 length of one decoded code point, as `TextEncoder` would encode it. */
+function utf8Length(char: string): number {
+  const point = char.codePointAt(0)!;
+  return point < 0x80 ? 1 : point < 0x800 ? 2 : point < 0x10000 ? 3 : 4;
+}
+
+async function* readRecords(file: Blob, delimiter: string, maxColumns: number, signal?: AbortSignal): AsyncGenerator<string[]> {
   const decoder = new TextDecoder('utf-8', { fatal: true });
   let field = '';
+  // The encoded bytes of `field` so far, so the ceiling costs one addition per character
+  // instead of a re-encode of the whole field.
+  let fieldBytes = 0;
   let row: string[] = [];
   // 'start' of a field, plain 'text', inside a quoted field, or just past its closing quote.
   let state: FieldState = 'start';
   let skipLF = false;
 
+  const append = (text: string): void => {
+    for (const char of text) fieldBytes += utf8Length(char);
+    if (fieldBytes > MAX_CELL_BYTES) throw new Error(LOCAL_CELL_TOO_LARGE);
+    field += text;
+  };
+  const endField = (): void => {
+    if (row.length >= maxColumns) throw new Error(LOCAL_TOO_WIDE);
+    row.push(field); field = ''; fieldBytes = 0; state = 'start';
+  };
   const endRecord = (): string[] => {
     // A blank line is an empty record, as the Server's `csv` reader reports it.
     const record = state === 'closed' || row.length || field !== '' ? [...row, field] : [];
-    row = []; field = ''; state = 'start';
+    if (record.length > maxColumns) throw new Error(LOCAL_TOO_WIDE);
+    row = []; field = ''; fieldBytes = 0; state = 'start';
     return record;
   };
 
@@ -242,21 +269,21 @@ async function* readRecords(file: Blob, delimiter: string, signal?: AbortSignal)
     for (const char of text) {
       if (skipLF) { skipLF = false; if (char === '\n') continue; }
       if (state === 'quoted') {
-        if (char === '"') state = 'closed'; else field += char;
+        if (char === '"') state = 'closed'; else append(char);
         continue;
       }
       if (state === 'closed') {
-        if (char === '"') { field += '"'; state = 'quoted'; continue; }
-        if (char === delimiter) { row.push(field); field = ''; state = 'start'; continue; }
-        if (char === '\r') skipLF = true; else if (char !== '\n') { field += char; state = 'text'; continue; }
+        if (char === '"') { append('"'); state = 'quoted'; continue; }
+        if (char === delimiter) { endField(); continue; }
+        if (char === '\r') skipLF = true; else if (char !== '\n') { append(char); state = 'text'; continue; }
         yield endRecord();
         continue;
       }
       if (char === '"' && state === 'start') { state = 'quoted'; continue; }
-      if (char === delimiter) { row.push(field); field = ''; state = 'start'; continue; }
+      if (char === delimiter) { endField(); continue; }
       if (char === '\r') skipLF = true;
       if (char === '\r' || char === '\n') { yield endRecord(); continue; }
-      field += char; state = 'text';
+      append(char); state = 'text';
     }
   }
 

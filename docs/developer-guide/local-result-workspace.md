@@ -125,6 +125,11 @@ ceilings as the remote path. Neither re-hashes per read.
   reader a click-to-execute address inside this origin.
 - Shared table views read the local file through the bounded local reader in
   `table-page.ts` (same row, column and page-byte ceilings as the remote path).
+  Because the file is untrusted bytes rather than a Server-parsed page, the
+  16 KiB cell ceiling and the column ceiling are enforced while a field and a
+  row are accumulated, and a row the page skips by `offset` is checked too: a
+  single oversized cell, or an unterminated quoted field that never ends, is
+  refused as soon as the field passes 16 KiB rather than being buffered whole.
 
 ### Measured CSP prerequisite
 

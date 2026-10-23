@@ -122,6 +122,60 @@ describe('local table paging', () => {
       .rejects.toThrow('exceeds the 16 KiB preview limit');
   });
 
+  it('refuses an oversized cell while it is being read, not after the whole file', async () => {
+    // Five megabytes of one unbroken field: nothing but the accumulation itself bounds it, so
+    // the refusal has to come from the parser as it appends, before the file is read whole.
+    const text = `a,b\n${'x'.repeat(5 * 1024 * 1024)}`;
+    const file = new File([text], 'long-cell.csv');
+    const read: number[] = [];
+    const slice = file.slice.bind(file);
+    Object.defineProperty(file, 'slice', {
+      value: (start?: number, end?: number) => {
+        const part = slice(start, end);
+        const arrayBuffer = part.arrayBuffer.bind(part);
+        Object.defineProperty(part, 'arrayBuffer', {
+          value: () => { read.push((end ?? 0) - (start ?? 0)); return arrayBuffer(); },
+        });
+        return part;
+      },
+    });
+    const files: LocalSourceFiles = { label: 'long', file: () => file, readUtf8: async () => { throw new Error('not used'); } };
+    await expect(readLocalTablePage(files, source('long-cell.csv'), { offset: 0, limit: 10 }))
+      .rejects.toThrow('exceeds the 16 KiB preview limit');
+    expect(read.reduce((total, bytes) => total + bytes, 0)).toBeLessThanOrEqual(256 * 1024);
+  });
+
+  it('refuses an unterminated quote that runs past the cell cap instead of buffering it', async () => {
+    const text = `a,b\n"${'y'.repeat(5 * 1024 * 1024)}`;
+    const files = localFolder({ 'open.csv': text });
+    await expect(readLocalTablePage(files, source('open.csv'), { offset: 0, limit: 10 }))
+      .rejects.toThrow('exceeds the 16 KiB preview limit');
+    // A short unterminated quote is still reported as malformed, as before.
+    const short = localFolder({ 'short.csv': 'a,b\n"open,2\n' });
+    await expect(readLocalTablePage(short, source('short.csv'), { offset: 0, limit: 10 }))
+      .rejects.toThrow('malformed');
+  });
+
+  it('bounds a row the page skips by offset, which no later check would see', async () => {
+    const oversizedRow = `x,${'z'.repeat(MAX_CELL_BYTES + 1)}\n`;
+    const files = localFolder({ 'skip.csv': `a,b\n${oversizedRow}1,2\n` });
+    await expect(readLocalTablePage(files, source('skip.csv'), { offset: 1, limit: 1 }))
+      .rejects.toThrow('exceeds the 16 KiB preview limit');
+    const wideRow = `${Array.from({ length: MAX_COLUMNS + 1 }, () => '0').join(',')}\n`;
+    const wide = localFolder({ 'skip.csv': `a,b\n${wideRow}1,2\n` });
+    await expect(readLocalTablePage(wide, source('skip.csv'), { offset: 1, limit: 1 }))
+      .rejects.toThrow('more columns');
+  });
+
+  it('reads a record whose quoted field crosses a slice boundary', async () => {
+    // 100 bounded cells put the closing quoted cell beyond the first 256 KiB slice.
+    const cells = Array.from({ length: MAX_COLUMNS - 1 }, () => 'p'.repeat(4000));
+    const files = localFolder({ 'split.csv': `a,b\n${cells.join(',')},"trailing,quote"\n` });
+    const page = await readLocalTablePage(files, source('split.csv'), { offset: 0, limit: 1 });
+    expect(page.rows[0]).toHaveLength(MAX_COLUMNS);
+    expect(page.rows[0]!.at(-1)).toBe('trailing,quote');
+  });
+
   it('refuses a page above 8 MiB rather than returning a partial page', async () => {
     // A wide page at the cell cap: 16 columns of 16 KB cells, 33 rows ≈ 8.4 MiB.
     const header = Array.from({ length: 16 }, (_, index) => `c${index}`);
