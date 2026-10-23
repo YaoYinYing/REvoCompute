@@ -162,6 +162,11 @@ class ComputeConfig:
     docker_user: str
     port: int
     runners_dir: str  # deployed runner-family root (docker/runners/)
+    # A demo deployment keeps the canonical manifests and browser surfaces but
+    # never executes a Task. It is the only configuration in which the executor
+    # may be ``demo``; every submission is refused before admission, so a
+    # preview cannot become a phantom execution.
+    demo_mode: bool = False
     # Infrastructure bindings are server-owned.  Runner/task manifests may
     # provide images and commands, but cannot select these implementations.
     job_executor: str = "slurm"
@@ -181,8 +186,14 @@ class ComputeConfig:
     max_published_bytes: int = 8 * 1024 * 1024 * 1024
 
     def __post_init__(self) -> None:
-        if self.job_executor != "slurm":
-            raise ValueError("REvoCompute supports Slurm as its job executor")
+        if self.job_executor == "slurm":
+            if self.demo_mode:
+                raise ValueError("A demo deployment runs no executor; set REVOCOMPUTE_JOB_EXECUTOR=demo")
+        elif self.job_executor == "demo":
+            if not self.demo_mode:
+                raise ValueError("REVOCOMPUTE_JOB_EXECUTOR=demo requires REVOCOMPUTE_DEMO_MODE=true")
+        else:
+            raise ValueError("REvoCompute supports Slurm as its job executor, or demo for preview-only")
         if self.container_runtime != "apptainer":
             raise ValueError("REvoCompute uses Apptainer as its container runtime")
         if self.scratch_backend not in {"disk", "ram"}:
@@ -204,7 +215,8 @@ class ComputeConfig:
             docker_user=resolve_docker_user(),
             port=env_int("PORT", 8080),
             runners_dir=os.path.abspath(os.path.expanduser(runners_dir)),
-            job_executor=env_choice("REVOCOMPUTE_JOB_EXECUTOR", "slurm", {"slurm"}),
+            demo_mode=env_bool("REVOCOMPUTE_DEMO_MODE", False),
+            job_executor=env_choice("REVOCOMPUTE_JOB_EXECUTOR", "slurm", {"slurm", "demo"}),
             container_runtime=env_choice("REVOCOMPUTE_CONTAINER_RUNTIME", "apptainer", {"apptainer"}),
             slurm_allowed_queues=env_csv("SLURM_ALLOWED_QUEUES", ""),
             scratch_backend=env_choice("REVOCOMPUTE_SCRATCH_BACKEND", "disk", {"disk", "ram"}),

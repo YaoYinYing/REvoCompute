@@ -207,6 +207,16 @@ app.config["RESULTS_FOLDER"] = CONFIG.results_folder
 _ensure_directories(CONFIG.upload_folder, CONFIG.workspace_folder, CONFIG.results_folder)
 app.config["storage_resolver"] = StorageResolver(CONFIG.results_folder, CONFIG.workspace_folder, task_store)
 
+# A demo deployment serves recorded result scenarios and validates every bundle
+# before the first request. An invalid index or bundle aborts startup rather
+# than serving a partial catalog; a production deployment reads nothing here.
+if CONFIG.demo_mode:
+    from revocompute.demo import load_demo_replays, replay_root
+
+    app.config["demo_replays"] = load_demo_replays(replay_root(CONFIG.server_dir))
+else:
+    app.config["demo_replays"] = None
+
 TOOL_CONFIG = ToolConfig.from_env(CONFIG)
 tool_registry = ToolRegistry.discover(
     TOOL_CONFIG.tools_dir,

@@ -6,6 +6,7 @@ import type { PresetApplication, WorkspacePreset } from './input-workspace/Input
 import { buildSubmissionFormData } from './submission';
 import type { TaskCatalog, TaskFormDefinition, TaskPreflight, TaskSummary } from './types';
 import { t } from '../../app/i18n';
+import { loadEnvironment } from '../../app/environment';
 
 function node<K extends keyof HTMLElementTagNameMap>(tag: K, className = '', text?: string): HTMLElementTagNameMap[K] {
   const value = document.createElement(tag); value.className = className; if (text != null) value.textContent = text; return value;
@@ -23,6 +24,7 @@ export class CreateTask {
   private readonly catalogStatus = node('p', 'ct-catalog-status');
   private readonly workbench = node('section', 'ct-workbench');
   private readonly pageHeader = node('header', 'ct-page-header');
+  private readonly environmentNotice = node('div', 'ct-environment-notice');
   private readonly workspaceRoot = node('div', 'ct-workspace');
   private readonly status = node('p', 'ct-status');
   private readonly validation = node('ul', 'ct-validation');
@@ -45,6 +47,14 @@ export class CreateTask {
   // takes it with it.
   private demoDialog: HTMLDialogElement | null = null;
   private revision = 0;
+  // A demo deployment serves this form for inspection only. The Server refuses
+  // every submission regardless; the form states the same fact before the reader
+  // fills it in, rather than presenting a Run control that can only fail.
+  private demoEnvironment = false;
+  // The profile read has not produced an answer. No run affordance and no
+  // production wording may be shown until it does: an outage is not a
+  // deployment profile.
+  private environmentUnresolved = true;
 
   constructor(private readonly root: HTMLElement) {
     // The preparation surface owns exactly one visible level-1 heading per state:
@@ -62,6 +72,7 @@ export class CreateTask {
 
   async mount(): Promise<void> {
     this.renderShell();
+    await this.resolveEnvironment();
     try {
       this.catalog = await getTaskCatalog(); this.renderCatalog();
       const requested = new URLSearchParams(window.location.search).get('task_type');
@@ -79,11 +90,37 @@ export class CreateTask {
     this.validationSummary.hidden = true;
     this.action.type = 'button'; this.action.addEventListener('click', () => void this.runAction());
     this.clear.type = 'button'; this.clear.addEventListener('click', () => void this.clearWorkspace());
-    this.root.append(this.pageHeader, this.chooser, this.workbench);
+    this.environmentNotice.hidden = true;
+    this.root.append(this.pageHeader, this.environmentNotice, this.chooser, this.workbench);
     // The region is in the document from mount, before the catalog resolves, so a
     // status set while the catalog is still loading is announced rather than
     // inserted into a region no assistive technology had been told about.
     this.renderChooserChrome();
+  }
+
+  /**
+   * Read the deployment profile once, and state a read that did not answer.
+   *
+   * Until the read answers, the run control stays disabled, because the form
+   * cannot know whether this deployment executes. A failure stays visible with
+   * a retry; the rest of the form remains usable, and the Server still refuses
+   * any submission the client might send.
+   */
+  private async resolveEnvironment(): Promise<void> {
+    const environment = await loadEnvironment();
+    this.environmentUnresolved = environment === null;
+    this.demoEnvironment = environment?.demo_mode === true;
+    this.environmentNotice.replaceChildren();
+    this.environmentNotice.hidden = !this.environmentUnresolved;
+    if (!environment) {
+      const retry = node('button', 'ct-secondary', t('environment.retry')); retry.type = 'button';
+      retry.addEventListener('click', () => { retry.disabled = true; void this.resolveEnvironment(); });
+      this.environmentNotice.append(node('p', '', t('environment.unresolved')), retry);
+    } else if (environment.demo_mode) {
+      this.pageHeader.append(node('p', 'demo-notice', environment.notice || t('demo.notice')));
+      this.action.textContent = t('demo.previewOnly');
+    }
+    this.refreshValidation();
   }
 
   private renderCatalog(): void {
@@ -242,12 +279,12 @@ export class CreateTask {
       if (admission.runner_ready === false && !codes.has('admission_unavailable')) blocker(t('ct.runnerUnavailable'));
       if (admission.infrastructure_status && !admission.infrastructure_ready && !codes.has('infrastructure_unavailable')) blocker(t('ct.infrastructure', { status: admission.infrastructure_status.toLowerCase() }));
       preflight.warnings.forEach(item => this.validation.append(this.validationRow('info', item.message)));
-    } else if (!this.actionFailed) this.validation.append(this.validationRow('info', t('ct.ready')));
+    } else if (!this.actionFailed && !this.environmentUnresolved) this.validation.append(this.validationRow('info', t(this.demoEnvironment ? 'ct.readyPreview' : 'ct.ready')));
     const counts = blockers;
     this.validationSummary.hidden = counts === 0;
     this.validationSummary.textContent = t(counts === 1 ? 'ct.issueOne' : 'ct.issueMany', { count: counts });
     this.validationSummary.className = `ct-validation-summary ${counts ? 'blocked' : 'ready'}`;
-    this.action.disabled = this.busy || errors.length > 0;
+    this.action.disabled = this.environmentUnresolved || this.demoEnvironment || this.busy || errors.length > 0;
     this.refreshSnapshot();
     return errors;
   }
@@ -269,6 +306,8 @@ export class CreateTask {
   }
 
   private async runAction(): Promise<void> {
+    if (this.environmentUnresolved) { this.setStatus(t('environment.unresolved'), 'error'); return; }
+    if (this.demoEnvironment) { this.setStatus(t('demo.runDisabled'), 'error'); return; }
     if (!this.definition || this.busy) return;
     const errors = this.refreshValidation(); if (errors.length) { this.setStatus(t('ct.fixIssues'), 'error'); return; }
     const generation = this.generation; const revision = this.revision;
@@ -380,7 +419,7 @@ export class CreateTask {
     }
     if (generation !== this.generation) return;
     const application = this.workspace.apply(preset);
-    this.setStatus(t('ct.demo.loaded', { title: demo.title }), 'ok');
+    this.setStatus(t(this.demoEnvironment ? 'ct.demo.loadedPreview' : 'ct.demo.loaded', { title: demo.title }), 'ok');
     this.reportDemoApplication(application, previous);
   }
 
@@ -421,7 +460,7 @@ export class CreateTask {
     if (generation !== this.generation) return; this.setStatus(t('ct.cleared'), 'ok'); this.refreshValidation();
   }
 
-  private setBusy(value: boolean): void { this.busy = value; this.action.disabled = value; this.clear.disabled = value; if (this.change) this.change.disabled = value; if (this.demo) this.demo.disabled = value; this.action.setAttribute('aria-busy', String(value)); }
+  private setBusy(value: boolean): void { this.busy = value; this.action.disabled = value || this.environmentUnresolved || this.demoEnvironment; this.clear.disabled = value; if (this.change) this.change.disabled = value; if (this.demo) this.demo.disabled = value; this.action.setAttribute('aria-busy', String(value)); }
   private setStatus(message: string, kind: 'busy' | 'ok' | 'error' | '' = ''): void {
     this.status.textContent = message; this.status.className = `ct-status ${kind}`;
     // An error is announced assertively; the region itself is the polite default.

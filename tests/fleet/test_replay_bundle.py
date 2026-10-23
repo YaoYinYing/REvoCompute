@@ -919,7 +919,7 @@ def test_a_host_local_path_inside_an_artifact_payload_is_not_checked_in(tmp_path
 )
 def test_a_host_path_after_a_quote_paren_or_equals_is_scrubbed_and_rejected(text: str, root: str) -> None:
     """A host-local path is caught wherever it opens, not only after whitespace."""
-    from frontend_fixtures.replay_bundle import _assert_no_host_paths, sanitize
+    from revocompute.replay_bundle import _assert_no_host_paths, sanitize
 
     scrubbed = sanitize(text)
     assert root not in scrubbed

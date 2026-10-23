@@ -13,6 +13,7 @@ after the walk, so it can carry the real step timings.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import sqlite3
@@ -297,6 +298,99 @@ def materialize_runner_families(state) -> None:
             shutil.rmtree(staging_root)
     if os.path.exists(previous_root):
         shutil.rmtree(previous_root)
+
+
+def materialize_demo_replays(state) -> None:
+    """Install the curated replay bundles the demo serves.
+
+    The tracked index names checked-in replay bundles under ``tests/data``; the
+    deployment copies only those files into its own state tree and writes a
+    resolved index that names them relative to the deployment. The source tree
+    is never mounted into a container, and a bundle outside the curated corpus
+    is refused before anything is installed. The staging tree is validated with
+    the same loader the Server uses, so an unreadable or self-inconsistent
+    bundle aborts the restart rather than serving a broken replay page.
+    """
+    if not state.demo_mode():
+        return
+    from revocompute_ctl import SERVER_ROOT
+    from revocompute.demo import DEMO_REPLAYS_SUBDIR, REPLAY_INDEX_NAME, DemoReplayError, load_demo_replays
+
+    source_root = Path(SERVER_ROOT) / "demo" / "replays"
+    corpus_root = (Path(SERVER_ROOT) / "tests" / "data").resolve()
+    try:
+        document = json.loads((source_root / REPLAY_INDEX_NAME).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise SystemExit(f"Demo replay index is not readable: {source_root / REPLAY_INDEX_NAME}: {exc}") from exc
+    entries = document.get("scenarios") if isinstance(document, dict) else None
+    if not isinstance(entries, list) or not entries:
+        raise SystemExit("Demo replay index declares no scenarios")
+
+    target_root = Path(state.server_dir()) / DEMO_REPLAYS_SUBDIR
+    staging_root = target_root.with_name(f"{target_root.name}.next")
+    previous_root = target_root.with_name(f"{target_root.name}.previous")
+    for transient in (staging_root, previous_root):
+        if transient.exists():
+            shutil.rmtree(transient)
+    staging_root.mkdir(parents=True)
+    resolved: list[dict[str, str]] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise SystemExit("A demo replay scenario must be an object")
+        relative = str(entry.get("source") or "")
+        source = (Path(SERVER_ROOT) / relative).resolve()
+        if not source.is_relative_to(corpus_root) or not source.is_file():
+            raise SystemExit(f"Demo replay source is outside the curated corpus: {relative!r}")
+        bundle_name = f"{entry.get('id')}.json"
+        shutil.copy2(source, staging_root / bundle_name)
+        resolved_entry = {key: value for key, value in entry.items() if key != "source"}
+        resolved_entry["bundle"] = bundle_name
+        resolved.append(resolved_entry)
+    (staging_root / REPLAY_INDEX_NAME).write_text(
+        json.dumps({"version": document["version"], "scenarios": resolved}, indent=2) + "\n", encoding="utf-8"
+    )
+    try:
+        load_demo_replays(staging_root)
+    except DemoReplayError as exc:
+        shutil.rmtree(staging_root, ignore_errors=True)
+        raise SystemExit(f"Demo replay content failed validation: {exc}") from exc
+    had_previous = target_root.exists()
+    try:
+        if had_previous:
+            target_root.rename(previous_root)
+        staging_root.rename(target_root)
+    except BaseException:
+        if had_previous and previous_root.exists() and not target_root.exists():
+            previous_root.rename(target_root)
+        raise
+    finally:
+        if staging_root.exists():
+            shutil.rmtree(staging_root)
+    if previous_root.exists():
+        shutil.rmtree(previous_root)
+
+
+def validate_deployment_files(state) -> list[RuntimeFamily]:
+    """Validate the files this deployment will actually serve.
+
+    A production deployment validates every enabled family's build definition,
+    access policy, and Runner contract because it will execute them. A demo
+    deployment executes nothing: validating a SIF definition or Apptainer
+    contract there would couple the playground to a scientific executor it must
+    not need. It instead runs the canonical manifest loader over the
+    materialized tree, so every Task definition, input role, and demo file is
+    the same validated contract the Server serves -- and nothing more.
+    """
+    if state.demo_mode():
+        from revocompute.demo import load_demo_replays, replay_root
+        from revocompute.task_types import isolated_discovery
+
+        plugin_root = deployment_plugin_root(state)
+        with isolated_discovery(plugin_root):
+            pass
+        load_demo_replays(replay_root(state.server_dir()))
+        return load_plugin_families(plugin_root)
+    return validate_runtime_files(state)
 
 
 def enabled_tool_families(state) -> tuple[str, ...]:
@@ -585,10 +679,12 @@ def cmd_setup(state) -> None:
     state.ensure_redis_password()
     state.ensure_auth_secret_key()
     if state.server_dir():
-        os.makedirs(runner_bundle_root(state), exist_ok=True)
         materialize_runner_families(state)
         materialize_tool_families(state)
-        materialize_runner_bundles(state, load_plugin_families(deployment_plugin_root(state)))
+        materialize_demo_replays(state)
+        if not state.demo_mode():
+            os.makedirs(runner_bundle_root(state), exist_ok=True)
+            materialize_runner_bundles(state, load_plugin_families(deployment_plugin_root(state)))
     print(f"Setup completed. Using env file: {state.env_file}")
     print(f"Review {state.env_file} before starting services.")
 
@@ -715,7 +811,9 @@ def cmd_up(
     require_env_file(state)
     validate_required_settings(state)
     if not prevalidated:
-        families = validate_runtime_files(state)
+        if state.demo_mode():
+            materialize_demo_replays(state)
+        families = validate_deployment_files(state)
         if state.use_slurm():
             validate_slurm_images(state, families)
         validate_auth_storage(state)
@@ -798,7 +896,9 @@ def finish_restart(state) -> None:
     """The completion banner printed after every successful restart."""
     print("Deployment completed.")
     print(f"Nginx gateway is now running at http://0.0.0.0:{state.get('PORT') or '8080'}/compute/dashboard")
-    if state.use_slurm():
+    if state.demo_mode():
+        print("[DEMO] Preview and replay only; this deployment executes no Tasks.")
+    elif state.use_slurm():
         print("[SLURM] SLURM runner is enabled. Configure per-task SLURM settings at /compute/configuration")
 
 
@@ -836,7 +936,8 @@ def build_restart_plan(state, compose_cmd: tuple[str, ...], flags: RestartFlags)
         if materialize:
             materialize_runner_families(state)
             materialize_tool_families(state)
-        loaded = validate_runtime_files(state)
+            materialize_demo_replays(state)
+        loaded = validate_deployment_files(state)
         families[:] = loaded
         if state.use_slurm() and not dry_run:
             migrate_legacy_sif_evidence(state, loaded)

@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 from frontend_fixtures import ReplayBundle, bioemu_runner, mount_scenario, replay_scenario
-from frontend_fixtures.replay_bundle import project_manifest_for_serve
+from revocompute.replay_bundle import project_manifest_for_serve
 from playwright.sync_api import Page, expect
 
 import browser_frontend_assets

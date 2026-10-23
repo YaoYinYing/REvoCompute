@@ -277,6 +277,162 @@ def health():
     return "", 200
 
 
+@app.route("/compute/api/environment", methods=["GET"])
+def environment_capability():
+    """The deployment profile the browser must state honestly.
+
+    ``demo_mode`` is a deployment fact, not a per-task one: a demo deployment
+    serves the canonical catalog and result surfaces but refuses every
+    submission. The browser labels that difference once, in the shell, instead
+    of inferring readiness from an empty or non-empty catalog. Production
+    reports ``execution: "available"`` and changes no other response.
+    """
+    if CONFIG.demo_mode:
+        return jsonify(
+            {
+                "version": 1,
+                "demo_mode": True,
+                "execution": "preview_only",
+                "notice": "Demo environment: preview and replay only. Tasks are not executed.",
+            }
+        )
+    return jsonify({"version": 1, "demo_mode": False, "execution": "available"})
+
+
+# ---------------------------------------------------------------------------
+# Demo replay scenarios
+#
+# Registered in every process, but every route requires a session and answers
+# only when the deployment loaded a demo replay index. A production deployment
+# therefore has no replay content to expose: a signed-in caller gets the same
+# 404 a missing route produces, and nothing is read from disk.
+# ---------------------------------------------------------------------------
+
+
+def _demo_replays() -> Mapping[str, Any] | None:
+    return current_app.config.get("demo_replays") if CONFIG.demo_mode else None
+
+
+def _demo_replay_or_404(scenario_id: str):
+    scenarios = _demo_replays()
+    if not scenarios:
+        abort(404)
+    scenario = scenarios.get(scenario_id)
+    if scenario is None:
+        abort(404)
+    return scenario
+
+
+@app.route("/compute/api/demo/replays", methods=["GET"])
+@login_required
+def demo_replay_catalog():
+    scenarios = _demo_replays()
+    if not scenarios:
+        abort(404)
+    return jsonify(
+        {
+            "version": 1,
+            "scenarios": [scenario.summary_payload() for scenario in scenarios.values()],
+        }
+    )
+
+
+@app.route("/compute/api/demo/replays/<scenario_id>", methods=["GET"])
+@login_required
+def demo_replay_manifest(scenario_id: str):
+    return jsonify(_demo_replay_or_404(scenario_id).served_manifest())
+
+
+@app.route("/compute/api/demo/replays/<scenario_id>/artifacts/<path:relative_path>", methods=["GET"])
+@login_required
+def demo_replay_artifact(scenario_id: str, relative_path: str):
+    scenario = _demo_replay_or_404(scenario_id)
+    payload = scenario.bundle.payload(relative_path)
+    if payload is None:
+        excluded = next(
+            (item for item in scenario.bundle.bundle.get("excluded", []) if item.get("path") == relative_path),
+            None,
+        )
+        return (
+            jsonify(
+                {
+                    "error": "This replay bundle does not retain this artifact",
+                    "path": relative_path,
+                    "reason": (excluded or {}).get("reason") or "not captured",
+                }
+            ),
+            404,
+        )
+    data, media_type = payload
+    response = Response(data, mimetype=media_type)
+    if request.args.get("download") == "1":
+        response.headers["Content-Disposition"] = f'attachment; filename="{os.path.basename(relative_path)}"'
+    return response
+
+
+@app.route("/compute/api/demo/replays/<scenario_id>/files/<file_id>", methods=["GET"])
+@login_required
+def demo_replay_logical_file(scenario_id: str, file_id: str):
+    scenario = _demo_replay_or_404(scenario_id)
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", file_id):
+        abort(404)
+    try:
+        index = int(request.args.get("index", "0"))
+    except ValueError:
+        abort(404)
+    path = scenario.bundle.logical_artifact_path(file_id, index)
+    payload = scenario.bundle.payload(path) if path is not None else None
+    if payload is None:
+        abort(404)
+    data, media_type = payload
+    return Response(data, mimetype=media_type)
+
+
+@app.route("/compute/api/demo/replays/<scenario_id>/tables/<path:relative_path>", methods=["GET"])
+@login_required
+def demo_replay_table(scenario_id: str, relative_path: str):
+    scenario = _demo_replay_or_404(scenario_id)
+    try:
+        offset = int(request.args.get("offset", 0))
+        limit = int(request.args.get("limit", 100))
+    except ValueError:
+        return jsonify({"error": "Invalid table page"}), 400
+    if offset < 0 or offset > 10_000 or limit < 1 or limit > 500:
+        return jsonify({"error": "Table page is outside allowed bounds"}), 400
+    matrix = request.args.get("matrix") in {"1", "true", "yes"}
+    page = scenario.bundle.table_page(relative_path, offset=offset, limit=limit, matrix=matrix)
+    if page is None:
+        return jsonify({"error": "Table artifact not found"}), 404
+    return jsonify(page)
+
+
+@app.route("/compute/api/demo/replays/<scenario_id>/ndarrays/<path:relative_path>", methods=["GET"])
+@login_required
+def demo_replay_ndarray(scenario_id: str, relative_path: str):
+    scenario = _demo_replay_or_404(scenario_id)
+    if set(request.args) - {"key", "kind", "max_elements"}:
+        return jsonify({"error": "Invalid array query"}), 400
+    keys = request.args.getlist("key")
+    kinds = request.args.getlist("kind")
+    if len(keys) > 1 or len(kinds) > 1:
+        return jsonify({"error": "Invalid array query"}), 400
+    projection = scenario.bundle.projection(
+        relative_path, kind=(kinds[0] if kinds else "numeric"), key=(keys[0] if keys else None)
+    )
+    if projection is None:
+        return jsonify({"error": "Array artifact not found"}), 404
+    return jsonify(projection)
+
+
+@app.route("/compute/api/demo/replays/<scenario_id>/archive", methods=["POST"])
+@login_required
+def demo_replay_archive(scenario_id: str):
+    # A replay bundle records a result; it cannot be re-archived. Answering
+    # explicitly is better than a blank success the page would report as ready.
+    _demo_replay_or_404(scenario_id)
+    return jsonify({"error": "A recorded demo result has no archive to build"}), 409
+
+
 @app.route("/compute/api/mcp", methods=["GET"])
 def mcp_capability():
     """Whether an agent host can actually reach this deployment's MCP surface.
@@ -430,6 +586,38 @@ def local_results_page():
     workspace sits beside the reader's Remote results; opening a folder starts no
     Task, Runner, or Tool.
     """
+    return _serve_frontend_entry(private=True)
+
+
+@app.route("/compute/demo", methods=["GET"])
+@login_required
+def demo_page():
+    """The Demo Playground landing, served only by a demo deployment.
+
+    The playground is a client-side route whose cards link to the catalog and to
+    recorded results, so without this route a hard refresh or a shared deep link
+    returns a 404 before the frontend can render it. The page carries no state of
+    its own: it serves the same entry document every other page route serves, and
+    the frontend states the deployment's preview/replay-only contract itself. A
+    production process answers 404, so it exposes no demo destination.
+    """
+    if not CONFIG.demo_mode:
+        abort(404)
+    return _serve_frontend_entry(private=True)
+
+
+@app.route("/compute/demo/replays/<scenario_id>", methods=["GET"])
+@login_required
+def demo_replay_page(scenario_id: str):
+    """One recorded replay scenario, served as the same inert entry document.
+
+    The scenario is resolved by the demo replay API the frontend reads, so the
+    page route neither reads a bundle nor invents a missing scenario: an absent
+    id renders the frontend's own "unavailable" state. Like the landing, it is a
+    demo-deployment-only destination and answers 404 elsewhere.
+    """
+    if not CONFIG.demo_mode:
+        abort(404)
     return _serve_frontend_entry(private=True)
 
 
@@ -1836,6 +2024,11 @@ def preflight_task(task_type: str):
     detail = details[0] if details and isinstance(details[0], dict) else {}
     code = str(
         detail.get("code")
+        # A refusal that names its own stable code at the envelope's top level
+        # keeps it through the preflight projection instead of degrading to the
+        # HTTP-status default: the demo's ``demo_read_only`` is what the client
+        # matches on, and both submission endpoints must name it the same way.
+        or payload.get("code")
         or {
             400: "contract_invalid",
             401: "authentication_required",
@@ -1885,6 +2078,22 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
     # shared boundary for both /compute/api/post and /compute/api/preflight/.
     if _blocked := _reject_guest():
         return _blocked
+
+    # A demo deployment inspects and replays; it never executes. Refusing at the
+    # one shared submission boundary means a crafted client that calls the
+    # ordinary API directly cannot create a row, reservation, scheduler request,
+    # or charge, whether or not the manifest is present in the registry.
+    if CONFIG.demo_mode:
+        return (
+            jsonify(
+                {
+                    "error": "This demo deployment is preview and replay only; it does not execute Tasks.",
+                    "code": "demo_read_only",
+                    "valid": False,
+                }
+            ),
+            403,
+        )
 
     # Deployment maintenance sentinel (restart.sh --drain): SERVER_DIR is
     # bind-mounted into the web container, so the host-side file is visible.

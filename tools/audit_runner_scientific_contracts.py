@@ -373,17 +373,10 @@ def _result_tree(task: Any, repo_root: Path) -> dict[str, Any] | None:
     return dict(tree) if tree else None
 
 
-def _load_bundle(repo_root: Path, path: Path) -> dict[str, Any] | None:
+def _load_bundle(path: Path) -> dict[str, Any] | None:
     """Load a checked-in replay bundle through the real capture/load path."""
-    import sys
+    from revocompute.replay_bundle import ReplayBundleError, load_bundle
 
-    tests_dir = str(repo_root / "tests")
-    if tests_dir not in sys.path:
-        sys.path.insert(0, tests_dir)
-    try:
-        from frontend_fixtures.replay_bundle import ReplayBundleError, load_bundle
-    except ImportError:  # pragma: no cover - the fixture package ships with the repo
-        return None
     try:
         return load_bundle(path)
     except ReplayBundleError:
@@ -412,7 +405,7 @@ def _label_corpus_item(repo_root: Path, path: Path) -> dict[str, Any]:
     resolved, and the loader refuses a promoted mode with no observation behind it.
     """
     relative = path.relative_to(repo_root).as_posix()
-    bundle = _load_bundle(repo_root, path)
+    bundle = _load_bundle(path)
     if bundle is None:
         return {"path": relative, "label": "unverified_declaration", "detail": "bundle failed canonical load"}
     provenance = bundle.get("provenance") if isinstance(bundle.get("provenance"), dict) else {}
@@ -471,7 +464,7 @@ def _label_receipt_pointer(
             "detail": f"the cited production receipt is not present: {receipt_path}",
         }
     try:
-        from frontend_fixtures.provenance import production_receipt_pointer
+        from revocompute.provenance import production_receipt_pointer
 
         canonical = production_receipt_pointer(candidate, task_id=task_id, receipt_path=receipt_path)
     except Exception:  # noqa: BLE001 - any receipt failure downgrades the label

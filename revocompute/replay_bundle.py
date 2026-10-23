@@ -44,7 +44,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from . import builders
+from revocompute.contracts import validate_openapi_payload
 
 REPLAY_BUNDLE_VERSION = 1
 REPLAY_BUNDLE_KIND = "real_runner_result_replay"
@@ -543,7 +543,7 @@ def _logical_file_map(manifest: Mapping[str, Any]) -> dict[str, list[dict[str, A
 
 def _validate_served(response: Mapping[str, Any]) -> None:
     try:
-        builders.validate_payload("ResultManifest", response)
+        validate_openapi_payload("ResultManifest", response)
     except AssertionError as exc:
         raise ReplayBundleError(f"served ResultManifest violates the canonical contract: {exc}") from exc
 

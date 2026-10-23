@@ -161,9 +161,17 @@ def resolve_env_file() -> str:
 def detect_executor(state: EnvState) -> tuple[bool, str]:
     """Select the server-owned scheduler without consulting task metadata."""
     executor = state.get("REVOCOMPUTE_JOB_EXECUTOR", "slurm").strip().lower()
-    if executor == "slurm":
+    if executor == "slurm" and not state.demo_mode():
         return True, "server configuration"
-    print("REVOCOMPUTE_JOB_EXECUTOR must be 'slurm'", file=sys.stderr)
+    if executor == "demo" and state.demo_mode():
+        # A demo deployment is a preview/replay profile: it materializes the
+        # canonical manifests but refuses execution. Accepting it here is the
+        # narrow, demo-only bypass; production keeps the Slurm requirement.
+        return False, "demo profile"
+    print(
+        "REVOCOMPUTE_JOB_EXECUTOR must be 'slurm', or 'demo' with REVOCOMPUTE_DEMO_MODE=true",
+        file=sys.stderr,
+    )
     raise SystemExit(1)
 
 

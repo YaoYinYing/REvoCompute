@@ -2137,6 +2137,13 @@ def _execute_compute_task(
     if not task:
         logging.error("Task %s missing from database", md5sum)
         return
+    # Defence in depth: the submission boundary already refuses in demo mode,
+    # so no row should reach the worker. If one does -- a restored store, an
+    # operator insert -- the worker still refuses to execute it.
+    if CONFIG.demo_mode:
+        _record_failure(md5sum, task, time.time(), "", "This demo deployment does not execute Tasks")
+        logging.error("Task %s refused: the demo deployment does not execute Tasks", md5sum)
+        return
     # Exactly-once dispatch: the compare-and-set claims the task for this one
     # execution.  A duplicated dispatch of the same id — a second worker, an
     # independent re-enqueue racing this run — loses the claim and returns
