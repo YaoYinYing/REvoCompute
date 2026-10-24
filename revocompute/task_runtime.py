@@ -2139,9 +2139,22 @@ def _execute_compute_task(
         return
     # Defence in depth: the submission boundary already refuses in demo mode,
     # so no row should reach the worker. If one does -- a restored store, an
-    # operator insert -- the worker still refuses to execute it.
+    # operator insert -- the worker still refuses to execute it. The row is
+    # failed with the minimum truthful fields only: the ordinary failure path
+    # publishes a failure report and charges its bytes, which a demo must not
+    # do, so it is not used here.
     if CONFIG.demo_mode:
-        _record_failure(md5sum, task, time.time(), "", "This demo deployment does not execute Tasks")
+        if not _task_is_terminal(md5sum):
+            finished_at = time.time()
+            started_at = task.get("started_at")
+            task_store.update_task(
+                md5sum,
+                status="failed",
+                finished_at=finished_at,
+                walltime=(finished_at - float(started_at)) if started_at else None,
+                error="This demo deployment does not execute Tasks",
+                run_stage=str(task.get("run_stage") or ""),
+            )
         logging.error("Task %s refused: the demo deployment does not execute Tasks", md5sum)
         return
     # Exactly-once dispatch: the compare-and-set claims the task for this one
@@ -3344,7 +3357,7 @@ def _reconcile_pending_storage_charges() -> dict[str, int]:
     # ``_on_worker_ready``: a restored database's anchored publication would
     # otherwise be charged by a background pass.
     if CONFIG.demo_mode:
-        return {"charged": 0, "released": 0}
+        return {"charged": 0, "released": 0, "skipped": 0}
     global _pending_storage_charge_cursor
     storage = _storage()
     charged = released = skipped = 0

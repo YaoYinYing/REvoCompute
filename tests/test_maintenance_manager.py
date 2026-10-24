@@ -606,6 +606,26 @@ def test_demo_pulse_never_repairs_a_restored_pending_charge(monkeypatch, tmp_pat
     assert module.task_store.logical_owned_bytes(user_id) == 0
 
 
+def test_demo_reclaim_abandoned_reservations_keeps_a_queued_commitment(monkeypatch, tmp_path):
+    """The function guard, not the boot caller, keeps a restored commitment.
+
+    A queued reservation whose Task row is missing is exactly the case the
+    unguarded reclaim frees: no task row means no scheduler question is asked.
+    """
+    module = _demo_worker_module(monkeypatch, tmp_path)
+    task_id = "f" * 32
+    assert module.task_store.reserve_compute_admission(
+        user_id=41, task_id=task_id, at=1_700_000_000
+    )["allowed"]
+    module.task_store.record_reservation_dispatch(task_id=task_id, slurm_job_id="9901", at=1_700_000_001)
+    queued_before = module.task_store.list_queued_reservations()
+    assert [row["task_id"] for row in queued_before] == [task_id]
+
+    assert module.task_runtime._reclaim_abandoned_reservations(now=1_700_000_100) == 0
+
+    assert module.task_store.list_queued_reservations() == queued_before
+
+
 def test_production_worker_boot_still_charges_and_settles(monkeypatch, tmp_path):
     """The demo boundary narrows nothing: failure recovery and repair still charge."""
     module = _pulse_module(monkeypatch, tmp_path, slurm_enabled=True)

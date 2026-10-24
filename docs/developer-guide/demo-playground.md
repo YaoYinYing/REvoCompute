@@ -106,8 +106,9 @@ The profile is a deployment fact owned by the server, not a frontend flag.
   (`POST /compute/api/auth/admin/operator/jobs/<job_id>/cancel`) only updates
   the job store and starts no host work, so it is not an execution surface.
 - Worker passes repeat the refusal at each function boundary, not only in the
-  boot caller. `_execute_compute_task` records an inserted Task row as failed
-  and starts no Runner; `tool_runtime.execute_tool_call` fails a queued ToolCall
+  boot caller. `_execute_compute_task` fails an inserted Task row without
+  publishing a result or charging storage, and starts no Runner;
+  `tool_runtime.execute_tool_call` fails a queued ToolCall
   before acquiring a runtime or touching its workspace;
   `_recover_orphaned_tasks` returns without failing, publishing, charging,
   re-enqueuing a workflow, or stopping a scheduler job; and
@@ -117,6 +118,12 @@ The profile is a deployment fact owned by the server, not a frontend flag.
   cycle, so the guarantee holds when `_on_worker_ready` is not the caller. A
   database restored from another deployment is therefore never settled,
   charged, or re-enqueued by a demo worker.
+- Leave `RESOURCE_MAINTENANCE_SECONDS` unset in a demo deployment (the default
+  is 0, and `.env.demo.example` does not set it). The opt-in
+  resource-maintenance pass would additionally run purge, purge-retry, and
+  stale-reservation expiry through `resource_lifecycle.reconcile_resources`,
+  outside the worker function guards above; enabling it in demo is not
+  supported.
 - Demo routes answer only while the deployment loaded a replay index. In a
   production process `GET /compute/api/demo/replays` and every scenario route
   return `404` and read nothing from disk. Production `/compute/api/types`

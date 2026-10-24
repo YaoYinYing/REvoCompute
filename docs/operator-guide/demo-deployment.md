@@ -60,6 +60,13 @@ shared with another deployment is a defect.
 and a demo deployment cannot keep the default Slurm executor, so a mistyped
 executor cannot turn a production deployment into a preview-only one.
 
+Leave `RESOURCE_MAINTENANCE_SECONDS` unset (the default is 0, and
+`.env.demo.example` does not set it). The opt-in resource-maintenance pass is not
+supported in the demo profile: enabling it would additionally run purge,
+purge-retry, and stale-reservation expiry through
+`resource_lifecycle.reconcile_resources`, outside the worker's demo function
+guards.
+
 ## Initialize and start
 
 ```bash
@@ -173,12 +180,13 @@ allowance, reset, quota, or policy-audit row is written:
 
 The answer does not depend on the id or the tool family: it is decided from the
 deployment profile before either is looked up. The Task and Tool workers repeat
-the refusal for a row that reaches them anyway: a Task row is failed with no
-Runner started, and a queued ToolCall is failed before a runtime or workspace is
-touched. The worker boot and pulse passes also refuse at each function boundary,
-so a database restored from another deployment is not settled, charged, or
-re-enqueued even though the pulse runs the storage repair every cycle. The
-submission gates remain the primary refusal.
+the refusal for a row that reaches them anyway: a Task row is failed without
+publishing a result or charging storage, and no Runner is started; a queued
+ToolCall is failed before a runtime or workspace is touched. The worker boot and
+pulse passes also refuse at each function boundary, so a database restored from
+another deployment is not settled, charged, or re-enqueued even though the pulse
+runs the storage repair every cycle. The submission gates remain the primary
+refusal.
 
 Two adjacent surfaces are different by design:
 
@@ -211,11 +219,36 @@ printf 'delete-batch %s\n' "$(code -X POST -H 'Content-Type: application/json' \
   -d "{\"md5sums\":[\"${DEMO_TASK_ID}\"]}" "$BASE/compute/api/delete")"
 ```
 
-Every line above must print `403`. A `200`, `202`, `400`, `404`, or `409` means
-the deployed revision does not enforce this boundary; stop and identify the
-running revision before recording evidence. The readiness-refresh and
-reconciliation probes use the demo admin token because those routes are
-Admin-only; their refusal happens after the Admin and Bearer checks.
+Continuing in the same shell, probe the admin accounting and policy refusals
+against one target user id from the Admin listing:
+
+```bash
+DEMO_USER_ID=$(curl -sS -H "Authorization: Bearer ${TOKEN}" \
+  "$BASE/compute/api/auth/admin/users" \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["users"][0]["id"])')
+printf 'gpu-adjust %s\n' "$(code -X POST -H 'Content-Type: application/json' \
+  -d '{"gpu_seconds":60,"reason":"demo","idempotency_key":"demo-adjust"}' \
+  "$BASE/compute/api/auth/admin/users/${DEMO_USER_ID}/gpu-credit/adjustments")"
+printf 'gpu-allowance %s\n' "$(code -X PUT -H 'Content-Type: application/json' \
+  -d '{"monthly_gpu_seconds":7200,"idempotency_key":"demo-allowance"}' \
+  "$BASE/compute/api/auth/admin/users/${DEMO_USER_ID}/gpu-credit/allowance")"
+printf 'gpu-reset %s\n' "$(code -X POST -H 'Content-Type: application/json' \
+  -d '{"reason":"demo","idempotency_key":"demo-reset"}' \
+  "$BASE/compute/api/auth/admin/users/${DEMO_USER_ID}/gpu-credit/reset")"
+printf 'gpu-reset-all %s\n' "$(code -X POST -H 'Content-Type: application/json' \
+  -d '{"reason":"demo","idempotency_key":"demo-reset-all"}' \
+  "$BASE/compute/api/auth/admin/gpu-credit/reset")"
+printf 'storage-quota %s\n' "$(code -X PUT -H 'Content-Type: application/json' \
+  -d '{"state":"limited","limit_bytes":1024,"reason":"demo","idempotency_key":"demo-quota"}' \
+  "$BASE/compute/api/auth/admin/users/${DEMO_USER_ID}/storage-quota")"
+```
+
+Every line in both blocks must print `403`. A `200`, `202`, `400`, `404`, or
+`409` means the deployed revision does not enforce this boundary; stop and
+identify the running revision before recording evidence. The
+readiness-refresh and reconciliation probes use the demo admin token because
+those routes are Admin-only; their refusal happens after the Admin and Bearer
+checks.
 
 ## Candidate deployment coordinates
 

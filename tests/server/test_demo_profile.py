@@ -533,7 +533,15 @@ def test_demo_worker_refuses_a_row_that_reached_it(monkeypatch, tmp_path):
     module.task_runtime._execute_compute_task(task_id)
     task = module.task_store.get_task(task_id)
     assert task["status"] == "failed"
+    assert task["finished_at"]
     assert "demo" in str(task.get("error") or "").lower()
+    # The refusal must not take the ordinary failure path, which publishes a
+    # failure report and charges its bytes.
+    assert [entry for entry in module.task_store.list_ledger(1, limit=200)
+            if entry["reason_code"] == "storage_charged"] == []
+    assert module.task_store.logical_owned_bytes(1) == 0
+    assert module.task_store.get_result_publication(task_id) is None
+    assert module.app.config["storage_resolver"].read_manifest_bytes(task) is None
 
 
 def test_demo_profile_refuses_mutating_operator_actions_before_any_row(monkeypatch, tmp_path):
