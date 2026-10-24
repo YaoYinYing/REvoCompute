@@ -43,29 +43,23 @@ from .models import (
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
-@lru_cache(maxsize=1)
 def openapi_spec() -> dict[str, Any]:
-    return json.loads((REPO_ROOT / "revocompute" / "static" / "openapi.json").read_text(encoding="utf-8"))
+    from revocompute.contracts import openapi_spec as canonical_spec
+
+    return canonical_spec()
 
 
 def validate_payload(schema_name: str, payload: object) -> None:
     """Validate one fixture payload against a canonical OpenAPI component.
 
     The harness is the only thing that can drift here, so a mismatch is an
-    assertion failure naming the schema and the first violation.
+    assertion failure naming the schema and the first violation. The check
+    itself lives with the Server: a replay bundle is validated by the same
+    function, so a fixture and a bundle cannot disagree about the contract.
     """
-    from jsonschema import Draft202012Validator
+    from revocompute.contracts import validate_openapi_payload
 
-    spec = openapi_spec()
-    validator = Draft202012Validator(
-        {"$ref": f"#/components/schemas/{schema_name}", "components": spec["components"]},
-        format_checker=Draft202012Validator.FORMAT_CHECKER,
-    )
-    errors = sorted(validator.iter_errors(payload), key=lambda error: list(error.absolute_path))
-    if errors:
-        first = errors[0]
-        location = "/".join(str(part) for part in first.absolute_path) or "<root>"
-        raise AssertionError(f"{schema_name} fixture violates the canonical contract at {location}: {first.message}")
+    validate_openapi_payload(schema_name, payload)
 
 
 # ---------------------------------------------------------------------------

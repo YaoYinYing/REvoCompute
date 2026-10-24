@@ -1,11 +1,12 @@
 import { DAYLIGHT_MARK } from './assets';
-import { Bell, ChartLine, FileText, FolderOpen, Gauge, KeyRound, LayoutDashboard, LogOut, Menu, X, PanelLeft, PanelLeftClose, Plus, Scale, ServerCog, Settings, ShieldCheck, UserCog, UserRound, UsersRound, Workflow, createIcons } from 'lucide';
+import { Bell, ChartLine, FileText, FlaskConical, FolderOpen, Gauge, KeyRound, LayoutDashboard, LogOut, Menu, X, PanelLeft, PanelLeftClose, Plus, Scale, ServerCog, Settings, ShieldCheck, UserCog, UserRound, UsersRound, Workflow, createIcons } from 'lucide';
 import type { CurrentUser } from '../api/app-api';
 import { authorizedJson, clearSessionCredential } from './session';
 import { ADMIN_DESTINATIONS } from './admin-destinations';
 import { applyLocale, locale, t } from './i18n';
 import { languageMenu, themeButton } from './localize';
 import { mountSystemNotices } from './system-notices';
+import { loadEnvironment } from './environment';
 
 export interface AppShell {
   outlet: HTMLElement;
@@ -22,7 +23,7 @@ export interface AppShell {
 const railKey = 'revocompute-rail';
 type RailState = 'collapsed' | 'expanded';
 const shellIcons = {
-  Bell, ChartLine, FileText, FolderOpen, Gauge, KeyRound, LayoutDashboard, LogOut, Menu, X, PanelLeft, PanelLeftClose, Plus,
+  Bell, ChartLine, FileText, FlaskConical, FolderOpen, Gauge, KeyRound, LayoutDashboard, LogOut, Menu, X, PanelLeft, PanelLeftClose, Plus,
   Scale, ServerCog, Settings, ShieldCheck, UserCog, UserRound, UsersRound, Workflow,
 };
 
@@ -95,6 +96,12 @@ export function mountShell(root: HTMLElement): AppShell {
     ['/compute/local_results', 'folder-open', t('shell.nav.localResults')],
   ];
   for (const [href, icon, label] of staticCompute) groups.compute.items.append(navLink(href, icon, label));
+  // The playground is a destination of the Compute region, but only a demo
+  // deployment has one: the link is revealed by the deployment profile rather
+  // than shown dead on every production install.
+  const demoLink = navLink('/compute/demo', 'flask-conical', t('shell.nav.demo'));
+  demoLink.hidden = true;
+  groups.compute.items.append(demoLink);
   // The Account region rests on the session: signed in it reaches the user's own
   // sections directly, signed out it is a single sign-in affordance. The region's
   // links are rebuilt when the session changes, so no link ever points a signed-out
@@ -198,8 +205,18 @@ export function mountShell(root: HTMLElement): AppShell {
     finally { clearSessionCredential(); location.assign('/compute/login'); }
   });
   actions.append(languageMenu(), noticesButton, userLink, logout, themeButton());
+  // The demo profile is a deployment fact; state it in the chrome rather than
+  // letting a canonical-looking catalog imply execution is available.
+  const demoBadge = document.createElement('span'); demoBadge.className = 'app-demo-badge'; demoBadge.hidden = true;
+  demoBadge.textContent = t('demo.badge'); demoBadge.title = t('demo.badgeTitle');
+  void loadEnvironment().then((environment) => {
+    if (!environment?.demo_mode) return;
+    demoBadge.hidden = false; demoLink.hidden = false;
+    shell.dataset.demoMode = 'true';
+    createIcons({ icons: shellIcons, root: demoLink });
+  });
   locationLabel = document.createElement('p'); locationLabel.className = 'app-location';
-  header.append(mobileToggle, locationLabel, actions);
+  header.append(mobileToggle, locationLabel, demoBadge, actions);
   // Create Task is reachable from every authenticated application route.
   const newTask = document.createElement('a'); newTask.href = '/compute/create_task'; newTask.className = 'app-new-task'; newTask.title = t('shell.nav.newTask'); newTask.innerHTML = `<i data-lucide="plus" aria-hidden="true"></i><span>${t('shell.nav.newTask')}</span>`;
   groups.compute.items.append(newTask);

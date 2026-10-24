@@ -5,6 +5,11 @@ x-task-env: &task-env
 
   SERVER_DIR: ${SERVER_DIR}
   MANAGE_DB_PATH: ${MANAGE_DB_PATH:-}
+  # The demo profile serves the canonical manifests but refuses execution. The
+  # executor is a server-owned fact, so it travels to every service container;
+  # an unset variable keeps the production Slurm default.
+  REVOCOMPUTE_DEMO_MODE: ${REVOCOMPUTE_DEMO_MODE:-false}
+  REVOCOMPUTE_JOB_EXECUTOR: ${REVOCOMPUTE_JOB_EXECUTOR:-slurm}
   ENABLED_TASKRUNNERS: ${ENABLED_TASKRUNNERS:-}
   SLURM_ALLOWED_QUEUES: ${SLURM_ALLOWED_QUEUES:-}
   REVOCOMPUTE_SCRATCH_BACKEND: ${REVOCOMPUTE_SCRATCH_BACKEND:-disk}

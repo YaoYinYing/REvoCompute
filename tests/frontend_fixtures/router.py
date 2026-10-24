@@ -20,8 +20,16 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Mapping
 from urllib.parse import parse_qs, unquote, urlparse
+
+from revocompute.ingress_security import phase_for_code
+from revocompute.schemas import (
+    PreflightAdmission,
+    PreflightFinding,
+    PreflightPhase,
+    TaskPreflightResult,
+)
 
 from . import builders
 from .models import DEFAULT_ORIGIN, DEFAULT_TASK_ID
@@ -47,8 +55,17 @@ _PROFILE_FIELDS = frozenset({"full_name", "affiliation", "position", "pi_name"})
 _APP_PAGE = re.compile(
     r"/(?:api-docs|runners|runners/[^/]+|compute/terms"
     r"|compute/(?:login|register|reset_password|user_verify|profile|quota|account/[^/]+|user_control|configuration|logs"
-    r"|runner_fleet|create_task|dashboard|results/[0-9a-fA-F]{32}))"
+    r"|runner_fleet|create_task|dashboard|demo|demo/replays/[^/]+|results/[0-9a-fA-F]{32}))"
 )
+
+# The production profile a deployment serves unless the scenario states otherwise.
+# A demo deployment answers the same route with ``preview_only``; the browser reads
+# it once and labels the chrome, the catalog, and the submission form from it.
+PRODUCTION_ENVIRONMENT: dict[str, Any] = {"version": 1, "demo_mode": False, "execution": "available"}
+
+#: The one refusal a demo deployment makes, shared by both submission paths.
+_DEMO_REFUSAL_CODE = "demo_read_only"
+_DEMO_REFUSAL_MESSAGE = "This demo deployment is preview and replay only; it does not execute Tasks."
 
 
 @dataclass(frozen=True, slots=True)
@@ -199,15 +216,33 @@ class UnexpectedRequest(AssertionError):
 class FrontendFixtureRouter:
     """Serve the production frontend bundle against one scenario's fixtures."""
 
-    def __init__(self, page: Any, scenario: RunnerScenario, *, origin: str = DEFAULT_ORIGIN) -> None:
+    def __init__(
+        self,
+        page: Any,
+        scenario: RunnerScenario,
+        *,
+        origin: str = DEFAULT_ORIGIN,
+        environment: Mapping[str, Any] | None = None,
+        demo_replays: Mapping[str, Any] | None = None,
+    ) -> None:
         self.page = page
         self.scenario = scenario
         self.origin = origin
+        self.environment = dict(environment) if environment is not None else dict(PRODUCTION_ENVIRONMENT)
+        # Demo replay scenarios keyed by id, as the Server's own loader projects
+        # them: each answers ``summary_payload()`` and ``served_manifest()`` and
+        # owns a replay bundle whose captured bytes and tables it serves.
+        self.demo_replays: dict[str, Any] = dict(demo_replays or {})
         self._records: list[RequestRecord] = []
         self._unexpected: list[RequestRecord] = []
         self._state = _ScenarioState()
         self._dist: Any = None
         self._html = ""
+
+    @property
+    def demo_mode(self) -> bool:
+        """Whether the mounted deployment is the preview/replay demo profile."""
+        return self.environment.get("demo_mode") is True
 
     # -- installation -------------------------------------------------------
 
@@ -365,6 +400,100 @@ class FrontendFixtureRouter:
     def _system_notices(self, route: Any, query: Any) -> None:
         return route.fulfill(json={"notices": []})
 
+    def _environment_capability(self, route: Any, query: Any) -> None:
+        """The deployment profile, exactly as the Server's public route states it."""
+        return route.fulfill(json=self.environment)
+
+    # -- demo replay scenarios ----------------------------------------------
+
+    def _demo_replay_catalog(self, route: Any, query: Any) -> None:
+        if not self.demo_replays:
+            # A production deployment has no replay content and answers 404, so
+            # a scenario that declares none must not fabricate a catalog either.
+            return route.fulfill(status=404, json={"error": "Not found"})
+        payload = {"version": 1, "scenarios": [item.summary_payload() for item in self.demo_replays.values()]}
+        return route.fulfill(json=payload)
+
+    def _demo_replay_manifest(self, route: Any, query: Any, scenario_id: str = "", **_: str) -> None:
+        replay = self.demo_replays.get(scenario_id)
+        if replay is None:
+            return route.fulfill(status=404, json={"error": "Replay scenario not found"})
+        return route.fulfill(json=replay.served_manifest())
+
+    def _demo_replay_artifact(self, route: Any, query: Any, scenario_id: str = "", path: str = "", **_: str) -> None:
+        replay = self.demo_replays.get(scenario_id)
+        if replay is None:
+            return route.fulfill(status=404, json={"error": "Replay scenario not found"})
+        relative = unquote(path)
+        body = replay.bundle.payload(relative)
+        if body is None:
+            excluded = next(
+                (item for item in replay.bundle.bundle.get("excluded", []) if item.get("path") == relative),
+                None,
+            )
+            return route.fulfill(
+                status=404,
+                json={
+                    "error": "This replay bundle does not retain this artifact",
+                    "path": relative,
+                    "reason": (excluded or {}).get("reason") or "not captured",
+                },
+            )
+        content, media_type = body
+        return route.fulfill(status=200, content_type=media_type, body=content)
+
+    def _demo_replay_logical_file(
+        self, route: Any, query: Any, scenario_id: str = "", file_id: str = "", **_: str
+    ) -> None:
+        replay = self.demo_replays.get(scenario_id)
+        if replay is None:
+            return route.fulfill(status=404, json={"error": "Replay scenario not found"})
+        try:
+            index = int((query.get("index", ["0"]) or ["0"])[0])
+        except ValueError:
+            return route.fulfill(status=404, json={"error": "Result file not found"})
+        path = replay.bundle.logical_artifact_path(file_id, index)
+        body = replay.bundle.payload(path) if path is not None else None
+        if body is None:
+            return route.fulfill(status=404, json={"error": "Result file not found"})
+        content, media_type = body
+        return route.fulfill(status=200, content_type=media_type, body=content)
+
+    def _demo_replay_table(self, route: Any, query: Any, scenario_id: str = "", path: str = "", **_: str) -> None:
+        replay = self.demo_replays.get(scenario_id)
+        if replay is None:
+            return route.fulfill(status=404, json={"error": "Replay scenario not found"})
+        try:
+            offset = int((query.get("offset", ["0"]) or ["0"])[0])
+            limit = int((query.get("limit", ["100"]) or ["100"])[0])
+        except ValueError:
+            return route.fulfill(status=400, json={"error": "Invalid table page"})
+        if offset < 0 or offset > 10_000 or limit < 1 or limit > 500:
+            return route.fulfill(status=400, json={"error": "Table page is outside allowed bounds"})
+        matrix = (query.get("matrix", ["0"]) or ["0"])[0] in {"1", "true", "yes"}
+        page = replay.bundle.table_page(unquote(path), offset=offset, limit=limit, matrix=matrix)
+        if page is None:
+            return route.fulfill(status=404, json={"error": "Table artifact not found"})
+        return route.fulfill(json=page)
+
+    def _demo_replay_ndarray(self, route: Any, query: Any, scenario_id: str = "", path: str = "", **_: str) -> None:
+        replay = self.demo_replays.get(scenario_id)
+        if replay is None:
+            return route.fulfill(status=404, json={"error": "Replay scenario not found"})
+        key = (query.get("key", [None]) or [None])[0]
+        kind = (query.get("kind", ["numeric"]) or ["numeric"])[0]
+        projection = replay.bundle.projection(unquote(path), kind=kind, key=key)
+        if projection is None:
+            return route.fulfill(status=404, json={"error": "Array artifact not found"})
+        return route.fulfill(json=projection)
+
+    def _demo_replay_archive(self, route: Any, query: Any, scenario_id: str = "", **_: str) -> None:
+        if scenario_id not in self.demo_replays:
+            return route.fulfill(status=404, json={"error": "Replay scenario not found"})
+        # A recorded result cannot be re-archived; the Server states that refusal
+        # rather than answering with a blank success the page would show as ready.
+        return route.fulfill(status=409, json={"error": "A recorded demo result has no archive to build"})
+
     def _mcp_capability(self, route: Any, query: Any) -> None:
         """The deployment's own MCP capability projection, as the real route serves it.
 
@@ -455,7 +584,39 @@ class FrontendFixtureRouter:
 
     # -- submission and lifecycle ------------------------------------------
 
+    def _demo_submit_refusal(self, route: Any) -> None:
+        """The flat envelope ``/compute/api/post`` returns for the demo profile."""
+        return route.fulfill(
+            status=403,
+            json={
+                "error": _DEMO_REFUSAL_MESSAGE,
+                "code": _DEMO_REFUSAL_CODE,
+                "valid": False,
+            },
+        )
+
+    def _demo_preflight_refusal(self, route: Any) -> None:
+        """The Server's own preflight projection of that same refusal.
+
+        ``preflight_task`` wraps every handler refusal in ``TaskPreflightResult``
+        instead of passing the flat submission body through, so the stable code
+        lives at ``errors[].code`` and ``admission.allowed`` is false. The
+        envelope is built from the real model and the real phase classifier so
+        the fixture cannot drift from what the Server serves.
+        """
+        phase = phase_for_code(_DEMO_REFUSAL_CODE, http_status=403)
+        result = TaskPreflightResult(
+            valid=False,
+            security=PreflightPhase(status="failed" if phase == "security" else "not_checked"),
+            contract=PreflightPhase(status="failed" if phase == "contract" else "not_checked"),
+            admission=PreflightAdmission(allowed=False),
+            errors=[PreflightFinding(code=_DEMO_REFUSAL_CODE, message=_DEMO_REFUSAL_MESSAGE)],
+        )
+        return route.fulfill(status=403, json=result.model_dump(exclude_none=True))
+
     def _preflight(self, route: Any, query: Any, name: str = "", **_: str) -> None:
+        if self.demo_mode:
+            return self._demo_preflight_refusal(route)
         definition = self.scenario.runner_or_none(name)
         if definition is None:
             return route.fulfill(status=404, json={"error": f"Unknown task type: {name!r}"})
@@ -463,6 +624,8 @@ class FrontendFixtureRouter:
         return route.fulfill(status=status, json=payload)
 
     def _submit(self, route: Any, query: Any) -> None:
+        if self.demo_mode:
+            return self._demo_submit_refusal(route)
         definition = self.scenario.runner_or_none(self.scenario.task_type)
         if definition is None:
             return route.fulfill(status=400, json={"error": f"Unknown task type: {self.scenario.task_type}"})
@@ -583,6 +746,14 @@ _API_ROUTES: tuple[tuple[re.Pattern[str], Any], ...] = (
     (re.compile(r"/compute/api/auth/register"), FrontendFixtureRouter._auth_register),
     (re.compile(r"/compute/api/legal/terms"), FrontendFixtureRouter._legal_terms),
     (re.compile(r"/compute/api/system/notices"), FrontendFixtureRouter._system_notices),
+    (re.compile(r"/compute/api/environment"), FrontendFixtureRouter._environment_capability),
+    (re.compile(r"/compute/api/demo/replays/(?P<scenario_id>[^/]+)/archive"), FrontendFixtureRouter._demo_replay_archive),
+    (re.compile(r"/compute/api/demo/replays/(?P<scenario_id>[^/]+)/artifacts/(?P<path>.+)"), FrontendFixtureRouter._demo_replay_artifact),
+    (re.compile(r"/compute/api/demo/replays/(?P<scenario_id>[^/]+)/files/(?P<file_id>[^/]+)"), FrontendFixtureRouter._demo_replay_logical_file),
+    (re.compile(r"/compute/api/demo/replays/(?P<scenario_id>[^/]+)/tables/(?P<path>.+)"), FrontendFixtureRouter._demo_replay_table),
+    (re.compile(r"/compute/api/demo/replays/(?P<scenario_id>[^/]+)/ndarrays/(?P<path>.+)"), FrontendFixtureRouter._demo_replay_ndarray),
+    (re.compile(r"/compute/api/demo/replays/(?P<scenario_id>[^/]+)"), FrontendFixtureRouter._demo_replay_manifest),
+    (re.compile(r"/compute/api/demo/replays"), FrontendFixtureRouter._demo_replay_catalog),
     (re.compile(r"/compute/api/mcp"), FrontendFixtureRouter._mcp_capability),
     (re.compile(r"/compute/api/resource-entitlement"), FrontendFixtureRouter._resource_entitlement),
     (re.compile(r"/compute/api/resource-ledger"), FrontendFixtureRouter._resource_ledger),
@@ -619,13 +790,35 @@ _API_ROUTES: tuple[tuple[re.Pattern[str], Any], ...] = (
 # ---------------------------------------------------------------------------
 
 
-def mount_scenario(page: Any, scenario: RunnerScenario, *, origin: str = DEFAULT_ORIGIN) -> FrontendFixtureRouter:
+def serve_environment(page: Any, origin: str = DEFAULT_ORIGIN) -> None:
+    """Answer the app-wide deployment-profile read for a harness that owns its routes.
+
+    The built frontend reads ``/compute/api/environment`` on every page. A
+    harness that builds its own entry and installs a selective route set must
+    answer it too, or the browser reports the unrouted request as a console
+    error. ``mount_scenario`` already serves it through its dispatch table.
+    """
+    page.route(f"{origin}/compute/api/environment", lambda route: route.fulfill(json=PRODUCTION_ENVIRONMENT))
+
+
+def mount_scenario(
+    page: Any,
+    scenario: RunnerScenario,
+    *,
+    origin: str = DEFAULT_ORIGIN,
+    environment: Mapping[str, Any] | None = None,
+    demo_replays: Mapping[str, Any] | None = None,
+) -> FrontendFixtureRouter:
     """Serve the built frontend bundle against one scenario's fixtures.
 
     Returns the installed router, whose ``requests`` capture answers what the
-    browser actually asked for.
+    browser actually asked for. ``environment`` states the deployment profile
+    (production when omitted) and ``demo_replays`` declares the replay
+    scenarios a demo profile serves.
     """
-    return FrontendFixtureRouter(page, scenario, origin=origin).install()
+    return FrontendFixtureRouter(
+        page, scenario, origin=origin, environment=environment, demo_replays=demo_replays
+    ).install()
 
 
 def _json_object(body: str | None) -> dict[str, Any] | None:

@@ -57,6 +57,10 @@ _NON_ADMIN_PAGE_ROUTES = frozenset(
         "/compute/create_task",
         "/compute/dashboard",
         "/compute/results/<md5sum>",
+        # Registered in every profile, but a production process answers 404: the
+        # playground exists only in a demo deployment.
+        "/compute/demo",
+        "/compute/demo/replays/<scenario_id>",
         "/PSSM_GREMLIN/dashboard",
         "/PSSM_GREMLIN/create_task",
     }

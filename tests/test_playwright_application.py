@@ -13,6 +13,7 @@ from playwright.sync_api import Page, expect
 import pytest
 
 from browser_frontend_assets import result_dist
+from frontend_fixtures.router import serve_environment
 
 pytestmark = pytest.mark.browser
 
@@ -282,6 +283,7 @@ def _install_app(page: Page) -> list[str]:
         "paths": {"/compute/api/types": {"get": {"summary": "List Runner types", "responses": {"200": {"description": "Catalog"}}}}},
     }))
     page.route(f"{ORIGIN}/compute/api/infrastructure", lambda route: route.fulfill(json=_infrastructure()))
+    serve_environment(page, ORIGIN)
     page.route(f"{ORIGIN}/compute/api/types", lambda route: route.fulfill(json=_catalog()))
     page.route(f"{ORIGIN}/compute/api/types/sequence_demo", lambda route: route.fulfill(json=_detail()))
     page.route(f"{ORIGIN}/compute/api/task-parameters/sequence_demo", lambda route: route.fulfill(json={

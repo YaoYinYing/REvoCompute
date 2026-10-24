@@ -68,9 +68,9 @@ from .models import (
     WorkspaceCapability,
     WorkspaceStep,
 )
-from .provenance import PROVENANCE_SOURCE, ProvenanceError, production_receipt_pointer
-from .replay import ReplayBundle
-from .replay_bundle import (
+from revocompute.provenance import PROVENANCE_SOURCE, ProvenanceError, production_receipt_pointer
+from revocompute.replay import ReplayBundle
+from revocompute.replay_bundle import (
     CAPTURE_MODES,
     DEFAULT_MAX_BUNDLE_BYTES,
     DEFAULT_MAX_PAYLOAD_BYTES,

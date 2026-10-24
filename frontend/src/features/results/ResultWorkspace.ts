@@ -20,6 +20,17 @@ import { StoryboardHost } from './storyboard-host';
 import { mountTaskDiagnostics } from '../tasks/diagnostics';
 import type { LocalResultSource } from './local-source';
 
+/**
+ * A demo replay source: the same ResultManifest v3 the workspace already renders,
+ * read from a validated replay bundle instead of a Task the reader owns. The
+ * workspace still owns every renderer and every artifact route stays bounded;
+ * only the manifest's origin changes.
+ */
+export interface DemoResultSource {
+  taskId: string;
+  load(signal: AbortSignal): Promise<TaskStatus | ResultManifest>;
+}
+
 function element<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, text?: string): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag); if (className) node.className = className; if (text != null) node.textContent = text; return node;
 }
@@ -61,8 +72,7 @@ const citationHref = (citation: { url?: string; doi?: string }): string | null =
   return citation.doi ? `https://doi.org/${encodeURIComponent(citation.doi)}` : null;
 };
 
-interface WorkspaceNodes {
-  status: HTMLElement; outcome: HTMLElement; badge: HTMLElement; title: HTMLElement; meta: HTMLElement; tabs: HTMLElement;
+interface WorkspaceNodes {  status: HTMLElement; outcome: HTMLElement; badge: HTMLElement; title: HTMLElement; meta: HTMLElement; tabs: HTMLElement;
   previewTitle: HTMLElement; previewDescription: HTMLElement; preview: HTMLElement; download: HTMLAnchorElement;
   rail: HTMLElement; railDetails: HTMLDetailsElement; reopen: HTMLButtonElement; search: HTMLInputElement;
   fileList: HTMLElement; integrity: HTMLElement; artifactSummary: HTMLElement; archive: HTMLButtonElement; archiveStatus: HTMLElement;
@@ -78,6 +88,8 @@ export class ResultWorkspace {
    * folder could be read through, so `load()` projects the folder's own manifest instead.
    */
   private readonly local: LocalResultSource | null;
+  /** A recorded demo source, when this page replays a bundle instead of a Task. */
+  private readonly demoSource: DemoResultSource | null;
   private readonly rendererRegistry = new RendererRegistry();
   private readonly viewRenderers = new ViewRendererRegistry();
   private readonly structure: StructureController;
@@ -112,11 +124,14 @@ export class ResultWorkspace {
   private readonly directoryExpansion = new Map<string, boolean>();
   private readonly listeners = new AbortController();
 
-  constructor(private readonly root: HTMLElement, private readonly createViewer: MolecularViewerFactory, local: LocalResultSource | null = null) {
+  constructor(private readonly root: HTMLElement, private readonly createViewer: MolecularViewerFactory, local: LocalResultSource | null = null,
+    demoSource: DemoResultSource | null = null) {
     this.local = local;
-    // The Task identity the page states: the source's own for a local folder, the URL's for a
-    // Task. No route is ever composed for the local one -- it is the literal `local`.
-    this.taskId = local ? local.taskId : taskIdFromLocation();
+    this.demoSource = demoSource;
+    // The Task identity the page states: the source's own for a local folder, the
+    // replayed Task's for a demo bundle, the URL's for a Task. No route is ever
+    // composed for the local one -- it is the literal `local`.
+    this.taskId = local ? local.taskId : demoSource ? demoSource.taskId : taskIdFromLocation();
     installScientificPrimitives(); this.geometry = new StructureController(createViewer, { controlsCollapsed: true }); this.structure = new StructureController(createViewer, {
       selectionEnabled: true, controlsCollapsed: true,
       onSelectionChanged: (residues) => this.storyboard.setMolecularSelection(residues),
@@ -161,12 +176,14 @@ export class ResultWorkspace {
     this.setState(t('results.loadingTitle'), t('results.loadingBody'));
     if (this.local) { this.renderLocal(this.local); return this; }
     try {
-      const result = await loadAuthorizedResult(this.taskId, this.loadController.signal);
+      const result = this.demoSource
+        ? await this.demoSource.load(this.loadController.signal)
+        : await loadAuthorizedResult(this.taskId, this.loadController.signal);
       if (!isResultManifest(result)) { this.renderPending(result); return this; }
       this.manifest = result; this.renderManifest(result);
     } catch (error) {
       if ((error as Error).name === 'AbortError') return this;
-      if (error instanceof ApiError && error.status === 401) {
+      if (!this.demoSource && error instanceof ApiError && error.status === 401) {
         location.assign(`/compute/login?return_to=${encodeURIComponent(location.pathname)}`); return this;
       }
       this.renderFatal((error as Error).message || t('results.unavailable'));
@@ -174,8 +191,8 @@ export class ResultWorkspace {
     return this;
   }
 
-  /** The identity line's source: the folder for a local result, the Task id for a remote one. */
-  private sourceLabel(): string { return this.local ? this.local.label : this.taskId; }
+  /** The identity line's source: the folder for a local result, the replay scenario for a demo, the Task id otherwise. */
+  private sourceLabel(): string { return this.local ? this.local.label : this.demoSource ? `${t('demo.replay.source')} · ${this.taskId}` : this.taskId; }
 
   /**
    * Render an opened local folder as this page's result.

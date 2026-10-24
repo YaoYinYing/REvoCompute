@@ -5,7 +5,7 @@ A bundle was assembled from the production artifact API for task
 sha256 `afeb5646...`), but it cannot be committed: the published result includes
 `boltz-model-assets.sha256`, whose bytes embedded a host-local provisioning root.
 `capture_replay_bundle` refuses a payload that carries a host path, and
-`tests/frontend_fixtures/replay_bundle.py` re-checks that on load.
+`revocompute/replay_bundle.py` re-checks that on load.
 
 The runner-side cause is fixed in this branch's history (`8082c1e`: the manifest
 now names assets relative to the mount and verification runs from the asset

@@ -15,7 +15,6 @@ capture, and it is served only when its bytes still match the captured sha256.
 
 from __future__ import annotations
 
-import csv
 import io
 import json
 import os
@@ -24,7 +23,13 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from .ndarray import MAX_PROJECTION_ELEMENTS
 from .replay_bundle import ReplayBundleError, load_bundle, payload_bytes
+from .result_projection import (
+    ResultPreviewError,
+    read_bounded_array_projection,
+    read_table_page,
+)
 
 
 class ReplayBundle:
@@ -84,57 +89,80 @@ class ReplayBundle:
 
     # -- bounded table and projection routes --------------------------------
 
-    def table_page(self, path: str, *, offset: int = 0, limit: int = 100, matrix: bool = False) -> dict[str, Any] | None:
-        """Page a captured table artifact exactly as the Server's route does.
+    def declares_table(self, path: str) -> bool:
+        """Whether the captured manifest declares ``path`` as a table artifact.
 
-        Applies the same bounds (offset ≤ 10000, limit ≤ 500, a wider matrix
-        column allowance) and the same CSV/TSV parsing, so the frontend receives
-        a byte-faithful projection of the captured artifact rather than a copy of
-        a whole file that would hide a paging defect.
+        The replay never infers a table from a file extension: the same
+        manifest capability the live result route requires is what admits a
+        recorded artifact to the paging route.
+        """
+        for artifact in self.manifest.get("artifacts") or []:
+            if isinstance(artifact, Mapping) and artifact.get("path") == path:
+                return artifact.get("capability") == "table" or artifact.get("preview") == "table"
+        return False
+
+    def table_page(
+        self,
+        path: str,
+        *,
+        offset: int = 0,
+        limit: int = 100,
+        matrix: bool = False,
+        strict: bool = False,
+    ) -> dict[str, Any] | None:
+        """Page a captured table artifact through the Server's bounded reader.
+
+        By default this is the recorded-bytes contract the replay fixture
+        harness has always used: a captured payload is paged whatever the live
+        route's current width/cell/page caps would say, and any refusal is
+        ``None`` (the caller's 404) because a recorded result must remain
+        renderable after the live caps tighten. ``strict=True`` is the live
+        result route's contract -- the artifact must be manifest-declared as a
+        table, the caps apply, and a refusal raises
+        :class:`ResultPreviewError` so a demo route can answer the bounded 400.
         """
         body = self.payload(path)
         if body is None:
             return None
         try:
-            offset = int(offset)
-            limit = int(limit)
-        except (TypeError, ValueError):
+            return read_table_page(
+                io.BytesIO(body[0]),
+                name=path,
+                offset=offset,
+                limit=limit,
+                matrix=matrix,
+                declared_table=self.declares_table(path),
+                bounded=strict,
+            )
+        except ResultPreviewError:
+            if strict:
+                raise
             return None
-        if offset < 0 or offset > 10_000 or limit < 1 or limit > 500:
-            return None
-        text = body[0].decode("utf-8")
-        delimiter = "\t" if path.lower().endswith(".tsv") else ","
-        reader = csv.reader(io.StringIO(text), delimiter=delimiter)
-        columns = next(reader, [])
-        rows: list[list[str]] = []
-        has_more = False
-        for index, row in enumerate(reader):
-            if index < offset:
-                continue
-            if len(rows) == limit:
-                has_more = True
-                break
-            rows.append(row)
-        return {
-            "columns": columns,
-            "rows": rows,
-            "offset": offset,
-            "limit": limit,
-            "has_more": has_more,
-        }
 
-    def projection(self, path: str, *, kind: str = "numeric", key: str | None = None) -> dict[str, Any] | None:
+    def projection(
+        self,
+        path: str,
+        *,
+        kind: str = "numeric",
+        key: str | None = None,
+        max_elements: int = MAX_PROJECTION_ELEMENTS,
+        strict: bool = False,
+    ) -> dict[str, Any] | None:
         """Project a captured artifact through the Server's own bounded reader.
 
         Delegates to ``revocompute.ndarray.read_array_projection`` -- the function
         the ``GET .../ndarrays/<path>`` route serves through -- so a replayed
         projection has the Server's shape, dtype, null, and NPY/NPZ semantics
-        rather than a harness approximation. A projection the Server would refuse
-        (an unsafe path, an element/byte overflow, an unsupported artifact) is
-        not served.
-        """
-        from revocompute.ndarray import MAX_PROJECTION_ELEMENTS, ArrayAccessError, read_array_projection
+        rather than a harness approximation.
 
+        By default a projection the live route would refuse (an unsafe path, an
+        element/byte overflow, an unsupported artifact) is ``None`` (the
+        caller's 404): a storyboard legitimately probes optional fields and
+        handles an absent projection, and a recorded result must keep rendering
+        after the live bounds tighten. ``strict=True`` raises
+        :class:`ResultPreviewError` with the live route's message instead, which
+        is what the demo route answers as a bounded 400.
+        """
         body = self.payload(path)
         if body is None:
             return None
@@ -143,9 +171,11 @@ class ReplayBundle:
             stream.flush()
             stream.seek(0)
             try:
-                return read_array_projection(
-                    stream, name=path, key=key, kind=kind, max_elements=MAX_PROJECTION_ELEMENTS
+                return read_bounded_array_projection(
+                    stream, name=path, key=key, kind=kind, max_elements=max_elements
                 )
-            except ArrayAccessError:
+            except ResultPreviewError:
+                if strict:
+                    raise
                 return None
 

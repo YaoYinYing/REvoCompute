@@ -63,7 +63,7 @@ rewrite them. `chai1-model-assets.json` is a required item of the
 `prediction_evidence` view, so the bundle cannot drop it without dropping the
 view.
 
-The host-path guard in `tests/frontend_fixtures/replay_bundle.py` now recognizes
+The host-path guard in `revocompute/replay_bundle.py` now recognizes
 a path after a quote, an assignment `=`, a mapping `:`, a parenthesis, or a JSON
 array bracket, so it catches this one and the former `(/tmp/rc/prodrop)` in the
 BioEmu bundle (which is now provenance text without the path). This bundle's
