@@ -2142,9 +2142,11 @@ def _execute_compute_task(
     # operator insert -- the worker still refuses to execute it. The row is
     # failed with the minimum truthful fields only: the ordinary failure path
     # publishes a failure report and charges its bytes, which a demo must not
-    # do, so it is not used here.
+    # do, so it is not used here. Only a row that could still be dispatched is
+    # refused; a restored finished, failed, or deleted row is left untouched,
+    # because the refusal must not rewrite execution history a redelivery names.
     if CONFIG.demo_mode:
-        if not _task_is_terminal(md5sum):
+        if str(task.get("status") or "").strip().lower() in {"pending", "queued", "running"}:
             finished_at = time.time()
             started_at = task.get("started_at")
             task_store.update_task(

@@ -544,6 +544,37 @@ def test_demo_worker_refuses_a_row_that_reached_it(monkeypatch, tmp_path):
     assert module.app.config["storage_resolver"].read_manifest_bytes(task) is None
 
 
+@pytest.mark.parametrize(
+    ("status", "finished_at", "walltime", "error"),
+    [
+        ("finished", 1_700_000_500.0, 100.0, None),
+        ("failed", 1_700_000_600.0, 42.0, "original failure"),
+    ],
+)
+def test_demo_worker_leaves_restored_terminal_rows_untouched(
+    monkeypatch, tmp_path, status, finished_at, walltime, error
+):
+    """A redelivered dispatch must not rewrite finished/failed execution history."""
+    _install_demo_replays(tmp_path)
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env=DEMO_ENV)
+    task_id = "b" * 32
+    module.task_store.upsert_task(
+        task_id, task_type=SYNTHETIC_TASK_TYPE, status=status, filename="demo.pdb", file_path="/tmp/demo.pdb",
+        uploaded_at=0.0, is_binary=0, storage_key="demo", submitted_by_user_id=1,
+    )
+    module.task_store.update_task(
+        task_id, status=status, finished_at=finished_at, walltime=walltime, error=error, run_stage="execute",
+    )
+    before = module.task_store.get_task(task_id)
+
+    module.task_runtime._execute_compute_task(task_id)
+
+    assert module.task_store.get_task(task_id) == before
+    assert [entry for entry in module.task_store.list_ledger(1, limit=200)
+            if entry["reason_code"] == "storage_charged"] == []
+    assert module.task_store.get_result_publication(task_id) is None
+
+
 def test_demo_profile_refuses_mutating_operator_actions_before_any_row(monkeypatch, tmp_path):
     """The Admin path reaches the host controller outside the submission gate.
 
