@@ -14,13 +14,14 @@ a production process. These tests drive the real application in both profiles.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 from pathlib import Path
 
 import pytest
 
-from conftest import _load_pssm_module, _test_client_auth
+from conftest import _admin_client_auth, _load_pssm_module, _test_client_auth
 from demo_replay_fixtures import (
     CAPTURED_ARTIFACT,
     EXCLUDED_ARTIFACT,
@@ -34,11 +35,15 @@ DEMO_ENV = {**IDENTITY, "REVOCOMPUTE_DEMO_MODE": "true", "REVOCOMPUTE_JOB_EXECUT
 SCENARIO_ID = "recorded-demo"
 
 
-def _install_demo_replays(tmp_path: Path, scenario_id: str = SCENARIO_ID) -> Path:
+def _install_demo_replays(
+    tmp_path: Path, scenario_id: str = SCENARIO_ID, *, binary_table: bool = False
+) -> Path:
     """Leave the deployment's replay index where ``app`` loads it at import."""
     root = tmp_path / "pssm_env" / "demo" / "replays"
     root.mkdir(parents=True, exist_ok=True)
-    write_synthetic_replay_bundle(root / f"{scenario_id}.json")
+    bundle_path = write_synthetic_replay_bundle(root / f"{scenario_id}.json")
+    if binary_table:
+        _store_table_payload_as_binary(bundle_path)
     index = {
         "version": 1,
         "scenarios": [
@@ -53,6 +58,36 @@ def _install_demo_replays(tmp_path: Path, scenario_id: str = SCENARIO_ID) -> Pat
     }
     (root / "index.json").write_text(json.dumps(index), encoding="utf-8")
     return root
+
+
+def _store_table_payload_as_binary(bundle_path: Path) -> None:
+    """Persist the synthetic table artifact as a valid non-UTF-8 replay payload.
+
+    A captured coordinate stream (XTC/DCD) is checked in as base64 with the
+    decoded size and sha256. The live table route refuses any bytes it cannot
+    parse with a bounded 400; this makes the replay route answer the same way
+    instead of letting a decode error reach the client as a 500.
+    """
+    from revocompute.replay_bundle import bundle_digest, write_bundle
+
+    document = json.loads(bundle_path.read_text(encoding="utf-8"))
+    data = b"\xff\xfe\x00binary table payload"
+    entry = document["payloads"][TABLE_ARTIFACT]
+    entry["encoding"] = "base64"
+    entry["payload"] = base64.b64encode(data).decode("ascii")
+    entry["size"] = len(data)
+    entry["sha256"] = hashlib.sha256(data).hexdigest()
+    for artifact in document["response"]["artifacts"]:
+        if artifact["path"] == TABLE_ARTIFACT:
+            artifact["size"] = len(data)
+            artifact["sha256"] = entry["sha256"]
+    for files in document["response"]["result"]["files"].values():
+        for item in files:
+            if item["path"] == TABLE_ARTIFACT:
+                item["size"] = len(data)
+                item["sha256"] = entry["sha256"]
+    document["bundle_digest"] = bundle_digest(document)
+    write_bundle(bundle_path, document)
 
 
 def _install_frontend_entry(module, tmp_path: Path) -> str:
@@ -209,7 +244,7 @@ def test_demo_replay_api_routes_require_a_session(monkeypatch, tmp_path):
         ("GET", f"/compute/api/demo/replays/{SCENARIO_ID}/artifacts/{CAPTURED_ARTIFACT}"),
         ("GET", f"/compute/api/demo/replays/{SCENARIO_ID}/files/summary"),
         ("GET", f"/compute/api/demo/replays/{SCENARIO_ID}/tables/{TABLE_ARTIFACT}"),
-        ("GET", f"/compute/api/demo/replays/{SCENARIO_ID}/ndarrays/{TABLE_ARTIFACT}?key=score"),
+        ("GET", f"/compute/api/demo/replays/{SCENARIO_ID}/ndarrays/{TABLE_ARTIFACT}?key=score&max_elements=8"),
         ("POST", f"/compute/api/demo/replays/{SCENARIO_ID}/archive"),
     )
     # The production result archive answers an anonymous caller through this same
@@ -252,12 +287,60 @@ def test_demo_table_route_pages_the_captured_table(monkeypatch, tmp_path):
     }
 
 
+def test_demo_table_route_refuses_a_binary_payload_with_a_bounded_error(monkeypatch, tmp_path):
+    """A non-UTF-8 table payload must be a bounded 400, never a decode 500.
+
+    A captured XTC/DCD stream is binary; the live table route refuses an
+    unpreviewable artifact rather than letting ``UnicodeDecodeError`` escape.
+    """
+    _install_demo_replays(tmp_path, binary_table=True)
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env=DEMO_ENV)
+    headers = _test_client_auth(module)
+    response = module.app.test_client().get(
+        f"/compute/api/demo/replays/{SCENARIO_ID}/tables/{TABLE_ARTIFACT}", headers=headers
+    )
+    assert response.status_code == 400
+    assert response.get_json() == {"error": "Table could not be previewed"}
+
+
+def test_demo_table_route_refuses_a_captured_non_table_artifact(monkeypatch, tmp_path):
+    """A text artifact is not a table merely because its bytes are readable."""
+    _install_demo_replays(tmp_path)
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env=DEMO_ENV)
+    headers = _test_client_auth(module)
+    response = module.app.test_client().get(
+        f"/compute/api/demo/replays/{SCENARIO_ID}/tables/{CAPTURED_ARTIFACT}", headers=headers
+    )
+    assert response.status_code == 400
+    assert response.get_json() == {"error": "Artifact is not a table"}
+
+
+def test_demo_array_route_refuses_the_element_limits_production_refuses(monkeypatch, tmp_path):
+    """``max_elements`` is a bound, not a query decoration."""
+    _install_demo_replays(tmp_path)
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env=DEMO_ENV)
+    headers = _test_client_auth(module)
+    client = module.app.test_client()
+    for query in (
+        "key=score",
+        "key=score&max_elements=0",
+        "key=score&max_elements=1048577",
+        "key=score&max_elements=abc",
+    ):
+        response = client.get(
+            f"/compute/api/demo/replays/{SCENARIO_ID}/ndarrays/{TABLE_ARTIFACT}?{query}", headers=headers
+        )
+        assert response.status_code == 400, query
+        assert response.get_json() == {"error": "Array projection is outside allowed bounds"}, query
+
+
 def test_demo_array_route_projects_a_captured_numeric_column(monkeypatch, tmp_path):
     _install_demo_replays(tmp_path)
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env=DEMO_ENV)
     headers = _test_client_auth(module)
     response = module.app.test_client().get(
-        f"/compute/api/demo/replays/{SCENARIO_ID}/ndarrays/{TABLE_ARTIFACT}?key=score", headers=headers
+        f"/compute/api/demo/replays/{SCENARIO_ID}/ndarrays/{TABLE_ARTIFACT}?key=score&max_elements=8",
+        headers=headers,
     )
     assert response.status_code == 200
     payload = response.get_json()
@@ -362,3 +445,74 @@ def test_demo_worker_refuses_a_row_that_reached_it(monkeypatch, tmp_path):
     task = module.task_store.get_task(task_id)
     assert task["status"] == "failed"
     assert "demo" in str(task.get("error") or "").lower()
+
+
+def test_demo_profile_refuses_mutating_operator_actions_before_any_row(monkeypatch, tmp_path):
+    """The Admin path reaches the host controller outside the submission gate.
+
+    ``runner.live_test`` runs ``run/restart.sh live-test``, whose executor
+    upserts a Task row before the worker refuses it. A demo deployment must
+    refuse the action at the operator write boundary, so a plan that is current
+    and executable still reserves no Operator Job and writes no Task row.
+    """
+    from revocompute import operator_service as service_module
+    from revocompute.admission import RunnerReadinessStatus
+    from revocompute.operator_executor import ExecutorAvailability
+    from revocompute.operator_service import OperatorServiceError
+    from revocompute.runner_readiness import RunnerReadiness
+
+    _install_demo_replays(tmp_path)
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env=DEMO_ENV)
+    client = module.app.test_client()
+    headers = _admin_client_auth(module)
+    service = module.app.config["operator_service"]
+    # Script only the expensive host boundary: a stale validation is a current,
+    # executable plan, and holding the queue keeps the host command unrun so a
+    # regression writes a job row instead of executing one.
+    readiness = RunnerReadiness(
+        runner_family="gpu_runner",
+        status=RunnerReadinessStatus.VALIDATION_STALE,
+        reason_code="RUNTIME_BUNDLE_CHANGED",
+        message="RUNTIME_BUNDLE_CHANGED",
+        doctor_ok=True,
+        sif_path="/images/gpu_runner.sif",
+        sif_exists=True,
+        sif_sha256="sha256:sif",
+        build_provenance_current=True,
+        build_provenance_digest="sha256:build",
+        runtime_bundle_sha256="sha256:bundle",
+        receipt_exists=True,
+        receipt_valid=False,
+        receipt_tested_at="2026-01-01T00:00:00Z",
+    )
+    monkeypatch.setattr(service_module, "evaluate_runner_readiness", lambda _host, _family: readiness)
+    monkeypatch.setattr(
+        service_module,
+        "availability",
+        lambda _host: ExecutorAvailability(True, "operator_executor_available"),
+    )
+    monkeypatch.setattr(service, "_schedule", lambda work: None)
+
+    plan = service.plan("runner.live_test", "gpu_runner")
+    with pytest.raises(OperatorServiceError, match="preview and replay"):
+        service.submit(
+            "runner.live_test",
+            "gpu_runner",
+            plan_digest=plan.plan_digest,
+            actor_user_id=1,
+            actor_username="sysadmin",
+        )
+    assert service.jobs() == []
+
+    # The Admin route maps the same refusal, and it is decided before plan
+    # validation: a deliberately stale digest still reports the demo reason.
+    for action in ("runner.live_test", "runner.build", "runner.prepare"):
+        response = client.post(
+            "/compute/api/auth/admin/runners/gpu_runner/actions",
+            headers=headers,
+            json={"action": action, "plan_digest": "sha256:" + "0" * 64},
+        )
+        assert response.status_code == 409, (action, response.get_json())
+        assert "preview and replay" in response.get_json()["error"], action
+    assert service.jobs() == []
+    assert module.task_store.list_tasks() == []

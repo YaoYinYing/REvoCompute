@@ -134,6 +134,20 @@ def _rewrite_routes(value: Any, prefix: str, target: str) -> Any:
     return value
 
 
+def validate_scenario_id(value: Any) -> str:
+    """Return the canonical replay scenario id, or refuse it.
+
+    An id is also the bundle's file name, so it must be a single path segment of
+    letters, digits, ``-`` and ``_``.  The loader and the deployment
+    materializer validate through this one rule, so the materializer can never
+    build a destination path from an id the loader would reject.
+    """
+    scenario_id = str(value or "").strip()
+    if not scenario_id or not scenario_id.replace("-", "").replace("_", "").isalnum():
+        raise DemoReplayError(f"invalid replay scenario id: {scenario_id!r}")
+    return scenario_id
+
+
 def _safe_bundle_path(root: Path, relative: str) -> Path:
     normalized = str(relative).replace("\\", "/")
     if not normalized or normalized.startswith("/") or any(part in {"", ".", ".."} for part in normalized.split("/")):
@@ -169,9 +183,7 @@ def load_demo_replays(root: str | os.PathLike[str]) -> dict[str, DemoReplayScena
     for entry in entries:
         if not isinstance(entry, dict):
             raise DemoReplayError("a demo replay scenario must be an object")
-        scenario_id = str(entry.get("id") or "").strip()
-        if not scenario_id or not scenario_id.replace("-", "").replace("_", "").isalnum():
-            raise DemoReplayError(f"invalid replay scenario id: {scenario_id!r}")
+        scenario_id = validate_scenario_id(entry.get("id"))
         if scenario_id in scenarios:
             raise DemoReplayError(f"duplicate replay scenario id: {scenario_id!r}")
         bundle_path = _safe_bundle_path(base, str(entry.get("bundle") or ""))

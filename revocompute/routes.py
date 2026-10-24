@@ -111,7 +111,6 @@ from revocompute.ingress_security import (
     event_for_code,
     phase_for_code,
 )
-from revocompute.ndarray import ArrayAccessError, MAX_PROJECTION_ELEMENTS, read_array_projection
 from revocompute.db import GPUCreditUnavailableError, TaskIdReservedError
 from revocompute.operational_events import emit_event
 from revocompute.ratelimit import rate_limit
@@ -142,7 +141,14 @@ from revocompute.resource_policy import (
     normalize_resource_value,
     serialize_resource_value,
 )
-from revocompute.result_projection import project_result_manifest
+from revocompute.result_projection import (
+    ResultPreviewError,
+    array_projection_query,
+    project_result_manifest,
+    read_bounded_array_projection,
+    read_table_page,
+    table_page_bounds,
+)
 from revocompute.storage import (
     PUBLICATION_ANCHOR_INVALID,
     PUBLICATION_ANCHOR_MISMATCH,
@@ -224,9 +230,6 @@ from jsonschema import validate as validate_json_schema
 from sqlalchemy.exc import IntegrityError
 from werkzeug.security import check_password_hash, generate_password_hash
 
-MAX_TABLE_PAGE_BYTES = 8 * 1024 * 1024
-MAX_TABLE_CELL_BYTES = 16 * 1024
-_TABLE_PAGE_ENVELOPE_BYTES = 512
 # Read a verified descriptor in bounded chunks; no read is ever sized by the
 # artifact, so a large download streams instead of issuing one huge read.
 _STREAM_CHUNK_BYTES = 64 * 1024
@@ -391,16 +394,18 @@ def demo_replay_logical_file(scenario_id: str, file_id: str):
 @app.route("/compute/api/demo/replays/<scenario_id>/tables/<path:relative_path>", methods=["GET"])
 @login_required
 def demo_replay_table(scenario_id: str, relative_path: str):
+    """Page a recorded table through the same bounded reader the result route uses."""
     scenario = _demo_replay_or_404(scenario_id)
     try:
-        offset = int(request.args.get("offset", 0))
-        limit = int(request.args.get("limit", 100))
-    except ValueError:
-        return jsonify({"error": "Invalid table page"}), 400
-    if offset < 0 or offset > 10_000 or limit < 1 or limit > 500:
-        return jsonify({"error": "Table page is outside allowed bounds"}), 400
-    matrix = request.args.get("matrix") in {"1", "true", "yes"}
-    page = scenario.bundle.table_page(relative_path, offset=offset, limit=limit, matrix=matrix)
+        offset, limit = table_page_bounds(request.args)
+        page = scenario.bundle.table_page(
+            relative_path,
+            offset=offset,
+            limit=limit,
+            matrix=request.args.get("matrix") == "1",
+        )
+    except ResultPreviewError as error:
+        return jsonify({"error": str(error)}), 400
     if page is None:
         return jsonify({"error": "Table artifact not found"}), 404
     return jsonify(page)
@@ -409,16 +414,15 @@ def demo_replay_table(scenario_id: str, relative_path: str):
 @app.route("/compute/api/demo/replays/<scenario_id>/ndarrays/<path:relative_path>", methods=["GET"])
 @login_required
 def demo_replay_ndarray(scenario_id: str, relative_path: str):
+    """Project recorded bytes through the same bounded reader the result route uses."""
     scenario = _demo_replay_or_404(scenario_id)
-    if set(request.args) - {"key", "kind", "max_elements"}:
-        return jsonify({"error": "Invalid array query"}), 400
-    keys = request.args.getlist("key")
-    kinds = request.args.getlist("kind")
-    if len(keys) > 1 or len(kinds) > 1:
-        return jsonify({"error": "Invalid array query"}), 400
-    projection = scenario.bundle.projection(
-        relative_path, kind=(kinds[0] if kinds else "numeric"), key=(keys[0] if keys else None)
-    )
+    try:
+        key, kind, max_elements = array_projection_query(request.args)
+        projection = scenario.bundle.projection(
+            relative_path, kind=kind, key=key, max_elements=max_elements
+        )
+    except ResultPreviewError as error:
+        return jsonify({"error": str(error)}), 400
     if projection is None:
         return jsonify({"error": "Array artifact not found"}), 404
     return jsonify(projection)
@@ -3220,43 +3224,19 @@ def get_result_ndarray(md5sum: str, relative_path: str):
     resolved = _with_verified_artifact(_result_artifact(task, relative_path), task)
     if resolved is None:
         return jsonify({"error": "Array artifact not found"}), 404
-    stream, artifact = resolved["verified_stream"], resolved
-    if set(request.args) - {"key", "kind", "max_elements"}:
-        stream.close()
-        return jsonify({"error": "Invalid array query"}), 400
-
-    def bounded_integer(name: str, default: int) -> int | None:
-        values = request.args.getlist(name)
-        raw = values[0] if values else str(default)
-        if len(values) > 1 or re.fullmatch(r"(?:0|[1-9][0-9]{0,18})", raw) is None:
-            return None
-        return int(raw)
-
-    max_elements = bounded_integer("max_elements", 0)
-    keys = request.args.getlist("key")
-    kinds = request.args.getlist("kind")
-    if (
-        max_elements is None
-        or max_elements < 1
-        or max_elements > MAX_PROJECTION_ELEMENTS
-        or len(keys) > 1
-        or len(kinds) > 1
-    ):
-        stream.close()
-        return jsonify({"error": "Array projection is outside allowed bounds"}), 400
-    key = keys[0] if keys else None
-    kind = kinds[0] if kinds else "numeric"
+    stream = resolved["verified_stream"]
     try:
+        key, kind, max_elements = array_projection_query(request.args)
         # The projection parses from the verified snapshot itself, so a file
         # replaced after publication identity was checked can never be projected:
         # after publication identity has been verified, a consumer must consume
         # the verified object, not reopen its pathname.
         return jsonify(
-            read_array_projection(
+            read_bounded_array_projection(
                 stream, name=relative_path, key=key, kind=kind, max_elements=max_elements
             )
         )
-    except ArrayAccessError as error:
+    except ResultPreviewError as error:
         return jsonify({"error": str(error)}), 400
     finally:
         stream.close()
@@ -3291,56 +3271,24 @@ def get_result_table(md5sum: str, relative_path: str):
         stream.close()
         return jsonify({"error": "Artifact is not a table"}), 400
     try:
-        offset = int(request.args.get("offset", 0))
-        limit = int(request.args.get("limit", 100))
-    except ValueError:
-        stream.close()
-        return jsonify({"error": "Invalid table page"}), 400
-    if offset < 0 or offset > 10000 or limit < 1 or limit > 500:
-        stream.close()
-        return jsonify({"error": "Table page is outside allowed bounds"}), 400
-    delimiter = "\t" if relative_path.lower().endswith(".tsv") else ","
-
-    def row_cost(row: list[str], max_columns: int) -> int:
-        if len(row) > max_columns:
-            raise ValueError("Table row exceeds preview limits")
-        cost = 2 + max(0, len(row) - 1)
-        for cell in row:
-            if len(cell.encode("utf-8")) > MAX_TABLE_CELL_BYTES:
-                raise ValueError("Table cell exceeds preview limits")
-            cost += len(json.dumps(cell, ensure_ascii=True, separators=(",", ":")).encode("utf-8"))
-        return cost
-
-    try:
         # The verified snapshot is read for the whole parse, so the page comes
         # from the bytes whose identity the manifest approved.
-        with stream, io.TextIOWrapper(stream, encoding='utf-8', newline='') as handle:
-            reader = csv.reader(handle, delimiter=delimiter)
-            columns = next(reader, [])
-            # A matrix page carries one extra leading column of row labels beside its
-            # values, so the matrix cap allows that label column on top of the cap
-            # itself; a plain preview keeps its tighter width limit.
-            max_columns = (512 + 1) if request.args.get("matrix") == "1" else 100
-            page_bytes = _TABLE_PAGE_ENVELOPE_BYTES + row_cost(columns, max_columns)
-            if page_bytes > MAX_TABLE_PAGE_BYTES:
-                raise ValueError("Table page exceeds the response byte limit")
-            rows = []
-            has_more = False
-            for index, row in enumerate(reader):
-                if index < offset:
-                    continue
-                if len(rows) == limit:
-                    has_more = True
-                    break
-                cost = row_cost(row, max_columns)
-                if page_bytes + cost > MAX_TABLE_PAGE_BYTES:
-                    raise ValueError("Table page exceeds the response byte limit")
-                page_bytes += cost
-                rows.append(row)
-    except (OSError, UnicodeError, csv.Error, ValueError):
-        logging.exception("Table preview failed for task %s artifact %s", md5sum, relative_path)
-        return jsonify({"error": "Table could not be previewed"}), 400
-    return jsonify({"columns": columns, "rows": rows, "offset": offset, "limit": limit, "has_more": has_more})
+        offset, limit = table_page_bounds(request.args)
+        page = read_table_page(
+            stream,
+            name=relative_path,
+            offset=offset,
+            limit=limit,
+            matrix=request.args.get("matrix") == "1",
+            declared_table=declared_table,
+        )
+    except ResultPreviewError as error:
+        if error.__cause__ is not None:
+            logging.exception("Table preview failed for task %s artifact %s", md5sum, relative_path)
+        return jsonify({"error": str(error)}), 400
+    finally:
+        stream.close()
+    return jsonify(page)
 
 
 @app.route("/compute/api/results/<md5sum>/archive", methods=["POST"])

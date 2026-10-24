@@ -25,6 +25,10 @@ export class CreateTask {
   private readonly workbench = node('section', 'ct-workbench');
   private readonly pageHeader = node('header', 'ct-page-header');
   private readonly environmentNotice = node('div', 'ct-environment-notice');
+  // The demo statement belongs to a region the workbench keeps: the page header
+  // is hidden once a method is open, and a preview-only deployment must still
+  // say so on the form the reader is filling in.
+  private readonly demoNotice = node('div');
   private readonly workspaceRoot = node('div', 'ct-workspace');
   private readonly status = node('p', 'ct-status');
   private readonly validation = node('ul', 'ct-validation');
@@ -96,7 +100,8 @@ export class CreateTask {
     this.action.type = 'button'; this.action.addEventListener('click', () => void this.runAction());
     this.clear.type = 'button'; this.clear.addEventListener('click', () => void this.clearWorkspace());
     this.environmentNotice.hidden = true;
-    this.root.append(this.pageHeader, this.environmentNotice, this.chooser, this.workbench);
+    this.demoNotice.hidden = true;
+    this.root.append(this.pageHeader, this.environmentNotice, this.demoNotice, this.chooser, this.workbench);
     // The region is in the document from mount, before the catalog resolves, so a
     // status set while the catalog is still loading is announced rather than
     // inserted into a region no assistive technology had been told about.
@@ -125,9 +130,14 @@ export class CreateTask {
       const retry = node('button', 'ct-secondary', t('environment.retry')); retry.type = 'button';
       retry.addEventListener('click', () => { retry.disabled = true; void this.resolveEnvironment(); });
       this.environmentNotice.append(node('p', '', t('environment.unresolved')), retry);
-    } else if (environment.demo_mode) {
-      this.pageHeader.append(node('p', 'demo-notice', environment.notice || t('demo.notice')));
+    }
+    if (environment?.demo_mode) {
+      this.demoNotice.className = 'demo-notice';
+      this.demoNotice.textContent = environment.notice || t('demo.notice');
+      this.demoNotice.hidden = false;
       this.action.textContent = t('demo.previewOnly');
+    } else {
+      this.demoNotice.className = ''; this.demoNotice.textContent = ''; this.demoNotice.hidden = true;
     }
     this.refreshValidation();
   }

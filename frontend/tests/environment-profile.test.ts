@@ -92,6 +92,14 @@ async function mount(CreateTask: Modules['CreateTask']): Promise<HarnessNode> {
 
 const action = (root: HarnessNode): HarnessNode => root.querySelector('.ct-actions button.ct-primary')!;
 
+/** Whether the element and every ancestor it is rendered under are visible. */
+function visible(node: HarnessNode): boolean {
+  for (let current: HarnessNode | null = node; current; current = current.parent) {
+    if (current.hidden) return false;
+  }
+  return true;
+}
+
 afterEach(() => vi.unstubAllGlobals());
 
 describe('the deployment profile read', () => {
@@ -106,6 +114,22 @@ describe('the deployment profile read', () => {
     const { environment } = await load();
     routeFetch(() => ({ ok: false, status: 503, json: async () => ({}) }) as unknown as Response);
     await expect(environment.loadEnvironment()).resolves.toBeNull();
+  });
+
+  it('rejects a malformed 200 body instead of defaulting it to production', async () => {
+    const { environment } = await load();
+    const malformed: unknown[] = [
+      {},
+      { version: 1, demo_mode: true },
+      { version: 1, demo_mode: 'true', execution: 'available' },
+      { version: 2, demo_mode: true, execution: 'preview_only' },
+      { version: 1, demo_mode: true, execution: 'live' },
+      [],
+    ];
+    for (const body of malformed) {
+      routeFetch(() => reply(body));
+      await expect(environment.loadEnvironment()).resolves.toBeNull();
+    }
   });
 
   it('does not cache the failure, so the retry reads again', async () => {
@@ -147,6 +171,11 @@ describe('the Create Task run control', () => {
     expect(action(root).disabled).toBe(true);
     expect(action(root).textContent).toBe('Preview only — not executable here');
     expect(root.querySelector('.ct-environment-notice')!.hidden).toBe(true);
+    // The statement must survive the workbench replacing the page header.
+    const notice = root.querySelector('.demo-notice')!;
+    expect(notice.closest('.ct-page-header')).toBeNull();
+    expect(visible(notice)).toBe(true);
+    expect(notice.textContent).toContain('Demo environment');
   });
 
   it('keeps the ordinary run control and copy on a resolved production profile', async () => {
@@ -155,6 +184,7 @@ describe('the Create Task run control', () => {
     const root = await mount(CreateTask);
     expect(action(root).disabled).toBe(false);
     expect(root.querySelector('.ct-environment-notice')!.hidden).toBe(true);
+    expect(root.querySelectorAll('.demo-notice')).toHaveLength(0);
     expect(root.querySelector('.ct-validation-row.info')!.textContent).toContain('before submission');
   });
 });

@@ -314,7 +314,13 @@ def materialize_demo_replays(state) -> None:
     if not state.demo_mode():
         return
     from revocompute_ctl import SERVER_ROOT
-    from revocompute.demo import DEMO_REPLAYS_SUBDIR, REPLAY_INDEX_NAME, DemoReplayError, load_demo_replays
+    from revocompute.demo import (
+        DEMO_REPLAYS_SUBDIR,
+        REPLAY_INDEX_NAME,
+        DemoReplayError,
+        load_demo_replays,
+        validate_scenario_id,
+    )
 
     source_root = Path(SERVER_ROOT) / "demo" / "replays"
     corpus_root = (Path(SERVER_ROOT) / "tests" / "data").resolve()
@@ -333,27 +339,45 @@ def materialize_demo_replays(state) -> None:
         if transient.exists():
             shutil.rmtree(transient)
     staging_root.mkdir(parents=True)
-    resolved: list[dict[str, str]] = []
-    for entry in entries:
-        if not isinstance(entry, dict):
-            raise SystemExit("A demo replay scenario must be an object")
-        relative = str(entry.get("source") or "")
-        source = (Path(SERVER_ROOT) / relative).resolve()
-        if not source.is_relative_to(corpus_root) or not source.is_file():
-            raise SystemExit(f"Demo replay source is outside the curated corpus: {relative!r}")
-        bundle_name = f"{entry.get('id')}.json"
-        shutil.copy2(source, staging_root / bundle_name)
-        resolved_entry = {key: value for key, value in entry.items() if key != "source"}
-        resolved_entry["bundle"] = bundle_name
-        resolved.append(resolved_entry)
-    (staging_root / REPLAY_INDEX_NAME).write_text(
-        json.dumps({"version": document["version"], "scenarios": resolved}, indent=2) + "\n", encoding="utf-8"
-    )
+    # Nothing installed into staging may survive a refusal: a partial tree would
+    # be renamed over a working deployment by a later step or left for an
+    # operator to mistake for content the loader never accepted.
     try:
-        load_demo_replays(staging_root)
-    except DemoReplayError as exc:
+        staging_resolved = staging_root.resolve()
+        resolved: list[dict[str, str]] = []
+        for entry in entries:
+            if not isinstance(entry, dict):
+                raise SystemExit("A demo replay scenario must be an object")
+            # The scenario id names the installed bundle, so it is validated
+            # before any destination path exists.  This is the loader's own rule:
+            # an id the loader would reject can never reach a path join.
+            try:
+                scenario_id = validate_scenario_id(entry.get("id"))
+            except DemoReplayError as exc:
+                raise SystemExit(f"Demo replay content failed validation: {exc}") from exc
+            bundle_name = f"{scenario_id}.json"
+            destination = staging_root / bundle_name
+            if not destination.resolve().is_relative_to(staging_resolved):
+                raise SystemExit(f"Demo replay bundle path escapes the staging root: {bundle_name!r}")
+            relative = str(entry.get("source") or "")
+            source = (Path(SERVER_ROOT) / relative).resolve()
+            if not source.is_relative_to(corpus_root) or not source.is_file():
+                raise SystemExit(f"Demo replay source is outside the curated corpus: {relative!r}")
+            shutil.copy2(source, destination)
+            resolved_entry = {key: value for key, value in entry.items() if key != "source"}
+            resolved_entry["bundle"] = bundle_name
+            resolved.append(resolved_entry)
+        (staging_root / REPLAY_INDEX_NAME).write_text(
+            json.dumps({"version": document["version"], "scenarios": resolved}, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        try:
+            load_demo_replays(staging_root)
+        except DemoReplayError as exc:
+            raise SystemExit(f"Demo replay content failed validation: {exc}") from exc
+    except BaseException:
         shutil.rmtree(staging_root, ignore_errors=True)
-        raise SystemExit(f"Demo replay content failed validation: {exc}") from exc
+        raise
     had_previous = target_root.exists()
     try:
         if had_previous:

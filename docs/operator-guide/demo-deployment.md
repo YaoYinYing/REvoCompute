@@ -84,26 +84,55 @@ Use `restart.sh reset-passwd <username>` if it is lost.
 
 ## Probes after start
 
-Run these on the host before attaching any ingress:
+Run these on the host before attaching any ingress. `/compute/health` and
+`/compute/api/environment` are public; the readiness report and every replay
+route require a credential.
 
 ```bash
 PORT=8082  # the candidate port; use the demo env file's value
-curl -sS "http://127.0.0.1:${PORT}/compute/health"
-curl -sS "http://127.0.0.1:${PORT}/compute/api/environment"
-curl -sS "http://127.0.0.1:${PORT}/compute/api/demo/replays"
+BASE="http://127.0.0.1:${PORT}"
+DEMO_ADMIN_USER=demo-admin  # the demo env file's ADMIN_USERS value
+
+# Liveness and the public deployment profile.
+curl -sS "$BASE/compute/health"            # 200, empty body
+curl -sS "$BASE/compute/api/environment"
+
+# The readiness report and replay catalog are signed-in APIs: exchange the demo
+# admin password for a short-lived Bearer token. The generated bootstrap and
+# reset-passwd secrets are 32 hex characters, so the JSON body needs no escaping.
+read -rsp "demo admin password: " DEMO_ADMIN_PASSWORD; echo
+TOKEN=$(curl -sS -X POST -H "Content-Type: application/json" \
+  --data "{\"username\":\"${DEMO_ADMIN_USER}\",\"password\":\"${DEMO_ADMIN_PASSWORD}\"}" \
+  "$BASE/compute/api/auth/login" | python3 -c 'import json, sys; print(json.load(sys.stdin)["token"])')
+unset DEMO_ADMIN_PASSWORD
+
+curl -sS -H "Authorization: Bearer ${TOKEN}" "$BASE/compute/api/infrastructure"
+curl -sS -H "Authorization: Bearer ${TOKEN}" "$BASE/compute/api/demo/replays"
 ```
 
 The expected observations, from the code, are:
 
-- health answers with the deployment's readiness response;
-- environment reports `demo_mode: true` and `execution: "preview_only"`;
-- the replay catalog lists the installed scenarios with provenance labels and
-  bundle digests.
+- health is a liveness probe: `200` with an empty body, not a readiness answer;
+- environment reports `demo_mode: true`, `execution: "preview_only"`, and the
+  preview notice;
+- infrastructure is the server's readiness report, the same signed-in endpoint
+  the Admin readiness view reads. A demo has no execution components, so do not
+  expect it to be submission-ready; record the component state it reports;
+- the replay catalog is `version: 1` plus one entry per installed scenario. Each
+  entry carries `id`, `title`, `summary`, `task_type`, a `provenance` object
+  (`kind`, `label`, `capture_source`), a `bundle_digest` starting `sha256:`, and
+  the captured `task` identity (`id`, `type`, `display_name`).
 
-Record the actual responses with the deployment evidence. The three commands
-above, and the authenticated submission-refusal check in the next paragraph,
-have not been observed on the candidate host described below; they are the
-procedure, not a receipt.
+Record the actual responses with the deployment evidence. These commands, and
+the authenticated submission-refusal check in the next paragraph, have not been
+observed on the candidate host described below; they are the procedure, not a
+receipt.
+
+The demo routes are registered in every process, but their credential boundary
+answers before their demo-profile check. An anonymous API caller therefore gets
+the shared `401` JSON refusal (or the login redirect when it sends
+`Accept: text/html`); only a signed-in caller reaches the demo route's `404` in
+a production process. The ordering is the same inside the demo process.
 
 A signed-in crafted submission to `/compute/api/post` or
 `/compute/api/preflight/<task_type>` must answer `403` with
@@ -245,8 +274,8 @@ deployment evidence rather than asserting it was checked.
 - **A page shows a missing payload.** That is the replay bundle's recorded
   exclusion, not a server failure. The evidence record should name the scenario
   and the reported reason.
-- **Ingress does not answer.** Re-run the loopback health, environment, and
-  replay probes. Repair the tunnel or access policy; do not disable application
-  authentication to make the page load.
+- **Ingress does not answer.** Re-run the loopback liveness, environment,
+  readiness, and replay probes. Repair the tunnel or access policy; do not
+  disable application authentication to make the page load.
 - **Port or project conflict.** Stop and correct the demo env file. Never stop
   another deployment's containers to free the demo's port.

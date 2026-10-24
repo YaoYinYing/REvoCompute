@@ -256,7 +256,9 @@ from revocompute.operator_service import build_operator_service  # noqa: E402
 from revocompute.process_role import serves_canonical_application as _owns_startup  # noqa: E402
 from revocompute.runner_host import build_server_host  # noqa: E402
 
-_operator_service = build_operator_service(build_server_host(CONFIG), database=_user_db)
+_operator_service = build_operator_service(
+    build_server_host(CONFIG), database=_user_db, demo_mode=CONFIG.demo_mode
+)
 # Only the process that *owns* this application runs the restart pass.  The MCP
 # service imports this module too -- to project the MCP protocol over the same
 # handlers -- and a second importer must not terminalize a job the web service is

@@ -22,28 +22,34 @@ let pending: Promise<EnvironmentCapability | null> | null = null;
 /** Read the deployment profile, or `null` when the read produced no answer. */
 export function loadEnvironment(): Promise<EnvironmentCapability | null> {
   if (current) return Promise.resolve(current);
-  if (!pending) {
-    pending = fetch('/compute/api/environment', { credentials: 'same-origin' })
-      .then(async (response) => {
-        if (!response.ok) return null;
-        const payload = await response.json().catch(() => null) as Partial<EnvironmentCapability> | null;
-        if (!payload || typeof payload !== 'object') return null;
-        const parsed: EnvironmentCapability = {
-          version: typeof payload.version === 'number' ? payload.version : 1,
-          demo_mode: payload.demo_mode === true,
-          execution: payload.execution === 'preview_only' ? 'preview_only' : 'available',
-          ...(typeof payload.notice === 'string' && payload.notice ? { notice: payload.notice } : {}),
-        };
-        return parsed;
-      })
-      .catch(() => null)
-      .then((environment) => {
-        // Only a resolved answer is cached. A failed read clears the in-flight
-        // promise so the next caller retries instead of inheriting the failure.
-        if (environment) current = environment;
-        else pending = null;
-        return environment;
-      });
-  }
-  return pending;
+  if (pending) return pending;
+  const request = fetch('/compute/api/environment', { credentials: 'same-origin' })
+    .then(async (response) => {
+      if (!response.ok) return null;
+      const payload = await response.json().catch(() => null) as Record<string, unknown> | null;
+      if (!payload || typeof payload !== 'object') return null;
+      const { version, demo_mode, execution, notice } = payload;
+      // A malformed body is not a profile. Accepting a partial payload would
+      // default a demo deployment served through a captive portal to the
+      // production answer; only the complete documented shape resolves.
+      if (version !== 1 || typeof demo_mode !== 'boolean') return null;
+      if (execution !== 'available' && execution !== 'preview_only') return null;
+      const parsedExecution: EnvironmentCapability['execution'] = execution === 'preview_only' ? 'preview_only' : 'available';
+      return {
+        version,
+        demo_mode,
+        execution: parsedExecution,
+        ...(typeof notice === 'string' && notice ? { notice } : {}),
+      };
+    })
+    .catch(() => null)
+    .then((environment) => {
+      // Only a resolved answer is cached. A failed read clears the in-flight
+      // promise so the next caller retries instead of inheriting the failure.
+      if (environment) current = environment;
+      else pending = null;
+      return environment;
+    });
+  pending = request;
+  return request;
 }

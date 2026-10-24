@@ -8,20 +8,7 @@
 
 .demo-intro { max-width: 62ch; color: var(--app-muted); }
 
-.demo-badge {
-  align-self: start;
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  padding: 0.3rem 0.7rem;
-  border: 1px solid var(--app-warning);
-  border-radius: var(--r-pill);
-  color: var(--app-warning);
-  font: 600 0.72rem/1.2 var(--font-mono);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
+.demo-badge { align-self: start; }
 
 .demo-section { display: grid; gap: 0.9rem; }
 .demo-section > h2 { margin: 0; font-family: var(--font-display); font-size: 1.3rem; }

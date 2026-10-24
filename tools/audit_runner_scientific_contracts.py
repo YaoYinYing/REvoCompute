@@ -64,6 +64,7 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import sys
 import tempfile
@@ -373,13 +374,36 @@ def _result_tree(task: Any, repo_root: Path) -> dict[str, Any] | None:
     return dict(tree) if tree else None
 
 
-def _load_bundle(path: Path) -> dict[str, Any] | None:
-    """Load a checked-in replay bundle through the real capture/load path."""
-    from revocompute.replay_bundle import ReplayBundleError, load_bundle
+def _checkout_module(repo_root: Path, name: str) -> Any:
+    """Load ``revocompute.<name>`` from the checkout ``--repo-root`` names.
+
+    ``--repo-root`` is the revision under audit, so its replay and provenance
+    rules are the ones that decide a label. This tool's own tree is the running
+    package, so it imports normally. Another checkout's module is executed from
+    its own file through a private spec -- never through a ``sys.path`` entry --
+    so the running ``revocompute`` package is not shadowed. A corpus root that
+    carries no ``revocompute`` package (a scratch tree holding only bundles)
+    keeps the running module.
+    """
+    package_root = repo_root.resolve() / "revocompute"
+    if package_root == _REPO_ROOT / "revocompute" or not package_root.is_dir():
+        return importlib.import_module(f"revocompute.{name}")
+    source = package_root / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(f"_revocompute_checkout_{name}", source)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load {source}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_bundle(repo_root: Path, path: Path) -> dict[str, Any] | None:
+    """Load a checked-in replay bundle through the audited checkout's own loader."""
+    replay_bundle = _checkout_module(repo_root, "replay_bundle")
 
     try:
-        return load_bundle(path)
-    except ReplayBundleError:
+        return replay_bundle.load_bundle(path)
+    except replay_bundle.ReplayBundleError:
         return None
 
 
@@ -405,7 +429,7 @@ def _label_corpus_item(repo_root: Path, path: Path) -> dict[str, Any]:
     resolved, and the loader refuses a promoted mode with no observation behind it.
     """
     relative = path.relative_to(repo_root).as_posix()
-    bundle = _load_bundle(path)
+    bundle = _load_bundle(repo_root, path)
     if bundle is None:
         return {"path": relative, "label": "unverified_declaration", "detail": "bundle failed canonical load"}
     provenance = bundle.get("provenance") if isinstance(bundle.get("provenance"), dict) else {}
@@ -464,9 +488,8 @@ def _label_receipt_pointer(
             "detail": f"the cited production receipt is not present: {receipt_path}",
         }
     try:
-        from revocompute.provenance import production_receipt_pointer
-
-        canonical = production_receipt_pointer(candidate, task_id=task_id, receipt_path=receipt_path)
+        provenance = _checkout_module(repo_root, "provenance")
+        canonical = provenance.production_receipt_pointer(candidate, task_id=task_id, receipt_path=receipt_path)
     except Exception:  # noqa: BLE001 - any receipt failure downgrades the label
         return {
             "path": relative,

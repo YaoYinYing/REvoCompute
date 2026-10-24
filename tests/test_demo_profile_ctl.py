@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 import revocompute_ctl
+import revocompute_ctl.steps as steps_module
 from demo_replay_fixtures import CAPTURED_ARTIFACT, SYNTHETIC_TASK_TYPE, write_synthetic_replay_bundle
 from revocompute_ctl.__main__ import detect_executor
 from revocompute_ctl.env import EnvState
@@ -42,6 +43,59 @@ def test_demo_profile_never_selects_the_slurm_model(tmp_path):
     state = _state(tmp_path)
     assert state.demo_mode() is True
     assert state.use_slurm() is False
+
+
+def test_demo_profile_does_not_layer_the_slurm_compose_overlay(tmp_path):
+    """The executor refusal must reach the rendered Compose model, not just a flag.
+
+    ``docker-compose.slurm.yml`` overrides ``worker`` and ``tool-worker``; a demo
+    stack that layered it would still start executor-shaped services. The Slurm
+    profile is asserted beside it so the demo assertion cannot pass vacuously.
+    """
+    slurm_overlay = str(revocompute_ctl.COMPOSE_SLURM_FILE)
+    assert slurm_overlay not in _state(tmp_path).compose_args()
+    slurm_state = _state(
+        tmp_path,
+        REVOCOMPUTE_DEMO_MODE="false",
+        REVOCOMPUTE_JOB_EXECUTOR="slurm",
+        USE_SLURM="1",
+    )
+    assert slurm_overlay in slurm_state.compose_args()
+
+
+def test_demo_setup_never_materializes_runtime_bundles(tmp_path, monkeypatch):
+    """A demo deployment pins no Runner code, so it must not snapshot bundles.
+
+    The Runtime Bundle store exists to pin the code an executing Task will run;
+    running the materializer in demo mode would silently create that executor
+    state. The non-demo control proves the spy observes a real call.
+    """
+    calls: list[object] = []
+    # An empty materialized runner tree is a valid zero-family snapshot, so
+    # validation never falls back to the production checkout.
+    (tmp_path / "server" / "docker" / "runners").mkdir(parents=True)
+    for name in ("materialize_runner_families", "materialize_tool_families", "materialize_demo_replays"):
+        monkeypatch.setattr(steps_module, name, lambda _state: None)
+    monkeypatch.setattr(steps_module, "load_plugin_families", lambda _root: [])
+    monkeypatch.setattr(
+        steps_module,
+        "materialize_runner_bundles",
+        lambda _state, families: calls.append(families) or {},
+    )
+    demo = _state(tmp_path, REDIS_PASSWORD="x", AUTH_SECRET_KEY="y")
+    steps_module.cmd_setup(demo)
+    assert calls == []
+    slurm = _state(
+        tmp_path,
+        REVOCOMPUTE_DEMO_MODE="false",
+        REVOCOMPUTE_JOB_EXECUTOR="slurm",
+        USE_SLURM="1",
+        RUNTIME_BUNDLE_DIR=str(tmp_path / "runtime-bundles"),
+        REDIS_PASSWORD="x",
+        AUTH_SECRET_KEY="y",
+    )
+    steps_module.cmd_setup(slurm)
+    assert calls == [[]]
 
 
 def test_demo_requires_the_demo_executor(tmp_path):
@@ -86,7 +140,7 @@ def test_demo_validation_does_not_require_a_runner_runtime(tmp_path):
     assert families, "the canonical manifests still validate without a SIF or Apptainer contract"
 
 
-def _crafted_corpus(tmp_path: Path, *, relative_source: str) -> Path:
+def _crafted_corpus(tmp_path: Path, *, relative_source: str, scenario_id: str = "crafted") -> Path:
     root = tmp_path / "crafted"
     (root / "tests" / "data").mkdir(parents=True)
     write_synthetic_replay_bundle(root / "tests" / "data" / "bundle.json")
@@ -98,7 +152,7 @@ def _crafted_corpus(tmp_path: Path, *, relative_source: str) -> Path:
                 "version": 1,
                 "scenarios": [
                     {
-                        "id": "crafted", "title": "crafted", "summary": "",
+                        "id": scenario_id, "title": "crafted", "summary": "",
                         "task_type": SYNTHETIC_TASK_TYPE, "source": relative_source,
                     }
                 ],
@@ -112,8 +166,33 @@ def _crafted_corpus(tmp_path: Path, *, relative_source: str) -> Path:
 def test_demo_replay_source_outside_the_curated_corpus_is_refused(tmp_path, monkeypatch):
     crafted = _crafted_corpus(tmp_path, relative_source="../outside.json")
     monkeypatch.setattr(revocompute_ctl, "SERVER_ROOT", crafted)
+    staging = tmp_path / "server" / "demo" / "replays.next"
     with pytest.raises(SystemExit, match="outside the curated corpus"):
         materialize_demo_replays(_state(tmp_path))
+    assert not staging.exists(), "a refused materialization must leave no staged tree behind"
+
+
+@pytest.mark.parametrize("scenario_id", ["../escaped", "nested/escaped"])
+def test_a_replay_id_that_cannot_be_a_bundle_name_is_refused_before_copying(
+    tmp_path, monkeypatch, scenario_id
+):
+    """The id names the installed bundle, so it is validated before any path join.
+
+    An escaping id would copy outside the demo state and then fail the loader; a
+    slash id would raise an uncaught ``FileNotFoundError``. Both must fail closed
+    with the loader's own refusal and leave nothing staged.
+    """
+    crafted = _crafted_corpus(
+        tmp_path, relative_source="tests/data/bundle.json", scenario_id=scenario_id
+    )
+    monkeypatch.setattr(revocompute_ctl, "SERVER_ROOT", crafted)
+    staging = tmp_path / "server" / "demo" / "replays.next"
+    target = tmp_path / "server" / "demo" / "replays"
+    with pytest.raises(SystemExit, match="invalid replay scenario id"):
+        materialize_demo_replays(_state(tmp_path))
+    assert not staging.exists()
+    assert not target.exists()
+    assert not list(tmp_path.rglob("escaped*"))
 
 
 def test_demo_replay_source_must_be_a_checked_in_bundle(tmp_path, monkeypatch):

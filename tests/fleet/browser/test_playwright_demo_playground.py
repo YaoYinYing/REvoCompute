@@ -121,8 +121,8 @@ def test_demo_landing_catalog_and_task_detail_lead_to_a_preview_only_form(
     page.goto(f"{ORIGIN}/compute/demo")
 
     # The deployment profile is stated in the chrome and on the page itself.
-    expect(page.locator(".app-demo-badge")).to_be_visible()
-    expect(page.locator(".app-demo-badge")).to_have_text("Demo environment")
+    expect(page.locator(".app-header .app-demo-badge")).to_be_visible()
+    expect(page.locator(".app-header .app-demo-badge")).to_have_text("Demo environment")
     expect(page.locator(".demo-page h1")).to_have_text("Demo playground")
     expect(page.locator(".demo-page .demo-notice")).to_contain_text("preview and replay only")
 
@@ -148,7 +148,10 @@ def test_demo_landing_catalog_and_task_detail_lead_to_a_preview_only_form(
     # The form is inspectable, and its only run control states the preview contract.
     page.locator(".runner-detail-heading").get_by_role("link", name="Create task", exact=True).click()
     expect(page.locator(".ct-workbench")).to_be_visible()
-    expect(page.locator(".ct-page-header .demo-notice")).to_contain_text("preview and replay only")
+    # The form's own notice region stays visible after the workbench replaces the
+    # page header; a text-only assertion would pass against a hidden notice.
+    expect(page.locator(".create-task .demo-notice")).to_be_visible()
+    expect(page.locator(".create-task .demo-notice")).to_contain_text("preview and replay only")
     action = page.locator(".ct-actions button.ct-primary")
     expect(action).to_have_text("Preview only — not executable here")
     expect(action).to_be_disabled()
