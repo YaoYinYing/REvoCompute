@@ -34,10 +34,7 @@ async function replayScenarios(): Promise<ReplaySummary[]> {
 export async function mountDemoLanding(root: HTMLElement): Promise<void> {
   root.replaceChildren(); root.className = 'app-outlet demo-page';
   const heading = document.createElement('header'); heading.className = 'page-heading';
-  const intro = document.createElement('div');
-  intro.append(text('p', t('demo.kicker'), 'page-kicker'), text('h1', t('demo.title')), text('p', t('demo.subtitle'), 'demo-intro'));
-  heading.append(intro);
-  const badge = text('span', t('demo.badge'), 'app-demo-badge demo-badge'); heading.append(badge);
+  heading.append(text('h1', t('demo.title')));
   root.append(heading);
 
   const environment = await loadEnvironment();
@@ -53,7 +50,7 @@ export async function mountDemoLanding(root: HTMLElement): Promise<void> {
 
   const catalog = await getTaskCatalog();
   const preview = document.createElement('section'); preview.className = 'demo-section';
-  preview.append(text('h2', t('demo.preview.heading')), text('p', t('demo.preview.intro'), 'demo-section-intro'));
+  preview.append(text('h2', t('demo.preview.heading')));
   const groups = document.createElement('div'); groups.className = 'demo-groups';
   catalog.categories.forEach((category) => {
     const tasks = catalog.task_types.filter((task) => task.category === category.name);
@@ -63,7 +60,7 @@ export async function mountDemoLanding(root: HTMLElement): Promise<void> {
     const grid = document.createElement('div'); grid.className = 'demo-grid';
     tasks.forEach((task) => {
       const card = document.createElement('article'); card.className = 'demo-card';
-      card.append(text('p', task.category.replaceAll('_', ' '), 'demo-card-kicker'), text('h4', task.display_name), text('p', task.summary, 'demo-card-summary'));
+      card.append(text('h4', task.display_name), text('p', task.summary, 'demo-card-summary'));
       const actions = document.createElement('footer'); actions.className = 'demo-card-actions';
       actions.append(link(`/runners/${encodeURIComponent(task.name)}`, t('demo.preview.view'), 'secondary-button'));
       actions.append(link(`/compute/create_task?task_type=${encodeURIComponent(task.name)}`, t('demo.preview.configure'), 'secondary-button'));
@@ -77,7 +74,7 @@ export async function mountDemoLanding(root: HTMLElement): Promise<void> {
   // A failed catalog read is not an empty catalog. The failure is stated and
   // retried in place; "none installed" is reserved for a served empty list.
   const renderReplay = async (): Promise<void> => {
-    replay.replaceChildren(text('h2', t('demo.replay.heading')), text('p', t('demo.replay.intro'), 'demo-section-intro'));
+    replay.replaceChildren(text('h2', t('demo.replay.heading')));
     let scenarios: ReplaySummary[];
     try { scenarios = await replayScenarios(); }
     catch (error) {
@@ -102,12 +99,6 @@ export async function mountDemoLanding(root: HTMLElement): Promise<void> {
   };
   root.append(replay);
   await renderReplay();
-
-  const limits = document.createElement('section'); limits.className = 'demo-section demo-limitations';
-  limits.append(text('h2', t('demo.limitations.heading')));
-  const list = document.createElement('ul');
-  [t('demo.limitations.live'), t('demo.limitations.data'), t('demo.limitations.replay')].forEach((item) => list.append(text('li', item)));
-  limits.append(list); root.append(limits);
   createIcons({ icons: { ArrowRight }, root });
 }
 

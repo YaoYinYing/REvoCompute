@@ -132,7 +132,6 @@ def test_demo_landing_catalog_and_task_detail_lead_to_a_preview_only_form(
     replays = page.locator(".demo-section", has=page.get_by_role("heading", name="Recorded results"))
     expect(replays.locator(".demo-card-replay")).to_have_count(len(demo_replays))
     expect(replays.locator(".demo-card-replay").first.locator(".demo-provenance")).to_contain_text("Recorded result")
-    expect(page.locator(".demo-limitations")).to_contain_text("does not run scientific Runners")
     assert router.requests.matching("/compute/api/environment")
 
     # Runner catalog: canonical contracts, the demo notice, no dead production link.
