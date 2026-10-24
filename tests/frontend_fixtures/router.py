@@ -23,7 +23,10 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping
 from urllib.parse import parse_qs, unquote, urlparse
 
+from werkzeug.datastructures import MultiDict
+
 from revocompute.ingress_security import phase_for_code
+from revocompute.result_projection import ResultPreviewError, array_projection_query, table_page_bounds
 from revocompute.schemas import (
     PreflightAdmission,
     PreflightFinding,
@@ -463,15 +466,22 @@ class FrontendFixtureRouter:
         replay = self.demo_replays.get(scenario_id)
         if replay is None:
             return route.fulfill(status=404, json={"error": "Replay scenario not found"})
+        # The recorded table is served through the live route's strict contract:
+        # the manifest must declare the artifact as a table, the page caps apply,
+        # and a refusal is the same bounded 400. A recorded result that the live
+        # reader now refuses must not render differently in the fixture.
+        args = MultiDict(query)
         try:
-            offset = int((query.get("offset", ["0"]) or ["0"])[0])
-            limit = int((query.get("limit", ["100"]) or ["100"])[0])
-        except ValueError:
-            return route.fulfill(status=400, json={"error": "Invalid table page"})
-        if offset < 0 or offset > 10_000 or limit < 1 or limit > 500:
-            return route.fulfill(status=400, json={"error": "Table page is outside allowed bounds"})
-        matrix = (query.get("matrix", ["0"]) or ["0"])[0] in {"1", "true", "yes"}
-        page = replay.bundle.table_page(unquote(path), offset=offset, limit=limit, matrix=matrix)
+            offset, limit = table_page_bounds(args)
+            page = replay.bundle.table_page(
+                unquote(path),
+                offset=offset,
+                limit=limit,
+                matrix=args.get("matrix") == "1",
+                strict=True,
+            )
+        except ResultPreviewError as error:
+            return route.fulfill(status=400, json={"error": str(error)})
         if page is None:
             return route.fulfill(status=404, json={"error": "Table artifact not found"})
         return route.fulfill(json=page)
@@ -480,9 +490,16 @@ class FrontendFixtureRouter:
         replay = self.demo_replays.get(scenario_id)
         if replay is None:
             return route.fulfill(status=404, json={"error": "Replay scenario not found"})
-        key = (query.get("key", [None]) or [None])[0]
-        kind = (query.get("kind", ["numeric"]) or ["numeric"])[0]
-        projection = replay.bundle.projection(unquote(path), kind=kind, key=key)
+        # ``max_elements`` is a real bound here, not a decoration: the recorded
+        # projection passes the same validated query and strict reader the live
+        # demo route uses, so an over-cap request is the same bounded 400.
+        try:
+            key, kind, max_elements = array_projection_query(MultiDict(query))
+            projection = replay.bundle.projection(
+                unquote(path), kind=kind, key=key, max_elements=max_elements, strict=True
+            )
+        except ResultPreviewError as error:
+            return route.fulfill(status=400, json={"error": str(error)})
         if projection is None:
             return route.fulfill(status=404, json={"error": "Array artifact not found"})
         return route.fulfill(json=projection)

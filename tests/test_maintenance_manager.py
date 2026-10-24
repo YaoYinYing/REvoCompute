@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import sqlite3
 import time
@@ -425,6 +426,72 @@ def test_worker_ready_starts_the_pulse_without_consuming_a_task_slot(monkeypatch
     module.task_runtime._on_worker_ready(None)
 
     assert started == [True]
+
+
+def test_worker_ready_in_demo_profile_never_settles_or_charges(monkeypatch, tmp_path):
+    """A restored demo database must not be settled or charged at boot."""
+    module = _pulse_module(monkeypatch, tmp_path, slurm_enabled=True)
+    monkeypatch.setattr(
+        module.task_runtime,
+        "CONFIG",
+        dataclasses.replace(module.task_runtime.CONFIG, demo_mode=True, job_executor="demo"),
+    )
+    ran: list[str] = []
+
+    def refuse(name: str):
+        def _called(*_args, **_kwargs):
+            pytest.fail(f"{name} ran in a demo profile")
+
+        return _called
+
+    monkeypatch.setattr(module.task_runtime, "_reconcile_slurm_allocations", refuse("allocation reconciliation"))
+    monkeypatch.setattr(module.task_runtime, "_reclaim_abandoned_reservations", refuse("reservation reclaim"))
+    monkeypatch.setattr(
+        module.task_runtime, "_reconcile_pending_storage_charges", refuse("storage-charge repair")
+    )
+    monkeypatch.setattr(
+        module.task_runtime, "probe_compute_infrastructure", SimpleNamespace(run=lambda: ran.append("probe"))
+    )
+    monkeypatch.setattr(module.task_runtime, "_recover_orphaned_tasks", lambda: ran.append("orphans") or 0)
+    monkeypatch.setattr(
+        module.task_runtime, "_reconcile_result_publications", lambda: ran.append("publications") or {}
+    )
+    monkeypatch.setattr(module.task_runtime, "start_infrastructure_pulse", lambda: ran.append("pulse"))
+
+    module.task_runtime._on_worker_ready(None)
+
+    assert ran == ["probe", "orphans", "publications", "pulse"]
+
+
+def test_worker_ready_in_production_still_settles_and_charges(monkeypatch, tmp_path):
+    """The demo gate narrows nothing in a production worker."""
+    module = _pulse_module(monkeypatch, tmp_path, slurm_enabled=True)
+    ran: list[str] = []
+    monkeypatch.setattr(
+        module.task_runtime, "probe_compute_infrastructure", SimpleNamespace(run=lambda: ran.append("probe"))
+    )
+    monkeypatch.setattr(module.task_runtime, "_recover_orphaned_tasks", lambda: ran.append("orphans") or 0)
+    monkeypatch.setattr(
+        module.task_runtime,
+        "_reconcile_slurm_allocations",
+        lambda: ran.append("allocations") or {"settled": 0, "review": 0, "active": 0},
+    )
+    monkeypatch.setattr(
+        module.task_runtime, "_reclaim_abandoned_reservations", lambda: ran.append("reservations") or 0
+    )
+    monkeypatch.setattr(
+        module.task_runtime, "_reconcile_result_publications", lambda: ran.append("publications") or {}
+    )
+    monkeypatch.setattr(
+        module.task_runtime,
+        "_reconcile_pending_storage_charges",
+        lambda: ran.append("charges") or {"charged": 0, "released": 0},
+    )
+    monkeypatch.setattr(module.task_runtime, "start_infrastructure_pulse", lambda: ran.append("pulse"))
+
+    module.task_runtime._on_worker_ready(None)
+
+    assert ran == ["probe", "orphans", "allocations", "reservations", "publications", "charges", "pulse"]
 
 
 # ---------------------------------------------------------------------------

@@ -3470,18 +3470,25 @@ try:
                 logging.info("Handled %d orphaned task(s)", count)
             else:
                 logging.info("Recovery: no orphaned tasks found")
-            reconciliation = _reconcile_slurm_allocations()
-            released = _reclaim_abandoned_reservations()
-            if reconciliation["settled"] or reconciliation["review"] or released:
-                logging.info(
-                    "Allocation reconciliation: %s (%d abandoned reservation(s) released)",
-                    reconciliation,
-                    released,
-                )
+            # A demo deployment never charges. A database restored from another
+            # deployment must not be settled, released, or charged at boot, so
+            # the three accounting passes that mutate that state are skipped.
+            # Orphan recovery and publication reconciliation stay: they repair
+            # local bookkeeping this process owns and move no money.
+            if not CONFIG.demo_mode:
+                reconciliation = _reconcile_slurm_allocations()
+                released = _reclaim_abandoned_reservations()
+                if reconciliation["settled"] or reconciliation["review"] or released:
+                    logging.info(
+                        "Allocation reconciliation: %s (%d abandoned reservation(s) released)",
+                        reconciliation,
+                        released,
+                    )
             publications = _reconcile_result_publications()
-            repaired = _reconcile_pending_storage_charges()
-            if repaired["charged"] or repaired["released"]:
-                logging.info("Repaired pending storage charges: %s", repaired)
+            if not CONFIG.demo_mode:
+                repaired = _reconcile_pending_storage_charges()
+                if repaired["charged"] or repaired["released"]:
+                    logging.info("Repaired pending storage charges: %s", repaired)
             unreadable = sum(
                 count for state, count in publications.items() if state != PUBLICATION_AVAILABLE
             )

@@ -789,12 +789,22 @@ def test_demo_archive_is_refused_without_enqueuing(monkeypatch, tmp_path):
     module = _demo_app(monkeypatch, tmp_path)
     headers = _test_client_auth(module)
     task_id = _insert_pending_task(module, tmp_path / "archive-result")
+    task = module.task_store.get_task(task_id)
+    task_root = Path(module.app.config["storage_resolver"].get_task_root(task))
+    (task_root / "result.txt").write_text("score\n", encoding="utf-8")
     module.task_store.update_task(task_id, status="finished")
+    # Finalize the publication so the only thing standing between this row and
+    # ``build_results_archive.apply_async`` is the demo guard: an unguarded
+    # route must reach the enqueue, not refuse publication first.
+    module.task_runtime._finalize_results_manifest(
+        module.task_store.get_task(task_id), execution_state="completed", finished_at=1_700_000_000
+    )
+    assert module.app.config["storage_resolver"].publication_state(module.task_store.get_task(task_id)) == "available"
     enqueued: list[list[str]] = []
     monkeypatch.setattr(
         module.task_runtime.build_results_archive,
         "apply_async",
-        lambda args: enqueued.append(args),
+        lambda args: enqueued.append(args) or SimpleNamespace(id="archive-job"),
     )
 
     response = module.app.test_client().post(f"/compute/api/results/{task_id}/archive", headers=headers)

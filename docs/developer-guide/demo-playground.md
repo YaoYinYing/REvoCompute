@@ -56,14 +56,42 @@ The profile is a deployment fact owned by the server, not a frontend flag.
   accepted. In the demo profile the selector decides only which Task
   definitions the browser can inspect; it grants no execution. An empty value
   selects every discovered family.
-- Every submission is refused at the one shared boundary
+- Every execution surface is refused at the server, before it can create a row,
+  workspace, or reservation, enqueue work, take a lease, purge data, or revoke
+  a job. Read-only payloads -- the catalog, replay content, readiness reports,
+  and result projections -- continue to answer.
+- Task submission is refused at the one shared boundary
   (`_handle_submission`), before form parsing, validation, reservation, or
-  charge. Both `/compute/api/post` and `/compute/api/preflight/<task_type>`
-  answer `403` with `code: "demo_read_only"` and `valid: false`. A crafted
-  client that calls the API directly cannot create a Task row.
-- The worker refuses an inserted row a second time in `_execute_compute_task`, records
-  it as failed, and starts no Runner. This is defence in depth; the submission
-  boundary is the primary refusal.
+  charge. `POST /compute/api/post` answers `403` with the flat envelope
+  `{"error": ..., "code": "demo_read_only", "valid": false}`, which creates no
+  Task row.
+  `POST /compute/api/preflight/<task_type>` projects that same refusal through
+  the `TaskPreflightResult` model instead: `valid: false`,
+  `admission.allowed: false`, and `errors[0].code: "demo_read_only"`. The
+  preflight envelope has no top-level `code`.
+- The same `403` / `code: "demo_read_only"` refusal guards the other execution
+  surfaces (their flat envelope carries no `valid` field):
+
+  | Surface | What the refusal prevents |
+  | --- | --- |
+  | `POST /compute/api/tools/<name>/call` | Tool workspace, reservation, ToolCall row, and queue message |
+  | `POST /compute/api/auth/admin/infrastructure/refresh` | Readiness probe pass and its worker enqueue |
+  | `POST /compute/api/auth/admin/gpu-credit/reconciliation` | Allocation reconciliation enqueue; the read-only `GET` still answers |
+  | `POST /compute/api/cancel/<md5sum>` | Cancellation claim, `cancel_compute_resources` dispatch, Celery revoke, and artifact removal |
+  | `POST /compute/api/results/<md5sum>/archive` | `build_results_archive` enqueue |
+  | `DELETE /compute/api/delete/<md5sum>`, `POST /compute/api/delete` | Cleanup claim, artifact purge, reservation release, and Celery revoke |
+
+  The refusal is decided from the deployment profile, not from whether the
+  named Task, tool family, or image exists, so a crafted request to an unknown
+  id is refused the same way.
+- Two worker passes repeat the refusal as defence in depth. `_execute_compute_task`
+  records an inserted Task row as failed and starts no Runner;
+  `tool_runtime.execute_tool_call` fails a queued ToolCall before acquiring a
+  runtime or touching its workspace. The submission boundaries are the primary
+  refusals, and a restored or operator-inserted row cannot execute either. The
+  worker's boot reconciliation also skips allocation settlement, abandoned
+  reservation reclaim, and pending storage-charge repair, so a database
+  restored from another deployment is never charged by a demo worker.
 - Demo routes answer only while the deployment loaded a replay index. In a
   production process `GET /compute/api/demo/replays` and every scenario route
   return `404` and read nothing from disk. Production `/compute/api/types`

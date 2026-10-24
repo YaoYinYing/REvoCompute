@@ -136,10 +136,59 @@ the shared `401` JSON refusal (or the login redirect when it sends
 `Accept: text/html`); only a signed-in caller reaches the demo route's `404` in
 a production process. The ordering is the same inside the demo process.
 
-A signed-in crafted submission to `/compute/api/post` or
-`/compute/api/preflight/<task_type>` must answer `403` with
-`code: "demo_read_only"` and create no Task row. Verify this through the API with
-a demo session, not only through the disabled browser control.
+A signed-in crafted submission must be refused:
+
+- `POST /compute/api/post` answers `403` with the flat envelope
+  `{"error": ..., "code": "demo_read_only", "valid": false}` and creates no Task
+  row.
+- `POST /compute/api/preflight/<task_type>` answers `403` with the
+  `TaskPreflightResult` envelope instead: `valid: false`,
+  `admission.allowed: false`, and `errors[0].code: "demo_read_only"`. It has no
+  top-level `code`; the preflight model wraps the handler's refusal.
+
+Every other execution surface answers `403` with
+`{"error": ..., "code": "demo_read_only"}` (no `valid` field), before creating
+a row, workspace, or reservation, enqueuing work, taking a lease, purging data,
+or revoking a job:
+
+| Probe | Refused action |
+| --- | --- |
+| `POST /compute/api/tools/<name>/call` | Tool workspace, reservation, ToolCall row, and queue message |
+| `POST /compute/api/auth/admin/infrastructure/refresh` | Readiness probe pass and its worker enqueue |
+| `POST /compute/api/auth/admin/gpu-credit/reconciliation` | Allocation reconciliation enqueue; the `GET` stays readable |
+| `POST /compute/api/cancel/<md5sum>` | Cancellation claim, resource-stop dispatch, Celery revoke, and artifact removal |
+| `POST /compute/api/results/<md5sum>/archive` | Archive build enqueue |
+| `DELETE /compute/api/delete/<md5sum>`, `POST /compute/api/delete` | Cleanup claim, artifact purge, reservation release, and Celery revoke |
+
+The answer does not depend on the id or the tool family: it is decided from the
+deployment profile before either is looked up. The Task and Tool workers repeat
+the refusal for a row that reaches them anyway: a Task row is failed with no
+Runner started, and a queued ToolCall is failed before a runtime or workspace is
+touched. The submission gates remain the primary refusal. Verify through the API
+with a demo session, not only through the disabled browser control:
+
+```bash
+DEMO_TASK_ID=0123456789abcdef0123456789abcdef
+auth=(-H "Authorization: Bearer ${TOKEN}")
+code() { curl -sS -o /dev/null -w '%{http_code}' "${auth[@]}" "$@"; }
+
+printf 'post %s\n' "$(code -X POST -d '{"task_type":"not-a-task"}' "$BASE/compute/api/post")"
+printf 'preflight %s\n' "$(code -X POST -d '{}' "$BASE/compute/api/preflight/not-a-task")"
+printf 'tool %s\n' "$(code -X POST -F 'parameters={}' "$BASE/compute/api/tools/structure_inspect/call")"
+printf 'readiness-refresh %s\n' "$(code -X POST "$BASE/compute/api/auth/admin/infrastructure/refresh")"
+printf 'reconciliation %s\n' "$(code -X POST "$BASE/compute/api/auth/admin/gpu-credit/reconciliation")"
+printf 'cancel %s\n' "$(code -X POST "$BASE/compute/api/cancel/${DEMO_TASK_ID}")"
+printf 'archive %s\n' "$(code -X POST "$BASE/compute/api/results/${DEMO_TASK_ID}/archive")"
+printf 'delete %s\n' "$(code -X DELETE "$BASE/compute/api/delete/${DEMO_TASK_ID}")"
+printf 'delete-batch %s\n' "$(code -X POST -H 'Content-Type: application/json' \
+  -d "{\"md5sums\":[\"${DEMO_TASK_ID}\"]}" "$BASE/compute/api/delete")"
+```
+
+Every line must print `403`. A `200`, `202`, `400`, `404`, or `409` means the
+deployed revision does not enforce this boundary; stop and identify the running
+revision before recording evidence. The readiness-refresh and reconciliation
+probes use the demo admin token because those routes are Admin-only; their
+refusal happens after the Admin and Bearer checks.
 
 ## Candidate deployment coordinates
 

@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from conftest import _load_pssm_module, _test_client_auth
-from demo_replay_fixtures import SYNTHETIC_TASK_TYPE, write_synthetic_replay_bundle
+from demo_replay_fixtures import CAPTURED_ARTIFACT, SYNTHETIC_TASK_TYPE, TABLE_ARTIFACT, write_synthetic_replay_bundle
 from frontend_fixtures import FrontendFixtureRouter, controlled_scenario
 
 IDENTITY = {"RUNNER_UID": "1234", "RUNNER_GID": "5678"}
@@ -96,6 +96,14 @@ def test_demo_fixture_answers_exactly_what_the_real_demo_server_answers(monkeypa
         ("POST", f"/compute/api/preflight/{SYNTHETIC_TASK_TYPE}"),
         ("GET", "/compute/api/demo/replays"),
         ("GET", f"/compute/api/demo/replays/{SCENARIO_ID}"),
+        # The strict recorded-byte readers: the fixture must bound and refuse
+        # exactly as the demo route does, not page anything it can decode.
+        ("GET", f"/compute/api/demo/replays/{SCENARIO_ID}/tables/{TABLE_ARTIFACT}?offset=1&limit=1"),
+        ("GET", f"/compute/api/demo/replays/{SCENARIO_ID}/tables/{CAPTURED_ARTIFACT}"),
+        ("GET", f"/compute/api/demo/replays/{SCENARIO_ID}/tables/{TABLE_ARTIFACT}?limit=501"),
+        ("GET", f"/compute/api/demo/replays/{SCENARIO_ID}/ndarrays/{TABLE_ARTIFACT}?key=score&max_elements=8"),
+        ("GET", f"/compute/api/demo/replays/{SCENARIO_ID}/ndarrays/{TABLE_ARTIFACT}?key=score&max_elements=999999999"),
+        ("GET", f"/compute/api/demo/replays/{SCENARIO_ID}/ndarrays/{TABLE_ARTIFACT}?key=score"),
     )
     for method, path in requests:
         real = client.open(path, method=method, data={} if method == "POST" else None, headers=headers)
