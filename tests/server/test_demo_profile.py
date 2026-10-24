@@ -881,3 +881,59 @@ def test_production_execution_surfaces_still_reach_their_boundaries(monkeypatch,
     deleted = client.delete(f"/compute/api/delete/{delete_id}", headers=headers)
     assert deleted.status_code == 200
     assert module.task_store.get_task(delete_id)["status"].startswith("deleted")
+
+
+def test_demo_admin_cannot_write_accounting_or_policy_state(monkeypatch, tmp_path):
+    module = _demo_app(monkeypatch, tmp_path)
+    admin_headers = _admin_client_auth(module)
+    _test_client_auth(module, "target")
+    target_id = int(module.app.config["user_db"].get_user_by_username("target")["id"])
+    before = {
+        "ledger": module.task_store.list_ledger(target_id),
+        "policy_audit": module.task_store.list_policy_audit(target_id),
+        "quota_audit": module.task_store.list_storage_quota_audit(target_id),
+        "quota_policy": module.task_store.storage_quota_policy(target_id),
+    }
+    client = module.app.test_client()
+    requests = (
+        (
+            "post",
+            f"/compute/api/auth/admin/users/{target_id}/gpu-credit/adjustments",
+            {"gpu_seconds": 60, "reason": "demo", "idempotency_key": "demo-adjust"},
+            "it does not adjust GPU credit.",
+        ),
+        (
+            "put",
+            f"/compute/api/auth/admin/users/{target_id}/gpu-credit/allowance",
+            {"monthly_gpu_seconds": 7200, "idempotency_key": "demo-allowance"},
+            "it does not change GPU allowances.",
+        ),
+        (
+            "post",
+            f"/compute/api/auth/admin/users/{target_id}/gpu-credit/reset",
+            {"reason": "demo", "idempotency_key": "demo-reset"},
+            "it does not reset GPU credit.",
+        ),
+        (
+            "post",
+            "/compute/api/auth/admin/gpu-credit/reset",
+            {"reason": "demo", "idempotency_key": "demo-reset-all"},
+            "it does not reset GPU credit.",
+        ),
+        (
+            "put",
+            f"/compute/api/auth/admin/users/{target_id}/storage-quota",
+            {"state": "limited", "limit_bytes": 1024, "reason": "demo", "idempotency_key": "demo-quota"},
+            "it does not change storage quotas.",
+        ),
+    )
+    for method, path, body, refusal in requests:
+        response = getattr(client, method)(path, headers=admin_headers, json=body)
+        _assert_demo_refusal(response, refusal)
+
+    assert {
+        "ledger": module.task_store.list_ledger(target_id),
+        "policy_audit": module.task_store.list_policy_audit(target_id),
+        "quota_audit": module.task_store.list_storage_quota_audit(target_id),
+        "quota_policy": module.task_store.storage_quota_policy(target_id),
+    } == before

@@ -123,12 +123,12 @@ The expected observations, from the code, are:
   (`kind`, `label`, `capture_source`), a `bundle_digest` starting `sha256:`, and
   the captured `task` identity (`id`, `type`, `display_name`).
 
-Record the actual responses with the deployment evidence. The PR's own
-acceptance deployment exercised these probes on the candidate coordinates below,
-so the unauthenticated responses are recorded in its delivery evidence; the
-authenticated readiness and replay-catalog reads, and the submission-refusal
-check in the next paragraph, are the procedure to repeat and record on the host
-you maintain.
+Record the actual responses with the deployment evidence. Evidence is kept
+outside the repository and must be captured against the revision actually
+running; an older capture is not evidence for a newer head. The authenticated
+readiness and replay-catalog reads, the refusal probes on this page, and the
+browser journeys in [Demo Playground](../developer-guide/demo-playground.md)
+are the procedure to repeat and record on the host you maintain.
 
 The demo routes are registered in every process, but their credential boundary
 answers before their demo-profile check. An anonymous API caller therefore gets
@@ -146,7 +146,7 @@ A signed-in crafted submission must be refused:
   `admission.allowed: false`, and `errors[0].code: "demo_read_only"`. It has no
   top-level `code`; the preflight model wraps the handler's refusal.
 
-Every other execution surface answers `403` with
+The execution surfaces listed below answer `403` with
 `{"error": ..., "code": "demo_read_only"}` (no `valid` field), before creating
 a row, workspace, or reservation, enqueuing work, taking a lease, purging data,
 or revoking a job:
@@ -160,12 +160,39 @@ or revoking a job:
 | `POST /compute/api/results/<md5sum>/archive` | Archive build enqueue |
 | `DELETE /compute/api/delete/<md5sum>`, `POST /compute/api/delete` | Cleanup claim, artifact purge, reservation release, and Celery revoke |
 
+Admin accounting and policy writes are refused the same way, before any ledger,
+allowance, reset, quota, or policy-audit row is written:
+
+| Probe | Refused write |
+| --- | --- |
+| `POST .../users/<id>/gpu-credit/adjustments` | GPU-credit adjustment entry |
+| `PUT .../users/<id>/gpu-credit/allowance` | Monthly-allowance change |
+| `POST .../users/<id>/gpu-credit/reset` | Per-user compensating reset entry |
+| `POST /compute/api/auth/admin/gpu-credit/reset` | Global reset batch |
+| `PUT .../users/<id>/storage-quota` | Durable-storage quota policy |
+
 The answer does not depend on the id or the tool family: it is decided from the
 deployment profile before either is looked up. The Task and Tool workers repeat
 the refusal for a row that reaches them anyway: a Task row is failed with no
 Runner started, and a queued ToolCall is failed before a runtime or workspace is
-touched. The submission gates remain the primary refusal. Verify through the API
-with a demo session, not only through the disabled browser control:
+touched. The worker boot and pulse passes also refuse at each function boundary,
+so a database restored from another deployment is not settled, charged, or
+re-enqueued even though the pulse runs the storage repair every cycle. The
+submission gates remain the primary refusal.
+
+Two adjacent surfaces are different by design:
+
+- `POST /compute/api/auth/admin/runners/<runner_family>/actions` is refused by
+  the Operator service, not the route helper: a non-read action answers `409`
+  with `This demo deployment is preview and replay only; Runner operations that
+  change host or Task state are disabled.` Read-tier status/doctor actions still
+  answer.
+- `POST /compute/api/auth/admin/operator/jobs/<job_id>/cancel` only updates the
+  job store and starts no host work, so it is not an execution surface and is
+  not refused.
+
+Verify through the API with a demo session, not only through the disabled
+browser control:
 
 ```bash
 DEMO_TASK_ID=0123456789abcdef0123456789abcdef
@@ -184,11 +211,11 @@ printf 'delete-batch %s\n' "$(code -X POST -H 'Content-Type: application/json' \
   -d "{\"md5sums\":[\"${DEMO_TASK_ID}\"]}" "$BASE/compute/api/delete")"
 ```
 
-Every line must print `403`. A `200`, `202`, `400`, `404`, or `409` means the
-deployed revision does not enforce this boundary; stop and identify the running
-revision before recording evidence. The readiness-refresh and reconciliation
-probes use the demo admin token because those routes are Admin-only; their
-refusal happens after the Admin and Bearer checks.
+Every line above must print `403`. A `200`, `202`, `400`, `404`, or `409` means
+the deployed revision does not enforce this boundary; stop and identify the
+running revision before recording evidence. The readiness-refresh and
+reconciliation probes use the demo admin token because those routes are
+Admin-only; their refusal happens after the Admin and Bearer checks.
 
 ## Candidate deployment coordinates
 

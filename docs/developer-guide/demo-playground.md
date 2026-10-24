@@ -84,14 +84,39 @@ The profile is a deployment fact owned by the server, not a frontend flag.
   The refusal is decided from the deployment profile, not from whether the
   named Task, tool family, or image exists, so a crafted request to an unknown
   id is refused the same way.
-- Two worker passes repeat the refusal as defence in depth. `_execute_compute_task`
-  records an inserted Task row as failed and starts no Runner;
-  `tool_runtime.execute_tool_call` fails a queued ToolCall before acquiring a
-  runtime or touching its workspace. The submission boundaries are the primary
-  refusals, and a restored or operator-inserted row cannot execute either. The
-  worker's boot reconciliation also skips allocation settlement, abandoned
-  reservation reclaim, and pending storage-charge repair, so a database
-  restored from another deployment is never charged by a demo worker.
+- Admin accounting and policy writes answer the same `403` /
+  `code: "demo_read_only"` before any ledger, allowance, reset, quota, or
+  policy-audit row is written:
+
+  | Surface | What the refusal prevents |
+  | --- | --- |
+  | `POST .../users/<id>/gpu-credit/adjustments` | GPU-credit adjustment entry |
+  | `PUT .../users/<id>/gpu-credit/allowance` | Monthly-allowance change |
+  | `POST .../users/<id>/gpu-credit/reset` | Per-user compensating reset entry |
+  | `POST /compute/api/auth/admin/gpu-credit/reset` | Global reset batch |
+  | `PUT .../users/<id>/storage-quota` | Durable-storage quota policy |
+
+  Read-tier accounting and readiness GETs continue to answer, and user, access,
+  and account management are unchanged.
+- Two adjacent surfaces differ by design. The Admin Runner-operator action
+  (`POST /compute/api/auth/admin/runners/<runner_family>/actions`) is refused by
+  `OperatorService` with `409` and `This demo deployment is preview and replay
+  only; Runner operations that change host or Task state are disabled.`; its
+  read-tier status/doctor actions still answer. Operator-job cancellation
+  (`POST /compute/api/auth/admin/operator/jobs/<job_id>/cancel`) only updates
+  the job store and starts no host work, so it is not an execution surface.
+- Worker passes repeat the refusal at each function boundary, not only in the
+  boot caller. `_execute_compute_task` records an inserted Task row as failed
+  and starts no Runner; `tool_runtime.execute_tool_call` fails a queued ToolCall
+  before acquiring a runtime or touching its workspace;
+  `_recover_orphaned_tasks` returns without failing, publishing, charging,
+  re-enqueuing a workflow, or stopping a scheduler job; and
+  `_reconcile_pending_storage_charges`, `_reconcile_slurm_allocations`, and
+  `_reclaim_abandoned_reservations` return their zero outcomes before any
+  ledger or reservation write. The pulse calls the pending-charge repair every
+  cycle, so the guarantee holds when `_on_worker_ready` is not the caller. A
+  database restored from another deployment is therefore never settled,
+  charged, or re-enqueued by a demo worker.
 - Demo routes answer only while the deployment loaded a replay index. In a
   production process `GET /compute/api/demo/replays` and every scenario route
   return `404` and read nothing from disk. Production `/compute/api/types`

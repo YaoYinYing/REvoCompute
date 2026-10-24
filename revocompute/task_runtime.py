@@ -2914,6 +2914,12 @@ def _reconcile_slurm_allocations() -> dict[str, int]:
     plus a trustworthy runtime.  No ``sacct``/SlurmDBD dependency, no estimate:
     anything ambiguous is left for manual review.
     """
+    # A demo deployment never settles or charges compute. This is reachable from
+    # the maintenance pass's worker dispatch and from a queued task on a restored
+    # database, not only from the admin route, so the refusal lives here rather
+    # than in one caller.
+    if CONFIG.demo_mode:
+        return {"settled": 0, "active": 0, "review": 0}
     # First recover what the compute nodes themselves recorded.  The host-only
     # files come first: they are the only trace left by a worker that died
     # before it parsed the wrapper's job-id line at all, so adopting them is what
@@ -3014,6 +3020,11 @@ def _reclaim_abandoned_reservations(*, now: float | None = None) -> int:
     :func:`_reconcile_host_scheduler_logs`'s job; this pass only refuses to act
     against them.
     """
+    # Same boundary as allocation settlement: a demo never returns a restored
+    # deployment's commitment, whether reached from the pulse, maintenance
+    # dispatch, or the admin task.
+    if CONFIG.demo_mode:
+        return 0
     timestamp = time.time() if now is None else now
     reservations = task_store.list_queued_reservations()
     receipted: set[str] = set()
@@ -3082,6 +3093,11 @@ def _reclaim_abandoned_reservations(*, now: float | None = None) -> int:
 
 def _recover_orphaned_tasks() -> int:
     """Resolve compute records whose owning Celery worker disappeared."""
+    # A demo deployment never resolves a restored compute row: recovery can
+    # publish a failure report (and charge storage), re-enqueue a workflow, or
+    # cancel a scheduler job. Refuse before any row mutation or dispatch.
+    if CONFIG.demo_mode:
+        return 0
     handled = 0
     for task in task_store.list_tasks():
         if task.get("status") not in {"running", "queued"}:
@@ -3323,6 +3339,12 @@ def _reconcile_pending_storage_charges() -> dict[str, int]:
     Idempotent, and safe to run beside a live publisher: the store's transitions
     admit each task's charge once.
     """
+    # A demo deployment never charges storage. The worker pulse calls this
+    # unconditionally, so the refusal belongs here rather than only in
+    # ``_on_worker_ready``: a restored database's anchored publication would
+    # otherwise be charged by a background pass.
+    if CONFIG.demo_mode:
+        return {"charged": 0, "released": 0}
     global _pending_storage_charge_cursor
     storage = _storage()
     charged = released = skipped = 0
@@ -3473,8 +3495,10 @@ try:
             # A demo deployment never charges. A database restored from another
             # deployment must not be settled, released, or charged at boot, so
             # the three accounting passes that mutate that state are skipped.
-            # Orphan recovery and publication reconciliation stay: they repair
-            # local bookkeeping this process owns and move no money.
+            # Each also refuses at its own boundary; this skip keeps the boot
+            # path from calling them at all. Publication reconciliation stays:
+            # it reports local state and writes nothing, and orphan recovery is
+            # a no-op in demo mode at its own boundary.
             if not CONFIG.demo_mode:
                 reconciliation = _reconcile_slurm_allocations()
                 released = _reclaim_abandoned_reservations()

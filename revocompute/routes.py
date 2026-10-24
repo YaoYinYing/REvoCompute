@@ -5631,6 +5631,8 @@ def admin_adjust_user_gpu_credit(user_id: int):
         return _blocked
     if _blocked := require_bearer_auth():
         return _blocked
+    if CONFIG.demo_mode:
+        return _demo_read_only("it does not adjust GPU credit.")
     user = _get_user_db().get_user(user_id)
     if user is None or user.get("deleted"):
         return jsonify({"error": "User not found"}), 404
@@ -5728,6 +5730,8 @@ def admin_set_user_storage_quota(user_id: int):
         return _blocked
     if _blocked := require_bearer_auth():
         return _blocked
+    if CONFIG.demo_mode:
+        return _demo_read_only("it does not change storage quotas.")
     user = _get_user_db().get_user(user_id)
     if user is None or user.get("deleted"):
         return jsonify({"error": "User not found"}), 404
@@ -5772,6 +5776,8 @@ def admin_set_user_gpu_allowance(user_id: int):
         return _blocked
     if _blocked := require_bearer_auth():
         return _blocked
+    if CONFIG.demo_mode:
+        return _demo_read_only("it does not change GPU allowances.")
     user = _get_user_db().get_user(user_id)
     if user is None or user.get("deleted"):
         return jsonify({"error": "User not found"}), 404
@@ -5808,6 +5814,8 @@ def admin_reset_user_gpu_credit(user_id: int):
         return _blocked
     if _blocked := require_bearer_auth():
         return _blocked
+    if CONFIG.demo_mode:
+        return _demo_read_only("it does not reset GPU credit.")
     user = _get_user_db().get_user(user_id)
     if user is None or user.get("deleted"):
         return jsonify({"error": "User not found"}), 404
@@ -5845,6 +5853,8 @@ def admin_reset_all_gpu_credits():
         return _blocked
     if _blocked := require_bearer_auth():
         return _blocked
+    if CONFIG.demo_mode:
+        return _demo_read_only("it does not reset GPU credit.")
     req = _parse_body(GPUCreditResetRequest)
     if isinstance(req, tuple):
         return req

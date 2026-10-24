@@ -8,10 +8,11 @@ import dataclasses
 import logging
 import sqlite3
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from conftest import _load_pssm_module
+from conftest import _insert_pending_task, _load_pssm_module
 from revocompute.maintenance import manager
 from revocompute.maintenance.model import PeriodicTask
 from revocompute.maintenance.tasks import admin_digest
@@ -492,6 +493,151 @@ def test_worker_ready_in_production_still_settles_and_charges(monkeypatch, tmp_p
     module.task_runtime._on_worker_ready(None)
 
     assert ran == ["probe", "orphans", "allocations", "reservations", "publications", "charges", "pulse"]
+
+
+def _demo_worker_module(monkeypatch, tmp_path):
+    module = _pulse_module(monkeypatch, tmp_path, slurm_enabled=True)
+    monkeypatch.setattr(
+        module.task_runtime,
+        "CONFIG",
+        dataclasses.replace(module.task_runtime.CONFIG, demo_mode=True, job_executor="demo"),
+    )
+    monkeypatch.setenv("INFRA_REFRESH_SECONDS", "3600")
+    return module
+
+
+def _seed_running_task(module, tmp_path, *, task_type: str = "cpu_runner", name: str = "restored-running") -> str:
+    task_id = _insert_pending_task(module, tmp_path / name, task_type=task_type)
+    module.task_store.update_task(task_id, status="running", started_at=1_700_000_000)
+    return task_id
+
+
+def _seed_pending_storage_charge(module, monkeypatch, tmp_path, *, name: str = "pending-charge") -> tuple[str, int]:
+    """Publish a real result whose charge write is interrupted, leaving the marker."""
+    task_id = _insert_pending_task(module, tmp_path / name)
+    task = module.task_store.get_task(task_id)
+    task_root = Path(module.app.config["storage_resolver"].get_task_root(task))
+    (task_root / "result.txt").write_text("score\n", encoding="utf-8")
+    module.task_store.update_task(task_id, status="finished")
+
+    def refuse_charge(*_args, **_kwargs):
+        raise RuntimeError("simulated interrupted charge")
+
+    with monkeypatch.context() as failure:
+        failure.setattr(module.task_store, "charge_result_publication", refuse_charge)
+        module.task_runtime._finalize_results_manifest(
+            module.task_store.get_task(task_id), execution_state="completed", finished_at=1_700_000_000
+        )
+    user_id = int(task["submitted_by_user_id"])
+    assert module.task_store.list_pending_storage_publications()
+    assert module.task_store.logical_owned_bytes(user_id) == 0
+    return task_id, user_id
+
+
+def _storage_charges(module, user_id: int) -> list[dict]:
+    return [
+        entry for entry in module.task_store.list_ledger(user_id, limit=200)
+        if entry["reason_code"] == "storage_charged"
+    ]
+
+
+class _OnePass:
+    """A pulse stop event that lets exactly one iteration run."""
+
+    def __init__(self) -> None:
+        self.waits = 0
+
+    def wait(self, _interval: float) -> bool:
+        self.waits += 1
+        return self.waits > 1
+
+
+def test_demo_worker_boot_never_charges_a_restored_database(monkeypatch, tmp_path):
+    """The real boot path, with only the probe stubbed, writes no accounting."""
+    module = _demo_worker_module(monkeypatch, tmp_path)
+    running_id = _seed_running_task(module, tmp_path)
+    workflow_id = _seed_running_task(module, tmp_path, task_type="multistage_runner", name="restored-workflow")
+    charge_id, user_id = _seed_pending_storage_charge(module, monkeypatch, tmp_path)
+    module.task_store.record_allocation_start(
+        user_id=user_id,
+        task_id=running_id,
+        stage_id="stage",
+        slurm_job_id="7001",
+        gpu_count=1,
+        cpu_cores=1,
+        started_at=1_700_000_000,
+    )
+    rows_before = {
+        task_id: module.task_store.get_task(task_id) for task_id in (running_id, workflow_id, charge_id)
+    }
+    allocations_before = module.task_store.list_unsettled_allocations()
+    pending_before = module.task_store.list_pending_storage_publications()
+    enqueued: list[tuple] = []
+    monkeypatch.setattr(module.task_runtime.probe_compute_infrastructure, "run", lambda: None)
+    monkeypatch.setattr(
+        module.task_runtime.run_compute_task, "apply_async", lambda *args, **kwargs: enqueued.append((args, kwargs))
+    )
+
+    module.task_runtime._on_worker_ready(None)
+
+    assert _storage_charges(module, user_id) == []
+    assert module.task_store.logical_owned_bytes(user_id) == 0
+    assert enqueued == []
+    for task_id, row in rows_before.items():
+        assert module.task_store.get_task(task_id) == row
+    assert module.task_store.list_unsettled_allocations() == allocations_before
+    assert module.task_store.list_pending_storage_publications() == pending_before
+    # The two passes the boot path skips also refuse at their own boundaries.
+    assert module.task_runtime._reconcile_slurm_allocations() == {"settled": 0, "active": 0, "review": 0}
+    assert module.task_runtime._reclaim_abandoned_reservations() == 0
+    assert module.task_store.list_unsettled_allocations() == allocations_before
+
+
+def test_demo_pulse_never_repairs_a_restored_pending_charge(monkeypatch, tmp_path):
+    """The real pulse loop, not the boot caller, must not charge either."""
+    module = _demo_worker_module(monkeypatch, tmp_path)
+    _, user_id = _seed_pending_storage_charge(module, monkeypatch, tmp_path)
+    pending_before = module.task_store.list_pending_storage_publications()
+
+    module.task_runtime._infrastructure_pulse(0.0, _OnePass(), infrastructure_enabled=False)
+
+    assert module.task_store.list_pending_storage_publications() == pending_before
+    assert _storage_charges(module, user_id) == []
+    assert module.task_store.logical_owned_bytes(user_id) == 0
+
+
+def test_production_worker_boot_still_charges_and_settles(monkeypatch, tmp_path):
+    """The demo boundary narrows nothing: failure recovery and repair still charge."""
+    module = _pulse_module(monkeypatch, tmp_path, slurm_enabled=True)
+    monkeypatch.setenv("INFRA_REFRESH_SECONDS", "3600")
+    running_id = _seed_running_task(module, tmp_path)
+    _, user_id = _seed_pending_storage_charge(module, monkeypatch, tmp_path)
+    assert module.task_store.list_pending_storage_publications()
+    assert _storage_charges(module, user_id) == []
+    enqueued: list[tuple] = []
+    monkeypatch.setattr(module.task_runtime.probe_compute_infrastructure, "run", lambda: None)
+    monkeypatch.setattr(
+        module.task_runtime.run_compute_task, "apply_async", lambda *args, **kwargs: enqueued.append((args, kwargs))
+    )
+
+    module.task_runtime._on_worker_ready(None)
+
+    assert module.task_store.get_task(running_id)["status"] == "failed"
+    assert len(_storage_charges(module, user_id)) == 2
+    assert module.task_store.list_pending_storage_publications() == []
+    assert module.task_store.logical_owned_bytes(user_id) > 0
+    assert enqueued == []
+
+
+def test_production_pulse_still_repairs_a_pending_charge(monkeypatch, tmp_path):
+    module = _pulse_module(monkeypatch, tmp_path, slurm_enabled=True)
+    _, user_id = _seed_pending_storage_charge(module, monkeypatch, tmp_path)
+
+    module.task_runtime._infrastructure_pulse(0.0, _OnePass(), infrastructure_enabled=False)
+
+    assert module.task_store.list_pending_storage_publications() == []
+    assert len(_storage_charges(module, user_id)) == 1
+    assert module.task_store.logical_owned_bytes(user_id) > 0
 
 
 # ---------------------------------------------------------------------------
