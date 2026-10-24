@@ -32,6 +32,7 @@ import pytest
 
 from browser_frontend_assets import result_dist
 from frontend_fixtures import project_manifest_for_serve
+from frontend_fixtures.router import serve_environment
 
 pytestmark = pytest.mark.browser
 
@@ -115,6 +116,7 @@ def _serve(page: Page, manifest: dict, *, matrix_page: int = 3) -> dict:
         ),
     )
     page.route(f"{ORIGIN}/compute/login**", lambda route: route.fulfill(content_type="text/html", body="<p>Login</p>"))
+    serve_environment(page, ORIGIN)
 
     def static(route):
         relative = route.request.url.split("/static/app/", 1)[1].split("?", 1)[0]

@@ -790,6 +790,17 @@ _API_ROUTES: tuple[tuple[re.Pattern[str], Any], ...] = (
 # ---------------------------------------------------------------------------
 
 
+def serve_environment(page: Any, origin: str = DEFAULT_ORIGIN) -> None:
+    """Answer the app-wide deployment-profile read for a harness that owns its routes.
+
+    The built frontend reads ``/compute/api/environment`` on every page. A
+    harness that builds its own entry and installs a selective route set must
+    answer it too, or the browser reports the unrouted request as a console
+    error. ``mount_scenario`` already serves it through its dispatch table.
+    """
+    page.route(f"{origin}/compute/api/environment", lambda route: route.fulfill(json=PRODUCTION_ENVIRONMENT))
+
+
 def mount_scenario(
     page: Any,
     scenario: RunnerScenario,

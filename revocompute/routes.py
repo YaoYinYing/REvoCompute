@@ -403,6 +403,7 @@ def demo_replay_table(scenario_id: str, relative_path: str):
             offset=offset,
             limit=limit,
             matrix=request.args.get("matrix") == "1",
+            strict=True,
         )
     except ResultPreviewError as error:
         return jsonify({"error": str(error)}), 400
@@ -419,7 +420,7 @@ def demo_replay_ndarray(scenario_id: str, relative_path: str):
     try:
         key, kind, max_elements = array_projection_query(request.args)
         projection = scenario.bundle.projection(
-            relative_path, kind=kind, key=key, max_elements=max_elements
+            relative_path, kind=kind, key=key, max_elements=max_elements, strict=True
         )
     except ResultPreviewError as error:
         return jsonify({"error": str(error)}), 400

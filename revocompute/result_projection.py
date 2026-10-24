@@ -86,17 +86,21 @@ def read_table_page(
     limit: int,
     matrix: bool,
     declared_table: bool,
+    bounded: bool = True,
 ) -> dict[str, Any]:
-    """Page one table artifact stream under the route's cell, width, and byte caps.
+    """Page one table artifact stream.
 
-    ``declared_table`` is the caller's manifest-derived fact: an artifact the
-    manifest does not declare as a table is refused rather than parsed on the
-    strength of its extension.  The text wrapper consumes ``stream``; the caller
-    still owns closing the artifact descriptor it opened.  A parse failure is
+    ``bounded`` selects the live result route's contract: the artifact must be
+    manifest-declared as a table, and its rows, cells, and serialized page are
+    capped. A recorded replay of bytes a live route accepted before those caps
+    existed still has to page the artifact it captured, so its accessor passes
+    ``bounded=False`` -- the same parser and window bounds, without the live
+    response-size refusals. The text wrapper consumes ``stream``; the caller
+    still owns closing the artifact descriptor it opened. A parse failure is
     reported as ``ResultPreviewError("Table could not be previewed")`` with the
     original exception as its cause so the route can log the artifact defect.
     """
-    if not declared_table:
+    if bounded and not declared_table:
         raise ResultPreviewError("Artifact is not a table")
     if offset < 0 or offset > MAX_TABLE_OFFSET or limit < 1 or limit > MAX_TABLE_LIMIT:
         raise ResultPreviewError("Table page is outside allowed bounds")
@@ -107,6 +111,8 @@ def read_table_page(
     max_columns = _TABLE_MATRIX_COLUMNS if matrix else _TABLE_COLUMNS
 
     def row_cost(row: list[str]) -> int:
+        if not bounded:
+            return 0
         if len(row) > max_columns:
             raise ValueError("Table row exceeds preview limits")
         cost = 2 + max(0, len(row) - 1)
@@ -121,7 +127,7 @@ def read_table_page(
             reader = csv.reader(handle, delimiter=delimiter)
             columns = next(reader, [])
             page_bytes = _TABLE_PAGE_ENVELOPE_BYTES + row_cost(columns)
-            if page_bytes > MAX_TABLE_PAGE_BYTES:
+            if bounded and page_bytes > MAX_TABLE_PAGE_BYTES:
                 raise ValueError("Table page exceeds the response byte limit")
             rows: list[list[str]] = []
             has_more = False
@@ -132,7 +138,7 @@ def read_table_page(
                     has_more = True
                     break
                 cost = row_cost(row)
-                if page_bytes + cost > MAX_TABLE_PAGE_BYTES:
+                if bounded and page_bytes + cost > MAX_TABLE_PAGE_BYTES:
                     raise ValueError("Table page exceeds the response byte limit")
                 page_bytes += cost
                 rows.append(row)

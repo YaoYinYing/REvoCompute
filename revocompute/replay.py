@@ -101,26 +101,43 @@ class ReplayBundle:
                 return artifact.get("capability") == "table" or artifact.get("preview") == "table"
         return False
 
-    def table_page(self, path: str, *, offset: int = 0, limit: int = 100, matrix: bool = False) -> dict[str, Any] | None:
+    def table_page(
+        self,
+        path: str,
+        *,
+        offset: int = 0,
+        limit: int = 100,
+        matrix: bool = False,
+        strict: bool = False,
+    ) -> dict[str, Any] | None:
         """Page a captured table artifact through the Server's bounded reader.
 
-        Delegates to the same reader the ``GET .../tables/<path>`` route serves
-        through, including its manifest-declared table check, cell/width caps,
-        and serialized-byte limit. A payload the bundle does not retain is
-        ``None`` (the route's 404); a refusal the live route would answer with a
-        bounded 400 raises :class:`ResultPreviewError`.
+        By default this is the recorded-bytes contract the replay fixture
+        harness has always used: a captured payload is paged whatever the live
+        route's current width/cell/page caps would say, and any refusal is
+        ``None`` (the caller's 404) because a recorded result must remain
+        renderable after the live caps tighten. ``strict=True`` is the live
+        result route's contract -- the artifact must be manifest-declared as a
+        table, the caps apply, and a refusal raises
+        :class:`ResultPreviewError` so a demo route can answer the bounded 400.
         """
         body = self.payload(path)
         if body is None:
             return None
-        return read_table_page(
-            io.BytesIO(body[0]),
-            name=path,
-            offset=offset,
-            limit=limit,
-            matrix=matrix,
-            declared_table=self.declares_table(path),
-        )
+        try:
+            return read_table_page(
+                io.BytesIO(body[0]),
+                name=path,
+                offset=offset,
+                limit=limit,
+                matrix=matrix,
+                declared_table=self.declares_table(path),
+                bounded=strict,
+            )
+        except ResultPreviewError:
+            if strict:
+                raise
+            return None
 
     def projection(
         self,
@@ -129,16 +146,22 @@ class ReplayBundle:
         kind: str = "numeric",
         key: str | None = None,
         max_elements: int = MAX_PROJECTION_ELEMENTS,
+        strict: bool = False,
     ) -> dict[str, Any] | None:
         """Project a captured artifact through the Server's own bounded reader.
 
         Delegates to ``revocompute.ndarray.read_array_projection`` -- the function
         the ``GET .../ndarrays/<path>`` route serves through -- so a replayed
         projection has the Server's shape, dtype, null, and NPY/NPZ semantics
-        rather than a harness approximation. An artifact the bundle does not
-        retain is ``None`` (the route's 404); a projection the Server would
-        refuse (an unsafe path, an element/byte overflow, an unsupported
-        artifact) raises :class:`ResultPreviewError`.
+        rather than a harness approximation.
+
+        By default a projection the live route would refuse (an unsafe path, an
+        element/byte overflow, an unsupported artifact) is ``None`` (the
+        caller's 404): a storyboard legitimately probes optional fields and
+        handles an absent projection, and a recorded result must keep rendering
+        after the live bounds tighten. ``strict=True`` raises
+        :class:`ResultPreviewError` with the live route's message instead, which
+        is what the demo route answers as a bounded 400.
         """
         body = self.payload(path)
         if body is None:
@@ -147,7 +170,12 @@ class ReplayBundle:
             stream.write(body[0])
             stream.flush()
             stream.seek(0)
-            return read_bounded_array_projection(
-                stream, name=path, key=key, kind=kind, max_elements=max_elements
-            )
+            try:
+                return read_bounded_array_projection(
+                    stream, name=path, key=key, kind=kind, max_elements=max_elements
+                )
+            except ResultPreviewError:
+                if strict:
+                    raise
+                return None
 

@@ -38,6 +38,7 @@ from frontend_fixtures import (
     write_bundle,
 )
 from frontend_fixtures.models import ResultArtifactSpec, ResultFixture, StoryboardSpec
+from revocompute.result_projection import ResultPreviewError
 
 ROOT = Path(__file__).resolve().parents[2]
 TASK_ID = "0123456789abcdef0123456789abcdef"
@@ -441,6 +442,66 @@ def test_round_trip_serves_a_bounded_table_page(tmp_path: Path) -> None:
     matrix = replay.table_page("couplings/raw_scores.csv", matrix=True)
     assert matrix["columns"] == ["position", "10", "11"]
     assert matrix["rows"] == [["10", "0.0", "0.51"], ["11", "0.51", "0.0"]]
+
+
+def test_a_recorded_table_still_pages_when_the_live_caps_would_refuse_it(tmp_path: Path) -> None:
+    """A recorded result must keep rendering after the live route tightens.
+
+    The accessor used by replay harnesses pages the captured bytes under the
+    window bounds alone; the demo route opts into the live width/cell/page caps
+    with ``strict=True`` and receives the same bounded refusal a live result
+    route would.
+    """
+    columns = [f"c{index}" for index in range(238)]
+    wide = ResultFixture(
+        name="wide_table",
+        task_type="sequence_demo",
+        artifacts=(
+            ResultArtifactSpec(
+                "wide.csv",
+                role="primary",
+                capability="table",
+                media_type="text/csv",
+                body=",".join(columns) + "\n" + ",".join("1" for _ in columns) + "\n",
+            ),
+        ),
+        logical_files=(("wide", ("wide.csv",)),),
+        views=(view_entry("entity-table", "wide_table", "Wide table", {"table": ["wide.csv"]}),),
+        output_check=OutputCheckSpec(
+            state="passed",
+            checks=((("view_id", "wide_table"), ("source", "table"), ("required", True),
+                     ("status", "passed"), ("matched", 1)),),
+        ),
+    )
+    root = _write_result_root(tmp_path, wide)
+    replay = ReplayBundle(capture_replay_bundle(task_id=TASK_ID, result_root=root))
+    page = replay.table_page("wide.csv")
+    assert page is not None and len(page["columns"]) == 238
+    with pytest.raises(ResultPreviewError, match="Table could not be previewed"):
+        replay.table_page("wide.csv", strict=True)
+
+
+def test_a_replay_refusal_is_none_by_default_and_raised_only_when_strict(tmp_path: Path) -> None:
+    """A storyboard probes optional artifacts and handles an absent response.
+
+    The recorded-bytes accessor pages any captured payload (an artifact whose
+    extension or manifest capability the live route would refuse) and answers
+    ``None`` for a window or projection it cannot serve, which is the harness's
+    404. ``strict=True`` asks for the live route's refusal so the demo route can
+    answer the bounded 400 instead.
+    """
+    root = _write_result_root(tmp_path, _synthetic_fixture())
+    replay = ReplayBundle(capture_replay_bundle(task_id=TASK_ID, result_root=root))
+    legacy = replay.table_page("alignment/filtered_alignment.a3m")
+    assert legacy is not None and legacy["columns"] == [">seq1"]
+    with pytest.raises(ResultPreviewError, match="Artifact is not a table"):
+        replay.table_page("alignment/filtered_alignment.a3m", strict=True)
+    assert replay.table_page("tables/pairs.tsv", limit=0) is None
+    with pytest.raises(ResultPreviewError, match="outside allowed bounds"):
+        replay.table_page("tables/pairs.tsv", limit=0, strict=True)
+    assert replay.projection("summary.json", key="alignment.missing") is None
+    with pytest.raises(ResultPreviewError, match="JSON path was not found"):
+        replay.projection("summary.json", key="alignment.missing", strict=True)
 
 
 def test_logical_file_identity_resolves_to_the_captured_payload(tmp_path: Path) -> None:
