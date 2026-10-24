@@ -123,10 +123,12 @@ The expected observations, from the code, are:
   (`kind`, `label`, `capture_source`), a `bundle_digest` starting `sha256:`, and
   the captured `task` identity (`id`, `type`, `display_name`).
 
-Record the actual responses with the deployment evidence. These commands, and
-the authenticated submission-refusal check in the next paragraph, have not been
-observed on the candidate host described below; they are the procedure, not a
-receipt.
+Record the actual responses with the deployment evidence. The PR's own
+acceptance deployment exercised these probes on the candidate coordinates below,
+so the unauthenticated responses are recorded in its delivery evidence; the
+authenticated readiness and replay-catalog reads, and the submission-refusal
+check in the next paragraph, are the procedure to repeat and record on the host
+you maintain.
 
 The demo routes are registered in every process, but their credential boundary
 answers before their demo-profile check. An anonymous API caller therefore gets
@@ -141,9 +143,11 @@ a demo session, not only through the disabled browser control.
 
 ## Candidate deployment coordinates
 
-These coordinates are the planning values in the PR's implementation record. They
-are **not yet deployed or observed**; replace them with the values the host
-actually uses and record the deployment evidence.
+These coordinates are the PR's planning record, and the PR's own acceptance
+deployment ran the stack on exactly these values. They are not a maintained
+deployment's configuration of record: replace them with the values the host
+actually uses and record the deployment evidence. A maintainer-owned public
+hostname is still undecided; see [Private ingress](#private-ingress).
 
 | Item | Candidate value |
 | --- | --- |

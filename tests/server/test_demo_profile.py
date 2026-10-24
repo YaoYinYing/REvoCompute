@@ -36,7 +36,11 @@ SCENARIO_ID = "recorded-demo"
 
 
 def _install_demo_replays(
-    tmp_path: Path, scenario_id: str = SCENARIO_ID, *, binary_table: bool = False
+    tmp_path: Path,
+    scenario_id: str = SCENARIO_ID,
+    *,
+    binary_table: bool = False,
+    html_artifact: bool = False,
 ) -> Path:
     """Leave the deployment's replay index where ``app`` loads it at import."""
     root = tmp_path / "pssm_env" / "demo" / "replays"
@@ -44,6 +48,8 @@ def _install_demo_replays(
     bundle_path = write_synthetic_replay_bundle(root / f"{scenario_id}.json")
     if binary_table:
         _store_table_payload_as_binary(bundle_path)
+    if html_artifact:
+        _store_artifact_as_html(bundle_path)
     index = {
         "version": 1,
         "scenarios": [
@@ -58,6 +64,56 @@ def _install_demo_replays(
     }
     (root / "index.json").write_text(json.dumps(index), encoding="utf-8")
     return root
+
+
+def _rewrite_payload(bundle_path: Path, path: str, data: bytes, media_type: str | None = None) -> None:
+    """Replace one captured artifact's bytes and re-seal the bundle digest."""
+    from revocompute.replay_bundle import bundle_digest, write_bundle
+
+    document = json.loads(bundle_path.read_text(encoding="utf-8"))
+    entry = document["payloads"][path]
+    entry.pop("encoding", None)
+    entry["payload"] = data.decode("utf-8")
+    entry["size"] = len(data)
+    entry["sha256"] = hashlib.sha256(data).hexdigest()
+    if media_type is not None:
+        entry["media_type"] = media_type
+    for artifact in document["response"]["artifacts"]:
+        if artifact["path"] == path:
+            artifact["size"] = len(data)
+            artifact["sha256"] = entry["sha256"]
+            if media_type is not None:
+                artifact["media_type"] = media_type
+    for files in document["response"]["result"]["files"].values():
+        for item in files:
+            if item["path"] != path:
+                continue
+            # The served logical projection carries size but not the published
+            # sha256 (that identity lives in the bundle's own logical_files).
+            item["size"] = len(data)
+            if "sha256" in item:
+                item["sha256"] = entry["sha256"]
+    for entries in (document.get("logical_files") or {}).values():
+        for item in entries:
+            if item.get("path") == path:
+                item["size"] = len(data)
+                item["sha256"] = entry["sha256"]
+    document["bundle_digest"] = bundle_digest(document)
+    write_bundle(bundle_path, document)
+
+
+def _store_artifact_as_html(bundle_path: Path) -> None:
+    """Carry the captured text artifact as an HTML document in the same bundle.
+
+    A valid bundle may retain any published text artifact; the demo must treat
+    it as untrusted bytes even when it is served inline.
+    """
+    _rewrite_payload(
+        bundle_path,
+        CAPTURED_ARTIFACT,
+        b"<!doctype html><html><body><script>window.demoPwned = true</script></body></html>\n",
+        media_type="text/html",
+    )
 
 
 def _store_table_payload_as_binary(bundle_path: Path) -> None:
@@ -85,7 +141,8 @@ def _store_table_payload_as_binary(bundle_path: Path) -> None:
         for item in files:
             if item["path"] == TABLE_ARTIFACT:
                 item["size"] = len(data)
-                item["sha256"] = entry["sha256"]
+                if "sha256" in item:
+                    item["sha256"] = entry["sha256"]
     document["bundle_digest"] = bundle_digest(document)
     write_bundle(bundle_path, document)
 
@@ -268,6 +325,31 @@ def test_demo_logical_file_route_serves_the_captured_bytes(monkeypatch, tmp_path
     )
     assert response.status_code == 200
     assert response.get_data(as_text=True) == "residue pairs above threshold: 2\n"
+
+
+def test_demo_byte_routes_sandbox_a_captured_html_payload(monkeypatch, tmp_path):
+    """An inline recorded artifact cannot run script in the demo origin.
+
+    The demo serves images and structures inline, so it does not default to an
+    attachment; the live artifact route's ``CSP: sandbox`` is what keeps an
+    untrusted HTML payload inert. ``?download=1`` remains the attachment switch.
+    """
+    _install_demo_replays(tmp_path, html_artifact=True)
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env=DEMO_ENV)
+    headers = _test_client_auth(module)
+    client = module.app.test_client()
+    base = f"/compute/api/demo/replays/{SCENARIO_ID}"
+    inline = client.get(f"{base}/artifacts/{CAPTURED_ARTIFACT}", headers=headers)
+    assert inline.status_code == 200
+    assert inline.mimetype == "text/html"
+    assert inline.headers["Content-Security-Policy"] == "sandbox"
+    assert "Content-Disposition" not in inline.headers
+    download = client.get(f"{base}/artifacts/{CAPTURED_ARTIFACT}?download=1", headers=headers)
+    assert download.headers["Content-Security-Policy"] == "sandbox"
+    assert download.headers["Content-Disposition"].startswith("attachment;")
+    logical = client.get(f"{base}/files/summary", headers=headers)
+    assert logical.mimetype == "text/html"
+    assert logical.headers["Content-Security-Policy"] == "sandbox"
 
 
 def test_demo_table_route_pages_the_captured_table(monkeypatch, tmp_path):

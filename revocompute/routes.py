@@ -12,9 +12,7 @@ already-initialised application.
 
 from __future__ import annotations
 
-import csv
 import hashlib
-import io
 import json
 import logging
 import mimetypes
@@ -368,6 +366,10 @@ def demo_replay_artifact(scenario_id: str, relative_path: str):
         )
     data, media_type = payload
     response = Response(data, mimetype=media_type)
+    # Recorded artifacts are untrusted Runner output served same-origin. The
+    # demo previews them inline (images, structures), so the sandbox header is
+    # what keeps an inline HTML payload from running script in the demo origin.
+    response.headers["Content-Security-Policy"] = "sandbox"
     if request.args.get("download") == "1":
         response.headers["Content-Disposition"] = f'attachment; filename="{os.path.basename(relative_path)}"'
     return response
@@ -388,7 +390,9 @@ def demo_replay_logical_file(scenario_id: str, file_id: str):
     if payload is None:
         abort(404)
     data, media_type = payload
-    return Response(data, mimetype=media_type)
+    response = Response(data, mimetype=media_type)
+    response.headers["Content-Security-Policy"] = "sandbox"
+    return response
 
 
 @app.route("/compute/api/demo/replays/<scenario_id>/tables/<path:relative_path>", methods=["GET"])
