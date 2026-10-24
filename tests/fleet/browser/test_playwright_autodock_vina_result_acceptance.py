@@ -34,6 +34,7 @@ from playwright.sync_api import Page, expect
 from browser_frontend_assets import result_dist
 from conftest import _load_fleet_module, _upsert_task_for_user
 from frontend_fixtures import project_manifest_for_serve
+from frontend_fixtures.router import PRODUCTION_ENVIRONMENT
 
 pytestmark = pytest.mark.browser
 
@@ -96,6 +97,7 @@ def _serve(page: Page, manifest: dict, root: Path, task_id: str, logical_paths: 
         lambda route: route.fulfill(json={"id": 1, "username": "owner", "role": "user"}),
     )
     page.route(f"{ORIGIN}/compute/api/system/notices", lambda route: route.fulfill(json={"notices": []}))
+    page.route(f"{ORIGIN}/compute/api/environment", lambda route: route.fulfill(json=PRODUCTION_ENVIRONMENT))
     page.route(
         f"{ORIGIN}/compute/api/running/{task_id}",
         lambda route: route.fulfill(

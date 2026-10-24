@@ -48,10 +48,10 @@ The profile is a deployment fact owned by the server, not a frontend flag.
 - `GET /compute/api/environment` is the one profile fact the browser reads. A
   demo answers `demo_mode: true`, `execution: "preview_only"`, and a notice; a
   production deployment answers `demo_mode: false`, `execution: "available"`,
-  and nothing else changes. A read that fails stays unresolved: the Create Task
-  run control stays disabled and the page says so with a retry, so an outage is
-  never presented as an executable production deployment. The browser is not the
-  boundary; the `403` submission refusal below is.
+  and nothing else changes. A read that fails stays visible with a retry, but it
+  does not gate the run control: the browser waits only while the read is in
+  flight, and the form still submits. The `403` submission refusal below remains
+  the boundary.
 - `ENABLED_TASKRUNNERS` selects which families are materialized, advertised, and
   accepted. In the demo profile the selector decides only which Task
   definitions the browser can inspect; it grants no execution. An empty value

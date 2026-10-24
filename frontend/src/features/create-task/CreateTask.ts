@@ -51,10 +51,15 @@ export class CreateTask {
   // every submission regardless; the form states the same fact before the reader
   // fills it in, rather than presenting a Run control that can only fail.
   private demoEnvironment = false;
-  // The profile read has not produced an answer. No run affordance and no
-  // production wording may be shown until it does: an outage is not a
-  // deployment profile.
-  private environmentUnresolved = true;
+  // The profile read is in flight. The run control waits for it so a demo
+  // deployment never flashes an executable control before answering, but an
+  // unanswered read is not a harness for submission: availability and the
+  // server's own refusal decide that.
+  private environmentPending = true;
+  // The last profile read produced no answer. The form says so and offers a
+  // retry; the run control stays available because the profile endpoint is a
+  // label, not the submission boundary.
+  private environmentUnresolved = false;
 
   constructor(private readonly root: HTMLElement) {
     // The preparation surface owns exactly one visible level-1 heading per state:
@@ -101,13 +106,17 @@ export class CreateTask {
   /**
    * Read the deployment profile once, and state a read that did not answer.
    *
-   * Until the read answers, the run control stays disabled, because the form
-   * cannot know whether this deployment executes. A failure stays visible with
-   * a retry; the rest of the form remains usable, and the Server still refuses
-   * any submission the client might send.
+   * The run control waits only while the read is in flight, so a demo
+   * deployment cannot flash an executable control. An unanswered read leaves
+   * the form usable and the run control available: the notice names the
+   * condition and offers a retry, and the server still decides whether a
+   * submission executes.
    */
   private async resolveEnvironment(): Promise<void> {
+    this.environmentPending = true;
+    this.refreshValidation();
     const environment = await loadEnvironment();
+    this.environmentPending = false;
     this.environmentUnresolved = environment === null;
     this.demoEnvironment = environment?.demo_mode === true;
     this.environmentNotice.replaceChildren();
@@ -284,7 +293,7 @@ export class CreateTask {
     this.validationSummary.hidden = counts === 0;
     this.validationSummary.textContent = t(counts === 1 ? 'ct.issueOne' : 'ct.issueMany', { count: counts });
     this.validationSummary.className = `ct-validation-summary ${counts ? 'blocked' : 'ready'}`;
-    this.action.disabled = this.environmentUnresolved || this.demoEnvironment || this.busy || errors.length > 0;
+    this.action.disabled = this.environmentPending || this.demoEnvironment || this.busy || errors.length > 0;
     this.refreshSnapshot();
     return errors;
   }
@@ -306,7 +315,6 @@ export class CreateTask {
   }
 
   private async runAction(): Promise<void> {
-    if (this.environmentUnresolved) { this.setStatus(t('environment.unresolved'), 'error'); return; }
     if (this.demoEnvironment) { this.setStatus(t('demo.runDisabled'), 'error'); return; }
     if (!this.definition || this.busy) return;
     const errors = this.refreshValidation(); if (errors.length) { this.setStatus(t('ct.fixIssues'), 'error'); return; }
@@ -460,7 +468,7 @@ export class CreateTask {
     if (generation !== this.generation) return; this.setStatus(t('ct.cleared'), 'ok'); this.refreshValidation();
   }
 
-  private setBusy(value: boolean): void { this.busy = value; this.action.disabled = value || this.environmentUnresolved || this.demoEnvironment; this.clear.disabled = value; if (this.change) this.change.disabled = value; if (this.demo) this.demo.disabled = value; this.action.setAttribute('aria-busy', String(value)); }
+  private setBusy(value: boolean): void { this.busy = value; this.action.disabled = value || this.environmentPending || this.demoEnvironment; this.clear.disabled = value; if (this.change) this.change.disabled = value; if (this.demo) this.demo.disabled = value; this.action.setAttribute('aria-busy', String(value)); }
   private setStatus(message: string, kind: 'busy' | 'ok' | 'error' | '' = ''): void {
     this.status.textContent = message; this.status.className = `ct-status ${kind}`;
     // An error is announced assertively; the region itself is the polite default.
