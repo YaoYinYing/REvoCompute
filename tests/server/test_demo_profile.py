@@ -15,13 +15,18 @@ a production process. These tests drive the real application in both profiles.
 from __future__ import annotations
 
 import base64
+import dataclasses
 import hashlib
+import io
 import json
+from inspect import unwrap
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+from sqlalchemy import func, select
 
-from conftest import _admin_client_auth, _load_pssm_module, _test_client_auth
+from conftest import _admin_client_auth, _insert_pending_task, _load_pssm_module, _test_client_auth
 from demo_replay_fixtures import (
     CAPTURED_ARTIFACT,
     EXCLUDED_ARTIFACT,
@@ -29,6 +34,8 @@ from demo_replay_fixtures import (
     TABLE_ARTIFACT,
     write_synthetic_replay_bundle,
 )
+from revocompute.tool_calls import ToolCallDatabase, new_tool_call_id
+from revocompute.tool_workspace import ToolWorkspace
 
 IDENTITY = {"RUNNER_UID": "1234", "RUNNER_GID": "5678"}
 DEMO_ENV = {**IDENTITY, "REVOCOMPUTE_DEMO_MODE": "true", "REVOCOMPUTE_JOB_EXECUTOR": "demo"}
@@ -598,3 +605,269 @@ def test_demo_profile_refuses_mutating_operator_actions_before_any_row(monkeypat
         assert "preview and replay" in response.get_json()["error"], action
     assert service.jobs() == []
     assert module.task_store.list_tasks() == []
+
+
+def _demo_tool_module(monkeypatch, tmp_path):
+    """A demo app with an enabled Tool family and its image installed.
+
+    Today's deployed demo has no Tool images, but a missing image is an
+    inventory fact rather than an authorization boundary, so the refusal must
+    hold when the family is enabled and its image is present.
+    """
+    _install_demo_replays(tmp_path)
+    images = tmp_path / "tool-images"
+    images.mkdir()
+    (images / "bioio.sif").write_bytes(b"fixture-sif")
+    environment = {**DEMO_ENV, "ENABLED_TOOL_FAMILIES": "bioio", "TOOL_IMAGE_DIR": str(images)}
+    return _load_pssm_module(monkeypatch, tmp_path, extra_env=environment)
+
+
+def _tool_rows(module) -> int:
+    with module.tool_calls.engine.connect() as connection:
+        return connection.execute(select(func.count()).select_from(module.tool_calls.table)).scalar_one()
+
+
+def test_demo_tool_submission_is_refused_before_any_durable_state(monkeypatch, tmp_path):
+    module = _demo_tool_module(monkeypatch, tmp_path)
+    assert module.tool_registry.get("structure_inspect").runtime.image.is_file()
+
+    sent: list[tuple] = []
+    monkeypatch.setattr(module.celery, "send_task", lambda *args, **kwargs: sent.append((args, kwargs)))
+    monkeypatch.setattr(
+        module.tool_calls,
+        "reserve",
+        lambda **_kwargs: pytest.fail("a demo Tool submission reserved admission capacity"),
+    )
+    client = module.app.test_client()
+    headers = _test_client_auth(module)
+    fixture = Path(__file__).resolve().parents[1] / "data" / "3fap_hf3_A_short.pdb"
+    response = client.post(
+        "/compute/api/tools/structure_inspect/call",
+        headers=headers,
+        data={
+            "parameters": "{}",
+            "file_roles": "structure",
+            "files": (io.BytesIO(fixture.read_bytes()), "sample.pdb"),
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.get_json() == {
+        "error": "This demo deployment is preview and replay only; it does not execute Tools.",
+        "code": "demo_read_only",
+    }
+    assert sent == []
+    assert _tool_rows(module) == 0
+    assert not module.tool_workspace.root.exists()
+
+
+def test_demo_tool_worker_refuses_a_queued_call(monkeypatch, tmp_path):
+    """A row that evades the boundary still cannot reach a runtime or a child."""
+    module = _demo_tool_module(monkeypatch, tmp_path)
+    import revocompute.tool_runtime as tool_runtime
+
+    monkeypatch.setattr(
+        tool_runtime,
+        "COMPUTE_CONFIG",
+        dataclasses.replace(tool_runtime.COMPUTE_CONFIG, demo_mode=True, job_executor="demo"),
+    )
+    calls = ToolCallDatabase(str(tmp_path / "worker-calls.sqlite3"))
+    workspace = ToolWorkspace(tmp_path / "tool-workspace", request_max_bytes=1_000_000, output_max_bytes=1_000_000)
+    tool = module.tool_registry.get("structure_inspect")
+    call_id = new_tool_call_id()
+    calls.reserve(
+        tool_call_id=call_id,
+        tool_type=tool.name,
+        runtime_family=tool.runtime.name,
+        runtime_identity=tool.runtime.identity,
+        user_id=1,
+        username="owner",
+        parameter_json="{}",
+        input_manifest_json='{"inputs":{}}',
+        idempotency_key=None,
+        per_user_limit=3,
+        global_limit=8,
+    )
+
+    class UntouchableManager:
+        def ensure_warm(self, _runtime):
+            pytest.fail("the demo worker acquired a Tool runtime")
+
+        def execute(self, *_args, **_kwargs):
+            pytest.fail("the demo worker started a Tool child process")
+
+    tool_runtime.execute_tool_call(
+        call_id,
+        calls=calls,
+        registry=module.tool_registry,
+        workspace=workspace,
+        manager=UntouchableManager(),
+        config=module.app.config["TOOL_CONFIG"],
+    )
+
+    record = calls.get(call_id)
+    assert record["status"] == "failed"
+    assert record["error_class"] == "runtime_unavailable"
+    assert "demo" in record["error"].lower()
+    assert record["reserved_bytes"] == 0
+    assert not workspace.root.exists()
+
+
+def _demo_app(monkeypatch, tmp_path):
+    _install_demo_replays(tmp_path)
+    return _load_pssm_module(monkeypatch, tmp_path, extra_env=DEMO_ENV)
+
+
+def _assert_demo_refusal(response, refusal):
+    assert response.status_code == 403
+    assert response.get_json() == {
+        "error": f"This demo deployment is preview and replay only; {refusal}",
+        "code": "demo_read_only",
+    }
+
+
+def test_demo_infrastructure_refresh_is_refused_before_any_probe(monkeypatch, tmp_path):
+    module = _demo_app(monkeypatch, tmp_path)
+
+    class UntouchableReadiness:
+        def report(self, **_kwargs):
+            pytest.fail("the demo refresh ran infrastructure probes")
+
+    module.app.config["infrastructure_readiness"] = UntouchableReadiness()
+    response = module.app.test_client().post(
+        "/compute/api/auth/admin/infrastructure/refresh",
+        headers=_admin_client_auth(module),
+    )
+
+    _assert_demo_refusal(response, "it does not run infrastructure readiness probes.")
+
+
+def test_demo_gpu_reconciliation_is_refused_before_the_worker(monkeypatch, tmp_path):
+    module = _demo_app(monkeypatch, tmp_path)
+    enqueued: list[bool] = []
+
+    class _Result:
+        def get(self, timeout):
+            return {}
+
+    monkeypatch.setattr(
+        module.task_runtime.reconcile_slurm_allocations,
+        "apply_async",
+        lambda: enqueued.append(True) or _Result(),
+    )
+    client = module.app.test_client()
+    headers = _admin_client_auth(module)
+    response = client.post("/compute/api/auth/admin/gpu-credit/reconciliation", headers=headers)
+
+    _assert_demo_refusal(response, "it does not run resource reconciliation.")
+    assert enqueued == []
+    # The read side stays available: only the worker-executing POST is refused.
+    assert client.get("/compute/api/auth/admin/gpu-credit/reconciliation", headers=headers).status_code == 200
+
+
+def test_demo_cancel_is_refused_without_stopping_resources_or_touching_the_row(monkeypatch, tmp_path):
+    module = _demo_app(monkeypatch, tmp_path)
+    headers = _test_client_auth(module)
+    task_id = _insert_pending_task(module, tmp_path / "cancel-result")
+    before = module.task_store.get_task(task_id)
+    stopped: list[dict] = []
+    route_globals = unwrap(module.app.view_functions["cancel_task"]).__globals__
+    monkeypatch.setitem(
+        route_globals,
+        "cancel_compute_resources",
+        SimpleNamespace(delay=lambda **fields: stopped.append(fields)),
+    )
+
+    response = module.app.test_client().post(f"/compute/api/cancel/{task_id}", headers=headers)
+
+    _assert_demo_refusal(response, "it does not cancel Tasks.")
+    assert stopped == []
+    assert module.task_store.get_task(task_id) == before
+
+
+def test_demo_archive_is_refused_without_enqueuing(monkeypatch, tmp_path):
+    module = _demo_app(monkeypatch, tmp_path)
+    headers = _test_client_auth(module)
+    task_id = _insert_pending_task(module, tmp_path / "archive-result")
+    module.task_store.update_task(task_id, status="finished")
+    enqueued: list[list[str]] = []
+    monkeypatch.setattr(
+        module.task_runtime.build_results_archive,
+        "apply_async",
+        lambda args: enqueued.append(args),
+    )
+
+    response = module.app.test_client().post(f"/compute/api/results/{task_id}/archive", headers=headers)
+
+    _assert_demo_refusal(response, "it does not build result archives.")
+    assert enqueued == []
+
+
+def test_demo_delete_is_refused_and_keeps_the_row(monkeypatch, tmp_path):
+    module = _demo_app(monkeypatch, tmp_path)
+    headers = _test_client_auth(module)
+    task_id = _insert_pending_task(module, tmp_path / "delete-result")
+    before = module.task_store.get_task(task_id)
+    client = module.app.test_client()
+
+    single = client.delete(f"/compute/api/delete/{task_id}", headers=headers)
+    batch = client.post("/compute/api/delete", headers=headers, json={"md5sums": [task_id]})
+
+    for response in (single, batch):
+        _assert_demo_refusal(response, "it does not delete Tasks.")
+    assert module.task_store.get_task(task_id) == before
+
+
+def test_production_execution_surfaces_still_reach_their_boundaries(monkeypatch, tmp_path):
+    """The demo gate narrows nothing in production."""
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env=IDENTITY)
+    client = module.app.test_client()
+    headers = _test_client_auth(module)
+    admin_headers = _admin_client_auth(module)
+
+    class RecordingReadiness:
+        def __init__(self):
+            self.calls: list[dict] = []
+
+        def report(self, **kwargs):
+            self.calls.append(kwargs)
+            return {"components": []}
+
+    readiness = RecordingReadiness()
+    module.app.config["infrastructure_readiness"] = readiness
+    refresh = client.post("/compute/api/auth/admin/infrastructure/refresh", headers=admin_headers)
+    assert refresh.status_code == 200
+    assert readiness.calls == [{"force": True, "admin": True}]
+
+    enqueued: list[bool] = []
+
+    class _Result:
+        def get(self, timeout):
+            return {"settled": 0}
+
+    monkeypatch.setattr(
+        module.task_runtime.reconcile_slurm_allocations,
+        "apply_async",
+        lambda: enqueued.append(True) or _Result(),
+    )
+    reconciled = client.post("/compute/api/auth/admin/gpu-credit/reconciliation", headers=admin_headers)
+    assert reconciled.status_code == 200
+    assert enqueued == [True]
+
+    cancel_id = _insert_pending_task(module, tmp_path / "cancel-result")
+    stopped: list[dict] = []
+    route_globals = unwrap(module.app.view_functions["cancel_task"]).__globals__
+    monkeypatch.setitem(
+        route_globals,
+        "cancel_compute_resources",
+        SimpleNamespace(delay=lambda **fields: stopped.append(fields)),
+    )
+    cancelled = client.post(f"/compute/api/cancel/{cancel_id}", headers=headers)
+    assert cancelled.status_code == 200
+    assert stopped
+    assert module.task_store.get_task(cancel_id)["status"] == "cancelled"
+
+    delete_id = _insert_pending_task(module, tmp_path / "delete-result")
+    deleted = client.delete(f"/compute/api/delete/{delete_id}", headers=headers)
+    assert deleted.status_code == 200
+    assert module.task_store.get_task(delete_id)["status"].startswith("deleted")

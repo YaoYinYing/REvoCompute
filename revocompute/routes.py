@@ -278,6 +278,23 @@ def health():
     return "", 200
 
 
+def _demo_read_only(refusal: str, *, valid: bool | None = None) -> tuple[Any, int]:
+    """Refuse an execution-capable action in a preview-and-replay deployment.
+
+    ``refusal`` completes the shared sentence for the specific action; the
+    stable ``code`` is what every client matches, so a demo refuses each
+    execution surface the same way. ``valid`` is set only where the documented
+    refusal envelope carries it.
+    """
+    body: dict[str, Any] = {
+        "error": f"This demo deployment is preview and replay only; {refusal}",
+        "code": "demo_read_only",
+    }
+    if valid is not None:
+        body["valid"] = valid
+    return jsonify(body), 403
+
+
 @app.route("/compute/api/environment", methods=["GET"])
 def environment_capability():
     """The deployment profile the browser must state honestly.
@@ -492,6 +509,8 @@ def refresh_infrastructure_readiness():
         return _blocked
     if _blocked := require_bearer_auth():
         return _blocked
+    if CONFIG.demo_mode:
+        return _demo_read_only("it does not run infrastructure readiness probes.")
     service = current_app.config["infrastructure_readiness"]
     return jsonify(service.report(force=True, admin=True)), 200
 
@@ -828,6 +847,12 @@ def submit_tool_call(name):
         return blocked
     if blocked := _reject_guest():
         return blocked
+    # A demo deployment inspects canonical Tool contracts and replays recorded
+    # results; it never executes. Refusing at this boundary means a crafted
+    # client cannot create a workspace, reservation, ToolCall row, or queue
+    # entry even when an enabled family ships an installed image.
+    if CONFIG.demo_mode:
+        return _demo_read_only("it does not execute Tools.")
     if os.path.exists(os.path.join(CONFIG.server_dir, ".maintenance")):
         return jsonify({"error": "Server is in maintenance; submissions are paused"}), 503
     try:
@@ -2093,16 +2118,7 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
     # ordinary API directly cannot create a row, reservation, scheduler request,
     # or charge, whether or not the manifest is present in the registry.
     if CONFIG.demo_mode:
-        return (
-            jsonify(
-                {
-                    "error": "This demo deployment is preview and replay only; it does not execute Tasks.",
-                    "code": "demo_read_only",
-                    "valid": False,
-                }
-            ),
-            403,
-        )
+        return _demo_read_only("it does not execute Tasks.", valid=False)
 
     # Deployment maintenance sentinel (restart.sh --drain): SERVER_DIR is
     # bind-mounted into the web container, so the host-side file is visible.
@@ -3301,6 +3317,8 @@ def get_result_table(md5sum: str, relative_path: str):
 def request_results_archive(md5sum: str):
     if _blocked := require_bearer_auth():
         return _blocked
+    if CONFIG.demo_mode:
+        return _demo_read_only("it does not build result archives.")
     md5sum = _normalize_task_id(md5sum)
     if md5sum is None:
         return jsonify({"error": "Invalid task id"}), 400
@@ -3429,6 +3447,8 @@ def _deliver_published_archive(task: dict[str, Any], archive: str) -> Response:
 def cancel_task(md5sum):
     if _blocked := require_bearer_auth():
         return _blocked
+    if CONFIG.demo_mode:
+        return _demo_read_only("it does not cancel Tasks.")
     md5sum = _normalize_task_id(md5sum)
     if md5sum is None:
         return jsonify({"status": "bad_request", "message": "Invalid task id"}), 400
@@ -3877,6 +3897,8 @@ def delete_task(md5sum):
         return _blocked
     if _blocked := _reject_guest():
         return _blocked
+    if CONFIG.demo_mode:
+        return _demo_read_only("it does not delete Tasks.")
     md5sum = _normalize_task_id(md5sum)
     if md5sum is None:
         return jsonify({"status": "bad_request", "message": "Invalid task id"}), 400
@@ -3900,6 +3922,8 @@ def delete_tasks_batch():  # skipcq: PY-R1000 -- per-task authorization and outc
         return _blocked
     if _blocked := _reject_guest():
         return _blocked
+    if CONFIG.demo_mode:
+        return _demo_read_only("it does not delete Tasks.")
     payload = request.get_json(silent=True) or {}
     md5sums = payload.get("md5sums")
     if not isinstance(md5sums, list):
@@ -5852,6 +5876,8 @@ def admin_gpu_credit_reconciliation():
     if request.method == "POST":
         if _blocked := require_bearer_auth():
             return _blocked
+        if CONFIG.demo_mode:
+            return _demo_read_only("it does not run resource reconciliation.")
         try:
             result = reconcile_slurm_allocations.apply_async().get(timeout=20)
         except Exception:
