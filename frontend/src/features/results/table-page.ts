@@ -26,14 +26,6 @@ const PAGE_ENVELOPE_BYTES = 512;
 /** A local file is decoded in bounded slices, never as one whole string. */
 const CHUNK_BYTES = 256 * 1024;
 
-const LOCAL_MISSING = 'The local result folder does not contain this table.';
-const LOCAL_BOUNDS = 'The local table page is outside the allowed bounds.';
-const LOCAL_MALFORMED = 'The local table is malformed.';
-const LOCAL_ENCODING = 'The local table is not valid UTF-8.';
-const LOCAL_TOO_WIDE = 'A local table row has more columns than the preview allows.';
-const LOCAL_CELL_TOO_LARGE = 'A local table cell exceeds the 16 KiB preview limit.';
-const LOCAL_PAGE_TOO_LARGE = 'The local table page exceeds the 8 MiB preview limit.';
-
 export interface TablePage {
   columns: string[];
   rows: string[][];
@@ -168,11 +160,11 @@ export async function readLocalTablePage(
 ): Promise<TablePageResponse> {
   const { offset, limit } = query;
   if (!Number.isInteger(offset) || offset < 0 || offset > MAX_OFFSET || !Number.isInteger(limit) || limit < 1 || limit > PAGE_LIMIT) {
-    throw new Error(LOCAL_BOUNDS);
+    throw new Error(t('results.local.table.bounds'));
   }
-  if (!source) throw new Error(LOCAL_MISSING);
+  if (!source) throw new Error(t('results.local.table.missing'));
   const file = files.file(source.path);
-  if (!file) throw new Error(LOCAL_MISSING);
+  if (!file) throw new Error(t('results.local.table.missing'));
   const delimiter = source.path.toLowerCase().endsWith('.tsv') ? '\t' : ',';
   const maxColumns = query.matrix ? MATRIX_MAX_COLUMNS : MAX_COLUMNS;
   let columns: string[] | null = null;
@@ -183,14 +175,14 @@ export async function readLocalTablePage(
   for await (const row of readRecords(file, delimiter, maxColumns, signal)) {
     if (columns === null) {
       pageBytes = PAGE_ENVELOPE_BYTES + rowCost(row);
-      if (pageBytes > MAX_PAGE_BYTES) throw new Error(LOCAL_PAGE_TOO_LARGE);
+      if (pageBytes > MAX_PAGE_BYTES) throw new Error(t('results.local.table.pageTooLarge'));
       columns = row;
       continue;
     }
     if (skipped < offset) { skipped += 1; continue; }
     if (rows.length === limit) { hasMore = true; break; }
     const cost = rowCost(row);
-    if (pageBytes + cost > MAX_PAGE_BYTES) throw new Error(LOCAL_PAGE_TOO_LARGE);
+    if (pageBytes + cost > MAX_PAGE_BYTES) throw new Error(t('results.local.table.pageTooLarge'));
     pageBytes += cost;
     rows.push(row);
   }
@@ -250,17 +242,17 @@ async function* readRecords(file: Blob, delimiter: string, maxColumns: number, s
 
   const append = (text: string): void => {
     for (const char of text) fieldBytes += utf8Length(char);
-    if (fieldBytes > MAX_CELL_BYTES) throw new Error(LOCAL_CELL_TOO_LARGE);
+    if (fieldBytes > MAX_CELL_BYTES) throw new Error(t('results.local.table.cellTooLarge'));
     field += text;
   };
   const endField = (): void => {
-    if (row.length >= maxColumns) throw new Error(LOCAL_TOO_WIDE);
+    if (row.length >= maxColumns) throw new Error(t('results.local.table.tooWide'));
     row.push(field); field = ''; fieldBytes = 0; state = 'start';
   };
   const endRecord = (): string[] => {
     // A blank line is an empty record, as the Server's `csv` reader reports it.
     const record = state === 'closed' || row.length || field !== '' ? [...row, field] : [];
-    if (record.length > maxColumns) throw new Error(LOCAL_TOO_WIDE);
+    if (record.length > maxColumns) throw new Error(t('results.local.table.tooWide'));
     row = []; field = ''; fieldBytes = 0; state = 'start';
     return record;
   };
@@ -288,7 +280,7 @@ async function* readRecords(file: Blob, delimiter: string, maxColumns: number, s
   }
 
   const decode = (buffer: ArrayBuffer, stream: boolean): string => {
-    try { return decoder.decode(buffer, { stream }); } catch { throw new Error(LOCAL_ENCODING); }
+    try { return decoder.decode(buffer, { stream }); } catch { throw new Error(t('results.local.table.encoding')); }
   };
   for (let start = 0; start < file.size; start += CHUNK_BYTES) {
     if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
@@ -298,6 +290,6 @@ async function* readRecords(file: Blob, delimiter: string, maxColumns: number, s
   yield* feed(decode(new ArrayBuffer(0), false));
   // `feed` owns every state transition; the casts keep flow analysis from treating the
   // state as the value this scope last saw.
-  if ((state as FieldState) === 'quoted') throw new Error(LOCAL_MALFORMED);
+  if ((state as FieldState) === 'quoted') throw new Error(t('results.local.table.malformed'));
   if (row.length || field !== '' || (state as FieldState) === 'closed') yield endRecord();
 }

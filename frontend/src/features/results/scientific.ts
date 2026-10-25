@@ -341,11 +341,24 @@ export class AlignmentCoverage {
 }
 export class EntitySummaryTable {
   constructor(private readonly host: HTMLElement, private options: { columns?: string[]; rows?: unknown[][]; store?: ResultSelectionStore; selection?: (row: unknown[], index: number) => Partial<SelectionState>; onSelect?: (row: unknown[], index: number) => void }) { this.render(); }
-  private render(): void { const table = document.createElement('table'); table.className = 'artifact-table-preview entity-result-table'; const heading = document.createElement('tr');
-    (this.options.columns || []).forEach((column) => { const th = document.createElement('th'); th.scope = 'col'; th.textContent = column; heading.append(th); }); table.append(heading);
-    (this.options.rows || []).forEach((row, index) => { const tr = document.createElement('tr'); tr.tabIndex = 0; tr.setAttribute('aria-selected', 'false'); row.forEach((value) => { const td = document.createElement('td'); td.textContent = String(value ?? ''); tr.append(td); });
+  private render(): void {
+    // Explicit groups: the header row is a column-header row (`thead`), and every
+    // selectable data row is body content (`tbody`), so the programmatic table
+    // structure matches what renders instead of relying on the browser's implicit
+    // body around directly-appended rows.
+    const table = document.createElement('table'); table.className = 'artifact-table-preview entity-result-table';
+    const head = document.createElement('thead'); const heading = document.createElement('tr');
+    (this.options.columns || []).forEach((column) => { const th = document.createElement('th'); th.scope = 'col'; th.textContent = column; heading.append(th); });
+    head.append(heading);
+    const body = document.createElement('tbody');
+    (this.options.rows || []).forEach((row, index) => {
+      const tr = document.createElement('tr'); tr.tabIndex = 0; tr.setAttribute('aria-selected', 'false');
+      row.forEach((value) => { const td = document.createElement('td'); td.textContent = String(value ?? ''); tr.append(td); });
       const select = (): void => { table.querySelectorAll('[aria-selected="true"]').forEach((node) => node.setAttribute('aria-selected', 'false')); tr.setAttribute('aria-selected', 'true'); this.options.store?.set(this.options.selection?.(row, index) || { entityA: String(row[0] ?? '') }, table); this.options.onSelect?.(row, index); };
-      tr.addEventListener('click', select); tr.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); select(); } }); table.append(tr); }); this.host.replaceChildren(table); }
+      tr.addEventListener('click', select); tr.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); select(); } }); body.append(tr);
+    });
+    table.append(head, body); this.host.replaceChildren(table);
+  }
   update(options: Partial<EntitySummaryTable['options']>): void { this.options = { ...this.options, ...options }; this.render(); }
   destroy(): void { this.host.replaceChildren(); }
 }

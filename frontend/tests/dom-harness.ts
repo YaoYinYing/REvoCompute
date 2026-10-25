@@ -133,7 +133,11 @@ export class HarnessNode {
   remove(): void {
     const siblings = this.parent?.nodes;
     if (!siblings) return;
-    siblings.splice(siblings.indexOf(this), 1);
+    // A node already detached from this parent is not in its child list; `prepend`
+    // empties `nodes` before re-appending, so an absent index must be a no-op rather
+    // than splicing the sibling at -1.
+    const index = siblings.indexOf(this);
+    if (index >= 0) siblings.splice(index, 1);
     this.parent = null;
   }
   removeChild(node: HarnessNode): void { node.remove(); }

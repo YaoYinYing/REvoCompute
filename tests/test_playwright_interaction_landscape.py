@@ -474,15 +474,18 @@ def test_runner_detail_anchor_lands_below_the_sticky_header(page: Page) -> None:
 
     The section index on the page *is* the reader-facing anchor surface, so the
     case clicks each of its links - a same-document fragment navigation, exactly
-    what a reader does - and then hit-tests the heading it asked for. Three cells:
-    a wide viewport, a 200% text-only resize, and dark mode with the zh-CN locale;
-    the third asserts the preference it carried really reached the document, so it
+    what a reader does - and then hit-tests the heading it asked for. Five cells:
+    the 768px and 1024px widths around the shell's rail breakpoint, a wide
+    viewport, a 200% text-only resize, and dark mode with the zh-CN locale; the
+    last asserts the preference it carried really reached the document, so it
     cannot pass as a silent duplicate of the first.
 
     The section carries a scroll margin in the product, so this asserts the
     contract the markup states rather than a measured pixel.
     """
     cells = (
+        ("tablet/16px", {"width": 768, "height": 900}, INITIAL_ROOT_PX, None, None),
+        ("rail-breakpoint/16px", {"width": 1024, "height": 900}, INITIAL_ROOT_PX, None, None),
         ("wide/16px", {"width": 1280, "height": 900}, INITIAL_ROOT_PX, None, None),
         ("wide/32px", {"width": 1280, "height": 900}, TEXT_ZOOM_ROOT_PX, None, None),
         ("wide/16px/dark/zh-CN", {"width": 1280, "height": 900}, INITIAL_ROOT_PX, "dark", "zh-CN"),
