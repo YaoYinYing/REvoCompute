@@ -3013,12 +3013,21 @@ export interface components {
             passed_smoke_cases?: string[];
             doctor_ok: boolean;
         };
+        /** @description The active artifact's identity as established from canonical evidence; presence alone is never an identity. */
+        RunnerActiveImage: {
+            /** @enum {string} */
+            state: "ACTIVE" | "MISSING" | "UNKNOWN";
+            sha256: string | null;
+            /** @description Why the identity is missing or unknown; null when it is established. */
+            reason_code: string | null;
+        };
         RunnerReadiness: {
             status: components["schemas"]["RunnerReadinessStatus"];
             /** @description Stable machine-readable reason; clients localize the copy. */
             reason_code: string;
             message: string;
             next_action: string;
+            active_image: components["schemas"]["RunnerActiveImage"];
             evidence: components["schemas"]["RunnerEvidence"];
         };
         /** @description Transient execution availability, reported separately from readiness. */

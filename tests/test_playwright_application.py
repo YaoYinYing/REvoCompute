@@ -1212,6 +1212,7 @@ def _fleet_payload() -> dict:
                     "reason_code": "RUNTIME_BUNDLE_CHANGED",
                     "message": "Runtime bundle changed",
                     "next_action": "live-test",
+                    "active_image": {"state": "ACTIVE", "sha256": "sha256:sif", "reason_code": None},
                     "evidence": {
                         "sif_path": "/images/stale_runner.sif", "sif_exists": True, "sif_sha256": "sha256:sif",
                         "build_provenance_current": True, "build_provenance_digest": "sha256:build",
@@ -1228,6 +1229,7 @@ def _fleet_payload() -> dict:
                 "runner_family": "healthy_runner",
                 "readiness": {
                     "status": "READY", "reason_code": "READY", "message": "ok", "next_action": "none",
+                    "active_image": {"state": "ACTIVE", "sha256": "sha256:sif", "reason_code": None},
                     "evidence": {
                         "sif_path": "/images/healthy_runner.sif", "sif_exists": True, "sif_sha256": "sha256:sif",
                         "build_provenance_current": True, "build_provenance_digest": "sha256:build",

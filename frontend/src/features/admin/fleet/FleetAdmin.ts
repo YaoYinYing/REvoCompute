@@ -186,6 +186,34 @@ export function weaknessLabel(status: string): string {
   return WEAKNESS_LABEL[weaknessOf(status)];
 }
 
+function shortIdentity(sha256: string): string {
+  const digest = sha256.startsWith('sha256:') ? sha256.slice('sha256:'.length) : sha256;
+  return digest.length > 12 ? `${digest.slice(0, 12)}…` : digest;
+}
+
+/**
+ * The active artifact's server-established identity, or the reason it is unknown.
+ *
+ * The server projects ``active_image`` from the same evidence the readiness
+ * verdict was derived from. This reads that projection and never falls back to
+ * "the file exists": an artifact whose identity was not established is
+ * ``Unknown``, because presence is not identity.
+ */
+export function activeImageLabel(readiness: RunnerReadiness): string {
+  const image = readiness.active_image;
+  if (!image || image.state === 'UNKNOWN') return 'Unknown';
+  if (image.state === 'MISSING') return 'Missing';
+  return image.sha256 ? `Active · ${shortIdentity(image.sha256)}` : 'Unknown';
+}
+
+/** The full active identity for the evidence dialog; never a presence claim. */
+export function activeImageDetail(readiness: RunnerReadiness): string {
+  const image = readiness.active_image;
+  if (image?.state === 'MISSING') return 'Missing';
+  if (image?.state !== 'ACTIVE' || !image.sha256) return 'Unknown — the server has not established an identity';
+  return `Active · ${image.sha256}`;
+}
+
 /** An Operator Job's lifecycle word; job state never shares a readiness badge. */
 export function jobStatusLabel(status: string): string {
   return JOB_STATUS_LABEL[status] || status;
@@ -436,7 +464,7 @@ export class FleetAdmin {
     const known = (value: boolean | undefined, yes: string, no: string) => value === true ? yes : value === false ? no : 'Unknown';
     const build = cell(known(evidence.sif_exists, 'Built', 'Not built'), 'Build');
     const test = cell(evidence.receipt_valid === true ? 'Validated' : evidence.receipt_exists === true ? 'Receipt stale' : known(evidence.receipt_exists, 'Recorded', 'No receipt'), 'Live test');
-    const active = cell(known(evidence.sif_exists, 'Image present', 'No active image'), 'Active image');
+    const active = cell(activeImageLabel(row.readiness), 'Active image');
     const freshness = cell(statusLabel(row.readiness.status), 'Freshness');
     if (row.in_flight) name.append(text('small', `Management operation: ${workflowLabel(row.in_flight.action.replace('runner.', ''))} · ${row.in_flight.status}`));
     tr.append(name, build, test, active, freshness);
@@ -472,7 +500,7 @@ export class FleetAdmin {
     facts.append(
       field('Readiness verdict', statusLabel(detail.readiness.status)),
       field('Recommended next step', detail.readiness.next_action === 'none' ? 'None' : workflowLabel(detail.readiness.next_action)),
-      field('Active image', evidence.sif_exists ? 'Present' : 'Missing'),
+      field('Active image', activeImageDetail(detail.readiness)),
       field('Build provenance', evidence.build_provenance_current ? 'Current' : 'Stale'),
       field('Runtime bundle', evidence.runtime_bundle_sha256 ? 'Pinned' : 'None'),
       field('Live receipt', evidence.receipt_valid ? 'Valid' : evidence.receipt_exists ? 'Stale' : 'Missing'),
