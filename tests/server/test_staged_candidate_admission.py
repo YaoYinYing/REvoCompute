@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 from conftest import _load_pssm_module, _test_client_auth
-from revocompute.artifact_evidence import write_artifact_evidence
+from revocompute.artifact_evidence import write_artifact_evidence, write_staged_identity
 from revocompute.live_tests import LIVE_TEST_RECEIPT_VERSION, atomic_write_json
 from revocompute.runner_admin_view import fleet_view
 from revocompute.runner_host import ServerHostPaths
@@ -73,6 +73,10 @@ def _record_artifact(state, family, artifact: Path, *, receipt: str = "valid") -
     provenance = _build_provenance(state, family)
     digest = sha256_file(artifact)
     write_artifact_evidence(family, digest, "build", provenance)
+    if artifact.name.endswith(".next"):
+        # The build boundary records the staged path's own identity; readiness
+        # reads that sidecar instead of guessing among content-addressed records.
+        write_staged_identity(family, digest, str(provenance["build_provenance_digest"]))
     if receipt is None:
         return
     identity = load_validation_identity(family, state=state)
@@ -508,3 +512,170 @@ def test_first_build_unvalidated_candidate_is_told_to_validate(monkeypatch, tmp_
         promote_sifs(state, [family])
     assert not active.exists()
     assert candidate.is_file()
+
+
+def test_validated_active_and_unvalidated_candidate_never_promote(monkeypatch, tmp_path):
+    """A's passing receipt must not authorize the staged candidate B."""
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={
+            "RUNNER_UID": "1234",
+            "RUNNER_GID": "5678",
+            "RUNNER_USERNAME": "revodesign",
+            "RUNNER_GROUP": "revodesign",
+            "REVODESIGN_APPTAINER_VERSION": "apptainer version 1.4.0",
+        },
+    )
+    module.app.config["manage_db"].resource_set("slurm_enabled", "true")
+    module.app.config["infrastructure_readiness"] = _AvailableInfrastructure()
+    queued: list[bool] = []
+    monkeypatch.setattr(module.run_compute_task, "apply_async", lambda *_args, **_kwargs: queued.append(True))
+
+    state, family = _deployment(module)
+    active = Path(family.slurm_image)
+    active.parent.mkdir(parents=True, exist_ok=True)
+    active.write_bytes(b"validated-active-A")
+    _record_artifact(state, family, active)
+    assert resolve_runner_readiness(state, family).ready is True
+
+    # B is a different artifact built from the same inputs, never live-tested.
+    candidate = Path(f"{family.slurm_image}.next")
+    candidate.write_bytes(b"unvalidated-candidate-B")
+    provenance = _build_provenance(state, family)
+    write_artifact_evidence(family, sha256_file(candidate), "build", provenance)
+    write_staged_identity(family, sha256_file(candidate), str(provenance["build_provenance_digest"]))
+
+    # A's receipt keeps validating A; it says nothing about B's bytes.
+    assert candidate_receipt_valid(state, family, sif_sha256=sha256_file(candidate)) is False
+
+    staged = resolve_runner_readiness(state, family)
+    assert staged.ready is False
+    assert staged.status.value == "NOT_VALIDATED"
+    assert staged.next_action == "live-test"
+    assert "staged Runner candidate" in staged.message
+    assert "promote" not in staged.message.lower()
+
+    with pytest.raises(RegistryError, match="no valid live-test receipt"):
+        promote_sifs(state, [family])
+    assert active.read_bytes() == b"validated-active-A"
+    assert candidate.read_bytes() == b"unvalidated-candidate-B"
+
+    _assert_post_is_refused(
+        module, staged, status="NOT_VALIDATED", reason="RECEIPT_MISSING", next_action="live-test", queued=queued
+    )
+    assert active.read_bytes() == b"validated-active-A"
+    assert candidate.read_bytes() == b"unvalidated-candidate-B"
+
+
+def test_both_artifacts_receipted_promotes_the_staged_candidate(monkeypatch, tmp_path):
+    """Same-provenance siblings both have receipts; B's own receipt is found."""
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={
+            "RUNNER_UID": "1234",
+            "RUNNER_GID": "5678",
+            "RUNNER_USERNAME": "revodesign",
+            "RUNNER_GROUP": "revodesign",
+            "REVODESIGN_APPTAINER_VERSION": "apptainer version 1.4.0",
+        },
+    )
+    module.app.config["manage_db"].resource_set("slurm_enabled", "true")
+    module.app.config["infrastructure_readiness"] = _AvailableInfrastructure()
+
+    state, family = _deployment(module)
+    active = Path(family.slurm_image)
+    active.parent.mkdir(parents=True, exist_ok=True)
+    active.write_bytes(b"validated-active-A")
+    _record_artifact(state, family, active)
+    candidate = Path(f"{family.slurm_image}.next")
+    candidate.write_bytes(b"validated-candidate-B")
+    _record_artifact(state, family, candidate)
+
+    # B's receipt wins over A's because the lookup is bound to B's bytes.
+    assert candidate_receipt_valid(state, family, sif_sha256=sha256_file(candidate)) is True
+    promote_sifs(state, [family])
+
+    assert active.read_bytes() == b"validated-candidate-B"
+    assert not candidate.exists()
+    assert not Path(f"{family.slurm_image}.next.build.json").exists()
+    assert resolve_runner_readiness(state, family).ready is True
+
+
+def test_a_candidate_changed_after_validation_is_not_promoted(monkeypatch, tmp_path):
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={
+            "RUNNER_UID": "1234",
+            "RUNNER_GID": "5678",
+            "RUNNER_USERNAME": "revodesign",
+            "RUNNER_GROUP": "revodesign",
+            "REVODESIGN_APPTAINER_VERSION": "apptainer version 1.4.0",
+        },
+    )
+    module.app.config["manage_db"].resource_set("slurm_enabled", "true")
+    module.app.config["infrastructure_readiness"] = _AvailableInfrastructure()
+
+    state, family = _deployment(module)
+    active = Path(family.slurm_image)
+    active.parent.mkdir(parents=True, exist_ok=True)
+    active.write_bytes(b"validated-active-A")
+    _record_artifact(state, family, active)
+    candidate = Path(f"{family.slurm_image}.next")
+    candidate.write_bytes(b"validated-candidate-B")
+    _record_artifact(state, family, candidate)
+
+    # The file no longer hashes to the digest its receipt and staged record name.
+    candidate.write_bytes(b"candidate-B-replaced-after-validation")
+
+    # Activation hashes the candidate and refuses: the receipt names B's
+    # original bytes, not the replacement.
+    assert candidate_receipt_valid(state, family, sif_sha256=sha256_file(candidate)) is False
+    with pytest.raises(RegistryError, match="no valid live-test receipt"):
+        promote_sifs(state, [family])
+    assert active.read_bytes() == b"validated-active-A"
+    assert candidate.read_bytes() == b"candidate-B-replaced-after-validation"
+
+
+def test_an_unrecorded_candidate_identity_names_a_recovery_that_clears_it(monkeypatch, tmp_path):
+    """A candidate validated before the staging record existed is repairable."""
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={
+            "RUNNER_UID": "1234",
+            "RUNNER_GID": "5678",
+            "RUNNER_USERNAME": "revodesign",
+            "RUNNER_GROUP": "revodesign",
+            "REVODESIGN_APPTAINER_VERSION": "apptainer version 1.4.0",
+        },
+    )
+    module.app.config["manage_db"].resource_set("slurm_enabled", "true")
+    module.app.config["infrastructure_readiness"] = _AvailableInfrastructure()
+
+    state, family = _deployment(module)
+    active = Path(family.slurm_image)
+    active.parent.mkdir(parents=True, exist_ok=True)
+    active.write_bytes(b"validated-active-A")
+    _record_artifact(state, family, active)
+    candidate = Path(f"{family.slurm_image}.next")
+    candidate.write_bytes(b"validated-candidate-B")
+    _record_artifact(state, family, candidate)
+    Path(f"{family.slurm_image}.next.build.json").unlink()
+
+    unrecorded = resolve_runner_readiness(state, family)
+    assert unrecorded.ready is False
+    assert unrecorded.status.value == "NOT_VALIDATED"
+    assert unrecorded.reason_code == "RECEIPT_MISSING"
+    assert unrecorded.next_action == "live-test"
+    assert "live test" in unrecorded.message
+    assert "promote" not in unrecorded.message.lower()
+    # The live test records the identity of the bytes it validates, which is the
+    # recovery the verdict named.
+    _record_artifact(state, family, candidate)
+    recovered = resolve_runner_readiness(state, family)
+    assert recovered.reason_code == "CANDIDATE_AWAITING_PROMOTION"
+    promote_sifs(state, [family])
+    assert active.read_bytes() == b"validated-candidate-B"

@@ -22,8 +22,8 @@ import yaml
 
 from revocompute.artifact_evidence import (
     read_artifact_evidence,
-    read_receipt_for_identity,
     write_artifact_evidence,
+    write_staged_identity,
 )
 from revocompute.compose import detect_compose_cmd, run_cmd
 from revocompute import resource_ledger as rloan
@@ -448,6 +448,13 @@ class RunnerLiveTestWorker:
             atomic_write_json(destination, report.as_dict())
             if report.passed:
                 write_artifact_evidence(self.family, report.sif_sha256, "receipt", report.as_dict())
+                if Path(self.candidate) == Path(self.artifact):
+                    # Bind the staged path to the bytes this run validated, so a
+                    # re-run also repairs a candidate whose identity predates the
+                    # staging record.
+                    write_staged_identity(
+                        self.family, report.sif_sha256, str(report.build_provenance_digest)
+                    )
             print(self._summary(report, destination))
 
     @staticmethod
@@ -1069,7 +1076,14 @@ def _family_owns_task(family: RuntimeFamily, task: str) -> bool:
 def receipt_valid_for_artifact(
     state, family: RuntimeFamily, artifact_path: str | Path, *, sif_sha256: str | None = None
 ) -> bool:
-    """Return whether required smoke tests passed for the exact artifact identity."""
+    """Return whether required smoke tests passed for the exact artifact identity.
+
+    The receipt is looked up by the artifact's own digest and identity, never by
+    identity alone: two artifacts built from the same inputs share an identity,
+    so an identity-only lookup can return another artifact's receipt.  When
+    ``sif_sha256`` is supplied, the artifact must still hash to it; a file that
+    changed after the caller measured it is not validated.
+    """
     worker = RunnerLiveTestWorker(state, family, artifact_path=artifact_path)
     artifact = worker.artifact
     if not artifact.is_file():
@@ -1089,13 +1103,16 @@ def receipt_valid_for_artifact(
             "execution_gid": int(state.get("RUNNER_GID")) if state.get("RUNNER_GID") else None,
             "scheduler_user": state.get("RUNNER_USERNAME") or None,
         }
-        receipt = read_receipt_for_identity(family, expected_identity)
-        recorded_sha256 = receipt.get("sif_sha256") if receipt else None
-        if receipt is None or (sif_sha256 is not None and sif_sha256 != recorded_sha256):
+        artifact_sha256, receipt = read_artifact_evidence(
+            family, artifact, "receipt", receipt_identity=expected_identity
+        )
+        if sif_sha256 is not None and artifact_sha256 != sif_sha256:
+            return False
+        if receipt is None:
             return False
         return receipt_matches(
             receipt,
-            sif_sha256=recorded_sha256,
+            sif_sha256=artifact_sha256,
             build_provenance_digest=expected_identity["build_provenance_digest"],
             test_definition_digest=expected_identity["test_definition_digest"],
             configuration_digest=expected_identity["configuration_digest"],

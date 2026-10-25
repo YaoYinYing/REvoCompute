@@ -89,6 +89,35 @@ def read_build_evidence_for_provenance(family, build_provenance_digest: str) -> 
     return None
 
 
+def receipt_digests(family, sif_sha256: str) -> tuple[Path, ...]:
+    """Every receipt path recorded for exactly this artifact digest."""
+    match = _SHA256_RE.fullmatch(sif_sha256)
+    if match is None:
+        return ()
+    root = Path(family.slurm_image).parent / "evidence" / family.name
+    try:
+        return tuple(sorted(root.glob(f"{match.group(1)}.*.receipt.json")))
+    except OSError:
+        return ()
+
+
+def read_receipt_for_digest(
+    family, sif_sha256: str, receipt_identity: Mapping[str, Any]
+) -> Mapping[str, Any] | None:
+    """Read the receipt written for exactly this digest and identity, without hashing."""
+    try:
+        value = json.loads(
+            evidence_path(family, sif_sha256, "receipt", receipt_identity=receipt_identity).read_text(
+                encoding="utf-8"
+            )
+        )
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return None
+    if not isinstance(value, Mapping) or value.get("runner_family") != family.name:
+        return None
+    return value
+
+
 def read_receipt_for_identity(family, receipt_identity: Mapping[str, Any]) -> Mapping[str, Any] | None:
     """Read a receipt by build and validation identity without hashing the SIF."""
     root = Path(family.slurm_image).parent / "evidence" / family.name
@@ -118,6 +147,49 @@ def receipt_exists_for_provenance(family, build_provenance_digest: str) -> bool:
         ):
             return True
     return False
+
+
+def staged_identity_path(family) -> Path:
+    """The path-bound identity of the staged candidate beside its artifact."""
+    return Path(f"{family.slurm_image}.next.build.json")
+
+
+def write_staged_identity(family, sif_sha256: str, build_provenance_digest: str) -> None:
+    """Record the digest of the file staged at ``<sif>.next``.
+
+    Build evidence is content-addressed, so same-provenance siblings leave
+    several records and none of them says which artifact is staged.  This
+    sidecar is the one path-bound record; it is removed on promotion.
+    """
+    atomic_write_json(
+        staged_identity_path(family),
+        {
+            "runner_family": family.name,
+            "sif_sha256": sif_sha256,
+            "build_provenance_digest": build_provenance_digest,
+        },
+    )
+
+
+def read_staged_identity(family, build_provenance_digest: str) -> str | None:
+    """The digest staged for this build provenance, or ``None`` when unknown."""
+    try:
+        value = json.loads(staged_identity_path(family).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(value, Mapping) or value.get("runner_family") != family.name:
+        return None
+    candidate = value.get("sif_sha256")
+    if not isinstance(candidate, str) or value.get("build_provenance_digest") != build_provenance_digest:
+        return None
+    return candidate
+
+
+def remove_staged_identity(family) -> None:
+    try:
+        staged_identity_path(family).unlink()
+    except FileNotFoundError:
+        pass
 
 
 def write_artifact_evidence(family, sif_sha256: str, kind: str, value: Mapping[str, Any]) -> Path:

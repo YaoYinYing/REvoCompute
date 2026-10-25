@@ -16,7 +16,10 @@ from typing import Any, Mapping
 from revocompute.admission import RunnerReadinessStatus
 from revocompute.artifact_evidence import (
     read_build_evidence_for_provenance,
+    read_receipt_for_digest,
     read_receipt_for_identity,
+    read_staged_identity,
+    receipt_digests,
     receipt_exists_for_provenance,
 )
 from revocompute.doctor import diagnose
@@ -175,13 +178,15 @@ class _ReceiptEvidence:
 
 
 def _receipt_evidence(
-    state, family: RuntimeFamily, build_digest: str, sif_sha256: str | None
+    state, family: RuntimeFamily, build_digest: str, sif_sha256: str | None, *, artifact_bound: bool = False
 ) -> _ReceiptEvidence:
     """Read the live-test identity and receipt evidence under one build provenance.
 
     The lookup is the same one production evidence uses, so a verdict and the
     Fleet cannot describe the evidence differently.  It hashes nothing: the
-    evidence model is content-addressed and path-agnostic.
+    evidence model is content-addressed and path-agnostic.  ``artifact_bound``
+    reads the receipt written for exactly ``sif_sha256`` instead of the first
+    same-identity receipt, which can belong to a sibling artifact.
     """
     try:
         identity = load_validation_identity(family, state=state)
@@ -211,10 +216,14 @@ def _receipt_evidence(
         "execution_gid": expected_gid,
         "scheduler_user": expected_scheduler_user,
     }
-    receipt = read_receipt_for_identity(family, expected_identity)
-    if sif_sha256 is None and receipt:
-        sif_sha256 = _string_field(receipt, "sif_sha256")
-    receipt_exists = receipt_exists_for_provenance(family, build_digest)
+    if artifact_bound and sif_sha256 is not None:
+        receipt = read_receipt_for_digest(family, sif_sha256, expected_identity)
+        receipt_exists = bool(receipt_digests(family, sif_sha256))
+    else:
+        receipt = read_receipt_for_identity(family, expected_identity)
+        if sif_sha256 is None and receipt:
+            sif_sha256 = _string_field(receipt, "sif_sha256")
+        receipt_exists = receipt_exists_for_provenance(family, build_digest)
     passed = _passed_case_ids(receipt or {})
     valid = bool(receipt) and receipt_matches(
         receipt,
@@ -252,8 +261,6 @@ def _staged_candidate_readiness(
     state,
     family: RuntimeFamily,
     build_digest: str,
-    build_record: Mapping[str, Any] | None,
-    sif_sha256: str | None,
     active_exists: bool,
 ) -> RunnerReadiness:
     """The submission verdict for a staged candidate, with the candidate's evidence.
@@ -265,7 +272,24 @@ def _staged_candidate_readiness(
     step would accept the candidate; an unvalidated candidate is told to run the
     live test first.
     """
-    evidence = _receipt_evidence(state, family, build_digest, sif_sha256)
+    candidate_sha256 = read_staged_identity(family, build_digest)
+    if candidate_sha256 is None:
+        # Without the path-bound record, the only receivable digest would be
+        # borrowed from content-addressed evidence that may describe another
+        # artifact, so no promotion can be recommended.  The live test is the
+        # one action that both validates the bytes and records their identity.
+        return _result(
+            family,
+            RunnerReadinessStatus.NOT_VALIDATED,
+            "RECEIPT_MISSING",
+            "The staged Runner candidate's build identity is unrecorded; re-run the live test to bind and "
+            "validate it",
+            doctor_ok=True,
+            sif_exists=active_exists,
+            build_provenance_current=False,
+            build_provenance_digest=build_digest,
+        )
+    evidence = _receipt_evidence(state, family, build_digest, candidate_sha256, artifact_bound=True)
     if evidence.failure is not None:
         return _result(
             family,
@@ -283,11 +307,11 @@ def _staged_candidate_readiness(
         # the installed artifact's identity, so the active digest stays unknown
         # while the receipt identifies the candidate.
         "sif_sha256": None,
-        "build_provenance_current": build_record is not None,
+        "build_provenance_current": True,
     }
     # The evidence check is at least as strong as the one ``promote_sifs``
-    # applies: the build record's digest is matched against the receipt, so a
-    # promotion verdict is never one the host step would refuse.
+    # applies: the recorded candidate digest is matched against the receipt, so
+    # a promotion verdict is never one the host step would refuse.
     if not evidence.fields["receipt_valid"]:
         receipt = evidence.receipt
         if receipt is None and not evidence.fields["receipt_exists"]:
@@ -391,7 +415,7 @@ def resolve_runner_readiness(state, family: RuntimeFamily) -> RunnerReadiness:
     # promoted; the live-test action itself is unaffected because it validates
     # the candidate through the worker, not through this verdict.
     if staged.is_file():
-        return _staged_candidate_readiness(state, family, build_digest, build_record, sif_sha256, active_exists)
+        return _staged_candidate_readiness(state, family, build_digest, active_exists)
 
     try:
         build_current = not sif_stale(state, family, str(active))

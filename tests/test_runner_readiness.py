@@ -43,6 +43,7 @@ from revocompute.artifact_evidence import (  # noqa: E402
     evidence_path,
     read_artifact_evidence,
     write_artifact_evidence,
+    write_staged_identity,
 )
 from revocompute.runner_registry import RuntimeFamily  # noqa: E402
 from revocompute.runner_registry import RegistryError  # noqa: E402
@@ -228,6 +229,7 @@ def test_staged_candidate_lifecycle_preserves_active_and_unrelated_evidence(evid
     write_artifact_evidence(
         family, candidate_sha, "build", {"build_provenance_digest": "sha256:build-current"}
     )
+    write_staged_identity(family, candidate_sha, "sha256:build-current")
     _write_receipt(family, candidate)
 
     staged = resolve_runner_readiness(state, family)
@@ -361,6 +363,7 @@ def test_candidate_without_an_active_sif_awaits_promotion(evidence):
     active.unlink()
     candidate = Path(f"{family.slurm_image}.next")
     candidate.write_bytes(b"validated-candidate")
+    write_staged_identity(family, sha256_file(candidate), "sha256:build-current")
     _write_receipt(family, candidate)
 
     result = resolve_runner_readiness(state, family)
@@ -376,7 +379,9 @@ def test_first_build_candidate_without_a_receipt_is_told_to_validate(evidence):
     """A staged first build is not promotable until a receipt validates it."""
     state, family, active = evidence
     active.unlink()
-    Path(f"{family.slurm_image}.next").write_bytes(b"unvalidated-candidate")
+    candidate = Path(f"{family.slurm_image}.next")
+    candidate.write_bytes(b"unvalidated-candidate")
+    write_staged_identity(family, sha256_file(candidate), "sha256:build-current")
 
     result = resolve_runner_readiness(state, family)
 

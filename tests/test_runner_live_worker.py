@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+from revocompute.artifact_evidence import read_staged_identity
 from revocompute.runner_live_test import (
     RunnerLiveTestError,
     RunnerLiveTestWorker,
@@ -92,6 +93,9 @@ def test_live_worker_records_explicit_success_lifecycle(tmp_path, monkeypatch):
     assert report.transitions == [
         "PREPARING", "BUILDING", "VALIDATING", "SEEDING", "SUBMITTED", "RUNNING", "ACCEPTING", "PASSED"
     ]
+    # A passing run binds the staged path to the bytes it validated, which is
+    # also the repair for a candidate whose identity predates this record.
+    assert read_staged_identity(worker.family, "build") == digest
 
 
 def test_live_worker_reports_validation_failure_and_timeout_category(tmp_path, monkeypatch):
@@ -169,7 +173,7 @@ def test_live_worker_targets_explicit_active_artifact(tmp_path):
     )
 
 
-def test_active_and_candidate_receipts_resolve_build_identity(tmp_path, monkeypatch):
+def test_active_and_candidate_receipts_bind_to_artifact_bytes(tmp_path, monkeypatch):
     worker = _worker(tmp_path)
     active = Path(worker.family.slurm_image)
     candidate = worker.candidate
@@ -200,7 +204,40 @@ def test_active_and_candidate_receipts_resolve_build_identity(tmp_path, monkeypa
     assert candidate_receipt_valid(worker.state, worker.family)
     candidate.write_bytes(b"changed-after-validation")
     assert active_receipt_valid(worker.state, worker.family)
-    assert candidate_receipt_valid(worker.state, worker.family)
+    # The receipt covers the validated bytes, not the shared identity alone.
+    assert not candidate_receipt_valid(worker.state, worker.family)
+
+
+def test_candidate_receipt_is_not_borrowed_from_the_active_artifact(tmp_path, monkeypatch):
+    """Two artifacts with the same inputs share an identity but not a receipt."""
+    worker = _worker(tmp_path)
+    active = Path(worker.family.slurm_image)
+    candidate = worker.candidate
+    active.parent.mkdir(parents=True)
+    active.write_bytes(b"active-A")
+    candidate.write_bytes(b"candidate-B")
+    monkeypatch.setattr(RunnerLiveTestWorker, "_load_identity", lambda _self: _identity())
+    monkeypatch.setattr(
+        "revocompute.runner_live_test._build_provenance",
+        lambda *_args: {"build_provenance_digest": "build"},
+    )
+    write_artifact_evidence(
+        worker.family,
+        sha256_file(active),
+        "receipt",
+        {
+            "receipt_contract_version": 2,
+            "passed": True,
+            "build_provenance_digest": "build",
+            "test_definition_digest": "test",
+            "configuration_digest": "config",
+            "cases": [{"case_id": "case", "passed": True}],
+        },
+    )
+
+    assert active_receipt_valid(worker.state, worker.family)
+    assert not candidate_receipt_valid(worker.state, worker.family)
+    assert not candidate_receipt_valid(worker.state, worker.family, sif_sha256=sha256_file(candidate))
 
 
 def test_live_worker_uses_candidate_image_one_off_worker_and_contract_mount(tmp_path, monkeypatch):
