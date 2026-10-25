@@ -8,9 +8,11 @@ import json
 import grp
 import pwd
 import os
+import shlex
 import shutil
 import subprocess
 import sys
+from functools import lru_cache
 from hashlib import sha256
 from pathlib import Path
 
@@ -18,6 +20,36 @@ import pytest
 import yaml
 from conftest import REPO_DIR
 from revocompute_ctl.env import EnvState
+
+
+@lru_cache(maxsize=1)
+def _project_interpreter() -> str:
+    """The interpreter that owns this repository's dependencies.
+
+    These contracts launch ``run/restart.sh`` and a fake-Docker ``python -``. Both must
+    run under the project environment; an ambient Conda, pyenv, or system ``python3``
+    earlier on PATH lacks the controller's dependencies and fails before any docker
+    command is recorded. ``run/restart.sh`` already honours ``REVODESIGN_PYTHON``, so the
+    harness names this interpreter explicitly instead of depending on PATH order.
+    """
+    python = sys.executable
+    probe = subprocess.run(
+        [python, "-c", "import revocompute_ctl"],
+        cwd=REPO_DIR,
+        env={**os.environ, "PYTHONPATH": str(Path(REPO_DIR) / "run")},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if probe.returncode:
+        raise AssertionError(
+            "These contracts must run under the REvoCompute project environment, such as:\n"
+            "  ./.venv/bin/python -m pytest tests/test_process_isolation.py tests/test_restart_ctl.py\n"
+            f"The interpreter running pytest is {python}, which cannot import revocompute_ctl:\n"
+            f"{probe.stderr.strip()}\n"
+            "An ambient python/python3 on PATH (such as a Conda base environment) is not supported."
+        )
+    return python
 
 
 def _run_restart_script(
@@ -40,6 +72,7 @@ def _run_restart_script(
     fake_bin.mkdir(parents=True)
     docker_log = tmp_path / "docker.log"
     docker = fake_bin / "docker"
+    project_python = shlex.quote(_project_interpreter())
     docker.write_text(
         "#!/usr/bin/env bash\n"
         'printf "%s\\n" "$*" >> "${DOCKER_LOG}"\n'
@@ -58,7 +91,7 @@ def _run_restart_script(
         '    fi\n'
         '    previous="$argument"\n'
         '  done\n'
-        '  sed "${substitutions[@]}" | python -\n'
+        f'  sed "${{substitutions[@]}}" | {project_python} -\n'
         "fi\n",
         encoding="utf-8",
     )
@@ -142,6 +175,7 @@ def _run_restart_script(
     env.update(
         {
             "REVODESIGN_SERVER_ENV": str(env_file),
+            "REVODESIGN_PYTHON": _project_interpreter(),
             "DOCKER_LOG": str(docker_log),
             "PATH": f"{fake_bin}{os.pathsep}{env['PATH']}",
         }

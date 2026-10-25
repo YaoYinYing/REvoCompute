@@ -266,8 +266,55 @@ jobs:
       - name: Install Server and Test Dependencies
         run: pip install -e ".[test]"
 
+      - name: Resolve Playwright Version
+        id: playwright-version
+        # pytest-playwright is declared, not playwright itself; the installed
+        # playwright package version is the authoritative cache identity.
+        run: |
+          version="$(python -c 'from importlib.metadata import version; print(version("playwright"))')"
+          if [ -z "$version" ]; then
+            echo "::error::Could not resolve the installed playwright package version."
+            exit 1
+          fi
+          cli_version="$(python -m playwright --version | awk '{print $2}')"
+          if [ "$cli_version" != "$version" ]; then
+            echo "::error::playwright metadata ($version) and CLI ($cli_version) disagree."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Resolved playwright package version: $version"
+
+      # The Chromium download is the expensive part of this job's setup. The key
+      # names the resolved playwright package version, the runner OS and the
+      # architecture, and declares no restore-keys, so a prefix can never supply
+      # a browser built for another version. Only a push or dispatch on main
+      # saves the cache: pull-request runs (including forks) restore the trusted
+      # default-branch entry but never publish executable bytes from a PR.
+      - name: Restore Playwright Chromium Cache
+        id: playwright-cache
+        uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright-version.outputs.version }}
+
       - name: Install Chromium for Browser Contracts
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        # Cache miss (first cold run or a new playwright version): the existing
+        # download path, with no extra clock. This is the cache-miss fallback.
         run: python -m playwright install --with-deps chromium
+
+      - name: Install Chromium System Dependencies
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        # OS packages live outside the cached browser directory and must be
+        # reinstated on every fresh runner; the browser download itself is warm.
+        run: python -m playwright install-deps chromium
+
+      - name: Save Playwright Chromium Cache
+        if: steps.playwright-cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ steps.playwright-cache.outputs.cache-primary-key }}
 
       - name: Run Browser Acceptance Contracts
         run: python -m pytest tests -m "browser and not molstar_csp" -n 4 --dist=load -v --tracing=retain-on-failure --durations=20
