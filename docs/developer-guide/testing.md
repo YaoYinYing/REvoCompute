@@ -240,7 +240,8 @@ python -m revocompute.app
 `run/restart.sh` and a fake-Docker `python -`. Both must run under the project
 environment. An ambient Conda or system `python3` earlier on `PATH` lacks the
 controller's dependencies, so the controller exits before any docker command is
-recorded and 48 of the block's 135 tests fail while the same tests pass in CI.
+recorded: 48 of the block's then-135 tests failed on one developer host while the
+same tests passed in CI.
 Run the block under the project interpreter:
 
 ```bash
@@ -250,8 +251,9 @@ Run the block under the project interpreter:
 The harness names its own interpreter through `REVODESIGN_PYTHON`, which
 `run/restart.sh` already honours, and through the fake-Docker shim, so ambient
 `PATH` order no longer decides which interpreter runs. `run/restart.sh` and its
-interpreter semantics are unchanged. If pytest itself runs under an interpreter
-that cannot import the controller, the harness fails with the supported
+interpreter semantics are unchanged. The harness checks the interpreter by
+running the controller entry point (not only importing its package), so an
+interpreter that is missing project dependencies fails with the supported
 invocation instead of an opaque subprocess traceback.
 
 Security regression checks for Docker socket exposure, admin self-lockout,

@@ -22,8 +22,35 @@ from conftest import REPO_DIR
 from revocompute_ctl.env import EnvState
 
 
-@lru_cache(maxsize=1)
-def _project_interpreter() -> str:
+_RUN_DIR = Path(REPO_DIR) / "run"
+
+
+def _interpreter_probe(python: str, pythonpath: Path) -> subprocess.CompletedProcess[str]:
+    """Run the controller entry point exactly as ``run/restart.sh`` does.
+
+    Importing the ``revocompute_ctl`` package proves only that the package
+    directory is visible: its ``__init__`` imports ``pathlib`` and nothing else.
+    The entry point imports the controller and the Revocompute modules it
+    drives, so a missing project dependency fails here.
+    """
+    return subprocess.run(
+        [python, "-m", "revocompute_ctl", "--help"],
+        cwd=REPO_DIR,
+        # `run/restart.sh` prepends the controller directory to PYTHONPATH; keep
+        # any inherited entry behind it so the probe composes the same path.
+        env={
+            **os.environ,
+            "PYTHONPATH": os.pathsep.join(
+                part for part in (str(pythonpath), os.environ.get("PYTHONPATH", "")) if part
+            ),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def _require_project_interpreter(python: str, pythonpath: Path = _RUN_DIR) -> str:
     """The interpreter that owns this repository's dependencies.
 
     These contracts launch ``run/restart.sh`` and a fake-Docker ``python -``. Both must
@@ -32,24 +59,52 @@ def _project_interpreter() -> str:
     command is recorded. ``run/restart.sh`` already honours ``REVODESIGN_PYTHON``, so the
     harness names this interpreter explicitly instead of depending on PATH order.
     """
-    python = sys.executable
-    probe = subprocess.run(
-        [python, "-c", "import revocompute_ctl"],
-        cwd=REPO_DIR,
-        env={**os.environ, "PYTHONPATH": str(Path(REPO_DIR) / "run")},
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    probe = _interpreter_probe(python, pythonpath)
     if probe.returncode:
         raise AssertionError(
             "These contracts must run under the REvoCompute project environment, such as:\n"
             "  ./.venv/bin/python -m pytest tests/test_process_isolation.py tests/test_restart_ctl.py\n"
-            f"The interpreter running pytest is {python}, which cannot import revocompute_ctl:\n"
+            f"The interpreter running pytest is {python}, which cannot run the controller:\n"
             f"{probe.stderr.strip()}\n"
             "An ambient python/python3 on PATH (such as a Conda base environment) is not supported."
         )
     return python
+
+
+@lru_cache(maxsize=1)
+def _project_interpreter() -> str:
+    return _require_project_interpreter(sys.executable)
+
+
+def test_project_interpreter_guard_accepts_the_project_venv():
+    _project_interpreter.cache_clear()
+    assert _project_interpreter() == sys.executable
+
+
+def test_project_interpreter_guard_rejects_an_interpreter_without_project_dependencies(tmp_path):
+    """The old import-only probe accepted an interpreter that cannot run the controller.
+
+    ``revocompute_ctl.__init__`` imports ``pathlib`` and nothing else, so a package
+    import succeeds for any Python 3; the controller's dependency chain lives in
+    ``__main__`` and ``steps``. The guard must execute the entry point, as
+    ``run/restart.sh`` does.
+    """
+    run_dir = tmp_path / "run"
+    package = run_dir / "revocompute_ctl"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("from pathlib import Path\n", encoding="utf-8")
+    (package / "__main__.py").write_text("import missing_project_dependency\n", encoding="utf-8")
+    import_only = subprocess.run(
+        [sys.executable, "-c", "import revocompute_ctl"],
+        cwd=REPO_DIR,
+        env={**os.environ, "PYTHONPATH": str(run_dir)},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert import_only.returncode == 0, "the import-only probe must reproduce the false assurance"
+    with pytest.raises(AssertionError, match="must run under the REvoCompute project environment"):
+        _require_project_interpreter(sys.executable, run_dir)
 
 
 def _run_restart_script(
