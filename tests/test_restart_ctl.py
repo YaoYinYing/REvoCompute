@@ -218,7 +218,14 @@ def _run_cli(
     monkeypatch, tmp_path: Path, env_file: Path, bin_dir: Path, *args: str
 ) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
-    env.update({"REVODESIGN_SERVER_ENV": str(env_file), "PATH": f"{bin_dir}:{env['PATH']}"})
+    # The controller must run under the interpreter that owns this repository's
+    # dependencies. `run/restart.sh` honours REVODESIGN_PYTHON, so an ambient
+    # python3 earlier on PATH (a Conda base environment) cannot take over.
+    env.update({
+        "REVODESIGN_SERVER_ENV": str(env_file),
+        "REVODESIGN_PYTHON": sys.executable,
+        "PATH": f"{bin_dir}:{env['PATH']}",
+    })
     return subprocess.run(
         ["bash", str(Path(REPO_DIR) / "run" / "restart.sh"), *args],
         cwd=REPO_DIR,

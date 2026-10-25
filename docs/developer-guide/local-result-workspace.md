@@ -106,6 +106,15 @@ file it was handed: the text readers bound its size against the size declared
 here, and the bounded table reader holds the same row, column and page-byte
 ceilings as the remote path. Neither re-hashes per read.
 
+The chooser itself is gated by a browser contract. It selects a real extracted
+folder from disk through the page's own `input[webkitdirectory]`, so the browser
+produces each `webkitRelativePath` rather than the test stubbing one; it asserts
+the declared matrix and entity-table views render from the folder's bytes under
+the production CSP, including `connect-src 'self' blob:`; and it asserts the page
+made no request to `/compute/api/results`. Selecting the result folder directly
+opens it, while selecting one level above it is refused with the missing declared
+paths.
+
 ### Transport
 
 - Each declared path becomes one `blob:` object URL created from the reader's
@@ -150,6 +159,8 @@ directive `connect-src 'self' blob:` to that policy; no other header changes.
 - One structure stage at a time: the workspace keeps a shared
   `StructureController`.
 - Restoring a prior Storyboard selection is not available for local sources.
+- The directory-chooser browser contract runs the repository's Chromium; another
+  browser's `webkitdirectory` implementation is not exercised.
 - This is **local-source preview**, not a fully offline application: the page
   shell and its viewers are still served by the Server, and the browser
   re-asks for the folder after a reload or a revoked permission. The page never

@@ -150,7 +150,7 @@ describe('entity-table declared structure', () => {
     const instance = await createEntityTableViewRenderer().render(view as never, tableSource as never,
       host as unknown as HTMLElement,
       { signal: new AbortController().signal, taskId: 'a'.repeat(32), openStructure, selectStructure });
-    host.querySelectorAll('tr')[1]!.dispatch('click', {});
+    host.querySelectorAll('tbody tr')[0]!.dispatch('click', {});
     expect(host.querySelector('table.entity-result-table')).not.toBeNull();
     expect(host.querySelector('.entity-table-stage')).toBeNull();
     expect(openStructure).not.toHaveBeenCalled();
@@ -199,8 +199,12 @@ describe('entity-table and metric-series renderers', () => {
       { table: [{ path: 'scores.csv', size: 10, sha256: 'a'.repeat(64), url: '/artifacts/s', table_url: '/tables/s' }] } as never,
       host as unknown as HTMLElement, { signal: new AbortController().signal, taskId: 'a'.repeat(32) });
     const table = host.querySelector('table.entity-result-table')!;
-    expect(table.querySelectorAll('th').map((cell) => cell.textContent)).toEqual(['mutation', 'mean_score']);
-    expect(table.querySelectorAll('tr')).toHaveLength(4);
+    // The header is its own group and the data rows are body content, so a
+    // programmatic reader reaches exactly the header and the selectable rows.
+    expect(table.querySelectorAll('thead tr')).toHaveLength(1);
+    expect(table.querySelectorAll('thead th').map((cell) => cell.textContent)).toEqual(['mutation', 'mean_score']);
+    expect(table.querySelectorAll('tbody tr')).toHaveLength(3);
+    expect(table.querySelectorAll('tbody td')).toHaveLength(6);
     (instance as { destroy(): void }).destroy();
     expect(host.querySelector('table')).toBeNull();
   });

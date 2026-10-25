@@ -38,7 +38,6 @@ _append_param() {
 NUMBER_OF_BATCHES="$(_parse_param number_of_batches)"
 SAMPLING_TEMP="$(_parse_param sampling_temp)"
 CHAINS="$(_parse_param chains)"
-FIXED_POS="$(_parse_param fixed_positions)"
 MODE="$(_parse_param mode)"
 
 echo "REVODESIGN_STAGE:${TASK_TYPE:-mpnn}"

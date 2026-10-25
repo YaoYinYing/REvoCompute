@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { applyLocale, translate } from '../src/app/i18n';
 import { resolveRoute, routePath } from '../src/app/router';
 import { openLocalResult } from '../src/features/results/local-source';
 import { ResultWorkspace } from '../src/features/results/ResultWorkspace';
@@ -64,7 +65,7 @@ async function archive(members: Member[], extra: Record<string, unknown> = {}): 
   });
 }
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { applyLocale('en', false); vi.unstubAllGlobals(); });
 
 describe('a local result source', () => {
   it('projects an archived manifest into the workspace shape without a served envelope', async () => {
@@ -228,7 +229,9 @@ describe('the Local Result Workspace page', () => {
       expect(root.querySelector('.result-meta')?.textContent).toBe('Demo method · demo-result');
       expect(root.textContent).toContain('Exported from task');
       expect(root.querySelector('.result-record')?.textContent).toContain(TASK);
-      expect(root.querySelector('.result-archive-action')).toBeNull();
+      // A local result has no Server archive to prepare: the shell's archive action
+      // stays present but hidden, exactly as it does in the browser.
+      expect((root.querySelector('.result-archive-action') as unknown as { hidden: boolean }).hidden).toBe(true);
       // A blob handle carries no filename, so the row states the folder's own name for the file.
       expect(root.querySelector('.result-file-download')?.getAttribute('download')).toBe('scores.csv');
     } finally { local.close(); workspace.destroy(); }
@@ -288,4 +291,38 @@ describe('the Local Result Workspace page', () => {
       expect(fetches).not.toHaveBeenCalled();
     } finally { view.destroy(); }
   });
+});
+
+describe('the local table refusal a reader sees', () => {
+  // A declared entity-table view whose own folder member is an unterminated quote:
+  // the folder opens (the bytes match its manifest), and the table reader refuses
+  // the page. The workspace states that reason in the note above the fallback.
+  const malformedView = {
+    id: 'pairs', plugin: 'entity-table', role: 'primary', title: 'Pairs',
+    sources: { table: ['pairs.csv'] }, mapping: { key_columns: ['i'] },
+  };
+
+  for (const locale of ['en', 'zh-CN'] as const) {
+    it(`states the refusal in ${locale}, through the note the workspace renders`, async () => {
+      installHarness(vi.stubGlobal, { pathname: '/compute/local_results' });
+      vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('the local workspace requested the server'); }));
+      applyLocale(locale);
+      const files = await archive([{ path: 'pairs.csv', text: 'i,j\n"open,2\n' }], { views: [malformedView] });
+      const local = await openLocalResult({ files, label: 'demo-result' });
+      const root = document.createElement('div');
+      const workspace = new ResultWorkspace(root, async () => { throw new Error('no viewer'); }, local);
+      (root.querySelector('.result-search') as unknown as { value: string }).value = '';
+      try {
+        await workspace.load();
+        await (workspace as unknown as { openView(view: unknown): Promise<void> }).openView(malformedView);
+        const reason = translate(locale, 'results.local.table.malformed');
+        const note = root.querySelector('.result-preview .result-note');
+        expect(note?.textContent).toContain(reason);
+        if (locale === 'zh-CN') {
+          // The catalog is the only source: a zh-CN reader must not see the English refusal.
+          expect(note?.textContent).not.toContain('The local table is malformed.');
+        }
+      } finally { local.close(); workspace.destroy(); }
+    });
+  }
 });

@@ -61,7 +61,7 @@ describe('loadMatrixSeries', () => {
     await expect(loadMatrixSeries('/tables/m.csv', {})).rejects.toThrow('not a number');
   });
 
-  it('accepts a full-width matrix page of 512 values plus its label column', async () => {
+  it('accepts exactly the declared column cap and states one column over it as the cap', async () => {
     const columns = ['position', ...Array.from({ length: 512 }, (_, index) => String(index + 1))];
     const row = ['1', ...Array.from({ length: 512 }, (_, index) => String(index))];
     servePages([row], columns, 500);
@@ -70,8 +70,15 @@ describe('loadMatrixSeries', () => {
     expect(series.values[0]).toHaveLength(512);
     expect(series.yLabels).toEqual(['1']);
 
+    // 513 value columns plus the label column is one over the 513-column cap: the
+    // page is still a table, so the refusal names the cap rather than the shape.
     const tooWide = ['position', ...Array.from({ length: 513 }, (_, index) => String(index + 1))];
     servePages([['1', ...Array.from({ length: 513 }, () => '0')]], tooWide, 500);
+    await expect(loadMatrixSeries('/tables/m.csv', { row_labels_column: 'position' })).rejects.toThrow('more columns than the matrix preview allows');
+  });
+
+  it('reserves the malformed reason for a row whose shape does not match the header', async () => {
+    servePages([['1', '2', '3']], ['position', '1'], 500);
     await expect(loadMatrixSeries('/tables/m.csv', { row_labels_column: 'position' })).rejects.toThrow('malformed');
   });
 
@@ -85,15 +92,13 @@ describe('loadMatrixSeries', () => {
     await expect(loadMatrixSeries('/tables/m.csv', {})).rejects.toThrow('could not be loaded');
   });
 
-  it('propagates abort and rejects a malformed page shape', async () => {
+  it('propagates abort instead of assembling a partial matrix', async () => {
     const controller = new AbortController(); controller.abort();
     vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
       if (init.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
       return new Response();
     }));
     await expect(loadMatrixSeries('/tables/m.csv', {}, { signal: controller.signal })).rejects.toHaveProperty('name', 'AbortError');
-    servePages([['1', '2', '3']], ['position', '1'], 500);
-    await expect(loadMatrixSeries('/tables/m.csv', { row_labels_column: 'position' })).rejects.toThrow('malformed');
   });
 });
 
