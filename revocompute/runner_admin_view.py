@@ -102,11 +102,12 @@ def active_image_view(row: RunnerReadiness) -> dict[str, Any]:
     ``UNKNOWN`` instead of claiming an active image.
 
     Build evidence can describe a *candidate*, not the installed artifact:
-    ``build_slurm_images`` stages ``<sif>.next`` and ``runner_readiness`` adopts
-    the candidate's digest, while execution still uses the installed path until
-    a promotion moves it into place.  A staged sibling therefore makes the
-    installed identity unknowable from that evidence, so it is reported as
-    ``STAGED_CANDIDATE_PENDING`` rather than borrowing the candidate's digest.
+    ``build_slurm_images`` stages ``<sif>.next``, and the readiness evaluator
+    reports that candidate's own build/receipt evidence while refusing
+    submission until a promotion moves it into place.  The staged sibling is
+    therefore checked before that evidence, so a candidate digest is never
+    presented as the installed identity; the state is
+    ``STAGED_CANDIDATE_PENDING`` instead.
     """
     if not row.sif_exists:
         return {"state": "MISSING", "sha256": None, "reason_code": "SIF_MISSING"}

@@ -355,14 +355,19 @@ def test_status_output_does_not_include_environment_secrets(evidence, monkeypatc
     assert "never-print-this" not in rendered
 
 
-def test_candidate_does_not_determine_active_readiness(evidence):
+def test_candidate_without_an_active_sif_awaits_promotion(evidence):
+    """The first-build flow: no active SIF, only the validated candidate."""
     state, family, active = evidence
     active.unlink()
     Path(f"{family.slurm_image}.next").write_bytes(b"validated-candidate")
 
     result = resolve_runner_readiness(state, family)
 
-    assert result.status is RunnerReadinessStatus.NOT_BUILT
+    assert result.status is RunnerReadinessStatus.BUILD_STALE
+    assert result.reason_code == "CANDIDATE_AWAITING_PROMOTION"
+    assert result.next_action == "promote"
+    assert result.sif_exists is False
+    assert result.ready is False
 
 
 def test_runner_status_all_lists_enabled_families_and_json(evidence, monkeypatch, capsys):

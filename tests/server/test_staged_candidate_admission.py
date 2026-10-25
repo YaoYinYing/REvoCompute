@@ -24,6 +24,7 @@ from revocompute.runner_live_test import load_validation_identity
 from revocompute.runner_readiness import bundle_digest, load_instance_families, resolve_runner_readiness
 from revocompute.runner_registry import _build_provenance
 from revocompute.serialization import sha256_file
+from revocompute_ctl.promotion import promote_sifs
 
 
 class _AvailableInfrastructure:
@@ -84,6 +85,7 @@ def _record_validated_artifact(state, family, artifact: Path) -> None:
             "execution_gid": 5678,
             "scheduler_user": "revodesign",
             "cases": [{"case_id": case.id, "passed": True} for case in identity.plan.select("smoke")],
+            "ended_at": "2026-10-25T12:00:00+00:00",
         },
     )
 
@@ -148,6 +150,21 @@ def test_staged_candidate_is_not_ready_and_cannot_create_submission_side_effects
     assert staged.reason_code == "CANDIDATE_AWAITING_PROMOTION"
     assert staged.next_action == "promote"
     assert "promote" in staged.message and "rebuild" not in staged.message.lower()
+    # The row carries the candidate's own live-test evidence rather than
+    # dataclass defaults: the Fleet must not claim "No receipt" for a candidate
+    # that promote-sifs will accept, and smoke coverage must not read 0/0.
+    assert staged.sif_exists is True
+    assert staged.build_provenance_current is True
+    assert staged.runtime_bundle_sha256 == bundle_digest(state, family)
+    assert staged.receipt_exists is True
+    assert staged.receipt_valid is True
+    assert staged.receipt_tested_at
+    assert staged.receipt_sif_sha256
+    # The installed artifact's identity is not established by a candidate's
+    # evidence, so no digest is presented as the active one.
+    assert staged.sif_sha256 is None
+    assert staged.required_smoke_cases == ("minimal-synthetic",)
+    assert staged.passed_smoke_cases == ("minimal-synthetic",)
 
     # Publish exactly what the controller publishes, then submit: no Task ID,
     # upload, reservation, or scheduler call may be created for the installed
@@ -192,8 +209,65 @@ def test_staged_candidate_is_not_ready_and_cannot_create_submission_side_effects
 
     # Promotion is the deployment-host step that makes the candidate the
     # executing artifact; the same evidence then validates a real submission.
-    active.write_bytes(candidate.read_bytes())
-    candidate.unlink()
+    promote_sifs(state, [family])
     promoted = resolve_runner_readiness(state, family)
     assert promoted.ready is True, promoted
     assert promoted.reason_code == "READY"
+
+
+def test_first_build_candidate_without_an_active_sif_awaits_promotion(monkeypatch, tmp_path):
+    """First enablement stages a validated candidate with no active SIF at all."""
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={
+            "RUNNER_UID": "1234",
+            "RUNNER_GID": "5678",
+            "RUNNER_USERNAME": "revodesign",
+            "RUNNER_GROUP": "revodesign",
+            "REVODESIGN_APPTAINER_VERSION": "apptainer version 1.4.0",
+        },
+    )
+    module.app.config["manage_db"].resource_set("slurm_enabled", "true")
+    module.app.config["infrastructure_readiness"] = _AvailableInfrastructure()
+    queued: list[bool] = []
+    monkeypatch.setattr(module.run_compute_task, "apply_async", lambda *_args, **_kwargs: queued.append(True))
+
+    state, family = _deployment(module)
+    active = Path(family.slurm_image)
+    active.parent.mkdir(parents=True, exist_ok=True)
+    candidate = Path(f"{family.slurm_image}.next")
+    candidate.write_bytes(b"first-candidate-v1")
+    _record_validated_artifact(state, family, candidate)
+    assert not active.exists()
+
+    staged = resolve_runner_readiness(state, family)
+    assert staged.ready is False
+    assert staged.status.value == "BUILD_STALE"
+    assert staged.reason_code == "CANDIDATE_AWAITING_PROMOTION"
+    assert staged.next_action == "promote"
+    assert staged.sif_exists is False
+    assert staged.receipt_valid is True
+    assert staged.receipt_sif_sha256 == sha256_file(candidate)
+    assert staged.sif_sha256 is None
+    assert staged.passed_smoke_cases == ("minimal-synthetic",)
+
+    _publish(module, staged)
+    response = module.app.test_client().post(
+        "/compute/api/post",
+        headers=_test_client_auth(module),
+        data=_payload(),
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 503, response.get_data(as_text=True)
+    assert response.get_json()["reason"] == "CANDIDATE_AWAITING_PROMOTION"
+    assert module.task_store.list_tasks() == []
+    assert module.task_store.list_live_reservations() == []
+    assert _durable_uploads(module) == []
+    assert queued == []
+
+    # promote-sifs installs the candidate even with no previous active file.
+    promote_sifs(state, [family])
+    assert active.is_file()
+    assert not candidate.exists()
+    assert resolve_runner_readiness(state, family).ready is True

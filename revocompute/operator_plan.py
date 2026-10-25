@@ -145,6 +145,15 @@ def evidence_digest(readiness: RunnerReadiness) -> str:
 def _effective_actions(action: OperatorAction, readiness: RunnerReadiness) -> tuple[str, ...]:
     """The ordered operations the control core will actually perform."""
     if action.id == "runner.repair":
+        if readiness.reason_code == "CANDIDATE_AWAITING_PROMOTION":
+            # The candidate is already built and validated; the remaining step is
+            # a host activation with no web command. A build→live_test plan would
+            # be a no-op or discard validated evidence and then dead-end at the
+            # unsupported build stage.
+            raise OperatorPlanError(
+                "A Runner image candidate is staged; activate it with the deployment-host promote-sifs "
+                "step (run/restart.sh) or discard the candidate. The web executor cannot promote artifacts."
+            )
         if readiness.status in (RunnerReadinessStatus.NOT_BUILT, RunnerReadinessStatus.BUILD_STALE):
             return ("build", "live_test")
         if readiness.status in (RunnerReadinessStatus.NOT_VALIDATED, RunnerReadinessStatus.VALIDATION_STALE):

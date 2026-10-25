@@ -85,6 +85,20 @@ def test_repair_of_a_stale_build_rebuilds_before_validating():
     assert plan.effective_actions == ("build", "live_test")
 
 
+def test_repair_of_a_candidate_awaiting_promotion_names_the_host_step():
+    """A validated candidate is one host activation away, not a rebuild."""
+    readiness = _readiness(
+        status=RunnerReadinessStatus.BUILD_STALE,
+        reason_code="CANDIDATE_AWAITING_PROMOTION",
+        receipt_valid=True,
+    )
+    with pytest.raises(OperatorPlanError, match="promote-sifs"):
+        build_plan("runner.repair", runner_family="demo", readiness=readiness)
+    # Live validation of the staged candidate is still a plannable action.
+    plan = build_plan("runner.live_test", runner_family="demo", readiness=readiness)
+    assert plan.effective_actions == ("live_test",)
+
+
 def test_repaired_configuration_is_refused_not_approximated():
     for status in (RunnerReadinessStatus.NOT_CONFIGURED,):
         with pytest.raises(OperatorPlanError, match="misconfiguration"):

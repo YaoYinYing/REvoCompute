@@ -47,6 +47,18 @@ def _row(name: str, variant: str) -> dict:
         image = {"state": "ACTIVE", "sha256": evidence["sif_sha256"], "reason_code": None}
     elif variant == "missing":
         image = {"state": "MISSING", "sha256": None, "reason_code": "SIF_MISSING"}
+    elif variant == "promotion":
+        # A validated candidate: the row reports the candidate's receipt and
+        # smoke evidence while the installed identity stays unknown.
+        evidence.update(
+            build_provenance_current=True,
+            runtime_bundle_sha256="sha256:bundle",
+            receipt_exists=True,
+            receipt_valid=True,
+            receipt_tested_at="2026-01-02T00:00:00Z",
+            passed_smoke_cases=["smoke"],
+        )
+        image = {"state": "UNKNOWN", "sha256": None, "reason_code": "STAGED_CANDIDATE_PENDING"}
     else:
         image = {"state": "UNKNOWN", "sha256": None, "reason_code": "ACTIVE_IMAGE_IDENTITY_UNKNOWN"}
     status = {
@@ -54,6 +66,7 @@ def _row(name: str, variant: str) -> dict:
         "stale": "VALIDATION_STALE",
         "missing": "NOT_BUILT",
         "unknown": "NOT_CONFIGURED",
+        "promotion": "BUILD_STALE",
     }[variant]
     return {
         "runner_family": name,
@@ -64,9 +77,10 @@ def _row(name: str, variant: str) -> dict:
                 "stale": "RECEIPT_STALE",
                 "missing": "SIF_MISSING",
                 "unknown": "DOCTOR_FAILED",
+                "promotion": "CANDIDATE_AWAITING_PROMOTION",
             }[variant],
             "message": "Evidence for the fleet rendering fixture.",
-            "next_action": "none" if variant == "active" else "live-test",
+            "next_action": "none" if variant == "active" else "promote" if variant == "promotion" else "live-test",
             "active_image": image,
             "evidence": evidence,
         },
@@ -76,7 +90,7 @@ def _row(name: str, variant: str) -> dict:
     }
 
 
-VARIANTS = ("active", "stale", "missing", "unknown")
+VARIANTS = ("active", "stale", "missing", "unknown", "promotion")
 
 
 def _fleet() -> dict:
@@ -100,7 +114,18 @@ def _mount_fleet(page: Page, fleet: dict | None = None) -> dict:
     def detail(route) -> None:
         family = route.request.url.rsplit("/", 1)[-1]
         row = next((item for item in fleet["runners"] if item["runner_family"] == family), fleet["runners"][0])
-        route.fulfill(json={**row, "actions": []})
+        # Mirror the server's refusal of a futile repair plan for a staged
+        # candidate: the action is offered without a plan, so no rebuild CTA.
+        actions = []
+        if row["readiness"]["reason_code"] == "CANDIDATE_AWAITING_PROMOTION":
+            actions = [{
+                "id": "runner.repair",
+                "tier": "mutate",
+                "summary": "Plan and run the shortest remediation for the current invalidation",
+                "available": False,
+                "unavailable_reason": "no_safe_plan_for_current_state",
+            }]
+        route.fulfill(json={**row, "actions": actions})
 
     page.route(f"{ORIGIN}/compute/api/auth/admin/runners/*", detail)
     return fleet
@@ -123,6 +148,9 @@ def test_fleet_renders_active_image_identity_over_32_families(page: Page, monkey
     ).to_be_visible()
     expect(
         page.get_by_role("button", name="family_03 · Active image: Unknown")
+    ).to_be_visible()
+    expect(
+        page.get_by_role("button", name="family_04 · Active image: Unknown")
     ).to_be_visible()
 
     # The dialog is reachable and operable from the keyboard, and closing it
@@ -147,6 +175,46 @@ def test_fleet_renders_active_image_identity_over_32_families(page: Page, monkey
         page.set_viewport_size({"width": width, "height": 1080})
         assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), width
     assert page.evaluate("window.__cspViolations") == []
+
+
+def test_fleet_reports_the_candidate_receipt_without_an_active_claim(page: Page, monkeypatch) -> None:
+    monkeypatch.setattr(browser_frontend_assets, "_RESULT_DIST", ROOT / "frontend/dist")
+    _mount_fleet(
+        page,
+        {
+            "runners": [_row("family_00", "promotion")],
+            "executor": {"available": True, "reason": "operator_executor_available", "unavailable_reason": None},
+        },
+    )
+    page.goto(f"{ORIGIN}/compute/runner_fleet")
+
+    row = page.locator(".admin-table tbody tr").first
+    expect(row).to_contain_text("Recommended: Activate")
+    expect(page.get_by_role("button", name="family_00 · Build: Built")).to_be_visible()
+    expect(page.get_by_role("button", name="family_00 · Live test: Validated")).to_be_visible()
+    page.get_by_role("button", name="family_00 · Active image: Unknown").click()
+
+    dialog = page.locator(".fleet-evidence-dialog")
+    expect(dialog).to_be_visible()
+    expect(dialog).to_contain_text(
+        "An image candidate is staged; activate it with promote-sifs before new submissions."
+    )
+
+    def fact(label: str):
+        return dialog.locator(".fleet-fact", has_text=label).locator("dd")
+
+    expect(fact("Recommended next step")).to_have_text("Activate")
+    expect(fact("Active image")).to_have_text("Unknown — a staged candidate is awaiting activation")
+    expect(fact("Build provenance")).to_have_text("Current")
+    expect(fact("Runtime bundle")).to_have_text("Pinned")
+    expect(fact("Live receipt")).to_have_text("Valid")
+    expect(fact("Last validated")).not_to_have_text("Never")
+    expect(fact("Smoke coverage")).to_have_text("1 of 1 cases")
+
+    # The server refuses a futile build→live_test repair plan for this state, so
+    # the action is listed as unavailable and offers no run control.
+    expect(dialog).to_contain_text("Not available for the current state")
+    expect(dialog.get_by_role("button", name="Review and run")).to_have_count(0)
 
 
 def test_empty_fleet_says_none_is_enabled_rather_than_implying_readiness(page: Page, monkeypatch) -> None:
