@@ -70,9 +70,12 @@ export async function loadMatrixSeries(
     const query = new URLSearchParams({ matrix: '1', offset: String(offset), limit: String(PAGE_LIMIT) });
     const page = await readTablePage(read, query, options.signal, t('results.matrix.error.pageLoad')) as TablePage;
     const header = Array.isArray(page.columns) ? page.columns.map(String) : null;
-    if (!header || header.length < 2 || header.length > MAX_COLUMNS || !Array.isArray(page.rows)) {
+    if (!header || header.length < 2 || !Array.isArray(page.rows)) {
       throw new Error(t('results.matrix.error.malformed'));
     }
+    // An over-wide page is still a table: state the declared column cap rather than
+    // calling the shape malformed.
+    if (header.length > MAX_COLUMNS) throw new Error(t('results.matrix.error.exceedsColumns'));
     if (columns === null) columns = header;
     if (page.rows.some((row) => !Array.isArray(row) || row.length !== columns!.length)) {
       throw new Error(t('results.matrix.error.malformed'));

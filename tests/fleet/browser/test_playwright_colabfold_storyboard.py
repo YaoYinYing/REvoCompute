@@ -127,7 +127,9 @@ def test_colabfold_storyboard_synchronizes_ranked_confidence_and_pae(page: Page)
     )
     expect(page.locator(".colabfold-figure canvas")).to_have_attribute("role", "grid")
     assert "1.0 Å" in page.locator(".matrix-readout").text_content()
-    expect(page.locator(".entity-result-table tr")).to_have_count(3)
+    # The header is its own table group; the selectable records are body rows.
+    expect(page.locator(".entity-result-table thead tr")).to_have_count(1)
+    expect(page.locator(".entity-result-table tbody tr")).to_have_count(2)
     expect(page.locator(".msa-header")).to_have_count(2)
     # The preferred relaxed rank 1 reaches the stage on mount, and the PAE matrix
     # is inside the hero beside it.
