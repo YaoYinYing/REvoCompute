@@ -135,7 +135,10 @@ def _write_result(parent: Path) -> Path:
         target = result / path
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(text, encoding="utf-8")
-    artifacts = [_artifact(MATRIX_PATH, MATRIX_TEXT, role="primary"), _artifact(ENTITY_PATH, ENTITY_TEXT, role="evidence")]
+    artifacts = [
+        _artifact(MATRIX_PATH, MATRIX_TEXT, role="primary"),
+        _artifact(ENTITY_PATH, ENTITY_TEXT, role="evidence"),
+    ]
     (result / "manifest.json").write_text(json.dumps(_manifest(artifacts), sort_keys=True), encoding="utf-8")
     return result
 
