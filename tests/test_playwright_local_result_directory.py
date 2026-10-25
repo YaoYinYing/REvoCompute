@@ -215,6 +215,9 @@ def test_real_directory_renders_declared_views_under_production_csp(
 
     expect(page.locator(".pair-matrix-view canvas")).to_be_visible()
     expect(page.get_by_role("heading", name="Coupling strengths")).to_be_visible()
+    # The canvas can be present before the legend labels are inserted, so wait on
+    # the legend text itself before taking a non-retrying snapshot.
+    expect(page.locator(".pair-matrix-view")).to_contain_text("-3.75")
     assert "-3.75" in page.locator(".pair-matrix-label").all_inner_texts()
     matrix = page.locator(".pair-matrix-view canvas")
     matrix.press("ArrowRight")
@@ -228,6 +231,13 @@ def test_real_directory_renders_declared_views_under_production_csp(
     page.locator(".result-view-menu > summary").click()
     page.get_by_role("button", name="Ranked pairs", exact=True).click()
     expect(page.get_by_role("heading", name="Ranked pairs")).to_be_visible()
+    # The heading is set before the renderer awaits the file read, so wait on the
+    # rendered rows before taking a non-retrying snapshot.
+    table = page.locator(".entity-table-view table")
+    expect(table).to_contain_text("A:1-B:2")
+    expect(table).to_contain_text("4.5")
+    expect(table).to_contain_text("A:2-B:3")
+    expect(table).to_contain_text("2.25")
     # Read the rendered rows, not the fixture text: the table is the proof the
     # local CSV reached the shared renderer.
     rows = page.locator(".entity-table-view table tr").all_inner_texts()
