@@ -3018,7 +3018,7 @@ export interface components {
             /** @enum {string} */
             state: "ACTIVE" | "MISSING" | "UNKNOWN";
             sha256: string | null;
-            /** @description Why the identity is missing or unknown; null when it is established. */
+            /** @description Why the identity is missing or unknown (SIF_MISSING, STAGED_CANDIDATE_PENDING, ACTIVE_IMAGE_IDENTITY_UNKNOWN); null when it is established. */
             reason_code: string | null;
         };
         RunnerReadiness: {

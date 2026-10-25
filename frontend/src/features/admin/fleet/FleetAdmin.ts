@@ -191,6 +191,12 @@ function shortIdentity(sha256: string): string {
   return digest.length > 12 ? `${digest.slice(0, 12)}…` : digest;
 }
 
+/** Why the server could not establish the installed artifact's identity. */
+const ACTIVE_IMAGE_UNKNOWN_COPY: Record<string, string> = {
+  STAGED_CANDIDATE_PENDING: 'a staged candidate is awaiting activation',
+  ACTIVE_IMAGE_IDENTITY_UNKNOWN: 'the server has not established an identity',
+};
+
 /**
  * The active artifact's server-established identity, or the reason it is unknown.
  *
@@ -210,7 +216,10 @@ export function activeImageLabel(readiness: RunnerReadiness): string {
 export function activeImageDetail(readiness: RunnerReadiness): string {
   const image = readiness.active_image;
   if (image?.state === 'MISSING') return 'Missing';
-  if (image?.state !== 'ACTIVE' || !image.sha256) return 'Unknown — the server has not established an identity';
+  if (image?.state !== 'ACTIVE' || !image.sha256) {
+    const reason = image?.reason_code ? ACTIVE_IMAGE_UNKNOWN_COPY[image.reason_code] : undefined;
+    return reason ? `Unknown — ${reason}` : 'Unknown — the server has not established an identity';
+  }
   return `Active · ${image.sha256}`;
 }
 

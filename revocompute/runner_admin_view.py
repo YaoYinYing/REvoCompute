@@ -19,6 +19,7 @@ Infrastructure readiness is a fourth, separate state owned by
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from revocompute.access_control import AccessPolicy, load_policy_documents, resolve_policy
@@ -43,8 +44,6 @@ def _family_access_policies(state: HostPaths) -> dict[str, AccessPolicy | None]:
     it from the same tree the evaluator reads — never from a second configuration
     source.
     """
-    from pathlib import Path
-
     from revocompute.plugins import PluginManager
 
     root = deployment_plugin_root(state)
@@ -101,9 +100,18 @@ def active_image_view(row: RunnerReadiness) -> dict[str, Any]:
     (the build or receipt record the readiness verdict was derived from), so a
     file that is present while no identity can be established reports
     ``UNKNOWN`` instead of claiming an active image.
+
+    Build evidence can describe a *candidate*, not the installed artifact:
+    ``build_slurm_images`` stages ``<sif>.next`` and ``runner_readiness`` adopts
+    the candidate's digest, while execution still uses the installed path until
+    a promotion moves it into place.  A staged sibling therefore makes the
+    installed identity unknowable from that evidence, so it is reported as
+    ``STAGED_CANDIDATE_PENDING`` rather than borrowing the candidate's digest.
     """
     if not row.sif_exists:
         return {"state": "MISSING", "sha256": None, "reason_code": "SIF_MISSING"}
+    if row.sif_path and Path(f"{row.sif_path}.next").is_file():
+        return {"state": "UNKNOWN", "sha256": None, "reason_code": "STAGED_CANDIDATE_PENDING"}
     if row.sif_sha256:
         return {"state": "ACTIVE", "sha256": row.sif_sha256, "reason_code": None}
     return {"state": "UNKNOWN", "sha256": None, "reason_code": "ACTIVE_IMAGE_IDENTITY_UNKNOWN"}

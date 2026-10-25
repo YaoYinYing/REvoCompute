@@ -22,6 +22,7 @@ from revocompute import runner_admin_view
 from revocompute.runner_admin_view import active_image_view, fleet_view
 from revocompute.runner_host import ServerHostPaths
 from revocompute.runner_readiness import RunnerReadiness
+from revocompute.serialization import sha256_file
 
 FLEET_SIZE = 32
 
@@ -147,6 +148,41 @@ def test_active_image_never_infers_identity_from_presence(sif_exists, sif_sha256
 
     expected = {"state": state, "sha256": sif_sha256 if state == "ACTIVE" else None, "reason_code": reason}
     assert active_image_view(row) == expected
+
+
+def test_active_image_does_not_claim_a_staged_candidate_as_the_installed_artifact(tmp_path):
+    """A web live test on a stale family validates a candidate that is not active.
+
+    ``build_slurm_images`` stages ``<sif>.next`` and records provenance-matched
+    build evidence for it; ``resolve_runner_readiness`` then adopts that
+    candidate's digest as the READY identity.  Execution still uses the installed
+    ``<sif>`` path until promotion, so the projection must not report the
+    candidate's digest as the active image.
+    """
+    images = tmp_path / "images"
+    images.mkdir()
+    active = images / "demo.sif"
+    active.write_bytes(b"old-installed-sif")
+    candidate = images / "demo.sif.next"
+    candidate.write_bytes(b"new-validated-candidate")
+    candidate_sha256 = sha256_file(candidate)
+
+    row = replace(
+        _readiness(
+            "demo",
+            status=RunnerReadinessStatus.READY,
+            reason_code="READY",
+            sif_exists=True,
+            sif_sha256=candidate_sha256,
+        ),
+        sif_path=str(active),
+    )
+
+    assert active_image_view(row) == {
+        "state": "UNKNOWN",
+        "sha256": None,
+        "reason_code": "STAGED_CANDIDATE_PENDING",
+    }
 
 
 def test_fleet_projects_a_32_family_register_with_independent_evidence(tmp_path, monkeypatch):

@@ -128,6 +128,17 @@ describe('fleet view helpers', () => {
       active_image: { state: 'UNKNOWN', sha256: null, reason_code: 'ACTIVE_IMAGE_IDENTITY_UNKNOWN' },
     })).toContain('Unknown');
 
+    // A staged candidate awaiting activation is not the installed artifact; the
+    // dialog says why rather than borrowing the candidate's digest.
+    expect(activeImageLabel({
+      ...identified,
+      active_image: { state: 'UNKNOWN', sha256: null, reason_code: 'STAGED_CANDIDATE_PENDING' },
+    })).toBe('Unknown');
+    expect(activeImageDetail({
+      ...identified,
+      active_image: { state: 'UNKNOWN', sha256: null, reason_code: 'STAGED_CANDIDATE_PENDING' },
+    })).toContain('staged candidate is awaiting activation');
+
     // A cached payload from a server that did not project the field is Unknown.
     expect(activeImageLabel({ ...identified, active_image: undefined } as never)).toBe('Unknown');
   });
