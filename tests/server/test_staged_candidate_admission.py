@@ -205,7 +205,10 @@ def test_staged_candidate_is_not_ready_and_cannot_create_submission_side_effects
     # A promotion verdict implies the host activation accepts the candidate;
     # the evaluator's evidence check is at least as strong as that predicate.
     assert candidate_receipt_valid(state, family) is True
-    assert (staged.reason_code == "CANDIDATE_AWAITING_PROMOTION") is candidate_receipt_valid(state, family)    # The row carries the candidate's own live-test evidence rather than
+    assert (staged.reason_code == "CANDIDATE_AWAITING_PROMOTION") is candidate_receipt_valid(
+        state, family
+    )
+    # The row carries the candidate's own live-test evidence rather than
     # dataclass defaults: the Fleet must not claim "No receipt" for a candidate
     # that promote-sifs will accept, and smoke coverage must not read 0/0.
     assert staged.sif_exists is True
