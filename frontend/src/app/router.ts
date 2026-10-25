@@ -12,6 +12,8 @@ export type AppRoute =
   | { id: 'create-task' }
   | { id: 'result'; taskId: string }
   | { id: 'local-results' }
+  | { id: 'demo' }
+  | { id: 'demo-replay'; scenario: string }
   | { id: 'account'; section: AccountSection }
   | { id: 'quota' }
   | { id: 'admin-fleet' }
@@ -50,6 +52,12 @@ export function resolveRoute(pathname: string): AppRoute {
   if (account?.[1] && accountSections.has(account[1])) return { id: 'account', section: account[1] as AccountSection };
   if (path === '/compute/quota') return { id: 'quota' };
   if (path === '/compute/local_results') return { id: 'local-results' };
+  if (path === '/compute/demo') return { id: 'demo' };
+  const demoReplay = /^\/compute\/demo\/replays\/([^/]+)$/.exec(path);
+  if (demoReplay?.[1]) {
+    try { return { id: 'demo-replay', scenario: decodeURIComponent(demoReplay[1]) }; }
+    catch { return { id: 'not-found' }; }
+  }
   if (path === '/compute/runner_fleet') return { id: 'admin-fleet' };
   if (path === '/compute/user_control') return { id: 'admin-users' };
   if (path === '/compute/configuration') return { id: 'admin-configuration' };
@@ -65,7 +73,7 @@ export function resolveRoute(pathname: string): AppRoute {
 }
 
 const protectedRoutes = new Set<AppRoute['id']>([
-  'dashboard', 'create-task', 'result', 'local-results', 'account', 'quota', 'admin-fleet', 'admin-users', 'admin-configuration', 'admin-logs',
+  'dashboard', 'create-task', 'result', 'local-results', 'demo', 'demo-replay', 'account', 'quota', 'admin-fleet', 'admin-users', 'admin-configuration', 'admin-logs',
 ]);
 const publicShellRoutes = new Set<AppRoute['id']>([
   'home', 'api-docs', 'login', 'register', 'reset-password', 'verify-email', 'terms', 'not-found',
@@ -92,6 +100,8 @@ export function routePath(route: AppRoute): string {
     case 'create-task': return '/compute/create_task';
     case 'result': return `/compute/results/${route.taskId}`;
     case 'local-results': return '/compute/local_results';
+    case 'demo': return '/compute/demo';
+    case 'demo-replay': return `/compute/demo/replays/${encodeURIComponent(route.scenario)}`;
     case 'account': return route.section === 'account' ? '/compute/profile' : `/compute/account/${route.section}`;
     case 'quota': return '/compute/quota';
     case 'admin-fleet': return '/compute/runner_fleet';

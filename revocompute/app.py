@@ -207,6 +207,16 @@ app.config["RESULTS_FOLDER"] = CONFIG.results_folder
 _ensure_directories(CONFIG.upload_folder, CONFIG.workspace_folder, CONFIG.results_folder)
 app.config["storage_resolver"] = StorageResolver(CONFIG.results_folder, CONFIG.workspace_folder, task_store)
 
+# A demo deployment serves recorded result scenarios and validates every bundle
+# before the first request. An invalid index or bundle aborts startup rather
+# than serving a partial catalog; a production deployment reads nothing here.
+if CONFIG.demo_mode:
+    from revocompute.demo import load_demo_replays, replay_root
+
+    app.config["demo_replays"] = load_demo_replays(replay_root(CONFIG.server_dir))
+else:
+    app.config["demo_replays"] = None
+
 TOOL_CONFIG = ToolConfig.from_env(CONFIG)
 tool_registry = ToolRegistry.discover(
     TOOL_CONFIG.tools_dir,
@@ -246,7 +256,9 @@ from revocompute.operator_service import build_operator_service  # noqa: E402
 from revocompute.process_role import serves_canonical_application as _owns_startup  # noqa: E402
 from revocompute.runner_host import build_server_host  # noqa: E402
 
-_operator_service = build_operator_service(build_server_host(CONFIG), database=_user_db)
+_operator_service = build_operator_service(
+    build_server_host(CONFIG), database=_user_db, demo_mode=CONFIG.demo_mode
+)
 # Only the process that *owns* this application runs the restart pass.  The MCP
 # service imports this module too -- to project the MCP protocol over the same
 # handlers -- and a second importer must not terminalize a job the web service is

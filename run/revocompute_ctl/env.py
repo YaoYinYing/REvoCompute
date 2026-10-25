@@ -87,7 +87,16 @@ class EnvState:
     def log_dir(self) -> str:
         return self.get("LOG_DIR")
 
+    def demo_mode(self) -> bool:
+        """Whether this deployment is the preview/replay demo profile."""
+        return self.get("REVOCOMPUTE_DEMO_MODE").strip().lower() in {"1", "true", "yes", "on"}
+
     def use_slurm(self) -> bool:
+        # A demo deployment runs no executor at all; the server refuses every
+        # submission, so it must not layer the Slurm compose model or validate
+        # SIFs either.
+        if self.demo_mode():
+            return False
         return self.get("USE_SLURM") == "1" or self.get("REVOCOMPUTE_JOB_EXECUTOR", "slurm").strip().lower() == "slurm"
 
     def compose_args(self) -> list[str]:

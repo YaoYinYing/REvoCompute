@@ -108,10 +108,12 @@ class OperatorService:
         database: Any = None,
         scheduler: Callable[[Callable[[], None]], None] | None = None,
         clock: Callable[[], float] = time.time,
+        demo_mode: bool = False,
     ) -> None:
         self.host = host
         self.database = database
         self._clock = clock
+        self._demo_mode = demo_mode
         self._schedule = scheduler or _default_scheduler
         self.store = store or OperatorJobStore(os.path.join(host.server_dir(), "operator-jobs.sqlite"))
 
@@ -249,8 +251,22 @@ class OperatorService:
         A read action runs inline and returns its outcome with no job.  A
         mutation reserves a durable Operator Job first, then dispatches it off
         the request, so the caller gets the job identity immediately.
+
+        A demo deployment refuses every non-read action here, before planning or
+        reserving, because the operator surface reaches the host controller
+        without passing the demo submission gate.
         """
         action = get_action(action_id)
+        # A demo deployment is preview and replay only. Its submission route
+        # refuses every Task, but the operator surface reaches the host
+        # controller directly (``run/restart.sh live-test`` upserts a Task row
+        # before the worker refuses it), so the refusal belongs at this write
+        # boundary too -- before a plan is reserved or any row is written.
+        if self._demo_mode and action.tier is not ActionTier.READ:
+            raise OperatorServiceError(
+                "This demo deployment is preview and replay only; Runner operations that "
+                "change host or Task state are disabled."
+            )
         normalized = normalize_parameters(action, {**(parameters or {}), "runner_family": runner_family})
         readiness = self.readiness(runner_family)
         plan = build_plan(action_id, runner_family=runner_family, readiness=readiness, parameters=normalized)
@@ -486,9 +502,9 @@ def _load_json(value: Any) -> Any:
         return None
 
 
-def build_operator_service(host: HostPaths, *, database: Any = None) -> OperatorService:
+def build_operator_service(host: HostPaths, *, database: Any = None, demo_mode: bool = False) -> OperatorService:
     """Build the Web process's operator service from its resolved host view."""
-    return OperatorService(host, database=database)
+    return OperatorService(host, database=database, demo_mode=demo_mode)
 
 
 __all__ = [

@@ -36,6 +36,12 @@ from revocompute.auth import generate_token
 
 pytestmark = pytest.mark.browser
 
+# Production runs this application in separate worker processes; it is not safe to
+# drive one app instance from concurrent threads.  The threaded server keeps the
+# browser's parallel asset and API requests realistic, but only one of them may be
+# dispatched into the application at a time.
+_DISPATCH_LOCK = threading.Lock()
+
 
 class _WsgiHandler(BaseHTTPRequestHandler):
     """A minimal WSGI transport for one Flask application.
@@ -90,10 +96,16 @@ class _WsgiHandler(BaseHTTPRequestHandler):
             status_holder["status"] = status
             status_holder["headers"] = json.dumps(headers)
 
-        for chunk in self.application(environ, start_response):
-            payload.append(chunk)
+        with _DISPATCH_LOCK:
+            for chunk in self.application(environ, start_response):
+                payload.append(chunk)
         self.send_response(int(status_holder["status"].split()[0]))
         for name, value in json.loads(status_holder["headers"]):
+            # The transport frames the body itself; forwarding the application's own
+            # framing headers would send them twice and the browser would not settle
+            # the response.
+            if name.lower() in {"connection", "content-length", "transfer-encoding"}:
+                continue
             self.send_header(name, value)
         self.send_header("Content-Length", str(sum(len(chunk) for chunk in payload)))
         self.end_headers()
@@ -121,6 +133,17 @@ def _cookie_for(module, username: str, password: str) -> dict[str, str]:
         if header.startswith("auth_token="):
             return {"name": "auth_token", "value": header.split(";", 1)[0].split("=", 1)[1]}
     raise AssertionError("login did not issue an auth_token cookie")
+
+
+def _leave_document(page: Page) -> None:
+    """Unload the current document before the cookie jar changes under it.
+
+    A page's requests carry the credential it loaded with.  Clearing the jar while
+    the old document is still running lets one of its requests answer 401 and
+    redirect to sign-in, and that redirect races the next navigation.  Unloading
+    the document first makes every identity's navigation start from a blank page.
+    """
+    page.goto("about:blank")
 
 
 def _admin_credentials(module) -> tuple[str, str]:
@@ -168,6 +191,7 @@ def test_administration_pages_answer_real_browser_navigation(monkeypatch, tmp_pa
         for path, _ in ADMIN_PAGE_ROUTES:
             # Anonymous: the server's own login redirect is the boundary, and the
             # browser lands on the sign-in page carrying the destination back.
+            _leave_document(page)
             page.context.clear_cookies()
             response = page.goto(f"{origin}{path}")
             assert response is not None and response.status == 200
@@ -177,6 +201,7 @@ def test_administration_pages_answer_real_browser_navigation(monkeypatch, tmp_pa
 
             # Signed-in non-administrator: the server answers the shell with 403,
             # and the frontend renders its own access-denied state.
+            _leave_document(page)
             page.context.clear_cookies()
             page.context.add_cookies([{**user_cookie, "url": origin}])
             response = page.goto(f"{origin}{path}")
@@ -184,6 +209,7 @@ def test_administration_pages_answer_real_browser_navigation(monkeypatch, tmp_pa
             expect(page.locator(".route-error")).to_contain_text("403")
 
             # Administrator: the page route serves the shell and renders the view.
+            _leave_document(page)
             page.context.clear_cookies()
             page.context.add_cookies([{**admin_cookie, "url": origin}])
             response = page.goto(f"{origin}{path}")

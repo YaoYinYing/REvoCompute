@@ -37,7 +37,7 @@ from urllib.parse import urlsplit
 
 import pytest
 from frontend_fixtures import ReplayBundle, RunnerDefinition, mount_scenario, replay_scenario
-from frontend_fixtures.replay_bundle import project_manifest_for_serve
+from revocompute.replay_bundle import project_manifest_for_serve
 from playwright.sync_api import Page, expect
 
 import browser_frontend_assets

@@ -119,6 +119,18 @@ def execute_tool_call(
     record = calls.get(tool_call_id)
     if record is None or record["status"] != "queued":
         return
+    # Defence in depth: the submission boundary already refuses Tool calls in
+    # demo mode, so no row should reach the worker. If one does -- a restored
+    # store, an operator insert, or a call queued before the mode changed -- the
+    # worker still refuses before acquiring a runtime or touching the workspace.
+    if COMPUTE_CONFIG.demo_mode:
+        _finish_failed(
+            tool_call_id, error_class="runtime_unavailable",
+            message="This demo deployment does not execute Tool calls",
+            calls=calls, workspace=workspace, config=config,
+        )
+        logging.error("Tool call %s refused: the demo deployment does not execute Tool calls", tool_call_id)
+        return
     started = time.time()
     try:
         tool = registry.get(str(record["tool_type"]))

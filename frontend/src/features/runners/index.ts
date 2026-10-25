@@ -6,6 +6,7 @@ import { t } from '../../app/i18n';
 import { guidedTour } from '../../app/guided-tour';
 import './runners.css';
 import { ApiError } from '../../app/session';
+import { loadEnvironment } from '../../app/environment';
 import type { AppShell } from '../../app/shell';
 
 function text(tag: keyof HTMLElementTagNameMap, value: string, className = ''): HTMLElement { const node = document.createElement(tag); node.className = className; node.textContent = value; return node; }
@@ -50,6 +51,7 @@ export async function mountRunnerCatalog(root: HTMLElement): Promise<void> {
   const readiness = document.createElement('div'); readiness.className = 'readiness-state'; readiness.textContent = t('runners.checking'); head.append(readiness);
   const toolbar = document.createElement('section'); toolbar.className = 'work-toolbar runner-toolbar'; toolbar.innerHTML = `<label class="search-control"><span>${t('catalog.searchMethods')}</span><span class="input-with-action"><i data-lucide="search"></i><input type="search" placeholder="${t('runners.searchPlaceholder')}"></span></label><label><span>${t('runners.category')}</span><select><option value="">${t('catalog.allCategories')}</option></select></label><fieldset class="layout-switch density-switch"><legend>${t('runners.density')}</legend><button type="button" data-density="comfortable" aria-pressed="true">${t('runners.comfortable')}</button><button type="button" data-density="compact" aria-pressed="false">${t('runners.compact')}</button></fieldset><p class="catalog-count" aria-live="polite"></p>`;
   const catalog = document.createElement('div'); catalog.className = 'runner-catalog'; catalog.dataset.density = 'comfortable'; const state = text('p', t('runners.loading'), 'empty-state'); catalog.append(state); root.append(head, toolbar, catalog);
+  void loadEnvironment().then(environment => { if (environment?.demo_mode) head.after(text('p', environment.notice || t('demo.notice'), 'demo-notice')); });
   void updateInfrastructure(readiness);
   const selected = new Map<string, string>();
   const comparison = document.createElement('dialog'); comparison.className = 'method-comparison';
@@ -171,6 +173,7 @@ export async function mountRunnerDetail(root: HTMLElement, name: string, shell: 
     const syncRuntime = (): void => { runtime.open = !narrow.matches; };
     syncRuntime(); narrow.addEventListener('change', syncRuntime);
     head.append(intro, runtime); root.append(head);
+    void loadEnvironment().then(environment => { if (environment?.demo_mode) head.after(text('p', environment.notice || t('demo.notice'), 'demo-notice')); });
     void updateInfrastructure(readiness);
     const body = document.createElement('div'); body.className = 'method-reference';
     const index = document.createElement('nav'); index.className = 'method-index'; index.setAttribute('aria-label', t('runners.detail.onThisMethod'));

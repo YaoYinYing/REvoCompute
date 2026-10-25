@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "scenarios": [
+    {
+      "id": "gremlin-lh-couplings",
+      "title": "GREMLIN/LH coupling model — 2KL8 alignment",
+      "summary": "Pairwise coupling matrices, ranked residue pairs, and the family scalar summary from a recorded GREMLIN/LH fit.",
+      "task_type": "gremlin_lh_fit",
+      "source": "tests/data/gremlin_lh_replay/2kl8_seed0_944ed43af62e.json"
+    },
+    {
+      "id": "fpocket-pockets",
+      "title": "FPocket pocket detection — 1SUO",
+      "summary": "Detected pockets, their per-cavity evidence, and the family scalar summary from a recorded FPocket run.",
+      "task_type": "fpocket",
+      "source": "tests/data/fpocket_replay/1suo_2pockets.json"
+    },
+    {
+      "id": "bioemu2-ensemble",
+      "title": "BioEmu2 equilibrium ensemble — 2KL8",
+      "summary": "A recorded equilibrium ensemble rendered through the trajectory view and its published verdicts.",
+      "task_type": "bioemu2_equilibrium",
+      "source": "tests/data/bioemu2_replay/2kl8_production_4d77ffcc.json"
+    },
+    {
+      "id": "alphafold3-tiny",
+      "title": "AlphaFold 3 tiny prediction — synthetic scenario",
+      "summary": "A labeled synthetic scenario exercising the candidate collection, scalar summary, and evidence bundle views.",
+      "task_type": "alphafold3",
+      "source": "tests/data/alphafold3_replay/tiny_production_4fed6908.json"
+    }
+  ]
+}

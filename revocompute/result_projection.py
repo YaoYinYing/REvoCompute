@@ -19,10 +19,37 @@ that can drift.
 
 from __future__ import annotations
 
+import csv
+import io
+import json
 import os
+import re
 from collections.abc import Mapping
 from typing import Any
 from urllib.parse import quote
+
+from revocompute.ndarray import ArrayAccessError, MAX_PROJECTION_ELEMENTS, read_array_projection
+
+#: The table route's response envelope ceilings.  ``_TABLE_PAGE_ENVELOPE_BYTES``
+#: covers the fixed JSON keys around the page; the cell and page limits bound an
+#: untrusted artifact's rows before any of them reach the browser.
+MAX_TABLE_PAGE_BYTES = 8 * 1024 * 1024
+MAX_TABLE_CELL_BYTES = 16 * 1024
+MAX_TABLE_OFFSET = 10_000
+MAX_TABLE_LIMIT = 500
+_TABLE_PAGE_ENVELOPE_BYTES = 512
+_TABLE_COLUMNS = 100
+_TABLE_MATRIX_COLUMNS = 512 + 1
+_BOUNDED_INTEGER = re.compile(r"(?:0|[1-9][0-9]{0,18})")
+
+
+class ResultPreviewError(ValueError):
+    """A result sub-resource page or projection is outside what the Server serves.
+
+    The message is already client-facing; both the production result routes and
+    the replay routes that serve recorded bytes refuse through this one type, so
+    a replay cannot accept a page or projection the real route would reject.
+    """
 
 
 def artifact_capability(preview: str | None, logical_type: str | None = None) -> str:
@@ -37,6 +64,134 @@ def artifact_capability(preview: str | None, logical_type: str | None = None) ->
     if declared == "model" or declared is None:
         return "download_only"
     return "unknown"
+
+
+def table_page_bounds(args: Mapping[str, Any]) -> tuple[int, int]:
+    """Parse ``offset``/``limit`` exactly as the table route always has.
+
+    The raw query values are converted the same way for a live artifact and a
+    recorded replay, so neither accepts a page the other refuses.
+    """
+    try:
+        return int(args.get("offset", 0)), int(args.get("limit", 100))
+    except (TypeError, ValueError):
+        raise ResultPreviewError("Invalid table page") from None
+
+
+def read_table_page(
+    stream: Any,
+    *,
+    name: str,
+    offset: int,
+    limit: int,
+    matrix: bool,
+    declared_table: bool,
+    bounded: bool = True,
+) -> dict[str, Any]:
+    """Page one table artifact stream.
+
+    ``bounded`` selects the live result route's contract: the artifact must be
+    manifest-declared as a table, and its rows, cells, and serialized page are
+    capped. A recorded replay of bytes a live route accepted before those caps
+    existed still has to page the artifact it captured, so its accessor passes
+    ``bounded=False`` -- the same parser and window bounds, without the live
+    response-size refusals. The text wrapper consumes ``stream``; the caller
+    still owns closing the artifact descriptor it opened. A parse failure is
+    reported as ``ResultPreviewError("Table could not be previewed")`` with the
+    original exception as its cause so the route can log the artifact defect.
+    """
+    if bounded and not declared_table:
+        raise ResultPreviewError("Artifact is not a table")
+    if offset < 0 or offset > MAX_TABLE_OFFSET or limit < 1 or limit > MAX_TABLE_LIMIT:
+        raise ResultPreviewError("Table page is outside allowed bounds")
+    delimiter = "\t" if name.lower().endswith(".tsv") else ","
+    # A matrix page carries one extra leading column of row labels beside its
+    # values, so the matrix cap allows that label column on top of the cap
+    # itself; a plain preview keeps its tighter width limit.
+    max_columns = _TABLE_MATRIX_COLUMNS if matrix else _TABLE_COLUMNS
+
+    def row_cost(row: list[str]) -> int:
+        if not bounded:
+            return 0
+        if len(row) > max_columns:
+            raise ValueError("Table row exceeds preview limits")
+        cost = 2 + max(0, len(row) - 1)
+        for cell in row:
+            if len(cell.encode("utf-8")) > MAX_TABLE_CELL_BYTES:
+                raise ValueError("Table cell exceeds preview limits")
+            cost += len(json.dumps(cell, ensure_ascii=True, separators=(",", ":")).encode("utf-8"))
+        return cost
+
+    try:
+        with io.TextIOWrapper(stream, encoding="utf-8", newline="") as handle:
+            reader = csv.reader(handle, delimiter=delimiter)
+            columns = next(reader, [])
+            page_bytes = _TABLE_PAGE_ENVELOPE_BYTES + row_cost(columns)
+            if bounded and page_bytes > MAX_TABLE_PAGE_BYTES:
+                raise ValueError("Table page exceeds the response byte limit")
+            rows: list[list[str]] = []
+            has_more = False
+            for index, row in enumerate(reader):
+                if index < offset:
+                    continue
+                if len(rows) == limit:
+                    has_more = True
+                    break
+                cost = row_cost(row)
+                if bounded and page_bytes + cost > MAX_TABLE_PAGE_BYTES:
+                    raise ValueError("Table page exceeds the response byte limit")
+                page_bytes += cost
+                rows.append(row)
+    except (OSError, UnicodeError, csv.Error, ValueError) as error:
+        raise ResultPreviewError("Table could not be previewed") from error
+    return {"columns": columns, "rows": rows, "offset": offset, "limit": limit, "has_more": has_more}
+
+
+def array_projection_query(args: Mapping[str, Any]) -> tuple[str | None, str, int]:
+    """Validate the bounded array query the projection route serves.
+
+    ``max_elements`` is required (its default of 0 is refused), a repeated or
+    non-decimal value is refused, and only ``key``/``kind``/``max_elements`` are
+    accepted, so a replay route cannot silently ignore a bound the live route
+    enforces.
+    """
+    if set(args) - {"key", "kind", "max_elements"}:
+        raise ResultPreviewError("Invalid array query")
+    values = args.getlist("max_elements")
+    raw = values[0] if values else "0"
+    if len(values) > 1 or _BOUNDED_INTEGER.fullmatch(raw) is None:
+        raise ResultPreviewError("Array projection is outside allowed bounds")
+    max_elements = int(raw)
+    keys = args.getlist("key")
+    kinds = args.getlist("kind")
+    if (
+        max_elements < 1
+        or max_elements > MAX_PROJECTION_ELEMENTS
+        or len(keys) > 1
+        or len(kinds) > 1
+    ):
+        raise ResultPreviewError("Array projection is outside allowed bounds")
+    return (keys[0] if keys else None), (kinds[0] if kinds else "numeric"), max_elements
+
+
+def read_bounded_array_projection(
+    stream: Any,
+    *,
+    name: str,
+    key: str | None,
+    kind: str,
+    max_elements: int,
+) -> dict[str, Any]:
+    """Project one array artifact under the route's element and byte bounds.
+
+    Delegates to :func:`revocompute.ndarray.read_array_projection` -- the reader
+    the live route serves through -- and restates its refusal in the route's own
+    error type so both callers answer the same bounded 400.
+    """
+    try:
+        return read_array_projection(stream, name=name, key=key, kind=kind, max_elements=max_elements)
+    except ArrayAccessError as error:
+        raise ResultPreviewError(str(error)) from error
 
 
 def project_result_manifest(

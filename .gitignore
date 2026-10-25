@@ -34,6 +34,7 @@ server_state/
 .env
 .env.*
 !.env.example
+!.env.demo.example
 docker-compose.runners.generated.yml
 docker/runners/*/Dockerfile.proxy.*
 docker/runners/*/*.sif

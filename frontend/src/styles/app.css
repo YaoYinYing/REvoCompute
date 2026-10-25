@@ -400,3 +400,19 @@ a { color: var(--app-accent); }
   .public-navigation nav a:hover { background: var(--app-soft); }
 }
 @media (max-width: 32rem) { .public-brand > span:first-child, .public-account span { display: none; }.public-account { min-width: 2.45rem; width: 2.45rem; padding: 0; } }
+
+/* Demo environment affordance. A demo deployment serves the canonical catalog and
+   recorded results but executes nothing, so every surface that could otherwise be
+   mistaken for a production deployment states the profile plainly. The badge and
+   notice live in the shared sheet because the authenticated and public chromes,
+   the catalog, the method page, and the create-task form all use them. */
+.app-demo-badge {
+  display: inline-flex; align-items: center; gap: .4rem; padding: .28rem .65rem;
+  border: 1px solid var(--app-warning); border-radius: var(--r-pill); color: var(--app-warning);
+  font: 600 .7rem/1.2 var(--font-mono); letter-spacing: .08em; text-transform: uppercase; white-space: nowrap;
+}
+.demo-notice {
+  margin: 0; padding: .7rem 1rem; border: 1px solid var(--app-line-strong);
+  border-left: 3px solid var(--app-warning); border-radius: var(--r-control);
+  background: var(--app-raised); color: var(--app-ink);
+}

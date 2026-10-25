@@ -33,6 +33,7 @@ from playwright.sync_api import Page, expect
 from browser_frontend_assets import result_dist
 from conftest import _load_fleet_module, _upsert_task_for_user
 from frontend_fixtures import project_manifest_for_serve
+from frontend_fixtures.router import serve_environment
 
 pytestmark = pytest.mark.browser
 
@@ -124,6 +125,7 @@ def _serve(page: Page, manifest: dict, root: Path, task_id: str, logical_paths: 
         lambda route: route.fulfill(content_type="text/html", headers={"Content-Security-Policy": CSP}, body=html),
     )
     page.route(f"{ORIGIN}/compute/login**", lambda route: route.fulfill(content_type="text/html", body="<p>Login</p>"))
+    serve_environment(page, ORIGIN)
 
     def static(route):
         relative = route.request.url.split("/static/app/", 1)[1].split("?", 1)[0]

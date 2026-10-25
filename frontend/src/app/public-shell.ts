@@ -4,6 +4,7 @@ import type { AppShell } from './shell';
 import { DAYLIGHT_MARK } from './assets';
 import { t } from './i18n';
 import { languageMenu, themeButton } from './localize';
+import { loadEnvironment } from './environment';
 
 const publicIcons = { LogIn, Menu, UserRound };
 
@@ -30,6 +31,10 @@ export function mountPublicShell(root: HTMLElement): AppShell {
   account.setAttribute('aria-label', account.title);
   account.innerHTML = `<i data-lucide="log-in" aria-hidden="true"></i><span>${t('shell.action.signIn')}</span>`;
   actions.append(languageMenu(), account, themeButton());
+  const demoBadge = document.createElement('span'); demoBadge.className = 'app-demo-badge'; demoBadge.hidden = true;
+  demoBadge.textContent = t('demo.badge'); demoBadge.title = t('demo.badgeTitle');
+  actions.prepend(demoBadge);
+  void loadEnvironment().then((environment) => { if (environment?.demo_mode) demoBadge.hidden = false; });
   header.append(actions);
   const outlet = document.createElement('div');
   outlet.className = 'public-outlet';

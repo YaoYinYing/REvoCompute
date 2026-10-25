@@ -21,7 +21,7 @@ from urllib.parse import unquote
 
 from . import builders, results
 from .auth import USER_AUTH, Session
-from .replay import ReplayBundle
+from revocompute.replay import ReplayBundle
 from .models import (
     DEFAULT_TASK_ID,
     AccessState,

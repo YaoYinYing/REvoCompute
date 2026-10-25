@@ -6,6 +6,7 @@ import { mountShell, type AppShell } from './app/shell';
 import { applyLocale, initialLocale, t } from './app/i18n';
 import { GUIDED_TOUR_ABORT_EVENT } from './app/guided-tour';
 import { applyTheme, storedTheme } from './app/theme';
+import { loadEnvironment } from './app/environment';
 import './styles/app.css';
 import './styles/daylight.css';
 
@@ -52,6 +53,9 @@ if (!root) throw new Error('Missing frontend application root');
 
 applyTheme(storedTheme());
 applyLocale(initialLocale(), false);
+// One public read of the deployment profile. The shell labels a demo before the
+// first page finishes loading; a failed read keeps production semantics.
+void loadEnvironment();
 
 const firstRoute = resolveRoute(location.pathname);
 // The document has two chromes: the public one for the reference and account
@@ -295,6 +299,8 @@ async function render(route: AppRoute, historyNavigation: boolean): Promise<void
       // The Local Result Workspace reads a folder the reader chooses; it starts no Task,
       // requests no result, and holds no server state of its own.
       case 'local-results': { const { mountLocalResultWorkspace } = await import('./features/results/index.js'); mount.view = await mountLocalResultWorkspace(mount.holder); break; }
+      case 'demo': { const { mountDemoLanding } = await import('./features/demo/index.js'); await mountDemoLanding(mount.holder); break; }
+      case 'demo-replay': { const { mountDemoReplay } = await import('./features/demo/index.js'); mount.view = await mountDemoReplay(mount.holder, route.scenario); break; }
       case 'account': { const { mountAccount } = await import('./features/profile/index.js'); await mountAccount(mount.holder, shell, sessionUser!, route.section); break; }
       // The Quota page reads the reader's own position from the endpoints scoped
       // to them and returns a view, so it takes the same disposable mount the

@@ -1,0 +1,53 @@
+/*
+ * Demo playground surfaces. The page uses the product's own tokens and
+ * components; this file only lays out the demo catalog and the replay banner,
+ * so the playground cannot drift into a second visual language.
+ */
+
+.demo-page { display: grid; gap: 2.2rem; }
+
+.demo-section { display: grid; gap: 0.9rem; }
+.demo-section > h2 { margin: 0; font-family: var(--font-display); font-size: 1.3rem; }
+
+.demo-groups { display: grid; gap: 1.6rem; }
+.demo-group { display: grid; gap: 0.7rem; }
+.demo-group > h3 { margin: 0; font-size: 0.86rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--app-muted); }
+
+.demo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr)); gap: 0.9rem; }
+
+.demo-card {
+  display: grid;
+  gap: 0.55rem;
+  align-content: start;
+  padding: 1rem;
+  border: 1px solid var(--app-line);
+  border-radius: var(--r-surface);
+  background: var(--app-surface);
+  box-shadow: var(--shadow-surface);
+}
+.demo-card h4 { margin: 0; font-family: var(--font-display); font-size: 1.02rem; }
+.demo-card-summary { margin: 0; color: var(--app-muted); font-size: 0.9rem; }
+.demo-card-meta { margin: 0; color: var(--app-muted); font: 0.72rem/1.45 var(--font-mono); overflow-wrap: anywhere; }
+.demo-card-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.2rem; }
+.demo-card-actions a { display: inline-flex; align-items: center; gap: 0.35rem; text-decoration: none; }
+
+.demo-provenance {
+  margin: 0;
+  color: var(--app-success);
+  font: 600 0.72rem/1.3 var(--font-mono);
+  letter-spacing: 0.03em;
+}
+
+.demo-replay-page { display: grid; gap: 1.2rem; }
+.demo-replay-banner {
+  display: grid;
+  gap: 0.5rem;
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--app-line-strong);
+  border-left: 3px solid var(--app-warning);
+  border-radius: var(--r-surface);
+  background: var(--app-raised);
+}
+.demo-replay-banner h1 { margin: 0; font-family: var(--font-display); font-size: 1.35rem; }
+.demo-replay-banner a { justify-self: start; text-decoration: none; }
+.demo-replay-stage { min-width: 0; }

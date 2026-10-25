@@ -12,9 +12,7 @@ already-initialised application.
 
 from __future__ import annotations
 
-import csv
 import hashlib
-import io
 import json
 import logging
 import mimetypes
@@ -111,7 +109,6 @@ from revocompute.ingress_security import (
     event_for_code,
     phase_for_code,
 )
-from revocompute.ndarray import ArrayAccessError, MAX_PROJECTION_ELEMENTS, read_array_projection
 from revocompute.db import GPUCreditUnavailableError, TaskIdReservedError
 from revocompute.operational_events import emit_event
 from revocompute.ratelimit import rate_limit
@@ -142,7 +139,14 @@ from revocompute.resource_policy import (
     normalize_resource_value,
     serialize_resource_value,
 )
-from revocompute.result_projection import project_result_manifest
+from revocompute.result_projection import (
+    ResultPreviewError,
+    array_projection_query,
+    project_result_manifest,
+    read_bounded_array_projection,
+    read_table_page,
+    table_page_bounds,
+)
 from revocompute.storage import (
     PUBLICATION_ANCHOR_INVALID,
     PUBLICATION_ANCHOR_MISMATCH,
@@ -224,9 +228,6 @@ from jsonschema import validate as validate_json_schema
 from sqlalchemy.exc import IntegrityError
 from werkzeug.security import check_password_hash, generate_password_hash
 
-MAX_TABLE_PAGE_BYTES = 8 * 1024 * 1024
-MAX_TABLE_CELL_BYTES = 16 * 1024
-_TABLE_PAGE_ENVELOPE_BYTES = 512
 # Read a verified descriptor in bounded chunks; no read is ever sized by the
 # artifact, so a large download streams instead of issuing one huge read.
 _STREAM_CHUNK_BYTES = 64 * 1024
@@ -275,6 +276,187 @@ def runner_detail_page(name: str):
 def health():
     """Liveness probe — unauthenticated, empty 200 when the process answers."""
     return "", 200
+
+
+def _demo_read_only(refusal: str, *, valid: bool | None = None) -> tuple[Any, int]:
+    """Refuse an execution-capable action in a preview-and-replay deployment.
+
+    ``refusal`` completes the shared sentence for the specific action; the
+    stable ``code`` is what every client matches, so a demo refuses each
+    execution surface the same way. ``valid`` is set only where the documented
+    refusal envelope carries it.
+    """
+    body: dict[str, Any] = {
+        "error": f"This demo deployment is preview and replay only; {refusal}",
+        "code": "demo_read_only",
+    }
+    if valid is not None:
+        body["valid"] = valid
+    return jsonify(body), 403
+
+
+@app.route("/compute/api/environment", methods=["GET"])
+def environment_capability():
+    """The deployment profile the browser must state honestly.
+
+    ``demo_mode`` is a deployment fact, not a per-task one: a demo deployment
+    serves the canonical catalog and result surfaces but refuses every
+    submission. The browser labels that difference once, in the shell, instead
+    of inferring readiness from an empty or non-empty catalog. Production
+    reports ``execution: "available"`` and changes no other response.
+    """
+    if CONFIG.demo_mode:
+        return jsonify(
+            {
+                "version": 1,
+                "demo_mode": True,
+                "execution": "preview_only",
+                "notice": "Demo environment: preview and replay only. Tasks are not executed.",
+            }
+        )
+    return jsonify({"version": 1, "demo_mode": False, "execution": "available"})
+
+
+# ---------------------------------------------------------------------------
+# Demo replay scenarios
+#
+# Registered in every process, but every route requires a session and answers
+# only when the deployment loaded a demo replay index. A production deployment
+# therefore has no replay content to expose: a signed-in caller gets the same
+# 404 a missing route produces, and nothing is read from disk.
+# ---------------------------------------------------------------------------
+
+
+def _demo_replays() -> Mapping[str, Any] | None:
+    return current_app.config.get("demo_replays") if CONFIG.demo_mode else None
+
+
+def _demo_replay_or_404(scenario_id: str):
+    scenarios = _demo_replays()
+    if not scenarios:
+        abort(404)
+    scenario = scenarios.get(scenario_id)
+    if scenario is None:
+        abort(404)
+    return scenario
+
+
+@app.route("/compute/api/demo/replays", methods=["GET"])
+@login_required
+def demo_replay_catalog():
+    scenarios = _demo_replays()
+    if not scenarios:
+        abort(404)
+    return jsonify(
+        {
+            "version": 1,
+            "scenarios": [scenario.summary_payload() for scenario in scenarios.values()],
+        }
+    )
+
+
+@app.route("/compute/api/demo/replays/<scenario_id>", methods=["GET"])
+@login_required
+def demo_replay_manifest(scenario_id: str):
+    return jsonify(_demo_replay_or_404(scenario_id).served_manifest())
+
+
+@app.route("/compute/api/demo/replays/<scenario_id>/artifacts/<path:relative_path>", methods=["GET"])
+@login_required
+def demo_replay_artifact(scenario_id: str, relative_path: str):
+    scenario = _demo_replay_or_404(scenario_id)
+    payload = scenario.bundle.payload(relative_path)
+    if payload is None:
+        excluded = next(
+            (item for item in scenario.bundle.bundle.get("excluded", []) if item.get("path") == relative_path),
+            None,
+        )
+        return (
+            jsonify(
+                {
+                    "error": "This replay bundle does not retain this artifact",
+                    "path": relative_path,
+                    "reason": (excluded or {}).get("reason") or "not captured",
+                }
+            ),
+            404,
+        )
+    data, media_type = payload
+    response = Response(data, mimetype=media_type)
+    # Recorded artifacts are untrusted Runner output served same-origin. The
+    # demo previews them inline (images, structures), so the sandbox header is
+    # what keeps an inline HTML payload from running script in the demo origin.
+    response.headers["Content-Security-Policy"] = "sandbox"
+    if request.args.get("download") == "1":
+        response.headers["Content-Disposition"] = f'attachment; filename="{os.path.basename(relative_path)}"'
+    return response
+
+
+@app.route("/compute/api/demo/replays/<scenario_id>/files/<file_id>", methods=["GET"])
+@login_required
+def demo_replay_logical_file(scenario_id: str, file_id: str):
+    scenario = _demo_replay_or_404(scenario_id)
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", file_id):
+        abort(404)
+    try:
+        index = int(request.args.get("index", "0"))
+    except ValueError:
+        abort(404)
+    path = scenario.bundle.logical_artifact_path(file_id, index)
+    payload = scenario.bundle.payload(path) if path is not None else None
+    if payload is None:
+        abort(404)
+    data, media_type = payload
+    response = Response(data, mimetype=media_type)
+    response.headers["Content-Security-Policy"] = "sandbox"
+    return response
+
+
+@app.route("/compute/api/demo/replays/<scenario_id>/tables/<path:relative_path>", methods=["GET"])
+@login_required
+def demo_replay_table(scenario_id: str, relative_path: str):
+    """Page a recorded table through the same bounded reader the result route uses."""
+    scenario = _demo_replay_or_404(scenario_id)
+    try:
+        offset, limit = table_page_bounds(request.args)
+        page = scenario.bundle.table_page(
+            relative_path,
+            offset=offset,
+            limit=limit,
+            matrix=request.args.get("matrix") == "1",
+            strict=True,
+        )
+    except ResultPreviewError as error:
+        return jsonify({"error": str(error)}), 400
+    if page is None:
+        return jsonify({"error": "Table artifact not found"}), 404
+    return jsonify(page)
+
+
+@app.route("/compute/api/demo/replays/<scenario_id>/ndarrays/<path:relative_path>", methods=["GET"])
+@login_required
+def demo_replay_ndarray(scenario_id: str, relative_path: str):
+    """Project recorded bytes through the same bounded reader the result route uses."""
+    scenario = _demo_replay_or_404(scenario_id)
+    try:
+        key, kind, max_elements = array_projection_query(request.args)
+        projection = scenario.bundle.projection(
+            relative_path, kind=kind, key=key, max_elements=max_elements, strict=True
+        )
+    except ResultPreviewError as error:
+        return jsonify({"error": str(error)}), 400
+    if projection is None:
+        return jsonify({"error": "Array artifact not found"}), 404
+    return jsonify(projection)
+
+
+@app.route("/compute/api/demo/replays/<scenario_id>/archive", methods=["POST"])
+@login_required
+def demo_replay_archive(scenario_id: str):
+    # A replay bundle records a result; it cannot be re-archived. Answering
+    # explicitly is better than a blank success the page would report as ready.
+    _demo_replay_or_404(scenario_id)
+    return jsonify({"error": "A recorded demo result has no archive to build"}), 409
 
 
 @app.route("/compute/api/mcp", methods=["GET"])
@@ -327,6 +509,8 @@ def refresh_infrastructure_readiness():
         return _blocked
     if _blocked := require_bearer_auth():
         return _blocked
+    if CONFIG.demo_mode:
+        return _demo_read_only("it does not run infrastructure readiness probes.")
     service = current_app.config["infrastructure_readiness"]
     return jsonify(service.report(force=True, admin=True)), 200
 
@@ -430,6 +614,38 @@ def local_results_page():
     workspace sits beside the reader's Remote results; opening a folder starts no
     Task, Runner, or Tool.
     """
+    return _serve_frontend_entry(private=True)
+
+
+@app.route("/compute/demo", methods=["GET"])
+@login_required
+def demo_page():
+    """The Demo Playground landing, served only by a demo deployment.
+
+    The playground is a client-side route whose cards link to the catalog and to
+    recorded results, so without this route a hard refresh or a shared deep link
+    returns a 404 before the frontend can render it. The page carries no state of
+    its own: it serves the same entry document every other page route serves, and
+    the frontend states the deployment's preview/replay-only contract itself. A
+    production process answers 404, so it exposes no demo destination.
+    """
+    if not CONFIG.demo_mode:
+        abort(404)
+    return _serve_frontend_entry(private=True)
+
+
+@app.route("/compute/demo/replays/<scenario_id>", methods=["GET"])
+@login_required
+def demo_replay_page(scenario_id: str):
+    """One recorded replay scenario, served as the same inert entry document.
+
+    The scenario is resolved by the demo replay API the frontend reads, so the
+    page route neither reads a bundle nor invents a missing scenario: an absent
+    id renders the frontend's own "unavailable" state. Like the landing, it is a
+    demo-deployment-only destination and answers 404 elsewhere.
+    """
+    if not CONFIG.demo_mode:
+        abort(404)
     return _serve_frontend_entry(private=True)
 
 
@@ -631,6 +847,12 @@ def submit_tool_call(name):
         return blocked
     if blocked := _reject_guest():
         return blocked
+    # A demo deployment inspects canonical Tool contracts and replays recorded
+    # results; it never executes. Refusing at this boundary means a crafted
+    # client cannot create a workspace, reservation, ToolCall row, or queue
+    # entry even when an enabled family ships an installed image.
+    if CONFIG.demo_mode:
+        return _demo_read_only("it does not execute Tools.")
     if os.path.exists(os.path.join(CONFIG.server_dir, ".maintenance")):
         return jsonify({"error": "Server is in maintenance; submissions are paused"}), 503
     try:
@@ -1836,6 +2058,11 @@ def preflight_task(task_type: str):
     detail = details[0] if details and isinstance(details[0], dict) else {}
     code = str(
         detail.get("code")
+        # A refusal that names its own stable code at the envelope's top level
+        # keeps it through the preflight projection instead of degrading to the
+        # HTTP-status default: the demo's ``demo_read_only`` is what the client
+        # matches on, and both submission endpoints must name it the same way.
+        or payload.get("code")
         or {
             400: "contract_invalid",
             401: "authentication_required",
@@ -1885,6 +2112,13 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
     # shared boundary for both /compute/api/post and /compute/api/preflight/.
     if _blocked := _reject_guest():
         return _blocked
+
+    # A demo deployment inspects and replays; it never executes. Refusing at the
+    # one shared submission boundary means a crafted client that calls the
+    # ordinary API directly cannot create a row, reservation, scheduler request,
+    # or charge, whether or not the manifest is present in the registry.
+    if CONFIG.demo_mode:
+        return _demo_read_only("it does not execute Tasks.", valid=False)
 
     # Deployment maintenance sentinel (restart.sh --drain): SERVER_DIR is
     # bind-mounted into the web container, so the host-side file is visible.
@@ -3011,43 +3245,19 @@ def get_result_ndarray(md5sum: str, relative_path: str):
     resolved = _with_verified_artifact(_result_artifact(task, relative_path), task)
     if resolved is None:
         return jsonify({"error": "Array artifact not found"}), 404
-    stream, artifact = resolved["verified_stream"], resolved
-    if set(request.args) - {"key", "kind", "max_elements"}:
-        stream.close()
-        return jsonify({"error": "Invalid array query"}), 400
-
-    def bounded_integer(name: str, default: int) -> int | None:
-        values = request.args.getlist(name)
-        raw = values[0] if values else str(default)
-        if len(values) > 1 or re.fullmatch(r"(?:0|[1-9][0-9]{0,18})", raw) is None:
-            return None
-        return int(raw)
-
-    max_elements = bounded_integer("max_elements", 0)
-    keys = request.args.getlist("key")
-    kinds = request.args.getlist("kind")
-    if (
-        max_elements is None
-        or max_elements < 1
-        or max_elements > MAX_PROJECTION_ELEMENTS
-        or len(keys) > 1
-        or len(kinds) > 1
-    ):
-        stream.close()
-        return jsonify({"error": "Array projection is outside allowed bounds"}), 400
-    key = keys[0] if keys else None
-    kind = kinds[0] if kinds else "numeric"
+    stream = resolved["verified_stream"]
     try:
+        key, kind, max_elements = array_projection_query(request.args)
         # The projection parses from the verified snapshot itself, so a file
         # replaced after publication identity was checked can never be projected:
         # after publication identity has been verified, a consumer must consume
         # the verified object, not reopen its pathname.
         return jsonify(
-            read_array_projection(
+            read_bounded_array_projection(
                 stream, name=relative_path, key=key, kind=kind, max_elements=max_elements
             )
         )
-    except ArrayAccessError as error:
+    except ResultPreviewError as error:
         return jsonify({"error": str(error)}), 400
     finally:
         stream.close()
@@ -3082,56 +3292,24 @@ def get_result_table(md5sum: str, relative_path: str):
         stream.close()
         return jsonify({"error": "Artifact is not a table"}), 400
     try:
-        offset = int(request.args.get("offset", 0))
-        limit = int(request.args.get("limit", 100))
-    except ValueError:
-        stream.close()
-        return jsonify({"error": "Invalid table page"}), 400
-    if offset < 0 or offset > 10000 or limit < 1 or limit > 500:
-        stream.close()
-        return jsonify({"error": "Table page is outside allowed bounds"}), 400
-    delimiter = "\t" if relative_path.lower().endswith(".tsv") else ","
-
-    def row_cost(row: list[str], max_columns: int) -> int:
-        if len(row) > max_columns:
-            raise ValueError("Table row exceeds preview limits")
-        cost = 2 + max(0, len(row) - 1)
-        for cell in row:
-            if len(cell.encode("utf-8")) > MAX_TABLE_CELL_BYTES:
-                raise ValueError("Table cell exceeds preview limits")
-            cost += len(json.dumps(cell, ensure_ascii=True, separators=(",", ":")).encode("utf-8"))
-        return cost
-
-    try:
         # The verified snapshot is read for the whole parse, so the page comes
         # from the bytes whose identity the manifest approved.
-        with stream, io.TextIOWrapper(stream, encoding='utf-8', newline='') as handle:
-            reader = csv.reader(handle, delimiter=delimiter)
-            columns = next(reader, [])
-            # A matrix page carries one extra leading column of row labels beside its
-            # values, so the matrix cap allows that label column on top of the cap
-            # itself; a plain preview keeps its tighter width limit.
-            max_columns = (512 + 1) if request.args.get("matrix") == "1" else 100
-            page_bytes = _TABLE_PAGE_ENVELOPE_BYTES + row_cost(columns, max_columns)
-            if page_bytes > MAX_TABLE_PAGE_BYTES:
-                raise ValueError("Table page exceeds the response byte limit")
-            rows = []
-            has_more = False
-            for index, row in enumerate(reader):
-                if index < offset:
-                    continue
-                if len(rows) == limit:
-                    has_more = True
-                    break
-                cost = row_cost(row, max_columns)
-                if page_bytes + cost > MAX_TABLE_PAGE_BYTES:
-                    raise ValueError("Table page exceeds the response byte limit")
-                page_bytes += cost
-                rows.append(row)
-    except (OSError, UnicodeError, csv.Error, ValueError):
-        logging.exception("Table preview failed for task %s artifact %s", md5sum, relative_path)
-        return jsonify({"error": "Table could not be previewed"}), 400
-    return jsonify({"columns": columns, "rows": rows, "offset": offset, "limit": limit, "has_more": has_more})
+        offset, limit = table_page_bounds(request.args)
+        page = read_table_page(
+            stream,
+            name=relative_path,
+            offset=offset,
+            limit=limit,
+            matrix=request.args.get("matrix") == "1",
+            declared_table=declared_table,
+        )
+    except ResultPreviewError as error:
+        if error.__cause__ is not None:
+            logging.exception("Table preview failed for task %s artifact %s", md5sum, relative_path)
+        return jsonify({"error": str(error)}), 400
+    finally:
+        stream.close()
+    return jsonify(page)
 
 
 @app.route("/compute/api/results/<md5sum>/archive", methods=["POST"])
@@ -3139,6 +3317,8 @@ def get_result_table(md5sum: str, relative_path: str):
 def request_results_archive(md5sum: str):
     if _blocked := require_bearer_auth():
         return _blocked
+    if CONFIG.demo_mode:
+        return _demo_read_only("it does not build result archives.")
     md5sum = _normalize_task_id(md5sum)
     if md5sum is None:
         return jsonify({"error": "Invalid task id"}), 400
@@ -3267,6 +3447,8 @@ def _deliver_published_archive(task: dict[str, Any], archive: str) -> Response:
 def cancel_task(md5sum):
     if _blocked := require_bearer_auth():
         return _blocked
+    if CONFIG.demo_mode:
+        return _demo_read_only("it does not cancel Tasks.")
     md5sum = _normalize_task_id(md5sum)
     if md5sum is None:
         return jsonify({"status": "bad_request", "message": "Invalid task id"}), 400
@@ -3715,6 +3897,8 @@ def delete_task(md5sum):
         return _blocked
     if _blocked := _reject_guest():
         return _blocked
+    if CONFIG.demo_mode:
+        return _demo_read_only("it does not delete Tasks.")
     md5sum = _normalize_task_id(md5sum)
     if md5sum is None:
         return jsonify({"status": "bad_request", "message": "Invalid task id"}), 400
@@ -3738,6 +3922,8 @@ def delete_tasks_batch():  # skipcq: PY-R1000 -- per-task authorization and outc
         return _blocked
     if _blocked := _reject_guest():
         return _blocked
+    if CONFIG.demo_mode:
+        return _demo_read_only("it does not delete Tasks.")
     payload = request.get_json(silent=True) or {}
     md5sums = payload.get("md5sums")
     if not isinstance(md5sums, list):
@@ -5445,6 +5631,8 @@ def admin_adjust_user_gpu_credit(user_id: int):
         return _blocked
     if _blocked := require_bearer_auth():
         return _blocked
+    if CONFIG.demo_mode:
+        return _demo_read_only("it does not adjust GPU credit.")
     user = _get_user_db().get_user(user_id)
     if user is None or user.get("deleted"):
         return jsonify({"error": "User not found"}), 404
@@ -5542,6 +5730,8 @@ def admin_set_user_storage_quota(user_id: int):
         return _blocked
     if _blocked := require_bearer_auth():
         return _blocked
+    if CONFIG.demo_mode:
+        return _demo_read_only("it does not change storage quotas.")
     user = _get_user_db().get_user(user_id)
     if user is None or user.get("deleted"):
         return jsonify({"error": "User not found"}), 404
@@ -5586,6 +5776,8 @@ def admin_set_user_gpu_allowance(user_id: int):
         return _blocked
     if _blocked := require_bearer_auth():
         return _blocked
+    if CONFIG.demo_mode:
+        return _demo_read_only("it does not change GPU allowances.")
     user = _get_user_db().get_user(user_id)
     if user is None or user.get("deleted"):
         return jsonify({"error": "User not found"}), 404
@@ -5622,6 +5814,8 @@ def admin_reset_user_gpu_credit(user_id: int):
         return _blocked
     if _blocked := require_bearer_auth():
         return _blocked
+    if CONFIG.demo_mode:
+        return _demo_read_only("it does not reset GPU credit.")
     user = _get_user_db().get_user(user_id)
     if user is None or user.get("deleted"):
         return jsonify({"error": "User not found"}), 404
@@ -5659,6 +5853,8 @@ def admin_reset_all_gpu_credits():
         return _blocked
     if _blocked := require_bearer_auth():
         return _blocked
+    if CONFIG.demo_mode:
+        return _demo_read_only("it does not reset GPU credit.")
     req = _parse_body(GPUCreditResetRequest)
     if isinstance(req, tuple):
         return req
@@ -5690,6 +5886,8 @@ def admin_gpu_credit_reconciliation():
     if request.method == "POST":
         if _blocked := require_bearer_auth():
             return _blocked
+        if CONFIG.demo_mode:
+            return _demo_read_only("it does not run resource reconciliation.")
         try:
             result = reconcile_slurm_allocations.apply_async().get(timeout=20)
         except Exception:
