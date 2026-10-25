@@ -107,6 +107,30 @@ describe('fleet view helpers', () => {
     expect(workflowLabel('unknown_stage')).toBe('unknown_stage');
   });
 
+  it('names a staged candidate instead of the installed image for reused receipt reasons', () => {
+    const message = 'The staged Runner candidate has no live-test receipt; run the live test to validate it';
+    const withActive = {
+      status: 'NOT_VALIDATED',
+      reason_code: 'RECEIPT_MISSING',
+      message,
+      next_action: 'live-test',
+      active_image: { state: 'UNKNOWN', sha256: null, reason_code: 'STAGED_CANDIDATE_PENDING' },
+      evidence: { ...evidence(), receipt_exists: false, receipt_valid: false },
+    } as unknown as RunnerFleetEntry['readiness'];
+    expect(reasonText(withActive)).toBe(message);
+    expect(reasonText(withActive)).not.toContain('active image');
+
+    // First build: no installed artifact exists, so a receipt code can only
+    // describe the staged candidate.
+    const firstBuild = {
+      ...withActive,
+      active_image: { state: 'MISSING', sha256: null, reason_code: 'SIF_MISSING' },
+      evidence: { ...evidence(), sif_exists: false, receipt_exists: false, receipt_valid: false },
+    } as RunnerFleetEntry['readiness'];
+    expect(reasonText(firstBuild)).toBe(message);
+    expect(reasonText(firstBuild)).not.toContain('active image');
+  });
+
   it('shows an active image only when the server established its identity', () => {
     const identified = entry('demo', 'READY').readiness;
     expect(activeImageLabel(identified)).toBe('Active · aaaaaaaaaaaa…');

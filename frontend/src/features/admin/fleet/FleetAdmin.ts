@@ -174,7 +174,29 @@ export function summarySentence(rows: RunnerFleetEntry[]): string {
 export type FleetFilter = 'all' | 'attention' | 'ready';
 export type FleetSort = 'attention' | 'family' | 'status';
 
+/**
+ * Whether this verdict describes a staged candidate rather than the installed
+ * artifact.
+ *
+ * An unvalidated candidate reuses the active-path receipt codes.  With an
+ * installed file the active image reports that a candidate is pending; without
+ * one, the active path would have returned SIF_MISSING before reading a
+ * receipt, so a receipt code there can only describe the candidate.
+ */
+function describesStagedCandidate(readiness: RunnerReadiness): boolean {
+  if (readiness.active_image?.reason_code === 'STAGED_CANDIDATE_PENDING') return true;
+  return (
+    readiness.evidence?.sif_exists === false &&
+    ['RECEIPT_MISSING', 'RECEIPT_STALE', 'RUNTIME_BUNDLE_CHANGED'].includes(readiness.reason_code)
+  );
+}
+
 export function reasonText(readiness: RunnerReadiness): string {
+  // The generic copy names the active image, which a candidate verdict does not
+  // describe; use the server's candidate-specific message for that row.
+  if (describesStagedCandidate(readiness)) {
+    return readiness.message || 'No explanation recorded.';
+  }
   return REASON_COPY[readiness.reason_code] || readiness.message || 'No explanation recorded.';
 }
 

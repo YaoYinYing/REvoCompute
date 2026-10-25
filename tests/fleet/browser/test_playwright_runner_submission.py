@@ -8,8 +8,9 @@ readiness attestation.  Catalog cards, the method detail, the comparison and the
 Create Task deep link all render that decision: a blocked method stays
 discoverable, but its Create Task control is an explanatory, non-actionable
 control carrying the server's own reason and recovery action.  The Create Task
-page states the same reason at mount; its Run control remains the server's
-boundary to refuse, never a client-side readiness oracle.
+page states the same reason at mount and turns its primary control into a
+refresh of that projection; the control grants nothing, and preflight and POST
+remain the boundary.
 """
 
 from __future__ import annotations
@@ -110,14 +111,20 @@ def _detail(name: str, label: str, submission: dict) -> dict:
     }
 
 
-def _install_methods(page: Page) -> None:
+def _install_methods(page: Page) -> dict[str, dict]:
+    """Serve the catalog and each method detail; return the mutable projections."""
+    state = {name: submission for name, _label, submission in METHODS}
+
     def handler(payload):
         return lambda route, *_request: route.fulfill(json=payload)
 
     # Registered after ``_install_app`` so these responses take precedence.
     page.route(f"{ORIGIN}/compute/api/types", handler(_catalog()))
-    for name, label, submission in METHODS:
-        page.route(f"{ORIGIN}/compute/api/types/{name}", handler(_detail(name, label, submission)))
+    for name, label, _submission in METHODS:
+        page.route(
+            f"{ORIGIN}/compute/api/types/{name}",
+            lambda route, _request, name=name, label=label: route.fulfill(json=_detail(name, label, state[name])),
+        )
         page.route(
             f"{ORIGIN}/compute/api/task-parameters/{name}",
             handler(
@@ -129,6 +136,7 @@ def _install_methods(page: Page) -> None:
                 }
             ),
         )
+    return state
 
 
 def _card(page: Page, label: str):
@@ -189,24 +197,86 @@ def test_compare_marks_a_blocked_method_without_offering_submission(page: Page):
     expect(configure).to_contain_text(BLOCKED["message"])
 
 
-def test_create_task_deep_link_states_the_server_reason_at_mount(page: Page):
-    _install_app(page)
-    _install_methods(page)
-    page.goto(f"{ORIGIN}/compute/create_task")
+def test_create_task_deep_link_rechecks_availability_instead_of_submitting(page: Page):
+    requested = _install_app(page)
+    projections = _install_methods(page)
+    preflight_calls: list[str] = []
+    post_calls: list[str] = []
 
+    def refuse_preflight(route, request):
+        preflight_calls.append(request.url)
+        route.fulfill(
+            status=503,
+            json={
+                "valid": False,
+                "security": {"status": "passed"},
+                "contract": {"status": "passed"},
+                "admission": {
+                    "allowed": False,
+                    "runner_ready": False,
+                    "infrastructure_ready": True,
+                    "infrastructure_status": "READY",
+                },
+                "normalized_params": {},
+                "inputs": [],
+                "warnings": [],
+                "errors": [
+                    {
+                        "code": "admission_unavailable",
+                        "message": "Runner readiness evidence is unavailable",
+                        "blocking": True,
+                    }
+                ],
+            },
+        )
+
+    def record_post(route, request):
+        post_calls.append(request.url)
+        route.fulfill(status=503, json={"error": "Runner unavailable"})
+
+    # Registered after the app fixtures so these take precedence.
+    page.route(f"{ORIGIN}/compute/api/preflight/blocked_method", refuse_preflight)
+    page.route(f"{ORIGIN}/compute/api/post", record_post)
+
+    page.goto(f"{ORIGIN}/compute/create_task")
     ready = page.locator("button.ct-method", has_text="Ready method")
     blocked = page.locator("button.ct-method", has_text="Blocked method")
     expect(blocked).to_contain_text(BLOCKED["message"])
     expect(ready).not_to_contain_text(BLOCKED["message"])
 
-    blocked.click()
+    page.goto(f"{ORIGIN}/compute/create_task?task_type=blocked_method")
     expect(page.locator(".ct-validation")).to_contain_text(BLOCKED["message"])
     expect(page.locator(".ct-validation")).to_contain_text("Recommended: Run the live test")
-    # The page explains the server's decision; the Run control is not a
-    # client-side readiness gate, and the server remains the boundary.
-    expect(page.locator("button.ct-primary")).to_be_enabled()
+    # The blocked method stays discoverable, but the primary control refreshes
+    # the server's projection rather than presenting a submission.
+    control = page.locator("button.ct-primary")
+    expect(control).to_have_text("Recheck availability")
+    expect(control).to_be_enabled()
+
+    control.click()
+    expect(page.locator(".ct-status")).to_contain_text("still not accepting new tasks")
+    expect(control).to_have_text("Recheck availability")
+    assert preflight_calls == []
+    assert post_calls == []
+    assert any(url.endswith("/compute/api/types/blocked_method") for url in requested)
+
+    # The projection is point-in-time. A recheck adopts the fresh server answer.
+    projections["blocked_method"] = READY
+    control.click()
+    expect(control).to_have_text("Run task")
+    expect(page.locator(".ct-validation")).not_to_contain_text(BLOCKED["message"])
+    assert preflight_calls == []
+    assert post_calls == []
+
+    # A stale-ready projection grants nothing: the authoritative preflight still
+    # refuses, so no Task is created and the control returns to a recheck.
+    control.click()
+    expect(page.locator(".ct-validation")).to_contain_text("Runner readiness evidence is unavailable")
+    expect(page.locator("button.ct-primary")).to_have_text("Recheck availability")
+    assert len(preflight_calls) == 1
+    assert post_calls == []
 
     page.goto(f"{ORIGIN}/compute/create_task?task_type=unknown_method")
     expect(page.locator(".ct-validation")).to_contain_text(UNKNOWN["message"])
     expect(page.locator(".ct-validation")).to_contain_text("Recommended: Run Runner Doctor")
-    expect(page.locator("button.ct-primary")).to_be_enabled()
+    expect(page.locator("button.ct-primary")).to_have_text("Recheck availability")

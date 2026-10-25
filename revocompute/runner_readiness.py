@@ -197,7 +197,11 @@ def _receipt_evidence(
     try:
         expected_bundle = bundle_digest(state, family)
     except (OSError, KeyError, TypeError, ValueError, RegistryError):
-        expected_bundle = None
+        # ``receipt_valid_for_artifact`` treats an unresolvable bundle as "no
+        # valid receipt".  Substituting ``None`` here could instead validate a
+        # bundle-less receipt, so a promotion verdict could name an activation
+        # the host step refuses.  Fail the evidence attribution instead.
+        return _ReceiptEvidence({}, None, "Runner Runtime Bundle binding cannot be resolved")
     expected_identity = {
         "build_provenance_digest": build_digest,
         "runtime_bundle_sha256": expected_bundle,
@@ -257,7 +261,9 @@ def _staged_candidate_readiness(
     The candidate is not the artifact execution loads, so its digest is never
     presented as the active identity.  Its build/receipt evidence is the evidence
     ``promote-sifs`` requires, so it is reported rather than left at its default
-    "no receipt" value.
+    "no receipt" value.  The verdict only names promotion when the deployment-host
+    step would accept the candidate; an unvalidated candidate is told to run the
+    live test first.
     """
     evidence = _receipt_evidence(state, family, build_digest, sif_sha256)
     if evidence.failure is not None:
@@ -271,6 +277,45 @@ def _staged_candidate_readiness(
             build_provenance_current=build_record is not None,
             build_provenance_digest=build_digest,
         )
+    fields = {
+        **evidence.fields,
+        # The evidence belongs to the candidate; this verdict does not establish
+        # the installed artifact's identity, so the active digest stays unknown
+        # while the receipt identifies the candidate.
+        "sif_sha256": None,
+        "build_provenance_current": build_record is not None,
+    }
+    # The evidence check is at least as strong as the one ``promote_sifs``
+    # applies: the build record's digest is matched against the receipt, so a
+    # promotion verdict is never one the host step would refuse.
+    if not evidence.fields["receipt_valid"]:
+        receipt = evidence.receipt
+        if receipt is None and not evidence.fields["receipt_exists"]:
+            return _result(
+                family,
+                RunnerReadinessStatus.NOT_VALIDATED,
+                "RECEIPT_MISSING",
+                "The staged Runner candidate has no live-test receipt; run the live test to validate it",
+                doctor_ok=True,
+                sif_exists=active_exists,
+                **fields,
+            )
+        bundle_changed = (
+            evidence.fields["runtime_bundle_sha256"] is not None
+            and _string_field(receipt, "runtime_bundle_sha256") != evidence.fields["runtime_bundle_sha256"]
+        )
+        return _result(
+            family,
+            RunnerReadinessStatus.VALIDATION_STALE,
+            "RUNTIME_BUNDLE_CHANGED" if bundle_changed else "RECEIPT_STALE",
+            "The Runtime Bundle changed; run the live test against the staged Runner candidate to validate it"
+            if bundle_changed
+            else "The staged Runner candidate's live-test receipt does not match its current identity; "
+            "run the live test to validate it",
+            doctor_ok=True,
+            sif_exists=active_exists,
+            **fields,
+        )
     return _result(
         family,
         RunnerReadinessStatus.BUILD_STALE,
@@ -281,14 +326,7 @@ def _staged_candidate_readiness(
         doctor_ok=True,
         next_action="promote",
         sif_exists=active_exists,
-        **{
-            **evidence.fields,
-            # The evidence belongs to the candidate; this verdict does not
-            # establish the installed artifact's identity, so the active digest
-            # stays unknown while the receipt identifies the candidate.
-            "sif_sha256": None,
-            "build_provenance_current": build_record is not None,
-        },
+        **fields,
     )
 
 

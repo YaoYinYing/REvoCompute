@@ -79,7 +79,12 @@ def _row(name: str, variant: str) -> dict:
                 "unknown": "DOCTOR_FAILED",
                 "promotion": "CANDIDATE_AWAITING_PROMOTION",
             }[variant],
-            "message": "Evidence for the fleet rendering fixture.",
+            "message": (
+                "A Runner image candidate is staged for promotion; activate it with the deployment-host "
+                "promote-sifs step"
+                if variant == "promotion"
+                else "Evidence for the fleet rendering fixture."
+            ),
             "next_action": "none" if variant == "active" else "promote" if variant == "promotion" else "live-test",
             "active_image": image,
             "evidence": evidence,
@@ -197,7 +202,7 @@ def test_fleet_reports_the_candidate_receipt_without_an_active_claim(page: Page,
     dialog = page.locator(".fleet-evidence-dialog")
     expect(dialog).to_be_visible()
     expect(dialog).to_contain_text(
-        "An image candidate is staged; activate it with promote-sifs before new submissions."
+        "A Runner image candidate is staged for promotion; activate it with the deployment-host promote-sifs step"
     )
 
     def fact(label: str):

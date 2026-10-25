@@ -359,13 +359,31 @@ def test_candidate_without_an_active_sif_awaits_promotion(evidence):
     """The first-build flow: no active SIF, only the validated candidate."""
     state, family, active = evidence
     active.unlink()
-    Path(f"{family.slurm_image}.next").write_bytes(b"validated-candidate")
+    candidate = Path(f"{family.slurm_image}.next")
+    candidate.write_bytes(b"validated-candidate")
+    _write_receipt(family, candidate)
 
     result = resolve_runner_readiness(state, family)
 
     assert result.status is RunnerReadinessStatus.BUILD_STALE
     assert result.reason_code == "CANDIDATE_AWAITING_PROMOTION"
     assert result.next_action == "promote"
+    assert result.sif_exists is False
+    assert result.ready is False
+
+
+def test_first_build_candidate_without_a_receipt_is_told_to_validate(evidence):
+    """A staged first build is not promotable until a receipt validates it."""
+    state, family, active = evidence
+    active.unlink()
+    Path(f"{family.slurm_image}.next").write_bytes(b"unvalidated-candidate")
+
+    result = resolve_runner_readiness(state, family)
+
+    assert result.status is RunnerReadinessStatus.NOT_VALIDATED
+    assert result.reason_code == "RECEIPT_MISSING"
+    assert result.next_action == "live-test"
+    assert "staged Runner candidate" in result.message
     assert result.sif_exists is False
     assert result.ready is False
 
