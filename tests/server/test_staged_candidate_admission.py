@@ -679,3 +679,44 @@ def test_an_unrecorded_candidate_identity_names_a_recovery_that_clears_it(monkey
     assert recovered.reason_code == "CANDIDATE_AWAITING_PROMOTION"
     promote_sifs(state, [family])
     assert active.read_bytes() == b"validated-candidate-B"
+
+
+def test_an_unresolvable_bundle_binding_is_a_verdict_not_an_exception(monkeypatch, tmp_path):
+    """The staged path must return CONFIGURATION_INVALID, never raise, for this."""
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={
+            "RUNNER_UID": "1234",
+            "RUNNER_GID": "5678",
+            "RUNNER_USERNAME": "revodesign",
+            "RUNNER_GROUP": "revodesign",
+            "REVODESIGN_APPTAINER_VERSION": "apptainer version 1.4.0",
+        },
+    )
+    state, family = _deployment(module)
+    active = Path(family.slurm_image)
+    active.parent.mkdir(parents=True, exist_ok=True)
+    active.write_bytes(b"validated-active-A")
+    _record_artifact(state, family, active)
+    candidate = Path(f"{family.slurm_image}.next")
+    candidate.write_bytes(b"candidate-B")
+    _record_artifact(state, family, candidate)
+
+    # A candidate identity is recorded, but the Runtime Bundle binding that the
+    # receipt must match cannot be resolved.
+    monkeypatch.setattr(
+        "revocompute.runner_readiness.bundle_digest",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("bundle index unreadable")),
+    )
+
+    verdict = resolve_runner_readiness(state, family)
+    assert verdict.ready is False
+    assert verdict.status.value == "NOT_CONFIGURED"
+    assert verdict.reason_code == "CONFIGURATION_INVALID"
+    assert verdict.next_action == "doctor"
+    assert verdict.build_provenance_current is False
+    assert verdict.sif_exists is True
+    # The Fleet projection renders that verdict rather than failing.
+    row = next(item for item in fleet_view(state) if item["runner_family"] == "cpu_runner")
+    assert row["readiness"]["reason_code"] == "CONFIGURATION_INVALID"

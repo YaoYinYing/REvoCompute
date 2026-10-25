@@ -298,7 +298,10 @@ def _staged_candidate_readiness(
             evidence.failure,
             doctor_ok=True,
             sif_exists=active_exists,
-            build_provenance_current=build_record is not None,
+            # Same reason as the unrecorded-identity branch above: no evidence
+            # was attributable to the candidate, so its build provenance is not
+            # established as current.
+            build_provenance_current=False,
             build_provenance_digest=build_digest,
         )
     fields = {
