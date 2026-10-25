@@ -19,6 +19,7 @@ from pathlib import Path
 from conftest import _load_pssm_module, _test_client_auth
 from revocompute.artifact_evidence import write_artifact_evidence
 from revocompute.live_tests import LIVE_TEST_RECEIPT_VERSION, atomic_write_json
+from revocompute.runner_admin_view import fleet_view
 from revocompute.runner_host import ServerHostPaths
 from revocompute.runner_live_test import load_validation_identity
 from revocompute.runner_readiness import bundle_digest, load_instance_families, resolve_runner_readiness
@@ -165,6 +166,24 @@ def test_staged_candidate_is_not_ready_and_cannot_create_submission_side_effects
     assert staged.sif_sha256 is None
     assert staged.required_smoke_cases == ("minimal-synthetic",)
     assert staged.passed_smoke_cases == ("minimal-synthetic",)
+
+    # The admin Fleet forwards those facts rather than dataclass defaults: the
+    # candidate receipt is visible, the active identity is not claimed.
+    fleet_row = next(row for row in fleet_view(state) if row["runner_family"] == "cpu_runner")
+    assert fleet_row["readiness"]["active_image"] == {
+        "state": "UNKNOWN",
+        "sha256": None,
+        "reason_code": "STAGED_CANDIDATE_PENDING",
+    }
+    fleet_evidence = fleet_row["readiness"]["evidence"]
+    assert fleet_evidence["sif_sha256"] is None
+    assert fleet_evidence["build_provenance_current"] is True
+    assert fleet_evidence["runtime_bundle_sha256"] == bundle_digest(state, family)
+    assert fleet_evidence["receipt_exists"] is True
+    assert fleet_evidence["receipt_valid"] is True
+    assert fleet_evidence["receipt_tested_at"]
+    assert fleet_evidence["required_smoke_cases"] == ["minimal-synthetic"]
+    assert fleet_evidence["passed_smoke_cases"] == ["minimal-synthetic"]
 
     # Publish exactly what the controller publishes, then submit: no Task ID,
     # upload, reservation, or scheduler call may be created for the installed
