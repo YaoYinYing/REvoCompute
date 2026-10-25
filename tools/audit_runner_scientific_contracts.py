@@ -64,10 +64,12 @@ Usage::
 from __future__ import annotations
 
 import argparse
-import importlib.util
+import hashlib
+import importlib
 import json
 import sys
 import tempfile
+import types
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -374,27 +376,55 @@ def _result_tree(task: Any, repo_root: Path) -> dict[str, Any] | None:
     return dict(tree) if tree else None
 
 
+_CHECKOUT_PACKAGES: dict[Path, str] = {}
+
+
+def _checkout_package(package_root: Path) -> str:
+    """Register one synthetic package for an audited checkout's ``revocompute``.
+
+    The package exists only to give the checkout's modules a package context for
+    their relative imports (``from .provenance import ...``). It is registered
+    under its own name, never as ``revocompute``, so the running package keeps its
+    identity; ``__path__`` points at the checkout's directory and no ``sys.path``
+    entry is added.
+    """
+    root = package_root.resolve()
+    cached = _CHECKOUT_PACKAGES.get(root)
+    if cached is not None:
+        return cached
+    name = f"_revocompute_checkout_{hashlib.sha256(str(root).encode('utf-8')).hexdigest()[:16]}"
+    if name not in sys.modules:
+        package = types.ModuleType(name)
+        package.__path__ = [str(root)]
+        package.__package__ = name
+        package.__file__ = str(root / "__init__.py")
+        sys.modules[name] = package
+    _CHECKOUT_PACKAGES[root] = name
+    return name
+
+
 def _checkout_module(repo_root: Path, name: str) -> Any:
     """Load ``revocompute.<name>`` from the checkout ``--repo-root`` names.
 
     ``--repo-root`` is the revision under audit, so its replay and provenance
     rules are the ones that decide a label. This tool's own tree is the running
     package, so it imports normally. Another checkout's module is executed from
-    its own file through a private spec -- never through a ``sys.path`` entry --
-    so the running ``revocompute`` package is not shadowed. A corpus root that
-    carries no ``revocompute`` package (a scratch tree holding only bundles)
-    keeps the running module.
+    its own file through a private package namespace -- never through a ``sys.path``
+    entry -- so the running ``revocompute`` package is not shadowed and the
+    checkout's relative imports resolve. Absolute imports inside those modules
+    (``provenance`` imports ``revocompute.api_receipt``) still bind the running
+    package; that is a known, bounded limitation of auditing a declaration-only
+    checkout. A corpus root that carries no ``revocompute`` package (a scratch
+    tree holding only bundles) keeps the running module.
     """
     package_root = repo_root.resolve() / "revocompute"
     if package_root == _REPO_ROOT / "revocompute" or not package_root.is_dir():
         return importlib.import_module(f"revocompute.{name}")
-    source = package_root / f"{name}.py"
-    spec = importlib.util.spec_from_file_location(f"_revocompute_checkout_{name}", source)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"cannot load {source}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    qualified = f"{_checkout_package(package_root)}.{name}"
+    loaded = sys.modules.get(qualified)
+    if loaded is not None:
+        return loaded
+    return importlib.import_module(qualified)
 
 
 def _load_bundle(repo_root: Path, path: Path) -> dict[str, Any] | None:

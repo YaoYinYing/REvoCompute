@@ -722,3 +722,50 @@ def test_a_stale_production_receipt_pointer_is_not_promoted(tmp_path):
     item = tool._label_corpus_item(scratch, missing)
     assert item["label"] == "unverified_declaration"
     assert "is not present" in item["detail"]
+
+
+def test_a_foreign_checkout_bundle_loads_through_its_own_package_namespace(tmp_path):
+    """An audited checkout's relative imports resolve inside its own namespace.
+
+    The corpus scanner reads another revision's ``replay_bundle`` so that
+    revision's rules decide the label. The module imports ``.provenance`` while
+    loading, so executing it as a bare top-level module raised ``ImportError``
+    instead of producing an inventory item. The checkout is loaded through a
+    synthetic package whose ``__path__`` is the checkout's own directory, without
+    adding a ``sys.path`` entry or replacing the running ``revocompute`` package.
+    """
+    import shutil
+    import sys
+
+    tool = _load_tool()
+    checkout = tmp_path / "checkout"
+    package = checkout / "revocompute"
+    package.mkdir(parents=True)
+    for name in ("replay_bundle.py", "provenance.py"):
+        shutil.copyfile(ROOT / "revocompute" / name, package / name)
+    bundle = checkout / "tests" / "data" / "freebindcraft_replay" / "2kl8_binders_f7d61fa4.json"
+    bundle.parent.mkdir(parents=True)
+    shutil.copyfile(
+        ROOT / "tests" / "data" / "freebindcraft_replay" / "2kl8_binders_f7d61fa4.json",
+        bundle,
+    )
+
+    replay_bundle = tool._checkout_module(checkout, "replay_bundle")
+    loaded = tool._load_bundle(checkout, bundle)
+    label = tool._label_corpus_item(checkout, bundle)
+
+    assert loaded is not None
+    assert loaded["task"]["type"] == "freebindcraft"
+    assert label["label"] == "synthetic_mock"
+    assert label["task_type"] == "freebindcraft"
+    # One synthetic package per resolved checkout root, one execution per
+    # submodule: repeated lookups reuse the loaded module.
+    assert tool._checkout_module(checkout, "replay_bundle") is replay_bundle
+    package_name = replay_bundle.__name__.rsplit(".", 1)[0]
+    assert package_name.startswith("_revocompute_checkout_")
+    assert sys.modules[package_name].__path__ == [str(package.resolve())]
+    # Known limitation: absolute imports inside the audited module still bind the
+    # running package, because the synthetic namespace does not re-root them.
+    from revocompute import contracts
+
+    assert replay_bundle.validate_openapi_payload is contracts.validate_openapi_payload
