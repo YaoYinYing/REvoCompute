@@ -589,6 +589,7 @@ def test_narrow_surfaces_that_fit_do_not_overflow(page: Page) -> None:
         assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth"), path
 
 
+@pytest.mark.parametrize("width", [320, 390])
 @pytest.mark.parametrize(
     ("path", "selector"),
     [
@@ -596,17 +597,17 @@ def test_narrow_surfaces_that_fit_do_not_overflow(page: Page) -> None:
         (f"/compute/results/{TASK_ID}", ".result-header"),
     ],
 )
-def test_narrow_content_heavy_surfaces_fit_the_viewport(page: Page, path: str, selector: str) -> None:
-    """Create Task and the Result Workspace fit the 320px viewport floor.
+def test_narrow_content_heavy_surfaces_fit_the_viewport(page: Page, path: str, selector: str, width: int) -> None:
+    """Create Task and the Result Workspace fit the phone viewport floor.
 
     Content-heavy surfaces hold the same 320px floor the rest of the app holds,
-    so at the narrowest supported width neither the protocol column nor the
-    result header actions push the document past the viewport. The surface's own
-    content node is awaited first, so the measurement is of the settled layout
-    rather than of a partially-rendered shell.
+    and the 390px width a common phone reports; at both, neither the protocol
+    column nor the result header actions push the document past the viewport.
+    The surface's own content node is awaited first, so the measurement is of
+    the settled layout rather than of a partially-rendered shell.
     """
     mount_scenario(page, controlled_scenario().with_result("minimal_success"))
-    page.set_viewport_size({"width": 320, "height": 760})
+    page.set_viewport_size({"width": width, "height": 760})
     page.goto(f"{ORIGIN}{path}")
     expect(page.locator(selector)).to_be_visible()
 
