@@ -2506,6 +2506,7 @@ export interface components {
             category: string;
             summary: string;
             access: components["schemas"]["TaskCatalogAccess"];
+            submission: components["schemas"]["TaskSubmissionState"] | null;
             detail_url: string;
             parameters_url: string;
         };
@@ -2514,6 +2515,16 @@ export interface components {
             granted?: boolean;
             /** @enum {string|null} */
             request_status?: "pending" | "approved" | "rejected" | "cancelled" | null;
+        };
+        /** @description The submission decision this deployment applies to the method, or null when this deployment does not gate submission on Runner readiness. The anonymous shape is the boolean only; an authenticated reader also receives the server's reason and recovery action. Never contains artifact paths, digests, or receipts. */
+        TaskSubmissionState: {
+            submittable: boolean;
+        } | {
+            ready: boolean;
+            status: components["schemas"]["RunnerReadinessStatus"];
+            reason_code: string;
+            message: string;
+            next_action: string;
         };
         TaskTypeDetail: {
             name: string;
@@ -2533,6 +2544,7 @@ export interface components {
             citations: components["schemas"]["TaskCitation"][];
             workflow: components["schemas"]["WorkflowStage"][];
             access: components["schemas"]["RunnerAccess"];
+            submission: components["schemas"]["TaskSubmissionState"] | null;
             detail_url: string;
             parameters_url: string;
             max_request_bytes: number;

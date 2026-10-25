@@ -51,6 +51,22 @@ def resolve_submission_readiness(server_dir: str | Path, runner_name: str) -> Ad
         return AdmissionEvidence({"runner_family": runner_name})
 
 
+def submission_admission(
+    server_dir: str | Path, runner_name: str, *, manage_db: Any
+) -> AdmissionEvidence | None:
+    """The evidence this deployment applies to a submission, or ``None`` when ungated.
+
+    Submission admission is a deployment decision: a server without the managed
+    Scheduler enabled does not consult Runner readiness at all.  Every surface
+    that reports whether a Runner may accept work asks this function, so the
+    public projection and the submission boundary cannot disagree about whether
+    the evidence is being enforced.
+    """
+    if manage_db is None or not manage_db.slurm_enabled():
+        return None
+    return resolve_submission_readiness(server_dir, runner_name)
+
+
 def invalidate_submission_attestations(
     server_dir: str | Path, runner_names: Iterable[str] | None = None
 ) -> None:

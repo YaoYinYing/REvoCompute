@@ -230,8 +230,13 @@ def test_staged_candidate_lifecycle_preserves_active_and_unrelated_evidence(evid
     )
     _write_receipt(family, candidate)
 
-    assert resolve_runner_readiness(state, family).status is RunnerReadinessStatus.READY
-    assert resolve_runner_readiness(state, family).status is RunnerReadinessStatus.READY
+    staged = resolve_runner_readiness(state, family)
+    assert staged.status is RunnerReadinessStatus.BUILD_STALE
+    assert staged.reason_code == "CANDIDATE_AWAITING_PROMOTION"
+    assert staged.next_action == "promote"
+    assert staged.ready is False
+    # Only the family with a staged candidate is withheld; an unrelated active
+    # Runner keeps its verdict, and neither receipt is rewritten by the build.
     assert resolve_runner_readiness(state, other).status is RunnerReadinessStatus.READY
     assert active_receipt_path.read_bytes() == active_receipt
     assert other_receipt_path.read_bytes() == other_receipt

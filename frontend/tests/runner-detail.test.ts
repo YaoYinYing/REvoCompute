@@ -19,6 +19,7 @@ const detail = (overrides: Partial<TaskTypeDetail> = {}): TaskTypeDetail => ({
   output_summary: 'A report.', considerations: [], definition_version: 4,
   runtime_family: 'example', gpus: false, requires_network: false, inputs: [], citations: [], workflow: [],
   access: { restricted: false }, detail_url: '/compute/api/types/sequence_demo',
+  submission: { ready: true, status: 'READY', reason_code: 'READY', message: 'Ready.', next_action: 'none' },
   parameters_url: '/compute/api/task-parameters/sequence_demo', max_request_bytes: 1048576,
   input_workspace: {} as never,
   ...overrides,

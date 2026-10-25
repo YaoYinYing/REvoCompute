@@ -73,6 +73,7 @@ export interface TaskFormDefinition {
   gpus?: boolean;
   requires_network?: boolean;
   access: components['schemas']['RunnerAccess'];
+  submission: components['schemas']['TaskSubmissionState'] | null;
   parameters_url: string;
   inputs: TaskInputRole[];
   input_workspace: WorkspaceContract;

@@ -90,8 +90,17 @@ def _result(
     message: str,
     *,
     doctor_ok: bool,
+    next_action: str | None = None,
     **evidence: Any,
 ) -> RunnerReadiness:
+    default_action = {
+        RunnerReadinessStatus.NOT_CONFIGURED: "doctor",
+        RunnerReadinessStatus.NOT_BUILT: "build-sif",
+        RunnerReadinessStatus.BUILD_STALE: "build-sif",
+        RunnerReadinessStatus.NOT_VALIDATED: "live-test",
+        RunnerReadinessStatus.VALIDATION_STALE: "live-test",
+        RunnerReadinessStatus.READY: "none",
+    }[status]
     return RunnerReadiness(
         runner_family=family.name,
         status=status,
@@ -99,14 +108,7 @@ def _result(
         message=message,
         doctor_ok=doctor_ok,
         sif_path=family.slurm_image,
-        next_action={
-            RunnerReadinessStatus.NOT_CONFIGURED: "doctor",
-            RunnerReadinessStatus.NOT_BUILT: "build-sif",
-            RunnerReadinessStatus.BUILD_STALE: "build-sif",
-            RunnerReadinessStatus.NOT_VALIDATED: "live-test",
-            RunnerReadinessStatus.VALIDATION_STALE: "live-test",
-            RunnerReadinessStatus.READY: "none",
-        }[status],
+        next_action=default_action if next_action is None else next_action,
         **evidence,
     )
 
@@ -187,6 +189,25 @@ def resolve_runner_readiness(state, family: RuntimeFamily) -> RunnerReadiness:
             "SIF_MISSING",
             "Active Runner SIF is missing",
             doctor_ok=True,
+        )
+
+    # A staged candidate is not the artifact execution loads.  The build/live-
+    # test evidence is content-addressed and path-agnostic, so a candidate built
+    # under the current provenance would otherwise make readiness adopt its
+    # digest while ``<sif>`` still holds the old file.  Submission readiness is a
+    # verdict about the artifact that will execute, so it fails closed until the
+    # candidate is promoted; the live-test action itself is unaffected because
+    # it validates the candidate through the worker, not through this verdict.
+    if Path(f"{family.slurm_image}.next").is_file():
+        return _result(
+            family,
+            RunnerReadinessStatus.BUILD_STALE,
+            "CANDIDATE_AWAITING_PROMOTION",
+            "A Runner image candidate is staged for promotion; activate it with the deployment-host "
+            "promote-sifs step, or discard the candidate, before new submissions",
+            doctor_ok=True,
+            next_action="promote",
+            sif_exists=True,
         )
 
     sif_sha256 = None

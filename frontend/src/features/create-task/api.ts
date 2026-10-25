@@ -134,6 +134,8 @@ export async function getTaskDefinition(name: string, signal?: AbortSignal): Pro
     runtime_family: typeof raw.runtime_family === 'string' ? raw.runtime_family : undefined,
     gpus: raw.gpus === true, requires_network: raw.requires_network === true,
     access: object(raw.access, t('ct.payload.field.taskAccess')) as components['schemas']['RunnerAccess'], parameters_url: parametersUrl,
+    submission: raw.submission && typeof raw.submission === 'object' && !Array.isArray(raw.submission)
+      ? raw.submission as TaskFormDefinition['submission'] : null,
     inputs: Array.isArray(raw.inputs) ? raw.inputs as components['schemas']['TaskInputRole'][] : [],
     input_workspace: parseWorkspace(raw.input_workspace),
     max_request_bytes: typeof raw.max_request_bytes === 'number' ? raw.max_request_bytes : Number.MAX_SAFE_INTEGER,

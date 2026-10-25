@@ -49,6 +49,7 @@ const REASON_COPY: Record<string, string> = {
   DOCTOR_FAILED: 'The Runner contract failed validation.',
   CONFIGURATION_INVALID: 'The Runner configuration or its build inputs cannot be resolved.',
   RUNNER_UNKNOWN: 'This Runner family is not enabled on this deployment.',
+  CANDIDATE_AWAITING_PROMOTION: 'An image candidate is staged; activate it with promote-sifs before new submissions.',
 };
 
 const STATUS_LABEL: Record<string, string> = {

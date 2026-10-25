@@ -264,6 +264,15 @@ def runner_access_payload(access: AccessState) -> dict[str, Any]:
     return payload
 
 
+READY_SUBMISSION: dict[str, Any] = {
+    "ready": True,
+    "status": "READY",
+    "reason_code": "READY",
+    "message": "Active Runner SIF passed all required current smoke cases",
+    "next_action": "none",
+}
+
+
 def build_runner_summary(definition: RunnerDefinition) -> dict[str, Any]:
     payload = {
         "name": definition.name,
@@ -271,6 +280,7 @@ def build_runner_summary(definition: RunnerDefinition) -> dict[str, Any]:
         "category": definition.category,
         "summary": definition.summary,
         "access": catalog_access_payload(definition.access),
+        "submission": dict(READY_SUBMISSION),
         "detail_url": f"/compute/api/types/{definition.name}",
         "parameters_url": f"/compute/api/task-parameters/{definition.name}",
     }
@@ -343,6 +353,7 @@ def build_detail(definition: RunnerDefinition) -> dict[str, Any]:
         "output_summary": definition.output_summary,
         "considerations": list(definition.considerations),
         "access": runner_access_payload(definition.access),
+        "submission": dict(READY_SUBMISSION),
         "detail_url": f"/compute/api/types/{definition.name}",
         "parameters_url": f"/compute/api/task-parameters/{definition.name}",
         "definition_version": 4,

@@ -5,6 +5,7 @@ import { InputWorkspace } from './input-workspace/InputWorkspace';
 import type { PresetApplication, WorkspacePreset } from './input-workspace/InputWorkspace';
 import { buildSubmissionFormData } from './submission';
 import type { TaskCatalog, TaskFormDefinition, TaskPreflight, TaskSummary } from './types';
+import { submissionNotice } from '../runners/readiness-copy';
 import { t } from '../../app/i18n';
 import { loadEnvironment } from '../../app/environment';
 
@@ -186,6 +187,10 @@ export class CreateTask {
     const button = node('button', 'ct-method'); button.type = 'button';
     button.append(node('strong', '', task.display_name), node('span', '', task.summary));
     if (task.access.restricted) button.append(node('small', `ct-access ${task.access.granted ? 'granted' : ''}`, task.access.granted ? t('ct.access.granted') : task.access.request_status === 'pending' ? t('ct.access.requested') : t('ct.access.restricted')));
+    // The chooser stays discoverable, but a method the server will refuse is
+    // never presented as ready to submit. The reason is the server's own.
+    const notice = submissionNotice(task.submission);
+    if (notice) button.append(node('small', 'ct-access', notice.message || t('ct.submissionBlocked')));
     button.addEventListener('click', () => void this.selectTask(task.name)); return button;
   }
 
@@ -280,6 +285,10 @@ export class CreateTask {
     const access = this.definition.access;
     if (access.restricted && !access.granted) errors.push(access.request_status === 'pending' ? t('ct.access.pending') : t('ct.access.required'));
     const preflight = this.preflight;
+    // A deep link cannot bypass admission. The page states the server's own
+    // reason at mount, but the Run control stays available: preflight and POST
+    // are the boundary, and a cached verdict is advice rather than policy.
+    const mountBlocked = preflight ? null : submissionNotice(this.definition.submission);
     this.validation.replaceChildren();
     let blockers = 0;
     const blocker = (message: string): void => { this.validation.append(this.validationRow('error', message)); blockers += 1; };
@@ -298,6 +307,9 @@ export class CreateTask {
       if (admission.runner_ready === false && !codes.has('admission_unavailable')) blocker(t('ct.runnerUnavailable'));
       if (admission.infrastructure_status && !admission.infrastructure_ready && !codes.has('infrastructure_unavailable')) blocker(t('ct.infrastructure', { status: admission.infrastructure_status.toLowerCase() }));
       preflight.warnings.forEach(item => this.validation.append(this.validationRow('info', item.message)));
+    } else if (mountBlocked) {
+      const reason = mountBlocked.message || t('ct.submissionBlocked');
+      this.validation.append(this.validationRow('info', mountBlocked.recovery ? `${reason} ${mountBlocked.recovery}` : reason));
     } else if (!this.actionFailed && !this.environmentUnresolved) this.validation.append(this.validationRow('info', t(this.demoEnvironment ? 'ct.readyPreview' : 'ct.ready')));
     const counts = blockers;
     this.validationSummary.hidden = counts === 0;
