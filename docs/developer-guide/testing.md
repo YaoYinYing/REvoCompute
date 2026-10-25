@@ -234,6 +234,28 @@ make test-boundaries
 python -m revocompute.app
 ```
 
+### Interpreter for the process-isolation and restart contracts
+
+`tests/test_process_isolation.py` and `tests/test_restart_ctl.py` launch
+`run/restart.sh` and a fake-Docker `python -`. Both must run under the project
+environment. An ambient Conda or system `python3` earlier on `PATH` lacks the
+controller's dependencies, so the controller exits before any docker command is
+recorded: 48 of the block's then-135 tests failed on one developer host while the
+same tests passed in CI.
+Run the block under the project interpreter:
+
+```bash
+./.venv/bin/python -m pytest tests/test_process_isolation.py tests/test_restart_ctl.py -q
+```
+
+The harness names its own interpreter through `REVODESIGN_PYTHON`, which
+`run/restart.sh` already honours, and through the fake-Docker shim, so ambient
+`PATH` order no longer decides which interpreter runs. `run/restart.sh` and its
+interpreter semantics are unchanged. The harness checks the interpreter by
+running the controller entry point (not only importing its package), so an
+interpreter that is missing project dependencies fails with the supported
+invocation instead of an opaque subprocess traceback.
+
 Security regression checks for Docker socket exposure, admin self-lockout,
 banned users, and login throttling belong to this suite. The controls those
 checks protect are documented in
@@ -255,3 +277,11 @@ The existing `tools/classify_ci_scope.py` owns lane selection, including
 changes, and manual dispatch run every lane, and missing classifier output never
 skips a gate. Browser contracts and Compose full-stack validation retain their
 own jobs. Scientific acceptance does not contribute to Server coverage.
+
+`BrowserContracts` caches Chromium under `~/.cache/ms-playwright`, keyed by the
+resolved `playwright` package version, the runner OS, and the architecture. The
+key declares no `restore-keys`, and only `main` saves the entry: a pull request
+may restore the trusted default-branch browser but never publishes executable
+bytes of its own. A cache hit reinstates the OS packages with
+`playwright install-deps`; a cache miss falls back to the original
+`playwright install --with-deps chromium` inside the unchanged job clock.
