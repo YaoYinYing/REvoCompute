@@ -21,6 +21,7 @@ from pathlib import Path
 
 import pytest
 from revocompute import runner_promotion as promotion
+from revocompute.artifact_evidence import write_staged_identity
 from revocompute.runner_host import ServerHostPaths
 from revocompute.runner_registry import RuntimeFamily
 
@@ -62,6 +63,9 @@ def _install_receipt(monkeypatch, *, valid: bool = True, identity: str = "sha256
 def _stage(family: RuntimeFamily, data: bytes = b"candidate") -> Path:
     staged = Path(f"{family.slurm_image}.next")
     staged.write_bytes(data)
+    # A real build records the staged row beside the artifact; activation
+    # requires that record to describe the staged bytes.
+    write_staged_identity(family, _sha256(staged), "sha256:provenance")
     return staged
 
 

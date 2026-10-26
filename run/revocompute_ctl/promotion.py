@@ -10,7 +10,7 @@ import os
 
 from revocompute_ctl.compose import image_id, run_cmd
 from revocompute.runner_registry import RuntimeFamily, _docker_tag, runner_enabled
-from revocompute.artifact_evidence import remove_staged_identity
+from revocompute.artifact_evidence import remove_staged_identity, staged_identity_describes
 from revocompute.serialization import sha256_file
 
 
@@ -60,6 +60,12 @@ def promote_sifs(state, families: list[RuntimeFamily]) -> None:
             candidate_identity = (hashed.st_size, hashed.st_mtime_ns, hashed.st_ino)
             if candidate_identity != (before.st_size, before.st_mtime_ns, before.st_ino):
                 raise RegistryError(f"Staged SIF changed while it was hashed: {family.name}")
+            # The staged-identity record is what readiness reads, so a candidate
+            # it does not describe has no recording of its identity and cannot be
+            # activated: the operator would otherwise promote bytes no verdict
+            # ever vouched for.
+            if not staged_identity_describes(family, candidate_sha256):
+                raise RegistryError(f"Staged SIF has no recorded build identity matching its bytes: {family.name}")
             # Bind the receipt to the candidate's own bytes: an identity-only
             # lookup would accept the installed artifact's receipt for a staged
             # candidate built from the same inputs.

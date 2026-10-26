@@ -21,6 +21,7 @@ from revocompute.artifact_evidence import (
     read_staged_identity,
     receipt_digests,
     receipt_exists_for_provenance,
+    staged_identity_describes,
 )
 from revocompute.doctor import diagnose
 from revocompute.live_tests import LiveTestConfigurationError, receipt_matches
@@ -273,17 +274,19 @@ def _staged_candidate_readiness(
     live test first.
     """
     candidate_sha256 = read_staged_identity(family, build_digest)
-    if candidate_sha256 is None:
-        # Without the path-bound record, the only receivable digest would be
-        # borrowed from content-addressed evidence that may describe another
-        # artifact, so no promotion can be recommended.  The live test is the
-        # one action that both validates the bytes and records their identity.
+    # A record that does not describe the staged bytes -- absent, or left from
+    # before the candidate was rewritten -- cannot support a promotion verdict,
+    # and ``promote_sifs`` refuses those bytes for the same reason.  The live
+    # test is the one action that both validates the bytes and records their
+    # identity, so it is the recovery in every case.
+    recorded = candidate_sha256 is not None and staged_identity_describes(family, candidate_sha256)
+    if not recorded:
         return _result(
             family,
             RunnerReadinessStatus.NOT_VALIDATED,
             "RECEIPT_MISSING",
-            "The staged Runner candidate's build identity is unrecorded; re-run the live test to bind and "
-            "validate it",
+            "The staged Runner candidate's build identity is unrecorded or no longer describes its bytes; "
+            "re-run the live test to bind and validate it",
             doctor_ok=True,
             sif_exists=active_exists,
             build_provenance_current=False,

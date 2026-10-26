@@ -18,7 +18,11 @@ from pathlib import Path
 
 import pytest
 from conftest import _load_pssm_module, _test_client_auth
-from revocompute.artifact_evidence import write_artifact_evidence, write_staged_identity
+from revocompute.artifact_evidence import (
+    staged_identity_describes,
+    write_artifact_evidence,
+    write_staged_identity,
+)
 from revocompute.live_tests import LIVE_TEST_RECEIPT_VERSION, atomic_write_json
 from revocompute.runner_admin_view import fleet_view
 from revocompute.runner_host import ServerHostPaths
@@ -629,11 +633,20 @@ def test_a_candidate_changed_after_validation_is_not_promoted(monkeypatch, tmp_p
 
     # The file no longer hashes to the digest its receipt and staged record name.
     candidate.write_bytes(b"candidate-B-replaced-after-validation")
+    # The replacement keeps the record's digest but not its stat identity, so the
+    # receipt is still the first refusal this activation hits.
+    assert staged_identity_describes(family, sha256_file(candidate)) is False
 
     # Activation hashes the candidate and refuses: the receipt names B's
     # original bytes, not the replacement.
     assert candidate_receipt_valid(state, family, sif_sha256=sha256_file(candidate)) is False
-    with pytest.raises(RegistryError, match="no valid live-test receipt"):
+    # Readiness is what the operator is told to do, so it must not name an
+    # activation the host step refuses.
+    staged = resolve_runner_readiness(state, family)
+    assert staged.next_action != "promote"
+    assert staged.ready is False
+    assert staged.reason_code == "RECEIPT_MISSING"
+    with pytest.raises(RegistryError, match="no recorded build identity matching its bytes"):
         promote_sifs(state, [family])
     assert active.read_bytes() == b"validated-active-A"
     assert candidate.read_bytes() == b"candidate-B-replaced-after-validation"
@@ -672,6 +685,13 @@ def test_an_unrecorded_candidate_identity_names_a_recovery_that_clears_it(monkey
     assert unrecorded.next_action == "live-test"
     assert "live test" in unrecorded.message
     assert "promote" not in unrecorded.message.lower()
+    # The verdict names the live test as the recovery, so the host step must
+    # refuse the candidate until that recovery happens; otherwise the operator is
+    # told one thing and activation does another.
+    with pytest.raises(RegistryError, match="no recorded build identity matching its bytes"):
+        promote_sifs(state, [family])
+    assert active.read_bytes() == b"validated-active-A"
+    assert candidate.read_bytes() == b"validated-candidate-B"
     # The live test records the identity of the bytes it validates, which is the
     # recovery the verdict named.
     _record_artifact(state, family, candidate)

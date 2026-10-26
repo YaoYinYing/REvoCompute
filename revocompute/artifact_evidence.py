@@ -154,12 +154,20 @@ def staged_identity_path(family) -> Path:
     return Path(f"{family.slurm_image}.next.build.json")
 
 
+def _staged_stat_identity(family) -> list[int]:
+    """The staged file's stat identity, captured while its bytes are known."""
+    stat = Path(f"{family.slurm_image}.next").stat()
+    return [stat.st_size, stat.st_mtime_ns, stat.st_ino]
+
+
 def write_staged_identity(family, sif_sha256: str, build_provenance_digest: str) -> None:
     """Record the digest of the file staged at ``<sif>.next``.
 
     Build evidence is content-addressed, so same-provenance siblings leave
     several records and none of them says which artifact is staged.  This
-    sidecar is the one path-bound record; it is removed on promotion.
+    sidecar is the one path-bound record; it is removed on promotion.  It also
+    carries the staged file's stat identity, so a reader can tell that the
+    recorded bytes are no longer the staged bytes without hashing the artifact.
     """
     atomic_write_json(
         staged_identity_path(family),
@@ -167,6 +175,7 @@ def write_staged_identity(family, sif_sha256: str, build_provenance_digest: str)
             "runner_family": family.name,
             "sif_sha256": sif_sha256,
             "build_provenance_digest": build_provenance_digest,
+            "staged_stat_identity": _staged_stat_identity(family),
         },
     )
 
@@ -183,6 +192,34 @@ def read_staged_identity(family, build_provenance_digest: str) -> str | None:
     if not isinstance(candidate, str) or value.get("build_provenance_digest") != build_provenance_digest:
         return None
     return candidate
+
+
+def staged_identity_describes(family, sif_sha256: str) -> bool:
+    """Whether the staged-identity record describes exactly the staged bytes.
+
+    A candidate rewritten after the record was written still has a receipt for
+    the bytes it replaced, so readiness and activation both need this check:
+    promotion refuses bytes the record does not describe, and readiness stops
+    recommending a promotion the deployment-host step would refuse.  The stat
+    identity is the cheap half of the contract; activation additionally hashes
+    the candidate and binds its receipt, which is the stronger half.
+
+    shortcut: a rewrite preserving size, mtime and inode is invisible here, so
+    readiness can recommend a promotion activation then refuses; upgrade to a
+    measured activation anchor when ordinary reads must detect that swap.
+    """
+    try:
+        value = json.loads(staged_identity_path(family).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(value, Mapping) or value.get("runner_family") != family.name:
+        return False
+    if value.get("sif_sha256") != sif_sha256:
+        return False
+    try:
+        return _staged_stat_identity(family) == [int(item) for item in value["staged_stat_identity"]]
+    except (KeyError, TypeError, ValueError, OSError):
+        return False
 
 
 def remove_staged_identity(family) -> None:

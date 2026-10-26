@@ -34,7 +34,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from revocompute.artifact_evidence import read_artifact_evidence, remove_staged_identity, _RECEIPT_IDENTITY_FIELDS
+from revocompute.artifact_evidence import (
+    _RECEIPT_IDENTITY_FIELDS,
+    read_artifact_evidence,
+    remove_staged_identity,
+    staged_identity_describes,
+)
 from revocompute.runner_host import HostPaths
 from revocompute.runner_registry import RegistryError
 from revocompute.serialization import canonical_digest, sha256_file
@@ -187,6 +192,8 @@ def plan_promotion(state: HostPaths, family) -> PromotionPlan:
     if not staged.is_file():
         raise PromotionError(f"No staged candidate to activate for {family.name}")
     candidate_sha256 = sha256_file(staged)
+    if not staged_identity_describes(family, candidate_sha256):
+        raise PromotionError(f"Staged candidate has no recorded build identity matching its bytes: {family.name}")
     # Bind the receipt to the candidate's own bytes; an identity-only lookup
     # can return the installed artifact's receipt for a candidate built from
     # the same inputs.
