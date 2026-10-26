@@ -2506,6 +2506,7 @@ export interface components {
             category: string;
             summary: string;
             access: components["schemas"]["TaskCatalogAccess"];
+            submission: components["schemas"]["TaskSubmissionState"] | null;
             detail_url: string;
             parameters_url: string;
         };
@@ -2514,6 +2515,16 @@ export interface components {
             granted?: boolean;
             /** @enum {string|null} */
             request_status?: "pending" | "approved" | "rejected" | "cancelled" | null;
+        };
+        /** @description The submission decision this deployment applies to the method, or null when this deployment does not gate submission on Runner readiness. The anonymous shape is the boolean only; an authenticated reader also receives the server's reason and recovery action. Never contains artifact paths, digests, or receipts. */
+        TaskSubmissionState: {
+            submittable: boolean;
+        } | {
+            ready: boolean;
+            status: components["schemas"]["RunnerReadinessStatus"];
+            reason_code: string;
+            message: string;
+            next_action: string;
         };
         TaskTypeDetail: {
             name: string;
@@ -2533,6 +2544,7 @@ export interface components {
             citations: components["schemas"]["TaskCitation"][];
             workflow: components["schemas"]["WorkflowStage"][];
             access: components["schemas"]["RunnerAccess"];
+            submission: components["schemas"]["TaskSubmissionState"] | null;
             detail_url: string;
             parameters_url: string;
             max_request_bytes: number;
@@ -3013,12 +3025,21 @@ export interface components {
             passed_smoke_cases?: string[];
             doctor_ok: boolean;
         };
+        /** @description The active artifact's identity as established from canonical evidence; presence alone is never an identity. */
+        RunnerActiveImage: {
+            /** @enum {string} */
+            state: "ACTIVE" | "MISSING" | "UNKNOWN";
+            sha256: string | null;
+            /** @description Why the identity is missing or unknown (SIF_MISSING, STAGED_CANDIDATE_PENDING, ACTIVE_IMAGE_IDENTITY_UNKNOWN); null when it is established. */
+            reason_code: string | null;
+        };
         RunnerReadiness: {
             status: components["schemas"]["RunnerReadinessStatus"];
             /** @description Stable machine-readable reason; clients localize the copy. */
             reason_code: string;
             message: string;
             next_action: string;
+            active_image: components["schemas"]["RunnerActiveImage"];
             evidence: components["schemas"]["RunnerEvidence"];
         };
         /** @description Transient execution availability, reported separately from readiness. */

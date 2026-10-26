@@ -34,7 +34,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from revocompute.artifact_evidence import read_artifact_evidence, _RECEIPT_IDENTITY_FIELDS
+from revocompute.artifact_evidence import (
+    _RECEIPT_IDENTITY_FIELDS,
+    read_artifact_evidence,
+    remove_staged_identity,
+    staged_identity_describes,
+)
 from revocompute.runner_host import HostPaths
 from revocompute.runner_registry import RegistryError
 from revocompute.serialization import canonical_digest, sha256_file
@@ -186,9 +191,14 @@ def plan_promotion(state: HostPaths, family) -> PromotionPlan:
     staged = _staged_path(family)
     if not staged.is_file():
         raise PromotionError(f"No staged candidate to activate for {family.name}")
-    if not _receipt_validator()(state, family):
+    candidate_sha256 = sha256_file(staged)
+    if not staged_identity_describes(family, candidate_sha256):
+        raise PromotionError(f"Staged candidate has no recorded build identity matching its bytes: {family.name}")
+    # Bind the receipt to the candidate's own bytes; an identity-only lookup
+    # can return the installed artifact's receipt for a candidate built from
+    # the same inputs.
+    if not _receipt_validator()(state, family, sif_sha256=candidate_sha256):
         raise PromotionError(f"Staged candidate has no valid live-test receipt: {family.name}")
-    candidate_sha256, _ = read_artifact_evidence(family, staged, "build")
     active = Path(family.slurm_image)
     previous = sha256_file(active) if active.is_file() else ""
     receipt_identity = _receipt_identity_for(family, staged) or ""
@@ -224,7 +234,7 @@ def verify_promotion(plan: PromotionPlan, state: HostPaths, family) -> None:
         raise StalePromotionError("The staged candidate is gone; replan before activating")
     if sha256_file(staged) != plan.candidate_sha256:
         raise StalePromotionError("The candidate changed since it was planned; replan before activating")
-    if not _receipt_validator()(state, family):
+    if not _receipt_validator()(state, family, sif_sha256=plan.candidate_sha256):
         raise StalePromotionError("The candidate's live-test receipt is no longer valid; replan before activating")
     if (_receipt_identity_for(family, staged) or "") != plan.receipt_identity:
         raise StalePromotionError("The candidate's receipt identity changed; replan before activating")
@@ -267,6 +277,7 @@ def promote(state: HostPaths, family, plan: PromotionPlan) -> dict[str, Any]:
     os.chmod(active, 0o444)
     if os.path.isfile(f"{staged}.source"):
         os.remove(f"{staged}.source")
+    remove_staged_identity(family)
     _write_pointer(family, active, plan.receipt_identity, preserved)
     return {
         "runner_family": family.name,

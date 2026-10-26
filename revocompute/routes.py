@@ -53,7 +53,7 @@ from revocompute.access_control import (
     policy_state,
     project_effective_entitlements,
 )
-from revocompute.admission import invalidate_submission_attestations, resolve_submission_readiness
+from revocompute.admission import invalidate_submission_attestations, submission_admission
 from revocompute import access_guard
 from revocompute.app import (
     CONFIG,
@@ -1079,6 +1079,32 @@ def _parameter_payload(parameter, *, include_help: bool = False) -> dict[str, An
     return payload
 
 
+def _submission_payload(tt) -> dict[str, Any] | None:
+    """The admission decision a new submission for this method would receive.
+
+    ``None`` when this deployment does not gate submission on Runner readiness,
+    so a catalog cannot present a restriction the submission boundary does not
+    apply.  The public shape is the boolean only; an authenticated reader also
+    gets the server's reason and recovery action so the catalog can explain an
+    unavailable method.  No artifact path, digest, receipt, or other admin
+    evidence leaves this projection.
+    """
+    evidence = submission_admission(
+        CONFIG.server_dir, tt.runtime.name, manage_db=current_app.config.get("manage_db")
+    )
+    if evidence is None:
+        return None
+    if g.get("current_user") is None:
+        return {"submittable": evidence.ready}
+    return {
+        "ready": evidence.ready,
+        "status": evidence.status.value,
+        "reason_code": evidence.reason_code,
+        "message": evidence.message,
+        "next_action": evidence.next_action,
+    }
+
+
 def _task_summary(tt, *, include_internal_metadata: bool = False) -> dict[str, Any]:
     payload = {
         "name": tt.name,
@@ -1086,6 +1112,7 @@ def _task_summary(tt, *, include_internal_metadata: bool = False) -> dict[str, A
         "category": tt.category,
         "summary": tt.summary,
         "access": _runner_access_payload(tt, compact=not include_internal_metadata),
+        "submission": _submission_payload(tt),
         "detail_url": f"/compute/api/types/{tt.name}",
         "parameters_url": f"/compute/api/task-parameters/{tt.name}",
     }
@@ -2279,22 +2306,21 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
     # Admission is based on the same immutable build/live-test evidence shown
     # by runner-status.  Evaluate it before validating or saving uploads so a
     # non-ready Runner cannot create task or scheduler side effects.
-    if managedb is not None and managedb.slurm_enabled():
-        readiness = resolve_submission_readiness(CONFIG.server_dir, tt.runtime.name)
-        if not readiness.ready:
-            return (
-                jsonify(
-                    {
-                        "error": "Runner is currently unavailable for new submissions",
-                        "runner": tt.runtime.name,
-                        "status": readiness.status.value,
-                        "reason": readiness.reason_code,
-                        "message": readiness.message,
-                        "next_action": readiness.next_action,
-                    }
-                ),
-                503,
-            )
+    admission = submission_admission(CONFIG.server_dir, tt.runtime.name, manage_db=managedb)
+    if admission is not None and not admission.ready:
+        return (
+            jsonify(
+                {
+                    "error": "Runner is currently unavailable for new submissions",
+                    "runner": tt.runtime.name,
+                    "status": admission.status.value,
+                    "reason": admission.reason_code,
+                    "message": admission.message,
+                    "next_action": admission.next_action,
+                }
+            ),
+            503,
+        )
     # Reject GPU-ineligible users and invalid scheduler configuration before
     # writing uploads or creating a task record.
     if tt.gpus and not g.current_user.get("allow_gpu_use"):

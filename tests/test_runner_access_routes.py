@@ -129,11 +129,9 @@ def test_production_admission_blocks_non_ready_before_queue_side_effect(monkeypa
     route = module.app.view_functions["upload_file"]
     while hasattr(route, "__wrapped__"):
         route = route.__wrapped__
-    route_globals = route.__globals__
-    monkeypatch.setitem(
-        route_globals,
-        "resolve_submission_readiness",
-        lambda *_args: SimpleNamespace(
+    monkeypatch.setattr(
+        "revocompute.admission.resolve_submission_readiness",
+        lambda *_args, **_kwargs: SimpleNamespace(
             ready=False,
             status=SimpleNamespace(value="VALIDATION_STALE"),
             reason_code="RECEIPT_STALE",
@@ -154,10 +152,9 @@ def test_production_admission_allows_ready_runner(monkeypatch, tmp_path):
     route = module.app.view_functions["upload_file"]
     while hasattr(route, "__wrapped__"):
         route = route.__wrapped__
-    monkeypatch.setitem(
-        route.__globals__,
-        "resolve_submission_readiness",
-        lambda *_args: SimpleNamespace(
+    monkeypatch.setattr(
+        "revocompute.admission.resolve_submission_readiness",
+        lambda *_args, **_kwargs: SimpleNamespace(
             ready=True,
             status=SimpleNamespace(value="READY"),
             reason_code="READY",

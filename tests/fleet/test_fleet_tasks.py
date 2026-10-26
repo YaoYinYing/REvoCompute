@@ -54,9 +54,13 @@ def test_task_type_api_exposes_runtime_family_and_gpu_contract(monkeypatch, tmp_
         "category",
         "summary",
         "access",
+        "submission",
         "detail_url",
         "parameters_url",
     }
+    # Admission is not gated until the managed Scheduler is enabled, so the
+    # projection is null rather than a restriction POST would not apply.
+    assert laser["submission"] is None
     assert laser["detail_url"] == "/compute/api/types/lasermpnn"
     assert laser["parameters_url"] == "/compute/api/task-parameters/lasermpnn"
     assert not ({"params", "parameter_schema", "runtime_family", "workflow", "citations"} & set(laser))

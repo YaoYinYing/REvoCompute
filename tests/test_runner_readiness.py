@@ -43,6 +43,8 @@ from revocompute.artifact_evidence import (  # noqa: E402
     evidence_path,
     read_artifact_evidence,
     write_artifact_evidence,
+    staged_identity_describes,
+    write_staged_identity,
 )
 from revocompute.runner_registry import RuntimeFamily  # noqa: E402
 from revocompute.runner_registry import RegistryError  # noqa: E402
@@ -228,10 +230,16 @@ def test_staged_candidate_lifecycle_preserves_active_and_unrelated_evidence(evid
     write_artifact_evidence(
         family, candidate_sha, "build", {"build_provenance_digest": "sha256:build-current"}
     )
+    write_staged_identity(family, candidate_sha, "sha256:build-current")
     _write_receipt(family, candidate)
 
-    assert resolve_runner_readiness(state, family).status is RunnerReadinessStatus.READY
-    assert resolve_runner_readiness(state, family).status is RunnerReadinessStatus.READY
+    staged = resolve_runner_readiness(state, family)
+    assert staged.status is RunnerReadinessStatus.BUILD_STALE
+    assert staged.reason_code == "CANDIDATE_AWAITING_PROMOTION"
+    assert staged.next_action == "promote"
+    assert staged.ready is False
+    # Only the family with a staged candidate is withheld; an unrelated active
+    # Runner keeps its verdict, and neither receipt is rewritten by the build.
     assert resolve_runner_readiness(state, other).status is RunnerReadinessStatus.READY
     assert active_receipt_path.read_bytes() == active_receipt
     assert other_receipt_path.read_bytes() == other_receipt
@@ -350,14 +358,40 @@ def test_status_output_does_not_include_environment_secrets(evidence, monkeypatc
     assert "never-print-this" not in rendered
 
 
-def test_candidate_does_not_determine_active_readiness(evidence):
+def test_candidate_without_an_active_sif_awaits_promotion(evidence):
+    """The first-build flow: no active SIF, only the validated candidate."""
     state, family, active = evidence
     active.unlink()
-    Path(f"{family.slurm_image}.next").write_bytes(b"validated-candidate")
+    candidate = Path(f"{family.slurm_image}.next")
+    candidate.write_bytes(b"validated-candidate")
+    write_staged_identity(family, sha256_file(candidate), "sha256:build-current")
+    _write_receipt(family, candidate)
 
     result = resolve_runner_readiness(state, family)
 
-    assert result.status is RunnerReadinessStatus.NOT_BUILT
+    assert result.status is RunnerReadinessStatus.BUILD_STALE
+    assert result.reason_code == "CANDIDATE_AWAITING_PROMOTION"
+    assert result.next_action == "promote"
+    assert result.sif_exists is False
+    assert result.ready is False
+
+
+def test_first_build_candidate_without_a_receipt_is_told_to_validate(evidence):
+    """A staged first build is not promotable until a receipt validates it."""
+    state, family, active = evidence
+    active.unlink()
+    candidate = Path(f"{family.slurm_image}.next")
+    candidate.write_bytes(b"unvalidated-candidate")
+    write_staged_identity(family, sha256_file(candidate), "sha256:build-current")
+
+    result = resolve_runner_readiness(state, family)
+
+    assert result.status is RunnerReadinessStatus.NOT_VALIDATED
+    assert result.reason_code == "RECEIPT_MISSING"
+    assert result.next_action == "live-test"
+    assert "staged Runner candidate" in result.message
+    assert result.sif_exists is False
+    assert result.ready is False
 
 
 def test_runner_status_all_lists_enabled_families_and_json(evidence, monkeypatch, capsys):
@@ -722,3 +756,17 @@ def test_workspace_projection_tolerates_a_plugin_without_a_configuration_schema(
     entry = projection["workspace_task-regions"]
     assert entry["assets"]["workspace/regions/index.js"]
     assert entry["backend"]["normalizer"]["entrypoint"] == "workspace/regions/backend.py:normalize"
+
+
+def test_a_staged_record_written_with_no_candidate_describes_nothing(tmp_path):
+    """Losing the staged file must not raise, and must not describe it.
+
+    A passing live test writes its receipt first and records the staged identity
+    afterwards, so a candidate removed in that gap must leave a record that
+    describes no file rather than an exception after the run already passed.
+    """
+    family = RuntimeFamily("demo", "1", "demo.def", "demo.sif", str(tmp_path / "images" / "demo.sif"))
+    (tmp_path / "images").mkdir(parents=True)
+    write_staged_identity(family, "sha256:" + "b" * 64, "sha256:provenance")
+
+    assert staged_identity_describes(family, "sha256:" + "b" * 64) is False

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { clearSessionCredential } from '../src/app/session';
 import { adminApi, type RunnerFleetEntry } from '../src/features/admin/api';
-import { capacityLabel, executorNotice, filterFleet, jobStatusLabel, reasonText, summarizeFleet, summarySentence, weaknessLabel, weaknessOf, workflowLabel } from '../src/features/admin/fleet/FleetAdmin';
+import { activeImageDetail, activeImageLabel, capacityLabel, executorNotice, filterFleet, jobStatusLabel, reasonText, summarizeFleet, summarySentence, weaknessLabel, weaknessOf, workflowLabel } from '../src/features/admin/fleet/FleetAdmin';
 
 type RequestRecord = { url: string; init: RequestInit };
 
@@ -31,7 +31,14 @@ const evidence = (): RunnerFleetEntry['readiness']['evidence'] => ({
 
 const entry = (family: string, status: RunnerFleetEntry['readiness']['status'], available: boolean | null = true): RunnerFleetEntry => ({
   runner_family: family,
-  readiness: { status, reason_code: 'READY', message: '', next_action: 'none', evidence: evidence() },
+  readiness: {
+    status,
+    reason_code: 'READY',
+    message: '',
+    next_action: 'none',
+    active_image: { state: 'ACTIVE', sha256: 'sha256:' + 'a'.repeat(64), reason_code: null },
+    evidence: evidence(),
+  },
   capacity: { available, reason: available === null ? 'capacity_unknown' : 'scheduler_available' },
   access: { restricted: false, granted: true, policy_id: null },
   in_flight: null,
@@ -98,6 +105,66 @@ describe('fleet view helpers', () => {
     expect(reasonText({ status: 'READY', reason_code: 'UNMAPPED_CODE', message: 'server copy' } as never)).toBe('server copy');
     expect(workflowLabel('live_test')).toBe('Live validation');
     expect(workflowLabel('unknown_stage')).toBe('unknown_stage');
+  });
+
+  it('names a staged candidate instead of the installed image for reused receipt reasons', () => {
+    const message = 'The staged Runner candidate has no live-test receipt; run the live test to validate it';
+    const withActive = {
+      status: 'NOT_VALIDATED',
+      reason_code: 'RECEIPT_MISSING',
+      message,
+      next_action: 'live-test',
+      active_image: { state: 'UNKNOWN', sha256: null, reason_code: 'STAGED_CANDIDATE_PENDING' },
+      evidence: { ...evidence(), receipt_exists: false, receipt_valid: false },
+    } as unknown as RunnerFleetEntry['readiness'];
+    expect(reasonText(withActive)).toBe(message);
+    expect(reasonText(withActive)).not.toContain('active image');
+
+    // First build: no installed artifact exists, so a receipt code can only
+    // describe the staged candidate.
+    const firstBuild = {
+      ...withActive,
+      active_image: { state: 'MISSING', sha256: null, reason_code: 'SIF_MISSING' },
+      evidence: { ...evidence(), sif_exists: false, receipt_exists: false, receipt_valid: false },
+    } as RunnerFleetEntry['readiness'];
+    expect(reasonText(firstBuild)).toBe(message);
+    expect(reasonText(firstBuild)).not.toContain('active image');
+  });
+
+  it('shows an active image only when the server established its identity', () => {
+    const identified = entry('demo', 'READY').readiness;
+    expect(activeImageLabel(identified)).toBe('Active · aaaaaaaaaaaa…');
+    expect(activeImageDetail(identified)).toBe('Active · sha256:' + 'a'.repeat(64));
+
+    expect(activeImageLabel({
+      ...identified,
+      active_image: { state: 'MISSING', sha256: null, reason_code: 'SIF_MISSING' },
+    })).toBe('Missing');
+
+    // A file that is present without an established identity is Unknown, never
+    // "present": existence is not identity.
+    expect(activeImageLabel({
+      ...identified,
+      active_image: { state: 'UNKNOWN', sha256: null, reason_code: 'ACTIVE_IMAGE_IDENTITY_UNKNOWN' },
+    })).toBe('Unknown');
+    expect(activeImageDetail({
+      ...identified,
+      active_image: { state: 'UNKNOWN', sha256: null, reason_code: 'ACTIVE_IMAGE_IDENTITY_UNKNOWN' },
+    })).toContain('Unknown');
+
+    // A staged candidate awaiting activation is not the installed artifact; the
+    // dialog says why rather than borrowing the candidate's digest.
+    expect(activeImageLabel({
+      ...identified,
+      active_image: { state: 'UNKNOWN', sha256: null, reason_code: 'STAGED_CANDIDATE_PENDING' },
+    })).toBe('Unknown');
+    expect(activeImageDetail({
+      ...identified,
+      active_image: { state: 'UNKNOWN', sha256: null, reason_code: 'STAGED_CANDIDATE_PENDING' },
+    })).toContain('staged candidate is awaiting activation');
+
+    // A cached payload from a server that did not project the field is Unknown.
+    expect(activeImageLabel({ ...identified, active_image: undefined } as never)).toBe('Unknown');
   });
 
   it('tells an operator why the host executor is unavailable, not just that it is', () => {

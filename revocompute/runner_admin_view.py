@@ -19,6 +19,7 @@ Infrastructure readiness is a fourth, separate state owned by
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from revocompute.access_control import AccessPolicy, load_policy_documents, resolve_policy
@@ -43,8 +44,6 @@ def _family_access_policies(state: HostPaths) -> dict[str, AccessPolicy | None]:
     it from the same tree the evaluator reads — never from a second configuration
     source.
     """
-    from pathlib import Path
-
     from revocompute.plugins import PluginManager
 
     root = deployment_plugin_root(state)
@@ -93,12 +92,39 @@ def access_view(policy: AccessPolicy | None, database: Any, user_id: int | None)
     return {"restricted": True, "granted": not missing, "policy_id": policy.id, "missing_entitlements": missing}
 
 
+def active_image_view(row: RunnerReadiness) -> dict[str, Any]:
+    """The active artifact's identity, never its mere presence.
+
+    "A SIF file exists" answers whether an artifact is installed, not which
+    artifact it is.  The identity comes from the evaluator's canonical evidence
+    (the build or receipt record the readiness verdict was derived from), so a
+    file that is present while no identity can be established reports
+    ``UNKNOWN`` instead of claiming an active image.
+
+    Build evidence can describe a *candidate*, not the installed artifact:
+    ``build_slurm_images`` stages ``<sif>.next``, and the readiness evaluator
+    reports that candidate's own build/receipt evidence while refusing
+    submission until a promotion moves it into place.  The staged sibling is
+    therefore checked before that evidence, so a candidate digest is never
+    presented as the installed identity; the state is
+    ``STAGED_CANDIDATE_PENDING`` instead.
+    """
+    if not row.sif_exists:
+        return {"state": "MISSING", "sha256": None, "reason_code": "SIF_MISSING"}
+    if row.sif_path and Path(f"{row.sif_path}.next").is_file():
+        return {"state": "UNKNOWN", "sha256": None, "reason_code": "STAGED_CANDIDATE_PENDING"}
+    if row.sif_sha256:
+        return {"state": "ACTIVE", "sha256": row.sif_sha256, "reason_code": None}
+    return {"state": "UNKNOWN", "sha256": None, "reason_code": "ACTIVE_IMAGE_IDENTITY_UNKNOWN"}
+
+
 def _readiness_view(row: RunnerReadiness) -> dict[str, Any]:
     return {
         "status": row.status.value,
         "reason_code": row.reason_code,
         "message": row.message,
         "next_action": row.next_action,
+        "active_image": active_image_view(row),
         "evidence": {
             "sif_path": row.sif_path,
             "sif_exists": row.sif_exists,
@@ -147,4 +173,4 @@ def fleet_view(
     return rows
 
 
-__all__ = ["RunnerReadiness", "access_view", "capacity_view", "fleet_view"]
+__all__ = ["RunnerReadiness", "access_view", "active_image_view", "capacity_view", "fleet_view"]

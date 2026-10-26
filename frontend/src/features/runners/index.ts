@@ -5,6 +5,7 @@ import { metadataValue, safeExternalUrl } from '../../app/domain-vocabulary';
 import { t } from '../../app/i18n';
 import { guidedTour } from '../../app/guided-tour';
 import './runners.css';
+import { isSubmissionBlocked, submissionNotice } from './readiness-copy';
 import { ApiError } from '../../app/session';
 import { loadEnvironment } from '../../app/environment';
 import type { AppShell } from '../../app/shell';
@@ -43,7 +44,35 @@ async function updateInfrastructure(node: HTMLElement): Promise<void> {
   node.textContent = infrastructure ? t('runners.infrastructureAdmission', { status: infrastructure.status === 'READY' ? t('runners.ready') : t('runners.status', { status: infrastructure.status.toLowerCase() }) }) : t('runners.infrastructureUnknown');
   if (infrastructure) node.dataset.status = infrastructure.status;
 }
-function createTaskLink(task: { name: string; access: { restricted: boolean; granted?: boolean; request_status?: string | null } }): HTMLAnchorElement { const link = document.createElement('a'); link.className = 'primary-button'; link.href = task.access.restricted && !task.access.granted ? '/compute/account/runner-access' : `/compute/create_task?task_type=${encodeURIComponent(task.name)}`; link.innerHTML = `<span>${task.access.restricted && !task.access.granted ? t('shell.account.runnerAccess') : t('runners.createTask')}</span><i data-lucide="arrow-right"></i>`; return link; }
+function createTaskLink(task: TaskTypeSummary | TaskTypeDetail): HTMLElement {
+  const needsAccess = task.access.restricted && !task.access.granted;
+  // The server decides whether this deployment accepts submissions for the
+  // method. A blocked method stays discoverable and its Create Task control is
+  // rendered from the server's own words instead of being a link, so no surface
+  // offers a submission the boundary will refuse. Preflight and POST remain the
+  // authority; a cached page cannot grant or deny by itself.
+  if (!needsAccess && isSubmissionBlocked(task.submission)) {
+    const notice = submissionNotice(task.submission);
+    const blocked = document.createElement('div');
+    blocked.className = 'runner-submission-blocked';
+    blocked.dataset.submission = 'blocked';
+    const control = document.createElement('button');
+    control.type = 'button';
+    control.className = 'primary-button';
+    control.disabled = true;
+    control.setAttribute('aria-disabled', 'true');
+    control.textContent = t('runners.createTaskUnavailable');
+    const reason = text('p', notice?.message || t('runners.submissionBlocked'), 'runner-submission-reason');
+    if (notice?.recovery) reason.append(` ${notice.recovery}`);
+    blocked.append(control, reason);
+    return blocked;
+  }
+  const link = document.createElement('a');
+  link.className = 'primary-button';
+  link.href = needsAccess ? '/compute/account/runner-access' : `/compute/create_task?task_type=${encodeURIComponent(task.name)}`;
+  link.innerHTML = `<span>${needsAccess ? t('shell.account.runnerAccess') : t('runners.createTask')}</span><i data-lucide="arrow-right"></i>`;
+  return link;
+}
 
 export async function mountRunnerCatalog(root: HTMLElement): Promise<void> {
   root.replaceChildren(); root.className = 'app-outlet runners-page';
@@ -151,7 +180,7 @@ export async function mountRunnerCatalog(root: HTMLElement): Promise<void> {
 function runnerCard(task: TaskTypeSummary): HTMLElement {
   const card = document.createElement('article'); card.className = 'runner-card';
   const badges = document.createElement('div'); badges.className = 'runner-badges'; const access = text('span', accessLabel(task), task.access.restricted ? 'badge restricted' : 'badge available'); badges.append(access);
-  const title = text('h3', task.display_name), summary = text('p', task.summary, 'runner-summary'); const link = document.createElement('a'); link.href = `/runners/${encodeURIComponent(task.name)}`; link.innerHTML = `<span>${t('runners.viewMethod')}</span><i data-lucide="arrow-right"></i>`; const footer = document.createElement('footer'); const prepare = createTaskLink(task); prepare.className = 'runner-prepare';
+  const title = text('h3', task.display_name), summary = text('p', task.summary, 'runner-summary'); const link = document.createElement('a'); link.href = `/runners/${encodeURIComponent(task.name)}`; link.innerHTML = `<span>${t('runners.viewMethod')}</span><i data-lucide="arrow-right"></i>`; const footer = document.createElement('footer'); const prepare = createTaskLink(task); prepare.classList.add('runner-prepare');
   const compare = document.createElement('label'); compare.className = 'runner-compare';
   const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.dataset.compare = task.name;
   checkbox.setAttribute('aria-label', t('runners.compare.select', { name: task.display_name }));

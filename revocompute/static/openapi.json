@@ -2432,13 +2432,14 @@
       },
       "TaskTypeSummary": {
         "type": "object",
-        "required": ["name", "display_name", "category", "summary", "access", "detail_url", "parameters_url"],
+        "required": ["name", "display_name", "category", "summary", "access", "submission", "detail_url", "parameters_url"],
         "properties": {
           "name": {"type": "string"},
           "display_name": {"type": "string"},
           "category": {"type": "string"},
           "summary": {"type": "string"},
           "access": {"$ref": "#/components/schemas/TaskCatalogAccess"},
+          "submission": {"oneOf": [{"$ref": "#/components/schemas/TaskSubmissionState"}, {"type": "null"}]},
           "detail_url": {"type": "string"},
           "parameters_url": {"type": "string"}
         },
@@ -2454,9 +2455,32 @@
         },
         "additionalProperties": false
       },
+      "TaskSubmissionState": {
+        "description": "The submission decision this deployment applies to the method, or null when this deployment does not gate submission on Runner readiness. The anonymous shape is the boolean only; an authenticated reader also receives the server's reason and recovery action. Never contains artifact paths, digests, or receipts.",
+        "oneOf": [
+          {
+            "type": "object",
+            "required": ["submittable"],
+            "properties": {"submittable": {"type": "boolean"}},
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": ["ready", "status", "reason_code", "message", "next_action"],
+            "properties": {
+              "ready": {"type": "boolean"},
+              "status": {"$ref": "#/components/schemas/RunnerReadinessStatus"},
+              "reason_code": {"type": "string"},
+              "message": {"type": "string"},
+              "next_action": {"type": "string"}
+            },
+            "additionalProperties": false
+          }
+        ]
+      },
       "TaskTypeDetail": {
         "type": "object",
-        "required": ["name", "display_name", "category", "summary", "use_when", "input_summary", "output_summary", "considerations", "access", "detail_url", "parameters_url", "definition_version", "runtime_family", "gpus", "requires_network", "inputs", "citations", "workflow", "max_request_bytes", "input_workspace"],
+        "required": ["name", "display_name", "category", "summary", "use_when", "input_summary", "output_summary", "considerations", "access", "submission", "detail_url", "parameters_url", "definition_version", "runtime_family", "gpus", "requires_network", "inputs", "citations", "workflow", "max_request_bytes", "input_workspace"],
         "properties": {
           "name": {"type": "string"},
           "display_name": {"type": "string"},
@@ -2474,6 +2498,7 @@
           "citations": {"type": "array", "items": {"$ref": "#/components/schemas/TaskCitation"}},
           "workflow": {"type": "array", "items": {"$ref": "#/components/schemas/WorkflowStage"}},
           "access": {"$ref": "#/components/schemas/RunnerAccess"},
+          "submission": {"oneOf": [{"$ref": "#/components/schemas/TaskSubmissionState"}, {"type": "null"}]},
           "detail_url": {"type": "string"},
           "parameters_url": {"type": "string"},
           "max_request_bytes": {"type": "integer"},
@@ -3088,14 +3113,26 @@
       },
       "additionalProperties": false
     },
+    "RunnerActiveImage": {
+      "type": "object",
+      "description": "The active artifact's identity as established from canonical evidence; presence alone is never an identity.",
+      "required": ["state", "sha256", "reason_code"],
+      "properties": {
+        "state": {"type": "string", "enum": ["ACTIVE", "MISSING", "UNKNOWN"]},
+        "sha256": {"type": ["string", "null"]},
+        "reason_code": {"type": ["string", "null"], "description": "Why the identity is missing or unknown (SIF_MISSING, STAGED_CANDIDATE_PENDING, ACTIVE_IMAGE_IDENTITY_UNKNOWN); null when it is established."}
+      },
+      "additionalProperties": false
+    },
     "RunnerReadiness": {
       "type": "object",
-      "required": ["status", "reason_code", "message", "next_action", "evidence"],
+      "required": ["status", "reason_code", "message", "next_action", "active_image", "evidence"],
       "properties": {
         "status": {"$ref": "#/components/schemas/RunnerReadinessStatus"},
         "reason_code": {"type": "string", "description": "Stable machine-readable reason; clients localize the copy."},
         "message": {"type": "string"},
         "next_action": {"type": "string"},
+        "active_image": {"$ref": "#/components/schemas/RunnerActiveImage"},
         "evidence": {"$ref": "#/components/schemas/RunnerEvidence"}
       },
       "additionalProperties": false

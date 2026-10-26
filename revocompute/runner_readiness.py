@@ -16,8 +16,12 @@ from typing import Any, Mapping
 from revocompute.admission import RunnerReadinessStatus
 from revocompute.artifact_evidence import (
     read_build_evidence_for_provenance,
+    read_receipt_for_digest,
     read_receipt_for_identity,
+    read_staged_digest,
+    receipt_digests,
     receipt_exists_for_provenance,
+    staged_identity_describes,
 )
 from revocompute.doctor import diagnose
 from revocompute.live_tests import LiveTestConfigurationError, receipt_matches
@@ -90,8 +94,17 @@ def _result(
     message: str,
     *,
     doctor_ok: bool,
+    next_action: str | None = None,
     **evidence: Any,
 ) -> RunnerReadiness:
+    default_action = {
+        RunnerReadinessStatus.NOT_CONFIGURED: "doctor",
+        RunnerReadinessStatus.NOT_BUILT: "build-sif",
+        RunnerReadinessStatus.BUILD_STALE: "build-sif",
+        RunnerReadinessStatus.NOT_VALIDATED: "live-test",
+        RunnerReadinessStatus.VALIDATION_STALE: "live-test",
+        RunnerReadinessStatus.READY: "none",
+    }[status]
     return RunnerReadiness(
         runner_family=family.name,
         status=status,
@@ -99,14 +112,7 @@ def _result(
         message=message,
         doctor_ok=doctor_ok,
         sif_path=family.slurm_image,
-        next_action={
-            RunnerReadinessStatus.NOT_CONFIGURED: "doctor",
-            RunnerReadinessStatus.NOT_BUILT: "build-sif",
-            RunnerReadinessStatus.BUILD_STALE: "build-sif",
-            RunnerReadinessStatus.NOT_VALIDATED: "live-test",
-            RunnerReadinessStatus.VALIDATION_STALE: "live-test",
-            RunnerReadinessStatus.READY: "none",
-        }[status],
+        next_action=default_action if next_action is None else next_action,
         **evidence,
     )
 
@@ -158,8 +164,204 @@ def bundle_digest(state, family: RuntimeFamily) -> str | None:
         return runtime_bundle.overlay_digest(family.root.parent, family.runtime_overlay)
 
 
+@dataclass(frozen=True, slots=True)
+class _ReceiptEvidence:
+    """The live-test evidence attributable under one build provenance.
+
+    ``fields`` is exactly the evidence a verdict carries; ``receipt`` is the
+    record those fields were read from.  ``failure`` names a configuration
+    defect that prevents attributing any receipt to the artifact.
+    """
+
+    fields: dict[str, Any]
+    receipt: Mapping[str, Any] | None
+    failure: str | None = None
+
+
+def _receipt_evidence(
+    state, family: RuntimeFamily, build_digest: str, sif_sha256: str | None, *, artifact_bound: bool = False
+) -> _ReceiptEvidence:
+    """Read the live-test identity and receipt evidence under one build provenance.
+
+    The lookup is the same one production evidence uses, so a verdict and the
+    Fleet cannot describe the evidence differently.  It hashes nothing: the
+    evidence model is content-addressed and path-agnostic.  ``artifact_bound``
+    reads the receipt written for exactly ``sif_sha256`` instead of the first
+    same-identity receipt, which can belong to a sibling artifact.
+    """
+    try:
+        identity = load_validation_identity(family, state=state)
+        required = tuple(sorted(case.id for case in identity.plan.select("smoke")))
+    except (OSError, KeyError, TypeError, ValueError, StopIteration, LiveTestConfigurationError, RegistryError):
+        return _ReceiptEvidence({}, None, "Runner live-test identity cannot be resolved")
+    try:
+        expected_uid = int(state.get("RUNNER_UID")) if state.get("RUNNER_UID") else None
+        expected_gid = int(state.get("RUNNER_GID")) if state.get("RUNNER_GID") else None
+        expected_scheduler_user = state.get("RUNNER_USERNAME") or None
+    except (TypeError, ValueError):
+        return _ReceiptEvidence({}, None, "Configured Runner UID/GID are not numeric")
+    try:
+        expected_bundle = bundle_digest(state, family)
+    except (OSError, KeyError, TypeError, ValueError, RegistryError):
+        # ``receipt_valid_for_artifact`` treats an unresolvable bundle as "no
+        # valid receipt".  Substituting ``None`` here could instead validate a
+        # bundle-less receipt, so a promotion verdict could name an activation
+        # the host step refuses.  Fail the evidence attribution instead.
+        return _ReceiptEvidence({}, None, "Runner Runtime Bundle binding cannot be resolved")
+    expected_identity = {
+        "build_provenance_digest": build_digest,
+        "runtime_bundle_sha256": expected_bundle,
+        "test_definition_digest": identity.plan.digest,
+        "configuration_digest": identity.configuration_digest,
+        "execution_uid": expected_uid,
+        "execution_gid": expected_gid,
+        "scheduler_user": expected_scheduler_user,
+    }
+    if artifact_bound and sif_sha256 is not None:
+        receipt = read_receipt_for_digest(family, sif_sha256, expected_identity)
+        receipt_exists = bool(receipt_digests(family, sif_sha256))
+    else:
+        receipt = read_receipt_for_identity(family, expected_identity)
+        if sif_sha256 is None and receipt:
+            sif_sha256 = _string_field(receipt, "sif_sha256")
+        receipt_exists = receipt_exists_for_provenance(family, build_digest)
+    passed = _passed_case_ids(receipt or {})
+    valid = bool(receipt) and receipt_matches(
+        receipt,
+        sif_sha256=sif_sha256,
+        build_provenance_digest=build_digest,
+        test_definition_digest=identity.plan.digest,
+        configuration_digest=identity.configuration_digest,
+        required_case_ids=set(required),
+        runtime_bundle_sha256=expected_bundle,
+        expected_execution_uid=expected_uid,
+        expected_execution_gid=expected_gid,
+        expected_scheduler_user=expected_scheduler_user,
+    )
+    return _ReceiptEvidence(
+        {
+            "sif_sha256": sif_sha256,
+            "build_provenance_current": True,
+            "build_provenance_digest": build_digest,
+            "runtime_bundle_sha256": expected_bundle,
+            "receipt_exists": receipt_exists,
+            "receipt_valid": valid,
+            "receipt_tested_at": _string_field(receipt, "ended_at"),
+            "receipt_sif_sha256": _string_field(receipt, "sif_sha256"),
+            "receipt_configuration_digest": _string_field(receipt, "configuration_digest"),
+            "receipt_test_definition_digest": _string_field(receipt, "test_definition_digest"),
+            "receipt_runtime_bundle_sha256": _string_field(receipt, "runtime_bundle_sha256"),
+            "required_smoke_cases": required,
+            "passed_smoke_cases": passed,
+        },
+        receipt,
+    )
+
+
+def _staged_candidate_readiness(
+    state,
+    family: RuntimeFamily,
+    build_digest: str,
+    active_exists: bool,
+) -> RunnerReadiness:
+    """The submission verdict for a staged candidate, with the candidate's evidence.
+
+    The candidate is not the artifact execution loads, so its digest is never
+    presented as the active identity.  Its build/receipt evidence is the evidence
+    ``promote-sifs`` requires, so it is reported rather than left at its default
+    "no receipt" value.  The verdict only names promotion when the deployment-host
+    step would accept the candidate; an unvalidated candidate is told to run the
+    live test first.
+    """
+    # The record binds the staged bytes, so this is the same test ``promote_sifs``
+    # applies.  A record that does not describe the staged bytes -- absent, from
+    # another provenance, or left from before a rewrite -- cannot support a
+    # promotion verdict; the live test is the one action that both validates the
+    # bytes and records their identity, so it is the recovery in every case.
+    candidate_sha256 = read_staged_digest(family)
+    recorded = candidate_sha256 is not None and staged_identity_describes(family, candidate_sha256)
+    if not recorded:
+        return _result(
+            family,
+            RunnerReadinessStatus.NOT_VALIDATED,
+            "RECEIPT_MISSING",
+            "The staged Runner candidate's build identity is unrecorded or no longer describes its bytes; "
+            "re-run the live test to bind and validate it",
+            doctor_ok=True,
+            sif_exists=active_exists,
+            build_provenance_current=False,
+            build_provenance_digest=build_digest,
+        )
+    evidence = _receipt_evidence(state, family, build_digest, candidate_sha256, artifact_bound=True)
+    if evidence.failure is not None:
+        return _result(
+            family,
+            RunnerReadinessStatus.NOT_CONFIGURED,
+            "CONFIGURATION_INVALID",
+            evidence.failure,
+            doctor_ok=True,
+            sif_exists=active_exists,
+            # Same reason as the unrecorded-identity branch above: no evidence
+            # was attributable to the candidate, so its build provenance is not
+            # established as current.
+            build_provenance_current=False,
+            build_provenance_digest=build_digest,
+        )
+    fields = {
+        **evidence.fields,
+        # The evidence belongs to the candidate; this verdict does not establish
+        # the installed artifact's identity, so the active digest stays unknown
+        # while the receipt identifies the candidate.
+        "sif_sha256": None,
+        "build_provenance_current": True,
+    }
+    # The evidence check is at least as strong as the one ``promote_sifs``
+    # applies: the recorded candidate digest is matched against the receipt, so
+    # a promotion verdict is never one the host step would refuse.
+    if not evidence.fields["receipt_valid"]:
+        receipt = evidence.receipt
+        if receipt is None and not evidence.fields["receipt_exists"]:
+            return _result(
+                family,
+                RunnerReadinessStatus.NOT_VALIDATED,
+                "RECEIPT_MISSING",
+                "The staged Runner candidate has no live-test receipt; run the live test to validate it",
+                doctor_ok=True,
+                sif_exists=active_exists,
+                **fields,
+            )
+        bundle_changed = (
+            evidence.fields["runtime_bundle_sha256"] is not None
+            and _string_field(receipt, "runtime_bundle_sha256") != evidence.fields["runtime_bundle_sha256"]
+        )
+        return _result(
+            family,
+            RunnerReadinessStatus.VALIDATION_STALE,
+            "RUNTIME_BUNDLE_CHANGED" if bundle_changed else "RECEIPT_STALE",
+            "The Runtime Bundle changed; run the live test against the staged Runner candidate to validate it"
+            if bundle_changed
+            else "The staged Runner candidate's live-test receipt does not match its current identity; "
+            "run the live test to validate it",
+            doctor_ok=True,
+            sif_exists=active_exists,
+            **fields,
+        )
+    return _result(
+        family,
+        RunnerReadinessStatus.BUILD_STALE,
+        "CANDIDATE_AWAITING_PROMOTION",
+        "A Runner image candidate is staged for promotion; activate it with the deployment-host "
+        "promote-sifs step (which verifies the candidate's live-test receipt), or discard the candidate, "
+        "before new submissions",
+        doctor_ok=True,
+        next_action="promote",
+        sif_exists=active_exists,
+        **fields,
+    )
+
+
 def resolve_runner_readiness(state, family: RuntimeFamily) -> RunnerReadiness:
-    """Derive readiness from current contracts and the active artifact without mutating state."""
+    """Derive readiness for the artifact execution would load, without mutating state."""
     plugin_root = family.root.parent if family.root is not None else Path(state.get("RUNNER_SOURCE_ROOT"))
     doctor = diagnose(plugin_root, runner=family.name, repo_root=SERVER_ROOT)
     if not doctor.ok:
@@ -180,7 +382,9 @@ def resolve_runner_readiness(state, family: RuntimeFamily) -> RunnerReadiness:
         )
 
     active = Path(family.slurm_image)
-    if not active.is_file():
+    staged = Path(f"{family.slurm_image}.next")
+    active_exists = active.is_file()
+    if not active_exists and not staged.is_file():
         return _result(
             family,
             RunnerReadinessStatus.NOT_BUILT,
@@ -190,12 +394,36 @@ def resolve_runner_readiness(state, family: RuntimeFamily) -> RunnerReadiness:
         )
 
     sif_sha256 = None
+    build_record = None
     try:
         provenance = _build_provenance(state, family)
         build_digest = str(provenance["build_provenance_digest"])
         build_record = read_build_evidence_for_provenance(family, build_digest)
         if build_record:
             sif_sha256 = build_record.get("sif_sha256")
+    except (OSError, KeyError, TypeError, ValueError, RegistryError):
+        return _result(
+            family,
+            RunnerReadinessStatus.NOT_CONFIGURED,
+            "CONFIGURATION_INVALID",
+            "Runner build inputs or provenance cannot be resolved",
+            doctor_ok=True,
+            sif_exists=active_exists,
+            sif_sha256=sif_sha256,
+        )
+
+    # A staged candidate is not the artifact execution loads.  The build/live-
+    # test evidence is content-addressed and path-agnostic, so a candidate built
+    # under the current provenance would otherwise make readiness adopt its
+    # digest while ``<sif>`` still holds the old file (or no file at all, in the
+    # first-enablement flow).  Submission readiness is a verdict about the
+    # artifact that will execute, so it fails closed until the candidate is
+    # promoted; the live-test action itself is unaffected because it validates
+    # the candidate through the worker, not through this verdict.
+    if staged.is_file():
+        return _staged_candidate_readiness(state, family, build_digest, active_exists)
+
+    try:
         build_current = not sif_stale(state, family, str(active))
     except (OSError, KeyError, TypeError, ValueError, RegistryError):
         return _result(
@@ -204,7 +432,7 @@ def resolve_runner_readiness(state, family: RuntimeFamily) -> RunnerReadiness:
             "CONFIGURATION_INVALID",
             "Runner build inputs or provenance cannot be resolved",
             doctor_ok=True,
-            sif_exists=True,
+            sif_exists=active_exists,
             sif_sha256=sif_sha256,
         )
     if not build_current:
@@ -214,110 +442,48 @@ def resolve_runner_readiness(state, family: RuntimeFamily) -> RunnerReadiness:
             "BUILD_PROVENANCE_STALE",
             "Active Runner SIF does not match current build inputs",
             doctor_ok=True,
-            sif_exists=True,
+            sif_exists=active_exists,
             sif_sha256=sif_sha256,
             build_provenance_digest=build_digest,
         )
 
-    try:
-        identity = load_validation_identity(family, state=state)
-        required = tuple(sorted(case.id for case in identity.plan.select("smoke")))
-    except (OSError, KeyError, TypeError, ValueError, StopIteration, LiveTestConfigurationError, RegistryError):
+    evidence = _receipt_evidence(state, family, build_digest, sif_sha256)
+    if evidence.failure is not None:
         return _result(
             family,
             RunnerReadinessStatus.NOT_CONFIGURED,
             "CONFIGURATION_INVALID",
-            "Runner live-test identity cannot be resolved",
+            evidence.failure,
             doctor_ok=True,
-            sif_exists=True,
+            sif_exists=active_exists,
             sif_sha256=sif_sha256,
             build_provenance_current=True,
             build_provenance_digest=build_digest,
         )
-
-    try:
-        expected_uid = int(state.get("RUNNER_UID")) if state.get("RUNNER_UID") else None
-        expected_gid = int(state.get("RUNNER_GID")) if state.get("RUNNER_GID") else None
-        expected_scheduler_user = state.get("RUNNER_USERNAME") or None
-    except (TypeError, ValueError):
-        return _result(
-            family,
-            RunnerReadinessStatus.NOT_CONFIGURED,
-            "CONFIGURATION_INVALID",
-            "Configured Runner UID/GID are not numeric",
-            doctor_ok=True,
-            sif_exists=True,
-            sif_sha256=sif_sha256,
-            build_provenance_current=True,
-            build_provenance_digest=build_digest,
-        )
-    try:
-        expected_bundle = bundle_digest(state, family)
-    except (OSError, KeyError, TypeError, ValueError, RegistryError):
-        expected_bundle = None
-    expected_identity = {
-        "build_provenance_digest": build_digest,
-        "runtime_bundle_sha256": expected_bundle,
-        "test_definition_digest": identity.plan.digest,
-        "configuration_digest": identity.configuration_digest,
-        "execution_uid": expected_uid,
-        "execution_gid": expected_gid,
-        "scheduler_user": expected_scheduler_user,
-    }
-    receipt = read_receipt_for_identity(family, expected_identity)
-    if sif_sha256 is None and receipt:
-        sif_sha256 = _string_field(receipt, "sif_sha256")
-    receipt_exists = receipt_exists_for_provenance(family, build_digest)
-    if receipt is None and not receipt_exists:
+    fields = evidence.fields
+    receipt = evidence.receipt
+    sif_sha256 = fields["sif_sha256"]
+    if receipt is None and not fields["receipt_exists"]:
         return _result(
             family,
             RunnerReadinessStatus.NOT_VALIDATED,
             "RECEIPT_MISSING",
             "Active Runner SIF has no live-test receipt",
             doctor_ok=True,
-            sif_exists=True,
+            sif_exists=active_exists,
             sif_sha256=sif_sha256,
             build_provenance_current=True,
             build_provenance_digest=build_digest,
-            required_smoke_cases=required,
+            required_smoke_cases=fields["required_smoke_cases"],
         )
-
-    passed = _passed_case_ids(receipt or {})
-    valid = bool(receipt) and receipt_matches(
-        receipt,
-        sif_sha256=sif_sha256,
-        build_provenance_digest=build_digest,
-        test_definition_digest=identity.plan.digest,
-        configuration_digest=identity.configuration_digest,
-        required_case_ids=set(required),
-        runtime_bundle_sha256=expected_bundle,
-        expected_execution_uid=expected_uid,
-        expected_execution_gid=expected_gid,
-        expected_scheduler_user=expected_scheduler_user,
-    )
-    common = {
-        "sif_exists": True,
-        "sif_sha256": sif_sha256,
-        "build_provenance_current": True,
-        "build_provenance_digest": build_digest,
-        "runtime_bundle_sha256": expected_bundle,
-        "receipt_exists": receipt_exists,
-        "receipt_valid": valid,
-        "receipt_tested_at": _string_field(receipt, "ended_at"),
-        "receipt_sif_sha256": _string_field(receipt, "sif_sha256"),
-        "receipt_configuration_digest": _string_field(receipt, "configuration_digest"),
-        "receipt_test_definition_digest": _string_field(receipt, "test_definition_digest"),
-        "receipt_runtime_bundle_sha256": _string_field(receipt, "runtime_bundle_sha256"),
-        "required_smoke_cases": required,
-        "passed_smoke_cases": passed,
-    }
-    if not valid:
+    common = {"sif_exists": active_exists, **fields}
+    if not fields["receipt_valid"]:
         # Distinguish "the SIF is fine, only the runtime code moved" from the
         # generic receipt mismatch: the operator action is the same live test,
         # but the diagnosis is not.
         bundle_changed = (
-            expected_bundle is not None
-            and _string_field(receipt, "runtime_bundle_sha256") != expected_bundle
+            fields["runtime_bundle_sha256"] is not None
+            and _string_field(receipt, "runtime_bundle_sha256") != fields["runtime_bundle_sha256"]
         )
         return _result(
             family,

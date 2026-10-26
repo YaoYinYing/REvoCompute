@@ -18,7 +18,11 @@ import yaml
 
 from revocompute import runtime_bundle
 from revocompute.access_control import load_policy_documents, resolve_policy
-from revocompute.artifact_evidence import read_build_evidence_for_provenance, write_artifact_evidence
+from revocompute.artifact_evidence import (
+    read_build_evidence_for_provenance,
+    remove_staged_identity,
+    write_artifact_evidence,
+)
 from revocompute.compose import run_cmd
 from revocompute.live_tests import atomic_write_json, canonical_digest, receipt_matches, sha256_file
 from revocompute.plugins import PluginManager
@@ -410,15 +414,17 @@ def _build_provenance(state, family: RuntimeFamily) -> dict[str, object]:
 
 
 def _record_sif_manifest(state, family: RuntimeFamily, sif_path: str) -> None:
-    from revocompute.artifact_evidence import write_artifact_evidence
+    from revocompute.artifact_evidence import write_artifact_evidence, write_staged_identity
 
     sif_sha256 = sha256_file(sif_path)
+    provenance = _build_provenance(state, family)
     write_artifact_evidence(
         family,
         sif_sha256,
         "build",
-        {**_build_provenance(state, family), "build_timestamp": datetime.now(timezone.utc).isoformat()},
+        {**provenance, "build_timestamp": datetime.now(timezone.utc).isoformat()},
     )
+    write_staged_identity(family, sif_sha256, str(provenance["build_provenance_digest"]))
 
 
 def _build_identity_digest(record: dict) -> str:
@@ -618,6 +624,7 @@ def build_slurm_images(
             if not sif_stale(state, family, staged):
                 continue
             os.remove(staged)
+            remove_staged_identity(family)
         if not sif_stale(state, family):
             print(f"[SLURM] SIF image unchanged: {family.slurm_image} — skipping.")
             continue
@@ -666,18 +673,31 @@ def validate_prepared_images(state, families: list[RuntimeFamily]) -> None:
                 print(f"Prepared SIF provenance is invalid: {family.name}", file=sys.stderr)
                 raise RegistryError
             from revocompute.runner_live_test import active_receipt_valid, candidate_receipt_valid
-            from revocompute.artifact_evidence import read_build_evidence_for_provenance
-            provenance = _build_provenance(state, family)
-            build_record = read_build_evidence_for_provenance(family, str(provenance["build_provenance_digest"])) or {}
-            sif_sha256 = build_record.get("sif_sha256")
 
+            # The receipt must cover the artifact's own bytes: the aggregate
+            # build record for a provenance can describe a sibling artifact.
+            sif_sha256 = sha256_file(artifact)
             receipt_valid = candidate_receipt_valid if staged.is_file() else active_receipt_valid
-            if not isinstance(sif_sha256, str) or not receipt_valid(state, family, sif_sha256=sif_sha256):
+            if not receipt_valid(state, family, sif_sha256=sif_sha256):
                 print(
                     f"Prepared SIF has no valid live-test receipt: {family.name}",
                     file=sys.stderr,
                 )
                 raise RegistryError(f"Prepared SIF has no valid live-test receipt: {family.name}")
+            # ``promote-sifs`` runs after ``stop``, so a candidate it would refuse
+            # must be refused here, while the healthy stack is still serving. The
+            # staged-identity record is that refusal's other condition.
+            if staged.is_file():
+                from revocompute.artifact_evidence import staged_identity_describes
+
+                if not staged_identity_describes(family, sif_sha256):
+                    print(
+                        f"Prepared SIF has no recorded build identity matching its bytes: {family.name}",
+                        file=sys.stderr,
+                    )
+                    raise RegistryError(
+                        f"Prepared SIF has no recorded build identity matching its bytes: {family.name}"
+                    )
     for image in required:
         result = run_cmd(["docker", "image", "inspect", image], env=state.exported(), check=False, capture=True)
         if result.returncode != 0:

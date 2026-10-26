@@ -5,6 +5,7 @@ import { InputWorkspace } from './input-workspace/InputWorkspace';
 import type { PresetApplication, WorkspacePreset } from './input-workspace/InputWorkspace';
 import { buildSubmissionFormData } from './submission';
 import type { TaskCatalog, TaskFormDefinition, TaskPreflight, TaskSummary } from './types';
+import { submissionNotice } from '../runners/readiness-copy';
 import { t } from '../../app/i18n';
 import { loadEnvironment } from '../../app/environment';
 
@@ -44,6 +45,10 @@ export class CreateTask {
   // and no field error behind, so without this the panel would fall through to
   // the success-flavoured ready row while the status line reports the failure.
   private actionFailed = false;
+  // The server's admission projection says this method cannot accept a task.
+  // The primary control then refreshes that projection instead of submitting;
+  // preflight and POST remain the only submission boundary.
+  private admissionBlocked = false;
   private change: HTMLButtonElement | null = null;
   private demo: HTMLButtonElement | null = null;
   // The picker is a top-layer element, so it lives beside the view rather than
@@ -97,7 +102,7 @@ export class CreateTask {
     this.workbench.hidden = true;
     this.feedback.append(this.validationSummary, this.validation, this.status);
     this.validationSummary.hidden = true;
-    this.action.type = 'button'; this.action.addEventListener('click', () => void this.runAction());
+    this.action.type = 'button'; this.action.addEventListener('click', () => void (this.admissionBlocked ? this.recheckAvailability() : this.runAction()));
     this.clear.type = 'button'; this.clear.addEventListener('click', () => void this.clearWorkspace());
     this.environmentNotice.hidden = true;
     this.demoNotice.hidden = true;
@@ -186,6 +191,10 @@ export class CreateTask {
     const button = node('button', 'ct-method'); button.type = 'button';
     button.append(node('strong', '', task.display_name), node('span', '', task.summary));
     if (task.access.restricted) button.append(node('small', `ct-access ${task.access.granted ? 'granted' : ''}`, task.access.granted ? t('ct.access.granted') : task.access.request_status === 'pending' ? t('ct.access.requested') : t('ct.access.restricted')));
+    // The chooser stays discoverable, but a method the server will refuse is
+    // never presented as ready to submit. The reason is the server's own.
+    const notice = submissionNotice(task.submission);
+    if (notice) button.append(node('small', 'ct-access', notice.message || t('ct.submissionBlocked')));
     button.addEventListener('click', () => void this.selectTask(task.name)); return button;
   }
 
@@ -280,6 +289,19 @@ export class CreateTask {
     const access = this.definition.access;
     if (access.restricted && !access.granted) errors.push(access.request_status === 'pending' ? t('ct.access.pending') : t('ct.access.required'));
     const preflight = this.preflight;
+    // A deep link cannot bypass admission. The page states the server's own
+    // reason at mount and turns the primary control into a refresh of that
+    // projection. Availability comes from admission alone, so an input error
+    // still leaves the Run control available for a retry, and neither the
+    // projection nor a refresh authorizes submission: preflight and POST decide.
+    const mountBlocked = preflight ? null : submissionNotice(this.definition.submission);
+    const admissionBlocked = Boolean(mountBlocked) || preflight?.admission.runner_ready === false;
+    this.admissionBlocked = admissionBlocked;
+    this.action.textContent = this.demoEnvironment
+      ? t('demo.previewOnly')
+      : admissionBlocked
+        ? t('ct.recheckAvailability')
+        : t('ct.run');
     this.validation.replaceChildren();
     let blockers = 0;
     const blocker = (message: string): void => { this.validation.append(this.validationRow('error', message)); blockers += 1; };
@@ -298,12 +320,17 @@ export class CreateTask {
       if (admission.runner_ready === false && !codes.has('admission_unavailable')) blocker(t('ct.runnerUnavailable'));
       if (admission.infrastructure_status && !admission.infrastructure_ready && !codes.has('infrastructure_unavailable')) blocker(t('ct.infrastructure', { status: admission.infrastructure_status.toLowerCase() }));
       preflight.warnings.forEach(item => this.validation.append(this.validationRow('info', item.message)));
+    } else if (mountBlocked) {
+      const reason = mountBlocked.message || t('ct.submissionBlocked');
+      this.validation.append(this.validationRow('info', mountBlocked.recovery ? `${reason} ${mountBlocked.recovery}` : reason));
     } else if (!this.actionFailed && !this.environmentUnresolved) this.validation.append(this.validationRow('info', t(this.demoEnvironment ? 'ct.readyPreview' : 'ct.ready')));
     const counts = blockers;
     this.validationSummary.hidden = counts === 0;
     this.validationSummary.textContent = t(counts === 1 ? 'ct.issueOne' : 'ct.issueMany', { count: counts });
     this.validationSummary.className = `ct-validation-summary ${counts ? 'blocked' : 'ready'}`;
-    this.action.disabled = this.environmentPending || this.demoEnvironment || this.busy || errors.length > 0;
+    // A recheck is useful even while the form is incomplete, so input errors
+    // disable only a submission, never the refresh of the admission projection.
+    this.action.disabled = this.environmentPending || this.demoEnvironment || this.busy || (!admissionBlocked && errors.length > 0);
     this.refreshSnapshot();
     return errors;
   }
@@ -322,6 +349,37 @@ export class CreateTask {
 
   private validationRow(kind: 'ok' | 'error' | 'info', message: string): HTMLLIElement {
     const row = node('li', `ct-validation-row ${kind}`); row.append(node('span', 'ct-validation-marker'), document.createTextNode(message)); return row;
+  }
+
+  /**
+   * Refresh the server's admission projection without submitting.
+   *
+   * This reads the method detail — the same projection the catalog and the
+   * deep link render — rather than preflight, which needs the filled form and
+   * would report missing inputs. It replaces only the projection, preserving
+   * the reader's inputs, and grants nothing: the next click is still a
+   * preflight followed by POST.
+   */
+  private async recheckAvailability(): Promise<void> {
+    if (this.demoEnvironment) { this.setStatus(t('demo.runDisabled'), 'error'); return; }
+    if (!this.definition || this.busy) return;
+    const definition = this.definition;
+    const generation = this.generation;
+    this.setBusy(true);
+    this.setStatus(t('ct.rechecking'), 'busy');
+    try {
+      const fresh = await getTaskDefinition(definition.name);
+      if (generation !== this.generation) return;
+      definition.submission = fresh.submission;
+      this.setBusy(false);
+      this.refreshValidation();
+      this.setStatus(this.admissionBlocked ? t('ct.recheckUnavailable') : t('ct.recheckReady'), this.admissionBlocked ? '' : 'ok');
+    } catch (error) {
+      if (generation !== this.generation) return;
+      this.setBusy(false);
+      this.refreshValidation();
+      this.setStatus(t('ct.recheckFailed', { message: error instanceof Error ? error.message : String(error) }), 'error');
+    }
   }
 
   private async runAction(): Promise<void> {

@@ -101,7 +101,16 @@ def _prepare_backend(monkeypatch, tmp_path, *, entitlement: str | None):
         route = route.__wrapped__
     # Runner availability evidence is a separate concern; this test is about the
     # parameter contract, so the Runner is simply available.
-    monkeypatch.setitem(route.__globals__, "resolve_submission_readiness", lambda *_args: SimpleNamespace(ready=True))
+    monkeypatch.setattr(
+        "revocompute.admission.resolve_submission_readiness",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            ready=True,
+            status=SimpleNamespace(value="READY"),
+            reason_code="READY",
+            message="ready",
+            next_action="none",
+        ),
+    )
     module.app.config["infrastructure_readiness"] = SimpleNamespace(
         report=lambda: {
             "status": "READY",

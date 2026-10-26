@@ -38,7 +38,12 @@ from revocompute_ctl import stamp as stamp_mod  # noqa: E402
 from revocompute_ctl import steps as steps_mod  # noqa: E402
 from revocompute_ctl import sweep as sweep_mod  # noqa: E402
 from revocompute_ctl.env import EnvState, parse_env_file  # noqa: E402
-from revocompute.artifact_evidence import evidence_path, read_artifact_evidence  # noqa: E402
+from revocompute.artifact_evidence import (  # noqa: E402
+    evidence_path,
+    read_artifact_evidence,
+    write_staged_identity,
+)
+from revocompute.serialization import sha256_file  # noqa: E402
 from revocompute.runner_registry import (
     RegistryError,
     RuntimeFamily,
@@ -1149,6 +1154,26 @@ def test_prepared_candidate_requires_exact_live_receipt(tmp_path, monkeypatch):
         registry_mod.validate_prepared_images(state, [family])
 
 
+def test_prepared_candidate_requires_a_record_describing_its_bytes(tmp_path, monkeypatch):
+    """promote-sifs runs after stop, so preflight must refuse what it would refuse.
+
+    A staged candidate whose build record is missing passes the receipt check but
+    is refused at activation. Catching it here keeps the healthy stack up instead
+    of leaving services stopped on a refusal.
+    """
+    family = _direct_family(tmp_path)
+    Path(family.slurm_image).parent.mkdir()
+    state, _log = _shimmed_state(monkeypatch, tmp_path, _write_shims(tmp_path), {}, USE_SLURM="1")
+    build_slurm_images(state, [family])
+    sidecar = Path(f"{family.slurm_image}.next.build.json")
+    assert sidecar.is_file()
+    sidecar.unlink()
+    monkeypatch.setattr("revocompute.runner_live_test.candidate_receipt_valid", lambda *_args, **_kwargs: True)
+
+    with pytest.raises(RegistryError, match="recorded build identity"):
+        registry_mod.validate_prepared_images(state, [family])
+
+
 def test_prepared_active_sif_requires_exact_live_receipt(tmp_path, monkeypatch):
     family = _direct_family(tmp_path)
     Path(family.slurm_image).parent.mkdir()
@@ -1168,6 +1193,7 @@ def test_sif_promotion_is_receipt_gated_and_preserves_active(tmp_path, monkeypat
     active.write_bytes(b"active")
     candidate = Path(f"{family.slurm_image}.next")
     candidate.write_bytes(b"candidate")
+    write_staged_identity(family, sha256_file(candidate), "sha256:provenance")
     state = EnvState(str(tmp_path / "server.env"), values={"ENABLED_TASKRUNNERS": "demo"})
     monkeypatch.setattr("revocompute.runner_live_test.candidate_receipt_valid", lambda *_args, **_kwargs: False)
 
@@ -1190,7 +1216,9 @@ def test_sif_promotion_validates_all_candidates_before_activation(tmp_path, monk
         active = Path(family.slurm_image)
         active.parent.mkdir(parents=True)
         active.write_bytes(active_data)
-        Path(f"{family.slurm_image}.next").write_bytes(candidate_data)
+        candidate = Path(f"{family.slurm_image}.next")
+        candidate.write_bytes(candidate_data)
+        write_staged_identity(family, sha256_file(candidate), "sha256:provenance")
     state = EnvState(str(tmp_path / "server.env"), values={"ENABLED_TASKRUNNERS": "demo"})
     valid_results = iter((True, False))
     monkeypatch.setattr(
@@ -1215,7 +1243,9 @@ def test_sif_promotion_rolls_back_when_second_activation_fails(tmp_path, monkeyp
         active = Path(family.slurm_image)
         active.parent.mkdir(parents=True)
         active.write_bytes(active_data)
-        Path(f"{family.slurm_image}.next").write_bytes(candidate_data)
+        candidate = Path(f"{family.slurm_image}.next")
+        candidate.write_bytes(candidate_data)
+        write_staged_identity(family, sha256_file(candidate), "sha256:provenance")
     state = EnvState(str(tmp_path / "server.env"), values={"ENABLED_TASKRUNNERS": "demo"})
     monkeypatch.setattr(
         "revocompute.runner_live_test.candidate_receipt_valid", lambda *_args, **_kwargs: True
@@ -1246,6 +1276,7 @@ def test_sif_promotion_rechecks_candidate_bytes_immediately_before_activation(tm
     active.write_bytes(b"active")
     candidate = Path(f"{family.slurm_image}.next")
     candidate.write_bytes(b"validated")
+    write_staged_identity(family, sha256_file(candidate), "sha256:provenance")
     state = EnvState(str(tmp_path / "server.env"), values={"ENABLED_TASKRUNNERS": "demo"})
 
     def validate(*_args, **_kwargs):

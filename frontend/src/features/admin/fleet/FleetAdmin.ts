@@ -49,6 +49,7 @@ const REASON_COPY: Record<string, string> = {
   DOCTOR_FAILED: 'The Runner contract failed validation.',
   CONFIGURATION_INVALID: 'The Runner configuration or its build inputs cannot be resolved.',
   RUNNER_UNKNOWN: 'This Runner family is not enabled on this deployment.',
+  CANDIDATE_AWAITING_PROMOTION: 'An image candidate is staged; activate it with promote-sifs before new submissions.',
 };
 
 const STATUS_LABEL: Record<string, string> = {
@@ -173,7 +174,29 @@ export function summarySentence(rows: RunnerFleetEntry[]): string {
 export type FleetFilter = 'all' | 'attention' | 'ready';
 export type FleetSort = 'attention' | 'family' | 'status';
 
+/**
+ * Whether this verdict describes a staged candidate rather than the installed
+ * artifact.
+ *
+ * An unvalidated candidate reuses the active-path receipt codes.  With an
+ * installed file the active image reports that a candidate is pending; without
+ * one, the active path would have returned SIF_MISSING before reading a
+ * receipt, so a receipt code there can only describe the candidate.
+ */
+function describesStagedCandidate(readiness: RunnerReadiness): boolean {
+  if (readiness.active_image?.reason_code === 'STAGED_CANDIDATE_PENDING') return true;
+  return (
+    readiness.evidence?.sif_exists === false &&
+    ['RECEIPT_MISSING', 'RECEIPT_STALE', 'RUNTIME_BUNDLE_CHANGED'].includes(readiness.reason_code)
+  );
+}
+
 export function reasonText(readiness: RunnerReadiness): string {
+  // The generic copy names the active image, which a candidate verdict does not
+  // describe; use the server's candidate-specific message for that row.
+  if (describesStagedCandidate(readiness)) {
+    return readiness.message || 'No explanation recorded.';
+  }
   return REASON_COPY[readiness.reason_code] || readiness.message || 'No explanation recorded.';
 }
 
@@ -184,6 +207,43 @@ export function statusLabel(status: string): string {
 /** The human band name a readiness verdict is grouped into. */
 export function weaknessLabel(status: string): string {
   return WEAKNESS_LABEL[weaknessOf(status)];
+}
+
+function shortIdentity(sha256: string): string {
+  const digest = sha256.startsWith('sha256:') ? sha256.slice('sha256:'.length) : sha256;
+  return digest.length > 12 ? `${digest.slice(0, 12)}…` : digest;
+}
+
+/** Why the server could not establish the installed artifact's identity. */
+const ACTIVE_IMAGE_UNKNOWN_COPY: Record<string, string> = {
+  STAGED_CANDIDATE_PENDING: 'a staged candidate is awaiting activation',
+  ACTIVE_IMAGE_IDENTITY_UNKNOWN: 'the server has not established an identity',
+};
+
+/**
+ * The active artifact's server-established identity, or the reason it is unknown.
+ *
+ * The server projects ``active_image`` from the same evidence the readiness
+ * verdict was derived from. This reads that projection and never falls back to
+ * "the file exists": an artifact whose identity was not established is
+ * ``Unknown``, because presence is not identity.
+ */
+export function activeImageLabel(readiness: RunnerReadiness): string {
+  const image = readiness.active_image;
+  if (!image || image.state === 'UNKNOWN') return 'Unknown';
+  if (image.state === 'MISSING') return 'Missing';
+  return image.sha256 ? `Active · ${shortIdentity(image.sha256)}` : 'Unknown';
+}
+
+/** The full active identity for the evidence dialog; never a presence claim. */
+export function activeImageDetail(readiness: RunnerReadiness): string {
+  const image = readiness.active_image;
+  if (image?.state === 'MISSING') return 'Missing';
+  if (image?.state !== 'ACTIVE' || !image.sha256) {
+    const reason = image?.reason_code ? ACTIVE_IMAGE_UNKNOWN_COPY[image.reason_code] : undefined;
+    return reason ? `Unknown — ${reason}` : 'Unknown — the server has not established an identity';
+  }
+  return `Active · ${image.sha256}`;
 }
 
 /** An Operator Job's lifecycle word; job state never shares a readiness badge. */
@@ -436,7 +496,7 @@ export class FleetAdmin {
     const known = (value: boolean | undefined, yes: string, no: string) => value === true ? yes : value === false ? no : 'Unknown';
     const build = cell(known(evidence.sif_exists, 'Built', 'Not built'), 'Build');
     const test = cell(evidence.receipt_valid === true ? 'Validated' : evidence.receipt_exists === true ? 'Receipt stale' : known(evidence.receipt_exists, 'Recorded', 'No receipt'), 'Live test');
-    const active = cell(known(evidence.sif_exists, 'Image present', 'No active image'), 'Active image');
+    const active = cell(activeImageLabel(row.readiness), 'Active image');
     const freshness = cell(statusLabel(row.readiness.status), 'Freshness');
     if (row.in_flight) name.append(text('small', `Management operation: ${workflowLabel(row.in_flight.action.replace('runner.', ''))} · ${row.in_flight.status}`));
     tr.append(name, build, test, active, freshness);
@@ -472,7 +532,7 @@ export class FleetAdmin {
     facts.append(
       field('Readiness verdict', statusLabel(detail.readiness.status)),
       field('Recommended next step', detail.readiness.next_action === 'none' ? 'None' : workflowLabel(detail.readiness.next_action)),
-      field('Active image', evidence.sif_exists ? 'Present' : 'Missing'),
+      field('Active image', activeImageDetail(detail.readiness)),
       field('Build provenance', evidence.build_provenance_current ? 'Current' : 'Stale'),
       field('Runtime bundle', evidence.runtime_bundle_sha256 ? 'Pinned' : 'None'),
       field('Live receipt', evidence.receipt_valid ? 'Valid' : evidence.receipt_exists ? 'Stale' : 'Missing'),
