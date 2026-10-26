@@ -14,6 +14,7 @@ while a candidate is awaiting promotion and clear once the candidate is active.
 from __future__ import annotations
 
 import io
+import json
 from pathlib import Path
 
 import pytest
@@ -740,3 +741,54 @@ def test_an_unresolvable_bundle_binding_is_a_verdict_not_an_exception(monkeypatc
     # The Fleet projection renders that verdict rather than failing.
     row = next(item for item in fleet_view(state) if item["runner_family"] == "cpu_runner")
     assert row["readiness"]["reason_code"] == "CONFIGURATION_INVALID"
+
+
+def test_a_legacy_staged_record_is_repaired_by_the_live_test(monkeypatch, tmp_path):
+    """A record written before the stat identity existed is not a promotion verdict.
+
+    Candidates staged by an earlier build carry a sidecar without the stat
+    identity, so the record cannot say whether the staged bytes are still the
+    bytes it named. It falls back to the same recovery as an absent record, and
+    a passing live test rewrites it in the current shape.
+    """
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={
+            "RUNNER_UID": "1234",
+            "RUNNER_GID": "5678",
+            "RUNNER_USERNAME": "revodesign",
+            "RUNNER_GROUP": "revodesign",
+            "REVODESIGN_APPTAINER_VERSION": "apptainer version 1.4.0",
+        },
+    )
+    module.app.config["manage_db"].resource_set("slurm_enabled", "true")
+    module.app.config["infrastructure_readiness"] = _AvailableInfrastructure()
+
+    state, family = _deployment(module)
+    active = Path(family.slurm_image)
+    active.parent.mkdir(parents=True, exist_ok=True)
+    active.write_bytes(b"validated-active-A")
+    _record_artifact(state, family, active)
+    candidate = Path(f"{family.slurm_image}.next")
+    candidate.write_bytes(b"validated-candidate-B")
+    _record_artifact(state, family, candidate)
+
+    # Rewrite the sidecar in the pre-fix shape: digest and provenance, no stat identity.
+    sidecar = Path(f"{family.slurm_image}.next.build.json")
+    record = json.loads(sidecar.read_text(encoding="utf-8"))
+    del record["staged_stat_identity"]
+    sidecar.write_text(json.dumps(record), encoding="utf-8")
+
+    legacy = resolve_runner_readiness(state, family)
+    assert legacy.next_action == "live-test"
+    assert legacy.ready is False
+    with pytest.raises(RegistryError, match="no recorded build identity matching its bytes"):
+        promote_sifs(state, [family])
+    assert active.read_bytes() == b"validated-active-A"
+    # The live test records the identity of the bytes it validates, which repairs it.
+    _record_artifact(state, family, candidate)
+    assert "staged_stat_identity" in json.loads(sidecar.read_text(encoding="utf-8"))
+    assert resolve_runner_readiness(state, family).reason_code == "CANDIDATE_AWAITING_PROMOTION"
+    promote_sifs(state, [family])
+    assert active.read_bytes() == b"validated-candidate-B"
