@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-from revocompute.artifact_evidence import read_staged_identity
+from revocompute.artifact_evidence import read_staged_digest
 from revocompute.runner_live_test import (
     RunnerLiveTestError,
     RunnerLiveTestWorker,
@@ -95,7 +95,7 @@ def test_live_worker_records_explicit_success_lifecycle(tmp_path, monkeypatch):
     ]
     # A passing run binds the staged path to the bytes it validated, which is
     # also the repair for a candidate whose identity predates this record.
-    assert read_staged_identity(worker.family, "build") == digest
+    assert read_staged_digest(worker.family) == digest
 
 
 def test_live_worker_reports_validation_failure_and_timeout_category(tmp_path, monkeypatch):

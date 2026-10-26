@@ -43,6 +43,7 @@ from revocompute.artifact_evidence import (  # noqa: E402
     evidence_path,
     read_artifact_evidence,
     write_artifact_evidence,
+    staged_identity_describes,
     write_staged_identity,
 )
 from revocompute.runner_registry import RuntimeFamily  # noqa: E402
@@ -755,3 +756,17 @@ def test_workspace_projection_tolerates_a_plugin_without_a_configuration_schema(
     entry = projection["workspace_task-regions"]
     assert entry["assets"]["workspace/regions/index.js"]
     assert entry["backend"]["normalizer"]["entrypoint"] == "workspace/regions/backend.py:normalize"
+
+
+def test_a_staged_record_written_with_no_candidate_describes_nothing(tmp_path):
+    """Losing the staged file must not raise, and must not describe it.
+
+    A passing live test writes its receipt first and records the staged identity
+    afterwards, so a candidate removed in that gap must leave a record that
+    describes no file rather than an exception after the run already passed.
+    """
+    family = RuntimeFamily("demo", "1", "demo.def", "demo.sif", str(tmp_path / "images" / "demo.sif"))
+    (tmp_path / "images").mkdir(parents=True)
+    write_staged_identity(family, "sha256:" + "b" * 64, "sha256:provenance")
+
+    assert staged_identity_describes(family, "sha256:" + "b" * 64) is False

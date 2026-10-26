@@ -18,7 +18,7 @@ from revocompute.artifact_evidence import (
     read_build_evidence_for_provenance,
     read_receipt_for_digest,
     read_receipt_for_identity,
-    read_staged_identity,
+    read_staged_digest,
     receipt_digests,
     receipt_exists_for_provenance,
     staged_identity_describes,
@@ -273,12 +273,12 @@ def _staged_candidate_readiness(
     step would accept the candidate; an unvalidated candidate is told to run the
     live test first.
     """
-    candidate_sha256 = read_staged_identity(family, build_digest)
-    # A record that does not describe the staged bytes -- absent, or left from
-    # before the candidate was rewritten -- cannot support a promotion verdict,
-    # and ``promote_sifs`` refuses those bytes for the same reason.  The live
-    # test is the one action that both validates the bytes and records their
-    # identity, so it is the recovery in every case.
+    # The record binds the staged bytes, so this is the same test ``promote_sifs``
+    # applies.  A record that does not describe the staged bytes -- absent, from
+    # another provenance, or left from before a rewrite -- cannot support a
+    # promotion verdict; the live test is the one action that both validates the
+    # bytes and records their identity, so it is the recovery in every case.
+    candidate_sha256 = read_staged_digest(family)
     recorded = candidate_sha256 is not None and staged_identity_describes(family, candidate_sha256)
     if not recorded:
         return _result(

@@ -1154,6 +1154,26 @@ def test_prepared_candidate_requires_exact_live_receipt(tmp_path, monkeypatch):
         registry_mod.validate_prepared_images(state, [family])
 
 
+def test_prepared_candidate_requires_a_record_describing_its_bytes(tmp_path, monkeypatch):
+    """promote-sifs runs after stop, so preflight must refuse what it would refuse.
+
+    A staged candidate whose build record is missing passes the receipt check but
+    is refused at activation. Catching it here keeps the healthy stack up instead
+    of leaving services stopped on a refusal.
+    """
+    family = _direct_family(tmp_path)
+    Path(family.slurm_image).parent.mkdir()
+    state, _log = _shimmed_state(monkeypatch, tmp_path, _write_shims(tmp_path), {}, USE_SLURM="1")
+    build_slurm_images(state, [family])
+    sidecar = Path(f"{family.slurm_image}.next.build.json")
+    assert sidecar.is_file()
+    sidecar.unlink()
+    monkeypatch.setattr("revocompute.runner_live_test.candidate_receipt_valid", lambda *_args, **_kwargs: True)
+
+    with pytest.raises(RegistryError, match="recorded build identity"):
+        registry_mod.validate_prepared_images(state, [family])
+
+
 def test_prepared_active_sif_requires_exact_live_receipt(tmp_path, monkeypatch):
     family = _direct_family(tmp_path)
     Path(family.slurm_image).parent.mkdir()

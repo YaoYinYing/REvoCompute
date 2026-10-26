@@ -90,7 +90,17 @@ def promote_sifs(state, families: list[RuntimeFamily]) -> None:
             try:
                 os.chmod(staged, 0o444)
                 os.replace(staged, sif)
+                # The pre-replace stat and the replace are not one operation: a
+                # writer landing different bytes at ``staged`` in that window
+                # would be activated without a receipt. Re-read what actually
+                # landed and compare it to the identity the receipt was matched
+                # against.
+                landed = os.stat(sif)
+                if (landed.st_size, landed.st_mtime_ns, landed.st_ino) != before:
+                    raise RegistryError(f"Staged SIF changed during activation: {sif}")
             except Exception:
+                if os.path.isfile(sif):
+                    os.replace(sif, staged)
                 if backup and os.path.isfile(backup):
                     os.replace(backup, sif)
                 raise

@@ -154,9 +154,17 @@ def staged_identity_path(family) -> Path:
     return Path(f"{family.slurm_image}.next.build.json")
 
 
-def _staged_stat_identity(family) -> list[int]:
-    """The staged file's stat identity, captured while its bytes are known."""
-    stat = Path(f"{family.slurm_image}.next").stat()
+def _staged_stat_identity(family) -> list[int] | None:
+    """The staged file's stat identity, captured while its bytes are known.
+
+    ``None`` when nothing is staged: a live test that passed still writes its
+    receipt, and losing the candidate must not turn that run into an exception.
+    A record without a stat identity describes no file, so readers fail closed.
+    """
+    try:
+        stat = Path(f"{family.slurm_image}.next").stat()
+    except OSError:
+        return None
     return [stat.st_size, stat.st_mtime_ns, stat.st_ino]
 
 
@@ -180,8 +188,14 @@ def write_staged_identity(family, sif_sha256: str, build_provenance_digest: str)
     )
 
 
-def read_staged_identity(family, build_provenance_digest: str) -> str | None:
-    """The digest staged for this build provenance, or ``None`` when unknown."""
+def read_staged_digest(family) -> str | None:
+    """The digest the staged-identity record names, whatever its provenance.
+
+    Provenance must not gate this read: the record exists to bind *bytes* to the
+    staged path, and a record naming another provenance still names a digest.
+    Gating on provenance here made readiness report "unrecorded" for a record
+    the activation path accepts -- the same disagreement, one field over.
+    """
     try:
         value = json.loads(staged_identity_path(family).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -189,9 +203,7 @@ def read_staged_identity(family, build_provenance_digest: str) -> str | None:
     if not isinstance(value, Mapping) or value.get("runner_family") != family.name:
         return None
     candidate = value.get("sif_sha256")
-    if not isinstance(candidate, str) or value.get("build_provenance_digest") != build_provenance_digest:
-        return None
-    return candidate
+    return candidate if isinstance(candidate, str) else None
 
 
 def staged_identity_describes(family, sif_sha256: str) -> bool:
@@ -204,9 +216,12 @@ def staged_identity_describes(family, sif_sha256: str) -> bool:
     identity is the cheap half of the contract; activation additionally hashes
     the candidate and binds its receipt, which is the stronger half.
 
-    shortcut: a rewrite preserving size, mtime and inode is invisible here, so
-    readiness can recommend a promotion activation then refuses; upgrade to a
-    measured activation anchor when ordinary reads must detect that swap.
+    shortcut: a rewrite preserving size, mtime and inode is invisible to this
+    check, so readiness reports the recorded identity rather than the bytes on
+    disk. Activation additionally hashes the candidate and re-checks the file it
+    replaced, which catches any swap that changes the stat identity; a swap that
+    preserves all three inside the activation window remains undetected. Upgrade
+    to a measured activation anchor when that must close too.
     """
     try:
         value = json.loads(staged_identity_path(family).read_text(encoding="utf-8"))

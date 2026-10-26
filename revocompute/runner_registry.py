@@ -684,6 +684,20 @@ def validate_prepared_images(state, families: list[RuntimeFamily]) -> None:
                     file=sys.stderr,
                 )
                 raise RegistryError(f"Prepared SIF has no valid live-test receipt: {family.name}")
+            # ``promote-sifs`` runs after ``stop``, so a candidate it would refuse
+            # must be refused here, while the healthy stack is still serving. The
+            # staged-identity record is that refusal's other condition.
+            if staged.is_file():
+                from revocompute.artifact_evidence import staged_identity_describes
+
+                if not staged_identity_describes(family, sif_sha256):
+                    print(
+                        f"Prepared SIF has no recorded build identity matching its bytes: {family.name}",
+                        file=sys.stderr,
+                    )
+                    raise RegistryError(
+                        f"Prepared SIF has no recorded build identity matching its bytes: {family.name}"
+                    )
     for image in required:
         result = run_cmd(["docker", "image", "inspect", image], env=state.exported(), check=False, capture=True)
         if result.returncode != 0:

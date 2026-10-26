@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -792,3 +793,103 @@ def test_a_legacy_staged_record_is_repaired_by_the_live_test(monkeypatch, tmp_pa
     assert resolve_runner_readiness(state, family).reason_code == "CANDIDATE_AWAITING_PROMOTION"
     promote_sifs(state, [family])
     assert active.read_bytes() == b"validated-candidate-B"
+
+
+def test_a_candidate_swapped_during_activation_is_rolled_back(monkeypatch, tmp_path):
+    """The pre-replace stat and the replace are not one operation.
+
+    A writer with image-store access can swap the staged path inside that window,
+    so the replace installs bytes no receipt covers. Activation re-reads what it
+    actually replaced and restores the previous artifact.
+    """
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={
+            "RUNNER_UID": "1234",
+            "RUNNER_GID": "5678",
+            "RUNNER_USERNAME": "revodesign",
+            "RUNNER_GROUP": "revodesign",
+            "REVODESIGN_APPTAINER_VERSION": "apptainer version 1.4.0",
+        },
+    )
+    module.app.config["manage_db"].resource_set("slurm_enabled", "true")
+    module.app.config["infrastructure_readiness"] = _AvailableInfrastructure()
+
+    state, family = _deployment(module)
+    active = Path(family.slurm_image)
+    active.parent.mkdir(parents=True, exist_ok=True)
+    active.write_bytes(b"validated-active-A")
+    _record_artifact(state, family, active)
+    candidate = Path(f"{family.slurm_image}.next")
+    candidate.write_bytes(b"validated-candidate-B")
+    _record_artifact(state, family, candidate)
+
+    intruder = Path(f"{candidate}.intruder")
+    intruder_bytes = b"never-validated-intruder-with-other-length"
+    intruder.write_bytes(intruder_bytes)
+    real_replace = os.replace
+
+    def replace(source, destination):
+        # A concurrent writer swaps the staged path after every check passed but
+        # before the activation replace, so the replace installs its bytes.
+        if str(source) == str(candidate) and str(destination) == str(active):
+            real_replace(intruder, candidate)
+        real_replace(source, destination)
+
+    monkeypatch.setattr("revocompute_ctl.promotion.os.replace", replace)
+
+    with pytest.raises(RegistryError, match="changed during activation"):
+        promote_sifs(state, [family])
+
+    # The previous artifact is back and no backup is left behind. The bytes that
+    # were never validated are preserved rather than silently deleted.
+    assert active.read_bytes() == b"validated-active-A"
+    assert candidate.read_bytes() == intruder_bytes
+    assert not list(Path(family.slurm_image).parent.glob("*.promote-backup"))
+
+
+def test_a_record_naming_another_provenance_still_agrees_with_the_host(monkeypatch, tmp_path):
+    """Provenance must not decide whether the record describes the staged bytes.
+
+    The record binds bytes to the staged path; a record written under an older
+    provenance still names a digest. Gating the read on provenance made readiness
+    report "unrecorded" for a candidate the host accepts -- the same disagreement
+    one field over, so this asserts agreement rather than a particular verdict.
+    """
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={
+            "RUNNER_UID": "1234",
+            "RUNNER_GID": "5678",
+            "RUNNER_USERNAME": "revodesign",
+            "RUNNER_GROUP": "revodesign",
+            "REVODESIGN_APPTAINER_VERSION": "apptainer version 1.4.0",
+        },
+    )
+    module.app.config["manage_db"].resource_set("slurm_enabled", "true")
+    module.app.config["infrastructure_readiness"] = _AvailableInfrastructure()
+
+    state, family = _deployment(module)
+    active = Path(family.slurm_image)
+    active.parent.mkdir(parents=True, exist_ok=True)
+    active.write_bytes(b"validated-active-A")
+    _record_artifact(state, family, active)
+    candidate = Path(f"{family.slurm_image}.next")
+    candidate.write_bytes(b"validated-candidate-B")
+    _record_artifact(state, family, candidate)
+
+    sidecar = Path(f"{family.slurm_image}.next.build.json")
+    record = json.loads(sidecar.read_text(encoding="utf-8"))
+    record["build_provenance_digest"] = "sha256:" + "0" * 64
+    sidecar.write_text(json.dumps(record), encoding="utf-8")
+
+    staged = resolve_runner_readiness(state, family)
+    promoted = True
+    try:
+        promote_sifs(state, [family])
+    except RegistryError:
+        promoted = False
+    assert (staged.next_action == "promote") is promoted
+    assert active.read_bytes() == (b"validated-candidate-B" if promoted else b"validated-active-A")
