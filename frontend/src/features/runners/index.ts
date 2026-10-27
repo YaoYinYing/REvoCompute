@@ -162,9 +162,10 @@ export async function mountRunnerCatalog(root: HTMLElement): Promise<void> {
       // The live line announces every transition; the visible aggregate only
       // appears when rows are hidden, because group headings already count them.
       count.textContent = hidden ? t('runners.countFiltered', { shown: tasks.length, total }) : '';
-      status.textContent = hidden
+      const announcement = hidden
         ? count.textContent
         : total ? t(total === 1 ? 'runners.countOne' : 'runners.countMany', { count: total }) : t('runners.emptyRegister');
+      if (status.textContent !== announcement) status.textContent = announcement;
       catalog.replaceChildren();
       payload.categories.forEach(group => { const items = tasks.filter(task => task.category === group.name); if (!items.length) return; const section = document.createElement('section'); section.className = 'runner-group'; const groupHead = document.createElement('header'); groupHead.append(text('h2', group.label), text('span', t(items.length === 1 ? 'runners.countOne' : 'runners.countMany', { count: items.length }))); const grid = document.createElement('div'); grid.className = 'runner-grid'; items.forEach(task => grid.append(runnerCard(task))); section.append(groupHead, grid); catalog.append(section); });
       if (!tasks.length) catalog.append(text('p', total ? t('runners.empty') : t('runners.emptyRegister'), 'empty-state'));
