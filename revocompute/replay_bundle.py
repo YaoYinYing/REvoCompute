@@ -45,6 +45,7 @@ from pathlib import Path
 from typing import Any
 
 from revocompute.contracts import validate_openapi_payload
+from revocompute.storage import manifest_byte_limit, open_published_regular_file, verify_regular_file
 
 REPLAY_BUNDLE_VERSION = 1
 REPLAY_BUNDLE_KIND = "real_runner_result_replay"
@@ -338,18 +339,29 @@ def capture_replay_bundle(
     task_id = str(task_id).lower()
     root = str(result_root)
     manifest_path = os.path.join(root, "manifest.json")
-    if not os.path.isfile(manifest_path):
+    # One bounded, descriptor-pinned snapshot is the only read of the manifest:
+    # the bytes parsed and presented and the digest/size compared to the
+    # publication anchor are the same bytes, so a concurrent writer that swaps
+    # the mutable path cannot make the two disagree.
+    descriptor = open_published_regular_file(manifest_path)
+    if descriptor is None:
         raise ReplayBundleError(f"no published ResultManifest at {manifest_path}")
     try:
-        with open(manifest_path, encoding="utf-8") as handle:
-            manifest = json.load(handle)
-    except (OSError, ValueError) as exc:
+        snapshot, digest = verify_regular_file(descriptor, manifest_byte_limit())
+    except OSError as exc:
+        raise ReplayBundleError(f"ResultManifest is not a readable published file: {exc}") from exc
+    with snapshot:
+        data = snapshot.read()
+    size = len(data)
+    try:
+        manifest = json.loads(data)
+    except ValueError as exc:
         raise ReplayBundleError(f"ResultManifest is not readable JSON: {exc}") from exc
     if not isinstance(manifest, Mapping):
         raise ReplayBundleError("ResultManifest is not a JSON object")
 
     _verify_manifest_identity(manifest, task_id)
-    publication = _resolve_publication(task_id, manifest, task_store, manifest_path)
+    publication = _resolve_publication(task_id, manifest, task_store, digest, size)
     response = project_manifest_for_serve(manifest, task_id=task_id)
     _validate_served(response)
 
@@ -436,7 +448,8 @@ def _resolve_publication(
     task_id: str,
     manifest: Mapping[str, Any],
     task_store: Any | None,
-    manifest_path: str,
+    digest: str,
+    size: int,
 ) -> dict[str, Any] | None:
     """Resolve the canonical publication this result root claims, or ``None``.
 
@@ -445,7 +458,10 @@ def _resolve_publication(
     resolves, in the store, the finished row for this task and the publication
     anchor Core recorded for it, and accepts the publication only when the row is
     a finished success whose type agrees with the manifest and the anchored
-    digest and size are the digest and size of the manifest bytes on disk.
+    digest and size are the digest and size of the manifest bytes the capture
+    read -- *digest* and *size* are measured from the one verified snapshot and
+    passed in, so the anchor is never compared against a second read of the
+    mutable path.
 
     ``None`` means "no canonical publication resolved": a synthetic fixture
     capture passes no store, a deployment with no store configured resolves none,
@@ -460,11 +476,6 @@ def _resolve_publication(
         return None
     if not os.path.isfile(task_store):
         return None
-    try:
-        digest = _sha256_hex(Path(manifest_path).read_bytes())
-    except OSError:
-        return None
-    size = os.path.getsize(manifest_path)
     try:
         connection = sqlite3.connect(f"file:{task_store}?mode=ro", uri=True)
     except sqlite3.Error:

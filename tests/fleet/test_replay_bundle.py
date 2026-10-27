@@ -341,6 +341,141 @@ def test_a_real_capture_is_decided_by_the_store_anchor_not_by_the_caller(tmp_pat
     assert rewritten["provenance"]["capture"]["mode"] == "synthetic"
 
 
+#: A separate writer process: waits for the capture to open the mutable manifest
+#: path a second time, then atomically replaces it with the bytes the store
+#: anchored. Only a capture that re-reads the path for publication verification
+#: reaches it; a single-snapshot capture never signals the trigger.
+_MANIFEST_SWAP_WRITER = """\
+import os, sys, time
+trigger, ack, source, destination = sys.argv[1:5]
+deadline = time.monotonic() + 30
+while not os.path.exists(trigger):
+    if time.monotonic() > deadline:
+        sys.exit(2)
+    time.sleep(0.01)
+os.replace(source, destination)
+open(ack, "w").close()
+"""
+
+
+def test_a_manifest_swap_cannot_promote_bytes_other_than_the_anchored_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The anchor must bind the bytes the bundle parsed and presents.
+
+    A capture reads the manifest once and compares that read's digest to the
+    store's publication anchor. A concurrent writer that replaces
+    ``manifest.json`` after the parse -- with other, validly-anchored bytes --
+    must not turn the bundle into ``reproduced_real_result``: the promotion would
+    then cite an anchor for a manifest the response does not contain. The writer
+    is a separate process triggered by a *second* open of the mutable manifest
+    path through any of the file APIs a capture could use (``os.open``,
+    ``builtins.open``, ``io.open``/``Path.open``/``Path.read_bytes``), and the
+    capture must open that path exactly once.
+    """
+    import builtins
+    import io
+    import os
+    import subprocess
+    import sys
+
+    from revocompute.db import TaskDatabase
+
+    root = _write_result_root(tmp_path, _synthetic_fixture())
+    manifest_path = root / "manifest.json"
+    manifest_real = os.path.realpath(manifest_path)
+    original = manifest_path.read_bytes()
+    swapped_manifest = json.loads(original)
+    swapped_manifest["views"][0]["title"] = "swapped-view-title"
+    swapped = json.dumps(swapped_manifest).encode("utf-8")
+    assert swapped != original
+
+    store_path = str(tmp_path / "tasks.sqlite3")
+    store = TaskDatabase(store_path)
+    store.upsert_task(
+        TASK_ID,
+        filename="alignment.a3m",
+        file_path=str(root / "alignment" / "filtered_alignment.a3m"),
+        uploaded_at=time.time(),
+        status="finished",
+        is_binary=0,
+        task_type="sequence_demo",
+        storage_key="0123456789abcdef0123456789abcdef",
+        submitted_by_user_id=1,
+    )
+    # The store anchors the SWAPPED bytes: promoting the parsed original would
+    # present one manifest while citing an anchor for another.
+    store.record_result_publication(
+        TASK_ID,
+        manifest_sha256=hashlib.sha256(swapped).hexdigest(),
+        manifest_size=len(swapped),
+        published_at=time.time(),
+    )
+
+    swapped_file = tmp_path / "swapped.json"
+    swapped_file.write_bytes(swapped)
+    trigger, ack = tmp_path / "trigger", tmp_path / "ack"
+    writer = subprocess.Popen(
+        [
+            sys.executable, "-I", "-c", _MANIFEST_SWAP_WRITER,
+            str(trigger), str(ack), str(swapped_file), str(manifest_path),
+        ]
+    )
+    accesses: list[str] = []
+
+    def note_access(api: str, file: object) -> None:
+        if isinstance(file, int):
+            return
+        try:
+            target = os.fsdecode(os.fspath(file))
+        except TypeError:
+            return
+        if os.path.realpath(target) != manifest_real:
+            return
+        accesses.append(api)
+        if len(accesses) == 2:
+            trigger.write_text("swap")
+            deadline = time.monotonic() + 30
+            while not ack.exists():
+                if time.monotonic() > deadline:
+                    raise AssertionError("the fixture writer never swapped the manifest")
+                time.sleep(0.01)
+
+    real_os_open, real_builtin_open, real_io_open = os.open, builtins.open, io.open
+
+    def os_open(file: object, *args: object, **kwargs: object) -> int:
+        if kwargs.get("dir_fd") is None:
+            note_access("os.open", file)
+        return real_os_open(file, *args, **kwargs)
+
+    def builtin_open(file: object, *args: object, **kwargs: object):
+        note_access("builtins.open", file)
+        return real_builtin_open(file, *args, **kwargs)
+
+    def io_open(file: object, *args: object, **kwargs: object):
+        note_access("io.open", file)
+        return real_io_open(file, *args, **kwargs)
+
+    try:
+        # ``builtins.open`` and ``io.open`` are separate bindings to the same
+        # builtin, and ``Path.open``/``Path.read_bytes`` route through
+        # ``io.open``, so these three cover every path-based manifest open.
+        monkeypatch.setattr(os, "open", os_open)
+        monkeypatch.setattr(builtins, "open", builtin_open)
+        monkeypatch.setattr(io, "open", io_open)
+        bundle = capture_replay_bundle(task_id=TASK_ID, result_root=root, task_store=store_path)
+    finally:
+        writer.kill()
+        writer.wait()
+
+    capture = bundle["provenance"]["capture"]
+    assert len(accesses) == 1, f"the mutable manifest path was opened {len(accesses)} times: {accesses}"
+    assert capture["mode"] == "synthetic"
+    assert "publication_anchor" not in capture
+    # The presented manifest is the one the capture read, never the swapped file.
+    assert bundle["response"]["views"][0]["title"] != "swapped-view-title"
+
+
 def test_load_refuses_a_promoted_mode_without_the_captures_observation(tmp_path: Path) -> None:
     """The strongest mode must carry the record of what the capture observed.
 
