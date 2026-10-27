@@ -463,7 +463,9 @@ export class FleetAdmin {
 
   private renderTable(): void {
     const rows = this.visible();
-    this.count.textContent = `${rows.length} of ${this.rows.length} famil${this.rows.length === 1 ? 'y' : 'ies'}`;
+    // The summary bands already count the full register.
+    this.count.textContent = rows.length < this.rows.length
+      ? `${rows.length} of ${this.rows.length} famil${this.rows.length === 1 ? 'y' : 'ies'}` : '';
     this.table.replaceChildren();
     if (!rows.length) {
       // An empty register and an over-filtered one are different states, and a

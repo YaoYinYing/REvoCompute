@@ -78,7 +78,7 @@ export async function mountRunnerCatalog(root: HTMLElement): Promise<void> {
   root.replaceChildren(); root.className = 'app-outlet runners-page';
   const head = document.createElement('header'); head.className = 'page-heading'; head.innerHTML = `<div><h1>${t('runners.title')}</h1><p>${t('runners.subtitle')}</p></div>`;
   const readiness = document.createElement('div'); readiness.className = 'readiness-state'; readiness.textContent = t('runners.checking'); head.append(readiness);
-  const toolbar = document.createElement('section'); toolbar.className = 'work-toolbar runner-toolbar'; toolbar.innerHTML = `<label class="search-control"><span>${t('catalog.searchMethods')}</span><span class="input-with-action"><i data-lucide="search"></i><input type="search" placeholder="${t('runners.searchPlaceholder')}"></span></label><label><span>${t('runners.category')}</span><select><option value="">${t('catalog.allCategories')}</option></select></label><fieldset class="layout-switch density-switch"><legend>${t('runners.density')}</legend><button type="button" data-density="comfortable" aria-pressed="true">${t('runners.comfortable')}</button><button type="button" data-density="compact" aria-pressed="false">${t('runners.compact')}</button></fieldset><p class="catalog-count" aria-live="polite"></p>`;
+  const toolbar = document.createElement('section'); toolbar.className = 'work-toolbar runner-toolbar'; toolbar.innerHTML = `<label class="search-control"><span>${t('catalog.searchMethods')}</span><span class="input-with-action"><i data-lucide="search"></i><input type="search" placeholder="${t('runners.searchPlaceholder')}"></span></label><label><span>${t('runners.category')}</span><select><option value="">${t('catalog.allCategories')}</option></select></label><fieldset class="layout-switch density-switch"><legend>${t('runners.density')}</legend><button type="button" data-density="comfortable" aria-pressed="true">${t('runners.comfortable')}</button><button type="button" data-density="compact" aria-pressed="false">${t('runners.compact')}</button></fieldset><p class="catalog-count"></p><span class="sr-only" role="status" aria-live="polite" data-catalog-status></span>`;
   const catalog = document.createElement('div'); catalog.className = 'runner-catalog'; catalog.dataset.density = 'comfortable'; const state = text('p', t('runners.loading'), 'empty-state'); catalog.append(state); root.append(head, toolbar, catalog);
   void loadEnvironment().then(environment => { if (environment?.demo_mode) head.after(text('p', environment.notice || t('demo.notice'), 'demo-notice')); });
   void updateInfrastructure(readiness);
@@ -155,16 +155,20 @@ export async function mountRunnerCatalog(root: HTMLElement): Promise<void> {
     const select = toolbar.querySelector('select')!, labelBySlug = new Map(payload.categories.map(category => [category.name, category.label])); payload.categories.forEach(category => { const option = document.createElement('option'); option.value = category.name; option.textContent = category.label; select.append(option); });
     // Density is a scan aid for a fleet of methods; with one or a few it is ornamental.
     if (payload.task_types.length <= 3) toolbar.querySelector<HTMLElement>('.density-switch')?.setAttribute('hidden', '');
-    const input = toolbar.querySelector('input')!, count = toolbar.querySelector<HTMLElement>('.catalog-count')!;
+    const input = toolbar.querySelector('input')!, count = toolbar.querySelector<HTMLElement>('.catalog-count')!, status = toolbar.querySelector<HTMLElement>('[data-catalog-status]')!;
     const render = (): void => {
       const query = input.value.trim().toLowerCase(), category = select.value; const tasks = payload.task_types.filter(task => (!category || task.category === category) && (!query || [task.display_name, task.name, task.category, task.category.replaceAll('_', ' '), labelBySlug.get(task.category) ?? '', task.summary].join(' ').toLowerCase().includes(query)));
-      const filtered = Boolean(query || category);
-      // "enabled on this deployment" describes the deployment; a filter that hides
-      // every method must not make that claim read as "0 methods enabled".
-      const countKey = filtered ? 'runners.countFiltered' : payload.task_types.length <= 3 ? (tasks.length === 1 ? 'runners.countEnabledOne' : 'runners.countEnabledMany') : (tasks.length === 1 ? 'runners.countOne' : 'runners.countMany');
-      count.textContent = filtered ? t(countKey, { shown: tasks.length, total: payload.task_types.length }) : t(countKey, { count: tasks.length }); catalog.replaceChildren();
+      const total = payload.task_types.length, hidden = tasks.length < total;
+      // The live line announces every transition; the visible aggregate only
+      // appears when rows are hidden, because group headings already count them.
+      count.textContent = hidden ? t('runners.countFiltered', { shown: tasks.length, total }) : '';
+      const announcement = hidden
+        ? count.textContent
+        : total ? t(total === 1 ? 'runners.countOne' : 'runners.countMany', { count: total }) : t('runners.emptyRegister');
+      if (status.textContent !== announcement) status.textContent = announcement;
+      catalog.replaceChildren();
       payload.categories.forEach(group => { const items = tasks.filter(task => task.category === group.name); if (!items.length) return; const section = document.createElement('section'); section.className = 'runner-group'; const groupHead = document.createElement('header'); groupHead.append(text('h2', group.label), text('span', t(items.length === 1 ? 'runners.countOne' : 'runners.countMany', { count: items.length }))); const grid = document.createElement('div'); grid.className = 'runner-grid'; items.forEach(task => grid.append(runnerCard(task))); section.append(groupHead, grid); catalog.append(section); });
-      if (!tasks.length) catalog.append(text('p', t('runners.empty'), 'empty-state'));
+      if (!tasks.length) catalog.append(text('p', total ? t('runners.empty') : t('runners.emptyRegister'), 'empty-state'));
       syncComparison();
       createIcons({ icons: { ArrowRight, Cpu, ShieldCheck, Zap }, root: catalog });
     };

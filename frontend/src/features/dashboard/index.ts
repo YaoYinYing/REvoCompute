@@ -175,7 +175,8 @@ export class Dashboard {
     this.disposePreviews();
     this.selectionBoxes.clear();
     const result = queryTasks(this.tasks, this.query); this.error.textContent = result.error || '';
-    this.count.textContent = t('dashboard.list.count', { shown: result.tasks.length, total: this.tasks.length });
+    this.count.textContent = result.tasks.length < this.tasks.length
+      ? t('dashboard.list.count', { shown: result.tasks.length, total: this.tasks.length }) : '';
     const batchLabel = `${t('dashboard.card.deleteSelected')} (${this.selected.size})`;
     this.batch.hidden = this.user.role !== 'admin' || this.selected.size === 0;
     this.batch.title = batchLabel;
@@ -186,7 +187,9 @@ export class Dashboard {
     const active = Boolean(this.query.status || this.query.taskType || this.query.owner || this.query.submittedFrom || this.query.submittedTo || this.query.finishedFrom || this.query.finishedTo || this.query.regex || this.query.sort !== 'submitted');
     this.filterSummary.textContent = t(active ? 'dashboard.filters.active' : 'dashboard.filters.summary');
     this.list.dataset.layout = this.query.layout; this.list.replaceChildren();
-    if (!result.tasks.length) { const empty = document.createElement('p'); empty.className = 'empty-state'; empty.textContent = result.error ? t('dashboard.list.fixExpression') : t('dashboard.list.empty'); this.list.append(empty); return; }
+    if (!result.tasks.length) { const empty = document.createElement('p'); empty.className = 'empty-state'; empty.textContent = result.error
+      ? t('dashboard.list.fixExpression')
+      : this.tasks.length ? t('dashboard.list.empty') : t('dashboard.list.noTasks'); this.list.append(empty); return; }
     if (this.query.layout === 'table') this.renderTable(result.tasks); else result.tasks.forEach(task => this.list.append(this.taskCard(task)));
     createIcons({ icons: dashboardIcons, root: this.list });
   }

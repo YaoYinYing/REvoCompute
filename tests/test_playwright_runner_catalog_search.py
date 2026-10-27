@@ -21,6 +21,7 @@ from playwright.sync_api import Locator, Page, expect
 import pytest
 
 from frontend_fixtures import RunnerDefinition, mount_scenario, runner_scenario
+from test_playwright_application import _install_app
 
 pytestmark = pytest.mark.browser
 
@@ -107,8 +108,10 @@ def test_search_matches_the_category_label_the_catalog_displays(page: Page) -> N
     _type_in_search(page, label)
 
     expect(_cards(page)).to_have_count(len(MEMBERS))
-    # The reader is told how many of the total the query still shows.
-    expect(page.locator(".catalog-count")).to_have_text(f"{len(MEMBERS)} of {len(MEMBERS)} methods")
+    # Every method matches, so the visible aggregate is suppressed; the live line
+    # still announces the full register.
+    expect(page.locator(".catalog-count")).to_be_empty()
+    expect(page.locator("[data-catalog-status]")).to_have_text(f"{len(MEMBERS)} methods")
     expect(page.locator(".runner-group h2")).to_have_text(label)
 
 
@@ -120,4 +123,95 @@ def test_search_still_matches_the_category_slug(page: Page) -> None:
     _type_in_search(page, CATEGORY_SLUG)
 
     expect(_cards(page)).to_have_count(len(MEMBERS))
-    expect(page.locator(".catalog-count")).to_have_text(f"{len(MEMBERS)} of {len(MEMBERS)} methods")
+    expect(page.locator(".catalog-count")).to_be_empty()
+    expect(page.locator("[data-catalog-status]")).to_have_text(f"{len(MEMBERS)} methods")
+
+
+# ── register states ──────────────────────────────────────────────────────────
+
+_STATE_COPY = {
+    "en": {
+        "all": "2 methods",
+        "filtered": "1 of 2 methods",
+        "zero": "0 of 2 methods",
+        "no_match": "No methods match the current filters.",
+        "empty": "No methods are available in this catalog.",
+    },
+    "zh-CN": {
+        "all": "2 个方法",
+        "filtered": "共 2 个方法，显示 1 个",
+        "zero": "共 2 个方法，显示 0 个",
+        "no_match": "没有符合当前筛选条件的方法。",
+        "empty": "目录中暂无可用方法。",
+    },
+}
+
+
+def _method(index: int) -> dict:
+    return {
+        "name": f"method_{index:02d}",
+        "display_name": f"Method {index:02d}",
+        "category": "evolution",
+        "summary": f"Synthetic method {index:02d} for catalog state coverage.",
+        "access": {"restricted": False, "granted": True, "request_status": None},
+        "detail_url": f"/compute/api/types/method_{index:02d}",
+        "parameters_url": f"/compute/api/task-parameters/method_{index:02d}",
+    }
+
+
+def _serve_catalog(page: Page, methods: list[dict]) -> None:
+    categories = [{"name": "evolution", "label": "Evolution"}] if methods else []
+    page.route(
+        f"{ORIGIN}/compute/api/types",
+        lambda route: route.fulfill(json={"version": 3, "categories": categories, "task_types": methods}),
+    )
+
+
+@pytest.mark.parametrize("locale", ["en", "zh-CN"])
+def test_catalog_distinguishes_an_empty_register_from_a_filtered_no_match(page: Page, locale: str) -> None:
+    """A catalog with no methods is not the same state as a filter matching none."""
+    copy = _STATE_COPY[locale]
+    page.add_init_script(f"localStorage.setItem('revocompute-locale', '{locale}')")
+    _install_app(page)
+    _serve_catalog(page, [])
+    page.goto(f"{ORIGIN}/runners")
+
+    expect(page.locator(".runner-catalog .empty-state")).to_have_text(copy["empty"])
+    expect(page.locator(".catalog-count")).to_be_empty()
+    expect(page.locator("[data-catalog-status]")).to_have_text(copy["empty"])
+
+
+@pytest.mark.parametrize("locale", ["en", "zh-CN"])
+def test_catalog_announces_state_changes_without_restating_the_full_register(page: Page, locale: str) -> None:
+    """The visible aggregate appears only when rows are hidden; the live line never goes silent."""
+    copy = _STATE_COPY[locale]
+    page.add_init_script(f"localStorage.setItem('revocompute-locale', '{locale}')")
+    _install_app(page)
+    _serve_catalog(page, [_method(0), _method(1)])
+    page.goto(f"{ORIGIN}/runners")
+
+    count = page.locator(".catalog-count")
+    status = page.locator("[data-catalog-status]")
+    search = page.locator(".runner-toolbar input[type=search]")
+
+    # Every method matches: the group heading carries the count, so the visible
+    # aggregate is suppressed while the live line announces the register.
+    expect(count).to_be_empty()
+    expect(status).to_have_text(copy["all"])
+
+    # A filter that hides rows shows and announces the aggregate.
+    search.fill("method_00")
+    expect(_cards(page)).to_have_count(1)
+    expect(count).to_have_text(copy["filtered"])
+    expect(status).to_have_text(copy["filtered"])
+
+    # Clearing the search announces the restored register again.
+    search.fill("")
+    expect(count).to_be_empty()
+    expect(status).to_have_text(copy["all"])
+
+    # A filter that matches nothing counts zero and says so.
+    search.fill("no-such-method")
+    expect(page.locator(".runner-catalog .empty-state")).to_have_text(copy["no_match"])
+    expect(count).to_have_text(copy["zero"])
+    expect(status).to_have_text(copy["zero"])

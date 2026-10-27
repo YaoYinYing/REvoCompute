@@ -213,10 +213,13 @@ def test_runner_catalog_cardinality_stays_intentional(page: Page, count: int) ->
 
     page.goto(f"{ORIGIN}/runners")
     expect(page.locator(".runner-card")).to_have_count(count)
-    expect(page.locator(".catalog-count")).to_contain_text(f"{count} {'method' if count == 1 else 'methods'}")
+    # The group heading carries the complete count; the unfiltered aggregate does
+    # not restate it.
+    expect(page.locator(".catalog-count")).to_be_empty()
     # A single Runner still renders as one complete group, not an empty grid.
     expect(page.locator(".runner-group")).to_have_count(1)
     expect(page.locator(".runner-group").first.get_by_role("heading", name="Sequence demo", exact=True)).to_be_visible()
+    expect(page.locator(".runner-group").first).to_contain_text(f"{count} {'method' if count == 1 else 'methods'}")
     page.set_viewport_size({"width": 320, "height": 760})
     page.reload()
     expect(page.locator(".runner-card")).to_have_count(count)
@@ -526,7 +529,7 @@ def test_catalog_density_switch_sizes_to_its_two_controls(page: Page, width: int
     page.set_viewport_size({"width": width, "height": 900})
 
     page.goto(f"{ORIGIN}/runners")
-    expect(page.locator(".catalog-count")).to_be_visible()
+    expect(page.locator(".runner-card").first).to_be_visible()
     switch = page.locator(".runner-toolbar fieldset").first
     expect(switch).to_be_visible()
 
@@ -581,7 +584,7 @@ def test_narrow_surfaces_that_fit_do_not_overflow(page: Page) -> None:
     # ``selector`` is the surface's own fully-rendered content: scroll width is
     # only meaningful once the async content (not just the shell) is on screen.
     for path, selector in (
-        ("/runners", ".catalog-count"),
+        ("/runners", ".runner-card"),
         ("/compute/dashboard", ".task-card"),
     ):
         page.goto(f"{ORIGIN}{path}")
