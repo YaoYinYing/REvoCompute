@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { TaskSummary } from '../src/api/app-api';
+import { applyLocale } from '../src/app/i18n';
 import { Dashboard } from '../src/features/dashboard/index';
 import { documentOrder, installHarness, type HarnessNode } from './dom-harness';
 
@@ -31,15 +32,18 @@ beforeEach(() => {
   vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ tasks: [] }), { status: 200, headers: { 'content-type': 'application/json' } })));
 });
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { applyLocale('en', false); vi.unstubAllGlobals(); });
 
 /** Build a Dashboard whose card or Table view renders `tasks`, and return its root. */
-function render(tasks: TaskSummary[], layout: 'detailed' | 'compact' | 'table', role: 'user' | 'admin' = 'user'): HarnessNode {
+function render(
+  tasks: TaskSummary[], layout: 'detailed' | 'compact' | 'table',
+  role: 'user' | 'admin' = 'user', filters: Record<string, unknown> = {},
+): HarnessNode {
   const root = document.createElement('div') as unknown as HarnessNode;
   const dashboard = new Dashboard(root as unknown as HTMLElement, { notify: vi.fn(), setUser: vi.fn() } as never, { role, username: 'tester' } as never);
   const view = dashboard as unknown as { tasks: TaskSummary[]; query: Record<string, unknown>; render(): void };
   view.tasks = tasks;
-  view.query = { ...view.query, layout };
+  view.query = { ...view.query, layout, ...filters };
   view.render();
   return root;
 }
@@ -121,4 +125,33 @@ it('gives a failed Task a direct View error action in both Dashboard layouts', (
     expect(root.querySelector('a[href="/result"]')?.textContent).toContain('View details');
     expect(root.querySelector('button[data-action="delete"]')).not.toBeNull();
   }
+});
+
+describe('Dashboard register states', () => {
+  it('distinguishes an empty register from an active filter with no matches', () => {
+    const empty = render([], 'detailed');
+    expect(empty.querySelector('.task-list .empty-state')?.textContent).toBe('No tasks have been submitted yet.');
+    expect(empty.querySelector('.task-list')?.getAttribute('aria-live')).toBe('polite');
+    expect(empty.querySelector('.list-count')?.textContent).toBe('');
+
+    const filtered = render([task()], 'detailed', 'user', { search: 'unmatched' });
+    expect(filtered.querySelector('.task-list .empty-state')?.textContent).toBe('No tasks match the current filters.');
+    expect(filtered.querySelector('.list-count')?.textContent).toBe('0 of 1 tasks');
+    expect(filtered.querySelector('.task-list')?.getAttribute('aria-live')).toBe('polite');
+  });
+
+  it('shows a filtered count only when tasks are actually hidden', () => {
+    expect(render([task()], 'detailed').querySelector('.list-count')?.textContent).toBe('');
+    expect(render([task()], 'detailed', 'user', { search: 'model' })
+      .querySelector('.list-count')?.textContent).toBe('');
+    expect(render([task(), task({ task_id: 'b'.repeat(32), display_name: 'other.fasta' })], 'detailed', 'user', { search: 'model' })
+      .querySelector('.list-count')?.textContent).toBe('1 of 2 tasks');
+  });
+
+  it('keeps the empty and filtered messages localised', () => {
+    applyLocale('zh-CN');
+    expect(render([], 'detailed').querySelector('.task-list .empty-state')?.textContent).toBe('尚未提交任务。');
+    expect(render([task()], 'detailed', 'user', { search: 'unmatched' })
+      .querySelector('.task-list .empty-state')?.textContent).toBe('没有符合当前筛选条件的任务。');
+  });
 });

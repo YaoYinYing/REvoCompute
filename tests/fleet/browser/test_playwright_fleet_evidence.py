@@ -236,3 +236,26 @@ def test_empty_fleet_says_none_is_enabled_rather_than_implying_readiness(page: P
     expect(page.locator(".admin-table tbody tr")).to_have_count(1)
     expect(page.get_by_text("No Runner family is enabled on this deployment.").first).to_be_visible()
     expect(page.locator(".fleet-summary")).to_contain_text("No Runner family is enabled")
+
+
+def test_fleet_visible_count_only_appears_when_rows_are_hidden(page: Page, monkeypatch) -> None:
+    """Keep the filter result count; do not restate totals already shown in bands."""
+    monkeypatch.setattr(browser_frontend_assets, "_RESULT_DIST", ROOT / "frontend/dist")
+    _mount_fleet(page)
+    page.goto(f"{ORIGIN}/compute/runner_fleet")
+
+    count = page.locator(".admin-count")
+    expect(count).to_be_empty()
+
+    search = page.locator('input[placeholder="Filter by family name"]')
+    search.fill("family_00")
+    expect(count).to_have_text("1 of 32 families")
+
+    search.fill("")
+    expect(count).to_be_empty()
+
+    search.fill("unknown-family")
+    expect(count).to_have_text("0 of 32 families")
+    expect(page.locator(".admin-table")).to_contain_text(
+        "No Runner family matches the current filters"
+    )

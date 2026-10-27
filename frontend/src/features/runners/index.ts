@@ -161,8 +161,11 @@ export async function mountRunnerCatalog(root: HTMLElement): Promise<void> {
       const filtered = Boolean(query || category);
       // "enabled on this deployment" describes the deployment; a filter that hides
       // every method must not make that claim read as "0 methods enabled".
-      const countKey = filtered ? 'runners.countFiltered' : payload.task_types.length <= 3 ? (tasks.length === 1 ? 'runners.countEnabledOne' : 'runners.countEnabledMany') : (tasks.length === 1 ? 'runners.countOne' : 'runners.countMany');
-      count.textContent = filtered ? t(countKey, { shown: tasks.length, total: payload.task_types.length }) : t(countKey, { count: tasks.length }); catalog.replaceChildren();
+      // Category headings already count every method; the aggregate only adds
+      // information when the user narrows the register.
+      count.textContent = filtered
+        ? t('runners.countFiltered', { shown: tasks.length, total: payload.task_types.length }) : '';
+      catalog.replaceChildren();
       payload.categories.forEach(group => { const items = tasks.filter(task => task.category === group.name); if (!items.length) return; const section = document.createElement('section'); section.className = 'runner-group'; const groupHead = document.createElement('header'); groupHead.append(text('h2', group.label), text('span', t(items.length === 1 ? 'runners.countOne' : 'runners.countMany', { count: items.length }))); const grid = document.createElement('div'); grid.className = 'runner-grid'; items.forEach(task => grid.append(runnerCard(task))); section.append(groupHead, grid); catalog.append(section); });
       if (!tasks.length) catalog.append(text('p', t('runners.empty'), 'empty-state'));
       syncComparison();
