@@ -13,8 +13,8 @@ Production SLURM/Apptainer living tests and deployment verification remain
 operational release gates. This document is not an activation checklist and
 does not authorize production changes.
 
-The next result-view goal is tracked in
-the [result-view plugin contract](result-view-plugins.md).
+The [result-view plugin contract](result-view-plugins.md) defines how
+result views are contributed.
 
 ## Why this work exists
 

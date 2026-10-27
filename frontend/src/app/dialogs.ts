@@ -91,4 +91,3 @@ export function openDialog(options: DialogOptions): Promise<boolean> {
 
 export const confirmAction = (options: Omit<DialogOptions, 'confirmLabel'> & { confirmLabel?: string }): Promise<boolean> =>
   openDialog({ cancelLabel: 'Cancel', confirmLabel: 'Confirm', destructive: true, ...options });
-
