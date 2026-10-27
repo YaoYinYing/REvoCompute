@@ -159,8 +159,6 @@ export async function mountRunnerCatalog(root: HTMLElement): Promise<void> {
     const render = (): void => {
       const query = input.value.trim().toLowerCase(), category = select.value; const tasks = payload.task_types.filter(task => (!category || task.category === category) && (!query || [task.display_name, task.name, task.category, task.category.replaceAll('_', ' '), labelBySlug.get(task.category) ?? '', task.summary].join(' ').toLowerCase().includes(query)));
       const filtered = Boolean(query || category);
-      // "enabled on this deployment" describes the deployment; a filter that hides
-      // every method must not make that claim read as "0 methods enabled".
       // Category headings already count every method; the aggregate only adds
       // information when the user narrows the register.
       count.textContent = filtered

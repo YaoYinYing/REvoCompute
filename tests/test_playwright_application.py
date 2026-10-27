@@ -657,8 +657,12 @@ def test_runner_catalog_cardinality_layout_is_usable(page: Page, method_count: i
 
     assert_cards_usable()
 
-    count_text = page.locator(".catalog-count").inner_text()
-    assert re.match(rf"^{method_count} methods?\b", count_text), count_text
+    # The group heading counts the register; the unfiltered aggregate does not
+    # restate it.
+    expect(page.locator(".catalog-count")).to_be_empty()
+    expect(page.locator(".runner-group header span").first).to_have_text(
+        f"{method_count} {'method' if method_count == 1 else 'methods'}"
+    )
 
     switch = page.locator(".layout-switch")
     if method_count <= 3:
