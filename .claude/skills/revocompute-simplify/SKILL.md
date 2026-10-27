@@ -45,7 +45,9 @@ and require evidence rather than guesses:
 - Tool runtimes: `docker/tools/<family>/` manifests and entrypoints. The Tool
   worker mounts this tree read-only and `ToolRegistry.discover` globs its
   `*/plugin.yaml`, so a field found only here still has a production consumer.
-- Frontend: `revocompute/static/` JavaScript, CSS, and templates.
+- Frontend: `frontend/src/` TypeScript and CSS, with its tests in `frontend/tests/`.
+  `revocompute/static/` holds only the published `openapi.json` and `skills.md`; the built
+  bundle reaches `revocompute/static/app/` inside the server image, never in the source tree.
 - Tests and docs: `tests/`, `docs/`, generated assets.
 - Deployment: `run/revocompute_ctl/`, Compose files, env surfaces.
 

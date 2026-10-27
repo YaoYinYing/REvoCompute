@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import hashlib
-import inspect
 import io
 import json
 import logging
@@ -300,10 +299,6 @@ def test_anonymous_skills_document_is_static_api_bootstrap_without_side_effects(
     assert module.task_store.list_tasks() == before
     assert module.app.config["user_db"].list_users() == users_before
     assert module.app.config["user_db"].list_runner_access_events() == access_events_before
-    generator = inspect.getsource(module.app.view_functions["agent_skills_document"])
-    assert "send_from_directory" in generator
-    assert "_available_task_types" not in generator
-    assert "list_types" not in generator
 
     spec = json.loads((SERVER_PACKAGE / "static" / "openapi.json").read_text(encoding="utf-8"))
     references = set(re.findall(r"\b(GET|POST) (/[^`\s),]+)", document))

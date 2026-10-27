@@ -17,8 +17,6 @@ execution boundaries, extension contracts, and the test policy.
 - [Evidence Retention and External Archives](evidence-retention.md) — CI-bound evidence versus reusable external scientific output.
 - [Result View Plugin Contract](result-view-plugins.md) — the server-owned
   scientific result composition boundary.
-- [Result View Protocols (Design Record)](result-view-protocols.md) — the
-  viewer protocol design and its completion record.
 - [Scientific Result Inventory](result-inventory.md) — the living artifact and
   semantics audit.
 - [Input and Result Workspace (Design Record)](input-result-workspace.md) — the

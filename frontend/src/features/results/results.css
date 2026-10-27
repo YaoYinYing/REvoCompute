@@ -31,7 +31,6 @@
 .result-status { display: flex; gap: .8rem; padding: .7rem 0; align-items: baseline; border-bottom: 1px solid var(--result-line); font-size: .875rem; }
 .result-status strong { text-transform: capitalize; }
 .result-workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(19rem, 24rem); min-height: 38rem; border-bottom: 1px solid var(--result-line); }
-.result-app.is-rail-collapsed .result-workspace { grid-template-columns: minmax(0, 1fr) 4rem; }
 .result-main { min-width: 0; padding: 1.5rem 1.6rem 1.6rem 0; }
 .result-rail { min-width: 0; padding: 1.25rem 0 1.25rem 1.35rem; border-left: 1px solid var(--result-line); }
 .result-rail.is-collapsed { display: grid; place-items: start center; }
@@ -81,10 +80,6 @@
 .structure-viewport { display: grid; grid-template-rows: auto minmax(32rem, 72vh); min-height: 36rem; overflow: hidden; border: 1px solid var(--result-line); border-radius: var(--r-surface-lg); background: var(--result-stage); box-shadow: var(--shadow-surface); }
 /* Toolbar is chrome above the science: flat surface and a hairline, not a gradient. */
 .structure-toolbar { flex-wrap: wrap; gap: .5rem; padding: .55rem .7rem; border-bottom: 1px solid var(--result-line); background: var(--result-surface); }
-.structure-mode-group { display: inline-flex; flex-wrap: wrap; max-width: 100%; padding: 2px; border: 1px solid var(--result-line); border-radius: var(--r-control); background: color-mix(in srgb, var(--result-line) 25%, var(--result-surface)); }
-.structure-mode-group .result-button { border-width: 0; background: transparent; white-space: nowrap; }
-.structure-mode-group .result-button + .result-button { margin-left: 0; }
-.structure-mode-group .result-button[aria-pressed="true"] { position: relative; border-color: var(--result-accent); background: var(--result-surface); color: var(--result-accent); border-radius: var(--r-util); box-shadow: var(--shadow-surface); }
 .structure-toolbar-actions { display: inline-flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin-left: auto; }
 .structure-host { position: relative; min-height: 32rem; overflow: hidden; }
 /* Mol* pins its selection-controls row to a hard 430px, so below ~30rem it is
@@ -148,8 +143,8 @@
 .candidate-sequence { margin: 0; padding: 1.1rem; overflow: auto; border-radius: var(--r-surface); background: var(--app-stage); font: .875rem/1.55 var(--font-mono); overflow-wrap: anywhere; white-space: pre-wrap; }
 
 @container (max-width: 64rem) {
-  .result-app, .result-app.is-rail-collapsed { padding-inline: .75rem; }
-  .result-workspace, .result-app.is-rail-collapsed .result-workspace { grid-template-columns: minmax(0, 1fr); }
+  .result-app { padding-inline: .75rem; }
+  .result-workspace { grid-template-columns: minmax(0, 1fr); }
   .result-main { padding-right: 0; }
   .result-rail { padding: .85rem 0; border-left: 0; border-top: 1px solid var(--result-line); }
   .result-record { grid-template-columns: 1fr; gap: 1rem; }
@@ -176,7 +171,7 @@
    Kept alongside the media query (which still covers a genuinely narrow window
    and the other narrow-width adjustments). */
 @container (inline-size < 40em) {
-  .result-workspace, .result-app.is-rail-collapsed .result-workspace { grid-template-columns: minmax(0, 1fr); }
+  .result-workspace { grid-template-columns: minmax(0, 1fr); }
   .result-main { padding-right: 0; }
   .result-rail { padding: .85rem 0; border-left: 0; border-top: 1px solid var(--result-line); }
 }

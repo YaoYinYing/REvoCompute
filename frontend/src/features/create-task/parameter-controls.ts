@@ -12,7 +12,7 @@ function record(value: unknown): Record<string, unknown> {
 }
 
 /** Whether a declared JSON Schema ``format`` names an ISO calendar date. */
-export function isIsoDate(value: unknown): boolean {
+function isIsoDate(value: unknown): boolean {
   return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
 }
 

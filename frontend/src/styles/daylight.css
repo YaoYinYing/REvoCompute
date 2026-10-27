@@ -33,7 +33,7 @@ body { container-type:inline-size; font-size:14px; }
 .app-header-actions .icon-button { border-color:transparent; background:transparent; }
 .app-header-actions .icon-button,.app-header-actions .app-user { min-height:40px; }
 .app-user { max-width:12rem; }
-.app-user,.lang-menu-value,.lang-options button,.skip-link { font-size:14px; }
+.app-user,.lang-options button,.skip-link { font-size:14px; }
 .app-outlet { container-type:inline-size; padding-bottom:0; }
 .app-nav-open,.app-nav-close { display:none; }
 .app-nav-drawer { width:min(20rem,calc(100% - 24px)); height:100dvh; max-height:100dvh; max-width:none; margin:0; padding:0; border:0; border-right:1px solid var(--app-line); color:var(--app-ink); background:var(--app-stage); }
@@ -55,7 +55,7 @@ body:has(.app-nav-drawer[open]) { overflow:hidden; }
   .app-nav-drawer .app-nav a { min-height:44px; }
   .app-nav-drawer .app-sidebar-head { padding:10px 16px; }
   .app-location { flex:1; }
-  .app-user span,.app-header .lang-menu-value { display:none; }
+  .app-user span { display:none; }
 }
 @media(max-width:24rem) {
   .app-header { flex-wrap:wrap; gap:4px; padding:6px 12px; }

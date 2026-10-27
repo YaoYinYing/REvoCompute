@@ -9,7 +9,7 @@ import { t } from '../../app/i18n';
  * action). A missing projection means this deployment does not gate submission
  * on Runner readiness; the frontend never derives readiness from a status enum.
  */
-export type SubmissionState = NonNullable<TaskTypeSummary['submission']>;
+type SubmissionState = NonNullable<TaskTypeSummary['submission']>;
 
 /** Display copy for the server's recovery vocabulary, which stays server-owned. */
 export function nextActionLabel(action: string): string {
