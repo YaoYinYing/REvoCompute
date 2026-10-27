@@ -23,8 +23,10 @@ successful login returns there. External return URLs are rejected.
   passwords, manage API credentials, or submit compute for a Runner.
 - **Logout**: `POST /compute/api/auth/logout` clears the server-side cookie on
   every path.  A cookie-only request is not granted the token-version bump
-  (that write stays behind the Bearer gate as a CSRF control), so end the
-  session from a page holding a session token for a full invalidation.
+  (that write stays behind the Bearer gate as a CSRF control), and an API-key
+  request is refused with 403 because the bump also sits behind the web-login
+  gate.  End the session from a page holding a session token for a full
+  invalidation.
 - **CAPTCHA**: Self-registration requires solving a math challenge to prevent
   automated signups.  The CAPTCHA token expires after 5 minutes and is
   regenerated after each failed attempt.
@@ -143,6 +145,9 @@ API keys never expire but have **restricted privileges**: they can submit tasks 
 read results, but **cannot** change passwords, manage API keys, or perform admin
 actions. Use a Bearer token (web login) for those operations.  **Guest accounts
 cannot use API keys at all** — they are web-dashboard-only accounts.
+
+Changing or resetting an account password revokes that account's API key; ordinary
+logout ends web sessions without revoking the key.
 
 Rate limits: 5 login attempts/minute per IP, 3 registrations/hour per IP.  The
 login endpoint returns HTTP 429 with `retry_after_seconds`; the login page uses

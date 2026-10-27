@@ -239,7 +239,7 @@ def test_security_guest_cannot_use_api_key(monkeypatch, tmp_path):
     )
     db.verify_email(user["id"])
     # Admin generates API key for guest (admin override)
-    key_plain = db.generate_api_key(user["id"])
+    key_plain = db.generate_api_key(user["id"], user["token_version"])
     client = module.app.test_client()
     # Guest tries to use API key — should fail
     resp = client.get("/compute/api/auth/me", headers={"X-API-Key": key_plain})

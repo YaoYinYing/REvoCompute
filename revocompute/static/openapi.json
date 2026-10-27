@@ -304,7 +304,7 @@
       "post": {
         "tags": ["Authentication"],
         "summary": "Clear the session cookie",
-        "description": "Clear the auth cookie for the caller. A request authenticated with a Bearer token or API key also invalidates every token for the current user. A cookie-authenticated request is rejected with 403 unless it also presents a Bearer token (CSRF gate).",
+        "description": "Clear the auth cookie for the caller. A Bearer-authenticated web session also invalidates every token for the current user. An API-key-authenticated request is refused with 403 and does not invalidate sessions or reset links. A cookie-authenticated request is rejected with 403 unless it also presents a Bearer token (CSRF gate).",
         "operationId": "logout",
         "responses": {
           "200": {

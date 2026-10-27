@@ -185,7 +185,7 @@ def test_bearer_and_api_key_share_policy_cooldown(monkeypatch, tmp_path):
     bearer = _test_client_auth(module)
     db = module.app.config["user_db"]
     user = db.get_user_by_username("tester")
-    api_key = {"X-API-Key": db.generate_api_key(user["id"])}
+    api_key = {"X-API-Key": db.generate_api_key(user["id"], user["token_version"])}
 
     assert _submit_cpu_runner(client, bearer).status_code == 403
     assert _submit_cpu_runner(client, api_key).status_code == 403
@@ -406,7 +406,7 @@ def test_api_key_submission_uses_same_entitlement_check(monkeypatch, tmp_path):
     _test_client_auth(module)
     db = module.app.config["user_db"]
     user = db.get_user_by_username("tester")
-    api_headers = {"X-API-Key": db.generate_api_key(user["id"])}
+    api_headers = {"X-API-Key": db.generate_api_key(user["id"], user["token_version"])}
     assert _submit_cpu_runner(client, api_headers).status_code == 403
     db.grant_entitlement(user["id"], "example_academic", granted_by=user["id"], basis="other")
     assert _submit_cpu_runner(client, api_headers).status_code == 302

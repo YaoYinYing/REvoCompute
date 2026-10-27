@@ -153,7 +153,7 @@ def test_banned_user_cannot_authenticate_with_existing_credentials(monkeypatch, 
     from revocompute.auth import generate_token
 
     old_bearer = {"Authorization": f"Bearer {generate_token(user['id'])}"}
-    api_key = db.generate_api_key(user["id"])
+    api_key = db.generate_api_key(user["id"], user["token_version"])
 
     resp = client.put(
         f"/compute/api/auth/admin/users/{user['id']}",
@@ -201,6 +201,8 @@ def test_admin_password_reset_ends_existing_sessions(monkeypatch, tmp_path):
 
     stolen = {"Authorization": f"Bearer {generate_token(user['id'])}"}
     assert client.get("/compute/api/auth/me", headers=stolen).status_code == 200
+    api_key = db.generate_api_key(user["id"], user["token_version"])
+    assert client.get("/compute/api/auth/me", headers={"X-API-Key": api_key}).status_code == 200
 
     resp = client.put(
         f"/compute/api/auth/admin/users/{user['id']}",
@@ -210,12 +212,36 @@ def test_admin_password_reset_ends_existing_sessions(monkeypatch, tmp_path):
     assert resp.status_code == 200
 
     assert client.get("/compute/api/auth/me", headers=stolen).status_code == 401
+    assert client.get("/compute/api/auth/me", headers={"X-API-Key": api_key}).status_code == 401
     resp = client.post(
         "/compute/api/auth/login",
         headers={"Content-Type": "application/json"},
         data=json.dumps({"username": "resetme", "password": "brand-new-password"}),
     )
     assert resp.status_code == 200
+
+
+def test_admin_role_api_key_has_no_web_privileges(monkeypatch, tmp_path):
+    """An admin-role API key authenticates reads but cannot act as a web login.
+
+    Verification only: the key must not reach admin or password-change routes,
+    matching the restricted-privilege contract for programmatic credentials.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    client = module.app.test_client()
+    _admin_client_auth(module, username="keyadmin")
+    db = module.app.config["user_db"]
+    user = db.get_user_by_username("keyadmin")
+    api_key = db.generate_api_key(user["id"], user["token_version"])
+
+    assert client.get("/compute/api/auth/me", headers={"X-API-Key": api_key}).status_code == 200
+    assert client.get("/compute/api/auth/admin/users", headers={"X-API-Key": api_key}).status_code == 403
+    resp = client.put(
+        "/compute/api/auth/me",
+        headers={"X-API-Key": api_key, "Content-Type": "application/json"},
+        data=json.dumps({"full_name": "Key Admin"}),
+    )
+    assert resp.status_code == 403
 
 
 def test_login_rate_limit_returns_retry_after_seconds(monkeypatch, tmp_path):

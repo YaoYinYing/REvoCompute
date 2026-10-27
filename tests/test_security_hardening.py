@@ -47,7 +47,7 @@ def test_api_key_generate_and_validate(tmp_path):
     """A generated key validates; wrong keys, prefixes, and empties do not."""
     db = UserDatabase(str(tmp_path / "users.sqlite3"))
     user = db.create_user("alice", "alice@example.com", "password123")
-    key = db.generate_api_key(user["id"])
+    key = db.generate_api_key(user["id"], user["token_version"])
     assert key.startswith("revodesign_")
     # Re-read after generate — the stored value must be the sha256 digest,
     # never the plaintext key.
@@ -111,7 +111,7 @@ def test_api_key_validation_with_several_users(tmp_path):
     keys: dict[str, str] = {}
     for i, name in enumerate(("alice", "bob", "carol", "dave")):
         user = db.create_user(name, f"{name}@example.com", f"password{i}123")
-        keys[name] = db.generate_api_key(user["id"])
+        keys[name] = db.generate_api_key(user["id"], user["token_version"])
 
     for name, key in keys.items():
         got = db.validate_api_key(key)

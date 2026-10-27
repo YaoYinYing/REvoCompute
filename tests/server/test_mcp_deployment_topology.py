@@ -340,7 +340,7 @@ class _Deployment:
                     user_status="active",
                 )
                 database.verify_email(user["id"])
-            return {"X-API-Key": database.generate_api_key(user["id"])}
+            return {"X-API-Key": database.generate_api_key(user["id"], user["token_version"])}
         finally:
             database.engine.dispose()
 

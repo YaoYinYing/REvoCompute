@@ -178,11 +178,11 @@ def _run_restart_script(
         with sqlite3.connect(auth_dir / "users.sqlite3") as conn:
             conn.execute(
                 "CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT UNIQUE, "
-                "password_hash TEXT NOT NULL, token_version INTEGER DEFAULT 0)"
+                "password_hash TEXT NOT NULL, token_version INTEGER DEFAULT 0, api_key_digest TEXT)"
             )
             conn.execute(
-                "INSERT INTO users (username, password_hash, token_version) VALUES (?, ?, ?)",
-                (admins.split(",", 1)[0], generate_password_hash("old-password"), 0),
+                "INSERT INTO users (username, password_hash, token_version, api_key_digest) VALUES (?, ?, ?, ?)",
+                (admins.split(",", 1)[0], generate_password_hash("old-password"), 0, "seeded-api-key-digest"),
             )
     env_file = tmp_path / "server.env"
     settings = {
@@ -497,11 +497,13 @@ def test_reset_passwd_rotates_hash_invalidates_tokens_without_persisting_credent
     from werkzeug.security import check_password_hash
 
     with sqlite3.connect(root / "auth" / "users.sqlite3") as conn:
-        password_hash, token_version = conn.execute(
-            "SELECT password_hash, token_version FROM users WHERE username = ?", ("admin",)
+        password_hash, token_version, api_key_digest = conn.execute(
+            "SELECT password_hash, token_version, api_key_digest FROM users WHERE username = ?", ("admin",)
         ).fetchone()
     assert check_password_hash(password_hash, password)
     assert token_version == 1
+    # A password reset also revokes the long-lived API key.
+    assert api_key_digest is None
     backup_line = next(
         line for line in result.stdout.splitlines() if line.startswith("Auth database backup written to:")
     )

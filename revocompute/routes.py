@@ -4655,7 +4655,6 @@ def auth_reset_password():
         return jsonify({"error": "Invalid or expired reset token"}), 400
 
     db.update_user(user_id, password_hash=generate_password_hash(req.password))
-    db.increment_token_version(user_id)
     logging.info("User %d reset their password", user_id)
     return jsonify({"message": "Password updated - you can now log in."}), 200
 
@@ -4663,12 +4662,17 @@ def auth_reset_password():
 @app.route("/compute/api/auth/logout", methods=["POST"])
 @optional_user
 def auth_logout():
-    """Clear the auth cookie and invalidate all tokens for the current user.
-    Bearer token required for the token-version bump; cookie-only requests
-    only clear the cookie without invalidating tokens (CSRF-safe).
+    """Clear the auth cookie for the caller.
+
+    The credential contract for this operation is the ``logout`` description in
+    ``revocompute/static/openapi.json``; this handler must not restate it.
     """
     user = g.get("current_user")
-    blocked = require_bearer_auth() if user is not None else None
+    blocked = None
+    if user is not None:
+        # The session bump belongs to a web login: a long-lived API key must
+        # not invalidate sessions, and cookie-only requests keep the CSRF refusal.
+        blocked = require_web_login() or require_bearer_auth()
     # Expire the cookie on every path: a cookie-only request is refused the
     # token-version bump, but the browser session must still end.
     response, status = blocked if blocked else (jsonify({"status": "logged_out"}), 200)
@@ -5217,8 +5221,6 @@ def auth_update_me():
         updates["password_hash"] = generate_password_hash(req.new_password)
 
     db.update_user(user["id"], **updates)
-    if password_changed:
-        db.increment_token_version(user["id"])
     message = "Profile and password updated" if len(updates) > 1 and password_changed else (
         "Password updated" if password_changed else "Profile updated"
     )
@@ -5278,7 +5280,9 @@ def auth_generate_api_key():
     if _blocked := require_bearer_auth():
         return _blocked
     db = _get_user_db()
-    plaintext = db.generate_api_key(g.current_user["id"])
+    plaintext = db.generate_api_key(g.current_user["id"], g.current_user["token_version"])
+    if plaintext is None:
+        return jsonify({"error": "Session expired — log in again"}), 401
     return jsonify({"api_key": plaintext, "message": "Store this key securely — it will not be shown again."}), 201
 
 
@@ -6075,10 +6079,6 @@ def admin_manage_user(user_id):  # skipcq: PY-R1000 -- admin state transitions a
         return update_error
 
     if update_fields:
-        if "password_hash" in update_fields:
-            # A reset is normally a response to a compromised account, so it
-            # must also end the user's existing sessions.
-            db.increment_token_version(user_id)
         disables_gpu = (
             update_fields.get("allow_gpu_use") is False
             or ("email_verified" in update_fields and not update_fields["email_verified"])

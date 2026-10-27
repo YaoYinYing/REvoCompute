@@ -66,6 +66,8 @@ try:
         assignments = "password_hash = ?"
         if "token_version" in columns:
             assignments += ", token_version = token_version + 1"
+        if "api_key_digest" in columns:
+            assignments += ", api_key_digest = NULL"
         if source.execute(
             f"UPDATE users SET {assignments} WHERE username = ?",
             (generate_password_hash(PASSWORD), USERNAME),

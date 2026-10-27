@@ -50,6 +50,36 @@ def test_auth_me_rejects_unauthenticated(monkeypatch, tmp_path):
     assert resp.status_code == 401
 
 
+def test_api_key_mint_rejects_a_session_invalidated_before_the_write(monkeypatch, tmp_path):
+    """A reset that commits after auth but before the key write wins.
+
+    Minting authenticates the session first, then writes the digest.  If a
+    password reset commits in between, the stale session must not be able to
+    leave a valid long-lived key behind.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    db = module.app.config["user_db"]
+    auth_header = _test_client_auth(module)
+
+    from werkzeug.security import generate_password_hash
+
+    from revocompute.auth import UserDatabase
+
+    mint = UserDatabase.generate_api_key
+
+    def reset_before_mint(self, user_id, token_version):
+        self.update_user(user_id, password_hash=generate_password_hash("replacement-password"))
+        return mint(self, user_id, token_version)
+
+    monkeypatch.setattr(UserDatabase, "generate_api_key", reset_before_mint)
+    resp = module.app.test_client().post("/compute/api/auth/me/api-key", headers=auth_header)
+
+    assert resp.status_code == 401
+    user = db.get_user_by_username("tester")
+    assert user["token_version"] == 1
+    assert user["api_key_digest"] is None
+
+
 @pytest.mark.parametrize(
     "headers",
     ({"Authorization": "Bearer invalid"}, {"X-API-Key": "invalid"}),
@@ -70,6 +100,8 @@ def test_auth_update_me_changes_password(monkeypatch, tmp_path):
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     client = module.app.test_client()
     auth_header = _test_client_auth(module)
+    api_key = client.post("/compute/api/auth/me/api-key", headers=auth_header).json["api_key"]
+    assert client.get("/compute/api/auth/me", headers={"X-API-Key": api_key}).status_code == 200
     payload = {"current_password": "password", "new_password": "newpassword123"}
     resp = client.put(
         "/compute/api/auth/me",
@@ -77,6 +109,9 @@ def test_auth_update_me_changes_password(monkeypatch, tmp_path):
         data=json.dumps(payload),
     )
     assert resp.status_code == 200
+    # A password change revokes the API key and the old web session together.
+    assert client.get("/compute/api/auth/me", headers={"X-API-Key": api_key}).status_code == 401
+    assert client.get("/compute/api/auth/me", headers=auth_header).status_code == 401
     # Old password should no longer work for login
     login_resp = client.post(
         "/compute/api/auth/login",
@@ -93,10 +128,23 @@ def test_auth_update_me_changes_password(monkeypatch, tmp_path):
     assert login_resp.status_code == 200
 
 
+def test_logout_preserves_api_key(monkeypatch, tmp_path):
+    """Ordinary logout ends web sessions but leaves the long-lived API key valid."""
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    client = module.app.test_client()
+    auth_header = _test_client_auth(module)
+    api_key = client.post("/compute/api/auth/me/api-key", headers=auth_header).json["api_key"]
+
+    assert client.post("/compute/api/auth/logout", headers=auth_header).status_code == 200
+    assert client.get("/compute/api/auth/me", headers=auth_header).status_code == 401
+    assert client.get("/compute/api/auth/me", headers={"X-API-Key": api_key}).status_code == 200
+
+
 def test_auth_update_me_persists_research_identity(monkeypatch, tmp_path):
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     client = module.app.test_client()
     auth_header = _test_client_auth(module)
+    api_key = client.post("/compute/api/auth/me/api-key", headers=auth_header).json["api_key"]
     payload = {
         "full_name": "Updated Scientist",
         "affiliation": "New Institute",
@@ -110,6 +158,8 @@ def test_auth_update_me_persists_research_identity(monkeypatch, tmp_path):
     assert response.json == {"message": "Profile updated"}
     profile = client.get("/compute/api/auth/me", headers=auth_header).json
     assert {field: profile[field] for field in payload} == payload
+    # A profile-only update does not touch credentials.
+    assert client.get("/compute/api/auth/me", headers={"X-API-Key": api_key}).status_code == 200
 
 
 @pytest.mark.parametrize(
@@ -444,6 +494,55 @@ def test_auth_logout_clears_cookie(monkeypatch, tmp_path):
     assert resp.json["status"] == "logged_out"
 
 
+def test_api_key_cannot_trigger_logout_session_bump(monkeypatch, tmp_path):
+    """A restricted API key cannot end web sessions or outstanding reset links.
+
+    The key stays valid, an ordinary Bearer web logout still bumps
+    token_version, and the refused request leaves a pending reset link usable.
+    """
+    from revocompute.auth import _serializer, validate_reset_token
+
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    client = module.app.test_client()
+    auth_header = _test_client_auth(module)
+    db = module.app.config["user_db"]
+    user = db.get_user_by_username("tester")
+    api_key = client.post("/compute/api/auth/me/api-key", headers=auth_header).json["api_key"]
+    reset_token = _serializer.dumps(
+        {"uid": user["id"], "purpose": "reset-password", "ver": user["token_version"], "nonce": "s5"}
+    )
+
+    resp = client.post("/compute/api/auth/logout", headers={"X-API-Key": api_key})
+    assert resp.status_code == 403
+    assert db.get_user(user["id"])["token_version"] == 0
+    assert validate_reset_token(reset_token, db) == user["id"]
+    assert client.get("/compute/api/auth/me", headers=auth_header).status_code == 200
+    assert client.get("/compute/api/auth/me", headers={"X-API-Key": api_key}).status_code == 200
+
+    # The same route still completes the session bump for a Bearer web login.
+    resp = client.post("/compute/api/auth/logout", headers=auth_header)
+    assert resp.status_code == 200
+    assert db.get_user(user["id"])["token_version"] == 1
+    assert client.get("/compute/api/auth/me", headers=auth_header).status_code == 401
+
+
+def test_cookie_only_logout_keeps_its_csrf_refusal(monkeypatch, tmp_path):
+    """Cookie-auth logout ends the browser session without bumping token_version."""
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    _test_client_auth(module)
+    db = module.app.config["user_db"]
+    user = db.get_user_by_username("tester")
+    client = module.app.test_client()
+    assert client.post(
+        "/compute/api/auth/login", json={"username": "tester", "password": "password"}
+    ).status_code == 200
+
+    resp = client.post("/compute/api/auth/logout")
+    assert resp.status_code == 403
+    assert db.get_user(user["id"])["token_version"] == 0
+    assert "auth_token=;" in resp.headers["Set-Cookie"]
+
+
 def test_logout_invalidates_cookie_dashboard_and_authenticated_pages_are_not_cached(monkeypatch, tmp_path):
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     app_root = tmp_path / "static" / "app"
@@ -526,7 +625,7 @@ def test_forgot_password_rate_limited(monkeypatch, tmp_path):
 def test_reset_password_post_sets_new_password(monkeypatch, tmp_path):
     """POST /compute/api/auth/reset-password sets a new password."""
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
-    from revocompute.auth import _serializer
+    from revocompute.auth import _serializer, generate_token
 
     db = module.app.config["user_db"]
     user = db.create_user(
@@ -537,16 +636,21 @@ def test_reset_password_post_sets_new_password(monkeypatch, tmp_path):
         user_status="active",
     )
     db.verify_email(user["id"])
+    api_key = db.generate_api_key(user["id"], user["token_version"])
+    old_session = {"Authorization": f"Bearer {generate_token(user['id'])}"}
     token = _serializer.dumps(
         {"uid": user["id"], "purpose": "reset-password", "ver": user.get("token_version", 0), "nonce": "test-nonce"}
     )
     client = module.app.test_client()
+    assert client.get("/compute/api/auth/me", headers={"X-API-Key": api_key}).status_code == 200
     resp = client.post(
         "/compute/api/auth/reset-password",
         headers={"Content-Type": "application/json"},
         data=json.dumps({"token": token, "password": "newpass456"}),
     )
     assert resp.status_code == 200
+    assert client.get("/compute/api/auth/me", headers={"X-API-Key": api_key}).status_code == 401
+    assert client.get("/compute/api/auth/me", headers=old_session).status_code == 401
     # Verify new password works
     login_resp = client.post(
         "/compute/api/auth/login",
@@ -837,7 +941,7 @@ def test_user_db_validate_api_key(monkeypatch, tmp_path):
         user_status="active",
     )
     db.verify_email(user["id"])
-    key = db.generate_api_key(user["id"])
+    key = db.generate_api_key(user["id"], user["token_version"])
     # Valid key
     found = db.validate_api_key(key)
     assert found is not None

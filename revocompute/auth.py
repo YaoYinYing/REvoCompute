@@ -300,6 +300,9 @@ class UserDatabase:
         ``user_status``, ``approved_by``, ``approved_at``,
         ``allow_gpu_use``.
         Password and API key values must be pre-hashed by the caller.
+        Setting ``password_hash`` also bumps ``token_version`` and clears
+        ``api_key_digest`` in the same statement, so a password change revokes
+        both existing web sessions and any API key.
         """
         _allowed = {
             "username",
@@ -329,20 +332,36 @@ class UserDatabase:
             raise ValueError(f"Unsupported user role: {values['role']!r}")
         if not values:
             return
+        if "password_hash" in values:
+            # A password change is the revocation point for every prior
+            # credential: bump the session version and drop the API key
+            # atomically rather than leaving a second authority to remember.
+            values["token_version"] = _users_table.c.token_version + 1
+            values["api_key_digest"] = None
         stmt = sa.update(_users_table).where(_users_table.c.id == user_id).values(**values)
         with self.engine.begin() as conn:
             conn.execute(stmt)
 
     # -- API key helpers -----------------------------------------------------
 
-    def generate_api_key(self, user_id: int) -> str:
-        """Generate a new API key for *user_id*.
+    def generate_api_key(self, user_id: int, token_version: int) -> str | None:
+        """Generate a new API key for *user_id* if *token_version* is current.
 
         Returns the *plaintext* key — store only its sha256 digest.  The
-        caller is responsible for showing the plaintext once.
+        caller is responsible for showing the plaintext once.  Returns
+        ``None`` when the session that requested the key was invalidated
+        before the write, so a key can never outlive the credential that
+        minted it.
         """
         raw = "revodesign_" + os.urandom(32).hex()
-        self.update_user(user_id, api_key_digest=hashlib.sha256(raw.encode("utf-8")).hexdigest())
+        stmt = (
+            sa.update(_users_table)
+            .where(_users_table.c.id == user_id, _users_table.c.token_version == token_version)
+            .values(api_key_digest=hashlib.sha256(raw.encode("utf-8")).hexdigest())
+        )
+        with self.engine.begin() as conn:
+            if conn.execute(stmt).rowcount != 1:
+                return None
         return raw
 
     def revoke_api_key(self, user_id: int) -> None:
