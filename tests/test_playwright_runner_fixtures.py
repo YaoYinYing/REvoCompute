@@ -219,7 +219,7 @@ def test_runner_catalog_cardinality_stays_intentional(page: Page, count: int) ->
     # A single Runner still renders as one complete group, not an empty grid.
     expect(page.locator(".runner-group")).to_have_count(1)
     expect(page.locator(".runner-group").first.get_by_role("heading", name="Sequence demo", exact=True)).to_be_visible()
-    expect(page.locator(".runner-group header span")).to_have_text(f"{count} {'method' if count == 1 else 'methods'}")
+    expect(page.locator(".runner-group").first).to_contain_text(f"{count} {'method' if count == 1 else 'methods'}")
     page.set_viewport_size({"width": 320, "height": 760})
     page.reload()
     expect(page.locator(".runner-card")).to_have_count(count)

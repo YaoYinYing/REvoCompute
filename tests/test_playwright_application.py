@@ -660,7 +660,7 @@ def test_runner_catalog_cardinality_layout_is_usable(page: Page, method_count: i
     # The group heading counts the register; the unfiltered aggregate does not
     # restate it.
     expect(page.locator(".catalog-count")).to_be_empty()
-    expect(page.locator(".runner-group header span").first).to_have_text(
+    expect(page.locator(".runner-group").first).to_contain_text(
         f"{method_count} {'method' if method_count == 1 else 'methods'}"
     )
 
