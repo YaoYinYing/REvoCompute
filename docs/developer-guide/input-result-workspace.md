@@ -14,7 +14,7 @@ operational release gates. This document is not an activation checklist and
 does not authorize production changes.
 
 The next result-view goal is tracked in
-the [result-view protocols](result-view-protocols.md).
+the [result-view plugin contract](result-view-plugins.md).
 
 ## Why this work exists
 

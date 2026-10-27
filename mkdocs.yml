@@ -92,11 +92,10 @@ nav:
       - Execution Model: developer-guide/execution-model.md
       - Authenticated Tool Runtime: developer-guide/tool-runtime.md
       - Result View Plugin Contract: developer-guide/result-view-plugins.md
-      - Result View Protocols: developer-guide/result-view-protocols.md
       - Scientific Result Inventory: developer-guide/result-inventory.md
       - Runner Scientific Contract Audit: developer-guide/scientific-contract-inventory.md
       - Input and Result Workspace: developer-guide/input-result-workspace.md
-      - "Local Result Workspace (PR #86)": developer-guide/local-result-workspace.md
+      - Local Result Workspace: developer-guide/local-result-workspace.md
       - Evidence Retention: developer-guide/evidence-retention.md
       - Levin Structure-View Notes: developer-guide/levin-structure-view-notes.md
       - Frontend Design Language: developer-guide/frontend-design-language.md

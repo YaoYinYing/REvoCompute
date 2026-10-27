@@ -15,12 +15,10 @@
 .account-section > header { position: relative; }.account-section .segmented-control { margin-top: .9rem; }
 .segmented-control { display: flex; flex-wrap: wrap; }.segmented-control button { min-height: 2.2rem; padding: .35rem .65rem; border: 1px solid var(--app-line); background: var(--app-raised); color: var(--app-muted); cursor: pointer; font-size: 12px; }.segmented-control button:first-child { border-radius: var(--r-util) 0 0 var(--r-util); }.segmented-control button:last-child { border-radius: 0 var(--r-util) var(--r-util) 0; }.segmented-control button + button { margin-left: -1px; }.segmented-control button[aria-pressed="true"] { position: relative; border-color: var(--app-accent); background: var(--app-soft); color: var(--app-accent); font-weight: 650; }.metrics-summary { grid-template-columns: repeat(6, 1fr); }.metrics-composition { color: var(--app-muted); font-size: 12px; }.activity-chart { display: grid; grid-template-columns: auto 1fr; grid-template-areas: 'y plot' 'empty x'; grid-template-rows: 1fr auto; column-gap: .5rem; }
 .activity-axis-y { grid-area: y; position: relative; width: 2.4rem; }
-.activity-tick-major, .activity-tick-minor { color: var(--app-muted); font-variant-numeric: tabular-nums; }
-.activity-axis-y .activity-tick-major, .activity-axis-y .activity-tick-minor { position: absolute; right: 0; transform: translateY(-50%); text-align: right; }
+.activity-tick-major { color: var(--app-muted); font-variant-numeric: tabular-nums; }
+.activity-axis-y .activity-tick-major { position: absolute; right: 0; transform: translateY(-50%); text-align: right; }
 .activity-axis-y .activity-tick-major { font-size: 12px; }
-.activity-axis-y .activity-tick-minor { right: .55rem; font-size: 12px; opacity: .75; }
 .activity-axis-y .activity-tick-major::after { content: ''; position: absolute; top: 50%; left: 100%; width: .45rem; border-top: 1px solid var(--app-line); }
-.activity-axis-y .activity-tick-minor::after { content: ''; position: absolute; top: 50%; left: 100%; width: .25rem; border-top: 1px solid var(--app-line); }
 .activity-plot { grid-area: plot; position: relative; height: 10rem; border: 1px solid var(--app-line); border-bottom-width: 2px; border-radius: var(--r-control); background: var(--app-raised); }
 .activity-bars { position: absolute; inset: 0; display: grid; align-items: end; gap: 2px; padding: 0 .35rem; }
 .activity-bar { min-width: 0; background: var(--app-accent); border-radius: 1px 1px 0 0; }
