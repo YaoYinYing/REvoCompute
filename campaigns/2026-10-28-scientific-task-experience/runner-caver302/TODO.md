@@ -1,11 +1,10 @@
 # TODO — feat(runner): headless CAVER 3.02 tunnel analysis and spatial input
 
-> **Status:** CPU-side Runner implemented on branch `campaign/2026-10-28-runner-caver302`;
-> SIF build, `%test` and authentic CAVER 3.0.2 execution on 1SUO are done. Live acceptance is
-> **blocked by the environment**: `live-test` cannot build the candidate server image because
-> `npm ci` aborts after ~462 s ("Exit handler never called") on two identical attempts, so no
-> receipt or attestation exists. The viewer remains deferred to PR #117. See the local
-> `IMPLEMENTATION_STATE.md` for exact provenance and test evidence.
+> **Status:** CPU-side Runner implemented on branch `campaign/2026-10-28-runner-caver302`.
+> SIF build, `%test`, authentic CAVER 3.0.2 execution on 1SUO and one Slurm live test are done;
+> the live test PASSED (receipt `ce3c6746….5675d6a5….receipt.json`, 7 clusters / 7 tunnels) and
+> the candidate is staged awaiting promotion. The viewer remains deferred to PR #117. See the
+> local `IMPLEMENTATION_STATE.md` for exact provenance and test evidence.
 > **Initial main:** 17e80ed1dbd00f1389f3ec7047e5661b85ed52eb. Re-check exact main and PR head before any coding/review.
 
 ## Goal
@@ -46,7 +45,7 @@ Integrate official upstream CAVER 3.0.2 CLI as an online CPU Runner with a scien
 - [x] Check CPU resource estimation, cancellation, memory OOM, missing JAR, non-zero tool exit, zero tunnels and incomplete output; no false-success task. (Bounded `-Xmx`, internal timeout, missing-JAR preflight, nonzero-exit and incomplete/empty-output failures tested. No resource-estimation model is declared.)
 - [x] Verify tunnel cluster/profiles metrics against a pinned upstream example, scientific units and trajectory frame labels, ResultManifest and storyboard render. (Parsers are tested against the distribution's guided-example output with explicit Angstrom units; storyboard/render evidence is deferred.)
 - [ ] Run existing server/manifest validations, doctor --strict, scientific smoke, frontend screenshot/keyboard regression and exact-head CI with evidence. (Fleet and fast suites pass locally; doctor/scientific smoke/CI run on the pushed head.)
-- [ ] Run one target-host live acceptance through the public API and record walltime, CPU time, host-memory peak, published artifacts and receipt. (BLOCKED: `run/restart.sh live-test --runner caver302 --use-proxy` fails while rebuilding the candidate server image — `npm ci` aborts after 461.9 s / 463.7 s / 462.1 s with npm "Exit handler never called" on three attempts, the last with an idle machine and an empty `squeue`. The caver302 SIF and Slurm were never reached; no receipt and no readiness attestation exist.)
+- [x] Run one target-host live acceptance through the public API and record walltime, CPU time, host-memory peak, published artifacts and receipt. (PASS on Slurm job 403980: 15.3 s case time, TotalCPU 22.2 s, 68 artifacts, all 10 required `expected_files` roles matched; receipt written and `readiness/caver302.json` refreshed with `CANDIDATE_AWAITING_PROMOTION`.)
 
 ## Non-goals
 - No PyMOL server dependency, embedded JAR copied from the plugin repo, or privileged direct GUI connection.
