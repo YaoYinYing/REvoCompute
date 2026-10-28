@@ -448,3 +448,40 @@ def test_reading_the_waterfall_never_rewrites_append_only_facts(monkeypatch, tmp
 
     after = [dict(entry) for entry in module.task_store.list_compute_ledger(user["id"], limit=200)]
     assert after == before
+
+
+def test_the_gpu_credit_balance_routes_refuse_an_unrepresentable_quantity(monkeypatch, tmp_path):
+    """A balance read refuses a quantity no JSON client can represent exactly.
+
+    The ledger read already refused; the two GPU balance routes published the
+    same fact as a rounded number.  One corrupt row must not make one surface
+    truthful and another invent a value.
+    """
+    module = _module(monkeypatch, tmp_path)
+    user_headers = _test_client_auth(module)
+    admin_headers = _admin_client_auth(module)
+    user = _user(module)
+    period = module.task_store.gpu_credit_summary(user["id"])["period"]
+    ledger = module.task_store.resource_ledger_table
+    with module.task_store.engine.begin() as conn:
+        conn.execute(sa.insert(ledger).values(
+            subject_type="user", subject_id=user["id"], period=period,
+            kind="admin_adjustment", unit="gpu_second", resource_class="",
+            quantity=2**53, actor_user_id=99, reason="Corrupt fixture",
+            reason_code="admin_adjustment", evidence_source="policy",
+            idempotency_key="overflow-credit-fixture", created_at=time.time(),
+        ))
+
+    client = module.app.test_client()
+    own = client.get("/compute/api/gpu-credit", headers=user_headers)
+    assert own.status_code == 503
+    body = own.get_json()
+    assert body["unavailable_reason"] == "ledger_value_out_of_range"
+    assert "adjustment_gpu_seconds" not in body and "remaining_credits" not in body
+
+    admin = client.get(
+        f"/compute/api/auth/admin/users/{user['id']}/gpu-credit", headers=admin_headers
+    )
+    assert admin.status_code == 503
+    assert admin.get_json()["unavailable_reason"] == "ledger_value_out_of_range"
+    assert "adjustment_gpu_seconds" not in admin.get_json()

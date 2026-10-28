@@ -4933,6 +4933,28 @@ def _gpu_credit_payload(user_id: int, *, admin: bool = False) -> dict[str, Any]:
     }
 
 
+def _exact_gpu_credit_payload(user_id: int, *, admin: bool = False) -> dict[str, Any]:
+    """A GPU credit payload whose every published quantity is JSON-exact.
+
+    The summary and history are exact Python integers on the server; one outside
+    ±(2^53-1) would be rounded by a JSON client, so a balance read refuses
+    instead of publishing a number the ledger does not contain. Mutation
+    responses still return the recorded fact: the write path already admitted it,
+    and reporting a committed change as a failed read would be untrue.
+    """
+    payload = _gpu_credit_payload(user_id, admin=admin)
+    for field in (
+        "monthly_grant_gpu_seconds",
+        "usage_gpu_seconds",
+        "adjustment_gpu_seconds",
+        "remaining_gpu_seconds",
+    ):
+        rloan.require_exact_units(int(payload[field]), what=field)
+    for entry in payload["history"]:
+        rloan.require_exact_units(int(entry["gpu_seconds"]), what="ledger quantity")
+    return payload
+
+
 def _typed_resource_refusal(exc: ResourceValidationError):
     """The bounded refusal for a stored resource policy no reader can interpret.
 
@@ -4980,7 +5002,7 @@ def current_resource_entitlement():
 def current_gpu_credit():
     """Return only the authenticated user's current UTC-period accounting."""
     try:
-        payload = _gpu_credit_payload(int(g.current_user["id"]))
+        payload = _exact_gpu_credit_payload(int(g.current_user["id"]))
     except (rloan.AccountingOverflow, SQLAlchemyError) as exc:
         return _ledger_read_refusal(exc)
     payload["allow_gpu_use"] = bool(g.current_user.get("allow_gpu_use"))
@@ -5676,7 +5698,7 @@ def admin_user_gpu_credit(user_id: int):
     if user is None or user.get("deleted"):
         return jsonify({"error": "User not found"}), 404
     try:
-        payload = _gpu_credit_payload(user_id, admin=True)
+        payload = _exact_gpu_credit_payload(user_id, admin=True)
     except (rloan.AccountingOverflow, SQLAlchemyError) as exc:
         return _ledger_read_refusal(exc)
     return jsonify(payload), 200
