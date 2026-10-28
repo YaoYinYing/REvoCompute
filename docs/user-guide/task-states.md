@@ -88,7 +88,9 @@ standard error and standard output.
   nothing is polled. **Search this excerpt** matches literal text
   case-insensitively and reports the match count. Regular expressions are not
   accepted, and line numbers are relative to the retained excerpt rather than
-  the original log.
+  the original log. Search reports at most 1,000 matches and covers only the
+  rendered excerpt: a longer excerpt renders, and searches, its most recent
+  10,000 lines.
 - Credentials, private paths, host details, and terminal control characters are
   removed before the excerpt is published, so the preview, search, and download
   all see the same sanitized text.

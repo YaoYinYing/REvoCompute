@@ -137,7 +137,12 @@ function addRetainedExcerpt(
     if (key.key === 'Enter') {
       if (typeof key.preventDefault === 'function') key.preventDefault();
       if (matches.length) select(active + (key.shiftKey ? -1 : 1));
-    } else if (key.key === 'Escape') { input.value = ''; runSearch(); }
+    } else if (key.key === 'Escape') {
+      // The Dashboard mounts this panel inside a native <dialog>, whose Escape
+      // default action closes it; clearing the search must not dismiss the panel.
+      key.preventDefault();
+      input.value = ''; runSearch();
+    }
   });
   previous.addEventListener('click', () => select(active - 1));
   next.addEventListener('click', () => select(active + 1));

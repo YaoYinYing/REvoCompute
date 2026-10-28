@@ -6,7 +6,7 @@ let bearerToken: string | null = null;
 let tokenRequest: Promise<string> | null = null;
 export const sessionExpiredEvent = 'revocompute:session-expired';
 
-function authorizedPath(url: string): string {
+export function authorizedPath(url: string): string {
   if (!url.startsWith('/') || url.startsWith('//') || url.includes('\\')) {
     throw new Error('Authorized requests must be same-origin paths.');
   }

@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import unicodedata
 from collections.abc import Iterable, Iterator, Mapping
 from typing import Any
 
@@ -30,12 +31,10 @@ REASONS = {
     "runner_validation_failed": "Runner output validation failed.",
 }
 _SECRET_KEY = re.compile(r"secret|password|passwd|token|credential|api.?key|authorization|private.?key", re.I)
-# ANSI/C0 controls plus invisible bidi and zero-width format characters, which
-# would otherwise let an excerpt visually reorder or conceal its own text.
-_CONTROL = re.compile(
-    r"\x1b\[[0-?]*[ -/]*[@-~]|[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]"
-    r"|[\u200b\u200e\u200f\u202a-\u202e\u2060\u2066-\u2069\ufeff]"
-)
+# ANSI escapes and C0 controls. Invisible format characters (bidi marks,
+# zero-width controls, soft hyphen, tag characters) are stripped by their
+# Unicode category so the set cannot go stale.
+_ANSI_CONTROL = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _SECRET_ASSIGNMENT = re.compile(
     r"(?im)(?<![\w.-])([\w.-]*(?:secret|password|passwd|token|credential|api.?key|authorization)"
     r"[\w.-]*[\"']?\s*[=:]\s*)(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^\s,;]+)"
@@ -58,9 +57,14 @@ def diagnostic_secret_values(environment: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(str(value) for key, value in environment.items() if _SECRET_KEY.search(key) and value)
 
 
+def _without_format_characters(text: str) -> str:
+    """Drop every Unicode ``Cf`` character, which is invisible but reorders or conceals text."""
+    return "".join(character for character in text if unicodedata.category(character) != "Cf")
+
+
 def safe_diagnostic_text(value: Any, *, secret_values: tuple[str, ...] = ()) -> str:
     """Redact known credentials, credential syntax, URLs and private path context."""
-    text = _CONTROL.sub("", str(value or ""))
+    text = _without_format_characters(_ANSI_CONTROL.sub("", str(value or "")))
     known = set(secret_values)
     known.update(diagnostic_secret_values(os.environ))
     for secret in sorted(known, key=len, reverse=True):
@@ -76,7 +80,7 @@ def safe_diagnostic_text(value: Any, *, secret_values: tuple[str, ...] = ()) -> 
     text = _HOST_PATH.sub("[path redacted]", text)
     text = _HOST_DETAIL.sub("[host detail redacted]", text)
     text = _PRIVATE_NETWORK.sub("[private network redacted]", text)
-    return _CONTROL.sub("", text)
+    return _without_format_characters(_ANSI_CONTROL.sub("", text))
 
 
 def redacted_log_lines(lines: Iterable[str], *, secret_values: tuple[str, ...] = ()) -> Iterator[str]:

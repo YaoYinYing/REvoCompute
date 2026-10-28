@@ -91,7 +91,7 @@ it('searches literally, counts matches and navigates by button and keyboard', as
   expect(host.textContent).toContain('Match 1 of 2');
   input.dispatch('keydown', { key: 'Enter', shiftKey: true, preventDefault: () => undefined });
   expect(host.textContent).toContain('Match 2 of 2');
-  input.dispatch('keydown', { key: 'Escape' });
+  input.dispatch('keydown', { key: 'Escape', preventDefault: () => undefined });
   expect(input.value).toBe('');
   expect(host.querySelectorAll('mark')).toHaveLength(0);
 });

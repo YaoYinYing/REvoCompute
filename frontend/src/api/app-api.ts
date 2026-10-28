@@ -1,5 +1,5 @@
 import type { components } from './schema.generated';
-import { authorizedJson, establishSessionCredential, requestJson, requestText } from '../app/session';
+import { authorizedJson, authorizedPath, establishSessionCredential, requestJson, requestText } from '../app/session';
 
 export type CurrentUser = components['schemas']['CurrentUser'];
 export type CurrentUserUpdate = components['schemas']['UpdateCurrentUserRequest'];
@@ -112,14 +112,7 @@ export type TaskDiagnostics = components['schemas']['TaskDiagnostics'];
 export const getTaskDiagnostics = (taskId: string, signal?: AbortSignal): Promise<TaskDiagnostics> =>
   requestJson(`/compute/api/tasks/${encodeURIComponent(taskId)}/diagnostics`, { signal });
 
-/** The server's own ceiling for one retained diagnostic excerpt (`MAX_LOG_BYTES`). */
-export const MAX_DIAGNOSTIC_EXCERPT_BYTES = 64 * 1024;
 /** Fetch the bounded, redacted excerpt a diagnostic log already offers for download. */
 export async function getTaskDiagnosticExcerpt(url: string, signal?: AbortSignal): Promise<string> {
-  if (!url.startsWith('/') || url.startsWith('//') || url.includes('\\')) {
-    throw new Error('Diagnostic excerpts must be same-origin server paths.');
-  }
-  const text = await requestText(url, { signal });
-  if (text.length > MAX_DIAGNOSTIC_EXCERPT_BYTES) throw new Error('Diagnostic excerpt exceeded its server bound.');
-  return text;
+  return requestText(authorizedPath(url), { signal });
 }

@@ -199,6 +199,9 @@ def test_diagnostic_context_is_not_a_user_facing_failure_explanation(text):
 
 def test_invisible_format_controls_cannot_reorder_the_retained_excerpt(task_context):
     module, client, task_id, root, owner, *_ = task_context
+    # Arabic letter mark, zero-width joiners, soft hyphen: every Unicode Cf
+    # character is invisible, so each one can reorder or conceal the text it sits in.
+    assert safe_diagnostic_text("a\u061cb\u200cc\u200dd\u00ade\n") == "abcde\n"
     publish_evidence(
         task_context,
         record={
