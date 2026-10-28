@@ -71,8 +71,10 @@ function addRetainedExcerpt(
   const cappedNote = element('p'); cappedNote.className = 'task-diagnostic-note task-diagnostic-capped'; cappedNote.hidden = true;
   const linesHost = element('div'); linesHost.className = 'task-diagnostic-lines'; linesHost.tabIndex = 0;
   linesHost.setAttribute('role', 'region'); linesHost.setAttribute('aria-label', t('diagnostics.excerptLabel', { stream }));
-  const loading = element('p', t('diagnostics.excerptLoading')); loading.className = 'task-diagnostic-note'; loading.hidden = true;
-  const failure = element('p', t('diagnostics.excerptFailed')); failure.className = 'task-diagnostic-error'; failure.hidden = true;
+  const loading = element('p', t('diagnostics.excerptLoading')); loading.className = 'task-diagnostic-note';
+  loading.setAttribute('role', 'status'); loading.hidden = true;
+  const failure = element('p', t('diagnostics.excerptFailed')); failure.className = 'task-diagnostic-error';
+  failure.setAttribute('role', 'alert'); failure.hidden = true;
   region.append(searchBar, status, note, cappedNote, linesHost);
   // Loading and failure feedback belong beside the toggle: `region` stays hidden
   // until a successful load, so feedback inside it would never be visible.
