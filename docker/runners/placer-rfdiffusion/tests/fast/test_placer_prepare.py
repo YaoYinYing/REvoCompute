@@ -23,9 +23,16 @@ _CCD_STUB = {
     "THR": frozenset({"N", "CA", "C", "O", "CB", "OG1", "CG2"}),
     "TRP": frozenset({"N", "CA"}),
     "LIG": frozenset({"C1", "C2"}),
-    "HEM": frozenset({"C1"}),
-    "LDP": frozenset({"C1"}),
+    # The 4dtz ligands' real atom names, so the RCSB fixture exercises the
+    # atom-set check with a template rather than only a name.
+    "HEM": frozenset(
+        "C1A C1B C1C C1D C2A C2B C2C C2D C3A C3B C3C C3D C4A C4B C4C C4D CAA CAB CAC CAD "
+        "CBA CBB CBC CBD CGA CGD CHA CHB CHC CHD CMA CMB CMC CMD FE NA NB NC ND O1A O1D O2A O2D".split()
+    ),
+    "LDP": frozenset("C1 C2 C3 C4 C5 C6 C7 C8 N1 O1 O2".split()),
     "SO4": frozenset({"S", "O1"}),
+    # A distinct, real CCD name whose atom set differs from 4dtz LDP.
+    "ZZQ": frozenset({"CAB", "CAC", "CAD"}),
 }
 
 
@@ -67,7 +74,8 @@ def _apo() -> str:
 def _complex_with_ligands(ligands: list[tuple[str, str, int]]) -> str:
     lines = [_line("ATOM", 1, "CA", "ALA", "A", 1)]
     for serial, (chain, name, number) in enumerate(ligands, start=2):
-        lines.append(_line("HETATM", serial, "C1", name, chain, number, x=float(serial)))
+        atom = sorted(_CCD_STUB[name])[0] if name in _CCD_STUB else "C1"
+        lines.append(_line("HETATM", serial, atom, name, chain, number, x=float(serial)))
     lines.append("END")
     return "\n".join(lines)
 
@@ -616,4 +624,60 @@ def test_fixed_all_with_target_res_and_centers_is_rejected(tmp_path):
     with pytest.raises(prepare.PreparationError, match="No ligand remains to predict"):
         prepare.validate_structure(params, prepare.validate_params(params), prepare.read_structure(structure),
                                    structure)
+
+
+def test_cif_ligand_atoms_must_match_the_residue_library(tmp_path):
+    # ZZQ is a real CCD name, but its template does not contain 4dtz LDP's atoms.
+    structure = _write(tmp_path, "zzq.cif", _cif_with_ligand("ZZQ"))
+    params = _params(predict_ligand="ZZQ")
+    with pytest.raises(prepare.PreparationError, match="has atoms PLACER does not parse"):
+        prepare.validate_structure(params, prepare.validate_params(params), prepare.read_structure(structure),
+                                   structure)
+
+
+def test_pdb_ligand_atoms_must_match_the_residue_library(tmp_path):
+    structure = _write(tmp_path, "hem.pdb", "\n".join([
+        _line("ATOM", 1, "CA", "ALA", "A", 1),
+        _line("HETATM", 2, "ZZZ", "HEM", "B", 1, x=5.0),
+        "END",
+    ]))
+    params = _params(predict_ligand="HEM")
+    with pytest.raises(prepare.PreparationError, match="has atoms PLACER does not parse"):
+        prepare.validate_structure(params, prepare.validate_params(params), prepare.read_structure(structure),
+                                   structure)
+
+
+def test_pdb_ligand_name_outside_the_library_is_parsed_by_openbabel(tmp_path):
+    # The documented smoke ligand is lowercase "lig", which is not a CCD entry.
+    structure = _write(tmp_path, "lower.pdb", _complex_with_ligands([("B", "lig", 1)]))
+    params = _params(predict_ligand="lig")
+    prepare.validate_structure(params, prepare.validate_params(params), prepare.read_structure(structure), structure)
+
+
+def test_pdb_target_res_must_be_in_the_residue_library(tmp_path):
+    # AAJ is a three-letter name that is absent from the shipped CCD.
+    structure = _write(tmp_path, "aaj.pdb", "\n".join([
+        _line("ATOM", 1, "CA", "AAJ", "A", 1),
+        _line("HETATM", 2, "C1", "LIG", "B", 1, x=5.0),
+        "END",
+    ]))
+    params = _params(target_res="A-1")
+    with pytest.raises(prepare.PreparationError, match="target_res residue 'AAJ' is not in PLACER's shipped"):
+        prepare.validate_structure(params, prepare.validate_params(params), prepare.read_structure(structure),
+                                   structure)
+
+
+def test_excluded_common_ligands_reject_a_polymer_name(tmp_path):
+    structure = _write(tmp_path, "unk.pdb", "\n".join([
+        _line("ATOM", 1, "CA", "UNK", "A", 1),
+        _line("HETATM", 2, "C1", "LIG", "B", 1, x=5.0),
+        "END",
+    ]))
+    records = prepare.read_structure(structure)
+    params = _params(exclude_common_ligands=True)
+    with pytest.raises(prepare.PreparationError, match="removes 'UNK' from PLACER's residue library"):
+        prepare.validate_structure(params, prepare.validate_params(params), records, structure)
+    # Without the flag PLACER still resolves UNK from its library.
+    params = _params()
+    prepare.validate_structure(params, prepare.validate_params(params), records, structure)
 

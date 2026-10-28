@@ -208,7 +208,8 @@ def _pdb_residues(text: str) -> list[Residue]:
             continue
         if line[:6] not in {"ATOM  ", "HETATM"} or len(line) < 27:
             continue
-        # Keep the raw column: upstream keys a blank chain as " ", not "".
+        # Keep the raw column: upstream keys a blank protein chain as " ", while
+        # ligand chains are stripped.
         chain = line[21:22]
         if line[:6] == "ATOM  " and chain != current_chain:
             # Upstream groups contiguous ATOM runs by chain, so a repeated
@@ -406,28 +407,49 @@ def validate_structure(params: dict[str, Any], parsed: ParsedParams, residues: l
     cif_input = suffix in {".cif", ".mmcif"}
     skip_common = bool(params.get("exclude_common_ligands"))
     skipped = {"HOH", *_COMMON_LIGANDS} if skip_common else {"HOH"}
-    # Upstream drops skipped ligands before parsing. For mmCIF the skip list
-    # also removes those names from the residue library, so polymer names go too.
-    relevant = [
-        residue
-        for residue in residues
-        if residue.name not in skipped or (residue.record == "ATOM" and not cif_input)
-    ]
-    # PLACER parses only residues and atoms present in its shipped library; check
-    # mmCIF ligands and every selector against that library before dispatch.
-    needs_ccd = cif_input or bool(
-        parsed.mutate or parsed.crop_centers or parsed.corruption_centers or parsed.bonds
+    if skip_common:
+        excluded_polymer = sorted(
+            {residue.name for residue in residues if residue.record == "ATOM" and residue.name in skipped}
+        )
+        if excluded_polymer:
+            raise PreparationError(
+                "exclude_common_ligands removes "
+                + ", ".join(repr(name) for name in excluded_polymer)
+                + " from PLACER's residue library, so protein residues with that name cannot be parsed. "
+                "Rename or remove them first."
+            )
+    # Upstream drops skipped ligands before parsing, so they are not part of
+    # any count, selector, or validation below.
+    relevant = [residue for residue in residues if residue.name not in skipped]
+    ligands = _ligands(residues, skip_common)
+    # PLACER resolves residues through its shipped library; check mmCIF ligands,
+    # PDB ligands that name a library entry, targets and every selector against it.
+    needs_ccd = cif_input or bool(ligands) or bool(
+        parsed.mutate or parsed.crop_centers or parsed.corruption_centers or parsed.bonds or parsed.target_res
     )
     ccd = _ccd_library() if needs_ccd else {}
     if cif_input:
-        unknown = sorted(
-            {residue.name for residue in relevant if residue.record == "HETATM" and residue.name not in ccd}
-        )
+        unknown = sorted({name for _chain, _number, name in ligands if name not in ccd})
         if unknown:
             raise PreparationError(
                 "Ligand name3 "
                 + ", ".join(repr(name) for name in unknown)
                 + " is not in PLACER's shipped residue library; PLACER would drop it."
+            )
+    ligand_atoms: dict[tuple[str, int, str], set[str]] = {}
+    for residue in residues:
+        if residue.record == "HETATM" and residue.number is not None and residue.name not in skipped:
+            ligand_atoms.setdefault((residue.chain, residue.number, residue.name), set()).add(residue.atom)
+    for ligand in ligands:
+        template = ccd.get(ligand[2])
+        if template is None:
+            # A PDB ligand name outside the library is parsed by OpenBabel.
+            continue
+        extra = sorted(atom for atom in ligand_atoms.get(ligand, ()) if atom not in template)
+        if extra:
+            raise PreparationError(
+                f"Ligand {ligand[0]}-{ligand[1]}-{ligand[2]} has atoms PLACER does not parse for residue "
+                f"name3 {ligand[2]!r}: " + ", ".join(repr(atom) for atom in extra) + "."
             )
     # The mmCIF parser resolves alternates by highest occupancy and never reads
     # insertion codes, so these PDB-parser restrictions apply to PDB only.
@@ -463,7 +485,6 @@ def validate_structure(params: dict[str, Any], parsed: ParsedParams, residues: l
                 "PLACER would merge them."
             )
 
-    ligands = _ligands(residues, skip_common)
     ligand_chains = {ligand[0] for ligand in ligands}
     protein_chains = {residue.chain for residue in relevant if residue.record == "ATOM"}
     shared_chains = sorted(ligand_chains & protein_chains)
@@ -490,12 +511,11 @@ def validate_structure(params: dict[str, Any], parsed: ParsedParams, residues: l
         ]
         if not matches:
             raise PreparationError(f"target_res {parsed.target_res!r} matches no protein residue in the input.")
-        if cif_input:
-            unknown = sorted({residue.name for residue in matches if residue.name not in ccd})
-            if unknown:
-                raise PreparationError(
-                    f"target_res residue {unknown[0]!r} is not in PLACER's shipped residue library."
-                )
+        unknown = sorted({residue.name for residue in matches if residue.name not in ccd})
+        if unknown:
+            raise PreparationError(
+                f"target_res residue {unknown[0]!r} is not in PLACER's shipped residue library."
+            )
     elif not ligands:
         raise PreparationError("target_res is required when the input structure has no ligand.")
     if not ligands and (parsed.crop_centers or parsed.corruption_centers):

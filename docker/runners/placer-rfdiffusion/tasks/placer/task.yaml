@@ -244,16 +244,18 @@ parameters:
     crop_centers:
       type: string
       description: Crop centers as space-separated chain-resno-name3-atom, for
-        example B-200-HEM-FE. One is chosen at random and also serves as the
-        corruption center, relocating each predicted ligand there; this does not
-        select which ligands are predicted. Cannot be combined with
+        example B-200-HEM-FE. One is chosen at random; it recenters the crop
+        sphere and leaves every predicted ligand to be corrupted from its input
+        coordinates. It neither selects nor relocates ligands; use
+        corruption_centers to relocate them. Cannot be combined with
         corruption_centers.
       default: ''
-      pattern: '^(?:[A-Za-z0-9]*-[0-9]+-[A-Za-z0-9]+-[A-Za-z0-9'']+(?:\s+[A-Za-z0-9]*-[0-9]+-[A-Za-z0-9]+-[A-Za-z0-9'']+)*)?$'
+      pattern: '^(?:[A-Za-z0-9]+-[0-9]+-[A-Za-z0-9]+-[A-Za-z0-9'']+(?:\s+[A-Za-z0-9]+-[0-9]+-[A-Za-z0-9]+-[A-Za-z0-9'']+)*)?$'
     corruption_centers:
       type: string
       description: Atoms toward which PLACER corrupts each predicted ligand, with
-        the same syntax as crop centers. One is chosen at random and at least one
-        per predicted ligand is required. Cannot be combined with crop_centers.
+        the same syntax as crop centers. One is chosen at random per ligand and
+        becomes that ligand's starting coordinate; at least one per predicted
+        ligand is required. Cannot be combined with crop_centers.
       default: ''
-      pattern: '^(?:[A-Za-z0-9]*-[0-9]+-[A-Za-z0-9]+-[A-Za-z0-9'']+(?:\s+[A-Za-z0-9]*-[0-9]+-[A-Za-z0-9]+-[A-Za-z0-9'']+)*)?$'
+      pattern: '^(?:[A-Za-z0-9]+-[0-9]+-[A-Za-z0-9]+-[A-Za-z0-9'']+(?:\s+[A-Za-z0-9]+-[0-9]+-[A-Za-z0-9]+-[A-Za-z0-9'']+)*)?$'
