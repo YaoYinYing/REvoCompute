@@ -7,9 +7,11 @@ The pinned PLACER CLI takes a directory of PDB files (``--idir``), which batches
 every PDB in it and cannot read mmCIF. This Task submits exactly one complex, so
 the adapter passes that file through ``--ifile`` instead.
 
-PLACER's own parse drops insertion codes and alternate locations, and its ligand
-specification is a string. Both are checked here before the model is loaded, and
-the manifest parameters become an argument vector, never shell text.
+PLACER's PDB parse drops insertion codes and alternate locations, its mmCIF
+parse resolves alternates by occupancy and keys chains/numbers by the label and
+author columns, and its ligand specification is a string. All are checked here
+before the model is loaded, and the manifest parameters become an argument
+vector, never shell text.
 """
 
 from __future__ import annotations
@@ -148,7 +150,7 @@ def validate_params(params: dict[str, Any]) -> ParsedParams:
         raise PreparationError("predict_ligand and fixed_ligand cannot both be set.")
     if parsed.crop_centers and parsed.corruption_centers:
         raise PreparationError("crop_centers and corruption_centers cannot both be set.")
-    if params.get("use_sm", True) is False and (parsed.predict_ligand or parsed.fixed_ligand):
+    if params.get("use_sm") is False and (parsed.predict_ligand or parsed.fixed_ligand):
         raise PreparationError(
             "use_sm: false removes the small molecule from the model, so it cannot be combined with "
             "predict_ligand or fixed_ligand."
@@ -167,7 +169,7 @@ def validate_params(params: dict[str, Any]) -> ParsedParams:
     rerank = str(params.get("rerank") or "")
     if rerank not in {"", "prmsd", "plddt", "plddt_pde"}:
         raise PreparationError(f"Invalid rerank metric {rerank!r}.")
-    samples = params.get("num_samples", 50)
+    samples = params.get("num_samples")
     if not isinstance(samples, int) or isinstance(samples, bool) or samples < 1:
         raise PreparationError("num_samples must be a positive integer.")
     noise = params.get("fixed_ligand_noise")
@@ -178,9 +180,27 @@ def validate_params(params: dict[str, Any]) -> ParsedParams:
 
 def _pdb_residues(text: str) -> list[Residue]:
     residues: list[Residue] = []
+    block_chains: set[str] = set()
+    current_chain: str | None = None
     for line in text.splitlines():
+        if line.startswith("MODEL"):
+            raise PreparationError(
+                "Multi-MODEL PDB input is not supported; PLACER keeps only the last model. "
+                "Submit a single model."
+            )
         if line[:6] not in {"ATOM  ", "HETATM"} or len(line) < 27:
             continue
+        chain = line[21:22].strip()
+        if line[:6] == "ATOM  " and chain != current_chain:
+            # Upstream groups contiguous ATOM runs by chain, so a repeated
+            # non-contiguous block silently overwrites the earlier one.
+            if chain in block_chains:
+                raise PreparationError(
+                    f"PDB chain {chain!r} appears in more than one block; PLACER would keep only the last block. "
+                    "Reorder the chains so each appears once."
+                )
+            block_chains.add(chain)
+            current_chain = chain
         try:
             number: int | None = int(line[22:26])
         except ValueError:
@@ -188,7 +208,7 @@ def _pdb_residues(text: str) -> list[Residue]:
         residues.append(
             Residue(
                 record=line[:6].strip(),
-                chain=line[21:22].strip(),
+                chain=chain,
                 number=number,
                 name=line[17:20].strip(),
                 atom=line[12:16].strip(),
@@ -257,35 +277,51 @@ def _cif_residues(text: str) -> list[Residue]:
         def column(*names: str) -> int | None:
             return next((positions[name] for name in names if name in positions), None)
 
+        def value(raw: str) -> str:
+            return "" if raw in {"?", "."} else raw
+
         group = column("_atom_site.group_PDB")
-        chain_column = column("_atom_site.auth_asym_id", "_atom_site.label_asym_id")
-        number_column = column("_atom_site.auth_seq_id", "_atom_site.label_seq_id")
+        chain_column = column("_atom_site.label_asym_id")
+        label_number = column("_atom_site.label_seq_id")
+        auth_number = column("_atom_site.auth_seq_id")
         name_column = column("_atom_site.auth_comp_id", "_atom_site.label_comp_id")
-        atom_column = column("_atom_site.auth_atom_id", "_atom_site.label_atom_id")
-        insertion_column = column("_atom_site.pdbx_PDB_ins_code")
-        altloc_column = column("_atom_site.label_alt_id", "_atom_site.auth_alt_id")
-        if chain_column is None or number_column is None or name_column is None or atom_column is None:
+        atom_column = column("_atom_site.label_atom_id", "_atom_site.auth_atom_id")
+        if (
+            chain_column is None
+            or label_number is None
+            or auth_number is None
+            or name_column is None
+            or atom_column is None
+        ):
             raise PreparationError("mmCIF atom-site records lack the columns PLACER needs.")
+        # Upstream keys chains by label_asym_id, polymer residues by
+        # label_seq_id, and non-polymer residues by auth_seq_id. Alternates are
+        # resolved by occupancy and insertion codes are not read.
+        polymer_chains = {
+            value(row[chain_column])
+            for row in rows
+            if len(row) == len(columns) and (group is None or row[group].upper() != "HETATM")
+        }
         for row in rows:
             if len(row) != len(columns):
                 continue
             group_value = row[group].upper() if group is not None else "ATOM"
-            raw_number = row[number_column]
+            chain = value(row[chain_column])
+            polymer = chain in polymer_chains
+            raw_number = row[label_number] if polymer else row[auth_number]
+            if raw_number in {"?", "."}:
+                continue
             try:
                 number: int | None = int(raw_number)
             except ValueError:
                 number = None
-            insertion = row[insertion_column] if insertion_column is not None else ""
-            altloc = row[altloc_column] if altloc_column is not None else ""
             residues.append(
                 Residue(
-                    record="HETATM" if group_value == "HETATM" else "ATOM",
-                    chain="" if row[chain_column] in {"?", "."} else row[chain_column],
+                    record="HETATM" if group_value == "HETATM" and not polymer else "ATOM",
+                    chain=chain,
                     number=number,
-                    name="" if row[name_column] in {"?", "."} else row[name_column],
-                    atom="" if row[atom_column] in {"?", "."} else row[atom_column],
-                    insertion="" if insertion in {"?", "."} else insertion,
-                    altloc="" if altloc in {"?", "."} else altloc,
+                    name=value(row[name_column]),
+                    atom=value(row[atom_column]),
                 )
             )
         index = cursor
@@ -337,18 +373,21 @@ def _matching_ligands(specs: list[str], ligands: list[tuple[str, int, str]]) -> 
 def validate_structure(params: dict[str, Any], parsed: ParsedParams, residues: list[Residue], path: str) -> None:
     """Cross-check the requested identifiers against the submitted structure."""
     relevant = [residue for residue in residues if residue.name != "HOH"]
-    insertion = sorted({residue.insertion for residue in relevant if residue.insertion})
-    if insertion:
-        raise PreparationError(
-            "PLACER does not preserve residue insertion codes; the input contains "
-            f"{', '.join(insertion)}. Remove or renumber those residues first."
-        )
-    altloc = sorted({residue.altloc for residue in relevant if residue.altloc})
-    if altloc:
-        raise PreparationError(
-            "PLACER does not resolve alternate locations; the input contains "
-            f"{', '.join(altloc)}. Keep one conformer per atom first."
-        )
+    # The mmCIF parser resolves alternates by highest occupancy and never reads
+    # insertion codes, so these PDB-parser restrictions apply to PDB only.
+    if Path(path).suffix.lower() == ".pdb":
+        insertion = sorted({residue.insertion for residue in relevant if residue.insertion})
+        if insertion:
+            raise PreparationError(
+                "PLACER does not preserve residue insertion codes; the input contains "
+                f"{', '.join(insertion)}. Remove or renumber those residues first."
+            )
+        altloc = sorted({residue.altloc for residue in relevant if residue.altloc})
+        if altloc:
+            raise PreparationError(
+                "PLACER does not resolve alternate locations; the input contains "
+                f"{', '.join(altloc)}. Keep one conformer per atom first."
+            )
     unnamed = sorted({residue.chain for residue in relevant if residue.number is None})
     if unnamed:
         raise PreparationError(
@@ -398,6 +437,12 @@ def validate_structure(params: dict[str, Any], parsed: ParsedParams, residues: l
             "crop_centers and corruption_centers require a ligand in the input structure; "
             "use target_res alone for a ligand-free structure."
         )
+    if not predicted and (target is None or parsed.crop_centers or parsed.corruption_centers):
+        # Same empty-center crash when fixed_ligand leaves no ligand to predict.
+        raise PreparationError(
+            "No ligand remains to predict: fixed_ligand covers every ligand. "
+            "Leave at least one ligand unfixed, or use target_res alone."
+        )
 
     for flag in _CENTER_FLAGS:
         for token in getattr(parsed, flag):
@@ -442,41 +487,15 @@ def validate_structure(params: dict[str, Any], parsed: ParsedParams, residues: l
         )
 
 
-def validate_custom_residues(path: str) -> None:
-    """Check the shape PLACER's ``add_custom_residues`` asserts."""
-    try:
-        definitions = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise PreparationError(f"Residue definitions are not readable JSON: {exc}") from None
-    if not isinstance(definitions, dict) or not definitions:
-        raise PreparationError("Residue definitions must be a non-empty JSON object.")
-    for name, entry in definitions.items():
-        if not isinstance(entry, dict) or set(entry) - {"sdf", "atom_id", "leaving", "pdbx_align"}:
-            raise PreparationError(f"Residue definition {name!r} has unknown or missing fields.")
-        if not isinstance(entry.get("sdf"), str) or not entry["sdf"].strip():
-            raise PreparationError(f"Residue definition {name!r} needs an SDF string.")
-        atom_id = entry.get("atom_id")
-        leaving = entry.get("leaving")
-        if not isinstance(atom_id, list) or not all(isinstance(atom, str) for atom in atom_id):
-            raise PreparationError(f"Residue definition {name!r} needs an atom_id string list.")
-        if not isinstance(leaving, list) or len(leaving) != len(atom_id) or not all(
-            isinstance(value, bool) for value in leaving
-        ):
-            raise PreparationError(f"Residue definition {name!r} needs one boolean leaving flag per atom.")
-        if not isinstance(entry.get("pdbx_align"), list):
-            raise PreparationError(f"Residue definition {name!r} needs a pdbx_align list.")
-
-
 def build_argv(
     params: dict[str, Any],
     parsed: ParsedParams,
     structure_path: str,
-    custom_residues_path: str | None,
     output_dir: str,
 ) -> list[str]:
     """Turn validated parameters into the pinned PLACER argument vector."""
-    argv = ["-f", structure_path, "-o", output_dir, "-n", str(int(params.get("num_samples", 50)))]
-    if params.get("use_sm", True) is False:
+    argv = ["-f", structure_path, "-o", output_dir, "-n", str(int(params["num_samples"]))]
+    if params.get("use_sm") is False:
         argv.append("--no-use_sm")
     if params.get("exclude_common_ligands"):
         argv.append("--exclude_common_ligands")
@@ -502,8 +521,6 @@ def build_argv(
     ):
         if values:
             argv.extend([f"--{flag}", *values])
-    if custom_residues_path:
-        argv.extend(["--residue_json", custom_residues_path])
     return argv
 
 
@@ -530,10 +547,8 @@ def _manifest_inputs(manifest: dict[str, Any], role: str) -> list[dict[str, Any]
     return files if isinstance(files, list) else []
 
 
-def _single_input(manifest: dict[str, Any], role: str, required: bool) -> str | None:
+def _single_input(manifest: dict[str, Any], role: str) -> str:
     files = _manifest_inputs(manifest, role)
-    if not files and not required:
-        return None
     if len(files) != 1 or not isinstance(files[0], dict) or not isinstance(files[0].get("path"), str):
         raise PreparationError(f"Input role {role!r} must contain exactly one file.")
     return files[0]["path"]
@@ -551,14 +566,11 @@ def main(argv: list[str] | None = None) -> int:
         params = manifest.get("params")
         if not isinstance(params, dict):
             raise PreparationError("Task manifest has no parameter object.")
-        structure = _single_input(manifest, "structures", required=True)
-        custom_residues = _single_input(manifest, "custom_residues", required=False)
+        structure = _single_input(manifest, "structures")
         parsed = validate_params(params)
         validate_structure(params, parsed, read_structure(structure), structure)
-        if custom_residues:
-            validate_custom_residues(custom_residues)
         placer_structure, temporary = normalize_structure_path(structure)
-        placer_argv = build_argv(params, parsed, placer_structure, custom_residues, args.output_dir)
+        placer_argv = build_argv(params, parsed, placer_structure, args.output_dir)
         if args.print_argv:
             print(json.dumps(placer_argv))
             return 0

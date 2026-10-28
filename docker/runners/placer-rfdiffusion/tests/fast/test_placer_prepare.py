@@ -68,12 +68,41 @@ def _cif_complex() -> str:
             "_atom_site.label_comp_id",
             "_atom_site.label_asym_id",
             "_atom_site.label_seq_id",
+            "_atom_site.auth_seq_id",
             "_atom_site.pdbx_PDB_ins_code",
-            "ATOM 1 N ALA A 1 ?",
-            "HETATM 2 C1 LIG B 1 ?",
+            "ATOM 1 N ALA A 1 1 ?",
+            # Non-polymer residues are numbered by auth_seq_id upstream.
+            "HETATM 2 C1 LIG B . 1 ?",
             "#",
         ]
     )
+
+
+def _cif_label_auth() -> str:
+    return "\n".join(
+        [
+            "data_test",
+            "loop_",
+            "_atom_site.group_PDB",
+            "_atom_site.id",
+            "_atom_site.label_atom_id",
+            "_atom_site.label_comp_id",
+            "_atom_site.label_asym_id",
+            "_atom_site.auth_asym_id",
+            "_atom_site.label_seq_id",
+            "_atom_site.auth_seq_id",
+            "_atom_site.label_alt_id",
+            "_atom_site.pdbx_PDB_ins_code",
+            # Upstream keys the polymer by label A/1, not author X/42, resolves
+            # alternates by occupancy, and never reads insertion codes.
+            "ATOM 1 CA ALA A X 1 42 A B",
+            "HETATM 2 C1 LIG B Y . 7 . ?",
+            "#",
+        ]
+    )
+
+
+FIXTURES = Path(__file__).resolve().parent / "4dtz.cif"
 
 
 def _write(tmp_path: Path, name: str, content: str) -> str:
@@ -110,7 +139,7 @@ def test_build_argv_roundtrips_every_supported_option():
         exclude_common_ligands=True,
     )
     parsed = prepare.validate_params(params)
-    argv = prepare.build_argv(params, parsed, "/in/complex.pdb", "/in/residues.json", "/out")
+    argv = prepare.build_argv(params, parsed, "/in/complex.pdb", "/out")
     assert argv == [
         "-f", "/in/complex.pdb", "-o", "/out", "-n", "3",
         "--exclude_common_ligands",
@@ -119,7 +148,6 @@ def test_build_argv_roundtrips_every_supported_option():
         "--rerank", "prmsd",
         "--bonds", "A-1-ALA-CA:B-1-LIG-C1:1.8",
         "--crop_centers", "B-1-LIG-C1",
-        "--residue_json", "/in/residues.json",
     ]
 
 
@@ -128,7 +156,7 @@ def test_sidechain_mode_fixes_ligand_and_targets_residue(tmp_path):
     parsed = prepare.validate_params(params)
     structure = _write(tmp_path, "complex.pdb", _complex())
     prepare.validate_structure(params, parsed, prepare.read_structure(structure), structure)
-    argv = prepare.build_argv(params, parsed, structure, None, "/out")
+    argv = prepare.build_argv(params, parsed, structure, "/out")
     assert argv[argv.index("--fixed_ligand") + 1] == "LIG"
     assert argv[argv.index("--target_res") + 1] == "A-1"
     assert "--predict_ligand" not in argv
@@ -137,7 +165,7 @@ def test_sidechain_mode_fixes_ligand_and_targets_residue(tmp_path):
 def test_apo_run_emits_no_use_sm():
     params = _params(predict_ligand="", target_res="A-1", use_sm=False)
     parsed = prepare.validate_params(params)
-    argv = prepare.build_argv(params, parsed, "/in/complex.pdb", None, "/out")
+    argv = prepare.build_argv(params, parsed, "/in/complex.pdb", "/out")
     assert "--no-use_sm" in argv
     assert "--use_sm" not in argv
 
@@ -321,7 +349,7 @@ def test_manifest_print_argv_uses_the_named_input_roles(tmp_path, capsys):
     structure = _write(tmp_path, "complex.pdb", _complex())
     manifest = tmp_path / "task.json"
     manifest.write_text(
-        json.dumps({"params": _params(), "inputs": {"structures": [{"path": structure}], "custom_residues": []}}),
+        json.dumps({"params": _params(), "inputs": {"structures": [{"path": structure}]}}),
         encoding="utf-8",
     )
     assert prepare.main(["--manifest", str(manifest), "--output-dir", str(tmp_path / "out"), "--print-argv"]) == 0
@@ -331,11 +359,90 @@ def test_manifest_print_argv_uses_the_named_input_roles(tmp_path, capsys):
     ]
 
 
-def test_custom_residue_definitions_follow_the_upstream_shape(tmp_path):
-    valid = _write(tmp_path, "residues.json", json.dumps({
-        "75I": {"sdf": "mol", "atom_id": ["N", "CA"], "leaving": [True, False], "pdbx_align": [0, 0]},
-    }))
-    prepare.validate_custom_residues(valid)
-    invalid = _write(tmp_path, "invalid.json", json.dumps({"75I": {"sdf": "mol", "atom_id": ["N"]}}))
-    with pytest.raises(prepare.PreparationError, match="leaving flag"):
-        prepare.validate_custom_residues(invalid)
+def test_rcsb_cif_uses_label_chains_and_ligand_auth_numbers(tmp_path):
+    records = prepare.read_structure(str(FIXTURES))
+    # 4dtz is RCSB with polymer alternates and a ligand whose label chain (D)
+    # differs from its author chain (A).
+    assert ("D", 501, "LDP") in prepare._ligands(records)
+    params = _params(predict_ligand="D-LDP-501", target_res="A-10")
+    prepare.validate_structure(params, prepare.validate_params(params), records, str(FIXTURES))
+
+
+def test_cif_polymer_uses_label_numbering_not_author_numbering(tmp_path):
+    structure = _write(tmp_path, "label_auth.cif", _cif_label_auth())
+    records = prepare.read_structure(structure)
+    assert [(record.record, record.chain, record.number, record.name) for record in records] == [
+        ("ATOM", "A", 1, "ALA"),
+        ("HETATM", "B", 7, "LIG"),
+    ]
+    # Upstream raises KeyError for the author chain; the label chain works.
+    author = _params(predict_ligand="B-LIG-7", target_res="X-42")
+    with pytest.raises(prepare.PreparationError, match="matches no protein residue"):
+        prepare.validate_structure(author, prepare.validate_params(author), records, structure)
+    label = _params(predict_ligand="B-LIG-7", target_res="A-1")
+    prepare.validate_structure(label, prepare.validate_params(label), records, structure)
+
+
+def test_cif_alternate_locations_and_insertion_codes_are_not_rejected(tmp_path):
+    structure = _write(tmp_path, "label_auth.cif", _cif_label_auth())
+    records = prepare.read_structure(structure)
+    assert not any(record.altloc or record.insertion for record in records)
+    params = _params(predict_ligand="B-LIG-7", target_res="A-1")
+    prepare.validate_structure(params, prepare.validate_params(params), records, structure)
+
+
+def test_multi_model_pdb_is_rejected(tmp_path):
+    path = _write(tmp_path, "models.pdb", "\n".join([
+        "MODEL        1",
+        _line("ATOM", 1, "CA", "ALA", "A", 1),
+        "ENDMDL",
+        "MODEL        2",
+        _line("ATOM", 1, "CA", "ALA", "A", 1),
+        "ENDMDL",
+        "END",
+    ]))
+    with pytest.raises(prepare.PreparationError, match="Multi-MODEL"):
+        prepare.read_structure(path)
+
+
+def test_non_contiguous_pdb_chain_blocks_are_rejected(tmp_path):
+    path = _write(tmp_path, "blocks.pdb", "\n".join([
+        _line("ATOM", 1, "CA", "ALA", "A", 1),
+        _line("ATOM", 2, "CA", "GLY", "B", 2),
+        _line("ATOM", 3, "CA", "SER", "A", 3),
+        "END",
+    ]))
+    with pytest.raises(prepare.PreparationError, match="more than one block"):
+        prepare.read_structure(path)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"crop_centers": "B-1-LIG-C1"},
+        {"corruption_centers": "B-1-LIG-C1"},
+        {"predict_multi": True},
+    ],
+)
+def test_a_fixed_ligand_covering_every_ligand_leaves_nothing_to_predict(tmp_path, overrides):
+    structure = _write(tmp_path, "complex.pdb", _complex())
+    records = prepare.read_structure(structure)
+    params = _params(predict_ligand="", fixed_ligand="LIG", **overrides)
+    with pytest.raises(prepare.PreparationError, match="No ligand remains to predict"):
+        prepare.validate_structure(params, prepare.validate_params(params), records, structure)
+
+
+def test_fixed_every_ligand_still_runs_in_target_res_mode(tmp_path):
+    structure = _write(tmp_path, "complex.pdb", _complex())
+    params = _params(predict_ligand="", fixed_ligand="LIG", target_res="A-1")
+    prepare.validate_structure(params, prepare.validate_params(params), prepare.read_structure(structure), structure)
+
+
+def test_the_adapter_does_not_restate_the_num_samples_default():
+    # The server resolves the Task default into task.json; inventing 50 here
+    # would silently override the authoritative declaration.
+    params = _params()
+    del params["num_samples"]
+    with pytest.raises(prepare.PreparationError, match="num_samples"):
+        prepare.validate_params(params)
+

@@ -13,7 +13,7 @@ export default {
     const root = el('div', 'pl-result');
     const style = el('style'); style.textContent = STYLE; root.append(style);
     root.append(el('h2', '', 'Protein–ligand complex models'));
-    root.append(el('p', 'pl-note', 'Every sampled placement is one MODEL in the published complex file, and the row with the same model_idx scores that MODEL. fape, lddt, rmsd and kabsch are measured against the input coordinates (lower fape, rmsd and kabsch are better; higher lddt is better); rmsd and kabsch cover the atoms PLACER rebuilt and report zero when no ligand atoms are corrupted (apo or target_res side-chain mode). prmsd is PLACER\'s predicted coordinate uncertainty (lower is better); plddt and plddt_pde are its predicted confidence (higher is better). A single sample is a hypothesis, not a converged ensemble. The complex keeps the input\'s chain and residue numbering; a residue number absent from the complex was not placed in this sample, and this page never renumbers it.'));
+    root.append(el('p', 'pl-note', 'Every sampled placement is one MODEL in the published complex file, and the row with the same model_idx scores that MODEL. fape, lddt, rmsd and kabsch are measured against the input coordinates; rmsd and kabsch cover the atoms PLACER rebuilt and report zero when no ligand atoms are corrupted (apo or target_res side-chain mode). prmsd is PLACER\'s predicted coordinate uncertainty; plddt and plddt_pde are its predicted confidence. A single sample is a hypothesis, not a converged ensemble. The complex keeps the input\'s chain and residue numbering; a residue number absent from the complex was not placed in this sample, and this page never renumbers it.'));
     // The sampled complex is the run's own protein–ligand model. The declared
     // views list candidates and table rows and mount no viewer, so the complex
     // opens here, on the first screen.
@@ -36,7 +36,6 @@ export default {
     download('complexes', 'Download complex models (PDB)');
     download('model_scores', 'Download model scores (CSV)');
     download('input_structures', 'Download input structures');
-    download('input_custom_residues', 'Download residue definitions (JSON)');
     download('citations', 'Download citations (BibTeX)');
     const status = el('p', 'result-note', 'Loading the published complex…'); status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
     root.append(status, downloads); host.replaceChildren(root);

@@ -4,8 +4,7 @@
 # score the same samples by model_idx. The complex is the primary view's
 # candidate source; the metrics table is the evidence view's table. The task
 # takes one protein–ligand complex, so the input snapshot is declared as a
-# single-file provenance set; the optional residue definitions JSON is a second
-# provenance set.
+# single-file provenance set.
 result:
   files:
     complexes:
@@ -25,12 +24,6 @@ result:
       cardinality: one
       required: true
       type: structure
-      role: provenance
-    input_custom_residues:
-      pattern: 'debug/inputs/custom_residues/*'
-      cardinality: one
-      required: false
-      type: json
       role: provenance
     submission:
       path: debug/submission.json

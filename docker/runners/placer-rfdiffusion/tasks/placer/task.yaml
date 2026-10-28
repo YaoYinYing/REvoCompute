@@ -13,8 +13,7 @@ use_when: Use this to refine or sample ligand placement and conformation, and to
   that already contains those atoms. It is not a blind global docking search and
   does not predict binding affinity.
 input_summary: One PDB or mmCIF protein structure, either a protein–ligand complex
-  or an apo protein with a target residue, and when needed a JSON file of
-  non-canonical residue definitions.
+  or an apo protein with a target residue.
 output_summary: An ensemble of sampled structures and one CSV of per-sample
   geometry and confidence metrics.
 considerations:
@@ -27,17 +26,15 @@ considerations:
   corruption centers use chain-resno-name3-atom.
 - Crop and corruption centers need at least one ligand in the input; a
   ligand-free structure uses target_res alone.
-- PLACER does not preserve insertion codes or alternate locations, and does not
-  predict hydrogens; inputs containing insertion codes or alternate locations
-  are rejected.
+- PDB insertion codes and alternate locations are not preserved, and PDB inputs
+  containing them are rejected; mmCIF alternate locations are resolved by
+  highest occupancy and insertion codes are ignored. PLACER does not predict
+  hydrogens.
 - Ligand bond orders, hybridization and atom typing are inferred from the input
   structure; PLACER's optional ligand reference file is not exposed, so a
   ligand whose PDB chemistry is ambiguous may be rebuilt incorrectly.
 - mmCIF input must be RCSB-style; mmCIF written by other prediction methods may
   not parse.
-- fape, lddt, rmsd and kabsch are measured against the input reference; prmsd is
-  PLACER's predicted coordinate uncertainty. Lower fape, rmsd, kabsch and prmsd
-  are better; higher lddt, plddt and plddt_pde are better.
 runner_args:
 - placer
 gpus: true
@@ -49,13 +46,6 @@ inputs:
     formats: [pdb, cif, mmcif]
     description: The structure PLACER rebuilds. A ligand to sample must already be
       present; an apo structure needs a target residue.
-  custom_residues:
-    title: Non-canonical residue definitions
-    type: residue_definitions
-    cardinality: {min: 0, max: 1}
-    formats: [json]
-    description: PLACER residue JSON used by mutate or referenced by the
-      structure.
 input_workspace:
   steps:
   - id: material
@@ -65,8 +55,7 @@ input_workspace:
     - plugin: files
       id: source_files
       title: Structure workspace
-      description: Upload the PDB/mmCIF structure and, when needed, its residue
-        definitions JSON.
+      description: Upload the PDB/mmCIF structure.
     - plugin: structure
       id: structure_builder
       title: Structure and ligands
@@ -127,10 +116,10 @@ result_workspace:
     id: model_scores
     role: evidence
     title: Per-sample geometry and confidence
-    description: One row per sampled MODEL. fape, lddt, rmsd and kabsch are measured
-      against the input reference; prmsd is predicted coordinate uncertainty
-      (lower is better) and plddt/plddt_pde are predicted confidence (higher is
-      better).
+    description: One row per sampled MODEL. Lower fape, rmsd, kabsch and prmsd are
+      better; higher lddt, plddt and plddt_pde are better. fape, lddt, rmsd and
+      kabsch are measured against the input reference; prmsd is predicted
+      coordinate uncertainty and plddt/plddt_pde are predicted confidence.
     sources:
       table:
       - glob: '*.csv'
@@ -244,8 +233,8 @@ parameters:
     mutate:
       type: string
       description: Residue mutations as space-separated resno+chain:name3, for
-        example 128A:75I. A non-canonical target residue needs the residue
-        definitions JSON. PDB input only.
+        example 128A:75I. The target must be in PLACER's shipped residue
+        library; custom residue definitions are not exposed. PDB input only.
       default: ''
       pattern: '^(?:[0-9]+[A-Za-z0-9]*:[A-Za-z0-9]+(?:\s+[0-9]+[A-Za-z0-9]*:[A-Za-z0-9]+)*)?$'
     crop_centers:

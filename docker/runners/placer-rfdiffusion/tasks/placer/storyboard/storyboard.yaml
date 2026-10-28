@@ -5,5 +5,4 @@ requires:
   - model_scores
 optional:
   - input_structures
-  - input_custom_residues
   - citations

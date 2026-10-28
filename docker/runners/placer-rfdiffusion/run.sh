@@ -15,10 +15,9 @@ _run_placer() {
   [[ ! -f "$input_file" ]] && { echo "Input not found: $input_file"; exit 1; }
   mkdir -p "$output_dir"
 
-  # The manifest names the one complex and the optional residue JSON. The
-  # validator turns them into a safe argument vector before PLACER loads.
+  # The manifest names the one complex; the validator turns it and the resolved
+  # parameters into a safe argument vector before PLACER loads.
   local prepare="${PLACER_PREPARE:-$runtime_root/placer-rfdiffusion/placer_prepare.py}"
-  [[ -f "$prepare" ]] || prepare="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/placer_prepare.py"
 
   echo "REVODESIGN_STAGE:placer"
   python3 "$prepare" --manifest "$input_file" --output-dir "$output_dir"
