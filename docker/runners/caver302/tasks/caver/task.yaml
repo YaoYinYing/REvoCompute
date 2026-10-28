@@ -1,0 +1,330 @@
+id: caver
+display_name: CAVER tunnel analysis
+category: structure
+summary: Identify and characterize transport tunnels through a protein structure or snapshot series with CAVER 3.0.2.
+use_when: Use this to locate pathways from a chosen site inside a protein to the bulk solvent and to compare their geometry across a bounded set of structural snapshots.
+input_summary: One reference PDB structure that defines the start site, plus an optional ordered series of additional PDB snapshots that share its atom and residue mapping.
+output_summary: Tunnel clusters ranked by priority with bottleneck radius, length, curvature, throughput and cost per tunnel and snapshot; per-point tunnel profiles in Angstroms; bottleneck and tunnel-lining residues; and the exact config, log and provenance that produced them.
+considerations:
+- CAVER identifies tunnels as paths through the Voronoi diagram of the structure; a tunnel is a geometric pathway, not a docking pose, binding affinity, or free-energy estimate.
+- The analysis starts from one user-defined site. Choose a site inside the protein (an active-site residue, a bound ligand, or a manual point); a site in bulk solvent is unlikely to yield tunnels.
+- shell_radius should exceed the radius of the tunnels of interest, otherwise CAVER treats those pathways as bulk solvent. When the typed value is smaller than the largest bottleneck radius, CAVER raises the effective shell radius automatically. The suitable value differs substantially between systems, for example for wide transmembrane channels.
+- The reference structure is frame 1. Additional snapshots follow in the order they were uploaded and must share the reference atom/residue mapping, so frame indexes are stable.
+- Only PDB input is accepted. The Runner does not convert other formats.
+- Tunnel-lining and bottleneck residues are always computed, where upstream defaults them off, because this Task publishes them.
+gpus: false
+requires_network: false
+inputs:
+  structure:
+    title: Reference structure
+    type: protein_structure
+    cardinality: {min: 1, max: 1}
+    formats: [pdb, ent]
+    description: The deposited structure that defines atom serial numbers and the start-point selection.
+  snapshots:
+    title: Additional snapshots
+    type: protein_structure
+    cardinality: {min: 0, max: 50}
+    formats: [pdb, ent]
+    description: Optional ordered frames that share the reference atom and residue mapping; frame indexes start at 1 for the reference structure.
+input_workspace:
+  steps:
+  - id: material
+    title: Provide the structure
+    description: Upload the reference PDB and any additional snapshots of the same system.
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: Structures
+      description: One reference structure is required; additional snapshots are optional and keep their upload order.
+      options: {primary_role: structure}
+    - plugin: structure
+      id: structure_summary
+      title: Inspect the reference structure
+      options: {source: source_files, role: structure, select_chains: false, select_residues: false}
+  - id: settings
+    title: Choose the start point and tunnel controls
+    description: Select where tunnel exploration starts and set the CAVER parameters that define and cluster tunnels.
+    capabilities:
+    - plugin: parameters
+      id: task_parameters
+      title: CAVER settings
+  - id: review
+    title: Review and run
+    description: Confirm the structure, start point and tunnel controls before creating the task snapshot.
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: CAVER review
+      options: {show_paths: true}
+result_workspace:
+  views:
+  - plugin: entity-table
+    id: tunnels
+    role: primary
+    title: Tunnels per snapshot
+    description: Every reported tunnel with its cluster, throughput, cost, bottleneck radius, length and curvature.
+    sources:
+      table:
+      - {path: tunnels.csv, required: true}
+    mapping:
+      entity: candidate
+      key_columns: [snapshot, tunnel_cluster, tunnel]
+      label_column: tunnel
+      evidence_columns: [throughput, cost, bottleneck_radius_angstrom, length_angstrom, curvature]
+  - plugin: entity-table
+    id: clusters
+    role: evidence
+    title: Tunnel clusters
+    description: Cluster-level averages of bottleneck radius, length, curvature and throughput, with the upstream priority ranking.
+    sources:
+      table:
+      - {path: clusters.csv, required: true}
+    mapping:
+      entity: candidate
+      key_columns: [cluster]
+      label_column: cluster
+      evidence_columns: [tunnel_count, snapshot_count, mean_bottleneck_radius_angstrom, max_bottleneck_radius_angstrom, mean_length_angstrom, mean_curvature, priority, mean_throughput]
+  - plugin: entity-table
+    id: bottlenecks
+    role: evidence
+    title: Bottleneck residues
+    description: The narrowest point of each tunnel with its Angstrom coordinates, radius and contacting residues.
+    sources:
+      table:
+      - {path: bottlenecks.csv, required: true}
+    mapping:
+      entity: candidate
+      key_columns: [snapshot, tunnel_cluster, tunnel]
+      label_column: tunnel
+      evidence_columns: [bottleneck_radius_angstrom, bottleneck_x_angstrom, bottleneck_y_angstrom, bottleneck_z_angstrom, bottleneck_residues]
+  - plugin: scalar-summary
+    id: tunnel_summary
+    role: evidence
+    title: Analysis summary
+    description: Counts of clusters, tunnels and tunnel-lining residues together with the pinned upstream and input provenance.
+    sources:
+      data:
+      - {path: summary.json, required: true}
+    mapping:
+      fields:
+      - {path: cluster_count, label: Tunnel clusters, unit: clusters, direction: neutral}
+      - {path: tunnel_count, label: Reported tunnels, unit: tunnels, direction: neutral}
+      - {path: lining_residue_count, label: Tunnel-lining residues, unit: residues, direction: neutral}
+  - plugin: evidence-bundle
+    id: raw_caver_output
+    role: evidence
+    title: CAVER evidence
+    description: The generated CAVER config, the run log and warnings, per-point tunnel profiles, tunnel-lining residues and atoms, and the full provenance record.
+    sources:
+      items:
+      - {path: caver_config.txt, required: true}
+      - {path: log.txt, required: true}
+      - {path: warnings.txt, required: false}
+      - {path: profiles.csv, required: true}
+      - {path: residues.csv, required: true}
+      - {path: atoms.txt, required: true}
+      - {path: provenance.json, required: true}
+      - {path: caver.stdout.log, required: false}
+      - {path: caver.stderr.log, required: false}
+    mapping: {}
+stage_markers:
+  resolve_start_point: Resolve the typed start point against the reference structure
+  compute_tunnels: CAVER tunnel computation and clustering
+  normalize_results: Tunnel, cluster, bottleneck and profile normalization
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  required: [start_point_mode]
+  properties:
+    start_point_mode:
+      type: string
+      enum: [point, atom, residue, group, ligand]
+      description: How to derive the point inside the structure from which tunnels are explored.
+    start_x:
+      type: number
+      description: Manual start-point x coordinate in Angstrom (point mode).
+      x-unit: angstrom
+    start_y:
+      type: number
+      description: Manual start-point y coordinate in Angstrom (point mode).
+      x-unit: angstrom
+    start_z:
+      type: number
+      description: Manual start-point z coordinate in Angstrom (point mode).
+      x-unit: angstrom
+    start_chain:
+      type: string
+      pattern: '^[A-Za-z0-9]?$'
+      description: PDB chain identifier for atom, residue or ligand mode; leave empty for the blank chain.
+    start_residue_number:
+      type: integer
+      description: PDB residue sequence number for atom, residue or ligand mode.
+    start_insertion_code:
+      type: string
+      pattern: '^[A-Za-z0-9]?$'
+      description: PDB insertion code for atom, residue or ligand mode; leave empty when the residue has none.
+    start_atom_name:
+      type: string
+      pattern: "^[A-Za-z0-9'*+.-]{1,4}$"
+      description: PDB atom name such as CA or OD1 for atom mode.
+    start_altloc:
+      type: string
+      pattern: '^[A-Za-z0-9]?$'
+      description: Alternate-location identifier for atom mode; leave empty to accept the highest-occupancy match.
+    start_residue_name:
+      type: string
+      pattern: '^[A-Za-z0-9]{1,4}$'
+      description: HETATM residue name such as HEM or CPZ for ligand mode.
+    start_group:
+      type: string
+      pattern: '^[A-Za-z0-9_]+:[0-9]+(-[0-9]+)?(,[A-Za-z0-9_]+:[0-9]+(-[0-9]+)?)*$'
+      description: Comma-separated CHAIN:RESIDUE or CHAIN:START-END terms whose centroid is the start point for group mode; use _ for the blank chain.
+    probe_radius:
+      type: number
+      description: Minimum tunnel radius in Angstrom; edges the probe cannot traverse are discarded (upstream probe_radius).
+      default: 0.9
+      exclusiveMinimum: 0
+    shell_radius:
+      type: number
+      description: Shell-probe radius in Angstrom that defines the bulk-solvent region (upstream shell_radius).
+      default: 3
+      exclusiveMinimum: 0
+    shell_depth:
+      type: number
+      description: Maximum depth in Angstrom of the surface region where tunnel branching is suppressed (upstream shell_depth).
+      default: 4
+      exclusiveMinimum: 0
+    clustering:
+      type: string
+      enum: [average_link, matrix]
+      default: average_link
+      description: Upstream clustering step; average_link produces tunnel clusters, while matrix stops after the pairwise distance matrix and yields no tunnel analysis.
+    weighting_coefficient:
+      type: number
+      description: Relative importance of tunnel segments in the pairwise distance; 1 weights all segments equally (upstream weighting_coefficient).
+      default: 1
+      exclusiveMinimum: 0
+    clustering_threshold:
+      type: number
+      description: Tree-cut level in the average-link clustering; larger values merge tunnels into fewer, broader clusters (upstream clustering_threshold).
+      default: 3.5
+      minimum: 0
+    exclude_start_zone:
+      type: number
+      description: Distance in Angstrom from the average starting point whose tunnel segments are ignored when comparing tunnels (upstream exclude_start_zone).
+      default: 2
+      minimum: 0
+    exclude_end_zone:
+      type: number
+      description: Distance in Angstrom from the average tunnel end whose segments are ignored when comparing tunnels (upstream exclude_end_zone).
+      default: 0
+      minimum: 0
+    min_middle_zone:
+      type: number
+      description: Minimum separation in Angstrom between the start and end zones used for tunnel comparison (upstream min_middle_zone).
+      default: 5
+      minimum: 0
+    one_tunnel_in_snapshot:
+      type: string
+      enum: [cheapest, random, no]
+      default: cheapest
+      description: Which tunnel to report when a cluster contains several tunnels in one snapshot (upstream one_tunnel_in_snapshot).
+    max_output_clusters:
+      type: integer
+      description: Maximum number of top-ranked tunnel clusters reported (upstream max_output_clusters).
+      default: 999
+      minimum: 1
+    max_number_of_tunnels:
+      type: integer
+      description: Maximum number of identified tunnels per snapshot (upstream max_number_of_tunnels).
+      default: 10000
+      minimum: 1
+    max_limiting_radius:
+      type: number
+      description: Radius in Angstrom above which tunnel segments are optimized for length only (upstream max_limiting_radius).
+      default: 100
+      minimum: 0
+    cost_function_exponent:
+      type: number
+      description: Exponent of the tunnel cost function balancing width against length (upstream cost_function_exponent).
+      default: 2
+      minimum: 0
+    number_of_approximating_balls:
+      type: integer
+      enum: [4, 6, 8, 12, 20]
+      default: 12
+      description: Number of balls used to approximate each atom above the smallest atom radius (upstream number_of_approximating_balls).
+    automatic_shell_radius:
+      type: boolean
+      default: false
+      description: Derive shell_radius from the largest bottleneck radius instead of using the typed value (upstream automatic_shell_radius).
+    automatic_shell_radius_bottleneck_multiplier:
+      type: number
+      description: Multiplier applied to the largest bottleneck radius when shell_radius is automatic (upstream automatic_shell_radius_bottleneck_multiplier).
+      default: 2
+      exclusiveMinimum: 1
+    starting_point_protection_radius:
+      type: number
+      description: Radius in Angstrom around the start point excluded from the surface region (upstream starting_point_protection_radius).
+      default: 4
+      minimum: 0
+    max_distance:
+      type: number
+      description: Maximum distance in Angstrom between the typed start point and the selected Voronoi vertex (upstream max_distance).
+      default: 3
+      minimum: 0
+    desired_radius:
+      type: number
+      description: Preferred minimum distance in Angstrom between the starting vertex and the atoms (upstream desired_radius).
+      default: 5
+      minimum: 0
+    first_frame:
+      type: integer
+      description: First snapshot analyzed; the reference structure is frame 1 (upstream first_frame).
+      default: 1
+      minimum: 1
+    last_frame:
+      type: integer
+      description: Last snapshot analyzed; values beyond the available frames are ignored (upstream last_frame).
+      default: 100000
+      minimum: 1
+    time_sparsity:
+      type: integer
+      description: Analyze every n-th snapshot in the selected frame range (upstream time_sparsity).
+      default: 1
+      minimum: 1
+    seed:
+      type: integer
+      description: Seed for the pseudo-random generator used by tunnel selection (upstream seed).
+      default: 1
+      minimum: -2147483648
+      maximum: 2147483647
+    exclude_residue_ids:
+      type: string
+      default: ''
+      description: Space- or comma-separated residue identifiers to exclude from the whole calculation, such as A:24B or 5-15 (upstream exclude_residue_ids).
+    exclude_residue_names:
+      type: string
+      default: ''
+      description: Space- or comma-separated residue names to exclude from the whole calculation, such as HOH or SO4 (upstream exclude_residue_names).
+    exclude_atom_numbers:
+      type: string
+      default: ''
+      description: Space- or comma-separated atom serial numbers or ranges to exclude from the whole calculation (upstream exclude_atom_numbers).
+    residue_contact_distance:
+      type: number
+      description: Distance in Angstrom from a tunnel ball within which an atom counts as tunnel-lining (upstream residue_contact_distance).
+      default: 3.0
+      exclusiveMinimum: 0
+    bottleneck_contact_distance:
+      type: number
+      description: Distance in Angstrom from the bottleneck ball within which a residue counts as a bottleneck residue (upstream bottleneck_contact_distance).
+      default: 3.0
+      exclusiveMinimum: 0
+citations:
+- num: 1
+  doi: 10.1371/journal.pcbi.1002708
+  bibtex: >-
+    @article{Chovancova_2012, title={CAVER 3.0: A Tool for the Analysis of Transport Pathways in Dynamic Protein Structures}, volume={8}, ISSN={1553-7358}, url={http://dx.doi.org/10.1371/journal.pcbi.1002708}, DOI={10.1371/journal.pcbi.1002708}, number={10}, journal={PLoS Computational Biology}, publisher={Public Library of Science (PLoS)}, author={Chovancová, Eva and Pavelka, Antonín and Beneš, Petr and Strnad, Ondřej and Brezovský, Jan and Kozlíková, Barbora and Gora, Artur and Šuštar, Václav and Klvaňa, Martin and Medek, Petr and Biedermannová, Lada and Sochor, Jiří and Damborský, Jiří}, year={2012}, month=Oct, pages={e1002708} }

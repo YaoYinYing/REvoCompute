@@ -1,0 +1,4 @@
+# CPU-only family: no host mounts, no GPU, no network. The heap bound and the
+# internal timeout are environment values supplied by the SIF and overridable
+# only by the deployment, never by a Task submission.
+max_runtime_seconds: 3600

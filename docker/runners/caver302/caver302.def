@@ -1,0 +1,73 @@
+Bootstrap: docker
+From: eclipse-temurin:8-jre-jammy
+
+%post
+    set -e
+    apt-get -o Acquire::Retries=5 update
+    DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
+      aria2 ca-certificates curl unzip python3
+    rm -rf /var/lib/apt/lists/*
+
+    # Pinned upstream distribution. The maintainer-specified official URL is the
+    # only source; a different archive fails the digest check instead of being
+    # silently substituted. caver.cz throttles a single connection to roughly
+    # 10 kB/s, so the download uses bounded parallel ranges.
+    archive=/tmp/caver_3.0.2.zip
+    aria2c --file-allocation=none -x 8 -s 8 -k 1M --max-tries=20 --retry-wait=5 \
+      -d /tmp -o caver_3.0.2.zip \
+      https://www.caver.cz/fil/download/caver30/302/caver_3.0.2.zip
+    echo '2d819541c7e3d3b223de18ba9a5bf2fbfaf92cced380d29e86cd749f7070ee1e  /tmp/caver_3.0.2.zip' \
+      | sha256sum --strict --check
+
+    # Refuse zip-slip, absolute members, backslash spellings and symlinks before
+    # extracting anything. Only the caver_3.0/ tree is expected.
+    unzip -Z1 "$archive" > /tmp/members.txt
+    grep -Eq '^/|(^|/)\.\.(/|$)|\\' /tmp/members.txt && { echo 'unsafe archive member' >&2; exit 1; }
+    grep -Ev '^caver_3\.0/' /tmp/members.txt && { echo 'unexpected archive member' >&2; exit 1; }
+    if zipinfo -l "$archive" | awk '$1 ~ /^l/ { found = 1 } END { exit !found }'; then
+      echo 'archive contains a symlink member' >&2; exit 1
+    fi
+
+    unzip -q "$archive" -d /tmp/caver-extract
+    mkdir -p /opt/caver302
+    mv /tmp/caver-extract/caver_3.0/caver /opt/caver302/caver
+    mkdir -p /opt/caver302/user_guide
+    cp /tmp/caver-extract/caver_3.0/user_guide/config_default.txt /opt/caver302/user_guide/
+    rm -rf /tmp/caver-extract "$archive" /tmp/members.txt
+
+    test -s /opt/caver302/caver/caver.jar
+    test -s /opt/caver302/caver/lib/ml.jar
+    test -s /opt/caver302/caver/bin/atom_radii.csv
+    test -s /opt/caver302/caver/license/license.txt
+    chmod -R a-w /opt/caver302
+
+    # Reserved Runtime Bundle mount point. This image is the environment; the
+    # REvoCompute entrypoint and adapters arrive read-only at execution time.
+    mkdir -p /opt/revocompute/runtime
+    chmod 0555 /opt/revocompute/runtime
+
+%environment
+    export CAVER_HOME=/opt/caver302/caver
+    export CAVER_JAVA=java
+    export CAVER_JAVA_XMX=1200m
+    export PYTHONNOUSERSITE=1
+    export TMPDIR=/tmp
+    export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
+
+%test
+    set -e
+    java -version 2>&1 | grep -F '1.8'
+    python3 -c 'import sys; assert sys.version_info >= (3, 8)'
+    echo '6ed4d88fa1a364cc77934534a2917c6ec0089e5b413e235f4bad1a0b30c3609a  /opt/caver302/caver/caver.jar' | sha256sum --strict --check
+    echo '3354a2f18829b545c5826f218ccb405d8894ecd12efad9a32ae700994b299f9c  /opt/caver302/caver/lib/AverageLinkClustering.jar' | sha256sum --strict --check
+    echo 'f00e4198b1dc4d833cb9f74cfe07929f645d45c9b28562991500d4ab888887f4  /opt/caver302/caver/lib/kd.jar' | sha256sum --strict --check
+    echo '6fad2e04f271f46ed68fdac70997288ad36e03230daf18b435e64889d7111526  /opt/caver302/caver/lib/ml.jar' | sha256sum --strict --check
+    echo '73761a7dfbe66ff2583a2a26f92ef43d0766d1ab491fe9d2aea1aa36680bb7a5  /opt/caver302/caver/lib/vecmath.jar' | sha256sum --strict --check
+    echo '5986cc8f6f07002b3c0b0601c2940527f5d8defe17580e17092b2b1ef8bce8f0  /opt/caver302/caver/bin/atom_radii.csv' | sha256sum --strict --check
+    test -s /opt/caver302/caver/license/license.txt
+    test ! -w /opt/caver302/caver/caver.jar
+    test ! -e /opt/caver302/caver_3.0
+    test -d /opt/revocompute/runtime
+
+%runscript
+    exec /bin/bash /opt/revocompute/runtime/caver302/run.sh "$@"

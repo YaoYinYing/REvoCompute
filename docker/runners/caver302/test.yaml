@@ -1,0 +1,14 @@
+version: 1
+collections:
+  smoke:
+    cases:
+    - id: caver-1suo-heme-tunnels
+      task: caver
+      input:
+        roles:
+          structure: [tests/data/pdb/1SUO.pdb]
+      parameters:
+        start_point_mode: ligand
+        start_residue_name: HEM
+        start_chain: A
+        start_residue_number: 500

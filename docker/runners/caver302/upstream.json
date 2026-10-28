@@ -1,0 +1,55 @@
+{
+  "project": "CAVER 3.0",
+  "homepage": "http://www.caver.cz/",
+  "release": "3.0.2",
+  "distribution_url": "https://www.caver.cz/fil/download/caver30/302/caver_3.0.2.zip",
+  "distribution_sha256": "2d819541c7e3d3b223de18ba9a5bf2fbfaf92cced380d29e86cd749f7070ee1e",
+  "distribution_bytes": 33303568,
+  "retrieved_at": "2026-10-28T15:46:08Z..2026-10-28T15:51:47Z",
+  "distribution_root": "caver_3.0/",
+  "version_note": "The archive is published as 3.0.2. Its readme.txt still labels the build 'CAVER 3.01' and lists the 3.01 changes; the pinned bytes and hashes below are the 3.0.2 archive from the maintainer-specified URL.",
+  "jar_sha256": "6ed4d88fa1a364cc77934534a2917c6ec0089e5b413e235f4bad1a0b30c3609a",
+  "library_sha256": {
+    "AverageLinkClustering.jar": "3354a2f18829b545c5826f218ccb405d8894ecd12efad9a32ae700994b299f9c",
+    "kd.jar": "f00e4198b1dc4d833cb9f74cfe07929f645d45c9b28562991500d4ab888887f4",
+    "ml.jar": "6fad2e04f271f46ed68fdac70997288ad36e03230daf18b435e64889d7111526",
+    "vecmath.jar": "73761a7dfbe66ff2583a2a26f92ef43d0766d1ab491fe9d2aea1aa36680bb7a5"
+  },
+  "bin_atom_radii_sha256": "5986cc8f6f07002b3c0b0601c2940527f5d8defe17580e17092b2b1ef8bce8f0",
+  "code_license": "GPL-3.0",
+  "code_license_path": "caver/license/license.txt",
+  "copyright": "Copyright (C) 2012 Masaryk University",
+  "source_availability": "http://www.caver.cz/",
+  "citation_doi": "10.1371/journal.pcbi.1002708",
+  "third_party": [
+    {
+      "library": "lib/kd.jar",
+      "license": "LGPL-3.0",
+      "source": "http://home.wlu.edu/~levys/software/kd/",
+      "evidence": "caver/license/license.txt names LGPL-3.0 and the source URL; the jar itself ships the corresponding .java sources"
+    },
+    {
+      "library": "lib/ml.jar",
+      "license": "GPL-3.0",
+      "version": "Weka 3.6.5",
+      "source": "http://www.cs.waikato.ac.nz/ml/weka/",
+      "evidence": "caver/license/license.txt names GPL-3.0 and Weka 3.6.5; lib/ml.jar weka/core/version.txt reports 3-6-5 and weka/core/Copyright.props names The University of Waikato"
+    },
+    {
+      "library": "lib/vecmath.jar",
+      "license": "Java Research License (JRL) or Java Distribution License (JDL)",
+      "version": "1.5.1",
+      "source": "Sun Microsystems Java 3D 1.5 Specification (java3d.dev.java.net, historical)",
+      "evidence": "lib/vecmath.jar javax/LICENSE.txt, javax/LICENSE-JDL.txt, javax/LICENSE-JRL.txt",
+      "redistribution_review": "UNRESOLVED: a non-GPL Sun license that caver/license/license.txt does not mention. At least four caver.jar classes reference javax/vecmath, so the library is a real runtime dependency. Public redistribution of a SIF that contains it needs a legal decision; this Runner makes no GPL-compliance claim."
+    },
+    {
+      "library": "lib/AverageLinkClustering.jar",
+      "license": "not separately stated",
+      "evidence": "no license file inside the jar; its Ant-created manifest matches caver.jar, so it appears to be built from the CAVER project",
+      "redistribution_review": "Treated as part of CAVER under GPL-3.0, but no explicit third-party notice identifies it."
+    }
+  ],
+  "build": "The SIF downloads distribution_url, verifies distribution_sha256, refuses unsafe archive members, extracts it read-only to /opt/caver302, and verifies the jar/library digests above in %test.",
+  "runtime_network": false
+}

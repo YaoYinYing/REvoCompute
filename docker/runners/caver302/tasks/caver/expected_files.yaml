@@ -1,0 +1,68 @@
+result:
+  files:
+    tunnel_table:
+      path: tunnels.csv
+      cardinality: one
+      required: true
+      type: table
+      role: artifact
+    cluster_table:
+      path: clusters.csv
+      cardinality: one
+      required: true
+      type: table
+      role: artifact
+    bottleneck_table:
+      path: bottlenecks.csv
+      cardinality: one
+      required: true
+      type: table
+      role: artifact
+    profile_table:
+      path: profiles.csv
+      cardinality: one
+      required: true
+      type: table
+      role: evidence
+    lining_residues:
+      path: residues.csv
+      cardinality: one
+      required: true
+      type: table
+      role: evidence
+    lining_atoms:
+      path: atoms.txt
+      cardinality: one
+      required: true
+      type: text
+      role: evidence
+    run_summary:
+      path: summary.json
+      cardinality: one
+      required: true
+      type: json
+      role: evidence
+    run_provenance:
+      path: provenance.json
+      cardinality: one
+      required: true
+      type: json
+      role: provenance
+    generated_config:
+      path: caver_config.txt
+      cardinality: one
+      required: true
+      type: text
+      role: provenance
+    run_log:
+      path: log.txt
+      cardinality: one
+      required: true
+      type: text
+      role: diagnostic
+    run_warnings:
+      path: warnings.txt
+      cardinality: one
+      required: false
+      type: text
+      role: diagnostic
