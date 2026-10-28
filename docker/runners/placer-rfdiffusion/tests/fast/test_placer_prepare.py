@@ -129,6 +129,30 @@ def _cif_label_auth() -> str:
     )
 
 
+def _cif_namespaces(
+    *, polymer_label: str = "ALA", polymer_auth: str = "ALA",
+    ligand_label: str = "LIG", ligand_auth: str = "LIG",
+) -> str:
+    return "\n".join(
+        [
+            "data_test",
+            "loop_",
+            "_atom_site.group_PDB",
+            "_atom_site.id",
+            "_atom_site.type_symbol",
+            "_atom_site.label_atom_id",
+            "_atom_site.label_comp_id",
+            "_atom_site.auth_comp_id",
+            "_atom_site.label_asym_id",
+            "_atom_site.label_seq_id",
+            "_atom_site.auth_seq_id",
+            f"ATOM 1 C CA {polymer_label} {polymer_auth} A 1 1",
+            f"HETATM 2 C C1 {ligand_label} {ligand_auth} B . 1",
+            "#",
+        ]
+    )
+
+
 FIXTURES = Path(__file__).resolve().parent / "4dtz.cif"
 
 
@@ -166,6 +190,24 @@ def _params(**overrides):
     return values
 
 
+def _flag_values(argv: list[str]) -> dict[str, list[str]]:
+    """Map each flag to its values, so a test names semantics, not argv order."""
+    flags: dict[str, list[str]] = {}
+    index = 0
+    while index < len(argv):
+        token = argv[index]
+        if not token.startswith("-"):
+            index += 1
+            continue
+        values: list[str] = []
+        index += 1
+        while index < len(argv) and not argv[index].startswith("-"):
+            values.append(argv[index])
+            index += 1
+        flags[token] = values
+    return flags
+
+
 def test_build_argv_roundtrips_every_supported_option():
     params = _params(
         bonds="A-1-ALA-CA:B-1-LIG-C1:1.8",
@@ -175,15 +217,24 @@ def test_build_argv_roundtrips_every_supported_option():
     )
     parsed = prepare.validate_params(params)
     argv = prepare.build_argv(params, parsed, "/in/complex.pdb", "/out")
-    assert argv == [
-        "-f", "/in/complex.pdb", "-o", "/out", "-n", "3",
-        "--exclude_common_ligands",
-        "--predict_ligand", "LIG",
-        "--fixed_ligand_noise", "0.2",
-        "--rerank", "prmsd",
-        "--bonds", "A-1-ALA-CA:B-1-LIG-C1:1.8",
-        "--crop_centers", "B-1-LIG-C1",
-    ]
+    flags = _flag_values(argv)
+    assert flags["-f"] == ["/in/complex.pdb"]
+    assert flags["-o"] == ["/out"]
+    assert flags["-n"] == ["3"]
+    assert flags["--exclude_common_ligands"] == []
+    assert flags["--predict_ligand"] == ["LIG"]
+    assert flags["--fixed_ligand_noise"] == ["0.2"]
+    assert flags["--rerank"] == ["prmsd"]
+    assert flags["--bonds"] == ["A-1-ALA-CA:B-1-LIG-C1:1.8"]
+    assert flags["--crop_centers"] == ["B-1-LIG-C1"]
+    assert not (
+        {"--use_sm", "--predict_multi", "--fixed_ligand", "--target_res", "--mutate", "--corruption_centers"}
+        & flags.keys()
+    )
+    assert not (
+        {"--cautious", "--ignore_ligand_hydrogens", "--ligand_file", "--residue_json", "--idir", "--suffix"}
+        & flags.keys()
+    )
 
 
 def test_sidechain_mode_fixes_ligand_and_targets_residue(tmp_path):
@@ -388,10 +439,13 @@ def test_manifest_print_argv_uses_the_named_input_roles(tmp_path, capsys):
         encoding="utf-8",
     )
     assert prepare.main(["--manifest", str(manifest), "--output-dir", str(tmp_path / "out"), "--print-argv"]) == 0
-    assert json.loads(capsys.readouterr().out) == [
-        "-f", structure, "-o", str(tmp_path / "out"), "-n", "3",
-        "--predict_ligand", "LIG", "--rerank", "prmsd",
-    ]
+    flags = _flag_values(json.loads(capsys.readouterr().out))
+    assert flags["-f"] == [structure]
+    assert flags["-o"] == [str(tmp_path / "out")]
+    assert flags["-n"] == ["3"]
+    assert flags["--predict_ligand"] == ["LIG"]
+    assert flags["--rerank"] == ["prmsd"]
+    assert not ({"--fixed_ligand", "--target_res", "--use_sm", "--no-use_sm", "--bonds", "--mutate"} & flags.keys())
 
 
 def test_rcsb_cif_uses_label_chains_and_ligand_auth_numbers(tmp_path, monkeypatch):
@@ -418,6 +472,29 @@ def test_cif_polymer_uses_label_numbering_not_author_numbering(tmp_path):
         prepare.validate_structure(author, prepare.validate_params(author), records, structure)
     label = _params(predict_ligand="B-LIG-7", target_res="A-1")
     prepare.validate_structure(label, prepare.validate_params(label), records, structure)
+
+
+def test_cif_polymer_component_name_comes_from_label_comp_id(tmp_path):
+    # cifutils populates polymer residues from entity_poly_seq/label_comp_id;
+    # auth_comp_id is only the non-polymer identity.
+    wrong = _write(tmp_path, "label_xqz.cif", _cif_namespaces(polymer_label="XQZ", polymer_auth="ALA"))
+    with pytest.raises(prepare.PreparationError, match=r"Protein residue name\(s\) 'XQZ'"):
+        prepare.validate_structure(
+            _params(), prepare.validate_params(_params()), prepare.read_structure(wrong), wrong
+        )
+    right = _write(tmp_path, "label_ala.cif", _cif_namespaces(polymer_label="ALA", polymer_auth="XQZ"))
+    params = _params(predict_ligand="LIG")
+    prepare.validate_structure(params, prepare.validate_params(params), prepare.read_structure(right), right)
+
+
+def test_cif_non_polymer_component_names_must_agree(tmp_path):
+    # Upstream keys the ligand by auth_comp_id; a differing label_comp_id would
+    # select an atom set under one name and publish the residue under another.
+    structure = _write(
+        tmp_path, "ligand_namespace.cif", _cif_namespaces(ligand_label="LIG", ligand_auth="ZZQ")
+    )
+    with pytest.raises(prepare.PreparationError, match="Non-polymer residue B-1"):
+        prepare.read_structure(structure)
 
 
 def test_cif_alternate_locations_and_insertion_codes_are_not_rejected(tmp_path):
@@ -579,20 +656,34 @@ def test_mutation_target_must_be_in_the_residue_library(tmp_path):
     prepare.validate_structure(good, prepare.validate_params(good), records, structure)
 
 
-def test_selector_atoms_must_be_in_the_parsed_residue_template(tmp_path):
-    structure = _write(tmp_path, "amber.pdb", "\n".join([
+def test_pdb_element_falls_back_to_the_atom_name_when_the_column_is_blank(tmp_path):
+    # An old PDB may stop before the element columns; the first letter of the
+    # atom name still identifies the unmatched hydrogen as H, not a heavy atom.
+    hydrogen = _line("ATOM", 2, "H9", "ALA", "A", 1, x=2.0)[:76]
+    structure = _write(tmp_path, "old.pdb", "\n".join([
         _line("ATOM", 1, "CA", "ALA", "A", 1),
-        _line("ATOM", 2, "OT1", "ALA", "A", 1, x=2.0),
+        hydrogen,
         _line("HETATM", 3, "C1", "LIG", "B", 1, x=5.0),
         "END",
     ]))
-    records = prepare.read_structure(structure)
-    center = _params(crop_centers="A-1-ALA-OT1")
-    with pytest.raises(prepare.PreparationError, match="not an atom PLACER parses"):
-        prepare.validate_structure(center, prepare.validate_params(center), records, structure)
-    bond = _params(bonds="A-1-ALA-OT1:B-1-LIG-C1:1.8")
-    with pytest.raises(prepare.PreparationError, match="not an atom PLACER parses"):
-        prepare.validate_structure(bond, prepare.validate_params(bond), records, structure)
+    params = _params(predict_ligand="LIG")
+    prepare.validate_structure(params, prepare.validate_params(params), prepare.read_structure(structure), structure)
+
+
+@pytest.mark.parametrize("atom", ["OT1", "OT2"])
+def test_pdb_polymer_heavy_atoms_must_match_the_residue_library(tmp_path, atom):
+    # pdbparser fills each ATOM residue from its CCD template, so an Amber
+    # terminal oxygen outside that template is silently dropped upstream.
+    structure = _write(tmp_path, "amber.pdb", "\n".join([
+        _line("ATOM", 1, "CA", "ALA", "A", 1),
+        _line("ATOM", 2, atom, "ALA", "A", 1, x=2.0),
+        _line("HETATM", 3, "C1", "LIG", "B", 1, x=5.0),
+        "END",
+    ]))
+    params = _params(predict_ligand="LIG")
+    with pytest.raises(prepare.PreparationError, match=f"Residue A-1-ALA has heavy atoms .*'{atom}'"):
+        prepare.validate_structure(params, prepare.validate_params(params), prepare.read_structure(structure),
+                                   structure)
 
 
 def test_blank_pdb_chain_is_keyed_as_space_and_cannot_be_selected(tmp_path):

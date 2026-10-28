@@ -245,9 +245,9 @@ The builder should support:
 - the complete uploaded snapshot remaining available to the runtime through
   `TASK_INPUTS`, even when RFdiffusion consumes only the primary input directly.
 
-The same structure and region plugins should later serve PLACER and MPNN tasks.
-Task-specific behavior belongs in declarative composition or a narrowly scoped
-adapter, not copied page-level event handlers.
+The same structure and region plugins serve PLACER and MPNN tasks. Task-specific
+behavior belongs in declarative composition or a narrowly scoped adapter, not
+copied page-level event handlers.
 
 ## Result-workspace reference composition
 

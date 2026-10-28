@@ -226,15 +226,21 @@ def _pdb_residues(text: str) -> list[Residue]:
             number: int | None = int(line[22:26])
         except ValueError:
             number = None
+        atom = line[12:16].strip()
+        # Element is columns 77-78, or the first letter of the atom name in the
+        # older PDB files that leave it blank. The heavy-atom check only needs
+        # the H/D distinction, but reading the real column keeps that exact.
+        element = line[76:78].strip().upper() or next((char for char in atom if char.isalpha()), "").upper()
         residues.append(
             Residue(
                 record=line[:6].strip(),
                 chain=chain,
                 number=number,
                 name=line[17:20].strip(),
-                atom=line[12:16].strip(),
+                atom=atom,
                 insertion=line[26:27].strip(),
                 altloc=line[16:17].strip(),
+                element=element,
             )
         )
     return residues
@@ -305,7 +311,8 @@ def _cif_residues(text: str) -> list[Residue]:
         chain_column = column("_atom_site.label_asym_id")
         label_number = column("_atom_site.label_seq_id")
         auth_number = column("_atom_site.auth_seq_id")
-        name_column = column("_atom_site.auth_comp_id", "_atom_site.label_comp_id")
+        label_name = column("_atom_site.label_comp_id")
+        auth_name = column("_atom_site.auth_comp_id")
         atom_column = column("_atom_site.label_atom_id", "_atom_site.auth_atom_id")
         symbol_column = column("_atom_site.type_symbol")
         model_column = column("_atom_site.pdbx_PDB_model_num")
@@ -313,7 +320,7 @@ def _cif_residues(text: str) -> list[Residue]:
             chain_column is None
             or label_number is None
             or auth_number is None
-            or name_column is None
+            or label_name is None
             or atom_column is None
         ):
             raise PreparationError("mmCIF atom-site records lack the columns PLACER needs.")
@@ -332,9 +339,10 @@ def _cif_residues(text: str) -> list[Residue]:
                 raise PreparationError(
                     "Multi-model mmCIF input is not supported; PLACER keeps one model. Submit a single model."
                 )
-        # Upstream keys chains by label_asym_id, polymer residues by
-        # label_seq_id, and non-polymer residues by auth_seq_id. Alternates are
-        # resolved by occupancy and insertion codes are not read.
+        # Upstream keys chains by label_asym_id, polymer residues and their
+        # component names by label_seq_id/label_comp_id, and non-polymer
+        # residues by auth_seq_id/auth_comp_id. Alternates are resolved by
+        # occupancy and insertion codes are not read.
         polymer_chains = {
             value(row[chain_column])
             for row in rows
@@ -353,14 +361,26 @@ def _cif_residues(text: str) -> list[Residue]:
                 number: int | None = int(raw_number)
             except ValueError:
                 number = None
+            label_component = value(row[label_name])
+            auth_component = value(row[auth_name]) if auth_name is not None else label_component
+            if polymer:
+                name = label_component
+            else:
+                if label_component and auth_component and label_component != auth_component:
+                    raise PreparationError(
+                        f"Non-polymer residue {chain}-{raw_number} has auth_comp_id {auth_component!r} "
+                        f"and label_comp_id {label_component!r}; PLACER identifies non-polymer "
+                        "residues by auth_comp_id, so the two names must agree."
+                    )
+                name = auth_component or label_component
             residues.append(
                 Residue(
                     record="HETATM" if group_value == "HETATM" and not polymer else "ATOM",
                     chain=chain,
                     number=number,
-                    name=value(row[name_column]),
+                    name=name,
                     atom=value(row[atom_column]),
-                    element=value(row[symbol_column]).upper() if symbol_column is not None else "",
+                    element=value(row[symbol_column]).upper(),
                 )
             )
         index = cursor
@@ -454,25 +474,27 @@ def validate_structure(params: dict[str, Any], parsed: ParsedParams, residues: l
                 + ", ".join(repr(name) for name in unknown)
                 + " is not in PLACER's shipped residue library; PLACER would drop it."
             )
-        # cifutils masks a residue only for an unmatched heavy atom; unmatched
-        # H/D atoms are skipped. Mirror that for polymer and ligand residues.
-        residue_atoms: dict[tuple[str, str, int, str], set[tuple[str, str]]] = {}
-        for residue in residues:
-            if residue.record in {"ATOM", "HETATM"} and residue.number is not None and residue.name not in skipped:
-                residue_atoms.setdefault(
-                    (residue.record, residue.chain, residue.number, residue.name), set()
-                ).add((residue.atom, residue.element))
-        for (record, chain, number, name), atoms in residue_atoms.items():
-            template = ccd[name]
-            extra = sorted(
-                atom for atom, element in atoms if atom not in template and element not in {"H", "D"}
+    # CIF: cifutils masks a residue only for an unmatched heavy atom and skips
+    # unmatched H/D. PDB: pdbparser drops a polymer heavy atom outside the
+    # template the same silent way, while PDB ligands are parsed by OpenBabel
+    # and never consult the template.
+    residue_atoms: dict[tuple[str, str, int, str], set[tuple[str, str]]] = {}
+    for residue in residues:
+        if residue.record in {"ATOM", "HETATM"} and residue.number is not None and residue.name not in skipped:
+            residue_atoms.setdefault(
+                (residue.record, residue.chain, residue.number, residue.name), set()
+            ).add((residue.atom, residue.element))
+    for (record, chain, number, name), atoms in residue_atoms.items():
+        if not cif_input and record != "ATOM":
+            continue
+        template = ccd[name]
+        extra = sorted(atom for atom, element in atoms if atom not in template and element not in {"H", "D"})
+        if extra:
+            kind = "Ligand" if record == "HETATM" else "Residue"
+            raise PreparationError(
+                f"{kind} {chain}-{number}-{name} has heavy atoms PLACER does not parse for residue "
+                f"name3 {name!r}: " + ", ".join(repr(atom) for atom in extra) + "."
             )
-            if extra:
-                kind = "Ligand" if record == "HETATM" else "Residue"
-                raise PreparationError(
-                    f"{kind} {chain}-{number}-{name} has heavy atoms PLACER does not parse for residue "
-                    f"name3 {name!r}: " + ", ".join(repr(atom) for atom in extra) + "."
-                )
     # The mmCIF parser resolves alternates by highest occupancy and never reads
     # insertion codes, so these PDB-parser restrictions apply to PDB only.
     if not cif_input:
@@ -568,10 +590,6 @@ def validate_structure(params: dict[str, Any], parsed: ParsedParams, residues: l
         )
         if match is None:
             raise PreparationError(f"{label} atom {chain}-{number}-{name}-{atom!r} is absent from the input.")
-        if (cif_input or match.record == "ATOM") and atom not in ccd.get(name, frozenset()):
-            raise PreparationError(
-                f"{label} atom {chain}-{number}-{name}-{atom!r} is not an atom PLACER parses for residue {name!r}."
-            )
 
     for flag in _CENTER_FLAGS:
         for token in getattr(parsed, flag):

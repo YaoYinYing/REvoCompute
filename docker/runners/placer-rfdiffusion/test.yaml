@@ -10,3 +10,7 @@ collections:
       task: placer
       input: {roles: {structures: [tests/data/pdb/3fap_hf3_A_short_lig.pdb]}}
       parameters: {num_samples: 1, predict_ligand: lig, rerank: plddt_pde}
+    - id: multi-sample-placer
+      task: placer
+      input: {roles: {structures: [tests/data/pdb/3fap_hf3_A_short_lig.pdb]}}
+      parameters: {num_samples: 2, predict_ligand: lig, rerank: plddt_pde}

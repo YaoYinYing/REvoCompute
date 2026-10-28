@@ -109,6 +109,33 @@ def test_other_files_named_task_finished_stay_published(monkeypatch, tmp_path) -
     assert "nested/task_finished/notes.txt" in published
 
 
+def test_input_snapshot_basename_does_not_collide_with_a_result_selector(monkeypatch, tmp_path) -> None:
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id = _finished_task(module, tmp_path)
+    tree = {
+        "complexes": {
+            "pattern": "*_model.pdb",
+            "cardinality": "one",
+            "required": True,
+            "type": "structure",
+            "role": "evidence",
+        }
+    }
+    monkeypatch.setattr(module.task_runtime, "expected_file_tree", lambda *_args: tree)
+    monkeypatch.setattr(module.task_runtime, "storyboard_declaration", lambda *_args: None)
+    manifest = _finalize(
+        module,
+        task_id,
+        {
+            "3fap_model.pdb": "MODEL        1\nENDMDL\n",
+            "debug/inputs/structures/3fap_model.pdb": "ATOM      1  CA  ALA A   1\n",
+        },
+    )
+
+    assert manifest["output_check"]["state"] == "passed", manifest["output_check"]
+    assert [item["path"] for item in manifest["result"]["files"]["complexes"]] == ["3fap_model.pdb"]
+
+
 def test_declared_role_overrides_the_default_classification() -> None:
     import revocompute.task_runtime as task_runtime
 
