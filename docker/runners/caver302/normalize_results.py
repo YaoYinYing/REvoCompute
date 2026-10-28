@@ -210,6 +210,7 @@ def parse_profiles(path: Path) -> list[dict[str, object]]:
     if any(name not in header for name in key_names):
         raise OutputError("tunnel_profiles.csv lacks snapshot/tunnel key columns")
     key_index = {name: header.index(name) for name in key_names}
+    required_axes = ("X", "Y", "Z", "distance", "length", "R")
     grouped: dict[tuple[str, int, int], dict[str, list[float]]] = {}
     for row in rows:
         if not row or not any(row):
@@ -217,7 +218,15 @@ def parse_profiles(path: Path) -> list[dict[str, object]]:
         if len(row) <= axis_index:
             raise OutputError("tunnel_profiles.csv contains a truncated row")
         axis = row[axis_index]
-        values = [number(cell, f"Axis {axis}") for cell in row[axis_index + 1 :]]
+        raw_values = row[axis_index + 1 :]
+        try:
+            values = [number(cell, f"Axis {axis}") for cell in raw_values]
+        except OutputError:
+            # Optional error axes are written as "-" when compute_errors is
+            # off; only the geometric axes are required to be numeric.
+            if axis in required_axes:
+                raise
+            continue
         if not values:
             raise OutputError(f"tunnel_profiles.csv has no values for axis {axis!r}")
         key = (
@@ -226,8 +235,6 @@ def parse_profiles(path: Path) -> list[dict[str, object]]:
             int(row[key_index["Tunnel"]]),
         )
         grouped.setdefault(key, {})[axis] = values
-
-    required_axes = ("X", "Y", "Z", "distance", "length", "R")
     points = []
     for (snapshot, cluster, tunnel), axes in grouped.items():
         lengths = {len(values) for values in axes.values()}

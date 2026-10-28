@@ -162,6 +162,34 @@ def test_profile_axis_length_mismatch_is_an_error(tmp_path: Path) -> None:
         normalize(raw, output, {})
 
 
+def _blank_axis(raw: Path, axis: str) -> None:
+    """Rewrite one profile axis row the way CAVER does when it is not computed."""
+    path = raw / "analysis/tunnel_profiles.csv"
+    rows = list(csv.reader(path.read_text(encoding="utf-8").splitlines()))
+    axis_index = [cell.strip() for cell in rows[0]].index("Axis")
+    for row in rows[1:]:
+        if row[axis_index].strip() == axis:
+            for index in range(axis_index + 1, len(row)):
+                row[index] = "-"
+    path.write_text("\n".join(",".join(row) for row in rows) + "\n", encoding="utf-8")
+
+
+def test_uncomputed_error_axis_is_skipped(tmp_path: Path) -> None:
+    """compute_errors no writes '-' in the optional error axes; the geometric axes still parse."""
+    raw, output = prepare(tmp_path)
+    _blank_axis(raw, "Upper limit of R overestimation")
+    summary = normalize(raw, output, {})
+    assert summary["profile_point_count"] == 35
+    assert read_csv(output / "profiles.csv")[0]["radius_angstrom"] == "1.644"
+
+
+def test_uncomputed_required_axis_is_an_error(tmp_path: Path) -> None:
+    raw, output = prepare(tmp_path)
+    _blank_axis(raw, "R")
+    with pytest.raises(OutputError, match="not a number"):
+        normalize(raw, output, {})
+
+
 def test_tunnel_absent_from_characteristics_is_an_error(tmp_path: Path) -> None:
     raw, output = prepare(tmp_path)
     lines = (raw / "analysis/tunnel_profiles.csv").read_text(encoding="utf-8").splitlines()
