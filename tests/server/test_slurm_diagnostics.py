@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -143,18 +144,35 @@ def test_job_stderr_tail_keeps_the_begin_of_a_truncated_private_key(tmp_path):
         assert "useful diagnostic context" in excerpt
 
 
+def test_secret_assignment_redaction_is_linear_without_separators():
+    """A keyword-dense line with no separator cannot match and must be cheap.
+
+    The assignment expression requires ``=`` or ``:``; without one it cannot
+    match, but it still backtracks quadratically on a long keyword run. The
+    bound is loose because a linear pass takes milliseconds.
+    """
+    from revocompute.execution_diagnostics import safe_diagnostic_text
+
+    line = "passwordsecretTOKEN_" * 3300 + "\n"  # ~64 KiB, no '=' or ':'
+    started = time.monotonic()
+    assert safe_diagnostic_text(line) == line
+    assert time.monotonic() - started < 5
+    assert safe_diagnostic_text('TOKEN_API="private-token"\n') == "TOKEN_API=[redacted]\n"
+
+
 def test_cancelling_a_job_releases_its_stderr_claim(tmp_path):
     """A cancelled job must not keep reconciliation from retiring its stderr."""
-    from revocompute.job.runners.slurm_runner import ALLOCATION_STDERR_CLAIM_SUFFIX
+    from revocompute.job.runners.slurm_runner import ALLOCATION_STDERR_CLAIM_NAME
 
     job = _job(tmp_path)
     job._slurm_job_id = "4217"
     (tmp_path / "out").mkdir()
     os.makedirs(job.allocation_dir, exist_ok=True)
-    log = Path(job.allocation_dir, "allocation-4217.err")
-    log.write_text("srun: error: cancelled\n", encoding="utf-8")
+    Path(job.allocation_dir, "allocation-4217.err").write_text(
+        "srun: error: cancelled\n", encoding="utf-8"
+    )
     job._claim_job_stderr()
-    claim = Path(str(log) + ALLOCATION_STDERR_CLAIM_SUFFIX)
+    claim = Path(job.allocation_dir, ALLOCATION_STDERR_CLAIM_NAME)
     assert claim.exists()
 
     job.cancel()
@@ -200,14 +218,14 @@ def test_a_window_inside_an_unbroken_line_still_redacts_the_key(tmp_path, cut):
         assert "MIIEvQIBADANBgkqhkiG9w0BAQEFAASC" not in excerpt
 
 
-def test_the_adapter_claims_its_stderr_until_it_is_captured(tmp_path):
-    """The claim is live between job-id discovery and the snapshot.
+def test_the_adapter_claims_its_directory_until_the_handoff_ends(tmp_path):
+    """The claim is live from launch to the end of persistence.
 
     Reconciliation in another worker process reads this claim as the handoff
-    that says the scheduler log still has an owner.
+    that says the scheduler log's owner has not finished publishing it.
     """
     from revocompute.job.runners.slurm_runner import (
-        ALLOCATION_STDERR_CLAIM_SUFFIX,
+        ALLOCATION_STDERR_CLAIM_NAME,
         scheduler_log_is_claimed,
     )
 
@@ -218,19 +236,22 @@ def test_the_adapter_claims_its_stderr_until_it_is_captured(tmp_path):
     log.write_text("Traceback (most recent call last):\nRuntimeError: boom\n", encoding="utf-8")
 
     job._claim_job_stderr()
-    claim = Path(str(log) + ALLOCATION_STDERR_CLAIM_SUFFIX)
+    claim = Path(job.allocation_dir, ALLOCATION_STDERR_CLAIM_NAME)
     pid_text, start_text = claim.read_text(encoding="ascii").split()
     assert int(pid_text) == os.getpid()
     assert int(start_text) > 0
     assert scheduler_log_is_claimed(str(log)) is True
 
     job._capture_job_stderr()
-    assert not claim.exists()
-    assert scheduler_log_is_claimed(str(log)) is False
     assert job._job_stderr_snapshot == [
         "Traceback (most recent call last):\n",
         "RuntimeError: boom\n",
     ]
+    # The claim outlives the read: it ends when the terminal path releases it.
+    assert claim.exists()
+    job._release_job_stderr_claim()
+    assert not claim.exists()
+    assert scheduler_log_is_claimed(str(log)) is False
 
 
 @pytest.mark.parametrize("cut", [0, 10], ids=["at-the-begin-line", "inside-the-marker"])

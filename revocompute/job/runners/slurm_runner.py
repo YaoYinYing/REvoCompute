@@ -107,10 +107,16 @@ ALLOCATION_RECEIPT_NAME = "allocation.receipt"
 #: what supplies job identity before the wrapper runs.
 ALLOCATION_SCHEDULER_LOG_NAME = "allocation-%j.err"
 
-#: Beside each scheduler log, the live adapter that will read it writes its pid
-#: here. Reconciliation runs in another worker process and cannot see that
-#: adapter; this file is the durable handoff that keeps the stderr until the
-#: capture is done (or the owning process is gone).
+#: The live adapter that will read this Task's scheduler stderr writes its pid
+#: here, in the allocation directory, *before* launching srun. Reconciliation
+#: runs in another worker process and cannot see that adapter; this file is the
+#: durable handoff that keeps the stderr until the capture is done (or the
+#: owning process is gone). Naming it per directory rather than per job is what
+#: covers the window before the adapter has learned the job id.
+ALLOCATION_STDERR_CLAIM_NAME = "scheduler-stderr.capturing"
+
+#: Where the adapter used to write a claim beside one scheduler log. Only read
+#: now, so a claim left on disk by an older worker still owns its file.
 ALLOCATION_STDERR_CLAIM_SUFFIX = ".capturing"
 
 #: How far back a truncated stderr tail may look for an open PEM block. The
@@ -425,9 +431,13 @@ class SlurmJob(Job):
                 # only as a floor: the tighter wrapper-start stamp is preferred
                 # whenever the wrapper's own id line was read.
                 self._allocation_submitted_at = time.time()
+            # srun creates the per-job stderr file at allocation, after Popen, so
+            # the claim must be durable before the process exists at all.
+            self._claim_job_stderr()
             self._process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         except Exception:
             self._failure_reason = "submission_failed"
+            self._release_job_stderr_claim()
             emit_event(
                 "slurm.allocation.failed",
                 level="ERROR",
@@ -743,31 +753,40 @@ class SlurmJob(Job):
             self._ingest_runner_protocol()
             self._notify_allocation_finished()
             self._remove_allocation_approval()
+            # The snapshot above is this process's last read; only now may
+            # another worker's reconciliation retire the file.  It must go
+            # before the host-only directory is dropped.
+            self._release_job_stderr_claim()
             self._remove_wrapper_script()
             self._cleanup_scratch_dir()
 
     def cancel(self) -> None:
         proc = self._process
-        if proc is None or proc.poll() is not None:
-            self._capture_job_stderr()
-            self._persist_output()
-            self._cleanup_scratch_dir()
-            return
-        proc.terminate()
-        try:
-            proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
-        logging.info("srun process %s terminated for task %s", proc.pid, self.task_id)
+        running = proc is not None and proc.poll() is None
+        if running:
+            proc.terminate()
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+            logging.info("srun process %s terminated for task %s", proc.pid, self.task_id)
+        # The readers parse the job id, so drain them before the snapshot: a
+        # capture taken first could not even name the file it is about to lose
+        # when the claim is released below.
+        for thread in (self._stdout_thread, self._stderr_thread):
+            if thread is not None:
+                thread.join(timeout=5)
         self._capture_job_stderr()
         try:
-            if self._slurm_job_id:
+            if running and self._slurm_job_id:
                 self._emit_terminal("slurm.allocation.cancelled")
         finally:
             self._persist_output()
-            self._remove_allocation_approval()
+            if running:
+                self._remove_allocation_approval()
             self._cleanup_scratch_dir()
+            self._release_job_stderr_claim()
 
     # -- srun arguments ------------------------------------------------------
 
@@ -1597,7 +1616,6 @@ class SlurmJob(Job):
                     # scheduler query.
                         if self._slurm_job_id is None:
                             self._slurm_job_id = candidate
-                            self._claim_job_stderr()
                             self._job_id_event.set()
                         self._wrapper_started = True
                         if self._wrapper_started_at is None:
@@ -1657,7 +1675,6 @@ class SlurmJob(Job):
                 match = _SLURM_JOB_ID_RE.search(line)
                 if match and self._slurm_job_id is None:
                     self._slurm_job_id = match.group(1)
-                    self._claim_job_stderr()
                     self._job_id_event.set()
         finally:
             stream.close()
@@ -1801,36 +1818,35 @@ class SlurmJob(Job):
             logging.warning("Could not save SLURM output for %s: %s", self._job_id, exc)
 
     def _capture_job_stderr(self) -> None:
-        """Snapshot the scheduler's stderr, then hand the file over.
+        """Snapshot the scheduler's stderr if the job can be named yet.
 
-        The claim is released only after the snapshot: until then another
-        dispatch's reconciliation must leave the file alone.
+        This may run before the reader thread has parsed the job id — e.g. right
+        after ``srun`` exits while its pipe is still draining. Caching the empty
+        read would make the real snapshot unreachable, so the attempt is a no-op
+        until identity is known; the claim stays held until a later attempt or a
+        terminal path releases it.
         """
-        if self._job_stderr_snapshot is None:
-            self._job_stderr_snapshot = self._job_stderr_lines()
-        self._release_job_stderr_claim()
-
-    def _scheduler_log_path(self) -> str | None:
+        if self._job_stderr_snapshot is not None:
+            return
         job_id = self._slurm_job_id
         if not job_id or not job_id.isdigit():
-            return None
-        return os.path.join(self.allocation_dir, ALLOCATION_SCHEDULER_LOG_NAME.replace("%j", job_id))
+            return
+        self._job_stderr_snapshot = self._job_stderr_lines()
 
     def _claim_job_stderr(self) -> None:
-        """Mark that this process will read the job's scheduler stderr.
+        """Mark this Task's allocation directory as owned by a live adapter.
 
-        Written the moment the job id is known, before the job can end, so a
-        concurrent reconciliation sees a live owner instead of assuming the
-        file is orphaned. The pid is what makes the handoff durable: a claim
-        left behind by a dead process does not block recovery.
+        Written before ``srun`` is launched, so it exists before the scheduler
+        can create the per-job file — including the interval before this process
+        has learned the job id. The pid and its start stamp are what make the
+        handoff durable: a claim left by a dead or replaced process does not
+        block recovery.
         """
-        path = self._scheduler_log_path()
-        if path is None:
-            return
-        pid = os.getpid()
-        claim = path + ALLOCATION_STDERR_CLAIM_SUFFIX
+        claim = os.path.join(self.allocation_dir, ALLOCATION_STDERR_CLAIM_NAME)
         pending = f"{claim}.{uuid.uuid4().hex}"
+        pid = os.getpid()
         try:
+            os.makedirs(self.allocation_dir, mode=0o700, exist_ok=True)
             # Publish the claim whole: a half-written file would read as absent
             # and let a concurrent reconciliation retire the log.
             with open(pending, "w", encoding="ascii") as handle:
@@ -1844,11 +1860,8 @@ class SlurmJob(Job):
                 pass
 
     def _release_job_stderr_claim(self) -> None:
-        path = self._scheduler_log_path()
-        if path is None:
-            return
         try:
-            os.unlink(path + ALLOCATION_STDERR_CLAIM_SUFFIX)
+            os.unlink(os.path.join(self.allocation_dir, ALLOCATION_STDERR_CLAIM_NAME))
         except OSError:
             pass
 
@@ -2370,14 +2383,14 @@ def _process_start_ticks(pid: int) -> int | None:
         return None
 
 
-def scheduler_log_is_claimed(path: str) -> bool:
-    """Whether the adapter that claimed this scheduler log is still capturing.
+def _claim_is_live(path: str) -> bool:
+    """Whether the claim file at *path* names a process still capturing.
 
     The claim carries the capturing process's identity, so a claim left by a
     dead or replaced process does not block recovery; only a live owner does.
     """
     try:
-        with open(path + ALLOCATION_STDERR_CLAIM_SUFFIX, encoding="ascii") as handle:
+        with open(path, encoding="ascii") as handle:
             parts = handle.read().split()
     except OSError:
         return False
@@ -2391,18 +2404,59 @@ def scheduler_log_is_claimed(path: str) -> bool:
     return True
 
 
-def retire_scheduler_log(path: str) -> bool:
-    """Remove a scheduler log whose evidence is already durable, and its claim.
+def scheduler_log_is_claimed(path: str) -> bool:
+    """Whether the adapter that will read this scheduler log is still capturing.
 
-    Returns whether the log itself is gone; a claim that cannot be removed is
-    harmless, since only a file whose claim process is alive blocks recovery.
+    The directory claim is written before srun starts, so it also covers the
+    interval in which the file exists but the adapter has not learned the job
+    id. A per-log claim from an older worker is honored as well, so such a file
+    is never retired underneath the process that owns it.
     """
+    return _claim_is_live(
+        os.path.join(os.path.dirname(path), ALLOCATION_STDERR_CLAIM_NAME)
+    ) or _claim_is_live(path + ALLOCATION_STDERR_CLAIM_SUFFIX)
+
+
+def _retirement_path(path: str) -> str:
+    """A name outside the scanned namespace, so a moved file is never adopted."""
+    return os.path.join(
+        os.path.dirname(path), f".{os.path.basename(path)}.retiring.{uuid.uuid4().hex}"
+    )
+
+
+def retire_scheduler_log(path: str) -> bool:
+    """Remove a scheduler log whose evidence is already durable, and its legacy claim.
+
+    The caller's claim check and this unlink cannot be one operation, so the
+    file is first renamed out of the scanned namespace and the claim is checked
+    again. A claim that appeared in between means a live adapter still expects
+    the file: it is restored and reported as not retired. Returns whether the
+    log is gone; a claim that cannot be removed is harmless, since only a file
+    whose claim process is alive blocks recovery.
+    """
+    if scheduler_log_is_claimed(path):
+        return False
+    pending = _retirement_path(path)
     try:
-        os.unlink(path)
+        os.replace(path, pending)
     except FileNotFoundError:
         pass
     except OSError:
         return False
+    else:
+        if scheduler_log_is_claimed(path):
+            try:
+                os.replace(pending, path)
+            except OSError:
+                return False
+            return False
+        try:
+            os.unlink(pending)
+        except OSError:
+            return False
+    # The directory claim belongs to whichever adapter now owns the directory,
+    # not to this retired file: unlinking it here could strip a claim a new
+    # stage wrote in the same window. Only the legacy per-log claim is ours.
     try:
         os.unlink(path + ALLOCATION_STDERR_CLAIM_SUFFIX)
     except OSError:

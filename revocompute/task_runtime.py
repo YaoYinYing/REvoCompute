@@ -2876,10 +2876,12 @@ def _reconcile_host_scheduler_logs() -> dict[str, int]:
             result["surviving"] += 1
             continue
         # A terminal scheduler state is not proof the adapter has snapshotted
-        # this file: it may still be between ``srun`` exit and its capture.
-        # The adapter's claim is the durable handoff -- written when the job id
-        # is learned and removed after the snapshot -- and a claim whose process
-        # died does not block recovery, so cleanup still terminates.
+        # this file: it may still be between ``srun`` exit and its capture, or
+        # may not even have learned the job id yet. The adapter's directory
+        # claim is the durable handoff -- written before srun starts and removed
+        # after the snapshot -- and a claim whose process died does not block
+        # recovery, so cleanup still terminates. Retirement re-checks the claim
+        # itself, which closes the window between this check and its unlink.
         if scheduler_log_is_claimed(str(entry["scheduler_log_path"])):
             result["surviving"] += 1
             continue

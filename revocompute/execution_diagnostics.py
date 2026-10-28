@@ -63,7 +63,10 @@ def safe_diagnostic_text(value: Any, *, secret_values: tuple[str, ...] = ()) -> 
             text = text.replace(secret, "[redacted]")
     text = _PRIVATE_KEY.sub("[private key redacted]", text)
     text = _BEARER.sub(lambda m: m[1] + " [redacted]", text)
-    text = _SECRET_ASSIGNMENT.sub(lambda m: m[1] + "[redacted]", text)
+    if "=" in text or ":" in text:
+        # The assignment pattern needs one of these separators, so a line with
+        # neither cannot match; skipping keeps a keyword-dense line linear.
+        text = _SECRET_ASSIGNMENT.sub(lambda m: m[1] + "[redacted]", text)
     text = _URL.sub("[service URL redacted]", text)
     text = _HOST_PATH.sub("[path redacted]", text)
     text = _HOST_DETAIL.sub("[host detail redacted]", text)
