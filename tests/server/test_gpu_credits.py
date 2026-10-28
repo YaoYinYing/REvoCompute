@@ -2536,14 +2536,18 @@ def test_a_dispatch_adopts_surviving_evidence_before_asking_for_more(monkeypatch
     assert module.task_store.gpu_credit_summary(107, at=at + 100)["usage_gpu_seconds"] == 45
 
 
-def test_a_running_jobs_scheduler_log_is_retired_only_after_it_ends(monkeypatch, tmp_path):
-    """Reconciliation must not unlink the stderr of a job that is still writing.
+def test_a_scheduler_log_waits_for_the_live_adapters_claim(monkeypatch, tmp_path):
+    """Reconciliation must not unlink a stderr its adapter has not captured yet.
 
-    The pass runs on every dispatch, so retiring a file whose allocation row
-    already exists would erase a *live* job's own stderr -- the only place its
-    traceback exists -- while it runs. It becomes redundant only when the
-    scheduler reports the job terminal.
+    The pass runs on every dispatch, in another worker process that cannot see
+    the adapter. A terminal scheduler state is not proof the adapter is done:
+    it may be between ``srun`` exit and its snapshot, and the pre-receipt window
+    has no allocation row to recognize it by. The adapter's claim is the durable
+    handoff; a claim whose process is gone does not block recovery, so an
+    orphaned file is still cleaned up.
     """
+    from revocompute.job.runners.slurm_runner import ALLOCATION_STDERR_CLAIM_SUFFIX
+
     module = _load_pssm_module(
         monkeypatch,
         tmp_path,
@@ -2563,6 +2567,10 @@ def test_a_running_jobs_scheduler_log_is_retired_only_after_it_ends(monkeypatch,
     # A second live job with no row and no wrapper receipt: the window between
     # allocation and the wrapper's first write must not be adopted away either.
     log_without_row = _plant_scheduler_log(module, task, job_id="8827", observed_at=at + 2)
+    claim = Path(str(log) + ALLOCATION_STDERR_CLAIM_SUFFIX)
+    claim.write_text(str(os.getpid()), encoding="ascii")
+    claim_without_row = Path(str(log_without_row) + ALLOCATION_STDERR_CLAIM_SUFFIX)
+    claim_without_row.write_text(str(os.getpid()), encoding="ascii")
 
     monkeypatch.setattr(module.task_runtime.shutil, "which", lambda command: f"/usr/bin/{command}")
     monkeypatch.setattr(
@@ -2574,8 +2582,8 @@ def test_a_running_jobs_scheduler_log_is_retired_only_after_it_ends(monkeypatch,
     assert log.exists()
     assert log_without_row.exists()
 
-    # Terminal scheduler state alone is not enough: the Task row is still
-    # running, so its adapter may still be publishing this stderr.
+    # The scheduler reports the job terminal while its adapter is still between
+    # srun exit and the snapshot: the live claim keeps the file.
     monkeypatch.setattr(
         module.task_runtime.subprocess,
         "run",
@@ -2583,8 +2591,13 @@ def test_a_running_jobs_scheduler_log_is_retired_only_after_it_ends(monkeypatch,
     )
     module.task_runtime._recover_surviving_host_allocations()
     assert log.exists()
+    assert log_without_row.exists()
 
-    module.task_store.update_task(task_id, status="finished")
+    # The capture is done for the recorded job; the pre-receipt job's claim
+    # names a pid that was reused by another process. Cleanup still terminates
+    # without waiting for either Task row.
+    claim.unlink()
+    claim_without_row.write_text(f"{os.getpid()} 1", encoding="ascii")
     module.task_runtime._recover_surviving_host_allocations()
     assert not log.exists()
     assert not log_without_row.exists()

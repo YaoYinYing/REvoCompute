@@ -11,6 +11,8 @@ import os
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from revocompute.job.runners.slurm_runner import SlurmJob
 from revocompute.task_types import RunnerConfig, RuntimeFamily, TaskInputRole, TaskType
 
@@ -88,12 +90,12 @@ def test_srun_error_file_is_published_and_reported_as_the_job_stderr(tmp_path):
     assert "RuntimeError: Failed to find C compiler." in record["logs"]["stderr"]
 
 
-def test_job_stderr_tail_never_publishes_a_cut_credential_line(tmp_path):
-    """A window that starts inside a credential assignment drops that line.
+def test_a_window_opening_inside_a_credential_still_redacts_it(tmp_path):
+    """The bound must not cut a credential assignment away from its key.
 
     Redaction matches a whole ``KEY=value`` assignment, so a tail cut through
-    the key would publish the value as ordinary text. The read starts one byte
-    before the window precisely so the partial first line is discarded.
+    the key would publish the value as ordinary text. The window opens on the
+    line boundary instead, so the redactor sees the assignment whole.
     """
     from revocompute.execution_diagnostics import MAX_LOG_BYTES
 
@@ -109,7 +111,7 @@ def test_job_stderr_tail_never_publishes_a_cut_credential_line(tmp_path):
 
     published = (tmp_path / "out" / "execution" / "slurm-alice-cpu_runner-task-1.stderr.log").read_text()
     assert "private-token" not in published
-    assert published.startswith("z")
+    assert published.startswith("TOKEN_API=[redacted]\n")
 
 
 def test_job_stderr_tail_keeps_the_begin_of_a_truncated_private_key(tmp_path):
@@ -139,3 +141,69 @@ def test_job_stderr_tail_keeps_the_begin_of_a_truncated_private_key(tmp_path):
         assert "[private key redacted]" in excerpt
         assert "MIIEvQIBADANBgkqhkiG9w0BAQEFAASC" not in excerpt
         assert "useful diagnostic context" in excerpt
+
+
+def test_the_adapter_claims_its_stderr_until_it_is_captured(tmp_path):
+    """The claim is live between job-id discovery and the snapshot.
+
+    Reconciliation in another worker process reads this claim as the handoff
+    that says the scheduler log still has an owner.
+    """
+    from revocompute.job.runners.slurm_runner import (
+        ALLOCATION_STDERR_CLAIM_SUFFIX,
+        scheduler_log_is_claimed,
+    )
+
+    job = _job(tmp_path)
+    job._slurm_job_id = "4217"
+    os.makedirs(job.allocation_dir, exist_ok=True)
+    log = Path(job.allocation_dir, "allocation-4217.err")
+    log.write_text("Traceback (most recent call last):\nRuntimeError: boom\n", encoding="utf-8")
+
+    job._claim_job_stderr()
+    claim = Path(str(log) + ALLOCATION_STDERR_CLAIM_SUFFIX)
+    pid_text, start_text = claim.read_text(encoding="ascii").split()
+    assert int(pid_text) == os.getpid()
+    assert int(start_text) > 0
+    assert scheduler_log_is_claimed(str(log)) is True
+
+    job._capture_job_stderr()
+    assert not claim.exists()
+    assert scheduler_log_is_claimed(str(log)) is False
+    assert job._job_stderr_snapshot == [
+        "Traceback (most recent call last):\n",
+        "RuntimeError: boom\n",
+    ]
+
+
+@pytest.mark.parametrize("cut", [0, 10], ids=["at-the-begin-line", "inside-the-marker"])
+def test_a_window_opening_on_the_pem_marker_still_redacts_the_key(tmp_path, cut):
+    """The 64 KiB bound must not split a PEM marker from its body.
+
+    The window is aligned to a line boundary, so a marker that straddles the
+    bound is published whole and the redactor sees it. A marker cut in half
+    would leave the body recognized by neither side.
+    """
+    from revocompute.execution_diagnostics import MAX_LOG_BYTES, STATUS_PATH
+
+    job = _job(tmp_path)
+    job._slurm_job_id = "4217"
+    filler = "filler\n" * 20
+    body = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASC" + "A" * 32 + "\n"
+    pem = "-----BEGIN PRIVATE KEY-----\n" + body + "-----END PRIVATE KEY-----\n"
+    # size - MAX_LOG_BYTES - 1 == len(filler) + cut, i.e. the window opens
+    # ``cut`` bytes into the marker line.
+    needed = MAX_LOG_BYTES + 1 + cut - len(pem)
+    content = filler + pem + "x" * (needed - 1) + "\n"
+    os.makedirs(job.allocation_dir, exist_ok=True)
+    Path(job.allocation_dir, "allocation-4217.err").write_text(content, encoding="utf-8")
+
+    job._save_output()
+    job._task_store = SimpleNamespace(record_task_diagnostics=lambda *args, **kwargs: None)
+    job._persist_execution_evidence()
+
+    published = (tmp_path / "out" / "execution" / "slurm-alice-cpu_runner-task-1.stderr.log").read_text()
+    record = json.loads((tmp_path / "out" / STATUS_PATH).read_text())
+    for excerpt in (published, record["logs"]["stderr"]):
+        assert "[private key redacted]" in excerpt
+        assert "MIIEvQIBADANBgkqhkiG9w0BAQEFAASC" not in excerpt

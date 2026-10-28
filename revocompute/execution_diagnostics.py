@@ -32,8 +32,8 @@ REASONS = {
 _SECRET_KEY = re.compile(r"secret|password|passwd|token|credential|api.?key|authorization|private.?key", re.I)
 _CONTROL = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _SECRET_ASSIGNMENT = re.compile(
-    r"(?im)([\w.-]*(?:secret|password|passwd|token|credential|api.?key|authorization)[\w.-]*[\"']?\s*[=:]\s*)"
-    r"(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^\s,;]+)"
+    r"(?im)(?<![\w.-])([\w.-]*(?:secret|password|passwd|token|credential|api.?key|authorization)"
+    r"[\w.-]*[\"']?\s*[=:]\s*)(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^\s,;]+)"
 )
 _BEARER = re.compile(r"(?i)\b(Bearer|Basic)\s+[^\s,;]+")
 _PRIVATE_KEY = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)", re.S)
