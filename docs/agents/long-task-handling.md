@@ -1627,6 +1627,14 @@ Different verification goals need different durable evidence:
   identity, lifecycle and validation state, an artifact inventory with hashes,
   and the selected observables the acceptance claim needs. Do not check in the
   entire job workspace merely to prove the run happened.
+- **Visual evidence** proves a UI, browser, or molecular-viewer claim. Capture the
+  selected real screenshots and upload sanitized PNGs as assets of an exact-head,
+  PR-specific GitHub **pre-release** (as in PR #109). Embed the direct asset URLs
+  in the PR discussion, naming the tested head, scenario, viewport and theme, and
+  verify a reviewer can open them. Do not commit screenshot collections to Git;
+  keep any fixture required for offline CI in Git. Releases are public: never
+  upload credentials, private inputs, or restricted data. A missing or
+  inaccessible asset is not accepted visual evidence.
 
 #### Independence without snapshot inflation
 
