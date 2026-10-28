@@ -1,154 +1,132 @@
 # RFC — durable execution-stage state
 
-> Status: accepted for implementation in PR #118. Scope: Core only. No Runner
-> protocol change, no stage-selection UI, no artifact reuse (PR #119).
+> Status: accepted for implementation in PR #118. Core only. No Runner protocol
+> change, no stage-selection UI, no artifact reuse (PR #119).
 
 ## Problem
 
-A Task's ``status`` and ``run_stage`` were written from three places: the
-worker before dispatch, Core's allocation callbacks, and the Runner's
-``REVODESIGN_STAGE:`` stdout markers. The workflow composer also wrote
-``tasks.status = "queued"`` before every allocation, so a Task that had
-completed its CPU preparation stage fell back to ``queued`` while its GPU stage
-waited in the scheduler queue. Nothing durable recorded *which allocation* ran,
-under which attempt, with which resources, or why it ended. stdout was the
-de-facto authority for phase transitions.
+A Task's state was written by three authorities: the worker before dispatch,
+Core's allocation callbacks, and the Runner's ``REVODESIGN_STAGE:`` stdout
+markers. ``_run_compute_workflow`` also wrote ``tasks.status = "queued"`` before
+every allocation, so a Task that had completed its CPU stage fell back to
+``queued`` while its GPU stage waited. No store recorded *which attempt* ran a
+stage, with which planned resources, or why it ended.
+
+## Why the existing stores cannot be the authority
+
+``tasks.workflow_state`` is a single JSON-text compatibility column. It is keyed
+by stage name, overwritten by read-modify-write, and has no uniqueness,
+transition, or ownership constraint, so duplicate workers can lose an update and
+a stale writer can regress a completed stage. It also does not exist for
+single-stage Tasks. It can be kept as a **derived projection**, not extended
+into the authority.
+
+``resource_allocations`` records **accounting facts** keyed by
+``(slurm_job_id, unit)``. It cannot represent a stage attempt before a scheduler
+allocation exists (queued dispatch, submission failure, or an attempt that never
+got an allocation), carries no attempt number, and has no planned-resource
+request. Extending it would put execution state into the ledger's identity.
+
+The missing fact is therefore: *one durable, uniquely-identified stage attempt
+that exists before, during, and after a scheduler allocation, with a monotonic
+lifecycle.* That needs database-enforced attempt identity, so a ``stage_runs``
+table is required. `stage_runs` is the **only** stage authority;
+`workflow_state` is written from it as a compatibility mirror, and
+`resource_allocations` remains the accounting authority.
 
 ## Entities
 
-| Entity | Identity | Authority | Lifetime |
-| --- | --- | --- | --- |
-| **Task** | ``tasks.md5sum`` | Core | Submission → terminal outcome |
-| **StageDefinition** | owning ``task.yaml`` ``workflow[i]`` | Server (manifest) | Immutable |
-| **StageRun / attempt** | ``(task_id, stage_index, attempt)`` | Core | One allocation attempt |
-| **Scheduler allocation** | ``slurm_job_id`` | Slurm + Core accounting | One ``srun`` request |
-| **Progress observation** | stdout marker | Runner, advisory | Within one allocation |
-| **Artifact publication** | anchored manifest | Core | After the final StageRun |
+| Entity | Identity | Authority |
+| --- | --- | --- |
+| Task | ``tasks.md5sum`` | Core |
+| StageDefinition | owning ``task.yaml`` ``workflow[i]`` | Server manifest |
+| **StageRun / attempt** | ``(task_id, stage_index, attempt)`` | **Core, durable** |
+| Scheduler allocation | ``slurm_job_id`` | Slurm; accounting in ``resource_allocations`` |
+| Progress observation | stdout marker | Runner, advisory |
+| Artifact publication | anchored manifest | Core |
 
-A Task with no manifest workflow has exactly one implicit StageDefinition: the
-Task type itself (``stage_index = 0``). Every allocation therefore has a
-StageRun; a workflow Task has one StageRun per workflow stage per attempt.
+A Task with no manifest workflow has one implicit StageDefinition: the Task type
+itself at ``stage_index = 0``. stdout markers stay optional progress detail
+(``tasks.run_stage``, execution-progress rows); they never create, advance, or
+settle a StageRun.
 
-StageRun is the only authority for "which stage is queued/running" and for why
-an attempt ended. ``tasks.status`` is a projection of the whole workflow
-outcome, not of the current allocation. stdout markers remain optional,
-diagnostic progress detail (``tasks.run_stage`` and the execution-progress
-rows); they never create, advance, or settle a StageRun.
-
-## Stage statuses and transitions
+## Statuses and transitions
 
 ```text
-NOT_STARTED ──> READY ──> QUEUED ──> RUNNING ──> COMPLETED
-     │            │          │          │
-     │            │          │          ├──────> FAILED
-     │            │          │          ├──────> CANCELLED
-     │            │          │          └──────> INTERRUPTED
-     │            │          └──────────────────> FAILED / CANCELLED / INTERRUPTED
-     │            └─────────────────────────────> SKIPPED / CANCELLED / FAILED
-     └──────────────────────────────────────────> SKIPPED / CANCELLED
+NOT_STARTED -> READY -> QUEUED -> RUNNING -> COMPLETED
+     |           |         |         |- FAILED
+     |           |         |         |- CANCELLED
+     |           |         |         \- INTERRUPTED
+     |           |         \- COMPLETED (missed start) / FAILED / CANCELLED / INTERRUPTED
+     |           \- SKIPPED / CANCELLED / FAILED
+     \- SKIPPED / CANCELLED
 ```
 
-Allowed transitions are enforced in the database write, not by a read-then-write
-check. Terminal statuses (``COMPLETED``, ``FAILED``, ``CANCELLED``,
-``INTERRUPTED``, ``SKIPPED``) have no outgoing transition, so a late log line,
-a stale callback, or a duplicate worker can never regress an attempt.
+Transitions are enforced in the database write by the legal-predecessor set.
+Terminal statuses (``COMPLETED``, ``FAILED``, ``CANCELLED``, ``INTERRUPTED``,
+``SKIPPED``) have no outgoing edge, so late markers and stale/duplicate callbacks
+cannot regress an attempt. ``READY`` is legal between stages but the Core writer
+creates an attempt directly in ``QUEUED`` before submission.
 
-``READY`` exists in the vocabulary for the interval between "previous stage
-committed" and "allocation submitted". The Core writer creates an attempt
-directly in ``QUEUED`` immediately before submission, so ``READY`` is legal but
-not currently persisted.
-
-### Retries
-
-One attempt is one allocation attempt. A retry after ``INTERRUPTED`` (worker
-loss) or an operator re-dispatch creates the next attempt number; the previous
-attempt stays terminal and is never edited. A duplicate dispatch finds the
-existing live attempt (``QUEUED``/``RUNNING``) and reuses it. The unique index on
-``(task_id, stage_index, attempt)`` and the partial unique index on
-``(task_id, stage_index)`` for live attempts make both properties database
-facts.
+**Retries.** One attempt = one allocation attempt. Worker-loss recovery
+(``INTERRUPTED``) or re-dispatch creates the next attempt; terminal attempts are
+never edited. A duplicate dispatch finds and reuses the live attempt. Unique
+``(task_id, stage_index, attempt)`` plus a partial unique index on live attempts
+``(task_id, stage_index)`` make both properties database facts.
 
 ## Task status projection
 
 | Situation | ``tasks.status`` | Stage view |
 | --- | --- | --- |
-| No allocation yet | ``pending`` / ``queued`` | first stage ``QUEUED`` once dispatch begins |
-| Any stage allocation running | ``running`` | that stage ``RUNNING``, earlier ``COMPLETED`` |
-| Previous stages done, next stage queued | ``running`` | next stage ``QUEUED`` |
-| Last stage completed and results published | ``finished`` | all ``COMPLETED`` |
-| Any stage failed / task failed | ``failed`` | failing stage ``FAILED`` with a reason code |
-| User cancellation | ``cancelled`` | active stage ``CANCELLED`` (or ``INTERRUPTED``) |
+| No allocation yet | ``queued`` | first attempt ``QUEUED`` |
+| Any allocation running | ``running`` | that stage ``RUNNING`` |
+| Prior stage done, next queued | ``running`` | next ``QUEUED`` (no task regression) |
+| Last stage done, results published | ``finished`` | all ``COMPLETED`` |
+| Stage failed | ``failed`` | failing stage ``FAILED`` + reason code |
+| Cancelled | ``cancelled`` | active stage ``CANCELLED`` |
 
-The transition to ``running`` happens at the allocation-started boundary
-(``allocation_started_callback``), the same boundary that admits the
-allocation. Between stages the Task stays ``running``: only the StageRun is
-``QUEUED``.
+Task ``running`` is written at the allocation-started boundary — the same
+boundary that admits the allocation — never from stdout.
 
 ## Boundary ownership
 
-| Transition | Written by |
+| Transition | Writer |
 | --- | --- |
-| attempt ``QUEUED`` | ``_run_compute_workflow`` / ``_run_compute_job`` immediately before ``job.submit()`` |
-| scheduler handle attached | allocation ``dispatched`` callback (scheduler accepted the request) |
-| ``RUNNING`` + Task ``running`` | allocation ``started`` callback (allocation observable on a node) |
-| ``COMPLETED`` / ``FAILED`` | Core after ``job.poll()`` returns its outcome |
-| ``INTERRUPTED`` | Core recovery when the owning worker disappeared |
-| ``CANCELLED`` | Core cancellation claim and the worker observing cancellation |
+| attempt ``QUEUED`` | workflow/job composer immediately before ``job.submit()`` |
+| scheduler handle | allocation ``dispatched`` callback |
+| ``RUNNING`` + Task ``running`` | allocation ``started`` callback |
+| ``COMPLETED`` / ``FAILED`` | Core after ``job.poll()`` |
+| ``INTERRUPTED`` | Core recovery when the owning worker vanished |
+| ``CANCELLED`` | Core cancellation claim and the worker observing it |
 
-Allocation accounting keeps its existing authority: the durable reservation is
-consumed when the allocation starts, and the GPU/CPU ledger settles from the
-allocation's measured lifetime. StageRun rows never move entitlement or charge
-anything; they only describe execution. A stage attempt that never obtained an
-allocation produces no ledger fact, and a duplicate callback for the same
-``slurm_job_id`` stays idempotent through the existing allocation identity.
+Accounting is unchanged: admission consumes the reservation at allocation start
+and the GPU/CPU ledger settles from measured allocation lifetime. StageRun rows
+never move entitlement; an attempt without an allocation creates no ledger fact,
+and duplicate callbacks stay idempotent through ``slurm_job_id``.
 
-## Idempotency and evidence monotonicity
+## Evidence monotonicity
 
-* Attempt creation is ``BEGIN IMMEDIATE``: reuse the live attempt, otherwise
-  insert ``max(attempt) + 1``.
-* Ownership and settlement writes are guarded by the legal-predecessor set, so
-  they are idempotent and monotonic under duplicate dispatch, late markers,
-  stale callbacks, worker loss, and a crash between stage completion and the
-  next dispatch.
-* A crash after the allocation ends but before ``COMPLETED`` is recorded leaves
-  the attempt ``RUNNING``; recovery marks it ``INTERRUPTED`` and the next
-  attempt re-runs the stage. Core cannot claim a completion it never observed.
+Attempt creation and every transition run under ``BEGIN IMMEDIATE`` with a
+predicate on the legal predecessor set, so duplicate dispatch, late markers,
+stale callbacks, worker loss, transient ``squeue`` failure, and a crash between
+stage completion and the next dispatch are all no-ops or forward transitions. A
+crash after the allocation ends but before ``COMPLETED`` is recorded leaves the
+attempt ``RUNNING``; recovery marks it ``INTERRUPTED`` and re-runs the stage —
+Core never claims a completion it did not observe.
 
-## Compatibility
+## API and migration
 
-``tasks.workflow_state`` remains a compatibility projection written by the same
-Core transitions. It is authoritative only for historical rows that predate
-StageRun records; new rows are read from the StageRun table. The API reports the
-source (``record`` vs ``legacy``) instead of silently mixing the two. Historical
-rows are never backfilled: there is no evidence of attempts, resources, or end
-reasons to invent.
+Status/list payloads gain ``stages``: source (``record`` | ``legacy``), total,
+completed, current stage, and per-stage status/attempt/timestamps/reason/
+planned resources. Existing fields are unchanged, so old clients keep working.
 
-## API projection
+Historical rows are never backfilled (there is no evidence of attempts to
+invent). When a stage has no StageRun, the API reads that stage from the legacy
+``workflow_state``; a Task with no records at all is labelled ``legacy``. A
+record always wins for the stage it describes. New rows write ``workflow_state``
+from the same Core transitions purely for existing consumers.
 
-The status and list payloads gain a ``stages`` object:
+## Non-goals
 
-```json
-{
-  "stages": {
-    "source": "record",
-    "total": 2,
-    "completed": 1,
-    "current": {"index": 1, "name": "model", "display_name": "Model", "status": "QUEUED", "attempt": 1, "reason_code": null},
-    "items": [
-      {"index": 0, "name": "features", "display_name": "Features", "status": "COMPLETED", "attempt": 1, "started_at": "...", "ended_at": "...", "reason_code": null, "planned_resources": {"cpus": 8, "requires_gpu": false, "...": "..."}},
-      {"index": 1, "name": "model", "display_name": "Model", "status": "QUEUED", "attempt": 1, "started_at": null, "ended_at": null, "reason_code": null, "planned_resources": {"cpus": 8, "requires_gpu": true, "...": "..."}}
-    ]
-  }
-}
-```
-
-Task-level state stays in the existing ``status`` field, so old clients keep
-working unchanged. Reason codes are a bounded Core vocabulary, never scheduler
-stderr.
-
-## Explicit non-goals
-
-* No generic DAG engine, conditional stages, or fan-out.
-* No Runner-protocol requirement for stage markers.
-* No stage selection, artifact reuse, or partial re-run UI.
-* No rewrite of Slurm placement, reservations, or the resource ledger.
+No DAG engine, conditional/fan-out stages, Runner marker requirement, stage
+selection, artifact reuse, or rewrite of placement/reservations/ledger.
