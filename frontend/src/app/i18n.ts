@@ -95,6 +95,7 @@ const en: Dictionary = {
   'quota.error.generic': 'Unable to load your resource position.',
   'quota.error.admin': "Unable to load this account's quota position.",
   'quota.error.envelope': 'Unable to load the resource envelope.',
+  'quota.error.ledger': 'The GPU credit ledger is currently unavailable ({detail}). The resource envelope above is still current.',
   // The read-only envelope shared by the user Quota page and the Admin drill-in.
   'quota.unit.gpuSecond': 'GPU seconds',
   'quota.unit.cpuCoreSecond': 'CPU core seconds',
@@ -934,6 +935,7 @@ const zhCN: Dictionary = {
   'quota.error.generic': '无法加载您的资源状况。',
   'quota.error.admin': '无法加载该账户的配额状况。',
   'quota.error.envelope': '无法加载资源清单。',
+  'quota.error.ledger': 'GPU 额度账本暂时不可用（{detail}）。上方资源清单仍然有效。',
   // The read-only envelope shared by the user Quota page and the Admin drill-in.
   'quota.unit.gpuSecond': 'GPU 秒',
   'quota.unit.cpuCoreSecond': 'CPU 核秒',

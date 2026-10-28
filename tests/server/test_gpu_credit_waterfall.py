@@ -485,3 +485,64 @@ def test_the_gpu_credit_balance_routes_refuse_an_unrepresentable_quantity(monkey
     assert admin.status_code == 503
     assert admin.get_json()["unavailable_reason"] == "ledger_value_out_of_range"
     assert "adjustment_gpu_seconds" not in admin.get_json()
+
+
+def test_the_entitlement_route_refuses_an_unrepresentable_gpu_balance(monkeypatch, tmp_path):
+    """The envelope route publishes the same balance as the guarded reads."""
+    module = _module(monkeypatch, tmp_path)
+    headers = _test_client_auth(module)
+    user = _user(module)
+    period = module.task_store.gpu_credit_summary(user["id"])["period"]
+    ledger = module.task_store.resource_ledger_table
+    with module.task_store.engine.begin() as conn:
+        conn.execute(sa.insert(ledger).values(
+            subject_type="user", subject_id=user["id"], period=period,
+            kind="admin_adjustment", unit="gpu_second", resource_class="",
+            quantity=2**53 + 1, actor_user_id=99, reason="Corrupt fixture",
+            reason_code="admin_adjustment", evidence_source="policy",
+            idempotency_key="overflow-envelope-fixture", created_at=time.time(),
+        ))
+
+    response = module.app.test_client().get("/compute/api/resource-entitlement", headers=headers)
+    assert response.status_code == 503
+    body = response.get_json()
+    assert body["unavailable_reason"] == "ledger_value_out_of_range"
+    assert "compute" not in body
+
+
+def test_a_storage_dominated_window_reports_no_gpu_step_and_the_settled_opening(monkeypatch, tmp_path):
+    """A window filled by newer storage facts is partial, not a zero history.
+
+    The GPU facts still exist in the period; they are simply outside the showing.
+    The opening balance must equal the settled total those omitted facts sum to,
+    and ``complete`` must say the window does not show them.
+    """
+    module = _module(monkeypatch, tmp_path)
+    headers = _test_client_auth(module)
+    user = _user(module)
+    _charge(module, user["id"], "8401", seconds=90, at=time.time() - 90)
+    period = module.task_store.gpu_credit_summary(user["id"])["period"]
+    ledger = module.task_store.resource_ledger_table
+    now = time.time()
+    with module.task_store.engine.begin() as conn:
+        for index in range(2):
+            conn.execute(sa.insert(ledger).values(
+                subject_type="user", subject_id=user["id"], period=period,
+                kind="storage_usage", unit="storage_byte", resource_class="",
+                quantity=-(1000 + index), task_id=str(index).rjust(32, "0"),
+                reason="Storage ownership", reason_code="storage_usage",
+                evidence_source="lifecycle", idempotency_key=f"storage-window-{index}",
+                created_at=now + index,
+            ))
+
+    window = _ledger(module, headers, limit=2)
+    assert _gpu_entries(window) == []
+    waterfall = window["gpu_waterfall"]
+    assert waterfall["entry_count"] == 0
+    assert waterfall["total_entry_count"] > 0
+    assert waterfall["complete"] is False
+    assert waterfall["opening_gpu_seconds"] == waterfall["closing_gpu_seconds"]
+    summary = module.task_store.gpu_credit_summary(user["id"])
+    assert waterfall["opening_gpu_seconds"] == (
+        summary["monthly_grant_gpu_seconds"] + summary["adjustment_gpu_seconds"] - summary["usage_gpu_seconds"]
+    )

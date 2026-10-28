@@ -35,14 +35,26 @@ export class CreditAdmin {
       // The ledger window is read separately and rendered when it arrives, so a
       // ledger outage never removes the audited policy controls below.
       const ledgerHost = element('div', 'credit-ledger-host', [empty('Loading the ledger window...')]);
-      const renderAccounting = (): void => accounting.replaceChildren(creditSummary(data), ledgerHost);
+      let summaryError: string | null = null;
+      const renderAccounting = (): void => accounting.replaceChildren(
+        summaryError
+          ? empty(`The GPU credit summary is currently unavailable (${summaryError}).`, true)
+          : creditSummary(data),
+        ledgerHost,
+      );
+      // A later load invalidates an earlier one: without this token a load that
+      // started before a mutation could land after the refreshed window and show
+      // a superseded balance.
+      let ledgerGeneration = 0;
       const loadLedger = async (): Promise<void> => {
+        const generation = ++ledgerGeneration;
         ledgerHost.replaceChildren(empty('Loading the ledger window...'));
         try {
           // The operator's drill-in reads the same canonical ledger window the
           // account reads about itself: chronological entries and the GPU
           // waterfall over an authoritative opening balance.
           const ledger = (await adminApi.getResourceReport(user.id)).ledger;
+          if (generation !== ledgerGeneration) return;
           ledgerHost.replaceChildren(
             waterfallSection(ledger.gpu_waterfall, ledger.entries, ledger.period),
             // The raw append-only facts stay beside the chart: reasons, actors,
@@ -50,6 +62,7 @@ export class CreditAdmin {
             quotaLedgerSection(ledger),
           );
         } catch (error) {
+          if (generation !== ledgerGeneration) return;
           const detail = (error as Error).message || 'no response';
           ledgerHost.replaceChildren(empty(
             `The GPU credit ledger window is currently unavailable (${detail}). The policy controls below still work.`,
@@ -58,7 +71,12 @@ export class CreditAdmin {
         }
       };
       const reload = async (): Promise<void> => {
-        try { data = await adminApi.getUserCredit(user.id); } catch { /* keep the last known summary */ }
+        try {
+          data = await adminApi.getUserCredit(user.id);
+          summaryError = null;
+        } catch (error) {
+          summaryError = (error as Error).message || 'no response';
+        }
         renderAccounting();
       };
       const afterMutation = async (message: string): Promise<void> => {

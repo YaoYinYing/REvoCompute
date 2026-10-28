@@ -4460,6 +4460,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthorized"];
+            503: components["responses"]["Unavailable"];
         };
     };
     getCurrentResourceLedger: {
@@ -4535,6 +4536,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            503: components["responses"]["Unavailable"];
         };
     };
     adminAdjustUserGpuCredit: {

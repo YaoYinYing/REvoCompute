@@ -4982,8 +4982,19 @@ def _entitlement_payload(user_id: int) -> dict[str, Any]:
     A stored storage policy the reader refuses to interpret raises
     :class:`ResourceValidationError`; callers that answer a client translate it
     with :func:`_typed_resource_refusal` rather than letting it become a 500.
+    The GPU balance it publishes is guarded here, in the route projection, for
+    the same reason as :func:`_exact_gpu_credit_payload`: a client that rounds
+    the number would show a balance the ledger does not contain.
     """
-    return task_store.resource_envelope(user_id).to_dict()
+    payload = task_store.resource_envelope(user_id).to_dict()
+    for unit in payload["compute"]:
+        if unit["unit"] != rloan.UNIT_GPU_SECOND:
+            continue
+        for field in ("allowance", "remaining", "used", "reserved", "unsettled_quantity"):
+            value = unit.get(field)
+            if value is not None:
+                rloan.require_exact_units(int(value), what=field)
+    return payload
 
 
 @app.route("/compute/api/resource-entitlement", methods=["GET"])
@@ -4994,6 +5005,8 @@ def current_resource_entitlement():
         payload = _entitlement_payload(int(g.current_user["id"]))
     except ResourceValidationError as exc:
         return _typed_resource_refusal(exc)
+    except rloan.AccountingOverflow as exc:
+        return _ledger_read_refusal(exc)
     return jsonify(payload), 200
 
 

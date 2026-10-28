@@ -445,21 +445,31 @@ export function waterfallSection(
  * the Admin drill-in already served, so an operator comparing the two sees the
  * identical projection rather than a second one.
  */
-export function quotaPosition(envelope: ResourceEntitlement, ledger: ResourceLedger): HTMLElement {
+export function quotaPosition(
+  envelope: ResourceEntitlement,
+  ledger: ResourceLedger | null,
+  ledgerUnavailable: string | null = null,
+): HTMLElement {
   const root = element('div', 'quota-position');
   const storage = element('section', 'quota-storage-overview');
   storage.append(text('h3', t('quota.storage.heading')), text('p', `${t('quota.storage.owned')}: ${formatBytes(envelope.storage.logical_owned_bytes)}`, 'quota-storage-value'));
   storage.append(text('p', envelope.storage.soft_limit_bytes === null ? t('quota.storage.notConfigured') : `${t('quota.storage.ceiling')}: ${formatBytes(envelope.storage.soft_limit_bytes)}`, 'quota-bar-note'));
   const policy = element('details', 'quota-policy');
   policy.append(text('summary', t('quota.envelope.heading')), envelopeSection(envelope.period, envelope));
-  root.append(
-    text('h3', t('quota.usage.heading')),
-    quotaBars(envelope),
-    waterfallSection(ledger.gpu_waterfall, ledger.entries, ledger.period),
-    storage,
-    policy,
-    quotaLedgerSection(ledger),
-  );
+  root.append(text('h3', t('quota.usage.heading')), quotaBars(envelope));
+  if (ledger) {
+    root.append(waterfallSection(ledger.gpu_waterfall, ledger.entries, ledger.period));
+  } else {
+    // The envelope is still the server's answer; only the ledger read failed.
+    // Say which read is missing and why, instead of blanking a position calculated
+    // from the succeeded read or blaming a policy that was never read.
+    root.append(element('section', 'quota-waterfall', [
+      text('h2', t('quota.waterfall.heading')),
+      empty(t('quota.error.ledger', { detail: ledgerUnavailable ?? t('quota.error.generic') }), true),
+    ]));
+  }
+  root.append(storage, policy);
+  if (ledger) root.append(quotaLedgerSection(ledger));
   return root;
 }
 
@@ -489,15 +499,28 @@ export class QuotaView {
   /** Build the page and read this account's own position into it. */
   async mount(outlet: HTMLElement): Promise<void> {
     outlet.replaceChildren(this.root);
+    let entitlement: ResourceEntitlement;
     try {
-      const [entitlement, ledger] = await Promise.all([getResourceEntitlement(), getResourceLedger()]);
-      this.body.replaceChildren(quotaPosition(entitlement, ledger));
+      entitlement = await getResourceEntitlement();
     } catch (error) {
       const message = error instanceof ApiError && error.status === 503
         ? t('quota.error.policy')
         : (error as Error).message || t('quota.error.generic');
       this.body.replaceChildren(empty(message, true));
+      return;
     }
+    // The ledger is a separate read: its failure must not blank the envelope
+    // that already arrived, and its 503 reason is the ledger's, not a policy's.
+    let ledger: ResourceLedger | null = null;
+    let ledgerUnavailable: string | null = null;
+    try {
+      ledger = await getResourceLedger();
+    } catch (error) {
+      ledgerUnavailable = error instanceof ApiError
+        ? error.message
+        : (error as Error).message || t('quota.error.generic');
+    }
+    this.body.replaceChildren(quotaPosition(entitlement, ledger, ledgerUnavailable));
   }
 
   /** Release the page. The reads own no subscription; the region leaves with the route. */

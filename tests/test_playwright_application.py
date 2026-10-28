@@ -1265,6 +1265,7 @@ def test_admin_credit_mutation_success_survives_a_failed_refresh(page: Page) -> 
     expect(page.get_by_text("GPU credit adjustment recorded.")).to_be_visible()
     expect(dialog.get_by_label("Adjustment in credits")).to_be_visible()
     expect(dialog).to_contain_text("The GPU credit ledger window is currently unavailable")
+    expect(dialog).to_contain_text("The GPU credit summary is currently unavailable")
 
 
 def _fleet_payload() -> dict:

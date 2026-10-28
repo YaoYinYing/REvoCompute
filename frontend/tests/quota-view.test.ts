@@ -14,6 +14,7 @@ import {
   kindLabel,
   quotaBar,
   quotaBars,
+  mountQuotaView,
   quotaLedgerSection,
   quotaPosition,
   waterfallSection,
@@ -39,6 +40,7 @@ class FakeNode {
   className = '';
   private attrs = new Map<string, string>();
   readonly style = { setProperty: (): void => undefined };
+  readonly dataset: Record<string, string> = {};
   constructor(readonly tagName: string) {}
   append(...nodes: Array<FakeNode | string>): this {
     for (const child of nodes) {
@@ -65,6 +67,9 @@ class FakeNode {
   querySelector<T extends FakeNode>(tag: string): T | null { return this.querySelectorAll<T>(tag)[0] ?? null; }
   addEventListener(): void {}
   removeEventListener(): void {}
+  remove(): void {
+    if (this.parent) this.parent.children = this.parent.children.filter(child => child !== this);
+  }
 }
 
 class FakeText extends FakeNode {
@@ -80,12 +85,23 @@ beforeEach(() => {
 });
 afterEach(() => { clearSessionCredential(); vi.unstubAllGlobals(); });
 
-function mockApi(payloads: Record<string, unknown>): { requests: RequestRecord[] } {
+function mockApi(
+  payloads: Record<string, unknown>,
+  failures: Record<string, { status: number; error: string; reason: string }> = {},
+): { requests: RequestRecord[] } {
   const requests: RequestRecord[] = [];
   vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init: RequestInit = {}) => {
     const url = String(input);
     if (url.endsWith('/compute/api/auth/token')) return new Response(JSON.stringify({ token: 'token' }), { status: 200 });
     requests.push({ url, init });
+    for (const [suffix, failure] of Object.entries(failures)) {
+      if (url.endsWith(suffix) || url.includes(suffix)) {
+        return new Response(
+          JSON.stringify({ error: failure.error, unavailable_reason: failure.reason }),
+          { status: failure.status, headers: { 'content-type': 'application/json' } },
+        );
+      }
+    }
     for (const [suffix, payload] of Object.entries(payloads)) {
       if (url.endsWith(suffix) || url.includes(suffix)) {
         return new Response(JSON.stringify(payload), { status: 200, headers: { 'content-type': 'application/json' } });
@@ -317,10 +333,12 @@ describe('the GPU credit waterfall', () => {
 
   it('announces what was loaded and exposes exact GPU-seconds to screen readers', async () => {
     const rendered = waterfallSection(waterfallOf(), entries) as unknown as FakeNode;
-    // The live region is populated in a microtask, after the section is built.
-    await Promise.resolve();
     const status = rendered.querySelectorAll('p').find(node => node.getAttribute('role') === 'status');
     expect(status?.getAttribute('aria-live')).toBe('polite');
+    // The region is empty until the microtask after insertion: a count written
+    // during construction would be pre-existing text, not an announcement.
+    expect(status?.textContent).toBe('');
+    await Promise.resolve();
     expect(status?.textContent).toContain('2 GPU fact');
     const labels = rendered.querySelectorAll('td').map(node => node.getAttribute('aria-label') ?? '');
     expect(labels.some(label => label.includes('-500 credits (-30000 GPU-seconds)'))).toBe(true);
@@ -398,6 +416,32 @@ describe('quota API reads', () => {
       '/compute/api/resource-entitlement',
       '/compute/api/resource-ledger',
     ]);
+  });
+
+  it('keeps the envelope when only the ledger read is unavailable', async () => {
+    mockApi(
+      {
+        '/compute/api/resource-entitlement': envelope([entry({})]),
+        '/compute/api/resource-ledger': ledgerOf([]),
+      },
+      {
+        '/compute/api/resource-ledger': {
+          status: 503,
+          error: 'The resource ledger is unavailable.',
+          reason: 'ledger_unavailable',
+        },
+      },
+    );
+    const outlet = new FakeNode('div');
+    const view = await mountQuotaView(outlet as unknown as HTMLElement);
+    // The succeeded read is still rendered, and the failure is named as the
+    // ledger's own reason instead of sending the reader to a policy.
+    expect(outlet.textContent).toContain('Usage against allowance');
+    expect(outlet.textContent).toContain('Resource envelope');
+    expect(outlet.textContent).toContain('GPU credit ledger is currently unavailable');
+    expect(outlet.textContent).toContain('The resource ledger is unavailable.');
+    expect(outlet.textContent).not.toContain('stored resource policy');
+    view.destroy();
   });
 
   it('reads one account position through the Admin report when an operator drills in', async () => {

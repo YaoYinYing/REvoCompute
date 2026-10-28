@@ -618,7 +618,8 @@
         "security": [{"bearerAuth": []}, {"apiKeyAuth": []}],
         "responses": {
           "200": {"description": "Current user's monthly balance and immutable entries", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GPUCreditSummary"}}}},
-          "401": {"$ref": "#/components/responses/Unauthorized"}
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "503": {"$ref": "#/components/responses/Unavailable"}
         }
       }
     },
@@ -672,7 +673,8 @@
           "200": {"description": "Current balance and immutable entries", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GPUCreditSummary"}}}},
           "401": {"$ref": "#/components/responses/Unauthorized"},
           "403": {"$ref": "#/components/responses/Forbidden"},
-          "404": {"$ref": "#/components/responses/NotFound"}
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "503": {"$ref": "#/components/responses/Unavailable"}
         }
       }
     },

@@ -3046,15 +3046,20 @@ class TaskDatabase:
         B-tree (``EXPLAIN QUERY PLAN``: ``SEARCH ... USING INDEX
         idx_resource_ledger_subject_unit (subject_type=? AND subject_id=?)`` +
         ``USE TEMP B-TREE FOR ORDER BY``).  No index carries ``created_at`` for
-        this predicate, so the sort is bounded by one subject's ledger rows and
-        the ``limit``, not by the table; that is the accepted cost of returning
-        storage facts alongside a period window.
+        this predicate, so the sort covers every matching row of this subject
+        and SQLite applies ``limit`` after it, not by the table; that is the
+        accepted cost of returning storage facts alongside a period window.
         """
         if limit < 1 or limit > 200:
             raise ValueError("limit must be between 1 and 200")
         checked_at = time.time() if at is None else at
         ledger = self.resource_ledger_table
         with self.engine.begin() as conn:
+            # pysqlite opens a DBAPI transaction on the first write, not on a
+            # SELECT.  A month whose grant already exists performs no write, so
+            # begin explicitly: every read below must see one snapshot even when
+            # a concurrent settlement commits between them.
+            conn.exec_driver_sql("BEGIN")
             summary, entitlement = self._gpu_credit_position_in_connection(conn, user_id, checked_at)
             period = str(summary["period"])
             rows = conn.execute(
