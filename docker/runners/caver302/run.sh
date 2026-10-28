@@ -54,12 +54,8 @@ case "${structure,,}" in
     *.pdb|*.ent) ;;
     *) echo "CAVER accepts a PDB structure, not ${structure}" >&2; exit 1 ;;
 esac
-snapshots=$(task_inputs snapshots)
-python3 -c 'import json,sys; json.loads(sys.argv[1])' "$snapshots" || {
-    echo "CAVER snapshot role is not readable" >&2
-    exit 1
-}
-
+# The snapshot role is optional and run_caver.py reads it with an empty
+# default; asking the shared helper for an absent role exits non-zero.
 echo "REVODESIGN_STAGE:resolve_start_point"
 python3 "$script_dir/run_caver.py" \
     --task "$task_file" \
