@@ -68,6 +68,7 @@ from revocompute.resource_observations import work_items_projection
 from revocompute.resource_policy import ResolvedResources, ResourceValidationError
 from revocompute.result_projection import artifact_capability
 from revocompute.result_storyboard import (
+    RECORD_FILE_ROLES,
     ResultContractError,
     declared_file_roles,
     expected_file_tree,
@@ -1696,20 +1697,21 @@ def _resolve_result_views(
     artifact_by_path = {artifact["path"]: artifact for artifact in artifacts}
 
     def view_source_eligible(path: str, view_role: str) -> bool:
-        """Scientific views never claim the input snapshot or run records.
+        """Whether ``path`` may be a source of a view with ``view_role``.
 
-        A primary view is the scientific result and must not promote an input
-        snapshot or a declared provenance/diagnostic file. An evidence view may
-        deliberately present a runner-owned run record, but it still never
-        reaches into the server-owned snapshot or execution tree.
+        Server-owned snapshot and execution paths are never sources in any view.
+        A primary view also excludes any file the result tree declares
+        provenance or diagnostic; an evidence view may still source such a
+        declared file, such as a runner-owned run record, when it lives outside
+        those server-owned paths.
         """
         if path not in artifact_by_path or is_server_record(path):
             return False
         if view_role != "primary":
             return True
         return (
-            artifact_by_path[path].get("role") not in {"provenance", "diagnostic"}
-            and declared_roles.get(path) not in {"provenance", "diagnostic"}
+            artifact_by_path[path].get("role") not in RECORD_FILE_ROLES
+            and declared_roles.get(path) not in RECORD_FILE_ROLES
         )
 
     for definition in task_type.result_workspace:
