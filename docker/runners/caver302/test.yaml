@@ -9,8 +9,12 @@ collections:
           structure: [tests/data/pdb/1SUO.pdb]
       parameters:
         # The heme iron is the documented, exemplified starting_point_atom path
-        # and the classic 1SUO tunnel-analysis site.
+        # and the classic 1SUO tunnel-analysis site. The iron sits in a pocket
+        # narrower than probe_radius, so the start-point optimisation must be
+        # allowed to reach a solvent-accessible vertex; with the default
+        # max_distance 3 CAVER finds no tunnels at all.
         start_point_mode: atom
         start_chain: A
         start_residue_number: 500
         start_atom_name: FE
+        max_distance: 5
