@@ -18,11 +18,26 @@ prepare = importlib.util.module_from_spec(_SPEC)
 sys.modules["placer_prepare"] = prepare
 _SPEC.loader.exec_module(prepare)
 
+_CCD_STUB = {
+    "ALA": frozenset({"N", "CA", "C", "O", "CB", "OXT"}),
+    "THR": frozenset({"N", "CA", "C", "O", "CB", "OG1", "CG2"}),
+    "TRP": frozenset({"N", "CA"}),
+    "LIG": frozenset({"C1", "C2"}),
+    "HEM": frozenset({"C1"}),
+    "LDP": frozenset({"C1"}),
+    "SO4": frozenset({"S", "O1"}),
+}
+
+
+@pytest.fixture(autouse=True)
+def _ccd_stub(monkeypatch):
+    monkeypatch.setattr(prepare, "_ccd_library", lambda: _CCD_STUB)
+
 
 def _line(record: str, serial: int, atom: str, name: str, chain: str, number: int, insertion: str = "",
           altloc: str = "", x: float = 0.0) -> str:
     return (
-        f"{record:<6}{serial:>5} {atom:<4}{altloc:1}{name:>3} {chain}{number:>4}{insertion}"
+        f"{record:<6}{serial:>5} {atom:<4}{altloc:1}{name:>3} {chain:1}{number:>4}{insertion}"
         f"   {x:8.3f}{0.0:8.3f}{0.0:8.3f}{1.0:6.2f}{20.0:6.2f}          {atom[0]:>2}"
     )
 
@@ -384,11 +399,12 @@ def test_cif_polymer_uses_label_numbering_not_author_numbering(tmp_path):
 
 
 def test_cif_alternate_locations_and_insertion_codes_are_not_rejected(tmp_path):
-    structure = _write(tmp_path, "label_auth.cif", _cif_label_auth())
-    records = prepare.read_structure(structure)
-    assert not any(record.altloc or record.insertion for record in records)
+    content = _cif_label_auth()
+    # The fixture carries altloc "A" and insertion code "B" on the polymer row.
+    assert "ATOM 1 CA ALA A X 1 42 A B" in content
+    structure = _write(tmp_path, "label_auth.cif", content)
     params = _params(predict_ligand="B-LIG-7", target_res="A-1")
-    prepare.validate_structure(params, prepare.validate_params(params), records, structure)
+    prepare.validate_structure(params, prepare.validate_params(params), prepare.read_structure(structure), structure)
 
 
 def test_single_model_pdb_block_is_accepted(tmp_path):
@@ -455,4 +471,149 @@ def test_the_adapter_does_not_restate_the_num_samples_default():
     del params["num_samples"]
     with pytest.raises(prepare.PreparationError, match="num_samples"):
         prepare.validate_params(params)
+
+
+def _cif_atom_site(rows: list[str], *, model: bool = False) -> str:
+    columns = [
+        "_atom_site.group_PDB",
+        "_atom_site.id",
+        "_atom_site.label_atom_id",
+        "_atom_site.label_comp_id",
+        "_atom_site.label_asym_id",
+        "_atom_site.label_seq_id",
+        "_atom_site.auth_seq_id",
+    ]
+    if model:
+        columns.append("_atom_site.pdbx_PDB_model_num")
+    return "\n".join(["data_test", "loop_", *columns, *rows, "#"])
+
+
+def _cif_with_models(count: int) -> str:
+    rows = [
+        f"{group} {serial} {atom} {name} {chain} {label_seq} {auth_seq} {model}"
+        for model in range(1, count + 1)
+        for group, serial, atom, name, chain, label_seq, auth_seq in (
+            ("ATOM", 1, "CA", "ALA", "A", 1, 1),
+            ("HETATM", 2, "C1", "LIG", "B", ".", 1),
+        )
+    ]
+    return _cif_atom_site(rows, model=True)
+
+
+def _cif_with_ligand(name: str) -> str:
+    return _cif_atom_site([
+        "ATOM 1 CA ALA A 1 1",
+        f"HETATM 2 C1 {name} C . 2",
+    ])
+
+
+def _cif_with_collision() -> str:
+    return _cif_atom_site([
+        "ATOM 1 CA ALA A 1 1",
+        "ATOM 2 CA GLY A 1 1",
+        "HETATM 3 C1 LIG B . 1",
+    ])
+
+
+def test_single_model_cif_is_accepted(tmp_path):
+    structure = _write(tmp_path, "one.cif", _cif_with_models(1))
+    records = prepare.read_structure(structure)
+    assert len(records) == 2
+    prepare.validate_structure(_params(), prepare.validate_params(_params()), records, structure)
+
+
+def test_multi_model_cif_is_rejected(tmp_path):
+    structure = _write(tmp_path, "two.cif", _cif_with_models(2))
+    with pytest.raises(prepare.PreparationError, match="Multi-model mmCIF"):
+        prepare.read_structure(structure)
+
+
+def test_cif_ligand_must_be_in_the_residue_library(tmp_path):
+    structure = _write(tmp_path, "unl.cif", _cif_with_ligand("UNL"))
+    params = _params()
+    with pytest.raises(prepare.PreparationError, match="not in PLACER's shipped residue library"):
+        prepare.validate_structure(params, prepare.validate_params(params), prepare.read_structure(structure),
+                                   structure)
+    named = _params(predict_ligand="UNL")
+    with pytest.raises(prepare.PreparationError, match="not in PLACER's shipped residue library"):
+        prepare.validate_structure(named, prepare.validate_params(named), prepare.read_structure(structure),
+                                   structure)
+
+
+def test_mutation_target_must_be_in_the_residue_library(tmp_path):
+    structure = _write(tmp_path, "complex.pdb", _complex())
+    records = prepare.read_structure(structure)
+    bad = _params(mutate="1A:75I")
+    with pytest.raises(prepare.PreparationError, match="not in PLACER's shipped residue library"):
+        prepare.validate_structure(bad, prepare.validate_params(bad), records, structure)
+    good = _params(mutate="1A:TRP")
+    prepare.validate_structure(good, prepare.validate_params(good), records, structure)
+
+
+def test_selector_atoms_must_be_in_the_parsed_residue_template(tmp_path):
+    structure = _write(tmp_path, "amber.pdb", "\n".join([
+        _line("ATOM", 1, "CA", "ALA", "A", 1),
+        _line("ATOM", 2, "OT1", "ALA", "A", 1, x=2.0),
+        _line("HETATM", 3, "C1", "LIG", "B", 1, x=5.0),
+        "END",
+    ]))
+    records = prepare.read_structure(structure)
+    center = _params(crop_centers="A-1-ALA-OT1")
+    with pytest.raises(prepare.PreparationError, match="not an atom PLACER parses"):
+        prepare.validate_structure(center, prepare.validate_params(center), records, structure)
+    bond = _params(bonds="A-1-ALA-OT1:B-1-LIG-C1:1.8")
+    with pytest.raises(prepare.PreparationError, match="not an atom PLACER parses"):
+        prepare.validate_structure(bond, prepare.validate_params(bond), records, structure)
+
+
+def test_blank_pdb_chain_is_keyed_as_space_and_cannot_be_selected(tmp_path):
+    structure = _write(tmp_path, "blank.pdb", "\n".join([
+        _line("ATOM", 1, "CA", "ALA", "", 1),
+        _line("HETATM", 2, "C1", "LIG", "B", 1, x=5.0),
+        "END",
+    ]))
+    assert {record.chain for record in prepare.read_structure(structure)} == {" ", "B"}
+    with pytest.raises(prepare.PreparationError, match="Invalid center"):
+        prepare.validate_params(_params(crop_centers="-1-ALA-CA"))
+
+
+def test_pdb_keeps_same_chain_number_residues_with_different_names(tmp_path):
+    structure = _write(tmp_path, "collision.pdb", "\n".join([
+        _line("ATOM", 1, "CA", "ALA", "A", 1),
+        _line("ATOM", 2, "CA", "GLY", "A", 1, x=1.0),
+        _line("HETATM", 3, "C1", "LIG", "B", 1, x=5.0),
+        "END",
+    ]))
+    params = _params()
+    prepare.validate_structure(params, prepare.validate_params(params), prepare.read_structure(structure), structure)
+
+
+def test_cif_merges_same_chain_number_residues_with_different_names(tmp_path):
+    structure = _write(tmp_path, "collision.cif", _cif_with_collision())
+    params = _params()
+    with pytest.raises(prepare.PreparationError, match="share a chain and residue number"):
+        prepare.validate_structure(params, prepare.validate_params(params), prepare.read_structure(structure),
+                                   structure)
+
+
+def test_excluded_common_ligands_ignore_their_altlocs(tmp_path):
+    structure = _write(tmp_path, "so4_altloc.pdb", "\n".join([
+        _line("ATOM", 1, "CA", "ALA", "A", 1),
+        _line("HETATM", 2, "S", "SO4", "C", 2, altloc="A", x=5.0),
+        "END",
+    ]))
+    records = prepare.read_structure(structure)
+    skipped = _params(predict_ligand="", target_res="A-1", exclude_common_ligands=True)
+    prepare.validate_structure(skipped, prepare.validate_params(skipped), records, structure)
+    strict = _params(predict_ligand="", target_res="A-1")
+    with pytest.raises(prepare.PreparationError, match="alternate locations"):
+        prepare.validate_structure(strict, prepare.validate_params(strict), records, structure)
+
+
+def test_fixed_all_with_target_res_and_centers_is_rejected(tmp_path):
+    structure = _write(tmp_path, "complex.pdb", _complex())
+    params = _params(predict_ligand="", fixed_ligand="LIG", target_res="A-1", crop_centers="B-1-LIG-C1")
+    with pytest.raises(prepare.PreparationError, match="No ligand remains to predict"):
+        prepare.validate_structure(params, prepare.validate_params(params), prepare.read_structure(structure),
+                                   structure)
 

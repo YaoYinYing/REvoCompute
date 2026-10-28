@@ -121,7 +121,9 @@ result_workspace:
     description: One row per sampled MODEL. Lower fape, rmsd, kabsch and prmsd are
       better; higher lddt, plddt and plddt_pde are better. fape, lddt, rmsd and
       kabsch are measured against the input reference; prmsd is predicted
-      coordinate uncertainty and plddt/plddt_pde are predicted confidence.
+      coordinate uncertainty and plddt/plddt_pde are predicted confidence. rmsd
+      and kabsch report zero when no ligand atoms are corrupted (apo or
+      target_res side-chain mode).
     sources:
       table:
       - glob: '*.csv'
@@ -176,15 +178,15 @@ parameters:
     predict_ligand:
       type: string
       description: Ligand instances to rebuild and score, as space-separated name3,
-        name3-resno, or chain-name3-resno (for example lig or B-lig-1). All other
-        ligands stay fixed.
+        name3-resno, or chain-name3-resno (for example lig or B-lig-1). A bare
+        token is a residue name, not a chain. All other ligands stay fixed.
       default: ''
       pattern: '^(?:[A-Za-z0-9]+|[A-Za-z0-9]+-[0-9]+|[A-Za-z0-9]+-[A-Za-z0-9]+-[0-9]+)(?:\s+(?:[A-Za-z0-9]+|[A-Za-z0-9]+-[0-9]+|[A-Za-z0-9]+-[A-Za-z0-9]+-[0-9]+))*$|^$'
     use_sm:
       type: boolean
       description: Keep the small molecule in the model. Turn off for an apo run
-        that rebuilds only protein residues; rmsd and kabsch then report zero.
-        Cannot be combined with predict_ligand or fixed_ligand.
+        that rebuilds only protein residues. Cannot be combined with
+        predict_ligand or fixed_ligand.
       default: true
     fixed_ligand:
       type: string
@@ -242,8 +244,10 @@ parameters:
     crop_centers:
       type: string
       description: Crop centers as space-separated chain-resno-name3-atom, for
-        example B-200-HEM-FE. One is chosen at random; this does not select which
-        ligands are predicted. Cannot be combined with corruption_centers.
+        example B-200-HEM-FE. One is chosen at random and also serves as the
+        corruption center, relocating each predicted ligand there; this does not
+        select which ligands are predicted. Cannot be combined with
+        corruption_centers.
       default: ''
       pattern: '^(?:[A-Za-z0-9]*-[0-9]+-[A-Za-z0-9]+-[A-Za-z0-9'']+(?:\s+[A-Za-z0-9]*-[0-9]+-[A-Za-z0-9]+-[A-Za-z0-9'']+)*)?$'
     corruption_centers:

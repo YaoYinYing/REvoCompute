@@ -17,6 +17,7 @@ vector, never shell text.
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
 import math
 import os
@@ -24,6 +25,7 @@ import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -45,6 +47,18 @@ _COMMON_LIGANDS = frozenset(
 
 class PreparationError(ValueError):
     """A user-correctable manifest, parameter, or input-structure failure."""
+
+
+@lru_cache(maxsize=1)
+def _ccd_library() -> dict[str, frozenset[str]]:
+    """Residue names and template atom names in PLACER's shipped CCD library."""
+    path = Path(os.environ.get("PLACER_PATH", "/opt/PLACER")) / "data" / "ligands.json.gz"
+    try:
+        with gzip.open(path, "rt", encoding="utf-8") as handle:
+            definitions = json.load(handle)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise PreparationError(f"PLACER residue library is not readable: {exc}") from None
+    return {name: frozenset(entry.get("atom_id") or ()) for name, entry in definitions.items()}
 
 
 @dataclass(frozen=True)
@@ -97,7 +111,7 @@ def _parse_target_res(token: str) -> tuple[str, int]:
 
 def _parse_center(token: str, flag: str) -> tuple[str, int, str, str]:
     parts = token.split("-")
-    if len(parts) != 4 or not parts[1].isdigit() or not parts[2] or not parts[3]:
+    if len(parts) != 4 or not parts[0] or not parts[1].isdigit() or not parts[2] or not parts[3]:
         raise PreparationError(
             f"Invalid center {token!r} for {flag}; use chain-resno-name3-atom, for example B-200-HEM-FE."
         )
@@ -124,7 +138,7 @@ def _parse_mutation(token: str) -> tuple[str, int, str]:
     parts = token.split(":")
     if len(parts) != 2 or not parts[1]:
         raise PreparationError(
-            f"Invalid mutation {token!r}; use resno+chain:name3, for example 128A:75I."
+            f"Invalid mutation {token!r}; use resno+chain:name3, for example 128A:TRP."
         )
     position, name = parts
     index = 0
@@ -194,7 +208,8 @@ def _pdb_residues(text: str) -> list[Residue]:
             continue
         if line[:6] not in {"ATOM  ", "HETATM"} or len(line) < 27:
             continue
-        chain = line[21:22].strip()
+        # Keep the raw column: upstream keys a blank chain as " ", not "".
+        chain = line[21:22]
         if line[:6] == "ATOM  " and chain != current_chain:
             # Upstream groups contiguous ATOM runs by chain, so a repeated
             # non-contiguous block silently overwrites the earlier one.
@@ -290,6 +305,7 @@ def _cif_residues(text: str) -> list[Residue]:
         auth_number = column("_atom_site.auth_seq_id")
         name_column = column("_atom_site.auth_comp_id", "_atom_site.label_comp_id")
         atom_column = column("_atom_site.label_atom_id", "_atom_site.auth_atom_id")
+        model_column = column("_atom_site.pdbx_PDB_model_num")
         if (
             chain_column is None
             or label_number is None
@@ -298,6 +314,16 @@ def _cif_residues(text: str) -> list[Residue]:
             or atom_column is None
         ):
             raise PreparationError("mmCIF atom-site records lack the columns PLACER needs.")
+        if model_column is not None:
+            models = {
+                row[model_column]
+                for row in rows
+                if len(row) == len(columns) and row[model_column] not in {"?", "."}
+            }
+            if len(models) > 1:
+                raise PreparationError(
+                    "Multi-model mmCIF input is not supported; PLACER keeps one model. Submit a single model."
+                )
         # Upstream keys chains by label_asym_id, polymer residues by
         # label_seq_id, and non-polymer residues by auth_seq_id. Alternates are
         # resolved by occupancy and insertion codes are not read.
@@ -339,8 +365,8 @@ def read_structure(path: str) -> list[Residue]:
         return _pdb_residues(text)
     if suffix in {".cif", ".mmcif"}:
         return _cif_residues(text)
-    # PLACER's -f dispatch recognizes only .pdb, .cif and .cif.gz, so a legacy
-    # .ent upload (also outside this Task's format list) is not forwarded.
+    # PLACER's -f dispatch also accepts .ent, but .ent is outside this Task's
+    # declared formats, so it is rejected here instead of being forwarded.
     raise PreparationError(f"Unsupported structure format {suffix or path!r}; use PDB or mmCIF.")
 
 
@@ -376,10 +402,36 @@ def _matching_ligands(specs: list[str], ligands: list[tuple[str, int, str]]) -> 
 
 def validate_structure(params: dict[str, Any], parsed: ParsedParams, residues: list[Residue], path: str) -> None:
     """Cross-check the requested identifiers against the submitted structure."""
-    relevant = [residue for residue in residues if residue.name != "HOH"]
+    suffix = Path(path).suffix.lower()
+    cif_input = suffix in {".cif", ".mmcif"}
+    skip_common = bool(params.get("exclude_common_ligands"))
+    skipped = {"HOH", *_COMMON_LIGANDS} if skip_common else {"HOH"}
+    # Upstream drops skipped ligands before parsing. For mmCIF the skip list
+    # also removes those names from the residue library, so polymer names go too.
+    relevant = [
+        residue
+        for residue in residues
+        if residue.name not in skipped or (residue.record == "ATOM" and not cif_input)
+    ]
+    # PLACER parses only residues and atoms present in its shipped library; check
+    # mmCIF ligands and every selector against that library before dispatch.
+    needs_ccd = cif_input or bool(
+        parsed.mutate or parsed.crop_centers or parsed.corruption_centers or parsed.bonds
+    )
+    ccd = _ccd_library() if needs_ccd else {}
+    if cif_input:
+        unknown = sorted(
+            {residue.name for residue in relevant if residue.record == "HETATM" and residue.name not in ccd}
+        )
+        if unknown:
+            raise PreparationError(
+                "Ligand name3 "
+                + ", ".join(repr(name) for name in unknown)
+                + " is not in PLACER's shipped residue library; PLACER would drop it."
+            )
     # The mmCIF parser resolves alternates by highest occupancy and never reads
     # insertion codes, so these PDB-parser restrictions apply to PDB only.
-    if Path(path).suffix.lower() == ".pdb":
+    if not cif_input:
         insertion = sorted({residue.insertion for residue in relevant if residue.insertion})
         if insertion:
             raise PreparationError(
@@ -397,18 +449,21 @@ def validate_structure(params: dict[str, Any], parsed: ParsedParams, residues: l
         raise PreparationError(
             f"Residue numbers are not integers in chain(s) {', '.join(repr(chain) for chain in unnamed)}."
         )
-    numbering: dict[tuple[str, int | None], set[str]] = {}
-    for residue in relevant:
-        numbering.setdefault((residue.chain, residue.number), set()).add(residue.name)
-    collisions = sorted(key for key, names in numbering.items() if len(names) > 1)
-    if collisions:
-        chain, number = collisions[0]
-        raise PreparationError(
-            f"Residues {chain}{number} share a chain and residue number with different names; "
-            "PLACER would merge them."
-        )
+    if cif_input:
+        # A CIF residue is keyed by chain and sequence number, so two names at
+        # one number collapse; a PDB keeps the name in its residue key.
+        numbering: dict[tuple[str, int | None], set[str]] = {}
+        for residue in relevant:
+            numbering.setdefault((residue.chain, residue.number), set()).add(residue.name)
+        collisions = sorted(key for key, names in numbering.items() if len(names) > 1)
+        if collisions:
+            chain, number = collisions[0]
+            raise PreparationError(
+                f"Residues {chain}{number} share a chain and residue number with different names; "
+                "PLACER would merge them."
+            )
 
-    ligands = _ligands(residues, bool(params.get("exclude_common_ligands")))
+    ligands = _ligands(residues, skip_common)
     ligand_chains = {ligand[0] for ligand in ligands}
     protein_chains = {residue.chain for residue in relevant if residue.record == "ATOM"}
     shared_chains = sorted(ligand_chains & protein_chains)
@@ -428,10 +483,19 @@ def validate_structure(params: dict[str, Any], parsed: ParsedParams, residues: l
     target = _parse_target_res(parsed.target_res) if parsed.target_res else None
     if target is not None:
         chain, number = target
-        if not any(
-            residue.record == "ATOM" and residue.chain == chain and residue.number == number for residue in relevant
-        ):
+        matches = [
+            residue
+            for residue in relevant
+            if residue.record == "ATOM" and residue.chain == chain and residue.number == number
+        ]
+        if not matches:
             raise PreparationError(f"target_res {parsed.target_res!r} matches no protein residue in the input.")
+        if cif_input:
+            unknown = sorted({residue.name for residue in matches if residue.name not in ccd})
+            if unknown:
+                raise PreparationError(
+                    f"target_res residue {unknown[0]!r} is not in PLACER's shipped residue library."
+                )
     elif not ligands:
         raise PreparationError("target_res is required when the input structure has no ligand.")
     if not ligands and (parsed.crop_centers or parsed.corruption_centers):
@@ -448,35 +512,46 @@ def validate_structure(params: dict[str, Any], parsed: ParsedParams, residues: l
             "Leave at least one ligand unfixed, or use target_res alone."
         )
 
-    for flag in _CENTER_FLAGS:
-        for token in getattr(parsed, flag):
-            chain, number, name, atom = _parse_center(token, flag)
-            if not any(
-                residue.chain == chain
+    def selector_residue(chain: str, number: int, name: str, atom: str, label: str) -> None:
+        match = next(
+            (
+                residue
+                for residue in relevant
+                if residue.chain == chain
                 and residue.number == number
                 and residue.name == name
                 and residue.atom == atom
-                for residue in relevant
-            ):
-                raise PreparationError(f"{flag} atom {token!r} is absent from the input structure.")
+            ),
+            None,
+        )
+        if match is None:
+            raise PreparationError(f"{label} atom {chain}-{number}-{name}-{atom!r} is absent from the input.")
+        if (cif_input or match.record == "ATOM") and atom not in ccd.get(name, frozenset()):
+            raise PreparationError(
+                f"{label} atom {chain}-{number}-{name}-{atom!r} is not an atom PLACER parses for residue {name!r}."
+            )
+
+    for flag in _CENTER_FLAGS:
+        for token in getattr(parsed, flag):
+            chain, number, name, atom = _parse_center(token, flag)
+            selector_residue(chain, number, name, atom, flag)
 
     for token in parsed.bonds:
         left, right, _length = token.split(":")
         for atom in (left, right):
             chain, number, name, atom_name = _parse_center(atom, "bonds")
-            if not any(
-                residue.chain == chain
-                and residue.number == number
-                and residue.name == name
-                and residue.atom == atom_name
-                for residue in relevant
-            ):
-                raise PreparationError(f"Bond atom {atom!r} is absent from the input structure.")
+            selector_residue(chain, number, name, atom_name, "Bond")
 
-    if parsed.mutate and Path(path).suffix.lower() in {".cif", ".mmcif"}:
+    if parsed.mutate and cif_input:
         raise PreparationError("mutate is PDB-only; PLACER does not apply it to mmCIF input.")
     for token in parsed.mutate:
-        chain, number, _name = _parse_mutation(token)
+        chain, number, name = _parse_mutation(token)
+        if name not in ccd:
+            raise PreparationError(
+                f"Mutation target {name!r} is not in PLACER's shipped residue library."
+            )
+        # Upstream groups a blank PDB chain as " " for mutations.
+        chain = chain or " "
         if not any(
             residue.record == "ATOM" and residue.chain == chain and residue.number == number for residue in relevant
         ):
