@@ -5,3 +5,17 @@
 .task-diagnostics pre{font-family:var(--font-mono,monospace);font-size:14px;line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere;max-height:20rem;overflow:auto;padding:1rem;border:1px solid var(--app-line-strong);border-radius:4px;background:var(--app-bg);color:var(--app-ink)}
 .task-diagnostics a{display:inline-block;padding:.5rem 0;text-decoration:underline;text-underline-offset:3px}.task-diagnostics button{min-height:40px;padding:.5rem 1rem}
 @media(max-width:40rem){.task-diagnostic-facts{grid-template-columns:1fr;gap:.25rem}.task-diagnostic-facts dd{margin-bottom:.5rem}.task-diagnostics{padding:1rem}.task-diagnostics pre{padding:.75rem}}
+.task-diagnostic-excerpt{margin:.75rem 0;min-width:0}
+.task-diagnostic-search{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin-bottom:.5rem}
+.task-diagnostic-search label{font-size:14px}
+.task-diagnostic-search-input{flex:1 1 12rem;min-height:40px;padding:.4rem .6rem;border:1px solid var(--app-line-strong);border-radius:4px;background:var(--app-bg);color:var(--app-ink);font-size:14px}
+.task-diagnostic-search-status{min-height:1.6em;margin:.25rem 0}
+.task-diagnostic-note{margin:.25rem 0;color:var(--app-muted);font-size:13px}
+.task-diagnostic-error{margin:.5rem 0;color:var(--app-danger);font-size:14px}
+.task-diagnostic-lines{max-height:24rem;overflow:auto;padding:.75rem;border:1px solid var(--app-line-strong);border-radius:4px;background:var(--app-bg);color:var(--app-ink);font-family:var(--font-mono,monospace);font-size:14px;line-height:1.6}
+.task-diagnostic-line{display:flex;gap:.75rem;content-visibility:auto;contain-intrinsic-size:auto 1.5em}
+.task-diagnostic-line.is-current{background:color-mix(in srgb,var(--app-accent) 16%,transparent)}
+.task-diagnostic-gutter{flex:0 0 auto;min-width:3.5rem;text-align:right;color:var(--app-muted);user-select:none}
+.task-diagnostic-line-text{min-width:0;white-space:pre-wrap;overflow-wrap:anywhere}
+.task-diagnostic-line-text mark{background:var(--app-warning);color:var(--app-bg)}
+@media(max-width:40rem){.task-diagnostic-search{flex-direction:column;align-items:stretch}.task-diagnostic-search-input{flex:0 0 auto;width:100%}.task-diagnostic-lines{max-height:18rem;font-size:13px}.task-diagnostic-gutter{min-width:2.5rem}}

@@ -197,6 +197,25 @@ def test_diagnostic_context_is_not_a_user_facing_failure_explanation(text):
     assert "service.internal" not in sanitized
 
 
+def test_invisible_format_controls_cannot_reorder_the_retained_excerpt(task_context):
+    module, client, task_id, root, owner, *_ = task_context
+    publish_evidence(
+        task_context,
+        record={
+            "source": "slurm_adapter",
+            "schema_version": 1,
+            "task_id": task_id,
+            # A right-to-left override plus zero-width/BOM characters would let a
+            # log line display different text than it contains.
+            "logs": {"stderr": "safe \u202eevil\u202c\u200f\ufeff text\n"},
+        },
+    )
+    evidence = client.get(f"/compute/api/tasks/{task_id}/diagnostics", headers=owner).json
+    assert evidence["logs"][0]["preview"] == "safe evil text\n"
+    downloaded = client.get(evidence["logs"][0]["download_url"], headers=owner)
+    assert downloaded.text == "safe evil text\n"
+
+
 def test_log_bounds_preserve_utf8_and_only_complete_lines():
     tail, truncated = bounded_log("first\n" + "αβγ\n" * 10000, limit=8192)
     assert truncated
@@ -444,3 +463,92 @@ def test_diagnostic_failures_preserve_terminal_ownership_accounting_and_cleanup(
     assert not (input_root / "scratch").exists()
     assert not (input_root / "prepared").exists()
     assert client.get(f"/compute/api/tasks/{task_id}/diagnostics", headers=owner).status_code == 200
+
+
+@pytest.mark.browser
+def test_retained_excerpt_reads_and_searches_without_leaving_the_panel(task_context, page, tmp_path, monkeypatch):
+    """Real Flask/storage/authorization plus the production bundle; no Slurm claim."""
+    import shutil
+    import threading
+    from playwright.sync_api import expect
+    from werkzeug.serving import make_server
+
+    module, _client, task_id, _root, _owner, *_ = task_context
+    bundle = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+    assert (bundle / "index.html").is_file(), "Build the production frontend before browser acceptance"
+    static_root = tmp_path / "browser-static"
+    shutil.copytree(bundle, static_root / "app")
+    monkeypatch.setattr(module.app, "static_folder", str(static_root))
+
+    # Longer than the 8 KiB preview so the retained excerpt is offered: the early
+    # marker is only reachable through the full bounded excerpt.
+    early = "EARLY-MARKER " + "a" * 200 + "\n"
+    body = "".join(f"progress step {index}\n" for index in range(3000))
+    stderr = early + body + "API_TOKEN=diagnostic-token\nLATE-MARKER\n"
+    publish_evidence(
+        task_context,
+        record={"source": "slurm_adapter", "schema_version": 1, "task_id": task_id, "logs": {"stderr": stderr}},
+    )
+
+    server = make_server("127.0.0.1", 0, module.app, threaded=True)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    origin = f"http://127.0.0.1:{server.server_port}"
+    login = page.context.request.post(
+        f"{origin}/compute/api/auth/login", data={"username": "tester", "password": "password"},
+    )
+    assert login.status == 200
+    try:
+        page.goto(f"{origin}/compute/results/{task_id}")
+        panel = page.locator(".task-diagnostics")
+        expect(panel).to_be_visible()
+        expect(panel.locator("pre").first).not_to_contain_text("EARLY-MARKER")
+        opener = panel.get_by_role("button", name="Read full retained excerpt", exact=True)
+        expect(opener).to_be_visible()
+        opener.focus()
+        page.keyboard.press("Enter")
+        toggle = panel.get_by_role("button", name="Hide retained excerpt", exact=True)
+        expect(toggle).to_have_attribute("aria-expanded", "true")
+        expect(toggle).to_be_focused()
+        lines = panel.locator(".task-diagnostic-lines")
+        expect(lines).to_be_visible()
+        expect(lines).to_contain_text("EARLY-MARKER")
+        expect(lines).to_contain_text("LATE-MARKER")
+        expect(lines).not_to_contain_text("diagnostic-token")
+        expect(panel.locator(".task-diagnostic-gutter").first).to_have_text("1")
+
+        search = panel.get_by_label("Search this excerpt")
+        search.fill("early-marker")
+        expect(panel.locator(".task-diagnostic-search-status")).to_have_text("Match 1 of 1")
+        expect(panel.locator("mark")).to_have_count(1)
+        search.fill("progress step")
+        expect(panel.locator(".task-diagnostic-search-status")).to_contain_text("Match 1 of 1000+")
+        page.keyboard.press("Enter")
+        expect(panel.locator(".task-diagnostic-search-status")).to_contain_text("Match 2 of 1000+")
+        page.keyboard.press("Shift+Enter")
+        expect(panel.locator(".task-diagnostic-search-status")).to_contain_text("Match 1 of 1000+")
+        page.keyboard.press("Escape")
+        expect(search).to_have_value("")
+        expect(panel.locator("mark")).to_have_count(0)
+
+        for width in (1440, 390):
+            page.set_viewport_size({"width": width, "height": 900})
+            assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+        # Screenshot the viewport, not the page: the excerpt can be many thousands
+        # of lines tall, past Chromium's capture limit.
+        page.set_viewport_size({"width": 1440, "height": 1000})
+        panel.scroll_into_view_if_needed()
+        page.screenshot(path=str(tmp_path / "retained-excerpt-desktop.png"))
+        page.set_viewport_size({"width": 390, "height": 900})
+        page.locator(".task-diagnostic-lines").scroll_into_view_if_needed()
+        page.screenshot(path=str(tmp_path / "retained-excerpt-mobile.png"))
+
+        # The toggle restores the bounded preview without a second request.
+        toggle.click()
+        expect(panel.get_by_role("button", name="Read full retained excerpt", exact=True)).to_have_attribute(
+            "aria-expanded", "false"
+        )
+        expect(panel.locator("pre").first).to_be_visible()
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)

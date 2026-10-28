@@ -32,6 +32,12 @@ export async function requestJson<T>(url: string, init: RequestInit = {}): Promi
   return response.json() as Promise<T>;
 }
 
+export async function requestText(url: string, init: RequestInit = {}): Promise<string> {
+  const response = await fetch(url, { ...init, credentials: 'same-origin' });
+  if (!response.ok) throw await responseError(response);
+  return response.text();
+}
+
 async function mintToken(force = false): Promise<string> {
   if (force) bearerToken = null;
   if (bearerToken) return bearerToken;

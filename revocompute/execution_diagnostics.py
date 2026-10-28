@@ -30,7 +30,12 @@ REASONS = {
     "runner_validation_failed": "Runner output validation failed.",
 }
 _SECRET_KEY = re.compile(r"secret|password|passwd|token|credential|api.?key|authorization|private.?key", re.I)
-_CONTROL = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+# ANSI/C0 controls plus invisible bidi and zero-width format characters, which
+# would otherwise let an excerpt visually reorder or conceal its own text.
+_CONTROL = re.compile(
+    r"\x1b\[[0-?]*[ -/]*[@-~]|[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]"
+    r"|[\u200b\u200e\u200f\u202a-\u202e\u2060\u2066-\u2069\ufeff]"
+)
 _SECRET_ASSIGNMENT = re.compile(
     r"(?im)(?<![\w.-])([\w.-]*(?:secret|password|passwd|token|credential|api.?key|authorization)"
     r"[\w.-]*[\"']?\s*[=:]\s*)(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^\s,;]+)"

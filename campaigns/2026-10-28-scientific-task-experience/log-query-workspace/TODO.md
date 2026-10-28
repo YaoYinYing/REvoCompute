@@ -1,43 +1,67 @@
-# TODO — feat(logs): lazy log loading, indexed search and viewer UX
+# TODO — feat(logs): retained-excerpt reading and search
 
-**Planning PR; not implemented or merge-ready.**
+**Planning PR; implementation narrowed after re-grounding the premise.**
 
 ## Goal
-Build bounded, authorized lazy log retrieval and searching with safe regex, syntax highlighting, contextual navigation and virtualized rendering. Preserve the merged #116 diagnostics contract.
+Let an authorized reader inspect and search the bounded, redacted failure evidence
+without leaving the failure panel, and keep that evidence sanitized. Preserve the
+merged #116 diagnostics contract.
 
-## Initial evidence
-- PR #116 merged into this main and fixes bounded/redacted Slurm stderr capture; do not duplicate it.
-- Current user report: streaming currently loads full logs and has no bounded server-side search.
-- Stage markers and logs are observational data; neither is an authoritative StageRun state transition.
+## Premise re-grounding (2026-10-28)
 
-## Work checklist
-- [ ] Audit current live/final log producers, publication snapshots, authenticated reads, redaction policies, Slurm failure diagnostics and UI. Document actual log sources.
-- [ ] Design a backward-compatible paged query contract with cursor/byte-range, log identity, monotonic offsets, line boundaries, max bytes/lines and EOF/truncation metadata.
-- [ ] Implement bounded range retrieval and live-follow with incremental updates, backpressure, reconnection/resume and cancellation; no full-file browser retention.
-- [ ] Keep running and immutable finalized logs distinct; never expose host-only scheduler files or permit arbitrary filesystem paths.
-- [ ] Implement server-side literal search plus opt-in bounded regex (safe linear-time engine or rigorously enforced complexity, time and byte budget), rate limits, authenticated scope, result caps and pagination.
-- [ ] Apply authorization, redaction and terminal-control sanitization before search, preview, snippet, highlighting or export; avoid side-channel leakage of hidden matches.
-- [ ] Support UTF-8 boundaries, long lines, CRLF, duplicated timestamps, rotated/truncated logs, mixed sources, multiple allocation attempts and error paths.
-- [ ] Build a compact log viewer with virtual scrolling, source tabs, follow/pause, scroll anchoring, search/regex toggle, match navigation, contextual snippets, severity/token highlighting, export of approved excerpts and accessibility.
-- [ ] Retain existing evidence and diagnostic authority; ensure StageRun-compatible log identity is optional until Stage State PR #118 lands.
-- [ ] Document API schema, size/time/rate limits, privacy controls, operator behavior and localized labels.
+The initial premise — "streaming currently loads full logs and has no bounded
+server-side search" — is false for the diagnostics path:
 
-## Acceptance and regression
-- [ ] Bounded memory/response under synthetic GB-scale logs; no automatic full-history fetch; cursor stability on append and truncation.
-- [ ] Security regression: credentials/PEM blocks, malicious HTML/ANSI, regex denial-of-service, search-count leakage, unauthorized user scope and private paths.
-- [ ] Correct stdout/stderr attribution and #116 error publication; multi-attempt ordering and network reconnection.
-- [ ] Browser tests for keyword and regex hits, scrolling, pause/follow, error/empty states, mobile and keyboard; exact-head CI.
+- Evidence is failure-only (`execution_diagnostics.py`, `diagnostic_payload`:
+  a non-`failed` task returns an `unavailable` payload). A running task has no
+  log read at all.
+- The adapter record is capped (`MAX_RECORD_BYTES`) and read only through a
+  verified manifest artifact whose digest and Task identity must match.
+- Each stream is redacted, bounded (`MAX_LOG_BYTES`), and further reduced to a
+  tail `preview` (`PREVIEW_BYTES`). The download endpoint returns that same
+  bounded excerpt.
+- The frontend performs one GET per open/retry and renders the preview; it does
+  not stream, poll, or read a full log.
+- The only other log read is the artifact text preview, bounded by a `Range`
+  request and byte ceiling.
 
-## Explicit non-goals
-- No secondary logging database or replacement for Slurm/diagnostic publication.
-- Do not let user regex execute unbounded Python re against arbitrary-sized text.
+No live stream, full-log retention, unbounded search input, or GB-scale viewer
+exists to build against. See `IMPLEMENTATION_STATE.md` for file/line evidence.
 
-## Dependencies
-Independent after merged PR #116; optionally adapt to #118 stage API in a separate small follow-up.
+## Implemented increment
 
-## Agent protocol
-- [ ] Read current CLAUDE.md, LONG_TASK_HANDLING.md and Single-PR Campaign Protocol before implementation.
-- [ ] Assign one owner and maintain an independently active Campaign Adviser. Maintainer retains final squash-merge authority.
-- [ ] Keep IMPLEMENTATION_STATE.md current once implementation starts; evidence and exact head in PR thread are canonical.
-- [ ] Add regression evidence, docs, scientific rationale and fail-path tests; perform independent exact-head merge-level review.
-- [ ] Remain draft until all requirements are met; do not merge on a planning-only commit.
+- [x] Audit the real producers, publication, authorization and UI reads.
+- [x] Keep the #116 record, bounds, redaction and authorization contract.
+- [x] Server: strip Unicode bidi/zero-width format controls with the existing
+      terminal-control sanitization before the excerpt is published.
+- [x] Frontend: load the already-bounded, already-redacted excerpt on request
+      (no automatic fetch) and render it with excerpt-relative line numbers.
+- [x] Frontend: literal, case-insensitive search with match count, next/previous
+      navigation, keyboard handling (Enter, Shift+Enter, Escape) and a bounded
+      match/render cap. No user-authored regular expressions.
+- [x] Failure state keeps the preview and download available; aborting the panel
+      discards a pending excerpt.
+- [x] Document the user contract in `docs/user-guide/task-states.md`.
+
+## Deliberately not built (no corresponding real input or authority)
+
+- [x] Live-follow, reconnection and backpressure — there is no running-task log
+      stream to follow.
+- [x] Byte-range paging and virtual scrolling of GB logs — the retained record
+      is bounded and no full log is exposed to the browser.
+- [x] A server-side search endpoint — the whole retained stream is bounded and
+      already downloadable by the same authorized reader, so server search would
+      duplicate the payload without adding safety.
+- [x] Regex search, a logging database, or a second persistence store.
+- [x] StageRun log identity — optional until the Stage State PR lands; not
+      needed by this increment.
+
+## Verification
+
+- [x] Unit: excerpt bounds, path validation, authorization refusal, literal
+      search, metacharacters, match/render caps, failure and abort disposal.
+- [x] Server: redaction/bidi sanitization through the real API, existing
+      diagnostics/slurm suites, boundary check.
+- [x] Browser: readable/searchable excerpt, keyboard navigation, redaction,
+      desktop and mobile layout, exact head.
+- [ ] Independent exact-head review and final acceptance (campaign roles).
