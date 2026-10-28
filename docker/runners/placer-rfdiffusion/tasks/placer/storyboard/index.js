@@ -13,7 +13,7 @@ export default {
     const root = el('div', 'pl-result');
     const style = el('style'); style.textContent = STYLE; root.append(style);
     root.append(el('h2', '', 'Protein–ligand complex models'));
-    root.append(el('p', 'pl-note', 'Each published complex is one independently sampled placement. The metrics table beside it scores the same sample: lDDT and RMSD compare it with the fixed input geometry, and pLDDT/pLDDT-PDE are the model\'s own confidence outputs. A single sample is a hypothesis, not a converged ensemble. The complex keeps the input\'s chain and residue numbering; a residue number absent from the complex was not placed in this sample, and this page never renumbers it.'));
+    root.append(el('p', 'pl-note', 'Every sampled placement is one MODEL in the published complex file, and the row with the same model_idx scores that MODEL. fape, lddt, rmsd and kabsch are measured against the input coordinates (lower fape, rmsd and kabsch are better; higher lddt is better); rmsd and kabsch cover the atoms PLACER rebuilt and report zero when the run predicts no ligand. prmsd is PLACER\'s predicted coordinate uncertainty (lower is better); plddt and plddt_pde are its predicted confidence (higher is better). A single sample is a hypothesis, not a converged ensemble. The complex keeps the input\'s chain and residue numbering; a residue number absent from the complex was not placed in this sample, and this page never renumbers it.'));
     // The sampled complex is the run's own protein–ligand model. The declared
     // views list candidates and table rows and mount no viewer, so the complex
     // opens here, on the first screen.
@@ -46,7 +46,7 @@ export default {
     }
     if (!structureMounted) structureStage.remove();
     structureNote.textContent = !complex ? 'This run published no complex model.'
-      : structureMounted ? `The complex ${complex.name || ''} is the sampled placement published with this run.`
+      : structureMounted ? `The file ${complex.name || ''} holds the sampled placements published with this run.`
         : 'The complex could not be drawn here; it stays downloadable below.';
     const mounted = [];
     try {
@@ -54,7 +54,7 @@ export default {
       for (const section of root.querySelectorAll('[data-view-id]')) {
         mounted.push(await services.mountView(section.dataset.viewId, section.querySelector('.pl-stage'), abort.signal) || null);
       }
-      status.textContent = 'The complex and the score row are the same published sample.';
+      status.textContent = 'Each score row names the MODEL it scores by model_idx.';
     } catch (error) {
       if (error.name !== 'AbortError') { status.textContent = 'The complex could not be rendered; the downloads above remain available.'; status.className = 'result-note'; }
     }

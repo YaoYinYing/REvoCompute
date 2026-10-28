@@ -11,6 +11,7 @@ runtime:
   runtime_overlay:
   - common/runtime/task_context.sh
   - common/runtime/task_context.py
+  - placer-rfdiffusion/placer_prepare.py
   entrypoint:
   - bash
   - /app/revocompute/run.sh

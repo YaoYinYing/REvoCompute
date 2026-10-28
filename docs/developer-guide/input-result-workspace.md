@@ -326,9 +326,10 @@ behavior or a scheduled goal.
   unauthorized artifact access, and remote plugin injection.
 - Performance tests demonstrating bounded reads and cleanup of object URLs,
   viewers, workers, and event listeners.
-- End-to-end tests for RFdiffusion nested uploads, PLACER multi-structure input,
-  MPNN structure selection, manifest galleries, individual downloads, byte
-  ranges, previews, and optional ZIP behavior.
+- End-to-end tests for RFdiffusion nested uploads, PLACER single-structure input
+  with optional residue definitions, MPNN structure selection, manifest
+  galleries, individual downloads, byte ranges, previews, and optional ZIP
+  behavior.
 
 ## Acceptance criteria
 

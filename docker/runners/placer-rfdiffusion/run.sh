@@ -13,34 +13,15 @@ _run_placer() {
   [[ -z "${input_file:-}" || -z "${output_dir:-}" ]] && usage
   input_file=$(readlink -f "$input_file"); output_dir=$(readlink -f "$output_dir")
   [[ ! -f "$input_file" ]] && { echo "Input not found: $input_file"; exit 1; }
-  input_root=/workspace/inputs/structures
   mkdir -p "$output_dir"
 
-  NUM_SAMPLES="$(_parse_param num_samples)"
-  USE_SM="$(_parse_param use_sm)"
+  # The manifest names the one complex and the optional residue JSON. The
+  # validator turns them into a safe argument vector before PLACER loads.
+  local prepare="${PLACER_PREPARE:-$runtime_root/placer-rfdiffusion/placer_prepare.py}"
+  [[ -f "$prepare" ]] || prepare="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/placer_prepare.py"
 
   echo "REVODESIGN_STAGE:placer"
-  export REVOCOMPUTE_INPUT_ROOT="$input_root"
-  local -a placer_args=(-i "$input_root" -o "$output_dir" -n "$NUM_SAMPLES")
-  [[ "$USE_SM" == "false" ]] && placer_args+=(--no-use_sm)
-  for switch_key in cautious exclude_common_ligands predict_multi ignore_ligand_hydrogens; do
-    [[ "$(_parse_param "$switch_key")" == "true" ]] && placer_args+=("--${switch_key}")
-  done
-  local value key flag
-  for mapping in fixed_ligand:fixed_ligand predict_ligand:predict_ligand bonds:bonds \
-    mutate:mutate crop_centers:crop_centers corruption_centers:corruption_centers; do
-    key=${mapping%%:*}; flag=${mapping#*:}; value=$(_parse_param "$key")
-    if [[ -n "$value" ]]; then
-      local -a values
-      read -r -a values <<< "$value"
-      placer_args+=("--${flag}" "${values[@]}")
-    fi
-  done
-  for mapping in target_res:target_res fixed_ligand_noise:fixed_ligand_noise rerank:rerank; do
-    key=${mapping%%:*}; flag=${mapping#*:}; value=$(_parse_param "$key")
-    [[ -n "$value" ]] && placer_args+=("--${flag}" "$value")
-  done
-  python3 "${PLACER_PATH}/run_PLACER.py" "${placer_args[@]}"
+  python3 "$prepare" --manifest "$input_file" --output-dir "$output_dir"
 
   touch "${output_dir}/task_finished"
   echo "PLACER complete."
