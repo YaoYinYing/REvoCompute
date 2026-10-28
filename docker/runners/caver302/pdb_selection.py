@@ -112,7 +112,7 @@ def parse_pdb(path: Path) -> list[Atom]:
         raise SelectionError(f"cannot read structure {path.name}: {exc}") from exc
     atoms: list[Atom] = []
     saw_model = False
-    for line in lines:
+    for lineno, line in enumerate(lines, start=1):
         record = line[:6]
         if record.startswith("MODEL"):
             if saw_model:
@@ -125,8 +125,11 @@ def parse_pdb(path: Path) -> list[Atom]:
             continue
         if not (record.startswith("ATOM") or record.startswith("HETATM")):
             continue
-        if len(line) < 54:
-            raise SelectionError(f"structure {path.name} contains a truncated coordinate record")
+        if len(line) < 79:
+            raise SelectionError(
+                f"structure {path.name} line {lineno} is a coordinate record shorter than 79 columns; "
+                "CAVER reads the element from columns 77-78 and aborts when they are absent"
+            )
         try:
             atoms.append(
                 Atom(
@@ -210,20 +213,38 @@ def _conformer_labels(residue_atoms: list[Atom]) -> dict[str, list[Atom]]:
     return conformers
 
 
-def difficult_conformations(atoms: list[Atom]) -> bool:
-    """True when a residue's conformers hold different numbers of atoms.
+def _blank_occupancy_conformers(residue_atoms: list[Atom]) -> bool:
+    """True when a residue has alternate locations and none carries an occupancy."""
+    return bool(_conformer_labels(residue_atoms)) and not any(
+        atom.occupancy is not None for atom in residue_atoms if atom.altloc
+    )
 
-    CAVER compares per-conformer atom counts, not atom names: equal-count
-    conformers are removed normally even when their atoms differ, while a
-    different count is the "Difficult case of alternative conformations
-    detected, please remove them manually". In that case CAVER keeps every atom
-    of the whole file. Verified against ``data/origins.pdb`` for 1/1 (removes
-    the lower conformer) and 2/1 (keeps everything). The flag is file-global, so
-    a difficult residue anywhere changes how every selection is averaged.
+
+def _blank_occupancy_error(residue_atoms: list[Atom]) -> SelectionError:
+    chain, number, _icode = residue_atoms[0].residue
+    return SelectionError(
+        f"residue {chain or '_'}:{number} has alternate locations but no atom carries an occupancy; "
+        "CAVER aborts on such a structure with NoSuchElementException, so it cannot be read"
+    )
+
+
+def difficult_conformations(atoms: list[Atom]) -> bool:
+    """True when CAVER treats the file's alternate conformations as its difficult case.
+
+    CAVER compares per-residue conformer atom counts, not atom names: equal
+    counts are removed normally even when the atoms differ, while a different
+    count sets its "Difficult case of alternative conformations detected,
+    please remove them manually" flag, after which it keeps every atom of the
+    whole file. Counts are compared by ``Integer`` identity, so the JVM's
+    ``Integer`` cache makes equal counts up to 127 compare equal but a count of
+    128 or more never does. Verified against ``data/origins.pdb`` for 1/1
+    (removes the lower conformer), 2/1 (keeps everything) and 128/128 (keeps
+    everything). The flag is file-global, so a difficult residue anywhere
+    changes how every selection is averaged.
     """
     for residue_atoms in _residues(atoms).values():
-        counts = {len(group) for group in _conformer_labels(residue_atoms).values()}
-        if len(counts) > 1:
+        counts = [len(group) for group in _conformer_labels(residue_atoms).values()]
+        if counts and (len(set(counts)) > 1 or max(counts) > 127):
             return True
     return False
 
@@ -233,16 +254,16 @@ def _kept_conformer(residue_atoms: list[Atom]) -> tuple[str, list[Atom]]:
 
     On equal mean occupancy CAVER keeps the highest label (its
     ``AverageOccupancy`` comparator sorts ascending and takes the last entry);
-    verified with a 0.50/0.50 residue where it kept conformation B.
+    verified with a 0.50/0.50 residue where it kept conformation B. The caller
+    refuses a residue whose alternate-location atoms all have blank occupancy,
+    because CAVER cannot compare conformations that carry no occupancy.
     """
     conformers = _conformer_labels(residue_atoms)
-    # Labels whose atoms carry no occupancy have no AverageOccupancy entry, so
-    # CAVER cannot compare them; the highest label is kept when none has one.
-    known = {label: group for label, group in conformers.items() if any(a.occupancy is not None for a in group)}
-    candidates = known or conformers
+    if _blank_occupancy_conformers(residue_atoms):
+        raise _blank_occupancy_error(residue_atoms)
     best: tuple[str, float, list[Atom]] | None = None
-    for label in sorted(candidates):
-        group = candidates[label]
+    for label in sorted(conformers):
+        group = conformers[label]
         occupancy = _mean_occupancy(group)
         if best is None or occupancy >= best[1]:
             best = (label, occupancy, group)
@@ -298,8 +319,8 @@ def _residues(atoms: list[Atom]) -> dict[tuple[str, int, str], list[Atom]]:
 def _insertion_code_error(chain: str, number: int) -> SelectionError:
     label = f"{chain or '_'}:{number}"
     return SelectionError(
-        f"residue {label} is only present with an insertion code; CAVER cannot address insertion-coded "
-        "residues, so it cannot be selected"
+        f"residue {label} is only present with an insertion code; this Task addresses residues by chain "
+        "and number, which cannot name an insertion-coded residue"
     )
 
 
@@ -340,6 +361,18 @@ def _resolve_residue(
         "chain_candidates": [candidate[0] or "" for candidate in matches],
     }
     return key, by_key[key], resolution
+
+
+#: The start-point fields each mode can honour. A non-empty field outside its
+#: mode's set would be recorded in provenance while changing nothing, so it is
+#: refused instead.
+_MODE_FIELDS = {
+    "point": frozenset(),
+    "atom": frozenset({"start_chain", "start_residue_number", "start_atom_name", "start_altloc"}),
+    "residue": frozenset({"start_chain", "start_residue_number"}),
+    "group": frozenset({"start_group"}),
+    "ligand": frozenset({"start_residue_name", "start_chain", "start_residue_number"}),
+}
 
 
 def _selection_fields(params: dict[str, object]) -> dict[str, object]:
@@ -412,6 +445,12 @@ def _single_atom(params: dict[str, object], atoms: list[Atom], difficult: bool) 
             "conformation instead"
         )
     atom = max(eligible, key=lambda item: (_mean_occupancy([item]), item.altloc == "", -item.serial))
+    shared = [candidate for candidate in retained_atoms(atoms, difficult) if candidate.serial == atom.serial]
+    if len(shared) > 1:
+        raise SelectionError(
+            f"atom serial {atom.serial} is shared by {len(shared)} atoms CAVER retains; CAVER renumbers "
+            "the duplicate, so starting_point_atom would address a different atom"
+        )
     return StartPoint(
         atom.x,
         atom.y,
@@ -623,8 +662,8 @@ def parse_residue_token(token: str) -> tuple[str, int]:
         raise SelectionError(f"residue identifier {token!r} is not CHAIN:NUMBER or NUMBER")
     if match.group("icode"):
         raise SelectionError(
-            f"residue identifier {token!r} carries an insertion code; CAVER cannot address insertion-coded "
-            "residues, so it cannot be excluded by identifier (use exclude_residue_names instead)"
+            f"residue identifier {token!r} carries an insertion code; this Task addresses residues by chain "
+            "and number, which cannot name an insertion-coded residue (use exclude_residue_names instead)"
         )
     return (match.group("chain") or ""), int(match.group("number"))
 
@@ -674,11 +713,26 @@ _RESOLVERS = {
 
 def resolve_start_point(atoms: list[Atom], params: dict[str, object]) -> StartPoint:
     """Resolve the typed start-point controls against parsed structure atoms."""
-    mode = params.get("start_point_mode")
-    resolver = _RESOLVERS.get(str(mode))
+    mode = str(params.get("start_point_mode"))
+    resolver = _RESOLVERS.get(mode)
     if resolver is None:
         raise SelectionError(f"unknown start_point_mode {mode!r}; expected one of {', '.join(_RESOLVERS)}")
+    irrelevant = sorted(set(_selection_fields(params)) - _MODE_FIELDS[mode])
+    if irrelevant:
+        fields = ", ".join(irrelevant)
+        raise SelectionError(
+            f"{fields} {'do' if len(irrelevant) > 1 else 'does'} not apply to {mode} mode; "
+            "leave the field empty or choose a mode that uses it"
+        )
     difficult = difficult_conformations(atoms)
+    if not difficult:
+        # CAVER removes alternate conformations for every residue in the file,
+        # so one residue whose conformations all lack an occupancy aborts the
+        # whole run even when the start point is elsewhere. In the difficult
+        # case CAVER keeps every atom and never compares occupancies.
+        for residue_atoms in _residues(atoms).values():
+            if _blank_occupancy_conformers(residue_atoms):
+                raise _blank_occupancy_error(residue_atoms)
     point = resolver(params, atoms, difficult)
     point.provenance["parameters"] = _selection_fields(params)
     return point

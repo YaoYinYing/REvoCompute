@@ -39,6 +39,33 @@ def _atoms():
     return parse_pdb(FIXTURES / "selection.pdb")
 
 
+def _record(
+    serial: int,
+    name: str,
+    altloc: str,
+    resname: str,
+    chain: str,
+    number: int,
+    x: float,
+    y: float,
+    z: float,
+    occupancy: float | None,
+    element: str = "C",
+) -> str:
+    """One 80-column ATOM record with an element, as CAVER requires."""
+    occ = " " * 6 if occupancy is None else f"{occupancy:6.2f}"
+    return (
+        f"{'ATOM':<6}{serial:>5} {name:<4}{altloc:1}{resname:>3} {chain:1}{number:>4}    "
+        f"{x:>8.3f}{y:>8.3f}{z:>8.3f}{occ}{20.0:6.2f}          {element:>2}  "
+    )
+
+
+def _write(tmp_path: Path, name: str, records: list[str]) -> Path:
+    path = tmp_path / name
+    path.write_text("\n".join(records) + "\nEND\n", encoding="utf-8")
+    return path
+
+
 def test_parse_pdb_keeps_altlocs_hetero_and_insertion_codes() -> None:
     atoms = _atoms()
     assert len(atoms) == 14
@@ -168,7 +195,7 @@ def test_blank_chain_structure_uses_bare_identifiers() -> None:
 
 def test_empty_chain_never_resolves_to_the_blank_chain_next_to_named_chains(tmp_path: Path) -> None:
     text = (FIXTURES / "selection.pdb").read_text(encoding="utf-8")
-    blank = "ATOM      1    N ALA     9       7.000   7.000   7.000  1.00 20.00           N\n"
+    blank = "ATOM      1    N ALA     9       7.000   7.000   7.000  1.00 20.00           N  \n"
     mixed = tmp_path / "mixed.pdb"
     mixed.write_text(blank + text, encoding="utf-8")
     atoms = parse_pdb(mixed)
@@ -259,8 +286,8 @@ def test_blank_occupancy_is_unknown_not_one() -> None:
     for atom in parse_pdb(FIXTURES / "tie.pdb"):
         assert atom.occupancy is not None
     blank = (
-        "ATOM      1    N ALA A   9       1.000   1.000   1.000  1.00 20.00           N\n"
-        "ATOM      2   CA ALA A   9       2.000   1.000   1.000         20.00           C\n"
+        "ATOM      1    N ALA A   9       1.000   1.000   1.000  1.00 20.00           N  \n"
+        "ATOM      2   CA ALA A   9       2.000   1.000   1.000         20.00           C  \n"
     )
     path = Path(tempfile.mkdtemp()) / "blank_occ.pdb"
     path.write_text(blank + "END\n", encoding="utf-8")
@@ -274,7 +301,7 @@ def test_group_blank_chain_marker_is_explicit() -> None:
     assert group.provenance["point_angstrom"] == [2.5, 1.5, 1.0]
 
     text = (FIXTURES / "selection.pdb").read_text(encoding="utf-8")
-    blank = "ATOM      1    N ALA     9       7.000   7.000   7.000  1.00 20.00           N\n"
+    blank = "ATOM      1    N ALA     9       7.000   7.000   7.000  1.00 20.00           N  \n"
     path = Path(tempfile.mkdtemp()) / "mixed.pdb"
     path.write_text(blank + text, encoding="utf-8")
     mixed_atoms = parse_pdb(path)
@@ -331,3 +358,122 @@ def test_snapshot_topology_must_match_the_reference(tmp_path: Path) -> None:
     )
     with pytest.raises(SelectionError, match="atoms but the reference structure"):
         assert_snapshot_matches(reference, parse_pdb(truncated), "truncated.pdb")
+
+
+def test_coordinate_records_need_the_element_columns(tmp_path: Path) -> None:
+    text = (FIXTURES / "blank_chain.pdb").read_text(encoding="utf-8")
+    line = next(line for line in text.splitlines() if line.startswith("ATOM"))
+    short = _write(tmp_path, "short.pdb", [line[:78]])
+    with pytest.raises(SelectionError, match="shorter than 79 columns"):
+        parse_pdb(short)
+    assert len(parse_pdb(_write(tmp_path, "full.pdb", [line]))) == 1
+
+
+def test_residue_whose_alternate_locations_have_no_occupancy_is_refused(tmp_path: Path) -> None:
+    records = [
+        _record(1, "N", " ", "ALA", "A", 1, 1, 1, 1, 1.0, "N"),
+        _record(2, "CA", " ", "ALA", "A", 1, 2, 1, 1, 1.0),
+        _record(3, "CB", "A", "ALA", "A", 3, 5, 3, 3, None),
+        _record(4, "CB", "B", "ALA", "A", 3, 6, 3, 3, None),
+    ]
+    # The refusal is global: CAVER removes conformations from every residue, so
+    # a blank-occupancy residue elsewhere still aborts the run.
+    with pytest.raises(SelectionError, match=r"A:3 has alternate locations but no atom carries an occupancy"):
+        resolve_start_point(
+            parse_pdb(_write(tmp_path, "blank.pdb", records)),
+            {"start_point_mode": "residue", "start_chain": "A", "start_residue_number": 1},
+        )
+
+    occupied = [record if record[54:60].strip() else record[:54] + "  0.50" + record[60:] for record in records]
+    resolved = resolve_start_point(
+        parse_pdb(_write(tmp_path, "occupied.pdb", occupied)),
+        {"start_point_mode": "residue", "start_chain": "A", "start_residue_number": 3},
+    )
+    assert resolved.provenance["removed_altlocs"] == ["A"]
+
+    # A difficult file keeps every atom, so CAVER never compares occupancies.
+    difficult = occupied + [_record(5, "CG", "A", "ALA", "A", 3, 5.5, 3.5, 3, 0.50)]
+    kept = resolve_start_point(
+        parse_pdb(_write(tmp_path, "difficult.pdb", difficult)),
+        {"start_point_mode": "residue", "start_chain": "A", "start_residue_number": 3},
+    )
+    assert kept.provenance["altloc_policy"].startswith("difficult case")
+
+
+def test_start_point_fields_the_mode_cannot_honour_are_refused() -> None:
+    atoms = _atoms()
+    cases = [
+        (
+            {"start_point_mode": "residue", "start_residue_number": 1, "start_altloc": "B"},
+            "start_altloc does not apply to residue mode",
+        ),
+        (
+            {"start_point_mode": "group", "start_group": "A:1", "start_chain": "A"},
+            "start_chain does not apply to group mode",
+        ),
+        (
+            {"start_point_mode": "point", "start_x": 2, "start_y": 1, "start_z": 1, "start_residue_number": 1},
+            "start_residue_number does not apply to point mode",
+        ),
+        (
+            {"start_point_mode": "ligand", "start_residue_name": "HEM", "start_altloc": "A"},
+            "start_altloc does not apply to ligand mode",
+        ),
+        (
+            {"start_point_mode": "ligand", "start_residue_name": "HEM", "start_atom_name": "FE"},
+            "start_atom_name does not apply to ligand mode",
+        ),
+    ]
+    for params, message in cases:
+        with pytest.raises(SelectionError, match=message):
+            resolve_start_point(atoms, params)
+    # Empty and absent fields stay valid for the selected mode.
+    point = resolve_start_point(
+        atoms,
+        {
+            "start_point_mode": "point",
+            "start_x": 4,
+            "start_y": 4,
+            "start_z": 4,
+            "start_chain": "",
+            "start_altloc": "",
+        },
+    )
+    assert point.provenance["parameters"] == {}
+
+
+def test_atom_serial_must_be_unique_among_retained_atoms(tmp_path: Path) -> None:
+    records = [
+        _record(1, "N", " ", "ALA", "A", 1, 1, 1, 1, 1.0, "N"),
+        _record(2, "CA", " ", "ALA", "A", 1, 2, 1, 1, 1.0),
+        _record(3, "CB", "A", "ALA", "A", 3, 5, 3, 3, 0.50),
+        _record(4, "CG", "A", "ALA", "A", 3, 5.5, 3.5, 3, 0.50),
+        _record(3, "CB", "B", "ALA", "A", 3, 9, 3, 3, 0.90),
+    ]
+    atoms = parse_pdb(_write(tmp_path, "duplicate_serial.pdb", records))
+    with pytest.raises(SelectionError, match="atom serial 3 is shared by 2 atoms CAVER retains"):
+        resolve_start_point(
+            atoms,
+            {"start_point_mode": "atom", "start_chain": "A", "start_residue_number": 3, "start_atom_name": "CB"},
+        )
+
+
+def test_128_atom_conformers_are_a_difficult_case(tmp_path: Path) -> None:
+    records = [
+        _record(1, "N", " ", "ALA", "A", 1, 1, 1, 1, 1.0, "N"),
+        _record(2, "CA", " ", "ALA", "A", 1, 2, 1, 1, 1.0),
+    ]
+    records += [_record(100 + index, "C", "A", "ALA", "A", 3, 20 + index * 3, 3, 3, 0.5) for index in range(128)]
+    records += [_record(300 + index, "C", "B", "ALA", "A", 3, 20 + index * 3, 8, 3, 0.5) for index in range(128)]
+    atoms = parse_pdb(_write(tmp_path, "equal_128.pdb", records))
+    # CAVER compares conformer sizes by Integer identity: 128 never compares
+    # equal, so equal 128-atom conformers are its difficult case.
+    assert difficult_conformations(atoms) is True
+    assert len(retained_atoms(atoms, True)) == len(atoms)
+    resolved = resolve_start_point(
+        atoms, {"start_point_mode": "residue", "start_chain": "A", "start_residue_number": 3}
+    )
+    assert resolved.provenance["atom_count"] == 256
+    assert resolved.provenance["removed_altlocs"] == []
+    # Mean of all 256 atoms: x = 20 + 63.5 * 3, y = (3 + 8) / 2.
+    assert resolved.provenance["point_angstrom"] == [210.5, 5.5, 3.0]
