@@ -119,6 +119,12 @@ ALLOCATION_STDERR_CLAIM_SUFFIX = ".capturing"
 #: not something a runner emits, and the bound keeps the extra read finite.
 PRIVATE_KEY_LOOKBACK_BYTES = 4 * 1024 * 1024
 
+_PRIVATE_KEY_MARKER = b"-----BEGIN "
+
+#: Slack kept before an unaligned window so a PEM marker the bound cut through
+#: is still recognized; comfortably longer than any marker line.
+_PEM_MARKER_LOOKBACK_BYTES = 64
+
 #: Hard ceiling for one Task's ephemeral scratch, in bytes.  Scratch is a
 #: per-execution safety concern, never durable user quota: a runaway temporary
 #: file must hit this wall instead of filling the host.  The allocation wrapper
@@ -743,6 +749,7 @@ class SlurmJob(Job):
     def cancel(self) -> None:
         proc = self._process
         if proc is None or proc.poll() is not None:
+            self._capture_job_stderr()
             self._persist_output()
             self._cleanup_scratch_dir()
             return
@@ -753,6 +760,7 @@ class SlurmJob(Job):
             proc.kill()
             proc.wait()
         logging.info("srun process %s terminated for task %s", proc.pid, self.task_id)
+        self._capture_job_stderr()
         try:
             if self._slurm_job_id:
                 self._emit_terminal("slurm.allocation.cancelled")
@@ -1828,7 +1836,8 @@ class SlurmJob(Job):
             with open(pending, "w", encoding="ascii") as handle:
                 handle.write(f"{pid} {_process_start_ticks(pid) or 0}")
             os.replace(pending, claim)
-        except OSError:
+        except OSError as exc:
+            logging.warning("Could not claim scheduler stderr for %s: %s", pid, exc)
             try:
                 os.unlink(pending)
             except OSError:
@@ -1871,9 +1880,12 @@ class SlurmJob(Job):
                 tail_start = max(0, size - MAX_LOG_BYTES - 1)
                 if tail_start:
                     start, aligned = self._line_start(handle, tail_start)
-                    key_start = self._private_key_start(handle, start)
-                    aligned = aligned or key_start != start
-                    start = key_start
+                    if aligned:
+                        start = self._private_key_start(handle, start)
+                    else:
+                        # Keep enough of the partial line to recognize a marker
+                        # that the bound cut in half.
+                        start = max(0, start - _PEM_MARKER_LOOKBACK_BYTES)
                 else:
                     start, aligned = 0, True
                 handle.seek(start)
@@ -1881,11 +1893,16 @@ class SlurmJob(Job):
         except OSError:
             return []
         if not aligned:
-            # A line longer than the alignment bound is left where it is; drop
-            # its partial first line, which a credential cut could hide in. The
-            # callers redact before they bound, so the tail never reaches a
-            # redactor already truncated.
-            text = text.partition("\n")[2]
+            # The window opened inside a line longer than the alignment bound.
+            # Drop its partial first line, which a credential cut could hide in
+            # -- unless that line carries a private-key marker, which must be
+            # kept so the redactor replaces the body instead of publishing it.
+            head, separator, rest = text.partition("\n")
+            marker = head.find("-----BEGIN ")
+            if marker >= 0 and "PRIVATE KEY-----" in head[marker:]:
+                text = head[marker:] + separator + rest
+            else:
+                text = rest
         return text.splitlines(keepends=True)
 
     @staticmethod
@@ -1894,17 +1911,20 @@ class SlurmJob(Job):
 
         A tail window must open on a line boundary: a PEM marker split between
         the discarded prefix and the published window is invisible to the
-        redactor on both sides. A marker line is short, so the bounded backward
-        scan reaches its newline; only a window inside a longer-than-bound line
-        is left unaligned, and the caller then drops that partial line.
+        redactor on both sides. A window inside a line longer than the bound has
+        no newline to align to, but a key marker on that line must still not be
+        dropped with the partial prefix, so the scan anchors at the marker.
         """
-        limit = max(0, position - MAX_LOG_BYTES)
+        limit = max(0, position - MAX_LOG_BYTES - len(_PRIVATE_KEY_MARKER))
         handle.seek(limit)
         chunk = handle.read(position - limit)
         offset = chunk.rfind(b"\n")
-        if offset < 0:
-            return position, False
-        return limit + offset + 1, True
+        if offset >= 0:
+            return limit + offset + 1, True
+        marker = chunk.rfind(_PRIVATE_KEY_MARKER)
+        if marker >= 0 and b"PRIVATE KEY-----" in chunk[marker:]:
+            return limit + marker, True
+        return position, False
 
     @staticmethod
     def _private_key_start(handle, start: int) -> int:
@@ -1924,7 +1944,7 @@ class SlurmJob(Job):
         last_begin: int | None = None
         last_end: int | None = None
         for line in prefix.splitlines(keepends=True):
-            if b"-----BEGIN " in line and b"PRIVATE KEY-----" in line:
+            if _PRIVATE_KEY_MARKER in line and b"PRIVATE KEY-----" in line:
                 last_begin = offset
             elif b"-----END " in line and b"PRIVATE KEY-----" in line:
                 last_end = offset

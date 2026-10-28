@@ -41,8 +41,8 @@ _URL = re.compile(r"\b(?:https?|ssh|redis|postgres(?:ql)?|mysql)://[^\s<>]+", re
 _HOST_PATH = re.compile(r"(?<![\w:])(?:/[\w.@+~%-]+){2,}(?:/[^\s\"'<>]*)?|[A-Za-z]:\\[^\r\n\"'<>]+")
 _HOST_DETAIL = re.compile(r"(?im)(\b(?:NodeList|BatchHost|Cluster|AllocNode:Sid)=)\S+|(?<=srun: error: )[^\s:]+:")
 _PRIVATE_NETWORK = re.compile(
-    r"\b(?:10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}"
-    r"|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}|[\w.-]+\.(?:internal|local|cluster))\b",
+    r"\b(?:10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2})\b"
+    r"|(?<![\w.-])[\w.-]+\.(?:internal|local|cluster)\b",
     re.I,
 )
 _LOG_PATH = re.compile(r"execution/slurm-[^/]+\.(stdout|stderr)\.log\Z")

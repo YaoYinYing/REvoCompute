@@ -143,6 +143,63 @@ def test_job_stderr_tail_keeps_the_begin_of_a_truncated_private_key(tmp_path):
         assert "useful diagnostic context" in excerpt
 
 
+def test_cancelling_a_job_releases_its_stderr_claim(tmp_path):
+    """A cancelled job must not keep reconciliation from retiring its stderr."""
+    from revocompute.job.runners.slurm_runner import ALLOCATION_STDERR_CLAIM_SUFFIX
+
+    job = _job(tmp_path)
+    job._slurm_job_id = "4217"
+    (tmp_path / "out").mkdir()
+    os.makedirs(job.allocation_dir, exist_ok=True)
+    log = Path(job.allocation_dir, "allocation-4217.err")
+    log.write_text("srun: error: cancelled\n", encoding="utf-8")
+    job._claim_job_stderr()
+    claim = Path(str(log) + ALLOCATION_STDERR_CLAIM_SUFFIX)
+    assert claim.exists()
+
+    job.cancel()
+
+    assert not claim.exists()
+    assert job._job_stderr_snapshot == ["srun: error: cancelled\n"]
+
+
+@pytest.mark.parametrize("cut", [0, 13], ids=["marker-after-the-window", "inside-the-marker"])
+def test_a_window_inside_an_unbroken_line_still_redacts_the_key(tmp_path, cut):
+    """A marker sharing a line longer than the bound must not be dropped.
+
+    When the window opens inside a line with no newline in reach, the partial
+    first line is discarded to avoid publishing a cut credential. That line can
+    also carry the key's BEGIN marker, which has to survive so the body is
+    redacted rather than published.
+    """
+    from revocompute.execution_diagnostics import MAX_LOG_BYTES, STATUS_PATH
+
+    job = _job(tmp_path)
+    job._slurm_job_id = "4217"
+    body = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASC" + "A" * 32 + "\n"
+    pem = "-----BEGIN PRIVATE KEY-----\n" + body + "-----END PRIVATE KEY-----\n"
+    giant = "A" * 100_000
+    if cut:
+        needed = MAX_LOG_BYTES + 1 + cut - len(pem)
+        content = giant + pem + "x" * (needed - 1) + "\n"
+    else:
+        # The window opens inside ``giant``; the marker follows on that line.
+        tail = 50_000 + MAX_LOG_BYTES + 1 - len(giant) - len(pem)
+        content = giant + pem + "x" * (tail - 1) + "\n"
+    os.makedirs(job.allocation_dir, exist_ok=True)
+    Path(job.allocation_dir, "allocation-4217.err").write_text(content, encoding="utf-8")
+
+    job._save_output()
+    job._task_store = SimpleNamespace(record_task_diagnostics=lambda *args, **kwargs: None)
+    job._persist_execution_evidence()
+
+    published = (tmp_path / "out" / "execution" / "slurm-alice-cpu_runner-task-1.stderr.log").read_text()
+    record = json.loads((tmp_path / "out" / STATUS_PATH).read_text())
+    for excerpt in (published, record["logs"]["stderr"]):
+        assert "[private key redacted]" in excerpt
+        assert "MIIEvQIBADANBgkqhkiG9w0BAQEFAASC" not in excerpt
+
+
 def test_the_adapter_claims_its_stderr_until_it_is_captured(tmp_path):
     """The claim is live between job-id discovery and the snapshot.
 
