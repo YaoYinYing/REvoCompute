@@ -30,7 +30,7 @@ const STYLE = `
 function list(value) { return Array.isArray(value) ? value : value ? [value] : []; }
 function name(artifact) { return artifact.name || String(artifact.path || "").split("/").pop(); }
 function label(artifact, index) {
-  const match = name(artifact).match(/seed_(\d+).*_sample_(\d+)\.cif$/);
+  const match = String(artifact.path || "").match(/seed_(\d+)\/predictions\/.*_sample_(\d+)\.cif$/);
   return match ? "Seed " + match[1] + " · sample " + match[2] : "Candidate " + (index + 1);
 }
 function element(tag, className, text) { const node = document.createElement(tag); node.className = className; if (text != null) node.textContent = text; return node; }
@@ -119,7 +119,7 @@ export default {
         for (const type of MATRIX_TYPES) matrixValues.push(await optionalProjection(fullArtifact, type.key, request.signal));
         if (current !== generation || !request.current()) return;
         actions.replaceChildren(); const open = element("button", "btn btn-soft", "Open selected structure"); open.type = "button"; open.addEventListener("click", () => context.services.openFile(structure)); actions.appendChild(open); if (fullArtifact) { const download = element("button", "btn btn-soft", "Download full confidence"); download.type = "button"; download.addEventListener("click", () => context.services.downloadFile(fullArtifact)); actions.appendChild(download); }
-        new Scientific.ScalarMetricGrid(metricHost, [{ label: "pLDDT (0-100)", value: payload.plddt, unit: "score", meaning: "Higher is better" }, { label: "pTM", value: payload.ptm, unit: "score", meaning: "Higher is better" }, { label: "ipTM", value: payload.iptm, unit: "score", meaning: "Higher is better" }, { label: "gPDE", value: payload.gpde, unit: "score", meaning: "Lower is better" }, { label: "Ranking score", value: payload.ranking_score, unit: "score", meaning: "Higher is better" }, { label: "Clash", value: payload.has_clash == null ? null : (payload.has_clash ? "Yes" : "No") }]);
+        new Scientific.ScalarMetricGrid(metricHost, [{ label: "pLDDT (0-100)", value: payload.plddt, unit: "score", meaning: "Higher is better" }, { label: "pTM", value: payload.ptm, unit: "score", meaning: "Higher is better" }, { label: "ipTM", value: payload.iptm, unit: "score", meaning: "Higher is better" }, { label: "gPDE", value: payload.gpde, unit: "distance", meaning: "Lower is better" }, { label: "Ranking score", value: payload.ranking_score, unit: "score", meaning: "Higher is better" }, { label: "Clash", value: payload.has_clash == null ? null : (payload.has_clash ? "Yes" : "No") }]);
         const chainSummary = chainPlddt(payload); chainNote.textContent = chainSummary || ""; chainNote.hidden = !chainSummary;
         if (confidencePlot) { confidencePlot.destroy(); confidencePlot = null; }
         local.hidden = false; localHost.replaceChildren();

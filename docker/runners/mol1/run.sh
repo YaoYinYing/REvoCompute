@@ -7,6 +7,7 @@ set -euo pipefail
 runtime_root="${RUNNER_RUNTIME_ROOT:-/opt/revocompute/runtime}"
 task_context_src="${TASK_CONTEXT_SRC:-$runtime_root/common/runtime/task_context.sh}"
 [[ -f "$task_context_src" ]] || { echo "Task context helpers not found: $task_context_src" >&2; exit 1; }
+# shellcheck source=/dev/null
 source "$task_context_src"
 
 usage() { echo "Usage: $0 -i <task.json> -o <output_dir>" >&2; exit 2; }
@@ -24,7 +25,7 @@ output_dir=$(readlink -m "$output_dir")
 [[ -f "$input_file" ]] || { echo "Task manifest not found: $input_file" >&2; exit 1; }
 mkdir -p "$output_dir"
 
-mol_root=${MOL_ROOT_DIR:-/mnt/db/mol1}
+mol_root=${MOL_ROOT_DIR:?MOL_ROOT_DIR must name the operator asset root}
 checkpoint=${MOL1_CHECKPOINT:-$mol_root/checkpoint/mol-1-base.pt}
 mol_cli=${MOL_CLI:-/opt/venv/bin/mol}
 prepare_input=${MOL1_PREPARE_INPUT:-$runtime_root/mol1/prepare_input.py}
@@ -60,10 +61,10 @@ if [[ "$template_mode" != "none" ]]; then
   }
 fi
 
-# Template feasibility downloads hit structures from PDBe into
-# $MOL_ROOT_DIR/mmcif. The operator's mount is read-only, so expose it through
-# a task-private writable root whose other entries are symlinks to the mount.
-# The task scratch (/tmp) disappears with the allocation.
+# Template feasibility downloads hit structures from PDBe into a fresh
+# mmcif/ directory on every run. The operator's mount is read-only, so expose
+# it through a task-private writable root whose other entries are symlinks to
+# the mount. The task scratch disappears with the allocation.
 writable_root=$(mktemp -d "${TMPDIR:-/tmp}/mol1-runtime.XXXXXX")
 trap 'rm -rf -- "$writable_root"' EXIT
 mkdir -p "$writable_root/mmcif"

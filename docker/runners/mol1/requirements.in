@@ -10,11 +10,11 @@ click==8.5.0
 numpy==2.4.4
 scipy==1.18.0
 pandas==2.3.1
-networkx>=3.4.2
+networkx==3.7
 ml_collections==1.1.0
 PyYAML==6.0.2
 tqdm==4.67.1
-pydantic>=2.0.0
+pydantic==2.14.1
 optree==0.17.0
 protobuf==6.31.1
 

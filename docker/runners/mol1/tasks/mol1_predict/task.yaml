@@ -11,9 +11,17 @@ considerations:
 - '`plddt` and the mmCIF B-factor use a 0-100 scale; `chain_plddt` and `atom_plddt` use 0-1.
   The per-token PAE, PDE, and contact matrices are indexed by token, not by residue number.'
 - MSA search uploads protein sequences to the public ColabFold MMseqs2 service. It is
-  off by default; select it only for sequences this deployment may disclose.
-- Template use with `.a3m` hits downloads the hit structures from PDBe on first use.
-  Inline JSON templates and a pre-populated operator cache avoid that download.
+  off by default; select it only for sequences this deployment may disclose. When any
+  protein or RNA MSA is supplied, `search` is refused because upstream re-searches
+  every protein chain in a job that has one missing chain and replaces supplied MSAs,
+  so the supplied sequences would be uploaded too. Supply every MSA with
+  `msa_mode` set to `supply` for the non-disclosure path.
+- Template use with `.a3m` hits downloads each hit structure from PDBe on every run,
+  into task scratch that is discarded with the allocation. Inline JSON templates need
+  no download.
+- A run may publish at most 500 structures. The job count x `sample_seeds` count x
+  `num_samples` is refused before inference when it exceeds that server projection
+  limit.
 - The admission bound is an estimated token count, not a measured fit. A 40 GiB A100
   has not been validated for systems above the smallest test case.
 - Seeds come only from the `sample_seeds` parameter. A job list that carries
@@ -124,13 +132,16 @@ parameters:
   properties:
     sample_seeds:
       type: string
-      pattern: '^[0-9]+(,[0-9]+)*$'
-      description: Comma-separated integer seeds. Each seed produces its own independent
-        set of ranked samples.
+      pattern: '^[0-9]{1,19}(,[0-9]{1,19})*$'
+      maxLength: 256
+      description: Comma-separated 64-bit integer seeds. Each seed produces its own
+        independent set of ranked samples. The job count x seed count x `num_samples`
+        must not exceed 500 structures.
       default: '101'
     num_samples:
       type: integer
       description: Number of independently sampled structures generated for each seed.
+        The job count x seed count x `num_samples` must not exceed 500 structures.
       default: 5
       minimum: 1
       maximum: 25
@@ -155,20 +166,23 @@ parameters:
       type: string
       enum: [none, supply, search]
       description: 'Protein MSAs: predict without them, use only the uploaded MSA files,
-        or search missing chains on the public ColabFold MMseqs2 service. Search sends
-        the protein sequences to that service.'
+        or search on the public ColabFold MMseqs2 service. Search uploads the protein
+        sequences and is refused when any protein or RNA MSA is supplied, because a job
+        with one missing chain is re-searched and every protein chain in it has its MSA
+        replaced.'
       default: none
     template_mode:
       type: string
       enum: [none, supply, search]
       description: 'Protein templates: use none, use only the uploaded template files,
-        or search chains without one. Searching needs an MSA mode other than none;
-        `.a3m` hits download their structures from PDBe.'
+        or search. Searching requires `msa_mode: search`; `.a3m` hits download their
+        structures from PDBe on every run.'
       default: none
     rna_msa_mode:
       type: string
       enum: [none, supply]
       description: 'RNA MSAs: ignore them, or use the uploaded `unpairedMsaPath` of every
-        RNA chain. RNA MSA search is not offered because its databases are not distributed
-        with this runner.'
+        RNA chain. Requires `msa_mode` other than none, because upstream reads MSAs only
+        when they are enabled. RNA MSA search is not offered because its databases are
+        not distributed with this runner.'
       default: none

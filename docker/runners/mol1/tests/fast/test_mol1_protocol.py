@@ -7,8 +7,10 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import pickle
 import subprocess
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -102,6 +104,89 @@ def test_unknown_ccd_code_fails_closed() -> None:
         estimate_tokens.estimate(document, estimate_tokens.CcdAtomCounts(None))
 
 
+def _ccd_counts(codes: dict[str, int]) -> estimate_tokens.CcdAtomCounts:
+    counts = estimate_tokens.CcdAtomCounts(None)
+    counts._molecules = {code: _AtomCount(heavy) for code, heavy in codes.items()}
+    return counts
+
+
+@pytest.mark.parametrize(
+    ("entity_type", "sequence", "code", "heavy"),
+    [
+        ("dnaSequence", "UUUU", "DU", 20),
+        ("dnaSequence", "IIII", "DI", 22),
+        ("rnaSequence", "IIII", "I", 23),
+    ],
+)
+def test_non_standard_polymer_residues_are_counted_per_atom(
+    entity_type: str, sequence: str, code: str, heavy: int
+) -> None:
+    document = [{"name": "nonstandard", "sequences": [{entity_type: {"sequence": sequence, "count": 1}}]}]
+    result = estimate_tokens.estimate(document, _ccd_counts({code: heavy}))
+    assert result.total == len(sequence) * heavy
+
+
+@pytest.mark.parametrize(
+    ("entity_type", "residue", "code", "heavy"),
+    [
+        ("dnaSequence", "U", "DU", 20),
+        ("dnaSequence", "I", "DI", 22),
+        ("rnaSequence", "I", "I", 23),
+    ],
+)
+def test_non_standard_residues_cannot_pass_the_800_bound(
+    tmp_path: Path, monkeypatch, entity_type: str, residue: str, code: str, heavy: int
+) -> None:
+    document = [{"name": "large", "sequences": [{entity_type: {"sequence": residue * 50, "count": 1}}]}]
+    specification = tmp_path / "large.json"
+    specification.write_text(json.dumps(document), encoding="utf-8")
+    cache = tmp_path / "assets/common/components.cif.rdkit_mol.pkl"
+    cache.parent.mkdir(parents=True)
+    cache.write_bytes(pickle.dumps({code: _AtomCount(heavy)}))
+    manifest = _manifest(tmp_path, specification=specification)
+
+    with pytest.raises(prepare_input.PreparationError, match="exceeds the 800-token"):
+        _prepare(tmp_path, manifest, monkeypatch)
+
+
+class _Conformer:
+    def __init__(self, is3d: bool) -> None:
+        self._is3d = is3d
+
+    def Is3D(self) -> bool:
+        return self._is3d
+
+
+class _LigandMol:
+    def __init__(self, is3d: bool) -> None:
+        self._is3d = is3d
+
+    def GetNumConformers(self) -> int:
+        return 1
+
+    def GetConformer(self) -> _Conformer:
+        return _Conformer(self._is3d)
+
+    def GetAtoms(self) -> list:
+        return [type("Atom", (), {"GetAtomicNum": lambda self: 6})()]
+
+
+def test_ligand_files_without_a_3d_conformer_are_refused(tmp_path: Path, monkeypatch) -> None:
+    path = tmp_path / "ligand.sdf"
+    path.write_text("fake", encoding="utf-8")
+    rdkit = types.ModuleType("rdkit")
+    rdkit.Chem = types.SimpleNamespace(
+        MolFromMolFile=lambda *_args, **_kwargs: _LigandMol(False),
+        MolFromMol2File=lambda *_args, **_kwargs: _LigandMol(False),
+        MolFromPDBFile=lambda *_args, **_kwargs: _LigandMol(False),
+        MolFromSmiles=lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setitem(sys.modules, "rdkit", rdkit)
+
+    with pytest.raises(estimate_tokens.TokenEstimateError, match="no 3D conformer"):
+        estimate_tokens._rdkit_heavy_atoms("FILE_ligand.sdf", True, str(path))
+
+
 def _manifest(tmp_path: Path, *, specification: Path, assets: list[tuple[Path, str]] | None = None, **params) -> Path:
     manifest = {
         "inputs": {
@@ -165,6 +250,135 @@ def test_prepare_rejects_a_system_over_the_token_bound(tmp_path: Path, monkeypat
         _prepare(tmp_path, manifest, monkeypatch, limit=10)
 
 
+def test_prepare_rejects_rna_msa_supply_when_msas_are_off(tmp_path: Path, monkeypatch) -> None:
+    manifest = _manifest(tmp_path, specification=FIXTURES / "minimal.json", rna_msa_mode="supply")
+
+    with pytest.raises(prepare_input.PreparationError, match="needs msa_mode 'supply'"):
+        _prepare(tmp_path, manifest, monkeypatch)
+
+
+def test_prepare_rejects_msa_search_when_a_protein_msa_is_supplied(tmp_path: Path, monkeypatch) -> None:
+    manifest = _manifest(
+        tmp_path,
+        specification=FIXTURES / "supplied_msa.json",
+        assets=[(FIXTURES / "msa.a3m", "msa.a3m")],
+        msa_mode="search",
+    )
+
+    with pytest.raises(prepare_input.PreparationError, match="public ColabFold"):
+        _prepare(tmp_path, manifest, monkeypatch)
+
+
+def test_prepare_rejects_msa_search_when_an_rna_msa_is_supplied(tmp_path: Path, monkeypatch) -> None:
+    specification = tmp_path / "rna.json"
+    specification.write_text(
+        json.dumps(
+            [
+                {
+                    "name": "rna",
+                    "sequences": [
+                        {"rnaSequence": {"sequence": "ACGU", "count": 1, "unpairedMsaPath": "msa.a3m"}}
+                    ],
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    manifest = _manifest(
+        tmp_path,
+        specification=specification,
+        assets=[(FIXTURES / "msa.a3m", "msa.a3m")],
+        msa_mode="search",
+    )
+
+    with pytest.raises(prepare_input.PreparationError, match="cannot preserve a supplied RNA MSA"):
+        _prepare(tmp_path, manifest, monkeypatch)
+
+
+def test_prepare_rejects_a_supplied_name_reserved_for_generated_output(tmp_path: Path, monkeypatch) -> None:
+    specification = tmp_path / "reserved.json"
+    specification.write_text(
+        json.dumps(
+            [
+                {
+                    "name": "job",
+                    "sequences": [
+                        {"proteinChain": {"sequence": "ACDE", "count": 1, "templatesPath": "normalized-input.json"}}
+                    ],
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    asset = tmp_path / "host.json"
+    asset.write_text("[]", encoding="utf-8")
+    manifest = _manifest(
+        tmp_path,
+        specification=specification,
+        assets=[(asset, "normalized-input.json")],
+        template_mode="supply",
+    )
+
+    with pytest.raises(prepare_input.PreparationError, match="collides with a Mol-1 generated artifact"):
+        _prepare(tmp_path, manifest, monkeypatch)
+
+
+def test_prepare_rejects_an_over_long_seed_list(tmp_path: Path, monkeypatch) -> None:
+    manifest = _manifest(
+        tmp_path,
+        specification=FIXTURES / "minimal.json",
+        sample_seeds=",".join(["1"] * 200),
+    )
+
+    with pytest.raises(prepare_input.PreparationError, match="at most 256 characters"):
+        _prepare(tmp_path, manifest, monkeypatch)
+
+
+def test_prepare_rejects_an_out_of_range_seed(tmp_path: Path, monkeypatch) -> None:
+    manifest = _manifest(
+        tmp_path,
+        specification=FIXTURES / "minimal.json",
+        sample_seeds=str(prepare_input.MAX_SEED_VALUE + 1),
+    )
+
+    with pytest.raises(prepare_input.PreparationError, match="must not exceed"):
+        _prepare(tmp_path, manifest, monkeypatch)
+
+
+def _many_jobs(count: int) -> Path:
+    return [{"name": f"job{i}", "sequences": [{"proteinChain": {"sequence": "A", "count": 1}}]} for i in range(count)]
+
+
+def test_prepare_rejects_more_structures_than_the_projection_limit(tmp_path: Path, monkeypatch) -> None:
+    specification = tmp_path / "jobs.json"
+    specification.write_text(json.dumps(_many_jobs(21)), encoding="utf-8")
+    manifest = _manifest(tmp_path, specification=specification, num_samples=25)
+
+    with pytest.raises(prepare_input.PreparationError, match="500-match"):
+        _prepare(tmp_path, manifest, monkeypatch)
+
+
+def test_prepare_admits_exactly_the_projection_limit(tmp_path: Path, monkeypatch) -> None:
+    specification = tmp_path / "jobs.json"
+    specification.write_text(json.dumps(_many_jobs(20)), encoding="utf-8")
+    manifest = _manifest(tmp_path, specification=specification, num_samples=25)
+
+    assert _prepare(tmp_path, manifest, monkeypatch).is_file()
+
+
+def test_prepare_rejects_template_search_with_supplied_msas(tmp_path: Path, monkeypatch) -> None:
+    manifest = _manifest(
+        tmp_path,
+        specification=FIXTURES / "supplied_msa.json",
+        assets=[(FIXTURES / "msa.a3m", "msa.a3m")],
+        msa_mode="supply",
+        template_mode="search",
+    )
+
+    with pytest.raises(prepare_input.PreparationError, match="needs a searched MSA"):
+        _prepare(tmp_path, manifest, monkeypatch)
+
+
 def test_prepare_confines_file_ligand_references(tmp_path: Path) -> None:
     root = tmp_path / "prepared"
     root.mkdir()
@@ -221,8 +435,12 @@ if os.environ.get("MOL1_FAKE_NO_STRUCTURE") != "1":
     '{"plddt":90.0,"ptm":0.8,"iptm":0.0,"gpde":1.0,"ranking_score":0.5,"has_clash":false}',
     encoding="utf-8",
 )
-if "--need_atom_confidence" in args and args[args.index("--need_atom_confidence") + 1] == "true":
+want_full = "--need_atom_confidence" in args and args[args.index("--need_atom_confidence") + 1] == "true"
+if want_full and os.environ.get("MOL1_FAKE_SKIP_FULL") != "1":
     (predictions / f"{job}_full_data_sample_0.json").write_text("{}", encoding="utf-8")
+if os.environ.get("MOL1_FAKE_ERR") == "1":
+    (out_dir / "ERR").mkdir()
+    (out_dir / "ERR" / "error.txt").write_text("upstream failure", encoding="utf-8")
 """,
         encoding="utf-8",
     )
@@ -449,3 +667,44 @@ def test_runner_refuses_template_supply_without_an_uploaded_template(tmp_path: P
     assert completed.returncode != 0
     assert "requires templatesPath" in completed.stderr
     assert not (tmp_path / "call.json").exists()
+
+
+def test_runner_fails_when_requested_full_confidence_is_missing(tmp_path: Path) -> None:
+    manifest = _manifest(tmp_path, specification=FIXTURES / "minimal.json", need_atom_confidence=True)
+    env = _runner_env(tmp_path, manifest, MOL1_FAKE_SKIP_FULL="1")
+
+    completed = _run(env, manifest, tmp_path / "result")
+
+    assert completed.returncode != 0
+    assert "produced no requested full confidence data" in completed.stderr
+
+
+def test_runner_fails_when_upstream_reports_an_internal_error(tmp_path: Path) -> None:
+    manifest = _manifest(tmp_path, specification=FIXTURES / "minimal.json")
+    env = _runner_env(tmp_path, manifest, MOL1_FAKE_ERR="1")
+
+    completed = _run(env, manifest, tmp_path / "result")
+
+    assert completed.returncode != 0
+    assert "internal inference error" in completed.stderr
+
+
+def test_runner_records_the_submitted_specification_hash(tmp_path: Path) -> None:
+    specification = tmp_path / "compact.json"
+    specification.write_text(
+        '[{"name":"job","sequences":[{"proteinChain":{"sequence":"NLYIQWLKDGGPSSGRPPPS","count":1}}]}]',
+        encoding="utf-8",
+    )
+    manifest = _manifest(tmp_path, specification=specification)
+    env = _runner_env(tmp_path, manifest)
+    output = tmp_path / "result"
+
+    completed = _run(env, manifest, output)
+
+    assert completed.returncode == 0, completed.stderr
+    normalized = output / "normalized_inputs/normalized-input.json"
+    provenance = json.loads((output / "mol1-provenance.json").read_text(encoding="utf-8"))
+    submitted_sha256 = _sha256(specification)
+    assert provenance["prepared_input"]["specification"]["sha256"] == submitted_sha256
+    assert submitted_sha256 != _sha256(normalized)
+    assert (output / "normalized_inputs/compact.json").read_bytes() == specification.read_bytes()

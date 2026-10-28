@@ -1,9 +1,11 @@
 # Mol-1 model and reference assets
 
 Mol-1 inference needs an operator-provisioned weights and reference-data root.
-Nothing is downloaded by a scheduled task: a missing file stops the run before
-the checkpoint is loaded. This page records the pinned identities and the
-mount layout; it does not copy upstream documentation.
+No weights or reference data are downloaded by a scheduled task: a missing file
+stops the run before the checkpoint is loaded. Template use can still download
+PDBe structures into task scratch (see Runtime decisions). This page records
+the pinned identities and the mount layout; it does not copy upstream
+documentation.
 
 ## Pinned upstream
 
@@ -24,10 +26,10 @@ clusters, and remains operator-managed under those publishers' terms. The
 upstream README marks its citation section "coming soon", so the Task carries
 no citation rather than an unpublished one.
 
-## Layout under `MOL_ROOT_DIR` (`/mnt/db/mol1`)
+## Layout under `MOL_ROOT_DIR`
 
 ```text
-/mnt/db/mol1/
+$MOL_ROOT_DIR/
 ├── checkpoint/mol-1-base.pt
 ├── common/
 │   ├── components.cif
@@ -40,9 +42,12 @@ no citation rather than an unpublished one.
     └── pdb_seqres_20261001.fasta           # template search only
 ```
 
-`mmcif/` is created inside the task's writable scratch root at runtime, because
-template featurization caches PDBe downloads there and the operator mount is
-read-only.
+`run.sh` exposes this read-only mount through a fresh task-private writable
+root: it creates an empty `mmcif/` directory and symlinks `checkpoint/`,
+`common/` and `search_database/` into it, then points `MOL_ROOT_DIR` at that
+root. Template featurization downloads PDBe structures into `mmcif/` on every
+run, and the whole scratch root disappears with the allocation. There is no
+operator-managed `mmcif/` cache.
 
 ## Artifact identities
 
@@ -72,7 +77,7 @@ here.
 ## Provisioning
 
 ```bash
-export MOL_ROOT_DIR=/mnt/db/mol1
+export MOL_ROOT_DIR="${MOL_ROOT_DIR:?set the operator asset root}"
 mkdir -p "$MOL_ROOT_DIR/checkpoint"
 curl -fL -o "$MOL_ROOT_DIR/checkpoint/mol-1-base.pt" \
   https://mol-1-release.oss-cn-shanghai.aliyuncs.com/checkpoint/mol-1-base.pt
@@ -105,13 +110,16 @@ search.
 - **MSA search.** `msa_mode: search` uploads protein sequences to
   `https://api.colabfold.com`. The upstream client retries a connection error
   forever, so the runner probes the service first and bounds the search step by
-  `MOL1_SEARCH_TIMEOUT` (default 3600 s). Prediction never searches: all paths
-  must exist before the checkpoint loads.
+  `MOL1_SEARCH_TIMEOUT` (default 3600 s). Search is refused when any protein or
+  RNA MSA is supplied: upstream re-searches every protein chain in a job with
+  one missing chain, replacing supplied MSAs. Prediction never searches: all
+  paths must exist before the checkpoint loads.
 - **Template search.** `template_mode: search` runs HMMER against
-  `pdb_seqres_20261001.fasta`. Template use with `.a3m` hits downloads each hit
-  structure from `https://www.ebi.ac.uk/pdbe/entry-files/download/<id>.cif` on
-  first use and caches it in the task scratch. Inline JSON templates do not
-  need that download.
+  `pdb_seqres_20261001.fasta` and requires `msa_mode: search`. Template use with
+  `.a3m` hits downloads each hit structure from
+  `https://www.ebi.ac.uk/pdbe/entry-files/download/<id>.cif` on every run into
+  the task-private `mmcif/` directory. Inline JSON templates do not need that
+  download.
 - **Not offered.** RNA MSA search (its Rfam/RNAcentral/NT-RNA databases are not
   distributed with this family), `.hhr` template uploads, and `.mol` ligand
   uploads (convert to `.json` templates or `.sdf`/`.mol2`).

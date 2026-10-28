@@ -154,6 +154,14 @@ _MOL1_MAX_LIGAND_LENGTH = 10_000
 
 
 def _mol1_int(value: Any) -> int | None:
+    """A true integer: upstream adds and ranges over `count` and modification positions."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
+
+
+def _mol1_bond_int(value: Any) -> int | None:
+    """Bond fields: upstream calls ``int()`` on these and its docs show strings."""
     if isinstance(value, bool):
         return None
     if isinstance(value, int):
@@ -164,10 +172,14 @@ def _mol1_int(value: Any) -> int | None:
 
 
 def _mol1_asset_reference(value: Any, extensions: tuple[str, ...]) -> str | None:
-    """Return an error unless *value* is a confined uploaded-asset reference."""
+    """Return an error unless *value* is a confined uploaded-asset reference.
+
+    Upstream matches these suffixes case-sensitively, so the reference must
+    carry the canonical lowercase extension.
+    """
     if not isinstance(value, str) or not _safe_relative_asset_reference(value):
         return "must be a confined uploaded asset name"
-    if not value.lower().endswith(extensions):
+    if not value.endswith(extensions):
         return f"must name one of: {', '.join(extensions)}"
     return None
 
@@ -317,11 +329,13 @@ def _validate_mol1_specification(value: Any) -> str | None:
                 bond_label = f"{label} covalent_bonds {bond_index + 1}"
                 if not isinstance(bond, dict) or set(bond) - _MOL1_BOND_KEYS:
                     return f"{bond_label} contains an unsupported field"
+                entity_numbers: list[int] = []
                 for suffix in ("1", "2"):
-                    entity_number = _mol1_int(bond.get(f"entity{suffix}"))
+                    entity_number = _mol1_bond_int(bond.get(f"entity{suffix}"))
                     if entity_number is None or not 1 <= entity_number <= len(sequences):
                         return f"{bond_label} entity{suffix} must name an entity in the job"
-                    position = _mol1_int(bond.get(f"position{suffix}"))
+                    entity_numbers.append(entity_number)
+                    position = _mol1_bond_int(bond.get(f"position{suffix}"))
                     if position is None or not 1 <= position <= entity_positions[entity_number - 1]:
                         return f"{bond_label} position{suffix} is outside its entity"
                     atom = bond.get(f"atom{suffix}")
@@ -332,10 +346,12 @@ def _validate_mol1_specification(value: Any) -> str | None:
                     return f"{bond_label} must declare copy1 and copy2 together"
                 if has_copy1:
                     for suffix in ("1", "2"):
-                        entity_number = _mol1_int(bond[f"entity{suffix}"])
-                        copy = _mol1_int(bond[f"copy{suffix}"])
+                        entity_number = _mol1_bond_int(bond[f"entity{suffix}"])
+                        copy = _mol1_bond_int(bond[f"copy{suffix}"])
                         if copy is None or not 1 <= copy <= entity_counts[entity_number - 1]:
                             return f"{bond_label} copy{suffix} is outside its entity"
+                elif entity_counts[entity_numbers[0] - 1] != entity_counts[entity_numbers[1] - 1]:
+                    return f"{bond_label} must declare copy1 and copy2 when the entity counts differ"
     return None
 
 

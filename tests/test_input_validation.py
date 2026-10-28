@@ -629,6 +629,7 @@ def test_mol1_chain_ids_are_scoped_to_their_job(tmp_path):
     [
         ({"protein": {"sequence": "ACDE", "count": 1}}, "unsupported entity type"),
         ({"proteinChain": {"sequence": "ACDE", "count": 0}}, "positive integer count"),
+        ({"proteinChain": {"sequence": "ACDE", "count": "1"}}, "positive integer count"),
         ({"proteinChain": {"sequence": "ACDE", "count": 2, "id": ["A"]}}, "one short chain id per copy"),
         ({"proteinChain": {"sequence": "ACDE", "count": 1, "msa": {"precomputed_msa_dir": "x"}}}, "unsupported field"),
         (
@@ -641,6 +642,21 @@ def test_mol1_chain_ids_are_scoped_to_their_job(tmp_path):
             },
             "residue position",
         ),
+        (
+            {
+                "proteinChain": {
+                    "sequence": "ACDE",
+                    "count": 1,
+                    "modifications": [{"ptmType": "CCD_HY3", "ptmPosition": "1"}],
+                }
+            },
+            "residue position",
+        ),
+        (
+            {"proteinChain": {"sequence": "ACDE", "count": 1, "templatesPath": "hits.A3M"}},
+            "must name one of",
+        ),
+        ({"ligand": {"ligand": "FILE_ligand.SDF", "count": 1}}, "must name one of"),
         ({"ligand": {"ligand": "FILE_/etc/passwd", "count": 1}}, "confined uploaded asset"),
         ({"ligand": {"ligand": "CCD_", "count": 1}}, "malformed"),
     ],
@@ -664,6 +680,42 @@ def test_mol1_specification_rejects_inconsistent_covalent_bonds(tmp_path):
     path = _write(tmp_path, json.dumps(document).encode(), "input.json")
 
     assert "entity2 must name an entity" in validate_logical_input(str(path), "json", "mol1_specification")
+
+
+def test_mol1_specification_rejects_unequal_bond_copy_counts(tmp_path):
+    document = [
+        {
+            "name": "job",
+            "sequences": [
+                {"proteinChain": {"sequence": "ACDE", "count": 2}},
+                {"ligand": {"ligand": "CCO", "count": 1}},
+            ],
+            "covalent_bonds": [
+                {"entity1": 1, "entity2": 2, "position1": 1, "position2": 1, "atom1": "N", "atom2": "C1"}
+            ],
+        }
+    ]
+    path = _write(tmp_path, json.dumps(document).encode(), "input.json")
+
+    assert "copy1 and copy2" in validate_logical_input(str(path), "json", "mol1_specification")
+
+
+def test_mol1_specification_accepts_equal_bond_copy_counts_and_string_fields(tmp_path):
+    document = [
+        {
+            "name": "job",
+            "sequences": [
+                {"proteinChain": {"sequence": "ACDE", "count": 1}},
+                {"ligand": {"ligand": "CCO", "count": 1}},
+            ],
+            "covalent_bonds": [
+                {"entity1": "1", "entity2": "2", "position1": "1", "position2": "1", "atom1": "N", "atom2": "C1"}
+            ],
+        }
+    ]
+    path = _write(tmp_path, json.dumps(document).encode(), "input.json")
+
+    assert validate_logical_input(str(path), "json", "mol1_specification") is None
 
 
 def test_mol1_specification_rejects_an_unsafe_job_name(tmp_path):

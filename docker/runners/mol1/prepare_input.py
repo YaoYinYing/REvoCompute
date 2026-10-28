@@ -18,6 +18,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import sys
 from pathlib import Path, PurePosixPath
@@ -32,6 +33,22 @@ MODES = {
 }
 PATH_FIELDS = ("pairedMsaPath", "unpairedMsaPath", "templatesPath")
 POLYMER_TYPES = frozenset({"proteinChain", "dnaSequence", "rnaSequence"})
+# Files this runner writes into the prepared tree; an uploaded asset with one
+# of these names would be overwritten or would hide the generated file.
+RESERVED_ARTIFACT_NAMES = frozenset(
+    {
+        "normalized-input.json",
+        "provenance.json",
+        "normalized-input-update-msa.json",
+        "normalized-input-final-updated.json",
+    }
+)
+MAX_SEEDS_LENGTH = 256
+MAX_SEED_VALUE = 2**63 - 1
+# Mirrors the server result-projection cap (revocompute/result_storyboard.py and
+# revocompute/task_runtime.py): more matches fail the output check after inference.
+MAX_PROJECTED_MATCHES = 500
+_SEEDS = re.compile(r"[0-9]+(,[0-9]+)*")
 
 
 class PreparationError(ValueError):
@@ -52,6 +69,10 @@ def _relative_path(entity: dict[str, Any]) -> PurePosixPath:
     relative = PurePosixPath(raw)
     if relative.is_absolute() or any(part in {"", ".", ".."} for part in relative.parts):
         raise PreparationError(f"unsafe input relative path: {raw!r}")
+    if relative.name in RESERVED_ARTIFACT_NAMES:
+        raise PreparationError(
+            f"input relative path collides with a Mol-1 generated artifact: {relative.as_posix()!r}"
+        )
     return relative
 
 
@@ -73,13 +94,17 @@ def _load_manifest(path: Path) -> tuple[Path, dict[str, Any], dict[str, Any]]:
     return Path(str(specification[0].get("path", ""))), manifest, params
 
 
-def _copy_inputs(manifest: dict[str, Any], destination: Path) -> tuple[Path, dict[str, Path]]:
+def _copy_inputs(
+    manifest: dict[str, Any], destination: Path
+) -> tuple[Path, dict[str, Path], dict[str, str], str]:
     inputs = manifest["inputs"]
     entities = list(inputs["specification"]) + list(inputs.get("assets") or [])
     if not all(isinstance(entity, dict) for entity in entities):
         raise PreparationError("Mol-1 input roles contain a malformed entry")
     available: dict[str, Path] = {}
+    hashes: dict[str, str] = {}
     specification: Path | None = None
+    specification_key: str | None = None
     for role, group in (("specification", inputs["specification"]), ("assets", inputs.get("assets") or [])):
         for entity in group:
             source = Path(str(entity.get("path", "")))
@@ -91,12 +116,14 @@ def _copy_inputs(manifest: dict[str, Any], destination: Path) -> tuple[Path, dic
                 raise PreparationError(f"duplicate Mol-1 input relative path: {key}")
             target = destination / relative
             target.parent.mkdir(parents=True, exist_ok=True)
+            hashes[key] = _sha256(source)
             shutil.copyfile(source, target)
             available[key] = target
             if role == "specification":
                 specification = target
-    assert specification is not None
-    return specification, available
+                specification_key = key
+    assert specification is not None and specification_key is not None
+    return specification, available, hashes, specification_key
 
 
 def _resolve_reference(reference: Any, root: Path, available: dict[str, Path]) -> Path:
@@ -138,17 +165,71 @@ def _enforce_modes(document: list[dict[str, Any]], params: dict[str, Any]) -> No
     template_mode = params["template_mode"]
     rna_msa_mode = params["rna_msa_mode"]
     if template_mode == "search" and msa_mode == "none":
-        raise PreparationError("template search needs an MSA: set msa_mode to supply or search")
+        raise PreparationError("template search needs an MSA: set msa_mode to search")
+    # Upstream's template search only searches when the MSA directory holds
+    # pairing.a3m/non_pairing.a3m, which a supplied MSA never has; it would
+    # no-op and verification would fail after the allocation.
+    if template_mode == "search" and msa_mode == "supply":
+        raise PreparationError(
+            "template search needs a searched MSA: use msa_mode 'search', "
+            "or supply templates with template_mode 'supply'"
+        )
+    # Upstream builds every MSA feature only when use_msa is true, so an RNA
+    # MSA supplied with msa_mode 'none' would never be read.
+    if rna_msa_mode == "supply" and msa_mode == "none":
+        raise PreparationError(
+            "rna_msa_mode 'supply' needs msa_mode 'supply': upstream reads RNA MSAs only when MSAs are enabled"
+        )
     for entity_type, entity in _chains(document):
         if entity_type == "proteinChain":
-            if msa_mode == "supply" and not (entity.get("pairedMsaPath") or entity.get("unpairedMsaPath")):
+            supplied = bool(entity.get("pairedMsaPath") or entity.get("unpairedMsaPath"))
+            if msa_mode == "supply" and not supplied:
                 raise PreparationError(
                     "msa_mode 'supply' requires pairedMsaPath or unpairedMsaPath on every protein chain"
                 )
+            if msa_mode == "search" and supplied:
+                raise PreparationError(
+                    "msa_mode 'search' re-searches every protein chain in a job with one missing MSA and "
+                    "overwrites supplied MSAs, uploading those protein sequences to the public ColabFold "
+                    "MMseqs2 service; supply every MSA with msa_mode 'supply' to keep it private"
+                )
             if template_mode == "supply" and not entity.get("templatesPath"):
                 raise PreparationError("template_mode 'supply' requires templatesPath on every protein chain")
-        elif entity_type == "rnaSequence" and rna_msa_mode == "supply" and not entity.get("unpairedMsaPath"):
-            raise PreparationError("rna_msa_mode 'supply' requires unpairedMsaPath on every RNA chain")
+        elif entity_type == "rnaSequence":
+            if msa_mode == "search" and entity.get("unpairedMsaPath"):
+                raise PreparationError(
+                    "msa_mode 'search' uploads protein sequences to the public ColabFold MMseqs2 service "
+                    "and cannot preserve a supplied RNA MSA; use msa_mode 'supply' to keep supplied MSAs private"
+                )
+            if rna_msa_mode == "supply" and not entity.get("unpairedMsaPath"):
+                raise PreparationError("rna_msa_mode 'supply' requires unpairedMsaPath on every RNA chain")
+
+
+def _seed_list(params: dict[str, Any]) -> list[int]:
+    raw = params.get("sample_seeds")
+    if not isinstance(raw, str) or len(raw) > MAX_SEEDS_LENGTH or not _SEEDS.fullmatch(raw):
+        raise PreparationError(
+            f"sample_seeds must be a comma-separated integer list of at most {MAX_SEEDS_LENGTH} characters"
+        )
+    seeds = [int(value) for value in raw.split(",")]
+    if any(seed > MAX_SEED_VALUE for seed in seeds):
+        raise PreparationError(f"sample_seeds values must not exceed {MAX_SEED_VALUE}")
+    return seeds
+
+
+def _check_projected_samples(document: list[dict[str, Any]], params: dict[str, Any]) -> None:
+    """Refuse work the server's result projection cannot admit."""
+    seeds = _seed_list(params)
+    samples = params.get("num_samples")
+    if isinstance(samples, bool) or not isinstance(samples, int) or samples < 1:
+        raise PreparationError("num_samples must be a positive integer")
+    projected = len(document) * len(seeds) * samples
+    if projected > MAX_PROJECTED_MATCHES:
+        raise PreparationError(
+            f"Mol-1 would publish {projected} structures, exceeding the server's "
+            f"{MAX_PROJECTED_MATCHES}-match result projection limit; reduce the job count, "
+            "sample_seeds, or num_samples"
+        )
 
 
 def _token_limit() -> int:
@@ -167,14 +248,15 @@ def _ccd_cache_path() -> Path | None:
 
 
 def prepare(manifest_path: Path, destination: Path) -> Path:
-    specification, manifest, params = _load_manifest(manifest_path)
+    _specification, manifest, params = _load_manifest(manifest_path)
     destination.mkdir(parents=True, exist_ok=True)
-    prepared_specification, available = _copy_inputs(manifest, destination)
+    prepared_specification, available, hashes, specification_key = _copy_inputs(manifest, destination)
     try:
         document = json.loads(prepared_specification.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise PreparationError(f"Invalid Mol-1 JSON specification: {exc}") from exc
     _enforce_modes(document, params)
+    _check_projected_samples(document, params)
     _resolve_references(document, destination, available)
     try:
         token_estimate = estimate(document, CcdAtomCounts(_ccd_cache_path()))
@@ -186,17 +268,17 @@ def prepare(manifest_path: Path, destination: Path) -> Path:
             f"Estimated {token_estimate.total} tokens exceeds the {limit}-token admission bound. "
             "Reduce the system or raise MOL1_MAX_TOKENS after measuring device memory."
         )
-    # Keep the uploaded specification copy untouched: the normalized document
-    # is a separate file, and the recorded hash is the one the user submitted.
-    submission_sha256 = _sha256(prepared_specification)
+    # The uploaded specification copy stays untouched: the normalized document
+    # is a separate file, and these hashes are of the user's original bytes,
+    # recorded at copy time.
     normalized = destination / "normalized-input.json"
     normalized.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     provenance = {
-        "specification": {"name": prepared_specification.name, "sha256": submission_sha256},
+        "specification": {"name": prepared_specification.name, "sha256": hashes[specification_key]},
         "assets": [
-            {"path": relative, "sha256": _sha256(path)}
-            for relative, path in sorted(available.items())
-            if path != prepared_specification
+            {"path": relative, "sha256": hashes[relative]}
+            for relative in sorted(available)
+            if relative != specification_key
         ],
         "token_estimate": {
             "total": token_estimate.total,
