@@ -118,6 +118,10 @@ def test_normalizes_authentic_output_into_declared_tables(tmp_path: Path) -> Non
     assert summary["profile_point_count"] == 35
     assert summary["bottleneck_row_count"] == 9
     assert summary["lining_residue_count"] == 39
+    assert summary["cluster_ids"] == [1, 2, 3, 4, 5]
+    assert len(summary["snapshot_labels"]) == 50
+    assert len(summary["cluster_table_sha256"]) == 64
+    assert len(summary["tunnel_table_sha256"]) == 64
     assert summary["start_point"] == {"mode": "ligand"}
     assert json.loads((output / "summary.json").read_text(encoding="utf-8")) == summary
 

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import math
 import shutil
@@ -379,6 +380,13 @@ def normalize(raw_out: Path, output_dir: Path, provenance: dict[str, object]) ->
         "profile_point_count": len(profiles),
         "bottleneck_row_count": len(bottlenecks),
         "lining_residue_count": len(residues),
+        # Bind the provenance record to the exact published tables: the cluster
+        # identifiers CAVER assigned, the snapshot labels it reported, and the
+        # bytes of the tunnel table. Counts alone cannot identify a result set.
+        "cluster_ids": sorted(int(cluster["cluster"]) for cluster in clusters),
+        "snapshot_labels": sorted({str(tunnel["snapshot"]) for tunnel in tunnels}),
+        "cluster_table_sha256": hashlib.sha256((output_dir / "clusters.csv").read_bytes()).hexdigest(),
+        "tunnel_table_sha256": hashlib.sha256((output_dir / "tunnels.csv").read_bytes()).hexdigest(),
         "units": {
             "bottleneck_radius": "angstrom",
             "length": "angstrom",
