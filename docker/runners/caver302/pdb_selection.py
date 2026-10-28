@@ -210,20 +210,20 @@ def _conformer_labels(residue_atoms: list[Atom]) -> dict[str, list[Atom]]:
     return conformers
 
 
-def _difficult_conformations(atoms: list[Atom]) -> bool:
-    """True when a residue's conformers do not cover the same atom names.
+def difficult_conformations(atoms: list[Atom]) -> bool:
+    """True when a residue's conformers hold different numbers of atoms.
 
-    CAVER prints "Difficult case of alternative conformations detected, please
-    remove them manually", removes nothing for the whole file and averages every
-    atom. Verified against ``data/origins.pdb`` on a residue whose conformer A
-    carries CB while conformer B carries CG.
+    CAVER compares per-conformer atom counts, not atom names: equal-count
+    conformers are removed normally even when their atoms differ, while a
+    different count is the "Difficult case of alternative conformations
+    detected, please remove them manually". In that case CAVER keeps every atom
+    of the whole file. Verified against ``data/origins.pdb`` for 1/1 (removes
+    the lower conformer) and 2/1 (keeps everything). The flag is file-global, so
+    a difficult residue anywhere changes how every selection is averaged.
     """
     for residue_atoms in _residues(atoms).values():
-        conformers = _conformer_labels(residue_atoms)
-        if len(conformers) < 2:
-            continue
-        names = {frozenset(atom.name for atom in group) for group in conformers.values()}
-        if len(names) > 1:
+        counts = {len(group) for group in _conformer_labels(residue_atoms).values()}
+        if len(counts) > 1:
             return True
     return False
 
@@ -236,24 +236,29 @@ def _kept_conformer(residue_atoms: list[Atom]) -> tuple[str, list[Atom]]:
     verified with a 0.50/0.50 residue where it kept conformation B.
     """
     conformers = _conformer_labels(residue_atoms)
+    # Labels whose atoms carry no occupancy have no AverageOccupancy entry, so
+    # CAVER cannot compare them; the highest label is kept when none has one.
+    known = {label: group for label, group in conformers.items() if any(a.occupancy is not None for a in group)}
+    candidates = known or conformers
     best: tuple[str, float, list[Atom]] | None = None
-    for label in sorted(conformers):
-        group = conformers[label]
+    for label in sorted(candidates):
+        group = candidates[label]
         occupancy = _mean_occupancy(group)
         if best is None or occupancy >= best[1]:
             best = (label, occupancy, group)
     return ("", []) if best is None else (best[0], best[2])
 
 
-def retained_atoms(atoms: list[Atom]) -> list[Atom]:
+def retained_atoms(atoms: list[Atom], difficult: bool) -> list[Atom]:
     """Return the atoms CAVER keeps after alternate-conformation removal.
 
     CAVER drops alternate conformations per residue: blank-altloc atoms are
     always kept and only the highest-mean-occupancy conformer survives, with the
-    highest label winning a tie. If any residue's conformers do not cover the
-    same atoms, CAVER removes nothing anywhere, and so does this function.
+    highest label winning a tie. ``difficult`` is the file-global flag computed
+    from the whole structure: when it is true CAVER removes nothing anywhere,
+    and so does this function.
     """
-    if _difficult_conformations(atoms):
+    if difficult:
         return list(atoms)
     keep = set()
     for residue_atoms in _residues(atoms).values():
@@ -263,16 +268,16 @@ def retained_atoms(atoms: list[Atom]) -> list[Atom]:
     return [atom for atom in atoms if id(atom) in keep]
 
 
-def altloc_policy(atoms: list[Atom]) -> str:
+def altloc_policy(difficult: bool) -> str:
     """One sentence describing how alternate conformations were handled."""
-    if _difficult_conformations(atoms):
+    if difficult:
         return "difficult case: CAVER keeps every atom of the file"
     return "CAVER removes all but the highest-occupancy conformer per residue"
 
 
-def _removed_altlocs(atoms: list[Atom], *, label_residues: bool = False) -> list[str]:
+def _removed_altlocs(atoms: list[Atom], difficult: bool, *, label_residues: bool = False) -> list[str]:
     """Alternate-conformation labels CAVER removes, optionally with residue ids."""
-    if _difficult_conformations(atoms):
+    if difficult:
         return []
     removed = []
     for (chain, number, _icode), residue_atoms in _residues(atoms).items():
@@ -349,7 +354,7 @@ def _selection_fields(params: dict[str, object]) -> dict[str, object]:
     return {name: params.get(name) for name in fields if params.get(name) not in (None, "")}
 
 
-def _manual_point(params: dict[str, object], atoms: list[Atom]) -> StartPoint:
+def _manual_point(params: dict[str, object], atoms: list[Atom], difficult: bool) -> StartPoint:
     coordinates: list[float] = []
     for axis in ("start_x", "start_y", "start_z"):
         value = params.get(axis)
@@ -377,7 +382,7 @@ def _manual_point(params: dict[str, object], atoms: list[Atom]) -> StartPoint:
     )
 
 
-def _single_atom(params: dict[str, object], atoms: list[Atom]) -> StartPoint:
+def _single_atom(params: dict[str, object], atoms: list[Atom], difficult: bool) -> StartPoint:
     chain = str(params.get("start_chain") or "")
     number = params.get("start_residue_number")
     atom_name = str(params.get("start_atom_name") or "")
@@ -394,15 +399,19 @@ def _single_atom(params: dict[str, object], atoms: list[Atom]) -> StartPoint:
             f"atom {atom_name!r} is absent from residue {key[0] or '_'}:{number}; available atoms: {available}"
         )
     # Highest occupancy wins; a blank alternate location breaks the tie, and
-    # the chosen one is recorded so the selection is reproducible.
-    atom = max(matches, key=lambda item: (_mean_occupancy([item]), item.altloc == "", -item.serial))
-    if id(atom) not in {id(candidate) for candidate in retained_atoms(residue_atoms)}:
+    # the chosen one is recorded so the selection is reproducible. With no
+    # explicit altloc only the conformer CAVER keeps is eligible, so asking for
+    # "whatever CAVER uses" never selects an atom CAVER deletes.
+    retained_ids = {id(candidate) for candidate in retained_atoms(residue_atoms, difficult)}
+    eligible = [candidate for candidate in matches if id(candidate) in retained_ids]
+    if not eligible:
         kept_label, _conformer = _kept_conformer(residue_atoms)
         raise SelectionError(
-            f"atom {atom_name!r} at alternate location {atom.altloc!r} is removed by CAVER, which keeps "
+            f"atom {atom_name!r} at alternate location {altloc!r} is removed by CAVER, which keeps "
             f"conformation {kept_label or '<blank>'} of residue {key[0] or '_'}:{number}; select that "
             "conformation instead"
         )
+    atom = max(eligible, key=lambda item: (_mean_occupancy([item]), item.altloc == "", -item.serial))
     return StartPoint(
         atom.x,
         atom.y,
@@ -418,21 +427,21 @@ def _single_atom(params: dict[str, object], atoms: list[Atom]) -> StartPoint:
             "altloc": atom.altloc,
             "atom_serial": atom.serial,
             "atom_count": 1,
-            "altloc_policy": altloc_policy(residue_atoms),
-            "removed_altlocs": _removed_altlocs(residue_atoms),
+            "altloc_policy": altloc_policy(difficult),
+            "removed_altlocs": _removed_altlocs(residue_atoms, difficult),
             **resolution,
         },
         (("starting_point_atom", str(atom.serial)),),
     )
 
 
-def _residue_centroid(params: dict[str, object], atoms: list[Atom]) -> StartPoint:
+def _residue_centroid(params: dict[str, object], atoms: list[Atom], difficult: bool) -> StartPoint:
     chain = str(params.get("start_chain") or "")
     number = params.get("start_residue_number")
     if not isinstance(number, int) or isinstance(number, bool):
         raise SelectionError("start_residue_number is required when the start point is a residue centroid")
     key, residue_atoms, resolution = _resolve_residue(_residues(atoms), chain, number)
-    kept = retained_atoms(residue_atoms)
+    kept = retained_atoms(residue_atoms, difficult)
     x, y, z = _centroid(kept)
     return StartPoint(
         x,
@@ -447,16 +456,16 @@ def _residue_centroid(params: dict[str, object], atoms: list[Atom]) -> StartPoin
             "residue_name": residue_atoms[0].resname,
             "atom_count": len(kept),
             "residue_count": 1,
-            "removed_altlocs": _removed_altlocs(residue_atoms),
+            "removed_altlocs": _removed_altlocs(residue_atoms, difficult),
             "centroid_policy": "mean over the atoms CAVER retains",
-            "altloc_policy": altloc_policy(residue_atoms),
+            "altloc_policy": altloc_policy(difficult),
             **resolution,
         },
         (("starting_point_residue", residue_identifier(key[0], number)),),
     )
 
 
-def _ligand_centroid(params: dict[str, object], atoms: list[Atom]) -> StartPoint:
+def _ligand_centroid(params: dict[str, object], atoms: list[Atom], difficult: bool) -> StartPoint:
     resname = str(params.get("start_residue_name") or "").strip()
     if not resname:
         raise SelectionError("start_residue_name is required when the start point is a ligand or cofactor centre")
@@ -487,7 +496,7 @@ def _ligand_centroid(params: dict[str, object], atoms: list[Atom]) -> StartPoint
             f"{resname!r} matches only a blank-chain residue, but CAVER resolves a chainless identifier "
             "to a named chain; set start_chain explicitly with a named chain"
         )
-    kept = retained_atoms(residue_atoms)
+    kept = retained_atoms(residue_atoms, difficult)
     x, y, z = _centroid(kept)
     return StartPoint(
         x,
@@ -502,9 +511,9 @@ def _ligand_centroid(params: dict[str, object], atoms: list[Atom]) -> StartPoint
             "residue_name": resname,
             "atom_count": len(kept),
             "residue_count": 1,
-            "removed_altlocs": _removed_altlocs(residue_atoms),
+            "removed_altlocs": _removed_altlocs(residue_atoms, difficult),
             "centroid_policy": "mean over the atoms CAVER retains",
-            "altloc_policy": altloc_policy(residue_atoms),
+            "altloc_policy": altloc_policy(difficult),
             "chain_resolution": "explicit" if chain not in (None, "") else "single matching HETATM residue",
         },
         (("starting_point_residue", residue_identifier(residue_chain, residue_number)),),
@@ -547,7 +556,7 @@ def _group_directive(ranges: list[tuple[str, int, int, bool]]) -> str:
     return " ".join(terms)
 
 
-def _group_centroid(params: dict[str, object], atoms: list[Atom]) -> StartPoint:
+def _group_centroid(params: dict[str, object], atoms: list[Atom], difficult: bool) -> StartPoint:
     spec = str(params.get("start_group") or "").strip()
     if not spec:
         raise SelectionError("start_group is required when the start point is a residue-group centroid")
@@ -583,7 +592,7 @@ def _group_centroid(params: dict[str, object], atoms: list[Atom]) -> StartPoint:
     # CAVER weights each named residue equally: the initial point is the mean of
     # the residue centres, and each residue centre is the mean of the atoms it
     # keeps. Sorted iteration keeps floating-point summation order stable.
-    centres = [_centroid(retained_atoms(by_key[key])) for key in sorted({atom.residue for atom in selected})]
+    centres = [_centroid(retained_atoms(by_key[key], difficult)) for key in sorted({atom.residue for atom in selected})]
     x = sum(centre[0] for centre in centres) / len(centres)
     y = sum(centre[1] for centre in centres) / len(centres)
     z = sum(centre[2] for centre in centres) / len(centres)
@@ -598,10 +607,10 @@ def _group_centroid(params: dict[str, object], atoms: list[Atom]) -> StartPoint:
             "units": "angstrom",
             "group": spec,
             "residue_count": residue_count,
-            "atom_count": len(retained_atoms(selected)),
-            "removed_altlocs": _removed_altlocs(selected, label_residues=True),
+            "atom_count": len(retained_atoms(selected, difficult)),
+            "removed_altlocs": _removed_altlocs(selected, difficult, label_residues=True),
             "centroid_policy": "mean of residue centres, each residue centre the mean of its retained atoms",
-            "altloc_policy": altloc_policy(atoms),
+            "altloc_policy": altloc_policy(difficult),
         },
         (("starting_point_residue", _group_directive(resolved)),),
     )
@@ -669,6 +678,7 @@ def resolve_start_point(atoms: list[Atom], params: dict[str, object]) -> StartPo
     resolver = _RESOLVERS.get(str(mode))
     if resolver is None:
         raise SelectionError(f"unknown start_point_mode {mode!r}; expected one of {', '.join(_RESOLVERS)}")
-    point = resolver(params, atoms)
+    difficult = difficult_conformations(atoms)
+    point = resolver(params, atoms, difficult)
     point.provenance["parameters"] = _selection_fields(params)
     return point

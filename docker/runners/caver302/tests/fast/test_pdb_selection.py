@@ -27,6 +27,7 @@ from pdb_selection import (  # noqa: E402
     SelectionError,
     altloc_policy,
     assert_snapshot_matches,
+    difficult_conformations,
     parse_pdb,
     resolve_start_point,
     retained_atoms,
@@ -197,6 +198,14 @@ def test_equal_occupancy_keeps_the_highest_conformation_label() -> None:
         },
     )
     assert selected.provenance["point_angstrom"] == [5.0, 1.0, 1.0]
+    # With start_altloc omitted the assistant must accept CAVER's conformer,
+    # which is B on this 0.50/0.50 tie, not the first-listed A.
+    default = resolve_start_point(
+        atoms,
+        {"start_point_mode": "atom", "start_chain": "A", "start_residue_number": 9, "start_atom_name": "CB"},
+    )
+    assert default.provenance["altloc"] == "B"
+    assert default.provenance["point_angstrom"] == [5.0, 1.0, 1.0]
     with pytest.raises(SelectionError, match="keeps conformation B"):
         resolve_start_point(
             atoms,
@@ -210,14 +219,40 @@ def test_equal_occupancy_keeps_the_highest_conformation_label() -> None:
         )
 
 
-def test_conformers_without_the_same_atoms_keep_every_atom() -> None:
-    atoms = parse_pdb(FIXTURES / "difficult.pdb")
-    # CAVER removes nothing anywhere in that case, so all four atoms count.
-    assert len(retained_atoms(atoms)) == 4
-    assert altloc_policy(atoms).startswith("difficult case")
+def test_equal_count_conformers_with_different_atoms_are_not_difficult() -> None:
+    atoms = parse_pdb(FIXTURES / "equal_count.pdb")
+    # CAVER compares per-conformer counts, so 1/1 is normal removal: B survives.
+    assert difficult_conformations(atoms) is False
+    assert len(retained_atoms(atoms, False)) == 3
     resolved = resolve_start_point(atoms, {"start_point_mode": "residue", "start_chain": "A", "start_residue_number": 9})
-    assert resolved.provenance["point_angstrom"] == [13 / 4, 1.0, 1.0]
+    assert resolved.provenance["point_angstrom"] == [8 / 3, 1.0, 1.0]
+    assert resolved.provenance["removed_altlocs"] == ["A"]
+
+
+def test_conformers_with_different_atom_counts_keep_every_atom() -> None:
+    atoms = parse_pdb(FIXTURES / "difficult.pdb")
+    # 2 atoms in A against 1 in B is CAVER's difficult case: nothing is removed.
+    assert difficult_conformations(atoms) is True
+    assert len(retained_atoms(atoms, True)) == 5
+    assert altloc_policy(True).startswith("difficult case")
+    resolved = resolve_start_point(atoms, {"start_point_mode": "residue", "start_chain": "A", "start_residue_number": 9})
+    assert resolved.provenance["point_angstrom"] == [17 / 5, 1.0, 1.0]
     assert resolved.provenance["removed_altlocs"] == []
+
+
+def test_difficult_residue_outside_the_selection_changes_the_whole_file(tmp_path: Path) -> None:
+    text = (FIXTURES / "selection.pdb").read_text(encoding="utf-8")
+    difficult = (FIXTURES / "difficult.pdb").read_text(encoding="utf-8")
+    hard = [line for line in difficult.splitlines() if line.startswith("ATOM") and " A   9" in line]
+    mixed = tmp_path / "hard_elsewhere.pdb"
+    mixed.write_text("\n".join(hard) + "\n" + text, encoding="utf-8")
+    atoms = parse_pdb(mixed)
+    assert difficult_conformations(atoms) is True
+    # Residue A:1 has altlocs A/B; a difficult residue elsewhere keeps both.
+    resolved = resolve_start_point(atoms, {"start_point_mode": "residue", "start_chain": "A", "start_residue_number": 1})
+    assert resolved.provenance["atom_count"] == 4
+    assert resolved.provenance["removed_altlocs"] == []
+    assert resolved.provenance["point_angstrom"] == [2.25, 1.25, 1.0]
 
 
 def test_blank_occupancy_is_unknown_not_one() -> None:
