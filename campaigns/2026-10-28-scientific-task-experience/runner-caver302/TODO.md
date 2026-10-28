@@ -1,7 +1,10 @@
 # TODO — feat(runner): headless CAVER 3.02 tunnel analysis and spatial input
 
 > **Status:** CPU-side Runner implemented on branch `campaign/2026-10-28-runner-caver302`;
-> SIF build, authentic execution, live acceptance and the viewer are not done. See the local
+> SIF build, `%test` and authentic CAVER 3.0.2 execution on 1SUO are done. Live acceptance is
+> **blocked by the environment**: `live-test` cannot build the candidate server image because
+> `npm ci` aborts after ~462 s ("Exit handler never called") on two identical attempts, so no
+> receipt or attestation exists. The viewer remains deferred to PR #117. See the local
 > `IMPLEMENTATION_STATE.md` for exact provenance and test evidence.
 > **Initial main:** 17e80ed1dbd00f1389f3ec7047e5661b85ed52eb. Re-check exact main and PR head before any coding/review.
 
@@ -19,7 +22,7 @@ Integrate official upstream CAVER 3.0.2 CLI as an online CPU Runner with a scien
 - [x] Download CAVER 3.0.2 **only from the exact upstream maintainer-provided URL** as a pinned build input, never from the plugin repository or transient mirror. Record retrieval date, archive byte count, checksum (SHA-256) and archive file inventory in documented provenance; verify reproducibly. (2026-10-28T15:46:08Z..15:51:47Z, 33,303,568 bytes, `2d819541…0ee1e`, 1,146 members; see `upstream.json`.)
 - [x] Inspect upstream ZIP before extracting: enforce safe archive extraction, zip-slip/symlink constraints, expected JAR/lib/home/config presence, license and third-party notices. If official URL is inaccessible or archive differs, STOP with a transparent blocker; do not silently substitute binaries. (`%post` and the audit script refuse unsafe members; all expected members present.)
 - [~] Review applicable GPL-3.0 obligations for the official JAR, dependency libraries and combined distribution. Preserve license notices and source-availability provenance; downloading direct from upstream does not by itself waive redistribution duties. (Reviewed: CAVER GPL-3.0, kd LGPL-3.0, Weka ml.jar GPL-3.0. **Unresolved:** Sun `vecmath.jar` is JRL/JDL and is not mentioned by `license.txt`; `AverageLinkClustering.jar` has no separate notice. No compliance claim is made.)
-- [ ] Build a headless Java Runner Family with versioned JRE/JAR/libs, CPU-only default resource policy, bounded Java heap (`-Xmx`), timeout, snapshot count limits, temp file isolation, read-only distribution mount and no unintended network. (Manifests, definition and adapters are implemented; the SIF is not built in this PR.)
+- [x] Build a headless Java Runner Family with versioned JRE/JAR/libs, CPU-only default resource policy, bounded Java heap (`-Xmx`), timeout, snapshot count limits, temp file isolation, read-only distribution mount and no unintended network. (Direct Apptainer build of `caver302.def` succeeded: 114,708,480 bytes, SHA-256 `ce3c6746…c759be`, `%test` passes on `openjdk 1.8.0_504`.)
 - [x] Implement initial Task `CAVER` / `Transport tunnel analysis` accepting PDB (and other types only through validated conversion) plus optional series of snapshots with stable atom/residue mapping; define ordering/frame indexing and input limits. (PDB only; reference = frame 1, uploads follow in order, 0..50 snapshots, topology checked.)
 - [x] Introduce **canonical typed spatial selectors** for the Task form: manual x,y,z in Å, selected atom, residue/atom group centroid, ligand/cofactor center, and optionally manual pocket marker; every mode resolves to a visualized immutable coordinates+selection provenance record. (Typed controls only; resolution and provenance implemented.)
 - [ ] Provide molecule viewer interaction for click-to-pick atoms/residues, multi-select, hovering tooltip, numerical coordinates, chain/insertion-code resolution, selection highlight and a draggable or editable 3D start-point marker when supported. Avoid speculative claims about geometry before reading the input structure. (Deferred: PR #117 owns the create-task surface.)
@@ -36,13 +39,14 @@ Integrate official upstream CAVER 3.0.2 CLI as an online CPU Runner with a scien
 
 ## Acceptance / tests
 - [x] Verify upstream distribution URL and pinned SHA-256 at build; altered or missing ZIP must fail. Preserve GPL/third-party licensing evidence and upstream citations. (Enforced in `caver302.def` `%post`/`%test`; the build itself is pending the live window.)
-- [ ] Run `java` CLI in candidate SIF on a known CAVER sample and verify completed tunnel/stats outputs with authentic files, not only process exit 0. (Deferred to the Commander's live window; the JAR was not executed in this phase.)
+- [x] Run `java` CLI in candidate SIF on a known CAVER sample and verify completed tunnel/stats outputs with authentic files, not only process exit 0. (Real 1SUO runs in the SIF: a serial-only `starting_point_atom` exits 0 with zero tunnels and a swallowed NPE, while `starting_point_atom <serial> <x> <y> <z>` produces the full output set in 3.72 s; success is judged from the output tables. Normalization of that real output succeeds.)
 - [ ] Browser tests of manual XYZ, atom click, residue centroid, ligand pocket and edits, including mutation of the selection, empty/malformed selection, chain ambiguity, altloc/insertion code and high-DPI/mobile layouts. (Deferred with the viewer.)
 - [x] Roundtrip test: click selection → form state → snapshot → generated CAVER config → actual result; compare coordinates and units to original structure with documented tolerance. (Typed selection → config → authentic-output normalization is covered end to end with a contract stand-in; the click step is deferred.)
 - [x] Reject huge/NaN/Inf coordinates, missing residues, frame inconsistency, unsafe archives, Java/config injection, path traversal, unbounded heap/frames and malicious structure names. (Fast tests cover each rejection path.)
 - [x] Check CPU resource estimation, cancellation, memory OOM, missing JAR, non-zero tool exit, zero tunnels and incomplete output; no false-success task. (Bounded `-Xmx`, internal timeout, missing-JAR preflight, nonzero-exit and incomplete/empty-output failures tested. No resource-estimation model is declared.)
 - [x] Verify tunnel cluster/profiles metrics against a pinned upstream example, scientific units and trajectory frame labels, ResultManifest and storyboard render. (Parsers are tested against the distribution's guided-example output with explicit Angstrom units; storyboard/render evidence is deferred.)
 - [ ] Run existing server/manifest validations, doctor --strict, scientific smoke, frontend screenshot/keyboard regression and exact-head CI with evidence. (Fleet and fast suites pass locally; doctor/scientific smoke/CI run on the pushed head.)
+- [ ] Run one target-host live acceptance through the public API and record walltime, CPU time, host-memory peak, published artifacts and receipt. (BLOCKED: `run/restart.sh live-test --runner caver302 --use-proxy` fails while rebuilding the candidate server image — `npm ci` aborts after ~462 s with npm "Exit handler never called" on two identical attempts. The caver302 SIF and Slurm were never reached; no receipt and no readiness attestation exist.)
 
 ## Non-goals
 - No PyMOL server dependency, embedded JAR copied from the plugin repo, or privileged direct GUI connection.
