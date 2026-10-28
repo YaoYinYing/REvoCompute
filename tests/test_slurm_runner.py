@@ -1711,6 +1711,37 @@ def test_srun_error_file_is_published_and_reported_as_the_job_stderr(tmp_path):
     assert "RuntimeError: Failed to find C compiler." in record["logs"]["stderr"]
 
 
+def test_job_stderr_tail_never_publishes_a_cut_credential_line(tmp_path):
+    """A window that starts inside a credential assignment drops that line.
+
+    Redaction matches a whole ``KEY=value`` assignment, so a tail cut through
+    the key would publish the value as ordinary text. The read starts one byte
+    before the window precisely so the partial first line is discarded.
+    """
+    from revocompute.execution_diagnostics import MAX_LOG_BYTES
+
+    job = SlurmJob(
+        "task-1",
+        _make_task_type(),
+        _make_runner(),
+        _make_entities(),
+        str(tmp_path / "out"),
+        username="alice",
+    )
+    job._slurm_job_id = "4217"
+    secret = 'TOKEN_API="private-token"\n'
+    cut_inside_key = 3
+    tail = "z" * (MAX_LOG_BYTES + 1 - len(secret) + cut_inside_key)
+    os.makedirs(job.allocation_dir, exist_ok=True)
+    Path(job.allocation_dir, "allocation-4217.err").write_text("filler\n" + secret + tail, encoding="utf-8")
+
+    job._save_output()
+
+    published = (tmp_path / "out" / "execution" / "slurm-alice-cpu_runner-task-1.stderr.log").read_text()
+    assert "private-token" not in published
+    assert published.startswith("z")
+
+
 def test_slurm_output_is_named_previewable_execution_diagnostics(tmp_path):
     job = SlurmJob(
         "task-1",

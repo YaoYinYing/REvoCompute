@@ -2536,6 +2536,49 @@ def test_a_dispatch_adopts_surviving_evidence_before_asking_for_more(monkeypatch
     assert module.task_store.gpu_credit_summary(107, at=at + 100)["usage_gpu_seconds"] == 45
 
 
+def test_a_running_jobs_scheduler_log_is_retired_only_after_it_ends(monkeypatch, tmp_path):
+    """Reconciliation must not unlink the stderr of a job that is still writing.
+
+    The pass runs on every dispatch, so retiring a file whose allocation row
+    already exists would erase a *live* job's own stderr -- the only place its
+    traceback exists -- while it runs. It becomes redundant only when the
+    scheduler reports the job terminal.
+    """
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    at = _timestamp(2026, 9, 5)
+    task_id = "e" * 32
+    _own_task(module.task_store, task_id, user_id=108)
+    module.task_store.reserve_compute_admission(user_id=108, task_id=task_id, at=at)
+    callbacks = module.task_runtime._compute_allocation_callbacks(
+        task_id=task_id, user_id=108, stage_id="model", resource_policy=_gpu_policy(),
+    )
+    callbacks[0]("8826", at + 1, True, {"slurm_job_id": "8826", "observed_at": at + 2, "cpus": 1, "gpus": 1})
+    assert module.task_store.allocation_row_exists("8826") is True
+    task = module.task_store.get_task(task_id)
+    log = _plant_scheduler_log(module, task, job_id="8826", observed_at=at + 2)
+
+    monkeypatch.setattr(module.task_runtime.shutil, "which", lambda command: f"/usr/bin/{command}")
+    monkeypatch.setattr(
+        module.task_runtime.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(stdout="JobId=8826 JobState=RUNNING RunTime=00:00:10\n"),
+    )
+    module.task_runtime._recover_surviving_host_allocations()
+    assert log.exists()
+
+    monkeypatch.setattr(
+        module.task_runtime.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(stdout="JobId=8826 JobState=COMPLETED RunTime=00:00:45\n"),
+    )
+    module.task_runtime._recover_surviving_host_allocations()
+    assert not log.exists()
+
+
 def test_a_dispatch_never_runs_the_unbounded_settle_phase(monkeypatch, tmp_path):
     """Dispatch adopts evidence; it does not settle the world.
 

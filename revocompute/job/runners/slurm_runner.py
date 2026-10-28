@@ -318,6 +318,10 @@ class SlurmJob(Job):
         self._process: subprocess.Popen | None = None
         self._stdout_lines: list[str] = []
         self._stderr_lines: list[str] = []
+        #: The scheduler's stderr file, captured the moment srun exits. The file
+        #: is retired by other passes once the allocation row is durable, so a
+        #: later read could find it gone.
+        self._job_stderr_snapshot: list[str] | None = None
         self._stdout_thread: threading.Thread | None = None
         self._stderr_thread: threading.Thread | None = None
         self._wrapper_script_path: str | None = None
@@ -705,6 +709,10 @@ class SlurmJob(Job):
             # Freeze execution end before diagnostic I/O without moving protocol ingest after settlement.
             if self._allocation_finished_at is None:
                 self._allocation_finished_at = time.time()
+            # Capture the scheduler's stderr file before diagnostic I/O: the
+            # allocation row is already durable, so any concurrent dispatch's
+            # reconciliation would otherwise be free to retire the file first.
+            self._job_stderr_snapshot = self._job_stderr_lines()
             self._persist_output()
             # Ingest before the terminal event, and for every outcome: an OOM
             # row is the evidence the estimator exists to learn from, and a
@@ -1765,9 +1773,13 @@ class SlurmJob(Job):
         stderr carries only the srun client's own messages. A failure report
         built from the pipe alone therefore shows an exit banner and no reason.
         Reading the file here gives the same evidence the scheduler kept, under
-        the same redaction and bound as every other captured stream. A partial
-        first line from a truncated tail is dropped rather than shown as text.
+        the same redaction and bound as every other captured stream. The read
+        starts one byte before the window so a truncated tail always yields a
+        partial first line, which is dropped rather than published: a cut inside
+        a credential assignment would no longer match the redactor.
         """
+        if self._job_stderr_snapshot is not None:
+            return self._job_stderr_snapshot
         job_id = self._slurm_job_id
         if not job_id or not job_id.isdigit():
             return []
@@ -1775,13 +1787,11 @@ class SlurmJob(Job):
         try:
             with open(path, "rb") as handle:
                 handle.seek(0, os.SEEK_END)
-                handle.seek(max(0, handle.tell() - MAX_LOG_BYTES))
+                handle.seek(max(0, handle.tell() - MAX_LOG_BYTES - 1))
                 text = handle.read(MAX_LOG_BYTES + 1).decode("utf-8", errors="replace")
         except OSError:
             return []
         text, _ = bounded_log(text, limit=MAX_LOG_BYTES)
-        if text and not text.endswith("\n"):
-            text += "\n"
         return text.splitlines(keepends=True)
 
     @staticmethod
