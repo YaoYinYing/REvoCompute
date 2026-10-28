@@ -1,8 +1,13 @@
 /* Preparation is one input surface beside its canonical model controls. */
-.create-task { width:100%; min-width:0; --ct-paper:var(--app-surface); --ct-raised:var(--app-raised); --ct-ink:var(--app-ink); --ct-muted:var(--app-muted); --ct-line:var(--app-line); --ct-accent:var(--app-accent); --ct-accent-strong:var(--app-accent-2); --ct-success:var(--app-success); --ct-amber:var(--app-warning); --ct-error:var(--app-danger); color:var(--ct-ink); max-width:1536px; margin:auto; padding:32px 48px 40px; font:14px/1.5 var(--font-sans); }
+/* The palette belongs to every create-task surface, not only the page: the
+   dialogs are appended to document.body in the top layer, outside this view's
+   inheritance scope, so they declare the same tokens for themselves. A dialog
+   that inherited none of them computed to a transparent background. */
+.create-task,.ct-dialog { --ct-paper:var(--app-surface); --ct-raised:var(--app-raised); --ct-ink:var(--app-ink); --ct-muted:var(--app-muted); --ct-line:var(--app-line); --ct-accent:var(--app-accent); --ct-accent-strong:var(--app-accent-2); --ct-success:var(--app-success); --ct-amber:var(--app-warning); --ct-error:var(--app-danger); }
+.create-task { width:100%; min-width:0; color:var(--ct-ink); max-width:1536px; margin:auto; padding:32px 48px 40px; font:14px/1.5 var(--font-sans); }
 .create-task button,.create-task input,.create-task select,.create-task textarea { font:inherit; }
 .ct-method-header,.ct-page-header { display:flex; align-items:center; justify-content:space-between; gap:24px; padding-bottom:27px; }
-.ct-method-header h1,.ct-page-header h1 { font:500 38px/1.2 var(--font-display); letter-spacing:-1.2px; margin:0; }
+.ct-method-header h1,.ct-page-header h1 { font:500 38px/1.2 var(--font-display); letter-spacing:-1.2px; margin:0; overflow-wrap:anywhere; }
 .ct-category { font:10px var(--font-mono); letter-spacing:1.2px; text-transform:uppercase; color:var(--ct-muted); margin:0 0 10px; }
 .ct-method-summary,.ct-page-header p { font-size:14px; line-height:1.7; color:var(--ct-muted); margin:12px 0 0; }
 .ct-primary,.ct-secondary { border:1px solid var(--ct-line); border-radius:4px; min-height:44px; padding:8px 13px; color:var(--ct-ink); background:var(--ct-raised); font-size:14px!important; cursor:pointer; }
@@ -58,7 +63,12 @@
 .ct-environment-notice { display:flex; align-items:center; gap:12px; margin-bottom:20px; padding:10px 14px; border:1px solid var(--ct-line); border-left:3px solid var(--ct-amber); border-radius:4px; background:var(--ct-raised); }.ct-environment-notice p { margin:0; font-size:14px; color:var(--ct-ink); }
 .ct-snapshot-details { grid-column:1/-1; font-size:14px; color:var(--ct-muted); }.ct-snapshot-details summary { cursor:pointer; }.ct-snapshot { display:grid; grid-template-columns:auto 1fr; gap:7px 20px; margin:15px 0 0; font-size:14px; }.ct-snapshot dd { margin:0; overflow-wrap:anywhere; }
 .ct-sequence { min-height:140px; }.ct-sequence-preview { white-space:pre-wrap; overflow-wrap:anywhere; font:14px var(--font-mono); background:var(--app-stage); padding:14px; }.ct-structure-viewer { height:400px; position:relative; overflow:hidden; }
-.ct-dialog { width:min(32rem,calc(100% - 32px)); max-height:90dvh; overflow:auto; background:var(--ct-raised); color:var(--ct-ink); padding:24px; border:1px solid var(--ct-line); border-radius:8px; }.ct-dialog::backdrop { background:var(--app-scrim); }
+.ct-dialog { width:min(32rem,calc(100% - 32px)); max-height:90dvh; margin:auto; overflow:auto; overscroll-behavior:contain; background:var(--ct-raised); color:var(--ct-ink); padding:24px; border:1px solid var(--ct-line); border-radius:8px; box-shadow:var(--shadow-dialog); font:14px/1.5 var(--font-sans); }.ct-dialog::backdrop { background:var(--app-scrim); }
+.ct-dialog form { display:grid; gap:12px; margin:0; }
+.ct-dialog h2 { margin:0; font:500 24px/1.25 var(--font-display); letter-spacing:-.4px; }
+.ct-dialog .ct-actions { margin-top:4px; }
+.ct-dialog .ct-label { display:block; }
+.ct-dialog .ct-sequence { min-height:120px; }
 .ct-method-controls { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:10px; align-items:center; min-width:0; }
 .ct-demo-dialog { width:min(48rem,calc(100% - 32px)); }
 .ct-demo-list { display:grid; gap:0; margin:18px 0; }
@@ -75,7 +85,14 @@
 .ct-demo-changes { margin:0; padding-left:20px; display:grid; gap:4px; overflow-wrap:anywhere; }
 .ct-demo-applied button { justify-self:start; }
 .ct-access-panel { padding:18px 0; border-bottom:1px solid var(--ct-line); font-size:14px; }
-.ct-catalog-controls { display:grid; grid-template-columns:1fr 220px; gap:16px; margin:24px 0; }.ct-method-group { border-top:1px solid var(--ct-line); padding:20px 0; }.ct-method-group h3 { font:500 21px var(--font-display); }.ct-method-grid { display:grid; gap:0; }.ct-method { display:grid; gap:7px; text-align:left; border:0; border-bottom:1px solid var(--ct-line); border-radius:0; padding:16px 0; background:transparent; color:inherit; cursor:pointer; }.ct-method strong { font:500 18px var(--font-display); }.ct-method span,.ct-method small { font-size:14px; color:var(--ct-muted); }
+.ct-catalog-controls { display:grid; grid-template-columns:1fr 220px; gap:16px; margin:24px 0; }.ct-method-group { border-top:1px solid var(--ct-line); padding:20px 0; }.ct-method-group h3 { font:500 21px var(--font-display); }.ct-method-grid { display:grid; gap:0; }.ct-method { display:grid; gap:7px; text-align:left; border:0; border-bottom:1px solid var(--ct-line); border-radius:0; padding:16px 0; background:transparent; color:inherit; cursor:pointer; }.ct-method strong { font:500 18px var(--font-display); overflow-wrap:anywhere; }.ct-method span,.ct-method small { font-size:14px; color:var(--ct-muted); }
 @container(max-width:1150px) { .create-task { padding-inline:28px; }.ct-workspace { gap:28px; }.ct-protocol-step { padding:20px; } }
 @container(max-width:820px) { .create-task { padding-inline:20px; }.ct-workspace { grid-template-columns:1fr; }.ct-method-header h1 { font-size:32px; }.ct-method-header { align-items:start; flex-wrap:wrap; }.ct-snapshot-panel { grid-template-columns:1fr; }.ct-actions { justify-content:space-between; }.ct-method-facts { grid-template-columns:1fr; }.ct-catalog-controls { grid-template-columns:1fr; } }
-@container(max-width:480px) { .ct-parameter-grid { grid-template-columns:minmax(0,1fr); } .ct-file-well { flex-wrap:wrap; }.ct-file-identity { flex-basis:calc(100% - 50px); }.ct-file-button { margin-left:38px; }.ct-snapshot-panel { position:static; } .ct-parameter-grid { gap:20px 16px; }.ct-step-title { font-size:21px; }.ct-role-id { display:none; }.ct-method-header h1 { font-size:29px; }.ct-snapshot-panel { padding:18px; } }
+@container(max-width:480px) { .ct-parameter-grid { grid-template-columns:minmax(0,1fr); } .ct-file-well { flex-wrap:wrap; }.ct-file-identity { flex-basis:calc(100% - 50px); }.ct-file-button { margin-left:38px; }.ct-snapshot-panel { position:static; } .ct-parameter-grid { gap:20px 16px; }.ct-step-title { font-size:21px; }.ct-role-id { display:none; }.ct-method-header h1 { font-size:29px; }.ct-snapshot-panel { padding:18px; }
+  /* A top-layer dialog has the viewport, not the page gutter, so it reserves its
+     own edge on a narrow screen and keeps both actions reachable. */
+  .ct-dialog { width:calc(100% - 16px); max-height:calc(100dvh - 16px); padding:18px; border-radius:6px; }
+  .ct-dialog .ct-actions { justify-content:stretch; }
+  .ct-dialog .ct-actions button { flex:1; }
+  .ct-dialog .ct-demo-summary { grid-template-columns:1fr; }
+}

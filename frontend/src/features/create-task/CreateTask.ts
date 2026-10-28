@@ -13,6 +13,14 @@ function node<K extends keyof HTMLElementTagNameMap>(tag: K, className = '', tex
   const value = document.createElement(tag); value.className = className; if (text != null) value.textContent = text; return value;
 }
 
+let dialogHeading = 0;
+
+/** Give a top-layer dialog its accessible name from the heading it shows. */
+function labelled(dialog: HTMLDialogElement, heading: HTMLElement): void {
+  heading.id = `ct-dialog-heading-${++dialogHeading}`;
+  dialog.setAttribute('aria-labelledby', heading.id);
+}
+
 export class CreateTask {
   private catalog: TaskCatalog | null = null;
   private definition: TaskFormDefinition | null = null;
@@ -270,7 +278,7 @@ export class CreateTask {
     const heading = node('h2', '', t('ct.access.heading')); const label = node('label', 'ct-label', t('ct.access.reasonLabel')); const reason = node('textarea', 'ct-sequence'); reason.required = true; reason.maxLength = 1000; label.htmlFor = 'ct-access-reason'; reason.id = 'ct-access-reason';
     const cancel = node('button', 'ct-secondary', t('ct.cancel')); cancel.type = 'button'; cancel.addEventListener('click', () => dialog.close('cancel'));
     const submit = node('button', 'ct-primary', t('ct.access.request')); submit.type = 'submit'; submit.value = 'submit';
-    const actions = node('div', 'ct-actions'); actions.append(cancel, submit); form.append(heading, node('p', '', t('ct.access.policyNote')), label, reason, actions); dialog.append(form); document.body.append(dialog); dialog.showModal();
+    const actions = node('div', 'ct-actions'); actions.append(cancel, submit); form.append(heading, node('p', 'ct-help', t('ct.access.policyNote')), label, reason, actions); dialog.append(form); labelled(dialog, heading); document.body.append(dialog); dialog.showModal();
     dialog.addEventListener('close', async () => {
       const value = reason.value.trim(); const accepted = dialog.returnValue === 'submit' && value; dialog.remove(); if (!accepted) return;
       button.disabled = true;
@@ -419,13 +427,14 @@ export class CreateTask {
     if (this.demoDialog) return;
     const dialog = node('dialog', 'ct-dialog ct-demo-dialog'); this.demoDialog = dialog;
     const form = node('form'); form.method = 'dialog';
-    form.append(node('h2', '', t('ct.demo.heading')), node('p', 'ct-help', t('ct.demo.intro')));
+    const heading = node('h2', '', t('ct.demo.heading'));
+    form.append(heading, node('p', 'ct-help', t('ct.demo.intro')));
     const list = node('div', 'ct-demo-list'); form.append(list);
     const empty = node('p', 'ct-help', t('ct.demo.empty')); empty.hidden = true; empty.dataset.ctDemoEmpty = ''; form.append(empty);
-    const status = node('p', 'ct-status'); form.append(status);
+    const status = node('p', 'ct-status'); status.setAttribute('role', 'status'); form.append(status);
     const close = node('button', 'ct-secondary', t('ct.cancel')); close.type = 'button'; close.addEventListener('click', () => dialog.close('cancel'));
     const actions = node('div', 'ct-actions'); actions.append(close); form.append(actions);
-    dialog.append(form); document.body.append(dialog);
+    dialog.append(form); labelled(dialog, heading); document.body.append(dialog);
     // The picker serves one decision and then leaves the document, whether it
     // was dismissed, answered, or closed by leaving the method, so a stale
     // dialog can never shadow a later one or outlive the method it belonged to.
@@ -436,8 +445,13 @@ export class CreateTask {
     dialog.showModal();
     let demos: TaskDemo[];
     try { demos = await getTaskDemos(definition.name); }
-    catch (error) { status.textContent = error instanceof Error ? error.message : String(error); status.className = 'ct-status error'; return; }
-    if (generation !== this.generation) { dialog.close('cancel'); return; }
+    catch (error) {
+      // A dismissed picker is gone whether or not its catalog ever arrives.
+      if (!dialog.open) return;
+      status.textContent = error instanceof Error ? error.message : String(error);
+      status.className = 'ct-status error'; status.setAttribute('role', 'alert'); return;
+    }
+    if (!dialog.open || generation !== this.generation) return;
     if (!demos.length) { empty.hidden = false; return; }
     demos.forEach(demo => list.append(this.demoOption(demo, dialog)));
   }
@@ -454,7 +468,7 @@ export class CreateTask {
     choose.addEventListener('click', () => { dialog.close('load'); void this.applyDemo(demo); });
     card.append(node('h3', '', demo.title), node('p', '', demo.purpose));
     if (demo.context) card.append(node('p', 'ct-help', demo.context));
-    const provenance = node('p', 'ct-demo-provenance', t('ct.demo.attribution'));
+    const provenance = node('p', 'ct-demo-provenance', `${t('ct.demo.attribution')} `);
     const source = demo.source.url ? node('a', '', demo.source.name) : node('span', '', demo.source.name);
     if (source instanceof HTMLAnchorElement) { source.href = demo.source.url; source.rel = 'noopener noreferrer'; source.target = '_blank'; }
     const licence = demo.license.url ? node('a', '', demo.license.name) : node('span', '', demo.license.name);
@@ -521,8 +535,9 @@ export class CreateTask {
     const keep = node('button', 'ct-secondary', t('ct.demo.keep')); keep.type = 'button'; keep.addEventListener('click', () => dialog.close('keep'));
     const replace = node('button', 'ct-primary', t('ct.demo.confirmReplace')); replace.type = 'button'; replace.addEventListener('click', () => dialog.close('replace'));
     const actions = node('div', 'ct-actions'); actions.append(keep, replace);
-    form.append(node('h2', '', t('ct.demo.load')), node('p', '', t('ct.demo.replace', { title: demo.title })), actions);
-    dialog.append(form); document.body.append(dialog); dialog.showModal();
+    const heading = node('h2', '', t('ct.demo.load'));
+    form.append(heading, node('p', '', t('ct.demo.replace', { title: demo.title })), actions);
+    dialog.append(form); labelled(dialog, heading); document.body.append(dialog); dialog.showModal();
     return new Promise(resolve => dialog.addEventListener('close', () => { const accepted = dialog.returnValue === 'replace'; dialog.remove(); resolve(accepted); }, { once: true }));
   }
 

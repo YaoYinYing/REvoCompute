@@ -258,6 +258,8 @@ def runner_access_payload(access: AccessState) -> dict[str, Any]:
         "requestable": access.requestable,
         "granted": access.granted,
         "request_status": access.request_status,
+        "expired": access.expired,
+        "expires_at": access.expires_at,
         "notice": {"title": access.notice_title, "summary": access.notice_summary},
         "license": {"name": access.license_name, "url": access.license_url},
     }

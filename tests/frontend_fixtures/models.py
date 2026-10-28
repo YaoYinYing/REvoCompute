@@ -128,6 +128,8 @@ class AccessState:
     granted: bool = True
     requestable: bool = False
     request_status: str | None = None
+    expired: bool = False
+    expires_at: int | None = None
     policy_id: str = "academic-only"
     label: str = "Academic models"
     description: str = "Academic eligibility is required."

@@ -22,4 +22,14 @@ describe('public and Account presentation data', () => {
     expect(accessState({ restricted: true, requestable: true })).toBe('Requestable');
     expect(accessState({ restricted: true, requestable: false })).toBe('Restricted');
   });
+
+  it('keeps a live grant ahead of stale request state and an expiry ahead of a newer request', () => {
+    // A grant is the decisive fact even if an old request row still says pending,
+    // and an expired grant is an Expired state even when a request was rejected.
+    expect(accessState({ restricted: true, granted: true, request_status: 'pending' })).toBe('Granted');
+    expect(accessState({ restricted: true, granted: true, expired: true })).toBe('Granted');
+    expect(accessState({ restricted: true, expired: true, request_status: 'pending' })).toBe('Expired');
+    expect(accessState({ restricted: true, expired: true, request_status: 'rejected' })).toBe('Expired');
+    expect(accessState({ restricted: true, request_status: 'approved', requestable: true })).toBe('Requestable');
+  });
 });

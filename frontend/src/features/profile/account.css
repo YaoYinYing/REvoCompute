@@ -10,7 +10,36 @@
 .profile-details { display: grid; grid-template-columns: 1fr 1fr; margin: 1rem 0 0; }.profile-details div { min-width: 0; padding: .8rem 1rem .8rem 0; border-bottom: 1px solid var(--app-line); }.profile-details div:nth-child(even) { padding-left: 1rem; border-left: 1px solid var(--app-line); }.profile-details dt { color: var(--app-muted); font-size: 12px; }.profile-details dd { margin: .25rem 0 0; overflow-wrap: anywhere; font-size: .9rem; font-weight: 600; }
 .profile-form { display: grid; max-width: 32rem; gap: 1rem; margin-top: 1.2rem; }.profile-form label { display: grid; gap: .35rem; color: var(--app-ink); font-size: 12px; font-weight: 650; }.profile-form textarea { resize: vertical; }.profile-form button { justify-self: start; }.account-form { max-width: 48rem; }.account-form .form-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
 .profile-actions { display: flex; flex-wrap: wrap; gap: .5rem; }.api-key-workspace { display: grid; gap: 1rem; margin-top: 1.2rem; }.api-key-workspace > p { margin: 0; color: var(--app-muted); }.api-key-secret { display: grid; max-width: 42rem; gap: .4rem; font-size: 12px; font-weight: 650; }.api-key-secret > span { display: flex; min-width: 0; }.api-key-secret input { min-width: 0; flex: 1; padding: .55rem .7rem; border: 1px solid var(--app-line); border-radius: var(--r-util) 0 0 var(--r-util); background: var(--app-raised); color: var(--app-ink); font: .875rem var(--font-mono); }.api-key-secret .icon-button { margin-left: -1px; border-radius: 0 var(--r-util) var(--r-util) 0; }.api-key-secret small { color: var(--app-danger); font-weight: 400; }
-.profile-resource { margin-top: 1rem; }.access-row { padding: 1rem 0; border-bottom: 1px solid var(--app-line); }.access-heading, .credit-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; }.access-heading h3 { margin: 0; font: 600 1.15rem var(--font-display); }.access-detail { max-width: 72ch; margin: .45rem 0 0; color: var(--app-muted); font-size: 12px; line-height: 1.5; }.access-row details { margin-top: .7rem; color: var(--app-muted); font-size: 12px; }.access-row details summary { width: fit-content; color: var(--app-accent); cursor: pointer; }.access-row details p { max-width: 72ch; }.access-request { max-width: none; grid-template-columns: minmax(0, 1fr) auto; align-items: end; }.access-request .form-status { grid-column: 1 / -1; }
+.profile-resource { margin-top: 1rem; }
+/* Runner access is grouped by what the reader can do next: request, wait, use,
+   or accept that nothing is requestable. */
+.access-group + .access-group { margin-top: 2rem; padding-top: 1.5rem; border-top: 1px solid var(--app-line); }
+.access-group > h2 { margin: 0; font: 500 1.35rem/1.2 var(--font-display); }
+.access-group-note { max-width: 72ch; margin: .35rem 0 0; color: var(--app-muted); font-size: 12px; line-height: 1.6; }
+.access-row { padding: 1rem 0; border-bottom: 1px solid var(--app-line); }
+.access-row:focus-visible { outline: 2px solid var(--app-focus); outline-offset: 3px; }
+.access-group .access-row:last-child { border-bottom: 0; padding-bottom: 0; }
+.access-heading, .credit-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; }
+.access-heading h3 { margin: 0; font: 600 1.15rem var(--font-display); overflow-wrap: anywhere; }
+.access-detail { max-width: 72ch; margin: .45rem 0 0; color: var(--app-muted); font-size: 12px; line-height: 1.5; }
+.access-policy { max-width: 72ch; margin: .3rem 0 0; color: var(--app-muted); font-size: 12px; line-height: 1.5; }
+.access-row details { margin-top: .7rem; color: var(--app-muted); font-size: 12px; }
+.access-row details summary { width: fit-content; color: var(--app-accent); cursor: pointer; }
+.access-row details p { max-width: 72ch; }
+/* A request is one column on every width: the question and its answer are the
+   reader's own words, so the control takes the whole measure rather than a
+   narrow slot beside its button. */
+.access-request { max-width: none; grid-template-columns: minmax(0, 1fr); align-items: stretch; }
+.access-request textarea { width: 100%; min-height: 6rem; }
+.access-request button { justify-self: start; }
+.access-request .form-status { grid-column: 1 / -1; }
+.access-granted-list { display: grid; margin: .75rem 0 0; padding: 0; list-style: none; }
+.access-granted { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: .2rem 1rem; padding: .65rem 0; border-bottom: 1px solid var(--app-line); }
+.access-granted:last-child { border-bottom: 0; }
+.access-granted-name { min-width: 0; overflow-wrap: anywhere; font-size: .9rem; font-weight: 650; }
+.access-granted-expiry { color: var(--app-muted); font-size: 12px; text-align: right; }
+.access-granted details { grid-column: 1 / -1; margin-top: .35rem; color: var(--app-muted); font-size: 12px; }
+.access-granted details summary { width: fit-content; color: var(--app-accent); cursor: pointer; }
 .credit-heading p { margin: 0; color: var(--app-muted); }.credit-summary, .metrics-summary { display: grid; grid-template-columns: repeat(4, 1fr); margin: 1.2rem 0; }.credit-summary div, .metrics-summary div { min-width: 0; padding: .2rem 1rem; border-left: 1px solid var(--app-line); }.credit-summary div:first-child, .metrics-summary div:first-child { padding-left: 0; border-left: 0; }.credit-summary dt, .metrics-summary dt { color: var(--app-muted); font-size: 12px; }.credit-summary dd, .metrics-summary dd { margin: .25rem 0 0; font-family: var(--font-display); font-size: 1.5rem; font-weight: 600; overflow-wrap: anywhere; }.credit-summary div:last-child dd { color: var(--app-accent); }.profile-resource > h3, .profile-resource section h3 { margin: 1.4rem 0 .5rem; font: 600 1.15rem var(--font-display); }.credit-history { border-top: 1px solid var(--app-line); }.credit-history > div { display: flex; justify-content: space-between; gap: 1rem; padding: .7rem 0; border-bottom: 1px solid var(--app-line); }.credit-history > div div { display: grid; gap: .2rem; }.credit-history strong { font-size: 12px; }.credit-history span { color: var(--app-muted); font-size: 12px; }.credit-credit { color: var(--app-success); }.credit-debit { color: var(--app-danger); }
 .account-section > header { position: relative; }.account-section .segmented-control { margin-top: .9rem; }
 .segmented-control { display: flex; flex-wrap: wrap; }.segmented-control button { min-height: 2.2rem; padding: .35rem .65rem; border: 1px solid var(--app-line); background: var(--app-raised); color: var(--app-muted); cursor: pointer; font-size: 12px; }.segmented-control button:first-child { border-radius: var(--r-util) 0 0 var(--r-util); }.segmented-control button:last-child { border-radius: 0 var(--r-util) var(--r-util) 0; }.segmented-control button + button { margin-left: -1px; }.segmented-control button[aria-pressed="true"] { position: relative; border-color: var(--app-accent); background: var(--app-soft); color: var(--app-accent); font-weight: 650; }.metrics-summary { grid-template-columns: repeat(6, 1fr); }.metrics-composition { color: var(--app-muted); font-size: 12px; }.activity-chart { display: grid; grid-template-columns: auto 1fr; grid-template-areas: 'y plot' 'empty x'; grid-template-rows: 1fr auto; column-gap: .5rem; }
@@ -32,7 +61,7 @@
    own font, which here is the zoomed root, so 200% text-only resize fires them
    and the layout collapses instead of widening the page. */
 @container (max-width: 64rem) { .metrics-summary { grid-template-columns: repeat(3, 1fr); }.metrics-summary div:nth-child(4) { padding-left: 0; border-left: 0; } }
-@container (max-width: 48rem) { .credit-summary { grid-template-columns: 1fr 1fr; }.credit-summary div:nth-child(3) { padding-left: 0; border-left: 0; }.access-request { grid-template-columns: 1fr; }.access-request .form-status { grid-column: auto; } }
+@container (max-width: 48rem) { .credit-summary { grid-template-columns: 1fr 1fr; }.credit-summary div:nth-child(3) { padding-left: 0; border-left: 0; }.access-granted { grid-template-columns: 1fr; }.access-granted-expiry { text-align: left; } }
 @container (max-width: 34rem) { .account-section { padding: 1rem; }.profile-details, .account-form .form-columns { grid-template-columns: 1fr; }.profile-details div:nth-child(even) { padding-left: 0; border-left: 0; }.segmented-control { display: grid; grid-template-columns: 1fr 1fr; }.segmented-control button + button { margin: -1px 0 0 -1px; }.metrics-summary { grid-template-columns: 1fr 1fr; }.metrics-summary div:nth-child(odd) { padding-left: 0; border-left: 0; }.metrics-distribution > div { grid-template-columns: minmax(5rem, 8rem) minmax(0, 1fr) auto; } }
 @container (max-width: 34rem) { .account-page { width: min(100% - 1rem, 64rem); padding-top: 1rem; } }
 

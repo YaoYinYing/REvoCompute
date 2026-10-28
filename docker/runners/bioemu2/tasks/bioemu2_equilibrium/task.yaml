@@ -1,4 +1,4 @@
-display_name: BioEmu2 equilibrium ensemble
+display_name: BioEmu2
 category: structure
 id: bioemu2_equilibrium
 summary: Sample a protein equilibrium conformational ensemble with BioEmu2.
