@@ -751,7 +751,7 @@ class TaskDatabase:
             self.stage_runs_table.c.task_id,
             self.stage_runs_table.c.stage_index,
             unique=True,
-            sqlite_where=text("status IN ('READY', 'QUEUED', 'RUNNING')"),
+            sqlite_where=text(stage_state.active_status_predicate()),
         )
         # The publication identity of a finalized result manifest, in canonical
         # server-owned state.  The result directory belongs to the runner's
@@ -1394,20 +1394,62 @@ class TaskDatabase:
         with self.engine.begin() as conn:
             if conn.execute(stmt).rowcount != 1:
                 return False
-            conn.execute(
-                update(self.stage_runs_table)
-                .where(
-                    self.stage_runs_table.c.task_id == md5sum,
-                    self.stage_runs_table.c.status.in_(tuple(stage_state.ACTIVE_STATUSES)),
-                )
-                .values(
-                    status=stage_state.CANCELLED,
-                    reason_code=stage_state.Reason.TASK_CANCELLED,
-                    ended_at=timestamp,
-                    updated_at=timestamp,
-                )
+            self._settle_live_stage_runs(
+                conn, md5sum, status=stage_state.CANCELLED, reason_code=stage_state.Reason.TASK_CANCELLED,
+                timestamp=timestamp,
             )
+            self._write_workflow_state_mirror(conn, md5sum)
             return True
+
+    def _settle_live_stage_runs(
+        self, conn, task_id: str, *, status: str, reason_code: str, timestamp: float
+    ) -> int:
+        """Guarded active→terminal update shared by the Task-level boundaries."""
+        allowed = tuple(stage_state.ACTIVE_STATUSES & stage_state.predecessors(status))
+        if not allowed:
+            return 0
+        return conn.execute(
+            update(self.stage_runs_table)
+            .where(
+                self.stage_runs_table.c.task_id == task_id,
+                self.stage_runs_table.c.status.in_(allowed),
+            )
+            .values(
+                status=status,
+                reason_code=reason_code,
+                ended_at=timestamp,
+                updated_at=timestamp,
+            )
+        ).rowcount
+
+    def _write_workflow_state_mirror(self, conn, task_id: str) -> None:
+        """Rewrite the compatibility mirror from records, inside the caller's txn.
+
+        The mirror is derived, but a Task-level boundary that settles stage rows
+        has the rows and the old mirror in one transaction, so leaving the mirror
+        stale there would be a needless disagreement.  Historical entries for
+        stages with no record are preserved.
+        """
+        rows = [dict(row) for row in conn.execute(
+            select(self.stage_runs_table).where(self.stage_runs_table.c.task_id == task_id)
+        ).mappings()]
+        if not rows:
+            return
+        existing = conn.execute(
+            select(self.tasks_table.c.workflow_state).where(self.tasks_table.c.md5sum == task_id)
+        ).scalar()
+        try:
+            legacy = json.loads(existing) if existing else {}
+        except (TypeError, json.JSONDecodeError):
+            legacy = {}
+        if not isinstance(legacy, dict):
+            legacy = {}
+        mirror = stage_state.workflow_state_mirror(rows, legacy)
+        conn.execute(
+            update(self.tasks_table)
+            .where(self.tasks_table.c.md5sum == task_id)
+            .values(workflow_state=json.dumps(mirror, sort_keys=True))
+        )
 
     def claim_task_cleanup(
         self,
@@ -1429,8 +1471,18 @@ class TaskDatabase:
             )
             .values(status=claim_status, celery_task_id=None)
         )
+        timestamp = time.time()
         with self.engine.begin() as conn:
-            return conn.execute(stmt).rowcount == 1
+            if conn.execute(stmt).rowcount != 1:
+                return False
+            # A Task can be deleted while an allocation is still queued or
+            # running.  The claim is terminal, so its live attempts are settled
+            # here rather than left as a permanently live record.
+            self._settle_live_stage_runs(
+                conn, md5sum, status=stage_state.CANCELLED, reason_code=stage_state.Reason.TASK_DELETED,
+                timestamp=timestamp,
+            )
+            return True
 
     def complete_task_cleanup(self, md5sum: str, *, claim_status: str, cleaned_status: str, **fields) -> bool:
         """Finish a claimed cleanup without overwriting a replacement task."""

@@ -326,6 +326,7 @@ class SlurmJob(Job):
         allocation_dispatched_callback: Any = None,
         allocation_started_callback: Any = None,
         allocation_finished_callback: Any = None,
+        allocation_accounting: bool | None = None,
         task_store: Any = None,
         runtime_bundle_root: str = "",
     ):
@@ -376,6 +377,11 @@ class SlurmJob(Job):
         self._allocation_dispatched_callback = allocation_dispatched_callback
         self._allocation_started_callback = allocation_started_callback
         self._allocation_finished_callback = allocation_finished_callback
+        # Callback presence is not the accounting decision: stage bookkeeping
+        # callbacks exist for unaccounted runs too, and must not open the
+        # wrapper's start/squeue/grant gates.  ``None`` keeps the historical
+        # inference for direct adapter callers.
+        self._allocation_accounting = allocation_accounting
         self._job_id_event = threading.Event()
         # Identity is available as soon as either reader finds it.  Completion
         # of one reader is insufficient: the other may still contain the
@@ -483,10 +489,13 @@ class SlurmJob(Job):
         self._job_id = self._slurm_job_id
         # Snapshot before the callbacks run: each may block, and this is the only
         # stable answer to "does the wrapper gate on resource accounting?".
-        accounting_enabled = (
-            self._allocation_dispatched_callback is not None
-            or self._allocation_started_callback is not None
-        )
+        if self._allocation_accounting is not None:
+            accounting_enabled = self._allocation_accounting
+        else:
+            accounting_enabled = (
+                self._allocation_dispatched_callback is not None
+                or self._allocation_started_callback is not None
+            )
         self._accounting_enabled = accounting_enabled
         try:
             # Job identity is now known, so the scheduler owns the request.

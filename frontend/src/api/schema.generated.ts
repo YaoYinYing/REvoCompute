@@ -2669,6 +2669,41 @@ export interface components {
         TaskList: {
             tasks: components["schemas"]["TaskSummary"][];
         };
+        TaskStageItem: {
+            index: number;
+            /** @description Manifest stage name (or the Task type itself for a single-stage Task). */
+            name: string;
+            display_name: string;
+            /** @enum {string} */
+            status: "NOT_STARTED" | "READY" | "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED" | "CANCELLED" | "INTERRUPTED" | "SKIPPED";
+            /**
+             * @description record: durable StageRun evidence; legacy: the pre-StageRun workflow_state mirror; definition: the declared stage has no evidence yet.
+             * @enum {string}
+             */
+            source: "record" | "legacy" | "definition";
+            attempt: number | null;
+            /** Format: date-time */
+            started_at: string | null;
+            /** Format: date-time */
+            ended_at: string | null;
+            /** @description Bounded Core reason for a terminal stage state; never scheduler output. */
+            reason_code: string | null;
+            planned_resources: null | {
+                [key: string]: unknown;
+            };
+        };
+        TaskStages: {
+            /**
+             * @description record: durable StageRun evidence. legacy: the pre-StageRun workflow_state mirror, reported only for historical Tasks.
+             * @enum {string}
+             */
+            source: "record" | "legacy";
+            total: number;
+            completed: number;
+            /** @description The running attempt, else the queued attempt, else null. */
+            current: null | components["schemas"]["TaskStageItem"];
+            items: components["schemas"]["TaskStageItem"][];
+        };
         TaskSummary: {
             task_id: components["schemas"]["TaskId"];
             task_type: string;
@@ -2821,6 +2856,7 @@ export interface components {
             result_publication?: "available" | "not_finalized" | "unanchored" | "manifest_missing" | "manifest_unreadable" | "anchor_mismatch" | "anchor_invalid" | null;
             /** @description Current execution state when status retains a legacy compatibility message */
             task_status?: string;
+            stages?: components["schemas"]["TaskStages"];
             error?: string;
             message?: string;
         } & {

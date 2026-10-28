@@ -2688,12 +2688,13 @@
       },
       "TaskStageItem": {
         "type": "object",
-        "required": ["index", "name", "display_name", "status", "attempt", "started_at", "ended_at", "reason_code", "planned_resources"],
+        "required": ["index", "name", "display_name", "status", "source", "attempt", "started_at", "ended_at", "reason_code", "planned_resources"],
         "properties": {
           "index": {"type": "integer", "minimum": 0},
           "name": {"type": "string", "description": "Manifest stage name (or the Task type itself for a single-stage Task)."},
           "display_name": {"type": "string"},
           "status": {"type": "string", "enum": ["NOT_STARTED", "READY", "QUEUED", "RUNNING", "COMPLETED", "FAILED", "CANCELLED", "INTERRUPTED", "SKIPPED"]},
+          "source": {"type": "string", "enum": ["record", "legacy", "definition"], "description": "record: durable StageRun evidence; legacy: the pre-StageRun workflow_state mirror; definition: the declared stage has no evidence yet."},
           "attempt": {"type": ["integer", "null"], "minimum": 1},
           "started_at": {"type": ["string", "null"], "format": "date-time"},
           "ended_at": {"type": ["string", "null"], "format": "date-time"},
@@ -2741,7 +2742,6 @@
           },
           "progress": {"type": ["object", "null"], "additionalProperties": true, "description": "Runner-owned structured progress, when available."},
           "outcome": {"type": ["string", "null"], "description": "Standardized Runner outcome, when reported."},
-          "stages": {"$ref": "#/components/schemas/TaskStages"},
           "error": {"type": ["string", "null"], "description": "Sanitized terminal error, when present."},
           "result": {"$ref": "#/components/schemas/TaskResultCapability"},
           "actions": {"$ref": "#/components/schemas/TaskActions"},

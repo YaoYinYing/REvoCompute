@@ -62,17 +62,18 @@ NOT_STARTED -> READY -> QUEUED -> RUNNING -> COMPLETED
      \- SKIPPED / CANCELLED
 ```
 
-Transitions are enforced in the database write by the legal-predecessor set.
-Terminal statuses (``COMPLETED``, ``FAILED``, ``CANCELLED``, ``INTERRUPTED``,
-``SKIPPED``) have no outgoing edge, so late markers and stale/duplicate callbacks
-cannot regress an attempt. ``READY`` is legal between stages but the Core writer
-creates an attempt directly in ``QUEUED`` before submission.
+Transitions are enforced by each guarded UPDATE's predicate (the legal-predecessor
+set); attempt identity is enforced by unique indexes. Terminal statuses
+(``COMPLETED``, ``FAILED``, ``CANCELLED``, ``INTERRUPTED``, ``SKIPPED``) have no
+outgoing edge, so late markers and stale/duplicate callbacks cannot regress an
+attempt. ``READY`` is legal between stages but the Core writer creates an attempt
+directly in ``QUEUED`` before submission.
 
 **Retries.** One attempt = one allocation attempt. Worker-loss recovery
 (``INTERRUPTED``) or re-dispatch creates the next attempt; terminal attempts are
-never edited. A duplicate dispatch finds and reuses the live attempt. Unique
-``(task_id, stage_index, attempt)`` plus a partial unique index on live attempts
-``(task_id, stage_index)`` make both properties database facts.
+never edited. A duplicate StageRun open finds and reuses the live attempt because
+of the partial unique index. Duplicate *execution* of a Task is prevented by the
+existing ``claim_task_execution`` mutex, not by StageRun uniqueness alone.
 
 ## Task status projection
 
@@ -106,25 +107,30 @@ and duplicate callbacks stay idempotent through ``slurm_job_id``.
 
 ## Evidence monotonicity
 
-Attempt creation and every transition run under ``BEGIN IMMEDIATE`` with a
-predicate on the legal predecessor set, so duplicate dispatch, late markers,
-stale callbacks, worker loss, transient ``squeue`` failure, and a crash between
-stage completion and the next dispatch are all no-ops or forward transitions. A
-crash after the allocation ends but before ``COMPLETED`` is recorded leaves the
-attempt ``RUNNING``; recovery marks it ``INTERRUPTED`` and re-runs the stage —
-Core never claims a completion it did not observe.
+Attempt creation runs under ``BEGIN IMMEDIATE`` (so "reuse the live attempt or
+insert the next one" is one serialized decision); every transition is a single
+guarded UPDATE whose predicate is the legal-predecessor set. Duplicate dispatch,
+late markers, stale callbacks, worker loss, transient ``squeue`` failure, and a
+crash between stage completion and the next dispatch are therefore no-ops or
+forward transitions. A crash after the allocation ends but before ``COMPLETED``
+is recorded leaves the attempt ``RUNNING``; recovery marks it ``INTERRUPTED`` and
+re-runs the stage — Core never claims a completion it did not observe.
 
 ## API and migration
 
-Status/list payloads gain ``stages``: source (``record`` | ``legacy``), total,
-completed, current stage, and per-stage status/attempt/timestamps/reason/
-planned resources. Existing fields are unchanged, so old clients keep working.
+The status payload gains ``stages``: overall source (``record`` | ``legacy``),
+total, completed, current stage, and per-stage status/source/attempt/timestamps/
+reason/semantic planned resources (``source`` is ``record``, ``legacy``, or
+``definition``). Existing fields are unchanged, so old clients keep working; the
+list payload omits the per-stage detail rather than issuing one query per Task.
 
 Historical rows are never backfilled (there is no evidence of attempts to
 invent). When a stage has no StageRun, the API reads that stage from the legacy
 ``workflow_state``; a Task with no records at all is labelled ``legacy``. A
-record always wins for the stage it describes. New rows write ``workflow_state``
-from the same Core transitions purely for existing consumers.
+record always wins for the stage it describes. Core boundaries (stage
+completion, failure, cancellation, recovery) rewrite ``workflow_state`` from the
+records for existing consumers. It is a best-effort projection: a crash can
+leave it stale, but it is never the authority for a Task that has records.
 
 ## Non-goals
 

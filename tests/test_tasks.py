@@ -746,6 +746,189 @@ def test_single_stage_slurm_task_transitions_from_queued_to_running(monkeypatch,
     assert observed_statuses == ["queued", "running", "finished"]
 
 
+def test_runner_stdout_markers_do_not_change_task_status(monkeypatch, tmp_path):
+    """A marker is progress detail; only the allocation boundary sets running."""
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "cpu_runner"},
+    )
+    md5sum = _insert_pending_task(module, tmp_path / "result")
+    module.task_store.update_task(md5sum, task_type="cpu_runner")
+    statuses_at_markers: list[str] = []
+
+    def _fake_runner(task_id, tt, runner, entities, output_dir, stage_callback=None, username=""):
+        del tt, runner, entities, username
+        statuses_at_markers.append(module.task_store.get_task(task_id)["status"])
+        if stage_callback:
+            stage_callback("execute")
+        statuses_at_markers.append(module.task_store.get_task(task_id)["status"])
+        # Now the allocation is observable; this is the authoritative boundary.
+        module.task_store.update_task(task_id, status="running")
+        output = Path(output_dir)
+        output.mkdir(parents=True, exist_ok=True)
+        (output / "model.cif").write_text("data_model\n", encoding="utf-8")
+
+    monkeypatch.setattr(module.task_runtime, "_get_job_executor", lambda: "slurm")
+    monkeypatch.setattr(module.task_runtime, "_run_compute_job", _fake_runner)
+
+    module.run_compute_task(md5sum, "cpu_runner", {})
+
+    assert statuses_at_markers == ["queued", "queued"]
+    assert module.task_store.get_task(md5sum)["status"] == "finished"
+
+
+def test_task_status_endpoint_reports_per_stage_state(monkeypatch, tmp_path):
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={
+            "RUNNER_UID": "1234",
+            "RUNNER_GID": "5678",
+            "ENABLED_TASKRUNNERS": "multistage_runner",
+        },
+    )
+    client = module.app.test_client()
+    auth_header = _test_client_auth(module)
+    md5sum = uuid.uuid4().hex
+    result_dir = tmp_path / "result"
+    result_dir.mkdir(parents=True, exist_ok=True)
+    _upsert_task_for_user(
+        module,
+        md5sum,
+        filename="input.fasta",
+        file_path=tmp_path / "input.fasta",
+        result_dir=result_dir,
+        username="tester",
+        status="running",
+        task_type="multistage_runner",
+    )
+    features = module.task_store.begin_stage_attempt(
+        task_id=md5sum, stage_index=0, stage_name="multistage_runner.features",
+        planned_resources={"cpus": 4, "memory": "8G", "max_runtime_seconds": 600, "requires_gpu": False},
+    )
+    module.task_store.finish_stage_attempt(
+        task_id=md5sum, stage_index=0, attempt=features["attempt"],
+        status=module.task_runtime.stage_state.COMPLETED,
+        reason_code=module.task_runtime.stage_state.Reason.COMPLETED,
+    )
+    module.task_store.begin_stage_attempt(
+        task_id=md5sum, stage_index=1, stage_name="multistage_runner.model",
+        planned_resources={"cpus": 8, "memory": "16G", "max_runtime_seconds": 600, "requires_gpu": True},
+    )
+
+    response = client.get(f"/compute/api/running/{md5sum}", headers=auth_header)
+
+    assert response.status_code == 202
+    payload = response.get_json()
+    stages = payload["stages"]
+    assert stages["source"] == "record"
+    assert (stages["total"], stages["completed"]) == (2, 1)
+    assert stages["current"]["name"] == "multistage_runner.model"
+    assert stages["current"]["status"] == "QUEUED"
+    assert [item["status"] for item in stages["items"]] == ["COMPLETED", "QUEUED"]
+    assert stages["items"][1]["planned_resources"]["requires_gpu"] is True
+    # Scheduler handles and placement internals are not exposed.
+    assert "slurm_job_id" not in stages["items"][1]
+
+
+def test_worker_redispatch_with_existing_stage_run_keeps_task_running(monkeypatch, tmp_path):
+    """Production worker/composer: re-entry with an existing StageRun.
+
+    This is also the regression for the P0 local-binding bug: the whole of
+    ``_execute_compute_task`` must see the ``stage_state`` module, including the
+    branch that inspects existing completed StageRuns.
+    """
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={
+            "RUNNER_UID": "1234",
+            "RUNNER_GID": "5678",
+            "ENABLED_TASKRUNNERS": "multistage_runner",
+        },
+    )
+    md5sum = _insert_pending_task(module, tmp_path / "result", task_type="multistage_runner")
+    form = json.loads(module.task_store.get_task(md5sum)["input_form"])
+    form["resource_policies"] = {
+        "multistage_runner.features": {
+            "cpus": 4, "memory": "8G", "max_runtime_seconds": 600,
+            "nodes": 1, "ntasks": 1, "requires_gpu": False, "gres": None,
+        },
+        "multistage_runner.model": {
+            "cpus": 8, "memory": "16G", "max_runtime_seconds": 600,
+            "nodes": 1, "ntasks": 1, "requires_gpu": True, "gres": "gpu:1",
+        },
+    }
+    module.task_store.update_task(
+        md5sum, input_form=json.dumps(form), submitted_by_user_id=0
+    )
+    # The Task was already running when its CPU stage completed; this re-entry
+    # must skip that stage, keep the Task running, and open the GPU stage.
+    prior = module.task_store.begin_stage_attempt(
+        task_id=md5sum, stage_index=0, stage_name="multistage_runner.features"
+    )
+    module.task_store.finish_stage_attempt(
+        task_id=md5sum, stage_index=0, attempt=prior["attempt"],
+        status=module.task_runtime.stage_state.COMPLETED,
+        reason_code=module.task_runtime.stage_state.Reason.COMPLETED,
+    )
+    observed: dict[str, str] = {}
+    created: list[str] = []
+
+    class _Job:
+        def __init__(self, tt, stage_callback, callbacks):
+            self.tt = tt
+            self.stage_callback = stage_callback
+            self.callbacks = callbacks
+
+        def submit(self):
+            dispatched, started, _finished = self.callbacks
+            dispatched("42", time.time(), True)
+            observed[f"{self.tt.name}:dispatched"] = module.task_store.get_task(md5sum)["status"]
+            if self.tt.name.endswith("model") and self.stage_callback:
+                # A stdout marker must never be the state authority.
+                self.stage_callback("inference")
+                observed["model:after_marker"] = module.task_store.get_task(md5sum)["status"]
+            started("42", time.time())
+            observed[f"{self.tt.name}:started"] = module.task_store.get_task(md5sum)["status"]
+            return "42"
+
+        def poll(self):
+            return module.task_runtime.JobState.COMPLETED
+
+    def _create_job(_task_id, tt, _runner, _entities, _output, stage_callback=None, **kwargs):
+        created.append(tt.name)
+        return _Job(
+            tt,
+            stage_callback,
+            (
+                kwargs["allocation_dispatched_callback"],
+                kwargs["allocation_started_callback"],
+                kwargs["allocation_finished_callback"],
+            ),
+        )
+
+    monkeypatch.setattr(module.task_runtime, "_get_job_executor", lambda: "slurm")
+    monkeypatch.setattr(module.task_runtime, "_recover_surviving_host_allocations", lambda: None)
+    monkeypatch.setattr(module.task_runtime, "_finalize_results_manifest", lambda *a, **k: None)
+    monkeypatch.setattr(module.task_runtime, "_create_job", _create_job)
+
+    module.task_runtime._execute_compute_task(md5sum)
+
+    # The completed CPU stage was not run again.
+    assert created == ["multistage_runner-model"]
+    # The GPU stage is queued; the Task is still running, not rolled back.
+    assert observed["multistage_runner-model:dispatched"] == "running"
+    assert observed["model:after_marker"] == "running"
+    assert observed["multistage_runner-model:started"] == "running"
+    runs = module.task_store.list_stage_runs(md5sum)
+    assert [(run["stage_index"], run["status"]) for run in runs] == [
+        (0, "COMPLETED"),
+        (1, "COMPLETED"),
+    ]
+
+
 def test_worker_recovery_cancels_slurm_orphans_and_preserves_unstarted_queue(monkeypatch, tmp_path):
     module = _load_pssm_module(
         monkeypatch,

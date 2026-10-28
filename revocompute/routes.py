@@ -3629,8 +3629,6 @@ def _task_list_summary(task: dict[str, Any], *, include_owner: bool) -> dict[str
         and _task_mutation_allowed(task)
         and status not in task_store.CLEANUP_CLAIM_STATUSES
     )
-    stages = stage_projection(task)
-
     return {
         "task_id": task_id,
         "task_type": task.get("task_type") or default_task_type(),
@@ -3643,7 +3641,6 @@ def _task_list_summary(task: dict[str, Any], *, include_owner: bool) -> dict[str
         "owner": (task.get("username") or None) if include_owner else None,
         "placement": _recorded_execution_class(task),
         **_task_execution_state_payload(task),
-        **({"stages": stages} if stages is not None else {}),
         "error": _sanitize_task_error(task, task.get("error")),
         "result": {
             "available": result_available,

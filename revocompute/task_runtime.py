@@ -375,6 +375,7 @@ def _stage_item(
     name: str,
     display_name: str,
     status: str,
+    source: str,
     attempt: Any = None,
     started_at: Any = None,
     ended_at: Any = None,
@@ -386,6 +387,7 @@ def _stage_item(
         "name": name,
         "display_name": display_name,
         "status": status,
+        "source": source,
         "attempt": attempt,
         "started_at": _iso_timestamp(started_at),
         "ended_at": _iso_timestamp(ended_at),
@@ -421,22 +423,28 @@ def stage_projection(task: dict[str, Any]) -> dict[str, Any] | None:
         legacy = _workflow_state(task)
         if not legacy:
             return None
-        names = [stage.name for stage in declared if stage.name in legacy]
+        # Every declared stage is shown, including one the mirror never ran;
+        # declared order is the workflow's order.  A legacy entry with no
+        # declaration in today's manifest is appended rather than dropped.
+        names = [stage.name for stage in declared]
         names += [name for name in legacy if name not in names]
         displays = {stage.name: stage.display_name for stage in declared}
         items = []
         for index, name in enumerate(names):
-            step = legacy.get(name) or {}
+            step = legacy.get(name)
             items.append(
                 _stage_item(
                     index=index,
                     name=name,
                     display_name=displays.get(name, name),
-                    status=_LEGACY_STAGE_STATUS.get(str(step.get("status") or "").lower(), stage_state.NOT_STARTED),
-                    attempt=step.get("attempt"),
-                    started_at=step.get("started_at"),
-                    ended_at=step.get("finished_at"),
-                    reason_code=step.get("reason_code"),
+                    status=_LEGACY_STAGE_STATUS.get(
+                        str((step or {}).get("status") or "").lower(), stage_state.NOT_STARTED
+                    ),
+                    source="legacy" if step is not None else "definition",
+                    attempt=(step or {}).get("attempt"),
+                    started_at=(step or {}).get("started_at"),
+                    ended_at=(step or {}).get("finished_at"),
+                    reason_code=(step or {}).get("reason_code"),
                     planned=None,
                 )
             )
@@ -475,6 +483,7 @@ def stage_projection(task: dict[str, Any]) -> dict[str, Any] | None:
                     status=_LEGACY_STAGE_STATUS.get(
                         str(step.get("status") or "").lower(), stage_state.NOT_STARTED
                     ),
+                    source="legacy" if step else "definition",
                     attempt=step.get("attempt"),
                     started_at=step.get("started_at"),
                     ended_at=step.get("finished_at"),
@@ -492,6 +501,7 @@ def stage_projection(task: dict[str, Any]) -> dict[str, Any] | None:
                 name=str(run["stage_name"]),
                 display_name=displays.get(index, str(run["stage_name"])),
                 status=str(run["status"]),
+                source="record",
                 attempt=run.get("attempt"),
                 started_at=run.get("started_at"),
                 ended_at=run.get("ended_at"),
@@ -586,6 +596,7 @@ def _create_job(
     allocation_dispatched_callback=None,
     allocation_started_callback=None,
     allocation_finished_callback=None,
+    allocation_accounting: bool = True,
 ) -> Job:
     """Create the production Slurm/Apptainer job adapter."""
     return SlurmJob(
@@ -607,6 +618,7 @@ def _create_job(
         allocation_dispatched_callback=allocation_dispatched_callback,
         allocation_started_callback=allocation_started_callback,
         allocation_finished_callback=allocation_finished_callback,
+        allocation_accounting=allocation_accounting,
     )
 
 
@@ -652,14 +664,19 @@ def _compute_allocation_callbacks(
     def _record_stage_dispatch(slurm_job_id: str, dispatched_at: float, wrapper_executed: bool) -> None:
         if not stage_target:
             return
-        task_store.record_stage_dispatched(
-            task_id=task_id,
-            stage_index=stage_index,
-            attempt=attempt,
-            slurm_job_id=str(slurm_job_id),
-            at=dispatched_at,
-            evidence={"wrapper_executed": bool(wrapper_executed)},
-        )
+        try:
+            task_store.record_stage_dispatched(
+                task_id=task_id,
+                stage_index=stage_index,
+                attempt=attempt,
+                slurm_job_id=str(slurm_job_id),
+                at=dispatched_at,
+                evidence={"wrapper_executed": bool(wrapper_executed)},
+            )
+        except Exception:
+            # Stage records are bookkeeping; the allocation fact and the
+            # scientific run do not depend on this write succeeding.
+            logging.exception("Could not record stage dispatch for task %s", task_id)
 
     def dispatched(
         slurm_job_id: str,
@@ -805,12 +822,15 @@ def _compute_allocation_callbacks(
             # whole Task is running.  This — not a stdout marker — is the state
             # boundary.  A cancelled attempt rejects the transition, which is why
             # the write is guarded in the store rather than by a read here.
-            task_store.record_stage_running(
-                task_id=task_id,
-                stage_index=stage_index,
-                attempt=attempt,
-                started_at=started_at,
-            )
+            try:
+                task_store.record_stage_running(
+                    task_id=task_id,
+                    stage_index=stage_index,
+                    attempt=attempt,
+                    started_at=started_at,
+                )
+            except Exception:
+                logging.exception("Could not record stage start for task %s", task_id)
             task_store.update_task(task_id, status="running")
 
     def finished(slurm_job_id: str, finished_at: float) -> None:
@@ -818,6 +838,10 @@ def _compute_allocation_callbacks(
         # scientific outcome: a temporary accounting failure must never rewrite
         # a completed Runner as a failed Task.  Keep the allocation recoverable
         # for reconciliation and surface it as evidence instead.
+        if not accounting:
+            # These callbacks still carry stage bookkeeping for unaccounted
+            # runs, but no allocation fact exists to settle.
+            return
         try:
             allocation = task_store.settle_allocation(
                 slurm_job_id, finished_at=finished_at
@@ -911,13 +935,9 @@ def _run_compute_job(
     """
     stored_task = task_store.get_task(task_id) or {}
     submitted_by_user_id = int(stored_task.get("submitted_by_user_id") or 0)
-    attempt_row = task_store.begin_stage_attempt(
-        task_id=task_id,
-        stage_index=0,
-        stage_name=tt.name,
-        planned_resources=stage_state.planned_resources(resource_policy),
-    )
-    attempt = int(attempt_row["attempt"])
+    accounting = submitted_by_user_id > 0 and resource_policy is not None
+    attempt_row = _begin_stage_attempt(task_id, 0, tt.name, resource_policy)
+    attempt = int(attempt_row["attempt"]) if attempt_row else None
     # No entitlement read here: the decision belongs to the atomic
     # allocation-start transition, which knows whether this Task holds a
     # reservation of its own (the workflow and re-dispatch cases do not).
@@ -928,29 +948,40 @@ def _run_compute_job(
         resource_policy=resource_policy,
         required_entitlements=(tt.runtime.access_policy.requires if tt.runtime.access_policy else ()),
         runner_family=tt.runtime.name,
-        stage_index=0,
+        stage_index=0 if attempt is not None else None,
         attempt=attempt,
     )
-    job = _create_job(
-        task_id,
-        tt,
-        runner,
-        entities,
-        output_dir,
-        stage_callback,
-        username=username,
-        resource_policy=resource_policy,
-        allocation_dispatched_callback=dispatched_callback,
-        allocation_started_callback=started_callback,
-        allocation_finished_callback=finished_callback,
-    )
-    jid = job.submit()
+    try:
+        job = _create_job(
+            task_id,
+            tt,
+            runner,
+            entities,
+            output_dir,
+            stage_callback,
+            username=username,
+            resource_policy=resource_policy,
+            allocation_dispatched_callback=dispatched_callback,
+            allocation_started_callback=started_callback,
+            allocation_finished_callback=finished_callback,
+            allocation_accounting=accounting,
+        )
+        jid = job.submit()
+    except Exception:
+        _settle_unsubmitted_attempt(task_id, 0, attempt)
+        raise
     # Persist the job handle so cancel can stop the running process even
     # after a server restart (Celery/Redis state is ephemeral).
     if jid:
         if isinstance(job, SlurmJob):
             task_store.update_task(task_id, slurm_job_id=jid)
-    state = job.poll()
+    try:
+        state = job.poll()
+    except GPUCreditUnavailableError:
+        _settle_stage_attempt(
+            task_id, 0, attempt, status=stage_state.FAILED, reason_code="admission_failed"
+        )
+        raise
     if isinstance(job, SlurmJob) and not job.wrapper_executed:
         # The request produced no allocation evidence: it was queued and then
         # cancelled, rejected, or lost, and no wrapper ever executed.  Its
@@ -976,52 +1007,82 @@ def _workflow_state(task: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return parsed if isinstance(parsed, dict) else {}
 
 
-def _workflow_state_projection(runs: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    """Project StageRun records into the historical ``workflow_state`` shape.
-
-    ``workflow_state`` is a compatibility view for consumers that predate
-    StageRun records (live-test evidence, older tooling).  It is written from
-    the records, never the other way round, so the two cannot disagree about a
-    Task that has records.  The newest attempt of each stage wins.
-    """
-    latest: dict[str, dict[str, Any]] = {}
-    for run in sorted(runs, key=lambda item: (item["stage_index"], item["attempt"])):
-        latest[str(run["stage_name"])] = run
-    return {
-        name: {
-            "status": str(run["status"]).lower(),
-            "job_id": run.get("slurm_job_id"),
-            "started_at": run.get("started_at"),
-            "finished_at": run.get("ended_at"),
-            "attempt": run.get("attempt"),
-            "reason_code": run.get("reason_code"),
-        }
-        for name, run in sorted(latest.items(), key=lambda item: item[1]["stage_index"])
-    }
-
-
 def _workflow_state_mirror(
     task_id: str, legacy_state: dict[str, dict[str, Any]]
 ) -> dict[str, dict[str, Any]]:
-    """Records projected into the mirror, plus historical entries they omit.
+    """The compatibility mirror derived from the Task's records.
 
-    A Task that began before StageRun records existed can still own a
-    ``workflow_state`` stage with no row.  Reusing that entry keeps a historical
-    completed stage visible without letting it override a recorded one.
+    It is written at Core boundaries and is never read as the authority for a
+    stage that has a record.  Historical entries for stages with no record are
+    preserved so a Task that straddles the migration does not lose them.
     """
-    runs = task_store.list_stage_runs(task_id)
-    mirror = _workflow_state_projection(runs)
-    recorded = {str(run["stage_name"]) for run in runs}
-    for name, step in legacy_state.items():
-        if name not in recorded:
-            mirror[name] = step
-    return mirror
+    return stage_state.workflow_state_mirror(task_store.list_stage_runs(task_id), legacy_state)
+
+
+def _settle_stage_attempt(
+    task_id: str, stage_index: int, attempt: int | None, *, status: str, reason_code: str
+) -> bool:
+    """Best-effort attempt settlement; bookkeeping never fails an allocation."""
+    if attempt is None:
+        return False
+    try:
+        task_store.finish_stage_attempt(
+            task_id=task_id,
+            stage_index=stage_index,
+            attempt=attempt,
+            status=status,
+            reason_code=stage_state.bounded_reason(reason_code),
+        )
+    except Exception:
+        logging.exception("Could not settle stage attempt %s/%s for task %s", stage_index, attempt, task_id)
+        return False
+    return True
+
+
+def _settle_unsubmitted_attempt(task_id: str, stage_index: int, attempt: int | None) -> None:
+    """Close an attempt whose submission raised before any allocation existed.
+
+    A cancellation that lands during submission is the important case: without
+    this settlement the attempt would stay live forever, because the cancelled
+    Task's failure path deliberately refuses to touch a terminal Task.
+    """
+    reason_code = "submission_failed"
+    status = stage_state.FAILED
+    current = str((task_store.get_task(task_id) or {}).get("status") or "").strip().lower()
+    if current == "cancelled" or current in task_store.CLEANUP_CLAIM_STATUSES | task_store.DELETED_STATUSES:
+        status, reason_code = stage_state.CANCELLED, stage_state.Reason.TASK_CANCELLED
+    _settle_stage_attempt(task_id, stage_index, attempt, status=status, reason_code=reason_code)
+
+
+def _begin_stage_attempt(
+    task_id: str, stage_index: int, stage_name: str, resource_policy: ResolvedResources | None
+) -> dict[str, Any] | None:
+    """Best-effort attempt creation; a bookkeeping outage must not block work."""
+    try:
+        return task_store.begin_stage_attempt(
+            task_id=task_id,
+            stage_index=stage_index,
+            stage_name=stage_name,
+            planned_resources=stage_state.planned_resources(resource_policy),
+        )
+    except Exception:
+        logging.exception("Could not open stage attempt %s for task %s", stage_index, task_id)
+        return None
+
+
+def _mirror_json(task_id: str, legacy_state: dict[str, dict[str, Any]]) -> str | None:
+    """Best-effort compatibility mirror; a projection failure is not execution state."""
+    try:
+        return json.dumps(_workflow_state_mirror(task_id, legacy_state), sort_keys=True)
+    except Exception:
+        logging.exception("Could not project workflow_state for task %s", task_id)
+        return None
 
 
 def _finish_stage_attempt(
     task_id: str,
     stage_index: int,
-    attempt: int,
+    attempt: int | None,
     state: JobState,
     *,
     reason_code: str | None = None,
@@ -1047,17 +1108,8 @@ def _finish_stage_attempt(
             reason_code = stage_state.Reason.TASK_CANCELLED
         else:
             evidence = task_store.get_task_diagnostics(task_id) or {}
-            reason_code = str(evidence.get("reason_code") or stage_state.Reason.ALLOCATION_FAILED)
-    try:
-        task_store.finish_stage_attempt(
-            task_id=task_id,
-            stage_index=stage_index,
-            attempt=attempt,
-            status=status,
-            reason_code=reason_code,
-        )
-    except Exception:
-        logging.exception("Could not settle stage attempt %s/%s for task %s", stage_index, attempt, task_id)
+            reason_code = str(evidence.get("reason_code") or "allocation_failed")
+    _settle_stage_attempt(task_id, stage_index, attempt, status=status, reason_code=reason_code)
 
 
 def _run_compute_workflow(
@@ -1110,43 +1162,46 @@ def _run_compute_workflow(
         # Task rejects it, so no attempt or allocation starts for it.
         if not task_store.update_task(task_id, run_stage=first_marker):
             return JobState.CANCELLED
-        attempt_row = task_store.begin_stage_attempt(
-            task_id=task_id,
-            stage_index=index,
-            stage_name=stage.name,
-            planned_resources=stage_state.planned_resources(policy),
-        )
-        attempt = int(attempt_row["attempt"])
+        attempt_row = _begin_stage_attempt(task_id, index, stage.name, policy)
+        attempt = int(attempt_row["attempt"]) if attempt_row else None
+        user_id = int(task.get("submitted_by_user_id") or 0)
         # A workflow stage has no reservation of its own after the first one
         # consumed the Task's single submission hold, so its allocation start is
         # admitted on the balance that is actually left — decided atomically with
         # the allocation itself, not by a read here.
         callbacks = _compute_allocation_callbacks(
             task_id=task_id,
-            user_id=int(task.get("submitted_by_user_id") or 0),
+            user_id=user_id,
             stage_id=stage.name,
             resource_policy=policy,
             required_entitlements=(tt.runtime.access_policy.requires if tt.runtime.access_policy else ()),
             runner_family=tt.runtime.name,
-            stage_index=index,
+            stage_index=index if attempt is not None else None,
             attempt=attempt,
         )
-        job = _create_job(
-            task_id,
-            stage_tt,
-            runner,
-            entities,
-            output_dir,
-            stage_callback,
-            username=task.get("username", ""),
-            resource_policy=policy,
-            allocation_dispatched_callback=callbacks[0],
-            allocation_started_callback=callbacks[1],
-            allocation_finished_callback=callbacks[2],
-        )
-        jid = job.submit()
-        mirror = _workflow_state_mirror(task_id, legacy_state)
-        handles: dict[str, Any] = {"workflow_state": json.dumps(mirror, sort_keys=True)}
+        try:
+            job = _create_job(
+                task_id,
+                stage_tt,
+                runner,
+                entities,
+                output_dir,
+                stage_callback,
+                username=task.get("username", ""),
+                resource_policy=policy,
+                allocation_dispatched_callback=callbacks[0],
+                allocation_started_callback=callbacks[1],
+                allocation_finished_callback=callbacks[2],
+                allocation_accounting=user_id > 0,
+            )
+            jid = job.submit()
+        except Exception:
+            _settle_unsubmitted_attempt(task_id, index, attempt)
+            raise
+        handles: dict[str, Any] = {}
+        mirror = _mirror_json(task_id, legacy_state)
+        if mirror is not None:
+            handles["workflow_state"] = mirror
         if isinstance(job, SlurmJob):
             handles["slurm_job_id"] = jid
         if not task_store.update_task(task_id, **handles):
@@ -1155,7 +1210,13 @@ def _run_compute_workflow(
                 task_id, index, attempt, JobState.CANCELLED, reason_code=stage_state.Reason.TASK_CANCELLED
             )
             return JobState.CANCELLED
-        result = job.poll()
+        try:
+            result = job.poll()
+        except GPUCreditUnavailableError:
+            _settle_stage_attempt(
+                task_id, index, attempt, status=stage_state.FAILED, reason_code="admission_failed"
+            )
+            raise
         if isinstance(job, SlurmJob) and not job.wrapper_executed:
             # This stage never produced allocation evidence, so no allocation
             # fact exists for it and the Task's scheduler-owned reservation (if it
@@ -1165,13 +1226,11 @@ def _run_compute_workflow(
                 task_id=task_id, reason_code=ReservationReason.RELEASED.value, at=time.time()
             )
         _finish_stage_attempt(task_id, index, attempt, result)
-        mirror = _workflow_state_mirror(task_id, legacy_state)
-        task_store.update_task(
-            task_id,
-            workflow_state=json.dumps(mirror, sort_keys=True),
-            slurm_job_id=None,
-            container_id=None,
-        )
+        settled: dict[str, Any] = {"slurm_job_id": None, "container_id": None}
+        mirror = _mirror_json(task_id, legacy_state)
+        if mirror is not None:
+            settled["workflow_state"] = mirror
+        task_store.update_task(task_id, **settled)
         if result != JobState.COMPLETED:
             return result
     return JobState.COMPLETED
@@ -2291,10 +2350,20 @@ def _record_failure(
         # store keeps this from rewriting one that already reached a terminal
         # state (cancelled or completed) first.
         task_store.finish_active_stage_runs(
-            md5sum, status=stage_state.FAILED, reason_code=stage_reason
+            md5sum,
+            status=stage_state.FAILED,
+            reason_code=stage_state.bounded_reason(stage_reason, default="execution_exception"),
         )
     except Exception:
         logging.exception("Could not settle stage attempts for failed task %s", md5sum)
+    try:
+        # The compatibility mirror is written at this Core boundary too, so a
+        # failed Task does not leave it describing a running stage.
+        mirror = _mirror_json(md5sum, _workflow_state(task_store.get_task(md5sum) or task))
+        if mirror is not None:
+            task_store.update_task(md5sum, workflow_state=mirror)
+    except Exception:
+        logging.exception("Could not refresh workflow_state for failed task %s", md5sum)
     _capture_debug_submission(task, _entities_from_input_form(task))
     _finalize_failed_results(task, error_message, finished_at=finish_time)
     task_store.update_task(
@@ -2651,7 +2720,7 @@ def _execute_compute_task(
     if task.get("request_headers"):
         logging.info("Request headers for task %s: %s", md5sum, _sanitize_for_log(task["request_headers"]))
 
-    stage_state = {"current": current_stage, "first": True}
+    stage_progress = {"current": current_stage, "first": True}
     runtime_event_fields = {
         "request_id": request_id,
         "task_id": md5sum,
@@ -2668,19 +2737,19 @@ def _execute_compute_task(
         """
         if _task_is_terminal(md5sum):
             return
-        stage_changed = stage != stage_state["current"]
-        is_first = stage_state.get("first")
+        stage_changed = stage != stage_progress["current"]
+        is_first = stage_progress.get("first")
         logging.info("Stage callback for task %s: stage=%s changed=%s first=%s", md5sum, stage, stage_changed, is_first)
         if is_first:
             emit_event("runner.stage.started", stage_id=stage, **runtime_event_fields)
         elif stage_changed:
-            emit_event("runner.stage.finished", stage_id=stage_state["current"], **runtime_event_fields)
+            emit_event("runner.stage.finished", stage_id=stage_progress["current"], **runtime_event_fields)
             emit_event("runner.stage.started", stage_id=stage, **runtime_event_fields)
         else:
             emit_event("runner.stage.progress", stage_id=stage, **runtime_event_fields)
-        stage_state["current"] = stage
+        stage_progress["current"] = stage
         if is_first:
-            stage_state["first"] = False
+            stage_progress["first"] = False
             task_store.update_task(md5sum, run_stage=stage)
         elif stage_changed:
             task_store.update_task(md5sum, run_stage=stage)
@@ -2718,7 +2787,7 @@ def _execute_compute_task(
             emit_event(
                 "runner.stage.failed",
                 level="ERROR",
-                stage_id=stage_state["current"],
+                stage_id=stage_progress["current"],
                 reason_code="allocation_failed",
                 **runtime_event_fields,
             )
@@ -2727,7 +2796,7 @@ def _execute_compute_task(
                 md5sum,
                 task,
                 start_time,
-                stage_state["current"],
+                stage_progress["current"],
                 REASONS.get(evidence.get("reason_code"), "Execution failed. See available diagnostic evidence."),
             )
             return
@@ -2737,7 +2806,7 @@ def _execute_compute_task(
             _cleanup_task_workspace(task)
             return
 
-        final_stage = stage_state["current"] or (stages[-1][0] if stages else "")
+        final_stage = stage_progress["current"] or (stages[-1][0] if stages else "")
         if final_stage:
             emit_event("runner.stage.finished", stage_id=final_stage, **runtime_event_fields)
         refreshed_task = task_store.get_task(md5sum) or task
@@ -2753,7 +2822,7 @@ def _execute_compute_task(
             # finished: a finished row whose canonical result Core's own reader
             # refuses is exactly the state this boundary exists to prevent.
             _record_failure(
-                md5sum, task, start_time, stage_state["current"], str(exc), reason_code="publication_failed"
+                md5sum, task, start_time, stage_progress["current"], str(exc), reason_code="publication_failed"
             )
             logging.error("Publication failed for task %s: %s", md5sum, exc)
             return
@@ -2781,11 +2850,11 @@ def _execute_compute_task(
         emit_event(
             "runner.stage.failed",
             level="ERROR",
-            stage_id=stage_state["current"] or None,
+            stage_id=stage_progress["current"] or None,
             reason_code="unexpected_failure",
             **runtime_event_fields,
         )
-        _record_failure(md5sum, task, start_time, stage_state["current"], str(exc))
+        _record_failure(md5sum, task, start_time, stage_progress["current"], str(exc))
         logging.exception("Unexpected failure while running task %s (type=%s)", md5sum, task_type)
 
 
@@ -3489,8 +3558,11 @@ def _recover_orphaned_tasks() -> int:
                 continue
             stop_error = _stop_orphaned_workflow_execution(md5sum, slurm_job_id, container_id)
             if stop_error:
-                task_store.update_task(md5sum, status="queued", error=stop_error)
-                logging.error("Recovery left workflow %s queued: %s", md5sum, stop_error)
+                # The allocation could not be stopped, so it may still be
+                # running.  Reporting the Task as queued would contradict a live
+                # attempt; keep it running and let the next pass retry.
+                task_store.update_task(md5sum, status="running", error=stop_error)
+                logging.error("Recovery could not stop workflow %s: %s", md5sum, stop_error)
                 handled += 1
                 continue
             # Every live attempt belongs to a worker that no longer exists.
@@ -3540,6 +3612,15 @@ def _recover_orphaned_tasks() -> int:
                     logging.warning("Recovery could not cancel SLURM job %s for %s: %s", slurm_job_id, md5sum, exc)
             else:
                 cancellation_error = "; scheduler cancellation could not be attempted"
+            # The owning worker is gone; the attempt was interrupted, not
+            # observed to fail scientifically.  The Task itself cannot resume,
+            # so it still settles as failed below.
+            try:
+                task_store.finish_active_stage_runs(
+                    md5sum, status=stage_state.INTERRUPTED, reason_code=stage_state.Reason.WORKER_LOST
+                )
+            except Exception:
+                logging.exception("Could not interrupt stage attempts for task %s", md5sum)
             _record_failure(
                 md5sum,
                 task,
@@ -3551,6 +3632,12 @@ def _recover_orphaned_tasks() -> int:
             handled += 1
             continue
         if not container_id and task.get("status") == "running":
+            try:
+                task_store.finish_active_stage_runs(
+                    md5sum, status=stage_state.INTERRUPTED, reason_code=stage_state.Reason.WORKER_LOST
+                )
+            except Exception:
+                logging.exception("Could not interrupt stage attempts for task %s", md5sum)
             _record_failure(
                 md5sum,
                 task,

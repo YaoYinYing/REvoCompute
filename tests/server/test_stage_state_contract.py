@@ -55,6 +55,18 @@ def _task_type() -> TaskType:
     )
 
 
+def _single_stage_type() -> TaskType:
+    runtime = RuntimeFamily("cpu_runner", ("bash", "run.sh"), "runner.def", "image.sif")
+    return TaskType(
+        "cpu_runner",
+        "Synthetic CPU runner",
+        runtime,
+        ".fasta",
+        "FASTA",
+        stage_markers={"execute": "Execute"},
+    )
+
+
 def _insert_task(database: TaskDatabase, task_id: str, *, status: str = "queued", **fields) -> None:
     database.upsert_task(
         task_id,
@@ -282,6 +294,8 @@ def test_failed_stage_stops_the_workflow_before_the_next_allocation(tmp_path, mo
     assert [(run["stage_index"], run["status"]) for run in database.list_stage_runs(task_id)] == [
         (0, stage_state.FAILED)
     ]
+    mirror = json.loads(database.get_task(task_id)["workflow_state"])
+    assert mirror["multistage_runner.features"]["status"] == "failed"
 
 
 def test_cancellation_settles_live_attempt_and_rejects_late_running(tmp_path, monkeypatch):
@@ -297,6 +311,9 @@ def test_cancellation_settles_live_attempt_and_rejects_late_running(tmp_path, mo
     runs = database.list_stage_runs(task_id)
     assert runs[0]["status"] == stage_state.CANCELLED
     assert runs[0]["reason_code"] == stage_state.Reason.TASK_CANCELLED
+    # The compatibility mirror is rewritten at the cancellation boundary too.
+    mirror = json.loads(database.get_task(task_id)["workflow_state"])
+    assert mirror["multistage_runner"]["status"] == "cancelled"
     # A worker that still reports its allocation must not resurrect the attempt.
     assert not database.record_stage_running(
         task_id=task_id, stage_index=0, attempt=attempt["attempt"]
@@ -343,6 +360,167 @@ def test_worker_loss_interrupts_the_live_attempt_and_resume_uses_a_new_attempt(t
     assert resumed["attempt"] == 2
 
 
+def test_duplicate_dispatch_cannot_rewrite_the_attempt_handle(tmp_path):
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "3" * 32
+    database.begin_stage_attempt(task_id=task_id, stage_index=0, stage_name="cpu_runner")
+    assert database.record_stage_dispatched(
+        task_id=task_id, stage_index=0, attempt=1, slurm_job_id="4100"
+    )
+    assert not database.record_stage_dispatched(
+        task_id=task_id, stage_index=0, attempt=1, slurm_job_id="4200"
+    )
+    assert database.list_stage_runs(task_id)[0]["slurm_job_id"] == "4100"
+
+
+def test_finish_active_stage_runs_settles_every_live_attempt_and_no_terminal_one(tmp_path):
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "4" * 32
+    database.begin_stage_attempt(task_id=task_id, stage_index=0, stage_name="a")
+    database.record_stage_running(task_id=task_id, stage_index=0, attempt=1)
+    database.begin_stage_attempt(task_id=task_id, stage_index=1, stage_name="b")
+    database.begin_stage_attempt(task_id=task_id, stage_index=2, stage_name="c")
+    database.finish_stage_attempt(
+        task_id=task_id, stage_index=2, attempt=1, status=stage_state.COMPLETED,
+        reason_code=stage_state.Reason.COMPLETED,
+    )
+
+    assert database.finish_active_stage_runs(
+        task_id, status=stage_state.INTERRUPTED, reason_code=stage_state.Reason.WORKER_LOST
+    ) == 2
+    assert [(run["stage_index"], run["status"]) for run in database.list_stage_runs(task_id)] == [
+        (0, stage_state.INTERRUPTED),
+        (1, stage_state.INTERRUPTED),
+        (2, stage_state.COMPLETED),
+    ]
+
+
+def test_an_attempt_whose_start_was_missed_can_still_complete(tmp_path):
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "5" * 32
+    database.begin_stage_attempt(task_id=task_id, stage_index=0, stage_name="cpu_runner")
+    assert database.finish_stage_attempt(
+        task_id=task_id, stage_index=0, attempt=1, status=stage_state.COMPLETED,
+        reason_code=stage_state.Reason.COMPLETED,
+    )
+    assert database.list_stage_runs(task_id)[0]["status"] == stage_state.COMPLETED
+
+
+def test_deleting_a_task_settles_its_live_attempt(tmp_path):
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "6" * 32
+    _insert_task(database, task_id, status="queued")
+    database.begin_stage_attempt(task_id=task_id, stage_index=0, stage_name="cpu_runner")
+
+    assert database.claim_task_cleanup(
+        task_id,
+        expected_status="queued",
+        expected_finished_at=None,
+        claim_status="deleting:cancel",
+    )
+    run = database.list_stage_runs(task_id)[0]
+    assert (run["status"], run["reason_code"]) == (
+        stage_state.CANCELLED,
+        stage_state.Reason.TASK_DELETED,
+    )
+
+
+def test_cancellation_during_submission_settles_the_attempt(tmp_path, monkeypatch):
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "7" * 32
+    _insert_task(database, task_id, status="running")
+    monkeypatch.setattr(task_runtime, "task_store", database)
+
+    class _CancelledJob:
+        def submit(self):
+            database.claim_task_cancellation(task_id, finished_at=time.time())
+            raise RuntimeError("task was cancelled during submission")
+
+    monkeypatch.setattr(task_runtime, "_create_job", lambda *args, **kwargs: _CancelledJob())
+
+    with pytest.raises(RuntimeError):
+        task_runtime._run_compute_job(
+            task_id, _single_stage_type(), RunnerConfig(), [], str(tmp_path / "out"),
+            resource_policy=_policy(False),
+        )
+
+    run = database.list_stage_runs(task_id)[0]
+    assert (run["status"], run["reason_code"]) == (
+        stage_state.CANCELLED,
+        stage_state.Reason.TASK_CANCELLED,
+    )
+
+
+def test_single_stage_job_records_its_lifecycle_through_the_allocation_boundary(tmp_path, monkeypatch):
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "8" * 32
+    _insert_task(database, task_id, status="queued", task_type="cpu_runner")
+    monkeypatch.setattr(task_runtime, "task_store", database)
+    observed: list[str] = []
+
+    class _Job:
+        def __init__(self, callbacks):
+            self.callbacks = callbacks
+
+        def submit(self):
+            self.callbacks[0]("77", time.time(), True)
+            observed.append(database.get_task(task_id)["status"])
+            self.callbacks[1]("77", time.time())
+            observed.append(database.get_task(task_id)["status"])
+            return "77"
+
+        def poll(self):
+            return task_runtime.JobState.COMPLETED
+
+    captured: dict = {}
+
+    def _create_job(*args, **kwargs):
+        captured.update(kwargs)
+        return _Job(
+            (
+                kwargs["allocation_dispatched_callback"],
+                kwargs["allocation_started_callback"],
+                kwargs["allocation_finished_callback"],
+            )
+        )
+
+    monkeypatch.setattr(task_runtime, "_create_job", _create_job)
+
+    state = task_runtime._run_compute_job(
+        task_id, _single_stage_type(), RunnerConfig(), [], str(tmp_path / "out"),
+        resource_policy=_policy(False),
+    )
+
+    assert state == task_runtime.JobState.COMPLETED
+    # Callback presence is not the accounting decision: this Task has no
+    # accounting subject, so the adapter must not open the grant gates.
+    assert captured["allocation_accounting"] is False
+    assert observed == ["queued", "running"]
+    run = database.list_stage_runs(task_id)[0]
+    assert (run["stage_index"], run["attempt"], run["status"], run["slurm_job_id"]) == (
+        0, 1, stage_state.COMPLETED, "77",
+    )
+    assert run["started_at"] is not None and run["ended_at"] is not None
+
+
+def test_unaccounted_callbacks_never_settle_an_allocation(tmp_path, monkeypatch):
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    monkeypatch.setattr(task_runtime, "task_store", database)
+    monkeypatch.setattr(
+        database, "settle_allocation", lambda *args, **kwargs: pytest.fail("must not settle")
+    )
+    callbacks = task_runtime._compute_allocation_callbacks(
+        task_id="9" * 32,
+        user_id=0,
+        stage_id="cpu_runner",
+        resource_policy=_policy(False),
+        stage_index=0,
+        attempt=1,
+    )
+
+    callbacks[2]("77", time.time())
+
+
 def test_projection_keeps_a_legacy_stage_that_predates_the_later_record(tmp_path, monkeypatch):
     database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
     task_id = "2" * 32
@@ -370,9 +548,36 @@ def test_projection_keeps_a_legacy_stage_that_predates_the_later_record(tmp_path
         stage_state.COMPLETED,
         stage_state.COMPLETED,
     ]
-    # The legacy stage carries no attempt evidence; the recorded one does.
+    # The legacy stage carries no attempt evidence; the recorded one does, and
+    # each item names where its evidence came from.
     assert projection["items"][0]["attempt"] is None
+    assert projection["items"][0]["source"] == "legacy"
     assert projection["items"][1]["attempt"] == model["attempt"]
+    assert projection["items"][1]["source"] == "record"
+
+
+def test_single_stage_worker_loss_interrupts_its_attempt(tmp_path, monkeypatch):
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "0" * 32
+    _insert_task(
+        database, task_id, status="running", task_type="cpu_runner", slurm_job_id="4154"
+    )
+    attempt = database.begin_stage_attempt(
+        task_id=task_id, stage_index=0, stage_name="cpu_runner"
+    )
+    database.record_stage_running(task_id=task_id, stage_index=0, attempt=attempt["attempt"])
+    monkeypatch.setattr(task_runtime, "task_store", database)
+    monkeypatch.setattr(task_runtime, "_get_task_type", lambda name: (_single_stage_type(), None))
+    monkeypatch.setattr(task_runtime.shutil, "which", lambda command: None)
+    monkeypatch.setattr(task_runtime, "_record_failure", lambda *args, **kwargs: None)
+
+    assert task_runtime._recover_orphaned_tasks() == 1
+
+    run = database.list_stage_runs(task_id)[0]
+    assert (run["status"], run["reason_code"]) == (
+        stage_state.INTERRUPTED,
+        stage_state.Reason.WORKER_LOST,
+    )
 
 
 def test_legacy_projection_is_labelled_and_historical_rows_survive_migration(tmp_path, monkeypatch):
@@ -399,6 +604,7 @@ def test_legacy_projection_is_labelled_and_historical_rows_survive_migration(tmp
         stage_state.COMPLETED,
         stage_state.RUNNING,
     ]
+    assert [item["source"] for item in projection["items"]] == ["legacy", "legacy"]
     assert projection["current"]["name"] == "multistage_runner.model"
     database.engine.dispose()
 
