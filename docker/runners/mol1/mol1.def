@@ -8,8 +8,10 @@
 # verified archive. Pin apt to a snapshot repository if bit-identical images
 # are required.
 Bootstrap: docker
-# Base image digest resolved from the 12.8.1-cudnn-runtime-ubuntu24.04 tag.
-From: nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04@sha256:ac55d124da4882b497f732d8dfd9a702d5447a5f29d08d56da6f64f0a1eb34bc
+# nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04 at this manifest digest.
+# Apptainer 1.4.5 rejects a Docker reference that carries both a tag and a
+# digest, so the tag is recorded here and the digest is the From reference.
+From: nvidia/cuda@sha256:ac55d124da4882b497f732d8dfd9a702d5447a5f29d08d56da6f64f0a1eb34bc
 
 %files
     mol1/requirements.in /opt/mol1-requirements.in
