@@ -6,7 +6,12 @@ From: nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04
 
 %post
     apt-get update
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates python3 python3-venv
+    # Triton compiles a CUDA-utils module in-process on its first kernel launch,
+    # so it needs a C compiler and the Python headers; the CUDA runtime base
+    # image ships neither. Only sequences past cuEquivariance's 100-residue
+    # fallback threshold reach a Triton kernel and therefore this build path.
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        ca-certificates python3 python3-venv gcc libc6-dev python3-dev
     rm -rf /var/lib/apt/lists/*
     python3 -m venv /opt/venv
     /opt/venv/bin/pip install --no-cache-dir uv==0.8.22
@@ -47,5 +52,7 @@ From: nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04
     # image, so importing them here would test the wrong artifact. %test
     # inherits %environment, so the cache redirects apply here too.
     python -c 'import torch, bioemu2; assert torch.__version__ == "2.13.0+cu126", torch.__version__; assert torch.version.cuda == "12.6"'
+    # The Triton build path that long sequences take needs both at execution time.
+    python -c 'import os, shutil, sysconfig; assert shutil.which("cc") and os.path.exists(os.path.join(sysconfig.get_paths()["include"], "Python.h"))'
     test -d /opt/revocompute/runtime
     test ! -e /app/revocompute

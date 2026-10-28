@@ -32,8 +32,8 @@ REASONS = {
 _SECRET_KEY = re.compile(r"secret|password|passwd|token|credential|api.?key|authorization|private.?key", re.I)
 _CONTROL = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _SECRET_ASSIGNMENT = re.compile(
-    r"(?im)([\w.-]*(?:secret|password|passwd|token|credential|api.?key|authorization)[\w.-]*[\"']?\s*[=:]\s*)"
-    r"(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^\s,;]+)"
+    r"(?im)(?<![\w.-])([\w.-]*(?:secret|password|passwd|token|credential|api.?key|authorization)"
+    r"[\w.-]*[\"']?\s*[=:]\s*)(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^\s,;]+)"
 )
 _BEARER = re.compile(r"(?i)\b(Bearer|Basic)\s+[^\s,;]+")
 _PRIVATE_KEY = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)", re.S)
@@ -41,8 +41,8 @@ _URL = re.compile(r"\b(?:https?|ssh|redis|postgres(?:ql)?|mysql)://[^\s<>]+", re
 _HOST_PATH = re.compile(r"(?<![\w:])(?:/[\w.@+~%-]+){2,}(?:/[^\s\"'<>]*)?|[A-Za-z]:\\[^\r\n\"'<>]+")
 _HOST_DETAIL = re.compile(r"(?im)(\b(?:NodeList|BatchHost|Cluster|AllocNode:Sid)=)\S+|(?<=srun: error: )[^\s:]+:")
 _PRIVATE_NETWORK = re.compile(
-    r"\b(?:10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}"
-    r"|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}|[\w.-]+\.(?:internal|local|cluster))\b",
+    r"\b(?:10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2})\b"
+    r"|(?<![\w.-])[\w.-]+\.(?:internal|local|cluster)\b",
     re.I,
 )
 _LOG_PATH = re.compile(r"execution/slurm-[^/]+\.(stdout|stderr)\.log\Z")
@@ -63,7 +63,10 @@ def safe_diagnostic_text(value: Any, *, secret_values: tuple[str, ...] = ()) -> 
             text = text.replace(secret, "[redacted]")
     text = _PRIVATE_KEY.sub("[private key redacted]", text)
     text = _BEARER.sub(lambda m: m[1] + " [redacted]", text)
-    text = _SECRET_ASSIGNMENT.sub(lambda m: m[1] + "[redacted]", text)
+    if "=" in text or ":" in text:
+        # The assignment pattern needs one of these separators, so a line with
+        # neither cannot match; skipping keeps a keyword-dense line linear.
+        text = _SECRET_ASSIGNMENT.sub(lambda m: m[1] + "[redacted]", text)
     text = _URL.sub("[service URL redacted]", text)
     text = _HOST_PATH.sub("[path redacted]", text)
     text = _HOST_DETAIL.sub("[host detail redacted]", text)

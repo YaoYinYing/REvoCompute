@@ -47,6 +47,8 @@ from revocompute.job import Job, JobState
 from revocompute.execution_diagnostics import REASONS, safe_diagnostic_text
 from revocompute.job.runners.slurm_runner import (
     SlurmJob,
+    retire_scheduler_log,
+    scheduler_log_is_claimed,
     surviving_allocation_receipts,
     surviving_scheduler_logs,
 )
@@ -2864,12 +2866,29 @@ def _reconcile_host_scheduler_logs() -> dict[str, int]:
         if state not in _ACTIVE_SLURM_STATES and state not in _TERMINAL_SLURM_STATES:
             result["unavailable" if scontrol else "rejected"] += 1
             continue
+        if state in _ACTIVE_SLURM_STATES:
+            # A live allocation is not recovery evidence yet. This file is the
+            # running job's own stderr, and its wrapper records the allocation
+            # itself. This pass runs on every dispatch, so adopting and retiring
+            # the file here would erase the output the adapter publishes when
+            # the job ends; a later terminal pass adopts whatever is still
+            # unrecorded then.
+            result["surviving"] += 1
+            continue
+        # A terminal scheduler state is not proof the adapter has snapshotted
+        # this file: it may still be between ``srun`` exit and its capture, or
+        # may not even have learned the job id yet. The adapter's directory
+        # claim is the durable handoff -- written before srun starts and removed
+        # after the snapshot -- and a claim whose process died does not block
+        # recovery, so cleanup still terminates. Retirement re-checks the claim
+        # itself, which closes the window between this check and its unlink.
+        if scheduler_log_is_claimed(str(entry["scheduler_log_path"])):
+            result["surviving"] += 1
+            continue
         if task_store.allocation_row_exists(job_id):
             # A real shape already exists for this job, so there is nothing to
-            # learn from the file; retire it rather than mint a second claim.
-            try:
-                os.unlink(str(entry["scheduler_log_path"]))
-            except OSError:
+            # learn from the file.
+            if not retire_scheduler_log(str(entry["scheduler_log_path"])):
                 result["surviving"] += 1
             result["recovered"] += 1
             continue
@@ -2913,9 +2932,7 @@ def _reconcile_host_scheduler_logs() -> dict[str, int]:
             user_id=user_id,
             reason_code=EvidenceSource.SCHEDULER_LOG.value,
         )
-        try:
-            os.unlink(str(entry["scheduler_log_path"]))
-        except OSError:
+        if not retire_scheduler_log(str(entry["scheduler_log_path"])):
             result["surviving"] += 1
         result["recovered"] += 1
     return result

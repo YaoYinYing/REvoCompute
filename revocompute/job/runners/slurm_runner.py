@@ -30,7 +30,14 @@ from typing import Any
 from revocompute.job import ExecutionBuilder, ExecutionPlan, Job, JobState
 from revocompute.job._stages import extract_stage_from_log_line
 from revocompute import runtime_bundle
-from revocompute.execution_diagnostics import STATUS_PATH, diagnostic_secret_values, redacted_log_lines, scheduler_failure
+from revocompute.execution_diagnostics import (
+    MAX_LOG_BYTES,
+    STATUS_PATH,
+    bounded_log,
+    diagnostic_secret_values,
+    redacted_log_lines,
+    scheduler_failure,
+)
 from revocompute.storage import publish_result_text
 from revocompute.operational_events import emit_event
 from revocompute.resource_observations import (
@@ -99,6 +106,30 @@ ALLOCATION_RECEIPT_NAME = "allocation.receipt"
 #: srun client's own banner still reaches the process's stderr pipe, which is
 #: what supplies job identity before the wrapper runs.
 ALLOCATION_SCHEDULER_LOG_NAME = "allocation-%j.err"
+
+#: The live adapter that will read this Task's scheduler stderr writes its pid
+#: here, in the allocation directory, *before* launching srun. Reconciliation
+#: runs in another worker process and cannot see that adapter; this file is the
+#: durable handoff that keeps the stderr until the capture is done (or the
+#: owning process is gone). Naming it per directory rather than per job is what
+#: covers the window before the adapter has learned the job id.
+ALLOCATION_STDERR_CLAIM_NAME = "scheduler-stderr.capturing"
+
+#: Where the adapter used to write a claim beside one scheduler log. Only read
+#: now, so a claim left on disk by an older worker still owns its file.
+ALLOCATION_STDERR_CLAIM_SUFFIX = ".capturing"
+
+#: How far back a truncated stderr tail may look for an open PEM block. The
+#: redactor recognizes key material only by its BEGIN line, so a tail that
+#: starts inside a key would publish the body. A key larger than this bound is
+#: not something a runner emits, and the bound keeps the extra read finite.
+PRIVATE_KEY_LOOKBACK_BYTES = 4 * 1024 * 1024
+
+_PRIVATE_KEY_MARKER = b"-----BEGIN "
+
+#: Slack kept before an unaligned window so a PEM marker the bound cut through
+#: is still recognized; comfortably longer than any marker line.
+_PEM_MARKER_LOOKBACK_BYTES = 64
 
 #: Hard ceiling for one Task's ephemeral scratch, in bytes.  Scratch is a
 #: per-execution safety concern, never durable user quota: a runaway temporary
@@ -311,6 +342,10 @@ class SlurmJob(Job):
         self._process: subprocess.Popen | None = None
         self._stdout_lines: list[str] = []
         self._stderr_lines: list[str] = []
+        #: The scheduler's stderr file, captured the moment srun exits. The file
+        #: is retired by other passes once the allocation row is durable, so a
+        #: later read could find it gone.
+        self._job_stderr_snapshot: list[str] | None = None
         self._stdout_thread: threading.Thread | None = None
         self._stderr_thread: threading.Thread | None = None
         self._wrapper_script_path: str | None = None
@@ -396,9 +431,13 @@ class SlurmJob(Job):
                 # only as a floor: the tighter wrapper-start stamp is preferred
                 # whenever the wrapper's own id line was read.
                 self._allocation_submitted_at = time.time()
+            # srun creates the per-job stderr file at allocation, after Popen, so
+            # the claim must be durable before the process exists at all.
+            self._claim_job_stderr()
             self._process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         except Exception:
             self._failure_reason = "submission_failed"
+            self._release_job_stderr_claim()
             emit_event(
                 "slurm.allocation.failed",
                 level="ERROR",
@@ -631,8 +670,14 @@ class SlurmJob(Job):
                 logging.error("SLURM job %s timed out after %d s", self._job_id, max_runtime)
                 self._process.kill()
                 self._process.wait()
+                self._capture_job_stderr()
                 self._emit_terminal("slurm.allocation.failed", reason_code="timeout")
                 return JobState.FAILED
+
+            # The allocation is over. Capture the scheduler's stderr file now,
+            # before the reader joins and terminal reporting give a concurrent
+            # dispatch's reconciliation time to retire it.
+            self._capture_job_stderr()
 
             if self._stdout_thread:
                 self._stdout_thread.join(timeout=10)
@@ -698,7 +743,17 @@ class SlurmJob(Job):
             # Freeze execution end before diagnostic I/O without moving protocol ingest after settlement.
             if self._allocation_finished_at is None:
                 self._allocation_finished_at = time.time()
-            self._persist_output()
+            # Fallback for outcomes that never reached the post-wait snapshot
+            # (a timeout or an admission refusal); a normal exit already has it.
+            self._capture_job_stderr()
+            try:
+                self._persist_output()
+            finally:
+                # Persistence is this process's last read of the file; only now
+                # may another worker's reconciliation retire it. The release
+                # must survive a failing post-persist cleanup, and must happen
+                # before the host-only directory is dropped.
+                self._release_job_stderr_claim()
             # Ingest before the terminal event, and for every outcome: an OOM
             # row is the evidence the estimator exists to learn from, and a
             # failed run is where it appears.
@@ -710,23 +765,32 @@ class SlurmJob(Job):
 
     def cancel(self) -> None:
         proc = self._process
-        if proc is None or proc.poll() is not None:
-            self._persist_output()
-            self._cleanup_scratch_dir()
-            return
-        proc.terminate()
+        running = proc is not None and proc.poll() is None
+        if running:
+            proc.terminate()
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+            logging.info("srun process %s terminated for task %s", proc.pid, self.task_id)
+        # The readers parse the job id, so drain them before the snapshot: a
+        # capture taken first could not even name the file it is about to lose
+        # when the claim is released below.
+        for thread in (self._stdout_thread, self._stderr_thread):
+            if thread is not None:
+                thread.join(timeout=5)
+        self._capture_job_stderr()
         try:
-            proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
-        logging.info("srun process %s terminated for task %s", proc.pid, self.task_id)
-        try:
-            if self._slurm_job_id:
+            if running and self._slurm_job_id:
                 self._emit_terminal("slurm.allocation.cancelled")
         finally:
-            self._persist_output()
-            self._remove_allocation_approval()
+            try:
+                self._persist_output()
+            finally:
+                self._release_job_stderr_claim()
+            if running:
+                self._remove_allocation_approval()
             self._cleanup_scratch_dir()
 
     # -- srun arguments ------------------------------------------------------
@@ -917,11 +981,14 @@ class SlurmJob(Job):
         # nodes.  Use the task-specific shared output directory so slurmstepd
         # never falls back to /tmp and every job has an isolated valid cwd.
         opts.append(f"--chdir={self.output_dir}")
-        # Slurm creates this file the instant the job is allocated a node, which
-        # is the only durable trace of an allocation killed before the wrapper's
-        # first statement.  It is written into the host-only directory (never
-        # bind-mounted into the container), and only stderr is redirected so the
-        # wrapper's own stdout protocol stays on the pipe this runner reads.
+        # ``--error`` connects the *job's* stderr -- including the container's
+        # traceback -- to this host-only file, and Slurm creates it the instant
+        # the job is allocated, so an allocation killed before the wrapper's
+        # first statement still leaves a trace. Only stderr is redirected: the
+        # wrapper's stdout protocol must stay on the pipe this runner reads.
+        # The file is read back into the persisted diagnostics by
+        # ``_job_stderr_lines``, since otherwise that stderr never reaches the
+        # user.
         opts.append(f"--error={os.path.join(self.allocation_dir, ALLOCATION_SCHEDULER_LOG_NAME)}")
         opts.append(f"--job-name=revocomput_{_sanitize_name(self._username)}_{self.tt.name}_{self.task_id[:8]}")
         return opts
@@ -1675,7 +1742,11 @@ class SlurmJob(Job):
             "stage_id": str(self.tt.name), **(self._scheduler_failure or {}),
         }
         logs: dict[str, str] = {}
-        for stream_name, lines in (("stdout", self._stdout_lines), ("stderr", self._stderr_lines)):
+        streams = (
+            ("stdout", tuple(self._stdout_lines)),
+            ("stderr", (*self._stderr_lines, *self._job_stderr_lines())),
+        )
+        for stream_name, lines in streams:
             # Redact complete lines before bounding the excerpt. Track PEM
             # blocks across discarded lines so a long key cannot lose its label.
             retained: deque[str] = deque()
@@ -1732,13 +1803,190 @@ class SlurmJob(Job):
                     secret_values=self._diagnostic_secrets(),
                 ),
             )
+            # Redact first: a private-key window widened back to its BEGIN line
+            # can exceed the bound, and bounding a redacted excerpt is safe
+            # because the label has already replaced the key body.
+            stderr_text, _ = bounded_log(
+                "".join(
+                    redacted_log_lines(
+                        (*self._stderr_lines, *self._job_stderr_lines()),
+                        secret_values=self._diagnostic_secrets(),
+                    )
+                ),
+                limit=MAX_LOG_BYTES,
+            )
             publish_result_text(
-                self.output_dir, os.path.relpath(err_path, self.output_dir),
-                redacted_log_lines(islice(self._stderr_lines, len(self._stderr_lines)), secret_values=self._diagnostic_secrets()),
+                self.output_dir, os.path.relpath(err_path, self.output_dir), stderr_text
             )
             self._save_resource_observation(execution_dir, username, task_name, task_id)
         except OSError as exc:
             logging.warning("Could not save SLURM output for %s: %s", self._job_id, exc)
+
+    def _capture_job_stderr(self) -> None:
+        """Snapshot the scheduler's stderr if the job can be named yet.
+
+        This may run before the reader thread has parsed the job id — e.g. right
+        after ``srun`` exits while its pipe is still draining. Caching the empty
+        read would make the real snapshot unreachable, so the attempt is a no-op
+        until identity is known; the claim stays held until a later attempt or a
+        terminal path releases it.
+        """
+        if self._job_stderr_snapshot is not None:
+            return
+        job_id = self._slurm_job_id
+        if not job_id or not job_id.isdigit():
+            return
+        self._job_stderr_snapshot = self._job_stderr_lines()
+
+    def _claim_job_stderr(self) -> None:
+        """Mark this Task's allocation directory as owned by a live adapter.
+
+        Written before ``srun`` is launched, so it exists before the scheduler
+        can create the per-job file — including the interval before this process
+        has learned the job id. The pid and its start stamp are what make the
+        handoff durable: a claim left by a dead or replaced process does not
+        block recovery.
+        """
+        claim = os.path.join(self.allocation_dir, ALLOCATION_STDERR_CLAIM_NAME)
+        pending = f"{claim}.{uuid.uuid4().hex}"
+        pid = os.getpid()
+        try:
+            os.makedirs(self.allocation_dir, mode=0o700, exist_ok=True)
+            # Publish the claim whole: a half-written file would read as absent
+            # and let a concurrent reconciliation retire the log.
+            with open(pending, "w", encoding="ascii") as handle:
+                handle.write(f"{pid} {_process_start_ticks(pid) or 0}")
+            os.replace(pending, claim)
+        except OSError as exc:
+            logging.warning("Could not claim scheduler stderr for %s: %s", pid, exc)
+            try:
+                os.unlink(pending)
+            except OSError:
+                pass
+
+    def _release_job_stderr_claim(self) -> None:
+        """Drop the handoff, but only while this process still owns it.
+
+        A retry can start a new adapter in the same directory before the old
+        one reaches its terminal path; unlinking by name alone would strip the
+        newer adapter's claim.
+        """
+        claim = os.path.join(self.allocation_dir, ALLOCATION_STDERR_CLAIM_NAME)
+        try:
+            with open(claim, encoding="ascii") as handle:
+                parts = handle.read().split()
+        except OSError:
+            return
+        if not parts or parts[0] != str(os.getpid()):
+            return
+        ticks = _process_start_ticks(os.getpid())
+        if ticks is not None and len(parts) > 1 and parts[1].isdigit() and int(parts[1]) not in (0, ticks):
+            return
+        try:
+            os.unlink(claim)
+        except OSError:
+            pass
+
+    def _job_stderr_lines(self) -> list[str]:
+        """The job's own stderr, which ``srun --error=`` keeps off this pipe.
+
+        ``--error`` redirects the *job's* stderr — the container's traceback on a
+        failed task — into the host-only allocation file, so this process's
+        stderr carries only the srun client's own messages. A failure report
+        built from the pipe alone therefore shows an exit banner and no reason.
+        Reading the file here gives the same evidence the scheduler kept, under
+        the same redaction as every other captured stream. The window opens on a
+        line boundary, so a credential assignment is never cut: the redactor
+        would not recognize the surviving suffix as one. The redactor tracks PEM
+        blocks only from their BEGIN line, so a window that opens inside a key
+        is moved back to that BEGIN line first -- the body is never published in
+        place of a label it lost. The callers bound the redacted excerpt, not
+        this read, so widening the window cannot leak key material.
+        """
+        if self._job_stderr_snapshot is not None:
+            return self._job_stderr_snapshot
+        job_id = self._slurm_job_id
+        if not job_id or not job_id.isdigit():
+            return []
+        path = os.path.join(self.allocation_dir, ALLOCATION_SCHEDULER_LOG_NAME.replace("%j", job_id))
+        try:
+            with open(path, "rb") as handle:
+                size = handle.seek(0, os.SEEK_END)
+                tail_start = max(0, size - MAX_LOG_BYTES - 1)
+                if tail_start:
+                    start, aligned = self._line_start(handle, tail_start)
+                    if aligned:
+                        start = self._private_key_start(handle, start)
+                    else:
+                        # Keep enough of the partial line to recognize a marker
+                        # that the bound cut in half.
+                        start = max(0, start - _PEM_MARKER_LOOKBACK_BYTES)
+                else:
+                    start, aligned = 0, True
+                handle.seek(start)
+                text = handle.read(size - start).decode("utf-8", errors="replace")
+        except OSError:
+            return []
+        if not aligned:
+            # The window opened inside a line longer than the alignment bound.
+            # Drop its partial first line, which a credential cut could hide in
+            # -- unless that line carries a private-key marker, which must be
+            # kept so the redactor replaces the body instead of publishing it.
+            head, separator, rest = text.partition("\n")
+            marker = head.find("-----BEGIN ")
+            if marker >= 0 and "PRIVATE KEY-----" in head[marker:]:
+                text = head[marker:] + separator + rest
+            else:
+                text = rest
+        return text.splitlines(keepends=True)
+
+    @staticmethod
+    def _line_start(handle, position: int) -> tuple[int, bool]:
+        """The first byte of the line containing *position*, and whether it was found.
+
+        A tail window must open on a line boundary: a PEM marker split between
+        the discarded prefix and the published window is invisible to the
+        redactor on both sides. A window inside a line longer than the bound has
+        no newline to align to, but a key marker on that line must still not be
+        dropped with the partial prefix, so the scan anchors at the marker.
+        """
+        limit = max(0, position - MAX_LOG_BYTES - len(_PRIVATE_KEY_MARKER))
+        handle.seek(limit)
+        chunk = handle.read(position - limit)
+        offset = chunk.rfind(b"\n")
+        if offset >= 0:
+            return limit + offset + 1, True
+        marker = chunk.rfind(_PRIVATE_KEY_MARKER)
+        if marker >= 0 and b"PRIVATE KEY-----" in chunk[marker:]:
+            return limit + marker, True
+        return position, False
+
+    @staticmethod
+    def _private_key_start(handle, start: int) -> int:
+        """Move a truncated window back to an open private-key BEGIN line.
+
+        The redactor recognizes a key only when it sees the BEGIN line, so a
+        window whose BEGIN was cut would publish the body. The nearest marker
+        in a bounded prefix decides: if the last one seen is a BEGIN, the key is
+        still open at *start* and the window opens there. A prefix with no
+        marker is ordinary stderr, and a window whose last marker is an END is
+        already past the block.
+        """
+        prefix_start = max(0, start - PRIVATE_KEY_LOOKBACK_BYTES)
+        handle.seek(prefix_start)
+        prefix = handle.read(start - prefix_start)
+        offset = prefix_start
+        last_begin: int | None = None
+        last_end: int | None = None
+        for line in prefix.splitlines(keepends=True):
+            if _PRIVATE_KEY_MARKER in line and b"PRIVATE KEY-----" in line:
+                last_begin = offset
+            elif b"-----END " in line and b"PRIVATE KEY-----" in line:
+                last_end = offset
+            offset += len(line)
+        if last_begin is not None and (last_end is None or last_begin > last_end):
+            return last_begin
+        return start
 
     @staticmethod
     def _is_captured_protocol_line(line: str) -> bool:
@@ -2137,6 +2385,108 @@ def surviving_scheduler_logs(results_root: str) -> list[dict[str, Any]]:
                     }
                 )
     return found
+
+
+def _process_start_ticks(pid: int) -> int | None:
+    """The kernel's start stamp for *pid*, or ``None`` when it is not running.
+
+    Pairs with the pid so a pid reused after a worker restart is not mistaken
+    for the adapter that wrote the claim.
+    """
+    try:
+        with open(f"/proc/{pid}/stat", encoding="ascii", errors="replace") as handle:
+            stat = handle.read()
+    except OSError:
+        return None
+    fields = stat.rsplit(")", 1)[-1].split()
+    try:
+        return int(fields[19])  # field 22 overall: starttime
+    except (IndexError, ValueError):
+        return None
+
+
+def _claim_is_live(path: str) -> bool:
+    """Whether the claim file at *path* names a process still capturing.
+
+    The claim carries the capturing process's identity, so a claim left by a
+    dead or replaced process does not block recovery; only a live owner does.
+    """
+    try:
+        with open(path, encoding="ascii") as handle:
+            parts = handle.read().split()
+    except OSError:
+        return False
+    if not parts or not parts[0].isdigit():
+        return False
+    start_ticks = _process_start_ticks(int(parts[0]))
+    if start_ticks is None:
+        return False
+    if len(parts) > 1 and parts[1].isdigit() and int(parts[1]):
+        return int(parts[1]) == start_ticks
+    return True
+
+
+def scheduler_log_is_claimed(path: str) -> bool:
+    """Whether the adapter that will read this scheduler log is still capturing.
+
+    The directory claim is written before srun starts, so it also covers the
+    interval in which the file exists but the adapter has not learned the job
+    id. A per-log claim from an older worker is honored as well, so such a file
+    is never retired underneath the process that owns it.
+    """
+    return _claim_is_live(
+        os.path.join(os.path.dirname(path), ALLOCATION_STDERR_CLAIM_NAME)
+    ) or _claim_is_live(path + ALLOCATION_STDERR_CLAIM_SUFFIX)
+
+
+def _retirement_path(path: str) -> str:
+    """A name outside the scanned namespace, so a moved file is never adopted."""
+    return os.path.join(
+        os.path.dirname(path), f".{os.path.basename(path)}.retiring.{uuid.uuid4().hex}"
+    )
+
+
+def retire_scheduler_log(path: str) -> bool:
+    """Remove a scheduler log whose evidence is already durable, and its legacy claim.
+
+    The caller's claim check and this unlink cannot be one operation, so the
+    file is first renamed out of the scanned namespace and the claim is checked
+    again. A claim that appeared in between means a live adapter still expects
+    the file: it is restored and reported as not retired. Returns whether the
+    log is gone; a claim that cannot be removed is harmless, since only a file
+    whose claim process is alive blocks recovery.
+    """
+    if scheduler_log_is_claimed(path):
+        return False
+    pending = _retirement_path(path)
+    try:
+        os.replace(path, pending)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        return False
+    else:
+        if scheduler_log_is_claimed(path):
+            try:
+                os.replace(pending, path)
+            except OSError:
+                return False
+            return False
+        try:
+            os.unlink(pending)
+        except OSError:
+            return False
+    # The directory claim belongs to whichever adapter now owns the directory,
+    # not to this retired file: unlinking it here could strip a claim a new
+    # stage wrote in the same window. Only the legacy per-log claim is ours,
+    # and only while it still names a dead process.
+    legacy = path + ALLOCATION_STDERR_CLAIM_SUFFIX
+    if not _claim_is_live(legacy):
+        try:
+            os.unlink(legacy)
+        except OSError:
+            pass
+    return True
 
 
 def _mtime(path: str) -> float:

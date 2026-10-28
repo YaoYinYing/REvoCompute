@@ -190,7 +190,7 @@ def test_scheduler_classification_needs_matching_authoritative_identity():
         "-----BEGIN PRIVATE KEY-----\ndiagnostic-credential\n-----END PRIVATE KEY-----",
     ],
 )
-def test_sensitive_context_is_not_a_user_facing_failure_explanation(text):
+def test_diagnostic_context_is_not_a_user_facing_failure_explanation(text):
     sanitized = safe_diagnostic_text(text)
     assert "diagnostic-credential" not in sanitized
     assert "/srv/private" not in sanitized

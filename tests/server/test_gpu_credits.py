@@ -2536,6 +2536,73 @@ def test_a_dispatch_adopts_surviving_evidence_before_asking_for_more(monkeypatch
     assert module.task_store.gpu_credit_summary(107, at=at + 100)["usage_gpu_seconds"] == 45
 
 
+def test_a_scheduler_log_waits_for_the_live_adapters_claim(monkeypatch, tmp_path):
+    """Reconciliation must not unlink a stderr its adapter has not captured yet.
+
+    The pass runs on every dispatch, in another worker process that cannot see
+    the adapter. A terminal scheduler state is not proof the adapter is done:
+    it may be between ``srun`` exit and its snapshot, and the pre-receipt window
+    has no allocation row to recognize it by. The adapter's claim is the durable
+    handoff; a claim whose process is gone does not block recovery, so an
+    orphaned file is still cleaned up.
+    """
+    from revocompute.job.runners.slurm_runner import ALLOCATION_STDERR_CLAIM_SUFFIX
+
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    at = _timestamp(2026, 9, 5)
+    task_id = "e" * 32
+    _own_task(module.task_store, task_id, user_id=108)
+    module.task_store.reserve_compute_admission(user_id=108, task_id=task_id, at=at)
+    callbacks = module.task_runtime._compute_allocation_callbacks(
+        task_id=task_id, user_id=108, stage_id="model", resource_policy=_gpu_policy(),
+    )
+    callbacks[0]("8826", at + 1, True, {"slurm_job_id": "8826", "observed_at": at + 2, "cpus": 1, "gpus": 1})
+    assert module.task_store.allocation_row_exists("8826") is True
+    task = module.task_store.get_task(task_id)
+    log = _plant_scheduler_log(module, task, job_id="8826", observed_at=at + 2)
+    # A second live job with no row and no wrapper receipt: the window between
+    # allocation and the wrapper's first write must not be adopted away either.
+    log_without_row = _plant_scheduler_log(module, task, job_id="8827", observed_at=at + 2)
+    claim = Path(str(log) + ALLOCATION_STDERR_CLAIM_SUFFIX)
+    claim.write_text(str(os.getpid()), encoding="ascii")
+    claim_without_row = Path(str(log_without_row) + ALLOCATION_STDERR_CLAIM_SUFFIX)
+    claim_without_row.write_text(str(os.getpid()), encoding="ascii")
+
+    monkeypatch.setattr(module.task_runtime.shutil, "which", lambda command: f"/usr/bin/{command}")
+    monkeypatch.setattr(
+        module.task_runtime.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(stdout="JobId=8826 JobState=RUNNING RunTime=00:00:10\n"),
+    )
+    module.task_runtime._recover_surviving_host_allocations()
+    assert log.exists()
+    assert log_without_row.exists()
+
+    # The scheduler reports the job terminal while its adapter is still between
+    # srun exit and the snapshot: the live claim keeps the file.
+    monkeypatch.setattr(
+        module.task_runtime.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(stdout="JobId=8826 JobState=COMPLETED RunTime=00:00:45\n"),
+    )
+    module.task_runtime._recover_surviving_host_allocations()
+    assert log.exists()
+    assert log_without_row.exists()
+
+    # The capture is done for the recorded job; the pre-receipt job's claim
+    # names a pid that was reused by another process. Cleanup still terminates
+    # without waiting for either Task row.
+    claim.unlink()
+    claim_without_row.write_text(f"{os.getpid()} 1", encoding="ascii")
+    module.task_runtime._recover_surviving_host_allocations()
+    assert not log.exists()
+    assert not log_without_row.exists()
+
+
 def test_a_dispatch_never_runs_the_unbounded_settle_phase(monkeypatch, tmp_path):
     """Dispatch adopts evidence; it does not settle the world.
 
