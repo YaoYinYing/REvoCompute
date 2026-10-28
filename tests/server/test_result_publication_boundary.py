@@ -121,6 +121,30 @@ def test_input_snapshot_basename_does_not_collide_with_a_result_selector(monkeyp
             "role": "evidence",
         }
     }
+    view = ResultView(
+        plugin="candidate-collection",
+        id="complex_models",
+        role="primary",
+        title="Complex models",
+        description="Synthetic view.",
+        sources={"candidates": (ArtifactSelector(value="*_model.pdb", is_glob=True, required=True),)},
+        mapping={},
+    )
+    task_type = type(
+        "TaskType",
+        (),
+        {
+            "name": "cpu_runner",
+            "display_name": "Synthetic cpu_runner",
+            "summary": "",
+            "output_summary": "",
+            "params": (),
+            "citations": (),
+            "considerations": (),
+            "result_workspace": (view,),
+        },
+    )()
+    monkeypatch.setattr(module.task_runtime, "_get_task_type", lambda *_args: (task_type, None))
     monkeypatch.setattr(module.task_runtime, "expected_file_tree", lambda *_args: tree)
     monkeypatch.setattr(module.task_runtime, "storyboard_declaration", lambda *_args: None)
     manifest = _finalize(
@@ -134,6 +158,20 @@ def test_input_snapshot_basename_does_not_collide_with_a_result_selector(monkeyp
 
     assert manifest["output_check"]["state"] == "passed", manifest["output_check"]
     assert [item["path"] for item in manifest["result"]["files"]["complexes"]] == ["3fap_model.pdb"]
+    assert manifest["views"] == [
+        {
+            "id": "complex_models",
+            "plugin": "candidate-collection",
+            "role": "primary",
+            "title": "Complex models",
+            "description": "Synthetic view.",
+            "sources": {"candidates": ["3fap_model.pdb"]},
+            "mapping": {},
+        }
+    ]
+    roles = {artifact["path"]: artifact["role"] for artifact in manifest["artifacts"]}
+    assert roles["3fap_model.pdb"] == "primary"
+    assert roles["debug/inputs/structures/3fap_model.pdb"] == "provenance"
 
 
 def test_declared_role_overrides_the_default_classification() -> None:
@@ -154,12 +192,15 @@ def test_declared_provenance_role_is_not_downgraded_by_view_membership() -> None
     assert artifacts[0]["role"] == "provenance"
 
 
-def test_primary_view_outranks_a_declared_role() -> None:
+def test_declared_diagnostic_role_is_not_promoted_by_a_primary_view() -> None:
     import revocompute.task_runtime as task_runtime
 
     artifacts = [{"path": "summary.json", "size": 10, "role": "artifact"}]
-    task_runtime._resolve_result_views(_type_with(("main", "primary", "summary.json")), artifacts, ".", {"summary.json": "diagnostic"})
-    assert artifacts[0]["role"] == "primary"
+    views, _checks, _problems = task_runtime._resolve_result_views(
+        _type_with(("main", "primary", "summary.json")), artifacts, ".", {"summary.json": "diagnostic"}
+    )
+    assert views[0]["sources"]["items"] == []
+    assert artifacts[0]["role"] == "diagnostic"
 
 
 def test_declared_role_parses_from_expected_files(tmp_path) -> None:

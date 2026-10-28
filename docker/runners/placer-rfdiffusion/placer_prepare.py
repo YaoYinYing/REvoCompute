@@ -590,6 +590,13 @@ def validate_structure(params: dict[str, Any], parsed: ParsedParams, residues: l
         )
         if match is None:
             raise PreparationError(f"{label} atom {chain}-{number}-{name}-{atom!r} is absent from the input.")
+        # The residue-level check ignores unmatched H/D atoms because cifutils
+        # skips them, but a selector still has to name an atom PLACER parses.
+        # PDB ligands are OpenBabel-parsed and are not template-checked.
+        if (cif_input or match.record == "ATOM") and atom not in ccd.get(name, frozenset()):
+            raise PreparationError(
+                f"{label} atom {chain}-{number}-{name}-{atom!r} is not an atom PLACER parses for residue {name!r}."
+            )
 
     for flag in _CENTER_FLAGS:
         for token in getattr(parsed, flag):

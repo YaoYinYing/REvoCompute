@@ -168,7 +168,7 @@ def expected_file_tree(task_type: Any, server_dir: str) -> dict[str, dict[str, A
     return load_expected_file_tree(contract_dir(task_type, server_dir) / "expected_files.yaml")
 
 
-def _is_server_record(path: str) -> bool:
+def is_server_record(path: str) -> bool:
     """True for the input snapshot and execution records the server owns."""
     return path.startswith(("debug/", "execution/", "log/"))
 
@@ -198,7 +198,7 @@ def resolve_expected_files(
             for path in sorted(by_path)
             if fnmatchcase(path, selector)
             and by_path[path]["size"] > 0
-            and (record_eligible or not _is_server_record(path))
+            and (record_eligible or not is_server_record(path))
         ]
         if definition["cardinality"] == "one" and len(matches) > 1:
             problems.append(f"{logical_id}: expected one file, found {len(matches)}")
@@ -325,6 +325,7 @@ __all__ = [
     "contract_directory",
     "declared_file_roles",
     "declared_result_contracts",
+    "is_server_record",
     "expected_file_tree",
     "load_expected_file_tree",
     "resolve_expected_files",

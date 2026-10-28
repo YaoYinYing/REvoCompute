@@ -71,6 +71,7 @@ from revocompute.result_storyboard import (
     ResultContractError,
     declared_file_roles,
     expected_file_tree,
+    is_server_record,
     resolve_expected_files,
     storyboard_declaration,
 )
@@ -1693,15 +1694,37 @@ def _resolve_result_views(
         return views, checks, problems
     paths = [artifact["path"] for artifact in artifacts]
     artifact_by_path = {artifact["path"]: artifact for artifact in artifacts}
+
+    def view_source_eligible(path: str, view_role: str) -> bool:
+        """Scientific views never claim the input snapshot or run records.
+
+        A primary view is the scientific result and must not promote an input
+        snapshot or a declared provenance/diagnostic file. An evidence view may
+        deliberately present a runner-owned run record, but it still never
+        reaches into the server-owned snapshot or execution tree.
+        """
+        if path not in artifact_by_path or is_server_record(path):
+            return False
+        if view_role != "primary":
+            return True
+        return (
+            artifact_by_path[path].get("role") not in {"provenance", "diagnostic"}
+            and declared_roles.get(path) not in {"provenance", "diagnostic"}
+        )
+
     for definition in task_type.result_workspace:
         resolved_sources: dict[str, list[str]] = {}
         for source_name, selectors in definition.sources.items():
             matches: list[str] = []
             for selector in selectors:
                 selected = (
-                    [path for path in paths if fnmatchcase(path, selector.value)]
+                    [
+                        path
+                        for path in paths
+                        if fnmatchcase(path, selector.value) and view_source_eligible(path, definition.role)
+                    ]
                     if selector.is_glob
-                    else [selector.value] if selector.value in artifact_by_path else []
+                    else [selector.value] if view_source_eligible(selector.value, definition.role) else []
                 )
                 if len(selected) > 500:
                     problems.append(f"{definition.title}: {source_name} matched more than 500 artifacts")
@@ -1748,7 +1771,8 @@ def _resolve_result_views(
                 # wins over plain view membership, and the server's default
                 # classification is the last resort.
                 if role == "primary":
-                    artifact["role"] = "primary"
+                    if view_source_eligible(path, "primary"):
+                        artifact["role"] = "primary"
                     continue
                 resolved_role = declared_roles.get(path) or role
                 if artifact["role"] in {"provenance", "diagnostic", "primary"}:

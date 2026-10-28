@@ -670,6 +670,28 @@ def test_pdb_element_falls_back_to_the_atom_name_when_the_column_is_blank(tmp_pa
     prepare.validate_structure(params, prepare.validate_params(params), prepare.read_structure(structure), structure)
 
 
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"crop_centers": "A-1-ALA-H99"},
+        {"bonds": "A-1-ALA-H99:B-1-LIG-C1:1.8"},
+    ],
+)
+def test_selectors_cannot_name_a_hydrogen_the_residue_check_ignored(tmp_path, overrides):
+    # An unmatched H/D atom is skipped by cifutils/pdbparser, so it exists in
+    # the input but not in the parsed residue; upstream would KeyError or loop.
+    structure = _write(tmp_path, "hydrogen.pdb", "\n".join([
+        _line("ATOM", 1, "CA", "ALA", "A", 1),
+        _line("ATOM", 2, "H99", "ALA", "A", 1, x=2.0),
+        _line("HETATM", 3, "C1", "LIG", "B", 1, x=5.0),
+        "END",
+    ]))
+    params = _params(**overrides)
+    with pytest.raises(prepare.PreparationError, match="is not an atom PLACER parses"):
+        prepare.validate_structure(params, prepare.validate_params(params), prepare.read_structure(structure),
+                                   structure)
+
+
 @pytest.mark.parametrize("atom", ["OT1", "OT2"])
 def test_pdb_polymer_heavy_atoms_must_match_the_residue_library(tmp_path, atom):
     # pdbparser fills each ATOM residue from its CCD template, so an Amber
