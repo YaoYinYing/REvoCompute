@@ -12,7 +12,11 @@ export function authorizedPath(url: string): string {
   }
   const base = new URL('https://revocompute.invalid/');
   const resolved = new URL(url, base);
-  if (resolved.origin !== base.origin) throw new Error('Authorized requests must be same-origin paths.');
+  // Dot-segment normalization can yield a protocol-relative pathname
+  // (`/..//evil.example/x`), which fetch would resolve cross-origin.
+  if (resolved.origin !== base.origin || resolved.pathname.startsWith('//')) {
+    throw new Error('Authorized requests must be same-origin paths.');
+  }
   return `${resolved.pathname}${resolved.search}${resolved.hash}`;
 }
 
