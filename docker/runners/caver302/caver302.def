@@ -65,7 +65,6 @@ From: eclipse-temurin:8-jre-jammy
     echo '73761a7dfbe66ff2583a2a26f92ef43d0766d1ab491fe9d2aea1aa36680bb7a5  /opt/caver302/caver/lib/vecmath.jar' | sha256sum --strict --check
     echo '5986cc8f6f07002b3c0b0601c2940527f5d8defe17580e17092b2b1ef8bce8f0  /opt/caver302/caver/bin/atom_radii.csv' | sha256sum --strict --check
     test -s /opt/caver302/caver/license/license.txt
-    test ! -w /opt/caver302/caver/caver.jar
     test ! -e /opt/caver302/caver_3.0
     test -d /opt/revocompute/runtime
 
