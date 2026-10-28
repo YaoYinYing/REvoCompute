@@ -66,8 +66,10 @@ Transitions are enforced by each guarded UPDATE's predicate (the legal-predecess
 set); attempt identity is enforced by unique indexes. Terminal statuses
 (``COMPLETED``, ``FAILED``, ``CANCELLED``, ``INTERRUPTED``, ``SKIPPED``) have no
 outgoing edge, so late markers and stale/duplicate callbacks cannot regress an
-attempt. ``READY`` is legal between stages but the Core writer creates an attempt
-directly in ``QUEUED`` before submission.
+attempt. ``READY`` and ``SKIPPED`` are **reserved**: ``READY`` is legal between
+stages but Core opens an attempt directly in ``QUEUED`` before submission, and no
+current selector writes ``SKIPPED`` (stage selection is PR #119). The API enum
+declares both so a future selector does not change the contract.
 
 **Retries.** One attempt = one allocation attempt. Worker-loss recovery
 (``INTERRUPTED``) or re-dispatch creates the next attempt; terminal attempts are

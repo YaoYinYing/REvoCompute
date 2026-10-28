@@ -403,7 +403,25 @@ class SlurmJob(Job):
 
     # -- Job ABC -------------------------------------------------------------
 
+    def _resolve_accounting_enabled(self) -> bool:
+        """The one effective-accounting decision for this allocation.
+
+        The wrapper gates, the host releases, and settlement all use this same
+        answer.  Callback presence is not it: stage bookkeeping callbacks exist
+        for unaccounted runs, and gating such a run would leave the wrapper
+        waiting for a release that never comes.
+        """
+        if self._allocation_accounting is not None:
+            return self._allocation_accounting
+        return (
+            self._allocation_dispatched_callback is not None
+            or self._allocation_started_callback is not None
+        )
+
     def submit(self) -> str:
+        # Resolve once, before the wrapper is rendered, so its gate shape and the
+        # host's release paths cannot disagree.
+        self._accounting_enabled = self._resolve_accounting_enabled()
         if self._task_store is not None:
             attempt_id = uuid.uuid4().hex
             try:
@@ -487,16 +505,9 @@ class SlurmJob(Job):
             )
             raise RuntimeError(f"SLURM submission did not return a scheduler job ID{suffix}")
         self._job_id = self._slurm_job_id
-        # Snapshot before the callbacks run: each may block, and this is the only
-        # stable answer to "does the wrapper gate on resource accounting?".
-        if self._allocation_accounting is not None:
-            accounting_enabled = self._allocation_accounting
-        else:
-            accounting_enabled = (
-                self._allocation_dispatched_callback is not None
-                or self._allocation_started_callback is not None
-            )
-        self._accounting_enabled = accounting_enabled
+        # The decision was made before the wrapper was rendered; the host uses
+        # the same value for release and grant.
+        accounting_enabled = self._accounting_enabled
         try:
             # Job identity is now known, so the scheduler owns the request.
             # ``_notify_dispatched`` writes the scheduler-owned reservation and,
@@ -1168,7 +1179,7 @@ class SlurmJob(Job):
             # anything is running.
             f'echo "{JOB_ID_PREFIX}${{SLURM_JOB_ID}}"',
         ]
-        if self._allocation_dispatched_callback is not None or self._allocation_started_callback is not None:
+        if self._resolve_accounting_enabled():
             lines.extend(
                 [
                     # Two gates, because there are two different questions.  The

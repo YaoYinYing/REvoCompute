@@ -47,6 +47,21 @@ def _isolated_runtime_state(monkeypatch, tmp_path):
     monkeypatch.setenv("ENABLED_TASKRUNNERS", "multistage_runner")
 
 
+def _ensure_task_row(task_runtime, task_id: str) -> None:
+    """A StageRun needs an active Task row; production always has one."""
+    task_runtime.task_store.upsert_task(
+        task_id,
+        filename="input.fasta",
+        file_path="/tmp/input.fasta",
+        uploaded_at=1.0,
+        status="queued",
+        is_binary=0,
+        task_type="multistage_runner",
+        storage_key="owner-key",
+        submitted_by_user_id=0,
+    )
+
+
 def _policy(requires_gpu: bool) -> ResolvedResources:
     return ResolvedResources(
         cpus=8,
@@ -109,6 +124,7 @@ def test_composer_resumes_after_completed_feature_stage(monkeypatch):
         "username": "tester",
         "workflow_state": json.dumps({"multistage_runner.features": {"status": "completed", "job_id": "41"}}),
     }
+    _ensure_task_row(task_runtime, "a" * 32)
 
     result = task_runtime._run_compute_workflow(
         "a" * 32,
@@ -176,6 +192,7 @@ def test_gpu_workflow_uses_owning_runtime_for_allocation_authorization(monkeypat
     )
     monkeypatch.setattr(task_runtime, "_create_job", lambda *args, **kwargs: _Job())
 
+    _ensure_task_row(task_runtime, "f" * 32)
     result = task_runtime._run_compute_workflow(
         "f" * 32,
         {"submitted_by_user_id": 17, "username": "tester"},
@@ -264,6 +281,7 @@ def test_composer_cancels_submitted_job_when_handle_cannot_be_persisted(monkeypa
     monkeypatch.setattr(task_runtime.task_store, "update_task", lambda *args, **kwargs: next(updates))
     monkeypatch.setattr(task_runtime, "_create_job", lambda *args, **kwargs: _Job())
 
+    _ensure_task_row(task_runtime, "c" * 32)
     result = task_runtime._run_compute_workflow(
         "c" * 32,
         {},
@@ -550,6 +568,7 @@ def test_composed_af3_workflow_advances_task_run_stage_through_all_markers(monke
     monkeypatch.setattr(task_runtime, "_create_job", _create_job)
     monkeypatch.setattr(task_runtime.task_store, "update_task", _update)
 
+    _ensure_task_row(task_runtime, "a" * 32)
     result = task_runtime._run_compute_workflow(
         "a" * 32,
         {"username": "tester"},

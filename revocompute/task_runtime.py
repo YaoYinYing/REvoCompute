@@ -829,9 +829,11 @@ def _compute_allocation_callbacks(
                     attempt=attempt,
                     started_at=started_at,
                 )
+                task_store.update_task(task_id, status="running")
             except Exception:
+                # Bookkeeping must not withhold a grant for an allocation whose
+                # fact the accounting transition already wrote.
                 logging.exception("Could not record stage start for task %s", task_id)
-            task_store.update_task(task_id, status="running")
 
     def finished(slurm_job_id: str, finished_at: float) -> None:
         # Settlement is a post-allocation accounting step, not part of the
@@ -934,6 +936,12 @@ def _run_compute_job(
     implementation rather than two.
     """
     stored_task = task_store.get_task(task_id) or {}
+    # The same cancellation/settlement gate the workflow composer uses: a
+    # terminal Task rejects the progress write, so it can never acquire a live
+    # attempt or an allocation.
+    first_marker = next(iter(tt.stage_markers), tt.name)
+    if not task_store.update_task(task_id, run_stage=first_marker):
+        return JobState.CANCELLED
     submitted_by_user_id = int(stored_task.get("submitted_by_user_id") or 0)
     accounting = submitted_by_user_id > 0 and resource_policy is not None
     attempt_row = _begin_stage_attempt(task_id, 0, tt.name, resource_policy)

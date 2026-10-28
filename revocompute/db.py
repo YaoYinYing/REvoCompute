@@ -1416,7 +1416,7 @@ class TaskDatabase:
             )
             .values(
                 status=status,
-                reason_code=reason_code,
+                reason_code=stage_state.bounded_reason(reason_code),
                 ended_at=timestamp,
                 updated_at=timestamp,
             )
@@ -2792,14 +2792,16 @@ class TaskDatabase:
         stage_index: int,
         stage_name: str,
         planned_resources: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any] | None:
         """Open the next attempt of one stage, or reuse the live one.
 
-        ``BEGIN IMMEDIATE`` makes the read-and-insert one serialized decision:
-        of two duplicate dispatches exactly one creates attempt *n+1* and the
-        other observes the live attempt.  The unique ``(task_id, stage_index,
-        attempt)`` index and the partial live-attempt index back the same
-        property in the database rather than in this read.
+        A Task that no longer exists, or is already terminal, cannot acquire a
+        live attempt: the check runs inside the same ``BEGIN IMMEDIATE`` as the
+        insert, so a delete/resubmit race cannot leave an orphan record.  When
+        the Task is active, of two duplicate dispatches exactly one creates
+        attempt *n+1* and the other observes the live attempt; the unique
+        ``(task_id, stage_index, attempt)`` and partial live-attempt indexes back
+        that property in the database rather than in this read.
         """
         if not isinstance(stage_index, int) or isinstance(stage_index, bool) or stage_index < 0:
             raise ValueError("stage_index must be a non-negative integer")
@@ -2808,6 +2810,12 @@ class TaskDatabase:
         with self.engine.connect() as conn:
             conn.exec_driver_sql("BEGIN IMMEDIATE")
             try:
+                task_status = conn.execute(
+                    select(self.tasks_table.c.status).where(self.tasks_table.c.md5sum == task_id)
+                ).scalar()
+                if task_status is None or str(task_status).strip().lower() in self.TERMINAL_STATUSES:
+                    conn.commit()
+                    return None
                 live = (
                     conn.execute(
                         select(self.stage_runs_table).where(
@@ -2942,7 +2950,7 @@ class TaskDatabase:
         timestamp = time.time() if ended_at is None else ended_at
         values: dict[str, Any] = {
             "status": status,
-            "reason_code": reason_code,
+            "reason_code": stage_state.bounded_reason(reason_code),
             "ended_at": timestamp,
             "updated_at": time.time(),
         }
@@ -2978,7 +2986,7 @@ class TaskDatabase:
         timestamp = time.time()
         values: dict[str, Any] = {
             "status": status,
-            "reason_code": reason_code,
+            "reason_code": stage_state.bounded_reason(reason_code),
             "ended_at": timestamp,
             "updated_at": timestamp,
         }

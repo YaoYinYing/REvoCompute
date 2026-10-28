@@ -577,6 +577,42 @@ def test_render_apptainer_binds_and_env(tmp_path):
     assert "/opt/images/cpu_runner_v1.sif" in script
 
 
+def _gated_job(tmp_path, *, accounting: bool) -> SlurmJob:
+    return SlurmJob(
+        "task-1",
+        _make_task_type(),
+        _make_runner(),
+        _make_entities(),
+        str(tmp_path / "out"),
+        allocation_dispatched_callback=lambda *args, **kwargs: False,
+        allocation_started_callback=lambda *args, **kwargs: None,
+        allocation_accounting=accounting,
+    )
+
+
+def test_unaccounted_run_renders_no_wrapper_accounting_gates(tmp_path):
+    """Callback presence must not gate a run the host will never release."""
+    job = _gated_job(tmp_path, accounting=False)
+    script = job._render_wrapper()
+
+    assert f"start={_sh_quote(job._allocation_release_path)}" not in script
+    assert "squeue -h -j" not in script
+    assert f"grant={_sh_quote(job._allocation_grant_path)}" not in script
+    assert "allocation was not released to run" not in script
+    # The science still runs.
+    assert "apptainer" in script
+
+
+def test_accounted_run_still_renders_the_accounting_gates(tmp_path):
+    job = _gated_job(tmp_path, accounting=True)
+    script = job._render_wrapper()
+
+    assert f"start={_sh_quote(job._allocation_release_path)}" in script
+    assert "squeue -h -j" in script
+    assert f"grant={_sh_quote(job._allocation_grant_path)}" in script
+    assert "allocation was not released to run" in script
+
+
 def test_render_apptainer_omits_nvidia_flag_for_cpu_task(tmp_path):
     job = SlurmJob("task-1", _make_task_type(gpus=False), _make_runner(), _make_entities(), str(tmp_path / "out"))
     script = job._render_wrapper()

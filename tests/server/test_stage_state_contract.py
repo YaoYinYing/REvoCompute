@@ -86,6 +86,7 @@ def test_attempt_identity_is_exactly_once_and_transitions_are_monotonic(tmp_path
     database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
     try:
         task_id = "a" * 32
+        _insert_task(database, task_id)
         first = database.begin_stage_attempt(
             task_id=task_id, stage_index=0, stage_name="features", planned_resources={"cpus": 4}
         )
@@ -363,6 +364,7 @@ def test_worker_loss_interrupts_the_live_attempt_and_resume_uses_a_new_attempt(t
 def test_duplicate_dispatch_cannot_rewrite_the_attempt_handle(tmp_path):
     database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
     task_id = "3" * 32
+    _insert_task(database, task_id)
     database.begin_stage_attempt(task_id=task_id, stage_index=0, stage_name="cpu_runner")
     assert database.record_stage_dispatched(
         task_id=task_id, stage_index=0, attempt=1, slurm_job_id="4100"
@@ -376,6 +378,7 @@ def test_duplicate_dispatch_cannot_rewrite_the_attempt_handle(tmp_path):
 def test_finish_active_stage_runs_settles_every_live_attempt_and_no_terminal_one(tmp_path):
     database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
     task_id = "4" * 32
+    _insert_task(database, task_id)
     database.begin_stage_attempt(task_id=task_id, stage_index=0, stage_name="a")
     database.record_stage_running(task_id=task_id, stage_index=0, attempt=1)
     database.begin_stage_attempt(task_id=task_id, stage_index=1, stage_name="b")
@@ -398,6 +401,7 @@ def test_finish_active_stage_runs_settles_every_live_attempt_and_no_terminal_one
 def test_an_attempt_whose_start_was_missed_can_still_complete(tmp_path):
     database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
     task_id = "5" * 32
+    _insert_task(database, task_id)
     database.begin_stage_attempt(task_id=task_id, stage_index=0, stage_name="cpu_runner")
     assert database.finish_stage_attempt(
         task_id=task_id, stage_index=0, attempt=1, status=stage_state.COMPLETED,
@@ -578,6 +582,51 @@ def test_single_stage_worker_loss_interrupts_its_attempt(tmp_path, monkeypatch):
         stage_state.INTERRUPTED,
         stage_state.Reason.WORKER_LOST,
     )
+
+
+def test_a_terminal_task_cannot_acquire_a_live_attempt(tmp_path):
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "a1" * 16
+    _insert_task(database, task_id, status="cancelled")
+
+    assert database.begin_stage_attempt(
+        task_id=task_id, stage_index=0, stage_name="cpu_runner"
+    ) is None
+    assert database.list_stage_runs(task_id) == []
+    # A missing row is equally ineligible.
+    assert database.begin_stage_attempt(
+        task_id="b1" * 16, stage_index=0, stage_name="cpu_runner"
+    ) is None
+
+
+def test_delete_then_resubmit_starts_a_fresh_attempt(tmp_path, monkeypatch):
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "c1" * 16
+    _insert_task(database, task_id, status="queued")
+    database.begin_stage_attempt(task_id=task_id, stage_index=0, stage_name="cpu_runner")
+    database.delete_task(task_id)
+    assert database.list_stage_runs(task_id) == []
+
+    _insert_task(database, task_id, status="queued")
+    fresh = database.begin_stage_attempt(
+        task_id=task_id, stage_index=0, stage_name="cpu_runner"
+    )
+    assert fresh is not None and fresh["attempt"] == 1
+
+
+def test_a_cancelled_single_stage_task_cannot_acquire_an_attempt(tmp_path, monkeypatch):
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "d1" * 16
+    _insert_task(database, task_id, status="cancelled", task_type="cpu_runner")
+    monkeypatch.setattr(task_runtime, "task_store", database)
+    monkeypatch.setattr(
+        task_runtime, "_create_job", lambda *args, **kwargs: pytest.fail("must not submit")
+    )
+
+    assert task_runtime._run_compute_job(
+        task_id, _single_stage_type(), RunnerConfig(), [], str(tmp_path / "out")
+    ) == task_runtime.JobState.CANCELLED
+    assert database.list_stage_runs(task_id) == []
 
 
 def test_legacy_projection_is_labelled_and_historical_rows_survive_migration(tmp_path, monkeypatch):
