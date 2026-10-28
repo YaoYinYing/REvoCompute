@@ -20,7 +20,7 @@ inputs:
     type: protein_structure
     cardinality: {min: 1, max: 1}
     formats: [pdb, ent]
-    description: The deposited structure that defines atom serial numbers and the start-point selection.
+    description: The deposited structure that defines atom serial numbers and the start-point selection. It must contain a single model; multi-model files are rejected rather than silently reduced.
   snapshots:
     title: Additional snapshots
     type: protein_structure
@@ -137,11 +137,22 @@ parameters:
   type: object
   additionalProperties: false
   required: [start_point_mode]
+  allOf:
+  - if: {properties: {start_point_mode: {const: point}}, required: [start_point_mode]}
+    then: {required: [start_x, start_y, start_z]}
+  - if: {properties: {start_point_mode: {const: atom}}, required: [start_point_mode]}
+    then: {required: [start_residue_number, start_atom_name]}
+  - if: {properties: {start_point_mode: {const: residue}}, required: [start_point_mode]}
+    then: {required: [start_residue_number]}
+  - if: {properties: {start_point_mode: {const: ligand}}, required: [start_point_mode]}
+    then: {required: [start_residue_name]}
+  - if: {properties: {start_point_mode: {const: group}}, required: [start_point_mode]}
+    then: {required: [start_group]}
   properties:
     start_point_mode:
       type: string
       enum: [point, atom, residue, group, ligand]
-      description: How to derive the point inside the structure from which tunnels are explored.
+      description: How to derive the point inside the structure from which tunnels are explored. A manual point must lie inside the structure's coordinate bounding box expanded by 10 Angstrom so a mistyped coordinate cannot silently start the search outside the protein.
     start_x:
       type: number
       description: Manual start-point x coordinate in Angstrom (point mode).
@@ -157,14 +168,10 @@ parameters:
     start_chain:
       type: string
       pattern: '^[A-Za-z0-9]?$'
-      description: PDB chain identifier for atom, residue or ligand mode; leave empty for the blank chain.
+      description: PDB chain identifier for atom, residue or ligand mode. Leave empty to use CAVER's default, the first chain in file order that contains the residue; the resolved chain is recorded in provenance. Leave it empty as well for structures without chain identifiers.
     start_residue_number:
       type: integer
       description: PDB residue sequence number for atom, residue or ligand mode.
-    start_insertion_code:
-      type: string
-      pattern: '^[A-Za-z0-9]?$'
-      description: PDB insertion code for atom, residue or ligand mode; leave empty when the residue has none.
     start_atom_name:
       type: string
       pattern: "^[A-Za-z0-9'*+.-]{1,4}$"
@@ -172,7 +179,7 @@ parameters:
     start_altloc:
       type: string
       pattern: '^[A-Za-z0-9]?$'
-      description: Alternate-location identifier for atom mode; leave empty to accept the highest-occupancy match.
+      description: Alternate-location identifier for atom mode. Leave empty to accept the highest-occupancy alternate location, with a blank alternate location preferred on ties; the chosen one is recorded in provenance.
     start_residue_name:
       type: string
       pattern: '^[A-Za-z0-9]{1,4}$'
@@ -180,7 +187,7 @@ parameters:
     start_group:
       type: string
       pattern: '^[A-Za-z0-9_]+:[0-9]+(-[0-9]+)?(,[A-Za-z0-9_]+:[0-9]+(-[0-9]+)?)*$'
-      description: Comma-separated CHAIN:RESIDUE or CHAIN:START-END terms whose centroid is the start point for group mode; use _ for the blank chain.
+      description: Comma-separated CHAIN:RESIDUE or CHAIN:START-END terms whose centroid is the start point for group mode; use _ for the blank chain. Ranges are expanded to individual residues because CAVER's start-point list has no range syntax.
     probe_radius:
       type: number
       description: Minimum tunnel radius in Angstrom; edges the probe cannot traverse are discarded (upstream probe_radius).
@@ -196,11 +203,6 @@ parameters:
       description: Maximum depth in Angstrom of the surface region where tunnel branching is suppressed (upstream shell_depth).
       default: 4
       exclusiveMinimum: 0
-    clustering:
-      type: string
-      enum: [average_link, matrix]
-      default: average_link
-      description: Upstream clustering step; average_link produces tunnel clusters, while matrix stops after the pairwise distance matrix and yields no tunnel analysis.
     weighting_coefficient:
       type: number
       description: Relative importance of tunnel segments in the pairwise distance; 1 weights all segments equally (upstream weighting_coefficient).
@@ -272,7 +274,7 @@ parameters:
       minimum: 0
     max_distance:
       type: number
-      description: Maximum distance in Angstrom between the typed start point and the selected Voronoi vertex (upstream max_distance).
+      description: Maximum distance in Angstrom between the typed start point and the selected Voronoi vertex (upstream max_distance). When no vertex lies within it, CAVER falls back to its own 3 Angstrom default and records the change in its log.
       default: 3
       minimum: 0
     desired_radius:
@@ -297,14 +299,14 @@ parameters:
       minimum: 1
     seed:
       type: integer
-      description: Seed for the pseudo-random generator used by tunnel selection (upstream seed).
+      description: Seed for the pseudo-random generator used by tunnel selection (upstream seed). It is fixed at 1 by default so a repeated run reproduces the same tunnels; upstream otherwise reseeds from the current time.
       default: 1
       minimum: -2147483648
       maximum: 2147483647
     exclude_residue_ids:
       type: string
       default: ''
-      description: Space- or comma-separated residue identifiers to exclude from the whole calculation, such as A:24B or 5-15 (upstream exclude_residue_ids).
+      description: Space- or comma-separated residue identifiers to exclude from the whole calculation, such as A:24 or 146, validated against the structure so a typo cannot silently change the calculation (upstream exclude_residue_ids). Insertion-coded residues cannot be named because CAVER does not match them.
     exclude_residue_names:
       type: string
       default: ''
@@ -312,7 +314,7 @@ parameters:
     exclude_atom_numbers:
       type: string
       default: ''
-      description: Space- or comma-separated atom serial numbers or ranges to exclude from the whole calculation (upstream exclude_atom_numbers).
+      description: Space- or comma-separated atom serial numbers or NUMBER-NUMBER ranges to exclude from the whole calculation, validated against the structure (upstream exclude_atom_numbers).
     residue_contact_distance:
       type: number
       description: Distance in Angstrom from a tunnel ball within which an atom counts as tunnel-lining (upstream residue_contact_distance).

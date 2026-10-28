@@ -15,7 +15,6 @@ BASE_PARAMS = {
     "probe_radius": 0.9,
     "shell_radius": 3,
     "shell_depth": 4,
-    "clustering": "average_link",
     "weighting_coefficient": 1,
     "clustering_threshold": 2.0,
     "exclude_start_zone": 2,

@@ -21,6 +21,7 @@ import csv
 import hashlib
 import json
 import math
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -269,23 +270,33 @@ def parse_bottlenecks(path: Path) -> list[dict[str, object]]:
     header_index = next((index for index, line in enumerate(lines) if line.startswith("Snapshot,")), None)
     if header_index is None:
         raise OutputError("bottlenecks.csv has no header row")
-    reader = csv.DictReader(lines[header_index:])
+    header = next(csv.reader([lines[header_index]]))
+    header = [cell.strip() for cell in header]
+    if "Bottleneck residues" not in header:
+        raise OutputError("bottlenecks.csv has no Bottleneck residues column")
+    residues_index = header.index("Bottleneck residues")
+    index = {name: header.index(name) for name in header if name != "Bottleneck residues"}
     rows = []
-    for row in reader:
-        if not row or not row.get("Snapshot"):
+    for cells in csv.reader(lines[header_index + 1 :]):
+        cells = [cell.strip() for cell in cells]
+        if not cells or not any(cells):
             continue
+        if len(cells) < len(header):
+            raise OutputError("bottlenecks.csv contains a truncated row")
         rows.append(
             {
-                "snapshot": row["Snapshot"].strip(),
-                "tunnel_cluster": int(row["Tunnel cluster"]),
-                "tunnel": int(row["Tunnel"]),
-                "throughput": f"{number(row['Throughput'], 'Throughput'):.10g}",
-                "cost": f"{number(row['Cost'], 'Cost'):.10g}",
-                "bottleneck_x_angstrom": f"{number(row['Bottleneck X'], 'Bottleneck X'):.6g}",
-                "bottleneck_y_angstrom": f"{number(row['Bottleneck Y'], 'Bottleneck Y'):.6g}",
-                "bottleneck_z_angstrom": f"{number(row['Bottleneck Z'], 'Bottleneck Z'):.6g}",
-                "bottleneck_radius_angstrom": f"{number(row['Bottleneck R'], 'Bottleneck R'):.6g}",
-                "bottleneck_residues": (row.get("Bottleneck residues") or "").strip(),
+                "snapshot": cells[index["Snapshot"]],
+                "tunnel_cluster": int(cells[index["Tunnel cluster"]]),
+                "tunnel": int(cells[index["Tunnel"]]),
+                "throughput": f"{number(cells[index['Throughput']], 'Throughput'):.10g}",
+                "cost": f"{number(cells[index['Cost']], 'Cost'):.10g}",
+                "bottleneck_x_angstrom": f"{number(cells[index['Bottleneck X']], 'Bottleneck X'):.6g}",
+                "bottleneck_y_angstrom": f"{number(cells[index['Bottleneck Y']], 'Bottleneck Y'):.6g}",
+                "bottleneck_z_angstrom": f"{number(cells[index['Bottleneck Z']], 'Bottleneck Z'):.6g}",
+                "bottleneck_radius_angstrom": f"{number(cells[index['Bottleneck R']], 'Bottleneck R'):.6g}",
+                # Every residue column after the last numeric one belongs to
+                # the list; a DictReader would drop all but the first.
+                "bottleneck_residues": ",".join(cell for cell in cells[residues_index:] if cell),
             }
         )
     if not rows:
@@ -300,6 +311,16 @@ def _split_residue(token: str) -> tuple[int, str]:
         return int(body), icode
     except ValueError as exc:
         raise OutputError(f"residue index is not numeric: {token!r}") from exc
+
+
+#: Fixed columns of a residues.txt data row, verified against real CAVER output:
+#: the chain is one character at offset 2 (blank for a structure without chain
+#: identifiers), the residue index occupies 3..10 and the amino acid 11..14.
+#: Whitespace splitting cannot work here because a blank chain collapses into
+#: the residue column.
+_RESIDUE_CHAIN = slice(2, 3)
+_RESIDUE_INDEX = slice(3, 10)
+_RESIDUE_NAME = slice(11, 14)
 
 
 def parse_residues(path: Path) -> list[dict[str, object]]:
@@ -320,25 +341,35 @@ def parse_residues(path: Path) -> list[dict[str, object]]:
             continue
         if cluster is None:
             raise OutputError("residues.txt has residue rows before a cluster heading")
-        fields = stripped.split()
-        if len(fields) < 6:
+        chain = line[_RESIDUE_CHAIN].strip()
+        number, icode = _split_residue(line[_RESIDUE_INDEX].strip())
+        name = line[_RESIDUE_NAME].strip()
+        fields = line[14:].split()
+        if len(fields) < 2 or not name:
             raise OutputError("residues.txt contains a malformed residue row")
-        number, icode = _split_residue(fields[1])
         residues.append(
             {
                 "tunnel_cluster": cluster,
-                "chain": fields[0],
+                "chain": chain,
                 "residue_number": number,
                 "insertion_code": icode,
-                "residue_name": fields[2],
-                "snapshot_count": int(fields[3]),
-                "sidechain_snapshot_count": int(fields[4]),
-                "lining_atoms": ";".join(fields[5:]),
+                "residue_name": name,
+                "snapshot_count": int(fields[0]),
+                "sidechain_snapshot_count": int(fields[1]),
+                "lining_atoms": ";".join(fields[2:]),
             }
         )
     if not residues:
         raise OutputError("residues.txt reports no tunnel-lining residues")
     return residues
+
+
+def _snapshot_order(label: str) -> tuple[int, int, str]:
+    """Order frame labels numerically, so 10 follows 9 rather than 1."""
+    match = re.fullmatch(r"\D*(\d+)(.*)", label)
+    if match is None:
+        return (1, 0, label)
+    return (0, int(match.group(1)), match.group(2))
 
 
 def _write_csv(path: Path, fields: tuple[str, ...], rows: list[dict[str, object]]) -> None:
@@ -386,12 +417,17 @@ def normalize(raw_out: Path, output_dir: Path, provenance: dict[str, object]) ->
         "tunnel_count": len(tunnels),
         "profile_point_count": len(profiles),
         "bottleneck_row_count": len(bottlenecks),
-        "lining_residue_count": len(residues),
+        # One residue can line several tunnel clusters, so the residue count is
+        # the number of distinct residues, not the number of table rows.
+        "lining_residue_count": len(
+            {(str(residue["chain"]), int(residue["residue_number"]), str(residue["insertion_code"])) for residue in residues}
+        ),
+        "lining_residue_row_count": len(residues),
         # Bind the provenance record to the exact published tables: the cluster
         # identifiers CAVER assigned, the snapshot labels it reported, and the
         # bytes of the tunnel table. Counts alone cannot identify a result set.
         "cluster_ids": sorted(int(cluster["cluster"]) for cluster in clusters),
-        "snapshot_labels": sorted({str(tunnel["snapshot"]) for tunnel in tunnels}),
+        "snapshot_labels": sorted({str(tunnel["snapshot"]) for tunnel in tunnels}, key=_snapshot_order),
         "cluster_table_sha256": hashlib.sha256((output_dir / "clusters.csv").read_bytes()).hexdigest(),
         "tunnel_table_sha256": hashlib.sha256((output_dir / "tunnels.csv").read_bytes()).hexdigest(),
         "units": {

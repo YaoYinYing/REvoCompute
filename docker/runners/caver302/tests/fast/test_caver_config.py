@@ -35,6 +35,7 @@ def test_renders_only_allowlisted_keys_with_the_selected_start_point() -> None:
     assert "starting_point_coordinates 4.000 4.000 4.000" in lines
     assert "probe_radius 0.9" in lines
     assert "shell_radius 3" in lines
+    assert "clustering average_link" in lines
     assert "clustering_threshold 2" in lines
     assert "compute_tunnel_residues yes" in lines
     assert "compute_bottleneck_residues yes" in lines
@@ -48,7 +49,7 @@ def test_renders_residue_directive_and_exclusion_lists() -> None:
     params = dict(BASE_PARAMS)
     params.update(
         {
-            "exclude_residue_ids": "A:24B, 5-15",
+            "exclude_residue_ids": "A:24, 146",
             "exclude_residue_names": "HOH SO4",
             "exclude_atom_numbers": "6,3115-3140",
         }
@@ -56,7 +57,7 @@ def test_renders_residue_directive_and_exclusion_lists() -> None:
     residue = StartPoint(1.0, 2.0, 3.0, {}, (("starting_point_residue", "A:146"),))
     lines = render_config(params, residue).splitlines()
     assert "starting_point_residue A:146" in lines
-    assert "exclude_residue_ids A:24B 5-15" in lines
+    assert "exclude_residue_ids A:24 146" in lines
     assert "exclude_residue_names HOH SO4" in lines
     assert "exclude_atom_numbers 6 3115-3140" in lines
 
@@ -68,7 +69,8 @@ def test_renders_residue_directive_and_exclusion_lists() -> None:
         ({"probe_radius": float("nan")}, "finite number"),
         ({"probe_radius": 0}, "greater than zero"),
         ({"clustering_threshold": -1}, "not be negative"),
-        ({"clustering": "single_link"}, "must be one of"),
+        ({"clustering": "matrix"}, "unsupported CAVER parameters"),
+        ({"last_frame": 1, "first_frame": 5}, "last_frame must not be smaller"),
         ({"one_tunnel_in_snapshot": "every"}, "must be one of"),
         ({"first_frame": 0}, "at least 1"),
         ({"first_frame": 1.5}, "must be an integer"),
@@ -79,6 +81,8 @@ def test_renders_residue_directive_and_exclusion_lists() -> None:
         ({"exclude_residue_names": "TOOLONGNAME"}, "invalid token"),
         ({"exclude_atom_numbers": "1-2-3"}, "invalid token"),
         ({"exclude_residue_ids": "line\nbreak"}, "invalid token"),
+        ({"exclude_residue_ids": "A:24B"}, "invalid token"),
+        ({"exclude_residue_ids": "5-15"}, "invalid token"),
     ],
 )
 def test_rejects_unsafe_or_invalid_values(override: dict[str, object], message: str) -> None:

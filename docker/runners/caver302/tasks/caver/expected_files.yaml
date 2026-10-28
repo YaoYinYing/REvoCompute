@@ -66,3 +66,15 @@ result:
       required: false
       type: text
       role: diagnostic
+    run_stdout:
+      path: caver.stdout.log
+      cardinality: one
+      required: false
+      type: text
+      role: diagnostic
+    run_stderr:
+      path: caver.stderr.log
+      cardinality: one
+      required: false
+      type: text
+      role: diagnostic

@@ -99,7 +99,8 @@ def test_normalizes_authentic_output_into_declared_tables(tmp_path: Path) -> Non
     assert len(bottlenecks) == 9
     assert bottlenecks[0]["bottleneck_x_angstrom"] == "12.1187"
     assert bottlenecks[0]["bottleneck_radius_angstrom"] == "1.01758"
-    assert bottlenecks[0]["bottleneck_residues"].startswith("X:146")
+    # Every contacting residue is published, not just the first.
+    assert bottlenecks[0]["bottleneck_residues"] == "X:146,X:142,X:173,X:242,X:169,X:138,X:141,X:145"
 
     residues = read_csv(output / "residues.csv")
     assert len(residues) == 39
@@ -188,6 +189,51 @@ def test_uncomputed_required_axis_is_an_error(tmp_path: Path) -> None:
     _blank_axis(raw, "R")
     with pytest.raises(OutputError, match="not a number"):
         normalize(raw, output, {})
+
+
+def test_bottleneck_row_keeps_every_contacting_residue(tmp_path: Path) -> None:
+    raw, output = prepare(tmp_path)
+    text = (FIXTURES / "bottlenecks_multi.csv").read_text(encoding="utf-8").replace("frame_1.pdb", "1.pdb")
+    (raw / "analysis/bottlenecks.csv").write_text(text, encoding="utf-8")
+    normalize(raw, output, {})
+    rows = read_csv(output / "bottlenecks.csv")
+    assert rows[0]["bottleneck_residues"] == "A:500,A:367,A:600,A:363"
+
+
+def test_blank_chain_residues_are_parsed_by_column(tmp_path: Path) -> None:
+    raw, output = prepare(tmp_path)
+    (raw / "analysis/residues.txt").write_bytes((FIXTURES / "residues_blank_chain.txt").read_bytes())
+    normalize(raw, output, {})
+    rows = read_csv(output / "residues.csv")
+    assert rows[0]["chain"] == ""
+    assert rows[0]["residue_number"] == "98"
+    assert rows[0]["residue_name"] == "ARG"
+    assert rows[0]["lining_atoms"].startswith("1:CD_541")
+
+
+def test_insertion_coded_residues_are_parsed_by_column(tmp_path: Path) -> None:
+    raw, output = prepare(tmp_path)
+    (raw / "analysis/residues.txt").write_bytes((FIXTURES / "residues_insertion_code.txt").read_bytes())
+    normalize(raw, output, {})
+    rows = read_csv(output / "residues.csv")
+    assert [(row["residue_number"], row["insertion_code"]) for row in rows] == [("100", "A"), ("100", "")]
+
+
+def test_lining_residue_count_counts_distinct_residues(tmp_path: Path) -> None:
+    raw, output = prepare(tmp_path)
+    summary = normalize(raw, output, {})
+    rows = read_csv(output / "residues.csv")
+    distinct = {(row["chain"], row["residue_number"], row["insertion_code"]) for row in rows}
+    assert summary["lining_residue_row_count"] == len(rows)
+    assert summary["lining_residue_count"] == len(distinct)
+    assert summary["lining_residue_count"] <= summary["lining_residue_row_count"]
+
+
+def test_snapshot_labels_are_ordered_numerically(tmp_path: Path) -> None:
+    from normalize_results import _snapshot_order
+
+    labels = ["1.pdb", "2.pdb", "10.pdb"]
+    assert sorted(reversed(labels), key=_snapshot_order) == labels
 
 
 def test_tunnel_absent_from_characteristics_is_an_error(tmp_path: Path) -> None:

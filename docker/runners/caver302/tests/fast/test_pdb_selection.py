@@ -27,6 +27,7 @@ from pdb_selection import (  # noqa: E402
     assert_snapshot_matches,
     parse_pdb,
     resolve_start_point,
+    validate_exclusions,
 )
 
 
@@ -56,7 +57,7 @@ def test_manual_point_accepts_inside_and_rejects_outside_or_non_finite() -> None
         )
 
 
-def test_selected_atom_uses_altloc_and_rejects_ambiguity() -> None:
+def test_selected_atom_honours_altloc_and_defaults_to_highest_occupancy() -> None:
     atoms = _atoms()
     selected = resolve_start_point(
         atoms,
@@ -71,11 +72,15 @@ def test_selected_atom_uses_altloc_and_rejects_ambiguity() -> None:
     assert selected.provenance["point_angstrom"] == [3.0, 2.0, 1.0]
     assert selected.directives == (("starting_point_atom", "4"),)
 
-    with pytest.raises(SelectionError, match="several alternate locations"):
-        resolve_start_point(
-            atoms,
-            {"start_point_mode": "atom", "start_chain": "A", "start_residue_number": 1, "start_atom_name": "CB"},
-        )
+    # Empty altloc is documented as "highest occupancy", and that is what happens.
+    default = resolve_start_point(
+        atoms,
+        {"start_point_mode": "atom", "start_chain": "A", "start_residue_number": 1, "start_atom_name": "CB"},
+    )
+    assert default.provenance["altloc"] == "A"
+    assert default.provenance["atom_serial"] == 3
+    assert default.directives == (("starting_point_atom", "3"),)
+
     with pytest.raises(SelectionError, match="is absent from residue"):
         resolve_start_point(
             atoms,
@@ -83,33 +88,36 @@ def test_selected_atom_uses_altloc_and_rejects_ambiguity() -> None:
         )
 
 
-def test_residue_centroid_uses_highest_occupancy_conformer_and_insertion_code() -> None:
+def test_residue_centroid_averages_every_coordinate_record() -> None:
     atoms = _atoms()
     residue = resolve_start_point(
         atoms, {"start_point_mode": "residue", "start_chain": "A", "start_residue_number": 1}
     )
-    assert residue.provenance["point_angstrom"] == [2.0, 1.0, 1.0]
-    assert residue.provenance["atom_count"] == 3
+    # All four records, both CB alternate locations included, as CAVER averages them.
+    assert residue.provenance["point_angstrom"] == [2.25, 1.25, 1.0]
+    assert residue.provenance["atom_count"] == 4
     assert residue.directives == (("starting_point_residue", "A:1"),)
 
-    insertion = resolve_start_point(
-        atoms,
-        {"start_point_mode": "residue", "start_chain": "A", "start_residue_number": 10, "start_insertion_code": "A"},
-    )
-    assert insertion.provenance["point_angstrom"] == [1.5, 3.0, 2.0]
-    assert insertion.directives == (("starting_point_residue", "A:10A"),)
+    # An insertion-coded residue cannot be named by CAVER, so it is refused.
+    with pytest.raises(SelectionError, match="insertion code"):
+        resolve_start_point(
+            atoms, {"start_point_mode": "residue", "start_chain": "A", "start_residue_number": 10}
+        )
 
 
-def test_residue_group_centroid_and_missing_residue() -> None:
+def test_residue_group_expands_ranges_into_individual_identifiers() -> None:
     atoms = _atoms()
     group = resolve_start_point(atoms, {"start_point_mode": "group", "start_group": "A:1-2"})
-    assert group.provenance["point_angstrom"] == [1.8, 1.4, 1.2]
+    # Mean of the two residue centres: A:1 = (2.25, 1.25, 1.0), A:2 = (1.5, 2.0, 1.5).
+    assert group.provenance["point_angstrom"] == [1.875, 1.625, 1.25]
     assert group.provenance["residue_count"] == 2
-    assert group.directives == (("starting_point_residue", "A:1-2"),)
+    assert group.provenance["atom_count"] == 6
+    # CAVER's start-point list has no range syntax, so the range is expanded.
+    assert group.directives == (("starting_point_residue", "A:1 A:2"),)
 
     with pytest.raises(SelectionError, match="absent from the structure"):
         resolve_start_point(atoms, {"start_point_mode": "group", "start_group": "A:1,B:9"})
-    with pytest.raises(SelectionError, match="an insertion code is required"):
+    with pytest.raises(SelectionError, match="insertion code"):
         resolve_start_point(atoms, {"start_point_mode": "group", "start_group": "A:10"})
     with pytest.raises(SelectionError, match="descending residue range"):
         resolve_start_point(atoms, {"start_point_mode": "group", "start_group": "A:5-1"})
@@ -133,6 +141,47 @@ def test_ligand_centroid_requires_one_matching_hetero_residue() -> None:
         resolve_start_point(atoms, {"start_point_mode": "ligand", "start_residue_name": "CPZ"})
     with pytest.raises(SelectionError, match="no HETATM residue"):
         resolve_start_point(atoms, {"start_point_mode": "ligand", "start_residue_name": "ZZZ"})
+
+
+def test_empty_chain_resolves_to_the_first_chain_and_is_recorded() -> None:
+    atoms = _atoms()
+    resolved = resolve_start_point(atoms, {"start_point_mode": "residue", "start_residue_number": 1})
+    assert resolved.provenance["chain"] == "A"
+    assert resolved.provenance["chain_candidates"] == ["A", "B"]
+    assert resolved.directives == (("starting_point_residue", "A:1"),)
+
+
+def test_blank_chain_structure_uses_bare_identifiers() -> None:
+    atoms = parse_pdb(FIXTURES / "blank_chain.pdb")
+    resolved = resolve_start_point(atoms, {"start_point_mode": "residue", "start_residue_number": 2})
+    assert resolved.provenance["chain"] == ""
+    assert resolved.provenance["point_angstrom"] == [3.5, 2.0, 1.0]
+    assert resolved.directives == (("starting_point_residue", "2"),)
+
+
+def test_multi_model_pdb_is_rejected(tmp_path: Path) -> None:
+    text = (FIXTURES / "blank_chain.pdb").read_text(encoding="utf-8")
+    body = text.replace("TER\nEND", "")
+    multi = tmp_path / "multi.pdb"
+    multi.write_text(f"MODEL        1\n{body}ENDMDL\nMODEL        2\n{body}ENDMDL\nEND\n", encoding="utf-8")
+    with pytest.raises(SelectionError, match="several models"):
+        parse_pdb(multi)
+
+
+def test_exclusions_are_validated_against_the_structure() -> None:
+    atoms = _atoms()
+    validate_exclusions(
+        {"exclude_residue_ids": "A:1 B:1", "exclude_residue_names": "CPZ", "exclude_atom_numbers": "1-3 14"},
+        atoms,
+    )
+    with pytest.raises(SelectionError, match="absent from the structure"):
+        validate_exclusions({"exclude_residue_ids": "A:99"}, atoms)
+    with pytest.raises(SelectionError, match="absent from the structure"):
+        validate_exclusions({"exclude_residue_names": "ZZZ"}, atoms)
+    with pytest.raises(SelectionError, match="matches no atom serial"):
+        validate_exclusions({"exclude_atom_numbers": "900-999"}, atoms)
+    with pytest.raises(SelectionError, match="insertion code"):
+        validate_exclusions({"exclude_residue_ids": "A:10A"}, atoms)
 
 
 def test_unknown_start_mode_is_rejected() -> None:

@@ -31,6 +31,7 @@ from pdb_selection import (
     assert_snapshot_matches,
     parse_pdb,
     resolve_start_point,
+    validate_exclusions,
 )
 
 MAX_SNAPSHOTS = 50
@@ -83,7 +84,9 @@ def stage_frames(reference: Path, snapshots: list[Path], pdb_dir: Path) -> list[
         atoms = reference_atoms if index == 1 else parse_pdb(source)
         if index > 1:
             assert_snapshot_matches(reference_atoms, atoms, source.name)
-        target = pdb_dir / f"frame_{index:04d}.pdb"
+        # CAVER labels results with the file stem, so frame_1.pdb yields the
+        # same "frame_1.pdb" snapshot label that provenance records.
+        target = pdb_dir / f"frame_{index}.pdb"
         shutil.copyfile(source, target)
         frames.append(
             {
@@ -146,6 +149,7 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     reference_atoms = parse_pdb(structures[0])
+    validate_exclusions(params, reference_atoms)
     start_point = resolve_start_point(reference_atoms, params)
     frames = stage_frames(structures[0], snapshots, pdb_dir)
     if params.get("start_point_mode") == "atom":
@@ -153,7 +157,6 @@ def main() -> None:
         selected_identity = (
             start_point.provenance["chain"],
             start_point.provenance["residue_number"],
-            start_point.provenance["insertion_code"],
             start_point.provenance["atom_name"],
             start_point.provenance["altloc"],
         )
@@ -162,7 +165,6 @@ def main() -> None:
             if len(matches) != 1 or (
                 matches[0].chain,
                 matches[0].resseq,
-                matches[0].icode,
                 matches[0].name,
                 matches[0].altloc,
             ) != selected_identity:

@@ -46,7 +46,6 @@ INTEGER_PARAMETERS = {
     "max_number_of_tunnels": 1,
 }
 ENUM_PARAMETERS = {
-    "clustering": ("average_link", "matrix"),
     "one_tunnel_in_snapshot": ("cheapest", "random", "no"),
 }
 BOOLEAN_PARAMETERS = {"automatic_shell_radius"}
@@ -61,7 +60,6 @@ START_POINT_PARAMETERS = {
     "start_z",
     "start_chain",
     "start_residue_number",
-    "start_insertion_code",
     "start_atom_name",
     "start_altloc",
     "start_residue_name",
@@ -79,7 +77,9 @@ ALLOWED_PARAMETERS = (
     | {"number_of_approximating_balls", "seed"}
 )
 
-_RESIDUE_ID = re.compile(r"^(?:[A-Za-z0-9]:)?[0-9]+[A-Za-z0-9]?(?:-[0-9]+[A-Za-z0-9]?)?$")
+#: CAVER's residue identifiers are a plain list (CHAIN:NUMBER or NUMBER); the
+#: upstream parser never matches an insertion code, so one is a contract error.
+_RESIDUE_ID = re.compile(r"^(?:[A-Za-z0-9]:)?[0-9]+$")
 _RESIDUE_NAME = re.compile(r"^[A-Za-z0-9]{1,4}$")
 _ATOM_NUMBER = re.compile(r"^[0-9]+(?:-[0-9]+)?$")
 _JAVA_HEAP = re.compile(r"^[1-9][0-9]{0,4}[mMgG]$")
@@ -148,6 +148,11 @@ def render_config(params: dict[str, object], start_point: StartPoint) -> str:
     if not start_point.directives:
         raise ConfigError("the resolved start point produced no CAVER directive")
 
+    first_frame = _integer(params, "first_frame", 1)
+    last_frame = _integer(params, "last_frame", 1)
+    if last_frame < first_frame:
+        raise ConfigError("last_frame must not be smaller than first_frame")
+
     def number_line(name: str) -> str:
         return f"{name} {_number(params, name):g}"
 
@@ -157,12 +162,15 @@ def render_config(params: dict[str, object], start_point: StartPoint) -> str:
         "load_cluster_tree no",
         "stop_after never",
         f"time_sparsity {_integer(params, 'time_sparsity', 1)}",
-        f"first_frame {_integer(params, 'first_frame', 1)}",
-        f"last_frame {_integer(params, 'last_frame', 1)}",
+        f"first_frame {first_frame}",
+        f"last_frame {last_frame}",
     ]
     lines.extend(f"{directive} {value}" for directive, value in start_point.directives)
     lines.extend(number_line(name) for name in ("probe_radius", "shell_radius", "shell_depth"))
-    lines.append(f"clustering {_enum(params, 'clustering')}")
+    # Only average-link clustering produces tunnel clusters; upstream's matrix
+    # mode stops at the distance matrix and publishes no tables, so it is not
+    # offered as a value that would always fail.
+    lines.append("clustering average_link")
     lines.extend(number_line(name) for name in ("weighting_coefficient", "clustering_threshold"))
     lines.extend(number_line(name) for name in ("exclude_start_zone", "exclude_end_zone", "min_middle_zone"))
     lines += [

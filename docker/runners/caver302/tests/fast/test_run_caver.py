@@ -146,8 +146,8 @@ def test_orchestrates_selection_config_execution_and_normalization(tmp_path: Pat
     config = (output / "caver_config.txt").read_text(encoding="utf-8")
     assert "starting_point_residue A:500" in config
     assert "probe_radius 0.9" in config
-    assert (output / "work/pdbs/frame_0001.pdb").is_file()
-    assert (output / "work/pdbs/frame_0002.pdb").is_file()
+    assert (output / "work/pdbs/frame_1.pdb").is_file()
+    assert (output / "work/pdbs/frame_2.pdb").is_file()
 
     provenance = json.loads((output / "provenance.json").read_text(encoding="utf-8"))
     assert provenance["start_point"]["mode"] == "ligand"
@@ -155,7 +155,7 @@ def test_orchestrates_selection_config_execution_and_normalization(tmp_path: Pat
     assert provenance["start_point"]["residue_number"] == 500
     # Centroid of the 43 HEM atoms in 1SUO, computed independently from the structure.
     assert provenance["start_point"]["point_angstrom"] == pytest.approx([-22.31088, 90.26135, 8.80723], abs=1e-4)
-    assert [frame["frame"] for frame in provenance["frames"]] == ["frame_0001.pdb", "frame_0002.pdb"]
+    assert [frame["frame"] for frame in provenance["frames"]] == ["frame_1.pdb", "frame_2.pdb"]
     assert [frame["source_name"] for frame in provenance["frames"]] == ["1SUO.pdb", "second_frame.pdb"]
     assert provenance["distribution"]["jar_sha256"] == hashlib.sha256(b"caver-jar").hexdigest()
     assert provenance["runtime_network"] is False
@@ -163,6 +163,17 @@ def test_orchestrates_selection_config_execution_and_normalization(tmp_path: Pat
 
     for artifact in ("tunnels.csv", "clusters.csv", "bottlenecks.csv", "profiles.csv", "residues.csv", "summary.json"):
         assert (output / artifact).stat().st_size > 0
+
+
+def test_unknown_exclusion_is_a_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CAVER_STUB_OUTPUT", str(raw_output_tree(tmp_path)))
+    manifest = task_manifest(tmp_path)
+    document = json.loads(manifest.read_text(encoding="utf-8"))
+    document["params"]["exclude_residue_ids"] = "A:9999"
+    manifest.write_text(json.dumps(document), encoding="utf-8")
+    completed = invoke(tmp_path, manifest, stub_java(tmp_path), fake_distribution(tmp_path), tmp_path / "published")
+    assert completed.returncode != 0
+    assert "absent from the structure" in completed.stderr
 
 
 def test_nonzero_tool_exit_is_a_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

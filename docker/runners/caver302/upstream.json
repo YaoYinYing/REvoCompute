@@ -47,9 +47,10 @@
       "library": "lib/AverageLinkClustering.jar",
       "license": "not separately stated",
       "evidence": "no license file inside the jar; its Ant-created manifest matches caver.jar, so it appears to be built from the CAVER project",
-      "redistribution_review": "Treated as part of CAVER under GPL-3.0, but no explicit third-party notice identifies it."
+      "redistribution_review": "UNRESOLVED: treated as part of CAVER under GPL-3.0, but no explicit third-party notice identifies it, so the SIF carries a component whose notice cannot be reproduced from the distribution. Maintainer/legal decision; this Runner makes no GPL-compliance claim."
     }
   ],
   "build": "The SIF downloads distribution_url, verifies distribution_sha256, refuses unsafe archive members, extracts it read-only to /opt/caver302, and verifies the jar/library digests above in %test.",
-  "runtime_network": false
+  "runtime_network": false,
+  "redownload_verification": "2026-10-29: a fresh download of distribution_url returned the same 33,303,568 bytes and SHA-256 2d819541c7e3d3b223de18ba9a5bf2fbfaf92cced380d29e86cd749f7070ee1e. An earlier same-size/different-hash observation came from an interrupted resumable download that zero-padded the partial file, not from the server, so the strict build-time digest check is correct."
 }

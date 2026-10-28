@@ -33,6 +33,8 @@ POINT_BOUND_MARGIN_ANGSTROM = 10.0
 MAX_GROUP_RESIDUES = 1000
 
 _GROUP_TERM = re.compile(r"^(?P<chain>[A-Za-z0-9_]):(?P<start>[0-9]+)(?:-(?P<end>[0-9]+))?$")
+_RESIDUE_TOKEN = re.compile(r"^(?:(?P<chain>[A-Za-z0-9]):)?(?P<number>[0-9]+)(?P<icode>[A-Za-z])?$")
+_ATOM_TOKEN = re.compile(r"^(?P<first>[0-9]+)(?:-(?P<last>[0-9]+))?$")
 
 
 class SelectionError(ValueError):
@@ -86,31 +88,36 @@ class StartPoint:
         return f"{self.x:.3f} {self.y:.3f} {self.z:.3f}"
 
 
-def residue_identifier(chain: str, number: int, icode: str = "") -> str:
+def residue_identifier(chain: str, number: int) -> str:
     """Render one upstream ``starting_point_residue`` / ``exclude_residue_ids`` identifier."""
     prefix = f"{chain}:" if chain else ""
-    return f"{prefix}{number}{icode}"
+    return f"{prefix}{number}"
 
 
 def parse_pdb(path: Path) -> list[Atom]:
-    """Parse the first model of a PDB file into coordinate records."""
+    """Parse a single-model PDB file into coordinate records.
+
+    CAVER itself reads only one structure per file, and a multi-model file
+    would silently contribute its first model while a multi-model CIF is
+    rejected, so both are refused here instead of being half-read.
+    """
     try:
         lines = path.read_text(encoding="utf-8", errors="strict").splitlines()
     except (OSError, UnicodeDecodeError) as exc:
         raise SelectionError(f"cannot read structure {path.name}: {exc}") from exc
     atoms: list[Atom] = []
-    in_model = False
     saw_model = False
     for line in lines:
         record = line[:6]
         if record.startswith("MODEL"):
             if saw_model:
-                break
+                raise SelectionError(
+                    f"structure {path.name} contains several models; provide one model per PDB file"
+                )
             saw_model = True
-            in_model = True
             continue
         if record.startswith("ENDMDL"):
-            break
+            continue
         if not (record.startswith("ATOM") or record.startswith("HETATM")):
             continue
         if len(line) < 54:
@@ -166,28 +173,20 @@ def assert_snapshot_matches(reference: list[Atom], snapshot: list[Atom], name: s
         raise SelectionError(f"snapshot {name} does not share the reference structure's atom/residue mapping")
 
 
-def _unique_atoms(atoms: list[Atom]) -> list[Atom]:
-    """Keep one alternate location per residue atom, highest occupancy first."""
-    chosen: dict[tuple[tuple[str, int, str], str], Atom] = {}
-    for atom in atoms:
-        key = (atom.residue, atom.name)
-        current = chosen.get(key)
-        if current is None:
-            chosen[key] = atom
-            continue
-        best = max((current, atom), key=lambda item: (item.occupancy, item.altloc == "", -item.serial))
-        chosen[key] = best
-    return list(chosen.values())
-
-
 def _centroid(atoms: list[Atom]) -> tuple[float, float, float]:
-    kept = _unique_atoms(atoms)
-    if not kept:
+    """Arithmetic mean over every coordinate record of the selection.
+
+    CAVER places the initial start point at the centre of gravity of the
+    selected residues, computed over the atoms it reads from the file, so all
+    alternate locations and hydrogens contribute. Averaging a deduplicated
+    conformer set here would publish a point CAVER never uses.
+    """
+    if not atoms:
         raise SelectionError("selection resolved to no atoms")
     return (
-        sum(atom.x for atom in kept) / len(kept),
-        sum(atom.y for atom in kept) / len(kept),
-        sum(atom.z for atom in kept) / len(kept),
+        sum(atom.x for atom in atoms) / len(atoms),
+        sum(atom.y for atom in atoms) / len(atoms),
+        sum(atom.z for atom in atoms) / len(atoms),
     )
 
 
@@ -198,11 +197,49 @@ def _residues(atoms: list[Atom]) -> dict[tuple[str, int, str], list[Atom]]:
     return residues
 
 
+def _insertion_code_error(chain: str, number: int) -> SelectionError:
+    label = f"{chain or '_'}:{number}"
+    return SelectionError(
+        f"residue {label} is only present with an insertion code; CAVER cannot address insertion-coded "
+        "residues, so it cannot be selected"
+    )
+
+
+def _resolve_residue(
+    by_key: dict[tuple[str, int, str], list[Atom]], chain: str, number: int
+) -> tuple[tuple[str, int, str], list[Atom], dict[str, object]]:
+    """Find one residue, mirroring CAVER's chain rules and refusing insertion codes.
+
+    With an explicit chain the residue must exist as written. An empty chain
+    follows the upstream rule: the identifier is taken to belong to the first
+    chain, so the first chain in file order that contains the residue wins and
+    is recorded. The caller always emits that resolved chain, so CAVER cannot
+    start somewhere other than the point recorded in provenance.
+    """
+    if chain:
+        key = (chain, number, "")
+        if key in by_key:
+            return key, by_key[key], {"chain_resolution": "explicit"}
+        if any(candidate[0] == chain and candidate[1] == number for candidate in by_key):
+            raise _insertion_code_error(chain, number)
+        raise SelectionError(f"residue {chain}:{number} is absent from the structure")
+    matches = [candidate for candidate in by_key if candidate[1] == number and not candidate[2]]
+    if not matches:
+        if any(candidate[1] == number for candidate in by_key):
+            raise _insertion_code_error("", number)
+        raise SelectionError(f"residue {number} is absent from the structure")
+    key = matches[0]
+    resolution: dict[str, object] = {
+        "chain_resolution": "first chain containing the residue (upstream default)",
+        "chain_candidates": [candidate[0] or "" for candidate in matches],
+    }
+    return key, by_key[key], resolution
+
+
 def _selection_fields(params: dict[str, object]) -> dict[str, object]:
     fields = (
         "start_chain",
         "start_residue_number",
-        "start_insertion_code",
         "start_atom_name",
         "start_altloc",
         "start_residue_name",
@@ -242,26 +279,22 @@ def _manual_point(params: dict[str, object], atoms: list[Atom]) -> StartPoint:
 def _single_atom(params: dict[str, object], atoms: list[Atom]) -> StartPoint:
     chain = str(params.get("start_chain") or "")
     number = params.get("start_residue_number")
-    icode = str(params.get("start_insertion_code") or "")
     atom_name = str(params.get("start_atom_name") or "")
     altloc = str(params.get("start_altloc") or "")
     if not isinstance(number, int) or isinstance(number, bool):
         raise SelectionError("start_residue_number is required when the start point is a selected atom")
     if not atom_name:
         raise SelectionError("start_atom_name is required when the start point is a selected atom")
-    residue_atoms = _residues(atoms).get((chain, number, icode))
-    if residue_atoms is None:
-        raise SelectionError(f"residue {chain or '_'}:{number}{icode} is absent from the structure")
+    key, residue_atoms, resolution = _resolve_residue(_residues(atoms), chain, number)
     matches = [atom for atom in residue_atoms if atom.name == atom_name and (not altloc or atom.altloc == altloc)]
     if not matches:
         available = ", ".join(sorted({atom.name for atom in residue_atoms}))
         raise SelectionError(
-            f"atom {atom_name!r} is absent from residue {chain or '_'}:{number}{icode}; available atoms: {available}"
+            f"atom {atom_name!r} is absent from residue {key[0] or '_'}:{number}; available atoms: {available}"
         )
-    if len({(atom.altloc, atom.serial) for atom in matches}) > 1 and not altloc:
-        altlocs = ", ".join(sorted({atom.altloc or "<blank>" for atom in matches}))
-        raise SelectionError(f"atom {atom_name!r} has several alternate locations ({altlocs}); set start_altloc")
-    atom = max(matches, key=lambda item: (item.occupancy, -item.serial))
+    # Highest occupancy wins; a blank alternate location breaks the tie, and
+    # the chosen one is recorded so the selection is reproducible.
+    atom = max(matches, key=lambda item: (item.occupancy, item.altloc == "", -item.serial))
     return StartPoint(
         atom.x,
         atom.y,
@@ -272,12 +305,13 @@ def _single_atom(params: dict[str, object], atoms: list[Atom]) -> StartPoint:
             "units": "angstrom",
             "chain": atom.chain,
             "residue_number": atom.resseq,
-            "insertion_code": atom.icode,
             "residue_name": atom.resname,
             "atom_name": atom.name,
             "altloc": atom.altloc,
             "atom_serial": atom.serial,
             "atom_count": 1,
+            "altloc_policy": "highest occupancy, blank alternate location preferred on ties",
+            **resolution,
         },
         (("starting_point_atom", str(atom.serial)),),
     )
@@ -286,12 +320,9 @@ def _single_atom(params: dict[str, object], atoms: list[Atom]) -> StartPoint:
 def _residue_centroid(params: dict[str, object], atoms: list[Atom]) -> StartPoint:
     chain = str(params.get("start_chain") or "")
     number = params.get("start_residue_number")
-    icode = str(params.get("start_insertion_code") or "")
     if not isinstance(number, int) or isinstance(number, bool):
         raise SelectionError("start_residue_number is required when the start point is a residue centroid")
-    residue_atoms = _residues(atoms).get((chain, number, icode))
-    if residue_atoms is None:
-        raise SelectionError(f"residue {chain or '_'}:{number}{icode} is absent from the structure")
+    key, residue_atoms, resolution = _resolve_residue(_residues(atoms), chain, number)
     x, y, z = _centroid(residue_atoms)
     return StartPoint(
         x,
@@ -301,15 +332,15 @@ def _residue_centroid(params: dict[str, object], atoms: list[Atom]) -> StartPoin
             "mode": "residue",
             "point_angstrom": [x, y, z],
             "units": "angstrom",
-            "chain": chain,
+            "chain": key[0],
             "residue_number": number,
-            "insertion_code": icode,
             "residue_name": residue_atoms[0].resname,
-            "atom_count": len(_unique_atoms(residue_atoms)),
+            "atom_count": len(residue_atoms),
             "residue_count": 1,
-            "altloc_policy": "highest-occupancy conformer per atom name",
+            "centroid_policy": "mean over all coordinate records, alternate locations included",
+            **resolution,
         },
-        (("starting_point_residue", residue_identifier(chain, number, icode)),),
+        (("starting_point_residue", residue_identifier(key[0], number)),),
     )
 
 
@@ -319,7 +350,6 @@ def _ligand_centroid(params: dict[str, object], atoms: list[Atom]) -> StartPoint
         raise SelectionError("start_residue_name is required when the start point is a ligand or cofactor centre")
     chain = params.get("start_chain")
     number = params.get("start_residue_number")
-    icode = str(params.get("start_insertion_code") or "")
     matched: dict[tuple[str, int, str], list[Atom]] = {}
     for atom in atoms:
         if atom.record != "HETATM" or atom.resname != resname:
@@ -332,14 +362,14 @@ def _ligand_centroid(params: dict[str, object], atoms: list[Atom]) -> StartPoint
     if not matched:
         raise SelectionError(f"no HETATM residue named {resname!r} matches the ligand/cofactor selection")
     if len(matched) > 1:
-        candidates = ", ".join(
-            f"{key[0] or '_'}:{key[1]}{key[2]}" for key in sorted(matched)[:10]
-        )
+        candidates = ", ".join(f"{key[0] or '_'}:{key[1]}" for key in sorted(matched)[:10])
         raise SelectionError(
             f"{resname!r} matches {len(matched)} HETATM residues ({candidates}); "
             "set start_chain and start_residue_number"
         )
     ((residue_chain, residue_number, residue_icode), residue_atoms) = next(iter(matched.items()))
+    if residue_icode:
+        raise _insertion_code_error(residue_chain, residue_number)
     x, y, z = _centroid(residue_atoms)
     return StartPoint(
         x,
@@ -351,13 +381,12 @@ def _ligand_centroid(params: dict[str, object], atoms: list[Atom]) -> StartPoint
             "units": "angstrom",
             "chain": residue_chain,
             "residue_number": residue_number,
-            "insertion_code": residue_icode,
             "residue_name": resname,
-            "atom_count": len(_unique_atoms(residue_atoms)),
+            "atom_count": len(residue_atoms),
             "residue_count": 1,
-            "altloc_policy": "highest-occupancy conformer per atom name",
+            "centroid_policy": "mean over all coordinate records, alternate locations included",
         },
-        (("starting_point_residue", residue_identifier(residue_chain, residue_number, residue_icode)),),
+        (("starting_point_residue", residue_identifier(residue_chain, residue_number)),),
     )
 
 
@@ -385,10 +414,10 @@ def _parse_group(spec: str) -> list[tuple[str, int, int]]:
 
 
 def _group_directive(ranges: list[tuple[str, int, int]]) -> str:
+    """Expand ranges into the individual identifiers CAVER's list parser accepts."""
     terms = []
     for chain, start, end in ranges:
-        identifier = residue_identifier(chain, start)
-        terms.append(f"{identifier}-{end}" if end != start else identifier)
+        terms.extend(residue_identifier(chain, number) for number in range(start, end + 1))
     return " ".join(terms)
 
 
@@ -399,21 +428,26 @@ def _group_centroid(params: dict[str, object], atoms: list[Atom]) -> StartPoint:
     ranges = _parse_group(spec)
     by_key = _residues(atoms)
     selected: list[Atom] = []
+    resolved: list[tuple[str, int, int]] = []
     missing: list[str] = []
     for chain, start, end in ranges:
         for number in range(start, end + 1):
-            residue_atoms = by_key.get((chain, number, ""))
-            if residue_atoms is None:
-                alternatives = sorted(key[2] for key in by_key if key[0] == chain and key[1] == number)
-                if alternatives:
-                    missing.append(f"{chain or '_'}:{number} (an insertion code is required)")
-                else:
-                    missing.append(f"{chain or '_'}:{number}")
+            try:
+                (residue_chain, _, _), residue_atoms, _resolution = _resolve_residue(by_key, chain, number)
+            except SelectionError as exc:
+                missing.append(str(exc))
                 continue
             selected.extend(residue_atoms)
+            resolved.append((residue_chain, number, number))
     if missing:
-        raise SelectionError(f"start_group residues are absent from the structure: {', '.join(missing[:10])}")
-    x, y, z = _centroid(selected)
+        raise SelectionError(f"start_group cannot be resolved: {'; '.join(missing[:10])}")
+    # CAVER weights each named residue equally: the initial point is the mean of
+    # the residue centres, and each residue centre is the mean of all its
+    # coordinate records.
+    centres = [_centroid(by_key[key]) for key in {atom.residue for atom in selected}]
+    x = sum(centre[0] for centre in centres) / len(centres)
+    y = sum(centre[1] for centre in centres) / len(centres)
+    z = sum(centre[2] for centre in centres) / len(centres)
     residue_count = len({atom.residue for atom in selected})
     return StartPoint(
         x,
@@ -425,11 +459,58 @@ def _group_centroid(params: dict[str, object], atoms: list[Atom]) -> StartPoint:
             "units": "angstrom",
             "group": spec,
             "residue_count": residue_count,
-            "atom_count": len(_unique_atoms(selected)),
-            "altloc_policy": "highest-occupancy conformer per atom name",
+            "atom_count": len(selected),
+            "centroid_policy": "mean of residue centres, each residue centre the mean of all its coordinate records",
         },
-        (("starting_point_residue", _group_directive(ranges)),),
+        (("starting_point_residue", _group_directive(resolved)),),
     )
+
+
+def parse_residue_token(token: str) -> tuple[str, int]:
+    """Parse one ``exclude_residue_ids`` token, refusing insertion codes."""
+    match = _RESIDUE_TOKEN.fullmatch(token)
+    if match is None:
+        raise SelectionError(f"residue identifier {token!r} is not CHAIN:NUMBER or NUMBER")
+    if match.group("icode"):
+        raise SelectionError(
+            f"residue identifier {token!r} carries an insertion code; CAVER cannot address insertion-coded "
+            "residues, so it cannot be excluded by identifier (use exclude_residue_names instead)"
+        )
+    return (match.group("chain") or ""), int(match.group("number"))
+
+
+def _tokens(raw: object) -> list[str]:
+    if not isinstance(raw, str):
+        return []
+    return [token for token in re.split(r"[,\s]+", raw.strip()) if token]
+
+
+def validate_exclusions(params: dict[str, object], atoms: list[Atom]) -> None:
+    """Reject exclusion tokens the structure cannot satisfy.
+
+    A typo in an exclusion silently changes the science, because CAVER warns
+    and keeps going. Every identifier must resolve against the reference
+    structure before the run starts.
+    """
+    by_key = _residues(atoms)
+    for token in _tokens(params.get("exclude_residue_ids")):
+        chain, number = parse_residue_token(token)
+        _resolve_residue(by_key, chain, number)
+    names = {atom.resname for atom in atoms}
+    for token in _tokens(params.get("exclude_residue_names")):
+        if token not in names:
+            raise SelectionError(f"exclude_residue_names names {token!r}, which is absent from the structure")
+    serials = {atom.serial for atom in atoms}
+    for token in _tokens(params.get("exclude_atom_numbers")):
+        match = _ATOM_TOKEN.fullmatch(token)
+        if match is None:
+            raise SelectionError(f"atom number {token!r} is not an integer or a NUMBER-NUMBER range")
+        first = int(match.group("first"))
+        last = int(match.group("last") or first)
+        if last < first:
+            raise SelectionError(f"atom number range {token!r} is descending")
+        if not any(first <= serial <= last for serial in serials):
+            raise SelectionError(f"exclude_atom_numbers names {token!r}, which matches no atom serial")
 
 
 _RESOLVERS = {

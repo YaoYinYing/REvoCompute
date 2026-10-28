@@ -2,8 +2,10 @@
 
 > **Status:** CPU-side Runner implemented on branch `campaign/2026-10-28-runner-caver302`.
 > SIF build, `%test`, authentic CAVER 3.0.2 execution on 1SUO and one Slurm live test are done;
-> the live test PASSED (receipt `ce3c6746….5675d6a5….receipt.json`, 7 clusters / 7 tunnels) and
-> the candidate is staged awaiting promotion. The viewer remains deferred to PR #117. See the
+> that live test PASSED at 3c7f17b (receipt `ce3c6746….5675d6a5….receipt.json`, 7 clusters /
+> 7 tunnels) and the candidate is staged awaiting promotion. Both R1 reviews returned R1_BLOCK at
+> 782447f; all blocking and major items are now fixed and a fresh live acceptance is required at
+> the new head. The viewer remains deferred to PR #117. See the
 > local `IMPLEMENTATION_STATE.md` for exact provenance and test evidence.
 > **Initial main:** 17e80ed1dbd00f1389f3ec7047e5661b85ed52eb. Re-check exact main and PR head before any coding/review.
 

@@ -2,3 +2,7 @@
 # internal timeout are environment values supplied by the SIF and overridable
 # only by the deployment, never by a Task submission.
 max_runtime_seconds: 3600
+# Memory is a deployment resource policy, not a runner field. CAVER's JVM
+# reserves ~1 GB regardless of -Xmx (observed MaxRSS ~0.9 GB on a single
+# frame), so the deployment must give this task at least 2 GB; a bare unitless
+# value such as "64" reaches Slurm as --mem=64 and is read as 64 MB.
