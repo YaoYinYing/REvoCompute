@@ -390,3 +390,29 @@ def test_request_capture_answers_semantic_questions_about_a_form_post() -> None:
     assert len(capture.status_polls("abc")) == 1
     assert capture.result_manifest("abc") == ()
     assert not capture.navigation()
+
+
+def test_resource_fixtures_use_the_canonical_balance_formula() -> None:
+    """The envelope and the waterfall describe one balance, not two.
+
+    The server derives remaining as allowance - used - reserved - unsettled, and
+    settled as grant + adjustment - usage.  A fixture that dropped the unsettled
+    term would let a browser test pass against a balance the server never
+    reports.
+    """
+    envelope = builders.build_resource_entitlement(builders.ADMIN_SUBJECT_ID)
+    ledger = builders.build_resource_ledger(builders.ADMIN_SUBJECT_ID)
+    gpu = next(unit for unit in envelope["compute"] if unit["unit"] == "gpu_second")
+    summary = ledger["gpu_waterfall"]["summary"]
+    assert gpu["remaining"] == (
+        gpu["allowance"] - gpu["used"] - gpu["reserved"] - gpu["unsettled_quantity"]
+    )
+    assert summary["remaining_gpu_seconds"] == gpu["remaining"]
+    assert summary["settled_balance_gpu_seconds"] == (
+        summary["monthly_grant_gpu_seconds"] + summary["adjustment_gpu_seconds"] - summary["usage_gpu_seconds"]
+    )
+    report = builders.build_admin_resource_report(builders.ADMIN_SUBJECT_ID)
+    report_gpu = next(
+        unit for unit in report["canonical_envelope"]["compute"] if unit["unit"] == "gpu_second"
+    )
+    assert report["ledger"]["gpu_waterfall"]["summary"]["remaining_gpu_seconds"] == report_gpu["remaining"]

@@ -19,7 +19,7 @@ Resolve issue #91 by providing a truthful bounded chronological GPU-credit water
 - [x] Support usage charge, reservation, release, monthly grant, correction, administrative adjustment and reversal according to canonical ledger semantics.
 - [x] Present an accessible cumulative waterfall with opening, individual deltas and closing balance, including negative balances and partial history; chart must reconcile to server summary exactly.
 - [x] Use integer units internally and format GPU-minutes/credits only for presentation; preserve time-zone display clarity and ordering.
-- [x] Link entries to Task, StageRun, allocation/Slurm evidence when known; show unknown attribution explicitly and provide link to raw ledger.
+- [x] Link usage entries to their Task; show StageRun and Slurm/allocation identifiers as text when known, show unknown attribution explicitly, and link to the raw ledger.
 - [x] Preserve RBAC (user sees own, admin authorized scope), append-only auditing, reconciliation policy and no unauthorized balance mutation.
 - [x] Make large windows performant without unbounded downloads (bounded window + verified opening). Export/source receipts deferred with cursor pagination until a >200-row window is demonstrated.
 - [ ] Resolve Issue #91 only after maintainer has reviewed merged production behavior and acceptance evidence.

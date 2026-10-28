@@ -93,7 +93,7 @@ export const getGpuCredit = (): Promise<GPUCreditSummary> => requestJson('/compu
 /** The canonical resource envelope admission decides against, for this account. */
 export const getResourceEntitlement = (signal?: AbortSignal): Promise<ResourceEntitlement> =>
   requestJson('/compute/api/resource-entitlement', { signal });
-/** This account's own append-only ledger, newest first and bounded by the server. */
+/** This account's own append-only ledger, bounded and returned in UTC chronological order. */
 export const getResourceLedger = (limit?: number, signal?: AbortSignal): Promise<ResourceLedger> =>
   requestJson(`/compute/api/resource-ledger${limit === undefined ? '' : `?limit=${encodeURIComponent(String(limit))}`}`, { signal });
 export const getAccess = (): Promise<AccessResponse> => requestJson('/compute/api/access');

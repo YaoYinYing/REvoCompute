@@ -9,15 +9,12 @@
 
 export {
   QuotaView,
-  creditAmount,
-  formatUtc,
   loadAdminQuota,
   mountQuotaView,
   quotaBar,
   quotaBars,
   quotaLedgerSection,
   quotaPosition,
-  waterfallSection,
 } from './QuotaView';
 export {
   attributionLabel,

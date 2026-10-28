@@ -701,10 +701,14 @@ def _allocation_facts(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
-def resource_ledger_window(
+def _ledger_window_with_entitlement(
     task_store: Any, user_id: int, *, limit: int = DEFAULT_LIMIT
-) -> dict[str, Any]:
-    """One bounded chronological ledger window with its GPU waterfall.
+) -> tuple[dict[str, Any], Any]:
+    """One bounded chronological ledger window with its settled GPU entitlement.
+
+    The entitlement is returned beside the payload rather than inside it: it is
+    already projected by ``canonical_envelope`` in the Admin report, and the
+    account route's contract has one balance, not two.
 
     The store selects the window and the canonical summary in one transaction:
     the newest ``limit`` facts by UTC timestamp (immutable identifier as
@@ -719,7 +723,7 @@ def resource_ledger_window(
     subject_id = int(user_id)
     window = task_store.resource_ledger_window(subject_id, limit=limit)
     entries = rloan.ledger_chronology(rloan.normalize_ledger_rows(window["rows"]))
-    return {
+    payload = {
         "subject_id": subject_id,
         "period": window["period"],
         "limit": limit,
@@ -733,6 +737,15 @@ def resource_ledger_window(
         ),
         "entries": entries,
     }
+    return payload, window["entitlement"]
+
+
+def resource_ledger_window(
+    task_store: Any, user_id: int, *, limit: int = DEFAULT_LIMIT
+) -> dict[str, Any]:
+    """The account's bounded chronological ledger window and GPU waterfall."""
+    payload, _ = _ledger_window_with_entitlement(task_store, user_id, limit=limit)
+    return payload
 
 
 def _measured_units(rows: Sequence[Mapping[str, Any]]) -> set[str]:
@@ -754,7 +767,24 @@ def _resource_operations_for_user(
 ) -> dict[str, Any]:
     """One subject's complete resource position, projected from canonical reads."""
     envelope = task_store.resource_envelope(user_id)
-    ledger_window = resource_ledger_window(task_store, user_id, limit=limit)
+    ledger_window, window_gpu = _ledger_window_with_entitlement(task_store, user_id, limit=limit)
+    # The envelope and the window are two snapshots.  Take the window's period
+    # and GPU entitlement so the GPU ``remaining`` in this payload is the one the
+    # waterfall summarizes; otherwise a settlement between the reads could
+    # publish two different balances in one response.  The CPU entitlement is
+    # ungated (its ``remaining`` is null) and durable storage is an independent
+    # ownership fact, so their earlier snapshot is display-only, not a second
+    # GPU balance.
+    envelope = rloan.ResourceEnvelope(
+        subject_type=envelope.subject_type,
+        subject_id=envelope.subject_id,
+        period=str(ledger_window["period"]),
+        compute=tuple(
+            window_gpu if entitlement.unit == rloan.UNIT_GPU_SECOND else entitlement
+            for entitlement in envelope.compute
+        ),
+        storage=envelope.storage,
+    )
     window = ledger_window["entries"]
     unsettled = [
         record

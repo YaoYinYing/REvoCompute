@@ -80,6 +80,11 @@ DEFAULT_LEDGER_LIMIT = 25
 DEFAULT_GPU_ALLOWANCE = 180_000
 DEFAULT_GPU_USED = 74_250
 DEFAULT_GPU_RESERVED = 6_000
+DEFAULT_GPU_UNSETTLED = 6_000
+#: The canonical remaining balance: allowance - used - reserved - unsettled.
+DEFAULT_GPU_REMAINING = (
+    DEFAULT_GPU_ALLOWANCE - DEFAULT_GPU_USED - DEFAULT_GPU_RESERVED - DEFAULT_GPU_UNSETTLED
+)
 
 
 def subject_id_for(session: Session) -> int:
@@ -103,8 +108,8 @@ def _ledger_rows(subject_id: int) -> list[dict[str, Any]]:
             "id": 1, "subject_type": "user", "subject_id": subject_id, "period": "2026-10",
             "kind": "monthly_grant", "unit": "gpu_second", "resource_class": "",
             "quantity": DEFAULT_GPU_ALLOWANCE, "task_id": None, "stage_id": None,
-            "slurm_job_id": None, "actor_user_id": None, "reason": None, "reason_code": None,
-            "evidence_source": "policy", "created_at": 1_790_636_400,
+            "slurm_job_id": None, "actor_user_id": None, "reason": "UTC calendar-month allowance",
+            "reason_code": "period_grant", "evidence_source": "policy", "created_at": 1_790_636_400,
         },
         {
             "id": 2, "subject_type": "user", "subject_id": subject_id, "period": "2026-10",
@@ -140,8 +145,8 @@ def _gpu_waterfall() -> dict[str, Any]:
             "settled_balance_gpu_seconds": settled,
             "reserved_gpu_seconds": DEFAULT_GPU_RESERVED,
             "unsettled_allocations": 1,
-            "unsettled_gpu_seconds": DEFAULT_GPU_RESERVED,
-            "remaining_gpu_seconds": settled - 2 * DEFAULT_GPU_RESERVED,
+            "unsettled_gpu_seconds": DEFAULT_GPU_UNSETTLED,
+            "remaining_gpu_seconds": DEFAULT_GPU_REMAINING,
             "usage_complete": False,
         },
     }
@@ -171,8 +176,8 @@ def build_resource_entitlement(
             "used": DEFAULT_GPU_USED,
             "reserved": DEFAULT_GPU_RESERVED,
             "unsettled_allocations": 1,
-            "unsettled_quantity": DEFAULT_GPU_RESERVED,
-            "remaining": DEFAULT_GPU_ALLOWANCE - DEFAULT_GPU_USED - DEFAULT_GPU_RESERVED,
+            "unsettled_quantity": DEFAULT_GPU_UNSETTLED,
+            "remaining": DEFAULT_GPU_REMAINING,
             "usage_complete": False,
             "evidence_sources": ["slurm_accounting"],
         },

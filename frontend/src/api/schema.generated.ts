@@ -3367,6 +3367,20 @@ export interface components {
             logical_owned_bytes: number;
             units_measured: string[];
         };
+        /** @description The Admin drill-in's bounded ledger window: the same chronological projection and GPU waterfall the account reads, plus the window limit and its accounting basis. */
+        AdminResourceLedgerWindow: {
+            subject_id: number;
+            period: string;
+            limit: number;
+            limit_ceiling: number;
+            /** @enum {string} */
+            order: "chronological";
+            gpu_waterfall: components["schemas"]["GPUCreditWaterfall"];
+            entries: components["schemas"]["ResourceLedgerEntry"][];
+            window_limit: number;
+            /** @enum {string} */
+            basis: "append_only_ledger";
+        };
         /** @description One subject's complete resource position, projected from canonical reads: the canonical envelope, the append-only ledger window behind it, per-class usage, durable storage, and unresolved allocations. A unit with no measured facts reports unknown rather than zero. The scope, the limit ceiling, and the requested page size are served beside the position, so one body fully describes which subject it is and how far its window reaches. */
         AdminResourceSubjectReport: {
             /** @enum {string} */
@@ -3390,9 +3404,7 @@ export interface components {
             storage: {
                 [key: string]: unknown;
             };
-            ledger: {
-                [key: string]: unknown;
-            };
+            ledger: components["schemas"]["AdminResourceLedgerWindow"];
             durable_data: {
                 [key: string]: unknown;
             };

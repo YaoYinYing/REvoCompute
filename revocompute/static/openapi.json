@@ -3626,6 +3626,23 @@
       },
       "additionalProperties": false
     },
+    "AdminResourceLedgerWindow": {
+      "type": "object",
+      "description": "The Admin drill-in's bounded ledger window: the same chronological projection and GPU waterfall the account reads, plus the window limit and its accounting basis.",
+      "required": ["subject_id", "period", "limit", "limit_ceiling", "order", "gpu_waterfall", "entries", "window_limit", "basis"],
+      "properties": {
+        "subject_id": {"type": "integer"},
+        "period": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}$"},
+        "limit": {"type": "integer", "minimum": 1},
+        "limit_ceiling": {"type": "integer", "minimum": 1},
+        "order": {"type": "string", "enum": ["chronological"]},
+        "gpu_waterfall": {"$ref": "#/components/schemas/GPUCreditWaterfall"},
+        "entries": {"type": "array", "items": {"$ref": "#/components/schemas/ResourceLedgerEntry"}},
+        "window_limit": {"type": "integer", "minimum": 1},
+        "basis": {"type": "string", "enum": ["append_only_ledger"]}
+      },
+      "additionalProperties": false
+    },
     "AdminResourceSubjectReport": {
       "type": "object",
       "description": "One subject's complete resource position, projected from canonical reads: the canonical envelope, the append-only ledger window behind it, per-class usage, durable storage, and unresolved allocations. A unit with no measured facts reports unknown rather than zero. The scope, the limit ceiling, and the requested page size are served beside the position, so one body fully describes which subject it is and how far its window reaches.",
@@ -3641,7 +3658,7 @@
         "allocation_facts": {"type": "object", "additionalProperties": true},
         "class_breakdown": {"type": "object", "additionalProperties": true},
         "storage": {"type": "object", "additionalProperties": true},
-        "ledger": {"type": "object", "additionalProperties": true},
+        "ledger": {"$ref": "#/components/schemas/AdminResourceLedgerWindow"},
         "durable_data": {"type": "object", "additionalProperties": true}
       },
       "additionalProperties": false

@@ -339,14 +339,16 @@ export function waterfallSection(
     section.append(text('p', t('quota.waterfall.negative'), 'quota-waterfall-note is-negative'));
   }
   section.append(text('p', t('quota.waterfall.commitments'), 'quota-waterfall-note'));
-  // The live region is attached empty and populated afterwards, so a screen
-  // reader announces the loaded count instead of treating the first text as
-  // pre-existing content.
+  // The live region is attached empty and populated in a microtask, after the
+  // caller has inserted this section, so the loaded count is announced as a
+  // change rather than read as pre-existing text.
   const status = text('p', '', 'quota-waterfall-status');
   status.setAttribute('role', 'status');
   status.setAttribute('aria-live', 'polite');
   section.append(status);
-  status.textContent = t('quota.waterfall.loaded', { count: waterfall.entry_count });
+  queueMicrotask(() => {
+    status.textContent = t('quota.waterfall.loaded', { count: waterfall.entry_count });
+  });
 
   const table = element('table', 'admin-table quota-waterfall-table');
   table.append(text('caption', t('quota.waterfall.caption', { period })));
@@ -518,7 +520,7 @@ export async function loadAdminQuota(userId: number): Promise<HTMLElement> {
     // The report serves the same canonical ledger window the user's own endpoint
     // does — entries, chronological order, and the GPU waterfall — so the two
     // readers are held to one shape by construction.
-    const ledger = report.ledger as unknown as ResourceLedger;
+    const ledger: ResourceLedger = report.ledger;
     return quotaPosition(report.canonical_envelope, ledger);
   } catch (error) {
     return empty((error as Error).message || t('quota.error.admin'), true);

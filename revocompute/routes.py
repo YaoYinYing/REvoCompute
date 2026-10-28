@@ -4979,20 +4979,25 @@ def current_resource_entitlement():
 @login_required
 def current_gpu_credit():
     """Return only the authenticated user's current UTC-period accounting."""
-    payload = _gpu_credit_payload(int(g.current_user["id"]))
+    try:
+        payload = _gpu_credit_payload(int(g.current_user["id"]))
+    except (rloan.AccountingOverflow, SQLAlchemyError) as exc:
+        return _ledger_read_refusal(exc)
     payload["allow_gpu_use"] = bool(g.current_user.get("allow_gpu_use"))
     return jsonify(payload), 200
 
 
 def _ledger_read_refusal(exc: Exception):
-    """The bounded 503 every ledger read gives instead of a fabricated number.
+    """The bounded 503 a ledger-derived balance read gives instead of a number.
 
     A quantity no JSON client can represent exactly and an unavailable store are
     different failures, but both make the read unable to publish a truthful
-    ledger.  Returning an empty window or a zero balance would be worse than an
+    balance.  Returning an empty window or a zero balance would be worse than an
     error: it would state a spend or a history nobody measured.  One mapping
-    serves the account's own read and the Admin report so the two scopes cannot
-    disagree about how the same failure is reported.
+    serves the account and Admin balance reads and the shared ledger window, so
+    those scopes cannot disagree about how the same failure is reported.  The
+    Admin user listing is an aggregate listing rather than a ledger window and
+    keeps its existing failure behavior.
     """
     if isinstance(exc, rloan.AccountingOverflow):
         logging.error("Resource ledger refused an unrepresentable value: %s", exc)
@@ -5670,7 +5675,11 @@ def admin_user_gpu_credit(user_id: int):
     user = _get_user_db().get_user(user_id)
     if user is None or user.get("deleted"):
         return jsonify({"error": "User not found"}), 404
-    return jsonify(_gpu_credit_payload(user_id, admin=True)), 200
+    try:
+        payload = _gpu_credit_payload(user_id, admin=True)
+    except (rloan.AccountingOverflow, SQLAlchemyError) as exc:
+        return _ledger_read_refusal(exc)
+    return jsonify(payload), 200
 
 
 @app.route("/compute/api/auth/admin/users/<int:user_id>/gpu-credit/adjustments", methods=["POST"])

@@ -383,6 +383,17 @@ class TaskDatabase:
             self.resource_ledger_table.c.period,
             self.resource_ledger_table.c.id,
         )
+        # The bounded window selects newest-by-UTC within one period, so the
+        # composite index carries the ordering columns.  It is declared here for
+        # new databases and created idempotently for existing ones at startup.
+        Index(
+            "idx_resource_ledger_period_time",
+            self.resource_ledger_table.c.subject_type,
+            self.resource_ledger_table.c.subject_id,
+            self.resource_ledger_table.c.period,
+            self.resource_ledger_table.c.created_at,
+            self.resource_ledger_table.c.id,
+        )
         Index("idx_resource_ledger_task", self.resource_ledger_table.c.task_id)
         # Policy is a current value, never a rewrite of history: a policy change
         # appends a ledger fact and updates this row.
@@ -791,6 +802,7 @@ class TaskDatabase:
                     logging.warning("TaskDatabase metadata already present, skipping creation")
                 self._migrate_subject_columns(conn)
                 self._migrate_resource_columns(conn)
+                self._ensure_ledger_time_index(conn)
             # The legacy copy normalizes idempotency keys in place, so it must
             # run before the append-only guards exist, and under the same lock
             # so nothing can re-create the legacy tables between the copy and
@@ -1050,6 +1062,19 @@ class TaskDatabase:
                 conn.exec_driver_sql(
                     f"UPDATE {table} SET subject_type = '{rloan.SUBJECT_USER}' WHERE subject_type IS NULL OR subject_type = ''"
                 )
+
+    @staticmethod
+    def _ensure_ledger_time_index(conn) -> None:
+        """Create the period/time index on a database created before it existed.
+
+        ``create_all(checkfirst=True)`` skips an existing table and therefore its
+        new indexes, so a deployed database needs the same idempotent statement
+        the table definition gives a fresh one.
+        """
+        conn.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS idx_resource_ledger_period_time "
+            "ON resource_ledger (subject_type, subject_id, period, created_at, id)"
+        )
 
     @staticmethod
     def _install_append_only_guards(conn) -> None:

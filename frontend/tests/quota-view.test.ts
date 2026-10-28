@@ -315,8 +315,10 @@ describe('the GPU credit waterfall', () => {
     ).toBe(true);
   });
 
-  it('announces what was loaded and exposes exact GPU-seconds to screen readers', () => {
+  it('announces what was loaded and exposes exact GPU-seconds to screen readers', async () => {
     const rendered = waterfallSection(waterfallOf(), entries) as unknown as FakeNode;
+    // The live region is populated in a microtask, after the section is built.
+    await Promise.resolve();
     const status = rendered.querySelectorAll('p').find(node => node.getAttribute('role') === 'status');
     expect(status?.getAttribute('aria-live')).toBe('polite');
     expect(status?.textContent).toContain('2 GPU fact');

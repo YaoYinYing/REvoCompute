@@ -1,5 +1,4 @@
 import type { AppShell } from '../../../app/shell';
-import type { ResourceLedger } from '../../../api/app-api';
 import { adminApi, idempotencyKey, type AdminUser, type GPUCreditSummary } from '../api';
 import { quotaLedgerSection, waterfallSection } from '../../quota/QuotaView';
 import { button, element, empty, formatCredits, formatDate, openDialog, reasonContent, setBusy, text } from '../../../components/dom';
@@ -31,25 +30,47 @@ export class CreditAdmin {
   async open(user: AdminUser): Promise<void> {
     try {
       let data = await adminApi.getUserCredit(user.id);
-      // The operator's drill-in reads the same canonical ledger window the account
-      // reads about itself: chronological entries and the GPU waterfall over an
-      // authoritative opening balance.
-      let ledger = (await adminApi.getResourceReport(user.id)).ledger as unknown as ResourceLedger;
       const root = element('div', 'credit-admin');
       const accounting = element('section', 'credit-accounting');
-      const renderAccounting = (): void => accounting.replaceChildren(
-        creditSummary(data),
-        waterfallSection(ledger.gpu_waterfall, ledger.entries, ledger.period),
-        // The raw append-only facts stay beside the chart: reasons, actors, and
-        // the `#ledger` anchor the waterfall links to live here.
-        quotaLedgerSection(ledger),
-      );
-      const refresh = async (): Promise<void> => {
-        data = await adminApi.getUserCredit(user.id);
-        ledger = (await adminApi.getResourceReport(user.id)).ledger as unknown as ResourceLedger;
+      // The ledger window is read separately and rendered when it arrives, so a
+      // ledger outage never removes the audited policy controls below.
+      const ledgerHost = element('div', 'credit-ledger-host', [empty('Loading the ledger window...')]);
+      const renderAccounting = (): void => accounting.replaceChildren(creditSummary(data), ledgerHost);
+      const loadLedger = async (): Promise<void> => {
+        ledgerHost.replaceChildren(empty('Loading the ledger window...'));
+        try {
+          // The operator's drill-in reads the same canonical ledger window the
+          // account reads about itself: chronological entries and the GPU
+          // waterfall over an authoritative opening balance.
+          const ledger = (await adminApi.getResourceReport(user.id)).ledger;
+          ledgerHost.replaceChildren(
+            waterfallSection(ledger.gpu_waterfall, ledger.entries, ledger.period),
+            // The raw append-only facts stay beside the chart: reasons, actors,
+            // and the `#ledger` anchor the waterfall links to live here.
+            quotaLedgerSection(ledger),
+          );
+        } catch (error) {
+          const detail = (error as Error).message || 'no response';
+          ledgerHost.replaceChildren(empty(
+            `The GPU credit ledger window is currently unavailable (${detail}). The policy controls below still work.`,
+            true,
+          ));
+        }
+      };
+      const reload = async (): Promise<void> => {
+        try { data = await adminApi.getUserCredit(user.id); } catch { /* keep the last known summary */ }
         renderAccounting();
       };
+      const afterMutation = async (message: string): Promise<void> => {
+        // A successful mutation is reported before any read it triggers: a
+        // ledger or listing refresh failure must not suppress the success fact.
+        this.shell.notify(message, 'success');
+        try { await this.onChanged(); } catch (error) { this.shell.notify((error as Error).message, 'error'); }
+        await reload();
+        await loadLedger();
+      };
       renderAccounting();
+      void loadLedger();
 
       const allowance = element('input'); allowance.type = 'number'; allowance.min = '0'; allowance.step = '0.01'; allowance.value = String(data.monthly_grant_credits);
       const allowanceButton = button('Set allowance');
@@ -62,7 +83,7 @@ export class CreditAdmin {
         setBusy(allowanceButton, true);
         try {
           await adminApi.setAllowance(user.id, Math.round(credits * 60), idempotencyKey(`allowance-${user.id}`));
-          await refresh(); await this.onChanged(); this.shell.notify('Monthly allowance updated.', 'success');
+          await afterMutation('Monthly allowance updated.');
         } catch (error) { this.shell.notify((error as Error).message, 'error'); }
         finally { setBusy(allowanceButton, false); }
       });
@@ -87,7 +108,8 @@ export class CreditAdmin {
         setBusy(adjustButton, true);
         try {
           await adminApi.adjustCredit(user.id, gpuSeconds, reasonText, idempotencyKey(`adjust-${user.id}`));
-          adjustment.value = ''; reason.value = ''; await refresh(); await this.onChanged(); this.shell.notify('GPU credit adjustment recorded.', 'success');
+          adjustment.value = ''; reason.value = '';
+          await afterMutation('GPU credit adjustment recorded.');
         } catch (error) { this.shell.notify((error as Error).message, 'error'); }
         finally { setBusy(adjustButton, false); }
       });
@@ -108,8 +130,9 @@ export class CreditAdmin {
         if (!reasonText) return;
         try {
           const result = await adminApi.resetUserCredit(user.id, reasonText, idempotencyKey(`reset-${user.id}`));
-          await refresh(); await this.onChanged();
-          this.shell.notify(result.changed ? `Credits reset by ${formatCredits(result.reset_delta_gpu_seconds / 60, true)}.` : 'Credits were already at the configured allowance.', 'success');
+          await afterMutation(result.changed
+            ? `Credits reset by ${formatCredits(result.reset_delta_gpu_seconds / 60, true)}.`
+            : 'Credits were already at the configured allowance.');
         } catch (error) { this.shell.notify((error as Error).message, 'error'); }
       });
 
