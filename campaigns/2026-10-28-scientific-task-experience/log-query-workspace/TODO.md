@@ -26,42 +26,41 @@ server-side search" — is false for the diagnostics path:
   request and byte ceiling.
 
 No live stream, full-log retention, unbounded search input, or GB-scale viewer
-exists to build against. See `IMPLEMENTATION_STATE.md` for file/line evidence.
+exists to build against.
 
 ## Implemented increment
 
-- [x] Audit the real producers, publication, authorization and UI reads.
-- [x] Keep the #116 record, bounds, redaction and authorization contract.
-- [x] Server: strip Unicode bidi/zero-width format controls with the existing
-      terminal-control sanitization before the excerpt is published.
-- [x] Frontend: load the already-bounded, already-redacted excerpt on request
-      (no automatic fetch) and render it with excerpt-relative line numbers.
-- [x] Frontend: literal, case-insensitive search with match count, next/previous
-      navigation, keyboard handling (Enter, Shift+Enter, Escape) and a bounded
-      match/render cap. No user-authored regular expressions.
-- [x] Failure state keeps the preview and download available; aborting the panel
-      discards a pending excerpt.
-- [x] Document the user contract in `docs/user-guide/task-states.md`.
+- Audit the real producers, publication, authorization and UI reads.
+- Keep the #116 record, bounds, redaction and authorization contract.
+- Server: strip Unicode bidi/zero-width format controls with the existing
+  terminal-control sanitization before the excerpt is published.
+- Frontend: load the already-bounded, already-redacted excerpt on request
+  (no automatic fetch) and render it with excerpt-relative line numbers.
+- Frontend: literal, case-insensitive search with match count, next/previous
+  navigation, keyboard handling (Enter, Shift+Enter, Escape) and a bounded
+  match/render cap. No user-authored regular expressions.
+- Failure state keeps the preview and download available; aborting the panel
+  discards a pending excerpt.
+- Document the user contract in `docs/user-guide/task-states.md`.
 
 ## Deliberately not built (no corresponding real input or authority)
 
-- [x] Live-follow, reconnection and backpressure — there is no running-task log
-      stream to follow.
-- [x] Byte-range paging and virtual scrolling of GB logs — the retained record
-      is bounded and no full log is exposed to the browser.
-- [x] A server-side search endpoint — the whole retained stream is bounded and
-      already downloadable by the same authorized reader, so server search would
-      duplicate the payload without adding safety.
-- [x] Regex search, a logging database, or a second persistence store.
-- [x] StageRun log identity — optional until the Stage State PR lands; not
-      needed by this increment.
+- Live-follow, reconnection and backpressure — there is no running-task log
+  stream to follow.
+- Byte-range paging and virtual scrolling of GB logs — the retained record
+  is bounded and no full log is exposed to the browser.
+- A server-side search endpoint — the whole retained stream is bounded and
+  already downloadable by the same authorized reader, so server search would
+  duplicate the payload without adding safety.
+- Regex search, a logging database, or a second persistence store.
+- StageRun log identity — optional until the Stage State PR lands; not
+  needed by this increment.
 
 ## Verification
 
-- [x] Unit: excerpt bounds, path validation, authorization refusal, literal
-      search, metacharacters, match/render caps, failure and abort disposal.
-- [x] Server: redaction/bidi sanitization through the real API, existing
-      diagnostics/slurm suites, boundary check.
-- [x] Browser: readable/searchable excerpt, keyboard navigation, redaction,
-      desktop and mobile layout, exact head.
-- [ ] Independent exact-head review and final acceptance (campaign roles).
+- Unit: excerpt bounds, path validation, authorization refusal, literal
+  search, metacharacters, match/render caps, failure and abort disposal.
+- Server: redaction/bidi sanitization through the real API, existing
+  diagnostics/slurm suites, boundary check.
+- Browser: readable/searchable excerpt, keyboard navigation, redaction,
+  desktop and mobile layout, exact head.

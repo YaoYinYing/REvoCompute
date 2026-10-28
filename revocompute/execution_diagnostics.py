@@ -65,8 +65,11 @@ def _without_format_characters(text: str) -> str:
 def safe_diagnostic_text(value: Any, *, secret_values: tuple[str, ...] = ()) -> str:
     """Redact known credentials, credential syntax, URLs and private path context."""
     text = _without_format_characters(_ANSI_CONTROL.sub("", str(value or "")))
-    known = set(secret_values)
-    known.update(diagnostic_secret_values(os.environ))
+    # The excerpt is already stripped of format characters, so a known secret
+    # that contains one must be normalized the same way before it can match.
+    known = {_without_format_characters(secret) for secret in secret_values}
+    known.update(_without_format_characters(value) for value in diagnostic_secret_values(os.environ))
+    known.discard("")
     for secret in sorted(known, key=len, reverse=True):
         if secret:
             text = text.replace(secret, "[redacted]")
@@ -86,7 +89,10 @@ def safe_diagnostic_text(value: Any, *, secret_values: tuple[str, ...] = ()) -> 
 def redacted_log_lines(lines: Iterable[str], *, secret_values: tuple[str, ...] = ()) -> Iterator[str]:
     """Retain log context while withholding credentials and private host details."""
     known = (*secret_values, *diagnostic_secret_values(os.environ))
-    pieces = tuple(piece for secret in known for piece in secret.splitlines() if piece)
+    pieces = tuple(
+        normalized for secret in known for line in secret.splitlines()
+        if (normalized := _without_format_characters(line))
+    )
     private_key = False
     for line in lines:
         if "-----BEGIN " in line and "PRIVATE KEY-----" in line:

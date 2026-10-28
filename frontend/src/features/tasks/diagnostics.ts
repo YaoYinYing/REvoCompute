@@ -73,8 +73,10 @@ function addRetainedExcerpt(
   linesHost.setAttribute('role', 'region'); linesHost.setAttribute('aria-label', t('diagnostics.excerptLabel', { stream }));
   const loading = element('p', t('diagnostics.excerptLoading')); loading.className = 'task-diagnostic-note'; loading.hidden = true;
   const failure = element('p', t('diagnostics.excerptFailed')); failure.className = 'task-diagnostic-error'; failure.hidden = true;
-  region.append(searchBar, status, note, cappedNote, linesHost, loading, failure);
-  section.append(toggle, region);
+  region.append(searchBar, status, note, cappedNote, linesHost);
+  // Loading and failure feedback belong beside the toggle: `region` stays hidden
+  // until a successful load, so feedback inside it would never be visible.
+  section.append(toggle, loading, failure, region);
 
   let loaded = false;
   let busy = false;
@@ -148,7 +150,7 @@ function addRetainedExcerpt(
   next.addEventListener('click', () => select(active + 1));
 
   const render = (text: string): void => {
-    const all = text.split('\n');
+    const all = text.split(/\r\n|\r|\n/);
     if (all.length > 1 && all[all.length - 1] === '') all.pop();
     const start = Math.max(0, all.length - MAX_RENDERED_LINES);
     shown = all.slice(start);

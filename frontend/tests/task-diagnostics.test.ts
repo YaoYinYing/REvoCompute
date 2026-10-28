@@ -96,6 +96,13 @@ it('searches literally, counts matches and navigates by button and keyboard', as
   expect(host.querySelectorAll('mark')).toHaveLength(0);
 });
 
+it('renders CR and CRLF line endings as separate excerpt lines', async () => {
+  await openExcerpt('progress 0%\rprogress 50%\rprogress 100%\r\nnext-real-line\n');
+  const gutters = host.querySelectorAll('.task-diagnostic-gutter').map(node => node.textContent);
+  expect(gutters).toEqual(['1', '2', '3', '4']);
+  expect(host.textContent).not.toContain('\r');
+});
+
 it('treats regular-expression metacharacters as literal text', async () => {
   await openExcerpt('a.b\naxb\n');
   const input = host.querySelector('input') as unknown as HarnessNode & { value: string };
@@ -112,6 +119,9 @@ it('keeps the preview and offers the toggle again when the excerpt cannot be loa
   await vi.waitFor(() => expect(host.querySelector('button')).not.toBeNull());
   host.querySelector('button')!.dispatch('click', {});
   await vi.waitFor(() => expect(host.querySelector('.task-diagnostic-error')!.hidden).toBe(false));
+  // The failure sits beside the toggle, not inside the excerpt region that stays
+  // hidden until a successful load; a hidden ancestor would hide the feedback.
+  expect(host.querySelector('.task-diagnostic-error')!.closest('[hidden]')).toBeNull();
   expect(host.querySelector('pre')!.hidden).toBe(false);
   expect(host.querySelector('button')!.disabled).toBe(false);
 });

@@ -91,9 +91,9 @@ standard error and standard output.
   the original log. Search reports at most 1,000 matches and covers only the
   rendered excerpt: a longer excerpt renders, and searches, its most recent
   10,000 lines.
-- Credentials, private paths, host details, and terminal control characters are
-  removed before the excerpt is published, so the preview, search, and download
-  all see the same sanitized text.
+- Credentials, private paths, host details, and terminal control characters
+  other than line breaks and tabs are removed before the excerpt is published,
+  so the preview, search, and download all see the same sanitized text.
 - The excerpt reports what the executor observed; it does not establish a root
   cause. Authorized original artifacts remain available under **Files &
   diagnostics** while retained.
