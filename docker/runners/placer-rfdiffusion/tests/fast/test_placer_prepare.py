@@ -20,8 +20,10 @@ _SPEC.loader.exec_module(prepare)
 
 _CCD_STUB = {
     "ALA": frozenset({"N", "CA", "C", "O", "CB", "OXT"}),
+    "GLY": frozenset({"N", "CA", "C", "O"}),
     "THR": frozenset({"N", "CA", "C", "O", "CB", "OG1", "CG2"}),
     "TRP": frozenset({"N", "CA"}),
+    "UNK": frozenset({"N", "CA", "C", "O"}),
     "LIG": frozenset({"C1", "C2"}),
     # The 4dtz ligands' real atom names, so the RCSB fixture exercises the
     # atom-set check with a template rather than only a name.
@@ -87,15 +89,16 @@ def _cif_complex() -> str:
             "loop_",
             "_atom_site.group_PDB",
             "_atom_site.id",
+            "_atom_site.type_symbol",
             "_atom_site.label_atom_id",
             "_atom_site.label_comp_id",
             "_atom_site.label_asym_id",
             "_atom_site.label_seq_id",
             "_atom_site.auth_seq_id",
             "_atom_site.pdbx_PDB_ins_code",
-            "ATOM 1 N ALA A 1 1 ?",
+            "ATOM 1 N N ALA A 1 1 ?",
             # Non-polymer residues are numbered by auth_seq_id upstream.
-            "HETATM 2 C1 LIG B . 1 ?",
+            "HETATM 2 C C1 LIG B . 1 ?",
             "#",
         ]
     )
@@ -108,6 +111,7 @@ def _cif_label_auth() -> str:
             "loop_",
             "_atom_site.group_PDB",
             "_atom_site.id",
+            "_atom_site.type_symbol",
             "_atom_site.label_atom_id",
             "_atom_site.label_comp_id",
             "_atom_site.label_asym_id",
@@ -118,14 +122,22 @@ def _cif_label_auth() -> str:
             "_atom_site.pdbx_PDB_ins_code",
             # Upstream keys the polymer by label A/1, not author X/42, resolves
             # alternates by occupancy, and never reads insertion codes.
-            "ATOM 1 CA ALA A X 1 42 A B",
-            "HETATM 2 C1 LIG B Y . 7 . ?",
+            "ATOM 1 C CA ALA A X 1 42 A B",
+            "HETATM 2 C C1 LIG B Y . 7 . ?",
             "#",
         ]
     )
 
 
 FIXTURES = Path(__file__).resolve().parent / "4dtz.cif"
+
+
+def _ccd_from(records: list[prepare.Residue]) -> dict[str, frozenset[str]]:
+    """Templates matching the fixture, so its mapping test is not an atom audit."""
+    templates: dict[str, set[str]] = {}
+    for record in records:
+        templates.setdefault(record.name, set()).add(record.atom)
+    return {name: frozenset(atoms) for name, atoms in templates.items()}
 
 
 def _write(tmp_path: Path, name: str, content: str) -> str:
@@ -382,10 +394,12 @@ def test_manifest_print_argv_uses_the_named_input_roles(tmp_path, capsys):
     ]
 
 
-def test_rcsb_cif_uses_label_chains_and_ligand_auth_numbers(tmp_path):
+def test_rcsb_cif_uses_label_chains_and_ligand_auth_numbers(tmp_path, monkeypatch):
     records = prepare.read_structure(str(FIXTURES))
     # 4dtz is RCSB with polymer alternates and a ligand whose label chain (D)
-    # differs from its author chain (A).
+    # differs from its author chain (A). The library is derived from the fixture
+    # here; the real-CCD probe for this file runs against the pinned SIF.
+    monkeypatch.setattr(prepare, "_ccd_library", lambda: _ccd_from(records))
     assert ("D", 501, "LDP") in prepare._ligands(records)
     params = _params(predict_ligand="D-LDP-501", target_res="A-10")
     prepare.validate_structure(params, prepare.validate_params(params), records, str(FIXTURES))
@@ -409,7 +423,7 @@ def test_cif_polymer_uses_label_numbering_not_author_numbering(tmp_path):
 def test_cif_alternate_locations_and_insertion_codes_are_not_rejected(tmp_path):
     content = _cif_label_auth()
     # The fixture carries altloc "A" and insertion code "B" on the polymer row.
-    assert "ATOM 1 CA ALA A X 1 42 A B" in content
+    assert "ATOM 1 C CA ALA A X 1 42 A B" in content
     structure = _write(tmp_path, "label_auth.cif", content)
     params = _params(predict_ligand="B-LIG-7", target_res="A-1")
     prepare.validate_structure(params, prepare.validate_params(params), prepare.read_structure(structure), structure)
@@ -481,17 +495,17 @@ def test_the_adapter_does_not_restate_the_num_samples_default():
         prepare.validate_params(params)
 
 
-def _cif_atom_site(rows: list[str], *, model: bool = False, type_symbol: bool = False) -> str:
-    columns = ["_atom_site.group_PDB", "_atom_site.id"]
-    if type_symbol:
-        columns.append("_atom_site.type_symbol")
-    columns.extend([
+def _cif_atom_site(rows: list[str], *, model: bool = False) -> str:
+    columns = [
+        "_atom_site.group_PDB",
+        "_atom_site.id",
+        "_atom_site.type_symbol",
         "_atom_site.label_atom_id",
         "_atom_site.label_comp_id",
         "_atom_site.label_asym_id",
         "_atom_site.label_seq_id",
         "_atom_site.auth_seq_id",
-    ])
+    ]
     if model:
         columns.append("_atom_site.pdbx_PDB_model_num")
     return "\n".join(["data_test", "loop_", *columns, *rows, "#"])
@@ -500,16 +514,16 @@ def _cif_atom_site(rows: list[str], *, model: bool = False, type_symbol: bool = 
 def _cif_with_typed_ligand(atoms: list[tuple[str, str]]) -> str:
     rows = ["ATOM 1 C CA ALA A 1 1"]
     rows.extend(f"HETATM {serial} {element} {atom} LIG B . 1" for serial, (atom, element) in enumerate(atoms, start=2))
-    return _cif_atom_site(rows, type_symbol=True)
+    return _cif_atom_site(rows)
 
 
 def _cif_with_models(count: int) -> str:
     rows = [
-        f"{group} {serial} {atom} {name} {chain} {label_seq} {auth_seq} {model}"
+        f"{group} {serial} {element} {atom} {name} {chain} {label_seq} {auth_seq} {model}"
         for model in range(1, count + 1)
-        for group, serial, atom, name, chain, label_seq, auth_seq in (
-            ("ATOM", 1, "CA", "ALA", "A", 1, 1),
-            ("HETATM", 2, "C1", "LIG", "B", ".", 1),
+        for group, serial, element, atom, name, chain, label_seq, auth_seq in (
+            ("ATOM", 1, "C", "CA", "ALA", "A", 1, 1),
+            ("HETATM", 2, "C", "C1", "LIG", "B", ".", 1),
         )
     ]
     return _cif_atom_site(rows, model=True)
@@ -517,16 +531,16 @@ def _cif_with_models(count: int) -> str:
 
 def _cif_with_ligand(name: str) -> str:
     return _cif_atom_site([
-        "ATOM 1 CA ALA A 1 1",
-        f"HETATM 2 C1 {name} C . 2",
+        "ATOM 1 C CA ALA A 1 1",
+        f"HETATM 2 C C1 {name} C . 2",
     ])
 
 
 def _cif_with_collision() -> str:
     return _cif_atom_site([
-        "ATOM 1 CA ALA A 1 1",
-        "ATOM 2 CA GLY A 1 1",
-        "HETATM 3 C1 LIG B . 1",
+        "ATOM 1 C CA ALA A 1 1",
+        "ATOM 2 C CA GLY A 1 1",
+        "HETATM 3 C C1 LIG B . 1",
     ])
 
 
@@ -658,17 +672,32 @@ def test_cif_ligand_unknown_hydrogen_is_ignored(tmp_path, element):
     prepare.validate_structure(params, prepare.validate_params(params), prepare.read_structure(structure), structure)
 
 
-def test_pdb_ligand_atoms_are_parsed_by_openbabel_without_the_library(tmp_path, monkeypatch):
-    # PDB ligands never go through getRes; dnHEM-style HEM atoms C1/FE1 are valid.
+def test_pdb_ligand_atoms_are_parsed_by_openbabel(tmp_path, monkeypatch):
+    # PDB polymer ALA resolves in the library; the HEM ligand never does, so its
+    # dnHEM-style C1/FE1 atoms are valid even though the stub has no HEM entry.
     structure = _write(tmp_path, "dnhem.pdb", "\n".join([
         _line("ATOM", 1, "CA", "ALA", "A", 1),
         _line("HETATM", 2, "FE1", "HEM", "B", 213, x=5.0),
         _line("HETATM", 3, "C1", "HEM", "B", 213, x=6.0),
         "END",
     ]))
-    monkeypatch.setattr(prepare, "_ccd_library", lambda: pytest.fail("PDB ligands must not load the CCD"))
+    monkeypatch.setattr(prepare, "_ccd_library", lambda: {"ALA": _CCD_STUB["ALA"]})
     params = _params(predict_ligand="HEM")
     prepare.validate_structure(params, prepare.validate_params(params), prepare.read_structure(structure), structure)
+
+
+def test_pdb_polymer_residue_must_be_in_the_residue_library(tmp_path, monkeypatch):
+    # pdbparser.py calls getRes for every ATOM residue; a None template raises.
+    structure = _write(tmp_path, "xqz.pdb", "\n".join([
+        _line("ATOM", 1, "CA", "XQZ", "A", 1),
+        _line("HETATM", 2, "C1", "LIG", "B", 1, x=5.0),
+        "END",
+    ]))
+    monkeypatch.setattr(prepare, "_ccd_library", lambda: {"ALA": _CCD_STUB["ALA"], "LIG": _CCD_STUB["LIG"]})
+    params = _params()
+    with pytest.raises(prepare.PreparationError, match=r"Protein residue name\(s\) 'XQZ'"):
+        prepare.validate_structure(params, prepare.validate_params(params), prepare.read_structure(structure),
+                                   structure)
 
 
 def test_pdb_ligand_name_outside_the_library_is_parsed_by_openbabel(tmp_path):
@@ -686,9 +715,62 @@ def test_pdb_target_res_must_be_in_the_residue_library(tmp_path):
         "END",
     ]))
     params = _params(target_res="A-1")
-    with pytest.raises(prepare.PreparationError, match="target_res residue 'AAJ' is not in PLACER's shipped"):
+    with pytest.raises(prepare.PreparationError, match=r"Protein residue name\(s\) 'AAJ'"):
         prepare.validate_structure(params, prepare.validate_params(params), prepare.read_structure(structure),
                                    structure)
+
+
+def _cif_with_polymer_atom(atom: str, element: str) -> str:
+    return "\n".join([
+        "data_test",
+        "loop_",
+        "_atom_site.group_PDB",
+        "_atom_site.id",
+        "_atom_site.type_symbol",
+        "_atom_site.label_atom_id",
+        "_atom_site.label_comp_id",
+        "_atom_site.label_asym_id",
+        "_atom_site.label_seq_id",
+        "_atom_site.auth_seq_id",
+        "ATOM 1 C CA ALA A 3 3",
+        f"ATOM 2 {element} {atom} ALA A 3 3",
+        "HETATM 3 C C1 LIG B . 1",
+        "#",
+    ])
+
+
+def test_cif_polymer_heavy_atom_must_match_the_residue_library(tmp_path):
+    # cifutils.py:609-610 masks the whole residue for an unmatched heavy atom.
+    structure = _write(tmp_path, "poly.cif", _cif_with_polymer_atom("QQ", "C"))
+    params = _params(predict_ligand="LIG")
+    with pytest.raises(prepare.PreparationError, match="Residue A-3-ALA has heavy atoms PLACER does not parse"):
+        prepare.validate_structure(params, prepare.validate_params(params), prepare.read_structure(structure),
+                                   structure)
+
+
+def test_cif_polymer_unknown_hydrogen_is_ignored(tmp_path):
+    structure = _write(tmp_path, "poly_h.cif", _cif_with_polymer_atom("H9", "H"))
+    params = _params(predict_ligand="LIG")
+    prepare.validate_structure(params, prepare.validate_params(params), prepare.read_structure(structure), structure)
+
+
+def test_cif_without_type_symbol_is_rejected(tmp_path):
+    structure = _write(tmp_path, "no_symbol.cif", "\n".join([
+        "data_test",
+        "loop_",
+        "_atom_site.group_PDB",
+        "_atom_site.id",
+        "_atom_site.label_atom_id",
+        "_atom_site.label_comp_id",
+        "_atom_site.label_asym_id",
+        "_atom_site.label_seq_id",
+        "_atom_site.auth_seq_id",
+        "ATOM 1 CA ALA A 1 1",
+        "HETATM 2 H9 LIG B . 1",
+        "#",
+    ]))
+    with pytest.raises(prepare.PreparationError, match="_atom_site.type_symbol"):
+        prepare.read_structure(structure)
 
 
 def test_excluded_common_ligands_reject_a_polymer_name(tmp_path):

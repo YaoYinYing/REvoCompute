@@ -317,6 +317,11 @@ def _cif_residues(text: str) -> list[Residue]:
             or atom_column is None
         ):
             raise PreparationError("mmCIF atom-site records lack the columns PLACER needs.")
+        if symbol_column is None:
+            raise PreparationError(
+                "mmCIF atom-site records lack _atom_site.type_symbol, which PLACER needs to tell "
+                "heavy atoms from hydrogens."
+            )
         if model_column is not None:
             models = {
                 row[model_column]
@@ -425,12 +430,22 @@ def validate_structure(params: dict[str, Any], parsed: ParsedParams, residues: l
     # any count, selector, or validation below.
     relevant = [residue for residue in residues if residue.name not in skipped]
     ligands = _ligands(residues, skip_common)
-    # PLACER resolves mmCIF residues through its shipped library; PDB ligands are
-    # parsed by OpenBabel instead, so only targets and selectors are checked there.
-    needs_ccd = cif_input or bool(
+    # Protein residues resolve through the shipped library in both parsers;
+    # PDB ligands are parsed by OpenBabel instead and are not library-checked.
+    has_polymer = any(residue.record == "ATOM" for residue in residues)
+    needs_ccd = cif_input or has_polymer or bool(
         parsed.mutate or parsed.crop_centers or parsed.corruption_centers or parsed.bonds or parsed.target_res
     )
     ccd = _ccd_library() if needs_ccd else {}
+    unknown_polymer = sorted(
+        {residue.name for residue in relevant if residue.record == "ATOM" and residue.name not in ccd}
+    )
+    if unknown_polymer:
+        raise PreparationError(
+            "Protein residue name(s) "
+            + ", ".join(repr(name) for name in unknown_polymer)
+            + " are not in PLACER's shipped residue library; PLACER would fail or silently drop them."
+        )
     if cif_input:
         unknown = sorted({name for _chain, _number, name in ligands if name not in ccd})
         if unknown:
@@ -440,24 +455,23 @@ def validate_structure(params: dict[str, Any], parsed: ParsedParams, residues: l
                 + " is not in PLACER's shipped residue library; PLACER would drop it."
             )
         # cifutils masks a residue only for an unmatched heavy atom; unmatched
-        # H/D atoms are skipped. Mirror that before dispatch.
-        ligand_atoms: dict[tuple[str, int, str], set[tuple[str, str]]] = {}
+        # H/D atoms are skipped. Mirror that for polymer and ligand residues.
+        residue_atoms: dict[tuple[str, str, int, str], set[tuple[str, str]]] = {}
         for residue in residues:
-            if residue.record == "HETATM" and residue.number is not None and residue.name not in skipped:
-                ligand_atoms.setdefault((residue.chain, residue.number, residue.name), set()).add(
-                    (residue.atom, residue.element)
-                )
-        for ligand in ligands:
-            template = ccd[ligand[2]]
+            if residue.record in {"ATOM", "HETATM"} and residue.number is not None and residue.name not in skipped:
+                residue_atoms.setdefault(
+                    (residue.record, residue.chain, residue.number, residue.name), set()
+                ).add((residue.atom, residue.element))
+        for (record, chain, number, name), atoms in residue_atoms.items():
+            template = ccd[name]
             extra = sorted(
-                atom
-                for atom, element in ligand_atoms.get(ligand, ())
-                if atom not in template and element not in {"H", "D"}
+                atom for atom, element in atoms if atom not in template and element not in {"H", "D"}
             )
             if extra:
+                kind = "Ligand" if record == "HETATM" else "Residue"
                 raise PreparationError(
-                    f"Ligand {ligand[0]}-{ligand[1]}-{ligand[2]} has heavy atoms PLACER does not parse for "
-                    f"residue name3 {ligand[2]!r}: " + ", ".join(repr(atom) for atom in extra) + "."
+                    f"{kind} {chain}-{number}-{name} has heavy atoms PLACER does not parse for residue "
+                    f"name3 {name!r}: " + ", ".join(repr(atom) for atom in extra) + "."
                 )
     # The mmCIF parser resolves alternates by highest occupancy and never reads
     # insertion codes, so these PDB-parser restrictions apply to PDB only.
