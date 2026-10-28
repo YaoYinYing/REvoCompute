@@ -139,6 +139,24 @@ When a lost GPU finish callback cannot be resolved from controller evidence, the
 allocation stays unsettled and is left for review; it is never estimated and
 never charged as zero.
 
+### Bounded ledger windows are chronological and self-describing
+
+`GET /compute/api/resource-ledger` returns a bounded window of the current UTC
+period plus the period-independent storage facts, presented oldest-first by
+`(created_at, id)`. The response carries `order`, an authoritative
+`opening_gpu_seconds` equal to the settled balance minus the deltas shown, one
+signed GPU-second step per shown fact, and `complete` with `total_entry_count`.
+A window that does not hold every fact says so instead of reading as a zero
+history. The Admin resource report embeds the identical projection, so the
+account and an operator cannot be shown two different waterfalls.
+
+GPU quantities are integer GPU-seconds on the server and become credits (60
+GPU-seconds each) only for presentation. A balance read that would publish an
+integer outside the exact JSON range (±(2^53-1)) answers `503` with
+`unavailable_reason` `ledger_value_out_of_range` rather than a rounded number;
+a store failure answers `ledger_unavailable`. The Admin user listing and
+mutation responses are not balance reads and keep their existing behavior.
+
 ## Data Lifecycle
 
 Durable data has its own lifecycle, orthogonal to the Task's execution status: a
