@@ -145,7 +145,7 @@ never charged as zero.
 period plus the period-independent storage facts, presented oldest-first by
 `(created_at, id)`. The response carries `order`, an authoritative
 `opening_gpu_seconds` equal to the settled balance minus the deltas shown, one
-signed GPU-second step per shown fact, and `complete` with `total_entry_count`.
+signed GPU-second step per shown GPU fact, and `complete` with `total_entry_count`.
 A window that does not hold every fact says so instead of reading as a zero
 history. The Admin resource report embeds the identical projection, so the
 account and an operator cannot be shown two different waterfalls.
