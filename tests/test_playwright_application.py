@@ -333,7 +333,7 @@ def _install_app(page: Page) -> list[str]:
         "notice": {"title": "Academic use only", "summary": "The upstream licence requires verified academic eligibility."},
         "license": {"name": "Upstream terms", "url": "https://example.org/terms"},
     }]}))
-    page.route(f"{ORIGIN}/compute/api/access/requests", lambda route: route.fulfill(status=201, json={"status": "pending"}))
+    page.route(f"{ORIGIN}/compute/api/access/requests", lambda route: route.fulfill(status=201, json={"policy_id": "academic-only", "requests": [{"entitlement": "academic-models", "status": "pending"}]}))
     page.route(f"{ORIGIN}/compute/api/gpu-credit", lambda route: route.fulfill(json=_gpu_credit()))
     page.route(f"{ORIGIN}/compute/api/user-metrics?*", lambda route: route.fulfill(json=_metrics(parse_qs(urlsplit(route.request.url).query).get("window", ["daily"])[0])))
     subject_id = 2
@@ -709,7 +709,7 @@ def test_restricted_runner_access_request_updates_without_navigation(page: Page)
     page.route(f"{ORIGIN}/compute/api/types/sequence_demo", lambda route: route.fulfill(json=detail))
     page.route(
         f"{ORIGIN}/compute/api/access/requests",
-        lambda route: (requested.append(route.request.post_data or ""), route.fulfill(status=201, json={"status": "pending"})),
+        lambda route: (requested.append(route.request.post_data or ""), route.fulfill(status=201, json={"policy_id": "academic-only", "requests": [{"entitlement": "academic-models", "status": "pending"}]})),
     )
 
     page.goto(f"{ORIGIN}/compute/create_task?task_type=sequence_demo")

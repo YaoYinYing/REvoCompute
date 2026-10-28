@@ -18,7 +18,6 @@ from __future__ import annotations
 import os
 from dataclasses import replace
 from pathlib import Path
-import time
 from urllib.parse import urlsplit
 
 from playwright.sync_api import Page, expect
@@ -178,22 +177,40 @@ def test_the_example_picker_fits_and_closes_on_a_narrow_screen(page: Page) -> No
 
 def test_closing_a_picker_while_its_catalog_is_in_flight_cancels_it(page: Page) -> None:
     """A dismissed picker cannot surface a late catalog response."""
-    mount_scenario(page, controlled_scenario().with_demos([sequence_demo()]))
+    router = mount_scenario(page, controlled_scenario().with_demos([sequence_demo()]))
     page.goto(f"{ORIGIN}/compute/create_task?task_type={RUNNER}")
     expect(page.locator(".ct-workbench")).to_be_visible()
 
-    def slow_catalog(route) -> None:
-        time.sleep(1.2)
-        route.fallback()
+    url = f"{ORIGIN}/compute/api/types/{RUNNER}/demos"
+    held: list = []
 
-    page.route(f"{ORIGIN}/compute/api/types/{RUNNER}/demos", slow_catalog)
+    def hold_catalog(route) -> None:
+        # Leave the request hanging so the picker can be dismissed first.
+        held.append(route)
+
+    page.route(url, hold_catalog)
     page.locator("[data-ct-demo-open]").click()
     expect(page.locator("dialog.ct-demo-dialog")).to_be_visible()
+    # Keep the dismissed dialog reachable so a late response mutating detached
+    # DOM is observable; a page locator cannot see nodes that left the document.
+    page.evaluate("() => { window.__closedPicker = document.querySelector('dialog.ct-demo-dialog'); }")
     page.keyboard.press("Escape")
     expect(page.locator("dialog.ct-demo-dialog")).to_have_count(0)
-    page.wait_for_timeout(1600)
-    expect(page.locator("dialog.ct-demo-dialog")).to_have_count(0)
-    expect(page.locator(".ct-demo")).to_have_count(0)
+    assert len(held) == 1, "the catalog request must still be in flight"
+    assert page.evaluate("window.__closedPicker.querySelectorAll('.ct-demo').length") == 0
+
+    # Deliver the late answer only after the dialog is gone: neither the demo
+    # cards nor an error may be written into the detached dialog.
+    held[0].fulfill(json=router.scenario.demo_catalog(RUNNER))
+    page.wait_for_timeout(400)
+    assert page.evaluate("window.__closedPicker.querySelectorAll('.ct-demo').length") == 0
+    assert page.evaluate("window.__closedPicker.querySelector('.ct-status').textContent") == ""
+
+    # The late response did not poison the next open either.
+    page.unroute(url, hold_catalog)
+    page.locator("[data-ct-demo-open]").click()
+    expect(page.locator("dialog.ct-demo-dialog .ct-demo")).to_have_count(1)
+    page.get_by_role("button", name="Cancel", exact=True).click()
 
 
 def test_a_failed_example_catalog_is_reported_inside_the_picker(page: Page) -> None:
@@ -214,8 +231,10 @@ def test_a_failed_example_catalog_is_reported_inside_the_picker(page: Page) -> N
     expect(dialog).to_have_count(0)
 
 
-def test_the_access_request_dialog_is_labelled_keyboard_safe_and_sends_one_policy(page: Page) -> None:
+@pytest.mark.parametrize("theme", ["light", "dark"])
+def test_the_access_request_dialog_is_labelled_keyboard_safe_and_sends_one_policy(page: Page, theme: str) -> None:
     """Requesting access is a modal form that emits exactly the policy's id."""
+    _pin_theme(page, theme)
     runner = replace(controlled_runner(), access=AccessState.requestable_policy())
     mount_scenario(page, controlled_scenario(runner=runner))
     posted: list[tuple[str, dict | None]] = []
@@ -229,6 +248,8 @@ def test_the_access_request_dialog_is_labelled_keyboard_safe_and_sends_one_polic
     style = _dialog_style(page, "dialog.ct-dialog")
     assert _rgba(style["background"])[3] == pytest.approx(1.0), style
     assert _contrast(style["color"], style["background"]) >= 4.5, style
+    assert float(style["border"].removesuffix("px")) >= 1, style
+    assert style["shadow"] != "none", style
     labelled = page.evaluate(
         """() => {
             const dialog = document.querySelector('dialog.ct-dialog');
@@ -237,7 +258,7 @@ def test_the_access_request_dialog_is_labelled_keyboard_safe_and_sends_one_polic
         }"""
     )
     assert labelled == "Request Runner access", labelled
-    _evidence(page, "access-request-dialog")
+    _evidence(page, f"access-request-dialog-{theme}")
 
     # A modal dialog takes focus and Escape cancels without sending.
     assert page.evaluate("document.activeElement && document.activeElement.closest('dialog.ct-dialog') !== null")
@@ -256,8 +277,10 @@ def test_the_access_request_dialog_is_labelled_keyboard_safe_and_sends_one_polic
     assert requests == [{"policy_id": "academic-only", "reason": "Non-commercial work at Example Institute"}]
 
 
-def test_the_replace_confirmation_is_a_labelled_opaque_dialog(page: Page) -> None:
+@pytest.mark.parametrize("theme", ["light", "dark"])
+def test_the_replace_confirmation_is_a_labelled_opaque_dialog(page: Page, theme: str) -> None:
     """Replacing an edited form is confirmed in the same dialog family."""
+    _pin_theme(page, theme)
     mount_scenario(page, controlled_scenario().with_demos([sequence_demo()]))
     page.goto(f"{ORIGIN}/compute/create_task?task_type={RUNNER}")
     expect(page.locator(".ct-workbench")).to_be_visible()
@@ -269,6 +292,7 @@ def test_the_replace_confirmation_is_a_labelled_opaque_dialog(page: Page) -> Non
 
     style = _dialog_style(page, "dialog.ct-dialog:not(.ct-demo-dialog)")
     assert _rgba(style["background"])[3] == pytest.approx(1.0), style
+    assert _contrast(style["color"], style["background"]) >= 4.5, style
     labelled = page.evaluate(
         """() => {
             const dialog = document.querySelector('dialog.ct-dialog:not(.ct-demo-dialog)');
@@ -276,11 +300,13 @@ def test_the_replace_confirmation_is_a_labelled_opaque_dialog(page: Page) -> Non
             return id ? document.getElementById(id)?.textContent : null;
         }"""
     )
-    # The accessible name is the heading the reader sees, not a duplicated label.
+    # The accessible name is the destructive question the reader answers, and it
+    # is the heading the dialog actually shows.
     heading = dialog.locator("h2").inner_text()
     assert labelled == heading and heading, labelled
+    expect(dialog.locator("h2")).to_contain_text("Replace")
     expect(dialog).to_contain_text("replaces the inputs and settings")
-    _evidence(page, "replace-confirmation")
+    _evidence(page, f"replace-confirmation-{theme}")
     page.keyboard.press("Escape")
     expect(dialog).to_have_count(0)
     expect(page.locator('[data-ct-parameter="iterations"]')).to_have_value("1")
@@ -298,3 +324,17 @@ def test_a_partial_example_is_offered_with_its_declared_file_and_nothing_else(pa
     expect(dialog).to_contain_text(demo.files[0].path)
     expect(dialog).to_contain_text(demo.source_name)
     expect(dialog).to_contain_text(demo.license_name)
+
+
+def test_demo_provenance_never_renders_an_unsafe_link(page: Page) -> None:
+    """A declared source or licence URL becomes a link only when it is http(s)."""
+    demo = sequence_demo(source_url="javascript:alert(1)", license_url="javascript:alert(1)")
+    mount_scenario(page, controlled_scenario().with_demos([demo]))
+    _open_demo(page)
+    provenance = page.locator("dialog.ct-demo-dialog .ct-demo-provenance")
+    expect(provenance.locator("a")).to_have_count(0)
+    expect(provenance).to_contain_text(demo.source_name)
+    expect(provenance).to_contain_text(demo.license_name)
+    assert page.evaluate(
+        "[...document.querySelectorAll('a[href]')].every(anchor => !anchor.getAttribute('href').startsWith('javascript:'))"
+    )

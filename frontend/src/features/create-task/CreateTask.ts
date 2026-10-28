@@ -8,6 +8,7 @@ import type { TaskCatalog, TaskFormDefinition, TaskPreflight, TaskSummary } from
 import { submissionNotice } from '../runners/readiness-copy';
 import { t } from '../../app/i18n';
 import { loadEnvironment } from '../../app/environment';
+import { safeExternalUrl } from '../../app/domain-vocabulary';
 
 function node<K extends keyof HTMLElementTagNameMap>(tag: K, className = '', text?: string): HTMLElementTagNameMap[K] {
   const value = document.createElement(tag); value.className = className; if (text != null) value.textContent = text; return value;
@@ -469,10 +470,13 @@ export class CreateTask {
     card.append(node('h3', '', demo.title), node('p', '', demo.purpose));
     if (demo.context) card.append(node('p', 'ct-help', demo.context));
     const provenance = node('p', 'ct-demo-provenance', `${t('ct.demo.attribution')} `);
-    const source = demo.source.url ? node('a', '', demo.source.name) : node('span', '', demo.source.name);
-    if (source instanceof HTMLAnchorElement) { source.href = demo.source.url; source.rel = 'noopener noreferrer'; source.target = '_blank'; }
-    const licence = demo.license.url ? node('a', '', demo.license.name) : node('span', '', demo.license.name);
-    if (licence instanceof HTMLAnchorElement) { licence.href = demo.license.url; licence.rel = 'noopener noreferrer'; licence.target = '_blank'; }
+    // A declared URL is published data, not a trusted link: only an absolute
+    // http(s) destination becomes a link; anything else stays plain text.
+    const sourceUrl = safeExternalUrl(demo.source.url); const licenceUrl = safeExternalUrl(demo.license.url);
+    const source = sourceUrl ? node('a', '', demo.source.name) : node('span', '', demo.source.name);
+    if (source instanceof HTMLAnchorElement) { source.href = sourceUrl!; source.rel = 'noopener noreferrer'; source.target = '_blank'; }
+    const licence = licenceUrl ? node('a', '', demo.license.name) : node('span', '', demo.license.name);
+    if (licence instanceof HTMLAnchorElement) { licence.href = licenceUrl!; licence.rel = 'noopener noreferrer'; licence.target = '_blank'; }
     provenance.append(source, node('span', '', ' · '), licence);
     const summary = node('dl', 'ct-demo-summary');
     Object.entries(demo.inputs).forEach(([role, files]) => { summary.append(node('dt', '', role), node('dd', '', files.map(file => file.path).join(', '))); });
@@ -535,7 +539,8 @@ export class CreateTask {
     const keep = node('button', 'ct-secondary', t('ct.demo.keep')); keep.type = 'button'; keep.addEventListener('click', () => dialog.close('keep'));
     const replace = node('button', 'ct-primary', t('ct.demo.confirmReplace')); replace.type = 'button'; replace.addEventListener('click', () => dialog.close('replace'));
     const actions = node('div', 'ct-actions'); actions.append(keep, replace);
-    const heading = node('h2', '', t('ct.demo.load'));
+    // The destructive question names the dialog, not the action that led here.
+    const heading = node('h2', '', t('ct.demo.confirmReplace'));
     form.append(heading, node('p', '', t('ct.demo.replace', { title: demo.title })), actions);
     dialog.append(form); labelled(dialog, heading); document.body.append(dialog); dialog.showModal();
     return new Promise(resolve => dialog.addEventListener('close', () => { const accepted = dialog.returnValue === 'replace'; dialog.remove(); resolve(accepted); }, { once: true }));

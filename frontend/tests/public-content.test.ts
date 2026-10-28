@@ -23,12 +23,13 @@ describe('public and Account presentation data', () => {
     expect(accessState({ restricted: true, requestable: false })).toBe('Restricted');
   });
 
-  it('keeps a live grant ahead of stale request state and an expiry ahead of a newer request', () => {
-    // A grant is the decisive fact even if an old request row still says pending,
-    // and an expired grant is an Expired state even when a request was rejected.
+  it('keeps a live grant and a live request ahead of the history behind them', () => {
+    // A grant is the decisive fact even if an old request row still says pending.
     expect(accessState({ restricted: true, granted: true, request_status: 'pending' })).toBe('Granted');
     expect(accessState({ restricted: true, granted: true, expired: true })).toBe('Granted');
-    expect(accessState({ restricted: true, expired: true, request_status: 'pending' })).toBe('Expired');
+    // The server's projection can carry an expired grant plus a newer request;
+    // its access list counts that policy as pending, so the live request wins.
+    expect(accessState({ restricted: true, expired: true, request_status: 'pending', requestable: true })).toBe('Pending');
     expect(accessState({ restricted: true, expired: true, request_status: 'rejected' })).toBe('Expired');
     expect(accessState({ restricted: true, request_status: 'approved', requestable: true })).toBe('Requestable');
   });
