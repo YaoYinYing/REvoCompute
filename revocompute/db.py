@@ -3056,10 +3056,14 @@ class TaskDatabase:
         ledger = self.resource_ledger_table
         with self.engine.begin() as conn:
             # pysqlite opens a DBAPI transaction on the first write, not on a
-            # SELECT.  A month whose grant already exists performs no write, so
-            # begin explicitly: every read below must see one snapshot even when
-            # a concurrent settlement commits between them.
-            conn.exec_driver_sql("BEGIN")
+            # SELECT.  A month whose grant already exists still executes the
+            # grant INSERT, and beginning deferred lets a concurrent settlement
+            # commit between the policy read and that write; SQLite cannot
+            # promote the stale read snapshot in WAL mode and returns
+            # SQLITE_BUSY_SNAPSHOT, which ``busy_timeout`` does not retry.
+            # ``BEGIN IMMEDIATE`` takes the write lock before the first read, so
+            # every read below sees one snapshot that no writer can invalidate.
+            conn.exec_driver_sql("BEGIN IMMEDIATE")
             summary, entitlement = self._gpu_credit_position_in_connection(conn, user_id, checked_at)
             period = str(summary["period"])
             rows = conn.execute(

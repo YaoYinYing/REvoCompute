@@ -13,12 +13,16 @@ implementation that produced it.
 
 from __future__ import annotations
 
+import sqlite3
+import threading
 import time
 from datetime import datetime, timezone
 
 import sqlalchemy as sa
 from conftest import _admin_client_auth, _load_pssm_module, _test_client_auth
 from jsonschema import Draft202012Validator
+from revocompute import resource_ledger as rloan
+from revocompute.db import TaskDatabase
 
 
 def _validate(spec: dict, schema_name: str, payload: object) -> None:
@@ -546,3 +550,138 @@ def test_a_storage_dominated_window_reports_no_gpu_step_and_the_settled_opening(
     assert waterfall["opening_gpu_seconds"] == (
         summary["monthly_grant_gpu_seconds"] + summary["adjustment_gpu_seconds"] - summary["usage_gpu_seconds"]
     )
+
+
+_RAW_FACT = (
+    "INSERT INTO resource_ledger (subject_type, subject_id, period, kind, unit, resource_class, quantity,"
+    " reason, reason_code, evidence_source, idempotency_key, created_at)"
+    " VALUES ('user', ?, ?, 'admin_adjustment', 'gpu_second', '', ?, 'Concurrent write',"
+    " 'admin_adjustment', 'policy', ?, ?)"
+)
+
+
+def _insert_fact(path: str, *, user_id: int, period: str, at: float, quantity: int, key: str) -> None:
+    """Commit one immutable fact from a second connection, timing left to the caller."""
+    with sqlite3.connect(path, timeout=0) as conn:
+        conn.execute("PRAGMA busy_timeout=0")
+        conn.execute(_RAW_FACT, (user_id, period, quantity, key, at))
+
+
+def _assert_coherent_window(window: dict) -> dict:
+    """The waterfall reconciles to the summary and to the window's own row list."""
+    waterfall = rloan.gpu_waterfall_payload(
+        entries=window["rows"],
+        summary=window["summary"],
+        entitlement=window["entitlement"],
+        total_entry_count=window["total_entry_count"],
+    )
+    gpu_rows = sorted(
+        (row for row in window["rows"] if row["unit"] == rloan.UNIT_GPU_SECOND),
+        key=lambda row: (row["created_at"], row["id"]),
+    )
+    assert waterfall["entry_count"] == len(gpu_rows)
+    assert waterfall["total_entry_count"] == window["total_entry_count"]
+    assert waterfall["complete"] is (len(gpu_rows) == window["total_entry_count"])
+    balance = waterfall["opening_gpu_seconds"]
+    for row, step in zip(gpu_rows, waterfall["steps"]):
+        assert step["entry_id"] == row["id"]
+        balance += int(row["quantity"])
+        assert step["balance_gpu_seconds"] == balance
+    assert balance == waterfall["closing_gpu_seconds"]
+    assert waterfall["closing_gpu_seconds"] == waterfall["summary"]["settled_balance_gpu_seconds"]
+    assert window["summary"]["remaining_gpu_seconds"] == window["entitlement"].remaining
+    return waterfall
+
+
+def _grant_insert_only(statement: str) -> bool:
+    return statement.lstrip().upper().startswith("INSERT INTO RESOURCE_LEDGER")
+
+
+def test_a_concurrent_commit_cannot_land_between_the_window_read_and_its_grant_write(tmp_path):
+    """The window's snapshot survives a peer write before its grant insert.
+
+    A month whose grant already exists still executes the idempotent grant
+    INSERT.  With a deferred ``BEGIN`` a peer could commit between the grant
+    policy SELECT and that INSERT; SQLite then cannot promote the stale snapshot
+    in WAL mode and raises SQLITE_BUSY_SNAPSHOT, which ``busy_timeout`` does not
+    retry, so a plain ledger read could 503.
+    """
+    path = str(tmp_path / "tasks.sqlite3")
+    database = TaskDatabase(path)
+    at = datetime(2026, 9, 15, tzinfo=timezone.utc).timestamp()
+    first = database.resource_ledger_window(11, at=at)
+    assert first["total_entry_count"] == 1
+
+    attempts: list[str] = []
+
+    def commit_between_read_and_grant_write(conn, cursor, statement, parameters, context, executemany):
+        if attempts or not _grant_insert_only(statement):
+            return
+        attempts.append("attempted")
+        try:
+            _insert_fact(path, user_id=11, period=first["period"], at=at + 1, quantity=5, key="in-between")
+            attempts.append("committed")
+        except sqlite3.OperationalError as exc:
+            attempts.append(str(exc).lower())
+
+    sa.event.listen(database.engine, "before_cursor_execute", commit_between_read_and_grant_write)
+    try:
+        window = database.resource_ledger_window(11, at=at)
+    finally:
+        sa.event.remove(database.engine, "before_cursor_execute", commit_between_read_and_grant_write)
+
+    assert attempts[0] == "attempted"
+    assert "locked" in attempts[1]
+    assert "committed" not in attempts[1]
+    _assert_coherent_window(window)
+    # The grant already existed, so the read appended nothing new.
+    rows = database.list_compute_ledger(11, period=first["period"])
+    assert [row["kind"] for row in rows] == ["monthly_grant"]
+    assert window["total_entry_count"] == 1
+
+
+def test_a_competing_writer_waits_for_the_window_instead_of_failing(tmp_path):
+    """Acquiring the write lock early must serialize a peer, not fail it."""
+    path = str(tmp_path / "tasks.sqlite3")
+    database = TaskDatabase(path)
+    at = datetime(2026, 9, 15, tzinfo=timezone.utc).timestamp()
+    first = database.resource_ledger_window(12, at=at)
+
+    attempting = threading.Event()
+    errors: list[Exception] = []
+
+    def writer() -> None:
+        try:
+            with sqlite3.connect(path, timeout=30) as conn:
+                conn.execute("PRAGMA busy_timeout=30000")
+                attempting.set()
+                conn.execute(_RAW_FACT, (12, first["period"], 5, "after-window", at + 1))
+        except Exception as exc:  # noqa: BLE001 - surfaced through the assertion
+            errors.append(exc)
+
+    thread = threading.Thread(target=writer)
+    started: list[str] = []
+
+    def start_writer_before_grant_write(conn, cursor, statement, parameters, context, executemany):
+        if started or not _grant_insert_only(statement):
+            return
+        started.append("started")
+        thread.start()
+        # The peer is at the write while the window holds the lock.
+        assert attempting.wait(timeout=5)
+
+    sa.event.listen(database.engine, "before_cursor_execute", start_writer_before_grant_write)
+    try:
+        window = database.resource_ledger_window(12, at=at)
+    finally:
+        sa.event.remove(database.engine, "before_cursor_execute", start_writer_before_grant_write)
+        thread.join(timeout=30)
+
+    assert started == ["started"]
+    assert errors == []
+    assert not thread.is_alive()
+    _assert_coherent_window(window)
+    # The peer committed after the window closed: the window read one fact, and
+    # the ledger now holds that one plus the peer's.
+    assert window["total_entry_count"] == 1
+    assert len(database.list_compute_ledger(12, period=first["period"])) == 2
