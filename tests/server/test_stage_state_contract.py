@@ -962,3 +962,37 @@ def test_reordered_never_run_stage_does_not_collide_with_another_stages_attempt(
         assert rows == {("multistage_runner.features", 1), ("multistage_runner.model", 1)}
     finally:
         database.engine.dispose()
+
+
+def test_workflow_state_mirror_prefers_the_newest_attempt_after_a_reorder(tmp_path, monkeypatch):
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "3d" * 16
+    _insert_task(database, task_id, status="running")
+    monkeypatch.setattr(task_runtime, "task_store", database)
+    try:
+        first = database.begin_stage_attempt(
+            task_id=task_id, stage_index=2, stage_name="multistage_runner.model"
+        )
+        database.finish_stage_attempt(
+            task_id=task_id, stage_name="multistage_runner.model", attempt=first["attempt"],
+            status=stage_state.INTERRUPTED, reason_code=stage_state.Reason.WORKER_LOST,
+        )
+        # The retry sits at a lower manifest index; position must not make the
+        # older attempt look newer.
+        second = database.begin_stage_attempt(
+            task_id=task_id, stage_index=0, stage_name="multistage_runner.model"
+        )
+        assert (second["attempt"], second["stage_index"]) == (2, 0)
+        database.finish_stage_attempt(
+            task_id=task_id, stage_name="multistage_runner.model", attempt=second["attempt"],
+            status=stage_state.COMPLETED, reason_code=stage_state.Reason.COMPLETED,
+        )
+
+        projection = stage_state.workflow_state_projection(database.list_stage_runs(task_id))
+        assert projection["multistage_runner.model"]["attempt"] == 2
+        assert projection["multistage_runner.model"]["status"] == "completed"
+        mirror = json.loads(task_runtime._mirror_json(task_id, {}))
+        assert mirror["multistage_runner.model"]["attempt"] == 2
+        assert mirror["multistage_runner.model"]["reason_code"] == stage_state.Reason.COMPLETED
+    finally:
+        database.engine.dispose()

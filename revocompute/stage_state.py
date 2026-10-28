@@ -98,8 +98,13 @@ def workflow_state_projection(runs: list[dict[str, Any]]) -> dict[str, dict[str,
     is derived from the records and never read as their authority.
     """
     latest: dict[str, dict[str, Any]] = {}
-    for run in sorted(runs, key=lambda item: (item["stage_index"], item["attempt"])):
-        latest[str(run["stage_name"])] = run
+    for run in runs:
+        name = str(run["stage_name"])
+        current = latest.get(name)
+        # Attempt numbers are per stage; the manifest position may move between
+        # attempts, so it cannot decide which attempt is newer.
+        if current is None or int(run["attempt"]) > int(current["attempt"]):
+            latest[name] = run
     return {
         name: {
             "status": str(run["status"]).lower(),
