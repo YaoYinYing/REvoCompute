@@ -808,7 +808,7 @@ def test_task_status_endpoint_reports_per_stage_state(monkeypatch, tmp_path):
         planned_resources={"cpus": 4, "memory": "8G", "max_runtime_seconds": 600, "requires_gpu": False},
     )
     module.task_store.finish_stage_attempt(
-        task_id=md5sum, stage_index=0, attempt=features["attempt"],
+        task_id=md5sum, stage_name="multistage_runner.features", attempt=features["attempt"],
         status=module.task_runtime.stage_state.COMPLETED,
         reason_code=module.task_runtime.stage_state.Reason.COMPLETED,
     )
@@ -869,7 +869,7 @@ def test_worker_redispatch_with_existing_stage_run_keeps_task_running(monkeypatc
         task_id=md5sum, stage_index=0, stage_name="multistage_runner.features"
     )
     module.task_store.finish_stage_attempt(
-        task_id=md5sum, stage_index=0, attempt=prior["attempt"],
+        task_id=md5sum, stage_name="multistage_runner.features", attempt=prior["attempt"],
         status=module.task_runtime.stage_state.COMPLETED,
         reason_code=module.task_runtime.stage_state.Reason.COMPLETED,
     )

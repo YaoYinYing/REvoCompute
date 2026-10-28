@@ -40,7 +40,7 @@ table is required. `stage_runs` is the **only** stage authority;
 | --- | --- | --- |
 | Task | ``tasks.md5sum`` | Core |
 | StageDefinition | owning ``task.yaml`` ``workflow[i]`` | Server manifest |
-| **StageRun / attempt** | ``(task_id, stage_index, attempt)`` | **Core, durable**; the live-attempt constraint is keyed by stage *name* |
+| **StageRun / attempt** | ``(task_id, stage_name, attempt)`` | **Core, durable**; ``stage_index`` is the manifest position stored with the attempt |
 | Scheduler allocation | ``slurm_job_id`` | Slurm; accounting in ``resource_allocations`` |
 | Progress observation | stdout marker | Runner, advisory |
 | Artifact publication | anchored manifest | Core |
@@ -73,8 +73,12 @@ the contract does not pre-declare one.
 **Retries.** One attempt = one allocation attempt. Worker-loss recovery
 (``INTERRUPTED``) or re-dispatch creates the next attempt; terminal attempts are
 never edited. A duplicate StageRun open finds and reuses the live attempt because
-of the partial unique index. Duplicate *execution* of a Task is prevented by the
-existing ``claim_task_execution`` mutex, not by StageRun uniqueness alone.
+of the partial unique index. Attempt identity is the stage *name*, not its
+manifest position, so reordering or inserting a stage resumes the existing
+attempt and numbers the next one per stage; a stage that has never run can take
+an index another stage already used without colliding. Duplicate *execution* of
+a Task is prevented by the existing ``claim_task_execution`` mutex, not by
+StageRun uniqueness alone.
 
 ## Task status projection
 

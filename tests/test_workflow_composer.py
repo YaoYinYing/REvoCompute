@@ -209,7 +209,6 @@ def test_gpu_workflow_uses_owning_runtime_for_allocation_authorization(monkeypat
     # a duplicate dispatch cannot create a second StageRun for the same work.
     assert len(callback_requests) == 1
     request = dict(callback_requests[0])
-    assert request.pop("stage_index") == 0
     assert request.pop("attempt") == 1
     assert request == {
         "task_id": "f" * 32,

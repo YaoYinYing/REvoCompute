@@ -739,15 +739,18 @@ class TaskDatabase:
             Column("created_at", Float, nullable=False),
             Column("updated_at", Float, nullable=False),
         )
+        # Attempt identity follows the stage, not its current position: a
+        # manifest reorder must not collide with another stage's attempt at the
+        # index this one moved to.
         Index(
-            "idx_stage_runs_task_stage_attempt",
+            "idx_stage_runs_identity",
             self.stage_runs_table.c.task_id,
-            self.stage_runs_table.c.stage_index,
+            self.stage_runs_table.c.stage_name,
             self.stage_runs_table.c.attempt,
             unique=True,
         )
         Index(
-            "idx_stage_runs_live_stage",
+            "idx_stage_runs_live_name",
             self.stage_runs_table.c.task_id,
             self.stage_runs_table.c.stage_name,
             unique=True,
@@ -837,8 +840,7 @@ class TaskDatabase:
                 # whose first creation died between the table and its indexes
                 # would stay unconstrained forever.  Create each index by name
                 # as its own idempotent step.
-                for index in self.stage_runs_table.indexes:
-                    index.create(bind=conn, checkfirst=True)
+                self._migrate_stage_run_indexes(conn)
                 self._migrate_subject_columns(conn)
                 self._migrate_resource_columns(conn)
             # The legacy copy normalizes idempotency keys in place, so it must
@@ -848,6 +850,19 @@ class TaskDatabase:
             self._migrate_legacy_gpu_tables()
             with self.engine.begin() as conn:
                 self._install_append_only_guards(conn)
+
+    #: Index names from earlier heads of this branch.  Their columns changed
+    #: (index-keyed identity and live attempt), and ``checkfirst`` matches by
+    #: name, so a database created by one of those heads would otherwise keep
+    #: the old definition forever.
+    _LEGACY_STAGE_RUN_INDEXES = ("idx_stage_runs_task_stage_attempt", "idx_stage_runs_live_stage")
+
+    def _migrate_stage_run_indexes(self, conn) -> None:
+        """Apply the current stage-run index definitions to an existing table."""
+        for name in self._LEGACY_STAGE_RUN_INDEXES:
+            conn.exec_driver_sql(f'DROP INDEX IF EXISTS "{name}"')
+        for index in self.stage_runs_table.indexes:
+            index.create(bind=conn, checkfirst=True)
 
     @contextmanager
     def _startup_lock(self):
@@ -1634,6 +1649,7 @@ class TaskDatabase:
             conn.execute(self.tasks_table.delete().where(self.tasks_table.c.md5sum == md5sum))
             conn.execute(self.task_progress_table.delete().where(self.task_progress_table.c.task_id == md5sum))
             conn.execute(self.task_diagnostics_table.delete().where(self.task_diagnostics_table.c.task_id == md5sum))
+            conn.execute(self.stage_runs_table.delete().where(self.stage_runs_table.c.task_id == md5sum))
             conn.execute(
                 self.result_publications_table.delete().where(
                     self.result_publications_table.c.task_id == md5sum
@@ -2813,22 +2829,22 @@ class TaskDatabase:
 
         A Task that no longer exists, or has settled, cannot acquire a live
         attempt: the check runs inside the same ``BEGIN IMMEDIATE`` as the
-        insert, so a delete/resubmit race cannot leave an orphan record.
-        ``failed`` is the one settled outcome that may start a new attempt,
-        because retrying a failed Task is a supported transition.  When the Task
-        is active, of two duplicate dispatches exactly one creates attempt *n+1*
-        and the other observes the live attempt; the unique
-        ``(task_id, stage_index, attempt)`` identity and the partial live-attempt
-        index keyed by stage *name* back that property in the database rather
-        than in this read.  The name is the stage's identity across a manifest
-        edit, so a reordered workflow reuses its live attempt instead of opening
-        a second one at a new index.
+        insert, so a delete/resubmit race cannot leave an orphan record.  There
+        is no retry path for a settled Task, so ``failed`` and ``finished`` are
+        refused exactly like cancellation and deletion; a retry must first move
+        the Task back to an active status.  When the Task is active, of two
+        duplicate dispatches exactly one creates attempt *n+1* and the other
+        observes the live attempt; the unique ``(task_id, stage_name, attempt)``
+        identity and the partial live-attempt index keyed by stage *name* back
+        that property in the database rather than in this read.  The name is the
+        stage's identity across a manifest edit, so a reordered workflow reuses
+        its live attempt instead of opening a second one at a new index.
         """
         if not isinstance(stage_index, int) or isinstance(stage_index, bool) or stage_index < 0:
             raise ValueError("stage_index must be a non-negative integer")
         timestamp = time.time()
         encoded = json.dumps(planned_resources, sort_keys=True) if planned_resources is not None else None
-        ineligible = (self.STOP_POLLING_STATUSES | self.CLEANUP_CLAIM_STATUSES) - {"failed"}
+        ineligible = self.STOP_POLLING_STATUSES | self.CLEANUP_CLAIM_STATUSES
         with self.engine.connect() as conn:
             conn.exec_driver_sql("BEGIN IMMEDIATE")
             try:
@@ -2878,7 +2894,7 @@ class TaskDatabase:
                     conn.execute(
                         select(self.stage_runs_table).where(
                             self.stage_runs_table.c.task_id == task_id,
-                            self.stage_runs_table.c.stage_index == stage_index,
+                            self.stage_runs_table.c.stage_name == stage_name,
                             self.stage_runs_table.c.attempt == attempt,
                         )
                     )
@@ -2895,7 +2911,7 @@ class TaskDatabase:
         self,
         *,
         task_id: str,
-        stage_index: int,
+        stage_name: str,
         attempt: int,
         slurm_job_id: str,
         at: float | None = None,
@@ -2906,7 +2922,7 @@ class TaskDatabase:
             update(self.stage_runs_table)
             .where(
                 self.stage_runs_table.c.task_id == task_id,
-                self.stage_runs_table.c.stage_index == stage_index,
+                self.stage_runs_table.c.stage_name == stage_name,
                 self.stage_runs_table.c.attempt == attempt,
                 self.stage_runs_table.c.status == stage_state.QUEUED,
                 # The first observed handle is the attempt's identity; a later
@@ -2926,7 +2942,7 @@ class TaskDatabase:
         self,
         *,
         task_id: str,
-        stage_index: int,
+        stage_name: str,
         attempt: int,
         started_at: float | None = None,
     ) -> bool:
@@ -2940,7 +2956,7 @@ class TaskDatabase:
         timestamp = time.time() if started_at is None else started_at
         identity = (
             self.stage_runs_table.c.task_id == task_id,
-            self.stage_runs_table.c.stage_index == stage_index,
+            self.stage_runs_table.c.stage_name == stage_name,
             self.stage_runs_table.c.attempt == attempt,
         )
         stmt = (
@@ -2965,7 +2981,7 @@ class TaskDatabase:
         self,
         *,
         task_id: str,
-        stage_index: int,
+        stage_name: str,
         attempt: int,
         status: str,
         reason_code: str | None = None,
@@ -2990,7 +3006,7 @@ class TaskDatabase:
             update(self.stage_runs_table)
             .where(
                 self.stage_runs_table.c.task_id == task_id,
-                self.stage_runs_table.c.stage_index == stage_index,
+                self.stage_runs_table.c.stage_name == stage_name,
                 self.stage_runs_table.c.attempt == attempt,
                 self.stage_runs_table.c.status.in_(tuple(stage_state.predecessors(status))),
             )
