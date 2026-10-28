@@ -825,6 +825,39 @@ const en: Dictionary = {
 
   // Dashboard input preview
   'dashboard.card.structureLoadFailed': 'Unable to load structure: {message}',
+
+  // Account Quota: the cumulative GPU credit waterfall. Every number is the
+  // server's own; a partial window states its verified opening rather than a
+  // zero history, and reservations are labelled as live admission state.
+  'quota.waterfall.heading': 'GPU credit waterfall',
+  'quota.waterfall.description': 'Every GPU ledger fact in this window, in UTC chronological order: an authoritative opening balance, the signed delta each fact recorded, and the closing balance. Opening plus the deltas equals closing exactly.',
+  'quota.waterfall.opening': 'Opening balance',
+  'quota.waterfall.closing': 'Closing balance',
+  'quota.waterfall.reserved': 'Reserved by live submissions',
+  'quota.waterfall.unsettled': 'Unsettled allocations',
+  'quota.waterfall.unsettledValue': '{count} allocation(s), {credits} reserved',
+  'quota.waterfall.remaining': 'Available now',
+  'quota.waterfall.credits': 'credits',
+  'quota.waterfall.notRecorded': 'Not recorded',
+  'quota.waterfall.partial': 'Partial history: this window shows the newest {shown} of {total} GPU facts for the period. The opening balance above is the exact sum of the facts not listed.',
+  'quota.waterfall.mismatch': 'The closing balance does not reconcile to the server summary. Treat this chart as unverified.',
+  'quota.waterfall.negative': 'The balance is below zero. This is recorded usage and adjustments, not a display error.',
+  'quota.waterfall.commitments': 'Reserved and unsettled amounts are live admission state, not ledger entries: a reservation reduces what is available without recording consumption, and a release restores it without appending a fact.',
+  'quota.waterfall.loaded': '{count} GPU fact(s) shown.',
+  'quota.waterfall.caption': 'Cumulative GPU credits for {period}, in UTC chronological order.',
+  'quota.waterfall.col.when': 'When (UTC)',
+  'quota.waterfall.col.kind': 'Kind',
+  'quota.waterfall.col.delta': 'Delta (credits)',
+  'quota.waterfall.col.balance': 'Balance (credits)',
+  'quota.waterfall.col.attribution': 'Attribution',
+  'quota.waterfall.openingAnchor': 'Sum of facts outside this window',
+  'quota.waterfall.deltaAria': 'Delta {credits} ({seconds} GPU-seconds), balance {balance}',
+  'quota.waterfall.task': 'Task {id}',
+  'quota.waterfall.stage': 'stage {id}',
+  'quota.waterfall.jobEvidence': 'Scheduler job {id}',
+  'quota.waterfall.unattributed': 'Unattributed',
+  'quota.waterfall.unknownKind': 'Unknown fact',
+  'quota.waterfall.rawLedger': 'View the raw append-only ledger',
 };
 
 const zhCN: Dictionary = {
@@ -1607,6 +1640,38 @@ const zhCN: Dictionary = {
 
   // Dashboard input preview
   'dashboard.card.structureLoadFailed': '无法加载结构：{message}',
+
+  // 账户配额：累计 GPU 额度瀑布图。所有数字均来自服务器；部分窗口会说明其
+  // 经核验的期初余额，而不是显示为零历史；预留会标注为实时准入状态。
+  'quota.waterfall.heading': 'GPU 额度瀑布图',
+  'quota.waterfall.description': '此窗口内的每一条 GPU 账本事实，按 UTC 时间顺序排列：权威期初余额、每条事实记录的有符号增减，以及期末余额。期初加上增减之和恰好等于期末。',
+  'quota.waterfall.opening': '期初余额',
+  'quota.waterfall.closing': '期末余额',
+  'quota.waterfall.reserved': '在线提交预留',
+  'quota.waterfall.unsettled': '未结算分配',
+  'quota.waterfall.unsettledValue': '{count} 个分配，预留 {credits}',
+  'quota.waterfall.remaining': '当前可用',
+  'quota.waterfall.credits': '额度',
+  'quota.waterfall.notRecorded': '未记录',
+  'quota.waterfall.partial': '部分历史：此窗口显示该周期 {total} 条 GPU 事实中最新的 {shown} 条。上方的期初余额正是未列出事实的精确总和。',
+  'quota.waterfall.mismatch': '期末余额与服务器汇总不一致。请将此图视为未经验证。',
+  'quota.waterfall.negative': '余额低于零。这是已记录的用量与调整，不是显示错误。',
+  'quota.waterfall.commitments': '预留与未结算金额是实时准入状态，不是账本条目：预留减少可用额度但不记录消耗，释放会在不追加事实的情况下恢复额度。',
+  'quota.waterfall.loaded': '已显示 {count} 条 GPU 事实。',
+  'quota.waterfall.caption': '自 {period} 起的累计 GPU 额度，按 UTC 时间顺序。',
+  'quota.waterfall.col.when': '时间 (UTC)',
+  'quota.waterfall.col.kind': '类型',
+  'quota.waterfall.col.delta': '增减（额度）',
+  'quota.waterfall.col.balance': '余额（额度）',
+  'quota.waterfall.col.attribution': '归属',
+  'quota.waterfall.openingAnchor': '此窗口之外事实的总和',
+  'quota.waterfall.deltaAria': '增减 {credits}（{seconds} GPU 秒），余额 {balance}',
+  'quota.waterfall.task': '任务 {id}',
+  'quota.waterfall.stage': '阶段 {id}',
+  'quota.waterfall.jobEvidence': '调度作业 {id}',
+  'quota.waterfall.unattributed': '未归属',
+  'quota.waterfall.unknownKind': '未知事实',
+  'quota.waterfall.rawLedger': '查看原始仅追加账本',
 };
 
 export const catalogs: Record<Locale, Dictionary> = { en, 'zh-CN': zhCN };

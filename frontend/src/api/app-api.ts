@@ -12,6 +12,9 @@ export type GPUCreditSummary = components['schemas']['GPUCreditSummary'];
 export type ResourceEntitlement = components['schemas']['ResourceEntitlement'];
 export type ResourceLedger = components['schemas']['ResourceLedger'];
 export type ResourceLedgerEntry = components['schemas']['ResourceLedgerEntry'];
+export type GPUCreditWaterfall = components['schemas']['GPUCreditWaterfall'];
+export type GPUCreditWaterfallStep = components['schemas']['GPUCreditWaterfallStep'];
+export type GPUCreditWaterfallSummary = components['schemas']['GPUCreditWaterfallSummary'];
 export type RunnerAccess = components['schemas']['RunnerAccess'];
 
 export type RegistrationCapability = components['schemas']['RegistrationCapability'];

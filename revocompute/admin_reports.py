@@ -701,6 +701,46 @@ def _allocation_facts(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
+def resource_ledger_window(
+    task_store: Any, user_id: int, *, limit: int = DEFAULT_LIMIT
+) -> dict[str, Any]:
+    """One bounded chronological ledger window with its verified GPU waterfall.
+
+    The window is the newest ``limit`` facts of the current UTC period, plus the
+    period-independent durable-ownership rows, reordered into UTC chronology with
+    the immutable identifier as tie-break.  The waterfall's opening balance is not
+    a guess: it is the period's settled balance minus the GPU deltas present, so
+    it is exactly the sum of every fact the bound omitted and the closing balance
+    reconciles to the canonical summary even when the history is partial.
+
+    One builder serves the account's own route and the Admin drill-in, so the two
+    readers cannot be shown two different waterfalls for the same ledger.
+    """
+    subject_id = int(user_id)
+    summary = task_store.gpu_credit_summary(subject_id)
+    period = str(summary["period"])
+    rows = task_store.list_ledger(subject_id, period=period, limit=limit)
+    entries = rloan.ledger_chronology(rloan.normalize_ledger_rows(rows))
+    entitlement = task_store.compute_entitlement(subject_id, unit=rloan.UNIT_GPU_SECOND)
+    total_entry_count = task_store.count_ledger(
+        subject_id, unit=rloan.UNIT_GPU_SECOND, period=period
+    )
+    return {
+        "subject_id": subject_id,
+        "period": period,
+        "limit": limit,
+        "limit_ceiling": MAX_LIMIT,
+        "order": "chronological",
+        "gpu_waterfall": rloan.gpu_waterfall_payload(
+            entries=entries,
+            summary=summary,
+            entitlement=entitlement,
+            total_entry_count=total_entry_count,
+        ),
+        "entries": entries,
+    }
+
+
 def _measured_units(rows: Sequence[Mapping[str, Any]]) -> set[str]:
     """Which accounting units the ledger window actually measured, not just allowed.
 
@@ -720,7 +760,8 @@ def _resource_operations_for_user(
 ) -> dict[str, Any]:
     """One subject's complete resource position, projected from canonical reads."""
     envelope = task_store.resource_envelope(user_id)
-    window = task_store.list_ledger(user_id, limit=limit)
+    ledger_window = resource_ledger_window(task_store, user_id, limit=limit)
+    window = ledger_window["entries"]
     unsettled = [
         record
         for record in task_store.list_unsettled_allocations()[:MAX_TASK_SCAN]
@@ -791,7 +832,7 @@ def _resource_operations_for_user(
         },
         "storage": _storage_block(envelope, int(user_id), task_store),
         "ledger": {
-            "entries": rloan.normalize_ledger_rows(window),
+            **ledger_window,
             "window_limit": limit,
             "basis": "append_only_ledger",
         },

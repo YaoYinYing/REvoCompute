@@ -656,7 +656,7 @@ export interface paths {
         };
         /**
          * Get the current user's own append-only resource ledger
-         * @description The immutable facts the balance is summed from, newest first and bounded. Each row names the unit it was charged in and the ledger kind, and - when the ledger recorded one - the Task, stage, Slurm job, and resource class that produced it. Rows that carry no Task are returned as unattributed rather than omitted, so a page is never read as a complete attribution.
+         * @description The immutable facts the balance is summed from, bounded to the newest rows of the current UTC period plus the period-independent durable-ownership rows, and ordered by UTC chronology with the immutable entry identifier as tie-break. Each row names the unit it was charged in and the ledger kind, and - when the ledger recorded one - the Task, stage, Slurm job, and resource class that produced it. Rows that carry no Task are returned as unattributed rather than omitted, so a page is never read as a complete attribution. `gpu_waterfall` is the cumulative GPU credit view over the same window: its opening balance is the exact sum of every fact the bound omitted, its closing balance reconciles to the period summary, and `complete` states whether every GPU fact in the period is shown.
          */
         get: operations["getCurrentResourceLedger"];
         put?: never;
@@ -2296,13 +2296,51 @@ export interface components {
             evidence_source?: "allocation_lifecycle" | "slurm_live" | "slurm_accounting" | "runner_observation" | "scheduler_log" | "reconciliation" | "policy" | "unknown";
             created_at: number;
         };
-        /** @description One bounded window of a subject's append-only ledger, naming the period the periodic units were filtered to and the ceiling the window was clamped to. Durable storage-ownership rows span periods and are therefore always included. */
+        /** @description One bounded window of a subject's append-only ledger, naming the period the periodic units were filtered to and the ceiling the window was clamped to. Durable storage-ownership rows span periods and are therefore always included. Entries are returned in UTC chronological order with the immutable identifier as tie-break; `gpu_waterfall` is the cumulative GPU credit view over the same window. */
         ResourceLedger: {
             subject_id: number;
             period: string;
             limit: number;
             limit_ceiling: number;
+            /** @enum {string} */
+            order: "chronological";
+            gpu_waterfall: components["schemas"]["GPUCreditWaterfall"];
             entries: components["schemas"]["ResourceLedgerEntry"][];
+        };
+        /** @description One GPU fact's signed position in the window. `entry_id` names the immutable ledger row in `entries`; the running balance starts at `opening_gpu_seconds`, so consecutive steps differ by exactly one delta. */
+        GPUCreditWaterfallStep: {
+            entry_id: number;
+            /** @description Signed change: positive grant, adjustment, or reversal; negative usage. */
+            delta_gpu_seconds: number;
+            /** @description Cumulative GPU-second balance after this fact. */
+            balance_gpu_seconds: number;
+        };
+        /** @description The period's canonical GPU position. `monthly_grant + adjustment - usage = settled_balance`; `settled_balance - reserved - unsettled = remaining`. Reservations and unsettled allocations are live admission state, not ledger entries: a reservation reduces what is available without recording consumption, and its release removes it without appending a fact. */
+        GPUCreditWaterfallSummary: {
+            monthly_grant_gpu_seconds: number;
+            usage_gpu_seconds: number;
+            adjustment_gpu_seconds: number;
+            settled_balance_gpu_seconds: number;
+            reserved_gpu_seconds: number;
+            unsettled_allocations: number;
+            unsettled_gpu_seconds: number;
+            /** @description Null only when the unit is ungated; a null is not a zero balance. */
+            remaining_gpu_seconds: number | null;
+            usage_complete: boolean;
+            reconciled: boolean;
+        };
+        /** @description A cumulative GPU credit waterfall over one bounded ledger window. `opening_gpu_seconds` is the exact sum of every GPU fact the window omits (zero for a complete window), `closing_gpu_seconds` is opening plus the shown deltas and reconciles to `summary.settled_balance_gpu_seconds`, and `complete` states whether the window holds every GPU fact in the period. A partial window is reported as partial rather than as an empty or zero history. */
+        GPUCreditWaterfall: {
+            /** @enum {string} */
+            unit: "gpu_second";
+            opening_gpu_seconds: number;
+            closing_gpu_seconds: number;
+            complete: boolean;
+            truncated: boolean;
+            entry_count: number;
+            total_entry_count: number;
+            steps: components["schemas"]["GPUCreditWaterfallStep"][];
+            summary: components["schemas"]["GPUCreditWaterfallSummary"];
         };
         GPUCreditLedgerEntry: {
             id: number;
@@ -4425,7 +4463,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The authenticated user's bounded ledger window */
+            /** @description The authenticated user's bounded chronological ledger window and GPU waterfall */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4436,6 +4474,7 @@ export interface operations {
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
+            503: components["responses"]["Unavailable"];
         };
     };
     getCurrentUserMetrics: {

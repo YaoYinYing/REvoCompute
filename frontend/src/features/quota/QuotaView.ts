@@ -26,6 +26,7 @@
  */
 
 import type {
+  GPUCreditWaterfall,
   ResourceEntitlement,
   ResourceLedger,
   ResourceLedgerEntry,
@@ -36,7 +37,7 @@ import { ApiError } from '../../app/session';
 import type { AppShell } from '../../app/shell';
 import { countLabel, envelopeSection, unitLabel } from './envelope';
 import { adminApi } from '../admin/api';
-import { element, empty, formatBytes, formatDate, text } from '../../components/dom';
+import { element, empty, formatBytes, formatCredits, formatDate, text } from '../../components/dom';
 import '../profile/account.css';
 import './quota.css';
 
@@ -181,6 +182,8 @@ export function quotaBars(envelope: ResourceEntitlement): HTMLElement {
 /** The append-only ledger register, with unattributed rows labelled as such. */
 export function quotaLedgerSection(ledger: ResourceLedger): HTMLElement {
   const section = element('section', 'quota-ledger');
+  // The waterfall links here as the raw facts behind every plotted step.
+  section.id = 'ledger';
   section.append(
     text('h2', t('quota.ledger.heading', { period: ledger.period })),
     text('p', attributionSummary(ledger.entries), 'admin-dialog-copy'),
@@ -205,17 +208,224 @@ export function quotaLedgerSection(ledger: ResourceLedger): HTMLElement {
     attribution.append(text('span', attributionLabel(entry)));
     if (entry.resource_class) attribution.append(text('small', entry.resource_class));
     if (entry.reason) attribution.append(text('small', entry.reason));
-    body.append(element('tr', '', [
+    const row = element('tr', '', [
       text('td', formatDate(entry.created_at)),
       text('td', kindLabel(entry.kind)),
       text('td', unitLabel(entry.unit)),
       text('td', amount),
       attribution,
-    ]));
+    ]);
+    row.id = `ledger-entry-${entry.id}`;
+    body.append(row);
   }
   table.append(head, body);
   section.append(element('div', 'admin-table-scroll', [table]));
   section.append(text('p', creditLine(ledger), 'quota-window-note'));
+  return section;
+}
+
+/**
+ * A timestamp as explicit UTC, never as the reader's unstated local zone.
+ *
+ * The ledger orders by UTC and the period boundary is UTC, so a chart that
+ * printed local time without saying so would place a fact on a different month
+ * than the one it was charged to.  ``toISOString`` is the same instant in UTC on
+ * every device.
+ */
+export function formatUtc(seconds: number): string {
+  const date = new Date(seconds * 1000);
+  if (Number.isNaN(date.getTime())) return t('quota.waterfall.notRecorded');
+  return `${date.toISOString().slice(0, 19).replace('T', ' ')} UTC`;
+}
+
+/**
+ * GPU-seconds as the published credit unit.
+ *
+ * The arithmetic stays integer GPU-seconds; this is the only place a displayed
+ * credit amount is derived, and the exact seconds remain in the accessible
+ * description so a reader can check the server's own numbers.
+ */
+export function creditAmount(seconds: number, signed = false): string {
+  return `${formatCredits(seconds / 60, signed)} ${t('quota.waterfall.credits')}`;
+}
+
+/** How one plotted step names the work behind it, with an explicit unknown. */
+function waterfallAttribution(entry: ResourceLedgerEntry | undefined): HTMLElement {
+  const cell = element('td', 'quota-waterfall-attribution');
+  if (!entry || (!entry.task_id && !entry.stage_id && !entry.slurm_job_id)) {
+    cell.className = 'quota-waterfall-attribution quota-waterfall-unattributed';
+    cell.append(text('span', t('quota.waterfall.unattributed')));
+    return cell;
+  }
+  if (entry.task_id) {
+    const link = element('a', 'quota-waterfall-task');
+    link.setAttribute('href', `/compute/results/${entry.task_id}`);
+    link.textContent = t('quota.waterfall.task', { id: entry.task_id });
+    cell.append(link);
+  }
+  if (entry.stage_id) cell.append(text('span', t('quota.waterfall.stage', { id: entry.stage_id })));
+  if (entry.slurm_job_id) cell.append(text('span', t('quota.waterfall.jobEvidence', { id: entry.slurm_job_id })));
+  return cell;
+}
+
+/** The period position beside the waterfall, in the same credit unit. */
+function waterfallSummary(waterfall: GPUCreditWaterfall): HTMLElement {
+  const list = element('dl', 'quota-waterfall-summary');
+  const summary = waterfall.summary;
+  const fact = (label: string, value: string, negative = false): HTMLElement => {
+    const item = element('div', negative ? 'is-negative' : '');
+    item.append(text('dt', label), text('dd', value));
+    return item;
+  };
+  list.append(
+    fact(t('quota.waterfall.opening'), creditAmount(waterfall.opening_gpu_seconds), waterfall.opening_gpu_seconds < 0),
+    fact(t('quota.waterfall.closing'), creditAmount(waterfall.closing_gpu_seconds), waterfall.closing_gpu_seconds < 0),
+    fact(t('quota.waterfall.reserved'), creditAmount(summary.reserved_gpu_seconds)),
+    fact(
+      t('quota.waterfall.unsettled'),
+      t('quota.waterfall.unsettledValue', {
+        count: summary.unsettled_allocations,
+        credits: creditAmount(summary.unsettled_gpu_seconds),
+      }),
+    ),
+    fact(
+      t('quota.waterfall.remaining'),
+      summary.remaining_gpu_seconds === null
+        ? t('quota.gated.notGated')
+        : creditAmount(summary.remaining_gpu_seconds),
+      (summary.remaining_gpu_seconds ?? 0) < 0,
+    ),
+  );
+  return list;
+}
+
+/**
+ * The cumulative GPU credit waterfall: opening, signed steps, and closing.
+ *
+ * Every number is the server's: the opening is the authoritative sum of the
+ * facts the bounded window omits, each step's delta is the stored signed
+ * quantity, and the closing reconciles to the same summary the bars read. A
+ * window that does not hold every fact says so, so a bounded page is never read
+ * as a complete history or as a zero balance. Reservations and unsettled
+ * allocations are shown beside the settled balance and labelled as live
+ * admission state rather than ledger entries, because a release changes what is
+ * available without appending a fact.
+ */
+export function waterfallSection(
+  waterfall: GPUCreditWaterfall,
+  entries: ResourceLedgerEntry[] = [],
+  period = '',
+): HTMLElement {
+  const section = element('section', 'quota-waterfall');
+  const headingId = 'quota-waterfall-heading';
+  const heading = text('h2', t('quota.waterfall.heading'));
+  heading.id = headingId;
+  section.setAttribute('aria-labelledby', headingId);
+  section.append(
+    heading,
+    text('p', t('quota.waterfall.description'), 'admin-dialog-copy'),
+    waterfallSummary(waterfall),
+  );
+
+  if (!waterfall.complete) {
+    section.append(text(
+      'p',
+      t('quota.waterfall.partial', { shown: waterfall.entry_count, total: waterfall.total_entry_count }),
+      'quota-waterfall-note',
+    ));
+  }
+  if (!waterfall.summary.reconciled) {
+    section.append(text('p', t('quota.waterfall.mismatch'), 'quota-waterfall-note is-negative'));
+  }
+  if (!waterfall.summary.usage_complete) {
+    section.append(text('p', t('quota.bar.incomplete'), 'quota-waterfall-note'));
+  }
+  if (waterfall.closing_gpu_seconds < 0) {
+    section.append(text('p', t('quota.waterfall.negative'), 'quota-waterfall-note is-negative'));
+  }
+  section.append(text('p', t('quota.waterfall.commitments'), 'quota-waterfall-note'));
+  const status = text('p', t('quota.waterfall.loaded', { count: waterfall.entry_count }), 'quota-waterfall-status');
+  status.setAttribute('role', 'status');
+  status.setAttribute('aria-live', 'polite');
+  section.append(status);
+
+  const table = element('table', 'admin-table quota-waterfall-table');
+  table.append(text('caption', t('quota.waterfall.caption', { period })));
+  const head = element('thead');
+  head.append(element('tr', '', [
+    t('quota.waterfall.col.when'),
+    t('quota.waterfall.col.kind'),
+    t('quota.waterfall.col.delta'),
+    t('quota.waterfall.col.balance'),
+    t('quota.waterfall.col.attribution'),
+  ].map(label => {
+    const cell = text('th', label);
+    cell.setAttribute('scope', 'col');
+    return cell;
+  })));
+
+  const body = element('tbody');
+  const byId = new Map(entries.map(entry => [entry.id, entry]));
+  const openingRow = element('tr', 'quota-waterfall-opening');
+  const openingHeader = text('th', t('quota.waterfall.opening'));
+  openingHeader.setAttribute('scope', 'row');
+  openingRow.append(
+    openingHeader,
+    text('td', ''),
+    text('td', ''),
+    text('td', creditAmount(waterfall.opening_gpu_seconds), waterfall.opening_gpu_seconds < 0 ? 'is-negative' : ''),
+    text('td', t('quota.waterfall.openingAnchor')),
+  );
+  body.append(openingRow);
+  for (const step of waterfall.steps) {
+    const entry = byId.get(step.entry_id);
+    const negative = step.balance_gpu_seconds < 0;
+    const row = element('tr', negative ? 'is-negative' : '');
+    const when = text('th', entry ? formatUtc(entry.created_at) : t('quota.waterfall.notRecorded'));
+    when.setAttribute('scope', 'row');
+    const delta = text(
+      'td',
+      creditAmount(step.delta_gpu_seconds, true),
+      step.delta_gpu_seconds < 0 ? 'is-negative' : 'is-positive',
+    );
+    delta.setAttribute(
+      'aria-label',
+      t('quota.waterfall.deltaAria', {
+        credits: creditAmount(step.delta_gpu_seconds, true),
+        seconds: step.delta_gpu_seconds,
+        balance: creditAmount(step.balance_gpu_seconds),
+      }),
+    );
+    row.append(
+      when,
+      text('td', entry ? kindLabel(entry.kind) : t('quota.waterfall.unknownKind')),
+      delta,
+      text('td', creditAmount(step.balance_gpu_seconds), negative ? 'is-negative' : ''),
+      waterfallAttribution(entry),
+    );
+    body.append(row);
+  }
+  const foot = element('tfoot');
+  const closingRow = element('tr', 'quota-waterfall-closing');
+  const closingHeader = text('th', t('quota.waterfall.closing'));
+  closingHeader.setAttribute('scope', 'row');
+  closingRow.append(
+    closingHeader,
+    text('td', ''),
+    text('td', ''),
+    text('td', creditAmount(waterfall.closing_gpu_seconds), waterfall.closing_gpu_seconds < 0 ? 'is-negative' : ''),
+    text('td', ''),
+  );
+  foot.append(closingRow);
+  table.append(head, body, foot);
+  section.append(element('div', 'admin-table-scroll', [table]));
+
+  const raw = element('p', 'quota-waterfall-raw');
+  const rawLink = element('a');
+  rawLink.setAttribute('href', '#ledger');
+  rawLink.textContent = t('quota.waterfall.rawLedger');
+  raw.append(rawLink);
+  section.append(raw);
   return section;
 }
 
@@ -235,7 +445,14 @@ export function quotaPosition(envelope: ResourceEntitlement, ledger: ResourceLed
   storage.append(text('p', envelope.storage.soft_limit_bytes === null ? t('quota.storage.notConfigured') : `${t('quota.storage.ceiling')}: ${formatBytes(envelope.storage.soft_limit_bytes)}`, 'quota-bar-note'));
   const policy = element('details', 'quota-policy');
   policy.append(text('summary', t('quota.envelope.heading')), envelopeSection(envelope.period, envelope));
-  root.append(text('h3', t('quota.usage.heading')), quotaBars(envelope), storage, policy, quotaLedgerSection(ledger));
+  root.append(
+    text('h3', t('quota.usage.heading')),
+    quotaBars(envelope),
+    waterfallSection(ledger.gpu_waterfall, ledger.entries, ledger.period),
+    storage,
+    policy,
+    quotaLedgerSection(ledger),
+  );
   return root;
 }
 
@@ -293,16 +510,10 @@ export async function mountQuotaView(outlet: HTMLElement): Promise<QuotaView> {
 export async function loadAdminQuota(userId: number): Promise<HTMLElement> {
   try {
     const report = await adminApi.getResourceReport(userId);
-    // The report's ledger window is the same canonical projection the user's own
-    // endpoint serves, so the two readers are held to one shape by construction.
-    const entries = (report.ledger.entries ?? []) as ResourceLedgerEntry[];
-    const ledger: ResourceLedger = {
-      subject_id: report.canonical_envelope.subject_id,
-      period: report.canonical_envelope.period,
-      limit: report.limit,
-      limit_ceiling: report.limit_ceiling,
-      entries,
-    };
+    // The report serves the same canonical ledger window the user's own endpoint
+    // does — entries, chronological order, and the GPU waterfall — so the two
+    // readers are held to one shape by construction.
+    const ledger = report.ledger as unknown as ResourceLedger;
     return quotaPosition(report.canonical_envelope, ledger);
   } catch (error) {
     return empty((error as Error).message || t('quota.error.admin'), true);

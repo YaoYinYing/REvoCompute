@@ -2985,6 +2985,32 @@ class TaskDatabase:
         """The GPU-compute projection of one subject's ledger, newest first."""
         return self.list_ledger(user_id, unit=rloan.UNIT_GPU_SECOND, period=period, limit=limit)
 
+    def count_ledger(
+        self, user_id: int, *, unit: str | None = None, period: str | None = None
+    ) -> int:
+        """How many immutable facts one bounded ledger scope holds.
+
+        Used beside a bounded window to say truthfully whether the window holds
+        every fact or whether a bound cut it off.  It is a count of the same rows
+        :meth:`list_ledger` reads, with the same unit and period filters, so the
+        two cannot disagree about what the scope is.
+        """
+        stmt = select(func.count()).select_from(self.resource_ledger_table).where(
+            self.resource_ledger_table.c.subject_type == rloan.SUBJECT_USER,
+            self.resource_ledger_table.c.subject_id == user_id,
+        )
+        if unit is not None:
+            stmt = stmt.where(self.resource_ledger_table.c.unit == unit)
+        if period is not None:
+            stmt = stmt.where(
+                or_(
+                    self.resource_ledger_table.c.period == period,
+                    self.resource_ledger_table.c.unit == rloan.UNIT_STORAGE_BYTE,
+                )
+            )
+        with self.engine.connect() as conn:
+            return int(conn.execute(stmt).scalar_one() or 0)
+
     def list_policy_audit(self, user_id: int, *, limit: int = 50) -> list[dict[str, Any]]:
         """Return administrative policy mutations for one subject, newest first."""
         if limit < 1 or limit > 200:

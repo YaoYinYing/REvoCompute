@@ -1,5 +1,7 @@
 import type { AppShell } from '../../../app/shell';
+import type { ResourceLedger } from '../../../api/app-api';
 import { adminApi, idempotencyKey, type AdminUser, type GPUCreditSummary } from '../api';
+import { waterfallSection } from '../../quota/QuotaView';
 import { button, element, empty, formatCredits, formatDate, openDialog, reasonContent, setBusy, text } from '../../../components/dom';
 
 export const globalResetConfirmation = 'RESET ALL';
@@ -23,33 +25,27 @@ function creditSummary(data: GPUCreditSummary): HTMLElement {
   return summary;
 }
 
-function creditHistory(data: GPUCreditSummary): HTMLElement {
-  const history = element('div', 'admin-history');
-  if (!data.history.length) return empty('No credit activity has been recorded.');
-  for (const entry of data.history) {
-    const copy = element('div', '', [
-      text('strong', entry.kind.replaceAll('_', ' ')),
-      text('span', entry.reason || entry.task_id || 'Recorded usage'),
-      text('time', formatDate(entry.created_at)),
-    ]);
-    history.append(element('article', '', [copy, text('b', `${formatCredits(entry.gpu_seconds / 60, true)} credits`)]));
-  }
-  return history;
-}
-
 export class CreditAdmin {
   constructor(private readonly shell: AppShell, private readonly onChanged: () => Promise<void>) {}
 
   async open(user: AdminUser): Promise<void> {
     try {
       let data = await adminApi.getUserCredit(user.id);
+      // The operator's drill-in reads the same canonical ledger window the account
+      // reads about itself: chronological entries and the GPU waterfall over an
+      // authoritative opening balance.
+      let ledger = (await adminApi.getResourceReport(user.id)).ledger as unknown as ResourceLedger;
       const root = element('div', 'credit-admin');
       const accounting = element('section', 'credit-accounting');
       const renderAccounting = (): void => accounting.replaceChildren(
         creditSummary(data),
-        text('h3', 'Immutable activity'),
-        creditHistory(data),
+        waterfallSection(ledger.gpu_waterfall, ledger.entries, ledger.period),
       );
+      const refresh = async (): Promise<void> => {
+        data = await adminApi.getUserCredit(user.id);
+        ledger = (await adminApi.getResourceReport(user.id)).ledger as unknown as ResourceLedger;
+        renderAccounting();
+      };
       renderAccounting();
 
       const allowance = element('input'); allowance.type = 'number'; allowance.min = '0'; allowance.step = '0.01'; allowance.value = String(data.monthly_grant_credits);
@@ -62,8 +58,8 @@ export class CreditAdmin {
         if (!confirmed) return;
         setBusy(allowanceButton, true);
         try {
-          const result = await adminApi.setAllowance(user.id, Math.round(credits * 60), idempotencyKey(`allowance-${user.id}`));
-          data = result.gpu_credit; renderAccounting(); await this.onChanged(); this.shell.notify('Monthly allowance updated.', 'success');
+          await adminApi.setAllowance(user.id, Math.round(credits * 60), idempotencyKey(`allowance-${user.id}`));
+          await refresh(); await this.onChanged(); this.shell.notify('Monthly allowance updated.', 'success');
         } catch (error) { this.shell.notify((error as Error).message, 'error'); }
         finally { setBusy(allowanceButton, false); }
       });
@@ -87,8 +83,8 @@ export class CreditAdmin {
         if (!confirmed) return;
         setBusy(adjustButton, true);
         try {
-          const result = await adminApi.adjustCredit(user.id, gpuSeconds, reasonText, idempotencyKey(`adjust-${user.id}`));
-          data = result.gpu_credit; adjustment.value = ''; reason.value = ''; renderAccounting(); await this.onChanged(); this.shell.notify('GPU credit adjustment recorded.', 'success');
+          await adminApi.adjustCredit(user.id, gpuSeconds, reasonText, idempotencyKey(`adjust-${user.id}`));
+          adjustment.value = ''; reason.value = ''; await refresh(); await this.onChanged(); this.shell.notify('GPU credit adjustment recorded.', 'success');
         } catch (error) { this.shell.notify((error as Error).message, 'error'); }
         finally { setBusy(adjustButton, false); }
       });
@@ -109,7 +105,7 @@ export class CreditAdmin {
         if (!reasonText) return;
         try {
           const result = await adminApi.resetUserCredit(user.id, reasonText, idempotencyKey(`reset-${user.id}`));
-          data = result.gpu_credit; renderAccounting(); await this.onChanged();
+          await refresh(); await this.onChanged();
           this.shell.notify(result.changed ? `Credits reset by ${formatCredits(result.reset_delta_gpu_seconds / 60, true)}.` : 'Credits were already at the configured allowance.', 'success');
         } catch (error) { this.shell.notify((error as Error).message, 'error'); }
       });

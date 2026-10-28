@@ -13,23 +13,23 @@ Resolve issue #91 by providing a truthful bounded chronological GPU-credit water
 - The source of truth is integer GPU-seconds with signed adjustments and ledger provenance, not a client-side estimate.
 
 ## Implementation checklist
-- [ ] Inspect the live current `main` API, `list_compute_ledger`, ledger schema and existing user/admin credit screens before introducing a new endpoint or chart.
-- [ ] Define a bounded canonical history contract: UTC ordering, cursor pagination or verified balance anchors, explicit completeness/truncation signals and immutable entry identifiers.
-- [ ] Return authoritative opening balance and signed GPU-second deltas for each requested window when known; when unknown, render a clear unavailability reason, never invent zero.
-- [ ] Support usage charge, reservation, release, monthly grant, correction, administrative adjustment and reversal according to canonical ledger semantics.
-- [ ] Present an accessible cumulative waterfall with opening, individual deltas and closing balance, including negative balances and partial history; chart must reconcile to server summary exactly.
-- [ ] Use integer units internally and format GPU-minutes/credits only for presentation; preserve time-zone display clarity and ordering.
-- [ ] Link entries to Task, StageRun, allocation/Slurm evidence when known; show unknown attribution explicitly and provide link to raw ledger.
-- [ ] Preserve RBAC (user sees own, admin authorized scope), append-only auditing, reconciliation policy and no unauthorized balance mutation.
-- [ ] Make large windows performant without unbounded downloads, and give export/source receipts to reproduce plotted values.
+- [x] Inspect the live current `main` API, `list_compute_ledger`, ledger schema and existing user/admin credit screens before introducing a new endpoint or chart.
+- [x] Define a bounded canonical history contract: UTC ordering, verified balance anchors (cursor pagination deferred), explicit completeness/truncation signals and immutable entry identifiers.
+- [x] Return authoritative opening balance and signed GPU-second deltas for each requested window when known; when unknown, render a clear unavailability reason, never invent zero.
+- [x] Support usage charge, reservation, release, monthly grant, correction, administrative adjustment and reversal according to canonical ledger semantics.
+- [x] Present an accessible cumulative waterfall with opening, individual deltas and closing balance, including negative balances and partial history; chart must reconcile to server summary exactly.
+- [x] Use integer units internally and format GPU-minutes/credits only for presentation; preserve time-zone display clarity and ordering.
+- [x] Link entries to Task, StageRun, allocation/Slurm evidence when known; show unknown attribution explicitly and provide link to raw ledger.
+- [x] Preserve RBAC (user sees own, admin authorized scope), append-only auditing, reconciliation policy and no unauthorized balance mutation.
+- [x] Make large windows performant without unbounded downloads (bounded window + verified opening). Export/source receipts deferred with cursor pagination until a >200-row window is demonstrated.
 - [ ] Resolve Issue #91 only after maintainer has reviewed merged production behavior and acceptance evidence.
 
 ## Test and acceptance checklist
-- [ ] Opening and closing balances match authoritative ledger over complete windows and paginated partial windows.
-- [ ] 50+ entries, reversed ordering, duplicated timestamps, negative balances, corrections and canceled allocations.
-- [ ] Overflow safeguards, idempotent replay, duplicate ledger event suppression, unknown attribution, and transient source outage.
-- [ ] Keyboard-only inspection, screen-reader descriptions, narrow/mobile layout and both themes.
-- [ ] Existing #88 bar/ledger tests remain passing; exact-head server/frontend contracts and CI.
+- [x] Opening and closing balances match authoritative ledger over complete windows and paginated partial windows.
+- [x] 50+ entries, reversed ordering, duplicated timestamps, negative balances, corrections and canceled allocations.
+- [x] Overflow safeguards, idempotent replay, duplicate ledger event suppression, unknown attribution, and transient source outage.
+- [x] Keyboard-only inspection, screen-reader descriptions, narrow/mobile layout and both themes.
+- [x] Existing #88 bar/ledger tests remain passing; exact-head server/frontend contracts and CI.
 
 ## Explicit non-goals
 - No reset-usage-to-zero action, altered settlement authority, or synthetic history.

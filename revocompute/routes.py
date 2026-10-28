@@ -225,7 +225,7 @@ from revocompute.tool_types import canonical_parameters, public_tool
 from revocompute.tool_workspace import ToolWorkspaceError
 from jsonschema import ValidationError as JSONSchemaValidationError
 from jsonschema import validate as validate_json_schema
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from werkzeug.security import check_password_hash, generate_password_hash
 
 # Read a verified descriptor in bounded chunks; no read is ever sized by the
@@ -5001,18 +5001,21 @@ def current_resource_ledger():
         limit = _bounded_query_limit()
     except admin_reports.AdminReportError as exc:
         return jsonify({"error": str(exc)}), 400
-    user_id = int(g.current_user["id"])
-    period = task_store.gpu_credit_summary(user_id)["period"]
-    rows = task_store.list_ledger(user_id, period=period, limit=limit)
-    return jsonify(
-        {
-            "subject_id": user_id,
-            "period": period,
-            "limit": limit,
-            "limit_ceiling": admin_reports.MAX_LIMIT,
-            "entries": rloan.normalize_ledger_rows(rows),
-        }
-    ), 200
+    try:
+        payload = admin_reports.resource_ledger_window(task_store, int(g.current_user["id"]), limit=limit)
+    except rloan.AccountingOverflow as exc:
+        logging.error("Resource ledger refused an unrepresentable value: %s", exc)
+        return jsonify({
+            "error": "The resource ledger contains a value this API cannot represent exactly.",
+            "unavailable_reason": "ledger_value_out_of_range",
+        }), 503
+    except SQLAlchemyError:
+        logging.exception("Resource ledger could not be read")
+        return jsonify({
+            "error": "The resource ledger is temporarily unavailable.",
+            "unavailable_reason": "ledger_unavailable",
+        }), 503
+    return jsonify(payload), 200
 
 
 _USER_METRICS_WINDOWS: dict[str, tuple[str, int | None]] = {

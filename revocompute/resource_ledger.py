@@ -663,6 +663,123 @@ class ReconciliationReport:
         }
 
 
+#: The largest integer a JSON consumer (an IEEE-754 double, e.g. JavaScript's
+#: ``Number``) represents exactly.  Accounting is integer, so a quantity or
+#: running balance beyond it would be silently rounded by such a reader and a
+#: plotted step would disagree with the ledger.  Projections refuse rather than
+#: publish one.
+MAX_EXACT_LEDGER_UNITS = 2**53 - 1
+
+
+class AccountingOverflow(ValueError):
+    """A ledger quantity or running balance no JSON client can represent exactly."""
+
+
+def require_exact_units(value: int, *, what: str) -> int:
+    """*value* as an integer safe to publish, or :class:`AccountingOverflow`.
+
+    Server arithmetic is exact — Python integers are unbounded — so this is a
+    guard at the JSON boundary, not an internal limit.  A projection that refuses
+    is truthful; one that rounded would plot a number the ledger does not contain.
+    """
+    if abs(int(value)) > MAX_EXACT_LEDGER_UNITS:
+        raise AccountingOverflow(f"{what} is outside the exactly representable integer range")
+    return int(value)
+
+
+def ledger_chronology(entries: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Ledger rows in UTC chronological order with a total tie-break.
+
+    Two facts can share a timestamp, so the immutable identifier breaks the tie:
+    the order is total and stable across reads.  The rows are already the
+    canonical projection, so this reorders them and copies nothing.
+    """
+    return sorted(
+        (dict(entry) for entry in entries),
+        key=lambda entry: (float(entry.get("created_at") or 0.0), int(entry.get("id") or 0)),
+    )
+
+
+def gpu_waterfall_payload(
+    *,
+    entries: Sequence[Mapping[str, Any]],
+    summary: Mapping[str, Any],
+    entitlement: ComputeEntitlement,
+    total_entry_count: int,
+) -> dict[str, Any]:
+    """The cumulative GPU credit waterfall over one bounded ledger window.
+
+    ``entries`` is the window in chronological order; this selects its GPU facts
+    and places them after an authoritative opening balance.  The opening is not
+    guessed: it is the period's settled balance minus the GPU deltas present in
+    the window, so it is exactly the sum of every fact the window omits, and
+    ``opening + Σ delta`` reaches the settled balance however many rows the bound
+    cut off.  ``complete`` says whether the window actually holds every GPU fact
+    in the period; when it does not, the omitted facts are summarized by the
+    opening balance rather than shown as a zero.
+
+    Reservations and unsettled allocations are reported beside the settled
+    balance because they reduce what is available without being recorded
+    consumption: a reservation is live admission state, and a release removes it
+    without appending a ledger fact.
+    """
+    gpu_entries = sorted(
+        (entry for entry in entries if str(entry.get("unit")) == UNIT_GPU_SECOND),
+        key=lambda entry: (float(entry.get("created_at") or 0.0), int(entry.get("id") or 0)),
+    )
+    monthly_grant = require_exact_units(int(summary.get("monthly_grant_gpu_seconds") or 0), what="monthly allowance")
+    usage = require_exact_units(int(summary.get("usage_gpu_seconds") or 0), what="settled usage")
+    adjustment = require_exact_units(int(summary.get("adjustment_gpu_seconds") or 0), what="adjustments")
+    settled_balance = require_exact_units(monthly_grant + adjustment - usage, what="settled balance")
+    window_delta = 0
+    for entry in gpu_entries:
+        window_delta += int(entry.get("quantity") or 0)
+    balance = require_exact_units(settled_balance - window_delta, what="opening balance")
+    opening = balance
+    steps: list[dict[str, int]] = []
+    for entry in gpu_entries:
+        delta = require_exact_units(int(entry.get("quantity") or 0), what=f"ledger entry {entry.get('id')} delta")
+        balance = require_exact_units(balance + delta, what=f"balance after ledger entry {entry.get('id')}")
+        steps.append(
+            {
+                "entry_id": int(entry.get("id") or 0),
+                "delta_gpu_seconds": delta,
+                "balance_gpu_seconds": balance,
+            }
+        )
+    closing = balance
+    complete = len(gpu_entries) == int(total_entry_count)
+    return {
+        "unit": UNIT_GPU_SECOND,
+        "opening_gpu_seconds": opening,
+        "closing_gpu_seconds": closing,
+        "complete": complete,
+        "truncated": not complete,
+        "entry_count": len(gpu_entries),
+        "total_entry_count": int(total_entry_count),
+        "steps": steps,
+        "summary": {
+            "monthly_grant_gpu_seconds": monthly_grant,
+            "usage_gpu_seconds": usage,
+            "adjustment_gpu_seconds": adjustment,
+            "settled_balance_gpu_seconds": settled_balance,
+            "reserved_gpu_seconds": require_exact_units(entitlement.reserved, what="reserved balance"),
+            "unsettled_allocations": entitlement.unsettled,
+            "unsettled_gpu_seconds": require_exact_units(
+                entitlement.unsettled_quantity, what="unsettled balance"
+            ),
+            "remaining_gpu_seconds": None
+            if entitlement.remaining is None
+            else require_exact_units(entitlement.remaining, what="remaining balance"),
+            "usage_complete": entitlement.usage_complete,
+            # The opening is the sum of every fact the bound omitted, so the
+            # closing is the period's settled balance even in a partial window.
+            # ``complete`` states whether the entries themselves are all shown.
+            "reconciled": closing == settled_balance,
+        },
+    }
+
+
 def normalize_ledger_rows(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     """A stable, JSON-safe projection of ledger rows for API consumers."""
     return [
