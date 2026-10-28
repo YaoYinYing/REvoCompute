@@ -143,7 +143,6 @@ def _gpu_waterfall() -> dict[str, Any]:
             "unsettled_gpu_seconds": DEFAULT_GPU_RESERVED,
             "remaining_gpu_seconds": settled - 2 * DEFAULT_GPU_RESERVED,
             "usage_complete": False,
-            "reconciled": True,
         },
     }
 

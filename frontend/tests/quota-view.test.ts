@@ -143,7 +143,6 @@ const waterfallOf = (overrides: Partial<GPUCreditWaterfall> = {}): GPUCreditWate
     unsettled_gpu_seconds: 0,
     remaining_gpu_seconds: 30_000,
     usage_complete: true,
-    reconciled: true,
   },
   ...overrides,
 });
@@ -306,6 +305,10 @@ describe('the GPU credit waterfall', () => {
     const headers = table.querySelectorAll('th');
     expect(headers.length).toBeGreaterThan(0);
     expect(headers.every(header => header.getAttribute('scope') !== null)).toBe(true);
+    // The wide table's scroll container is keyboard-focusable and labelled.
+    const scroll = rendered.querySelectorAll('div').find(node => node.getAttribute('tabindex') === '0');
+    expect(scroll?.getAttribute('role')).toBe('region');
+    expect(scroll?.getAttribute('aria-label')).toContain('arrow keys');
     expect(rendered.querySelectorAll('a').some(link => link.getAttribute('href') === '#ledger')).toBe(true);
     expect(
       rendered.querySelectorAll('a').some(link => link.getAttribute('href') === `/compute/results/${'d'.repeat(32)}`),

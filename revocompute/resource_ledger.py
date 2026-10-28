@@ -691,8 +691,9 @@ def ledger_chronology(entries: Sequence[Mapping[str, Any]]) -> list[dict[str, An
     """Ledger rows in UTC chronological order with a total tie-break.
 
     Two facts can share a timestamp, so the immutable identifier breaks the tie:
-    the order is total and stable across reads.  The rows are already the
-    canonical projection, so this reorders them and copies nothing.
+    the order is total and stable across reads.  Each row is copied into a new
+    dict, so the caller can annotate the result without mutating the projection
+    it was handed.
     """
     return sorted(
         (dict(entry) for entry in entries),
@@ -709,19 +710,25 @@ def gpu_waterfall_payload(
 ) -> dict[str, Any]:
     """The cumulative GPU credit waterfall over one bounded ledger window.
 
-    ``entries`` is the window in chronological order; this selects its GPU facts
-    and places them after an authoritative opening balance.  The opening is not
-    guessed: it is the period's settled balance minus the GPU deltas present in
-    the window, so it is exactly the sum of every fact the window omits, and
-    ``opening + Σ delta`` reaches the settled balance however many rows the bound
-    cut off.  ``complete`` says whether the window actually holds every GPU fact
-    in the period; when it does not, the omitted facts are summarized by the
-    opening balance rather than shown as a zero.
+    ``entries`` is the window; this selects its GPU facts, orders them by UTC
+    timestamp (immutable identifier as tie-break), and places them after an
+    authoritative opening balance.  The opening is not guessed: it is the
+    period's settled balance minus the GPU deltas present in the window, so it is
+    exactly the sum of every fact the window omits, and ``opening + Σ delta``
+    equals the settled balance however many rows the bound cut off.  ``complete``
+    says whether the window actually holds every GPU fact in the period; when it
+    does not, the omitted facts are summarized by the opening balance rather than
+    shown as a zero.
 
     Reservations and unsettled allocations are reported beside the settled
     balance because they reduce what is available without being recorded
     consumption: a reservation is live admission state, and a release removes it
     without appending a ledger fact.
+
+    There is deliberately no independent "reconciled" flag: closing is derived
+    from the same settled balance and deltas, so a boolean comparing them would
+    be a tautology rather than evidence.  The step arithmetic itself is what the
+    tests check.
     """
     gpu_entries = sorted(
         (entry for entry in entries if str(entry.get("unit")) == UNIT_GPU_SECOND),
@@ -772,10 +779,6 @@ def gpu_waterfall_payload(
             if entitlement.remaining is None
             else require_exact_units(entitlement.remaining, what="remaining balance"),
             "usage_complete": entitlement.usage_complete,
-            # The opening is the sum of every fact the bound omitted, so the
-            # closing is the period's settled balance even in a partial window.
-            # ``complete`` states whether the entries themselves are all shown.
-            "reconciled": closing == settled_balance,
         },
     }
 

@@ -1,7 +1,7 @@
 import type { AppShell } from '../../../app/shell';
 import type { ResourceLedger } from '../../../api/app-api';
 import { adminApi, idempotencyKey, type AdminUser, type GPUCreditSummary } from '../api';
-import { waterfallSection } from '../../quota/QuotaView';
+import { quotaLedgerSection, waterfallSection } from '../../quota/QuotaView';
 import { button, element, empty, formatCredits, formatDate, openDialog, reasonContent, setBusy, text } from '../../../components/dom';
 
 export const globalResetConfirmation = 'RESET ALL';
@@ -40,6 +40,9 @@ export class CreditAdmin {
       const renderAccounting = (): void => accounting.replaceChildren(
         creditSummary(data),
         waterfallSection(ledger.gpu_waterfall, ledger.entries, ledger.period),
+        // The raw append-only facts stay beside the chart: reasons, actors, and
+        // the `#ledger` anchor the waterfall links to live here.
+        quotaLedgerSection(ledger),
       );
       const refresh = async (): Promise<void> => {
         data = await adminApi.getUserCredit(user.id);

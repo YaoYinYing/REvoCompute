@@ -2327,7 +2327,6 @@ export interface components {
             /** @description Null only when the unit is ungated; a null is not a zero balance. */
             remaining_gpu_seconds: number | null;
             usage_complete: boolean;
-            reconciled: boolean;
         };
         /** @description A cumulative GPU credit waterfall over one bounded ledger window. `opening_gpu_seconds` is the exact sum of every GPU fact the window omits (zero for a complete window), `closing_gpu_seconds` is opening plus the shown deltas and reconciles to `summary.settled_balance_gpu_seconds`, and `complete` states whether the window holds every GPU fact in the period. A partial window is reported as partial rather than as an empty or zero history. */
         GPUCreditWaterfall: {

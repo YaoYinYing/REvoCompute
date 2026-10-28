@@ -2176,7 +2176,7 @@
       "GPUCreditWaterfallSummary": {
         "type": "object",
         "description": "The period's canonical GPU position. `monthly_grant + adjustment - usage = settled_balance`; `settled_balance - reserved - unsettled = remaining`. Reservations and unsettled allocations are live admission state, not ledger entries: a reservation reduces what is available without recording consumption, and its release removes it without appending a fact.",
-        "required": ["monthly_grant_gpu_seconds", "usage_gpu_seconds", "adjustment_gpu_seconds", "settled_balance_gpu_seconds", "reserved_gpu_seconds", "unsettled_allocations", "unsettled_gpu_seconds", "remaining_gpu_seconds", "usage_complete", "reconciled"],
+        "required": ["monthly_grant_gpu_seconds", "usage_gpu_seconds", "adjustment_gpu_seconds", "settled_balance_gpu_seconds", "reserved_gpu_seconds", "unsettled_allocations", "unsettled_gpu_seconds", "remaining_gpu_seconds", "usage_complete"],
         "properties": {
           "monthly_grant_gpu_seconds": {"type": "integer"},
           "usage_gpu_seconds": {"type": "integer"},
@@ -2186,8 +2186,7 @@
           "unsettled_allocations": {"type": "integer", "minimum": 0},
           "unsettled_gpu_seconds": {"type": "integer"},
           "remaining_gpu_seconds": {"type": ["integer", "null"], "description": "Null only when the unit is ungated; a null is not a zero balance."},
-          "usage_complete": {"type": "boolean"},
-          "reconciled": {"type": "boolean"}
+          "usage_complete": {"type": "boolean"}
         },
         "additionalProperties": false
       },

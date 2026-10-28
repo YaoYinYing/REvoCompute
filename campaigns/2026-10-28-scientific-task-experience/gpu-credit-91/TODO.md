@@ -1,6 +1,6 @@
 # TODO — feat(accounting): canonical GPU-credit waterfall and attribution (#91)
 
-> **Status:** Design / implementation not yet started. No merge authorization.
+> **Status:** Implementation complete for the bounded contract; PR remains Draft and issue #91 stays open for maintainer production review. No merge authorization.
 > **Baseline when drafted:** `17e80ed1dbd00f1389f3ec7047e5661b85ed52eb` (2026-10-28); revalidate against the exact head at implementation.
 > **Scope:** Resolve issue #91 by providing a truthful bounded chronological GPU-credit waterfall and queryable ledger attribution without changing append-only resource facts.
 
@@ -25,7 +25,7 @@ Resolve issue #91 by providing a truthful bounded chronological GPU-credit water
 - [ ] Resolve Issue #91 only after maintainer has reviewed merged production behavior and acceptance evidence.
 
 ## Test and acceptance checklist
-- [x] Opening and closing balances match authoritative ledger over complete windows and paginated partial windows.
+- [x] Opening and closing balances match authoritative ledger over complete and bounded partial windows (cursor pagination deferred by Commander directive).
 - [x] 50+ entries, reversed ordering, duplicated timestamps, negative balances, corrections and canceled allocations.
 - [x] Overflow safeguards, idempotent replay, duplicate ledger event suppression, unknown attribution, and transient source outage.
 - [x] Keyboard-only inspection, screen-reader descriptions, narrow/mobile layout and both themes.

@@ -13,6 +13,7 @@ from playwright.sync_api import Page, expect
 import pytest
 
 from browser_frontend_assets import result_dist
+from frontend_fixtures import builders
 from frontend_fixtures.router import serve_environment
 
 pytestmark = pytest.mark.browser
@@ -194,27 +195,6 @@ def _resource_entitlement(subject_id: int = 2) -> dict:
     }
 
 
-def _resource_ledger(subject_id: int = 2) -> dict:
-    """One bounded ledger window: an unattributed grant beside an attributed usage row."""
-    return {
-        "subject_id": subject_id, "period": "2026-09", "limit": 25, "limit_ceiling": 200,
-        "entries": [
-            {
-                "id": 1, "subject_type": "user", "subject_id": subject_id, "period": "2026-09",
-                "kind": "monthly_grant", "unit": "gpu_second", "resource_class": "", "quantity": 180000,
-                "task_id": None, "stage_id": None, "slurm_job_id": None, "actor_user_id": None,
-                "reason": None, "reason_code": None, "evidence_source": "policy", "created_at": 1790636400,
-            },
-            {
-                "id": 2, "subject_type": "user", "subject_id": subject_id, "period": "2026-09",
-                "kind": "usage", "unit": "gpu_second", "resource_class": "a100", "quantity": 74250,
-                "task_id": TASK_ID, "stage_id": "model", "slurm_job_id": "9711", "actor_user_id": None,
-                "reason": None, "reason_code": None, "evidence_source": "slurm_accounting", "created_at": 1790636500,
-            },
-        ],
-    }
-
-
 def _install_app(page: Page) -> list[str]:
     dist = result_dist()
     entry = json.loads((dist / ".vite" / "manifest.json").read_text(encoding="utf-8"))["index.html"]
@@ -338,7 +318,10 @@ def _install_app(page: Page) -> list[str]:
     page.route(f"{ORIGIN}/compute/api/user-metrics?*", lambda route: route.fulfill(json=_metrics(parse_qs(urlsplit(route.request.url).query).get("window", ["daily"])[0])))
     subject_id = 2
     page.route(f"{ORIGIN}/compute/api/resource-entitlement", lambda route: route.fulfill(json=_resource_entitlement(subject_id)))
-    page.route(f"{ORIGIN}/compute/api/resource-ledger**", lambda route: route.fulfill(json=_resource_ledger(subject_id)))
+    page.route(
+        f"{ORIGIN}/compute/api/resource-ledger**",
+        lambda route: route.fulfill(json=builders.build_resource_ledger(subject_id)),
+    )
 
     users = [_admin_user()]
 
@@ -362,7 +345,13 @@ def _install_app(page: Page) -> list[str]:
         else:
             route.fulfill(json=_gpu_credit())
 
+    def admin_report_resources(route) -> None:
+        query = parse_qs(urlsplit(route.request.url).query)
+        subject = int(query.get("subject", [subject_id])[0])
+        route.fulfill(json=builders.build_admin_resource_report(subject))
+
     page.route(f"{ORIGIN}/compute/api/auth/admin/users", admin_users)
+    page.route(f"{ORIGIN}/compute/api/auth/admin/reports/resources?*", admin_report_resources)
     page.route(f"{ORIGIN}/compute/api/auth/admin/users/*/gpu-credit/adjustments", admin_credit)
     page.route(f"{ORIGIN}/compute/api/auth/admin/users/*/gpu-credit/allowance", admin_credit)
     page.route(f"{ORIGIN}/compute/api/auth/admin/users/*/gpu-credit", admin_credit)

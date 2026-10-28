@@ -14,6 +14,7 @@ implementation that produced it.
 from __future__ import annotations
 
 import time
+from datetime import datetime, timezone
 
 import sqlalchemy as sa
 from conftest import _admin_client_auth, _load_pssm_module, _test_client_auth
@@ -103,7 +104,6 @@ def test_a_complete_window_opens_at_zero_and_closes_at_the_summary(monkeypatch, 
         - summary["usage_gpu_seconds"]
     )
     assert waterfall["closing_gpu_seconds"] == summary["settled_balance_gpu_seconds"]
-    assert summary["reconciled"] is True
 
     gpu_entries = _gpu_entries(payload)
     # UTC order: the grant at allocation start, the adjustment, then the settled
@@ -143,6 +143,53 @@ def test_entries_are_utc_chronological_and_duplicate_timestamps_have_a_total_ord
     assert balances == sorted(balances)
 
 
+def test_a_backdated_fact_does_not_displace_a_newer_timestamp_from_the_window(monkeypatch, tmp_path):
+    """The bounded window is newest by UTC time, not by insertion order.
+
+    The three corrections are inserted newest-time first, so a window selected by
+    descending identifier would hold the two oldest timestamps and present them
+    as the newest. The shown window must instead be the two newest timestamps,
+    and the opening balance must be the exact sum of everything it omitted.
+    """
+    module = _module(monkeypatch, tmp_path)
+    headers = _test_client_auth(module)
+    user = _user(module)
+    # A deterministic instant inside the current UTC month, so the grant and the
+    # backdated facts cannot straddle a month boundary.
+    noon = datetime.fromtimestamp(time.time(), timezone.utc).replace(
+        day=1, hour=12, minute=0, second=0, microsecond=0
+    ).timestamp()
+    # Materialize the period grant earlier than every correction, so it does not
+    # share the newest timestamp with the newest correction.
+    module.task_store.gpu_credit_summary(user["id"], at=noon - 60)
+    for gpu_seconds, offset, key in ((30, 10, "newest"), (20, 20, "middle"), (10, 30, "oldest")):
+        module.task_store.adjust_compute_account(
+            user_id=user["id"], gpu_seconds=gpu_seconds, actor_user_id=99,
+            reason=f"Backdated {key}", idempotency_key=key, created_at=noon - offset,
+        )
+
+    payload = _ledger(module, headers, limit=2)
+    shown = _gpu_entries(payload)
+    # Chronological order, but only the two newest timestamps are present.
+    assert [entry["quantity"] for entry in shown] == [20, 30]
+    assert all(entry["created_at"] >= noon - 20 for entry in shown)
+    oldest = next(
+        entry for entry in _gpu_entries(_ledger(module, headers, limit=200))
+        if entry["reason"] == "Backdated oldest"
+    )
+    assert oldest["id"] not in {entry["id"] for entry in shown}
+
+    all_entries = _gpu_entries(_ledger(module, headers, limit=200))
+    omitted = sum(
+        entry["quantity"] for entry in all_entries
+        if entry["id"] not in {shown_entry["id"] for shown_entry in shown}
+    )
+    waterfall = payload["gpu_waterfall"]
+    assert waterfall["opening_gpu_seconds"] == omitted
+    assert waterfall["closing_gpu_seconds"] == waterfall["summary"]["settled_balance_gpu_seconds"]
+    assert waterfall["complete"] is False
+
+
 def test_a_partial_window_uses_the_verified_opening_and_still_reconciles(monkeypatch, tmp_path):
     module = _module(monkeypatch, tmp_path)
     headers = _test_client_auth(module)
@@ -170,7 +217,6 @@ def test_a_partial_window_uses_the_verified_opening_and_still_reconciles(monkeyp
     omitted = sum(entry["quantity"] for entry in all_entries if entry["id"] not in shown)
     assert waterfall["opening_gpu_seconds"] == omitted
     assert waterfall["closing_gpu_seconds"] == waterfall["summary"]["settled_balance_gpu_seconds"]
-    assert waterfall["summary"]["reconciled"] is True
 
     # Concatenating the omitted facts before the shown ones reproduces the
     # closing balance, step by step.
@@ -223,7 +269,10 @@ def test_corrections_and_reversals_are_ordinary_signed_steps(monkeypatch, tmp_pa
     by_id = {entry["id"]: entry for entry in entries}
     for step in payload["gpu_waterfall"]["steps"]:
         assert step["delta_gpu_seconds"] == by_id[step["entry_id"]]["quantity"]
-    assert payload["gpu_waterfall"]["summary"]["reconciled"] is True
+    summary = payload["gpu_waterfall"]["summary"]
+    assert payload["gpu_waterfall"]["closing_gpu_seconds"] == (
+        summary["monthly_grant_gpu_seconds"] + summary["adjustment_gpu_seconds"] - summary["usage_gpu_seconds"]
+    )
 
 
 def test_unattributed_facts_are_published_and_named(monkeypatch, tmp_path):
@@ -317,14 +366,14 @@ def test_an_unrepresentable_value_is_unavailable_not_rounded(monkeypatch, tmp_pa
     assert "entries" not in body and "gpu_waterfall" not in body
 
 
+def _store_outage(*_args, **_kwargs):
+    raise sa.exc.OperationalError("SELECT", {}, Exception("database is locked"))
+
+
 def test_a_transient_store_outage_is_reported_as_unavailable(monkeypatch, tmp_path):
     module = _module(monkeypatch, tmp_path)
     headers = _test_client_auth(module)
-
-    def unavailable(*_args, **_kwargs):
-        raise sa.exc.OperationalError("SELECT", {}, Exception("database is locked"))
-
-    monkeypatch.setattr(module.task_store, "gpu_credit_summary", unavailable)
+    monkeypatch.setattr(module.task_store, "resource_ledger_window", _store_outage)
 
     response = module.app.test_client().get("/compute/api/resource-ledger", headers=headers)
     assert response.status_code == 503
@@ -332,6 +381,36 @@ def test_a_transient_store_outage_is_reported_as_unavailable(monkeypatch, tmp_pa
     assert body["unavailable_reason"] == "ledger_unavailable"
     # Unavailability is never an empty history or a zero balance.
     assert "entries" not in body and "gpu_waterfall" not in body
+
+
+def test_the_admin_report_reports_the_same_unavailability_as_the_account_read(monkeypatch, tmp_path):
+    """Both ledger scopes map an unrepresentable value and an outage to one 503."""
+    module = _module(monkeypatch, tmp_path)
+    client = module.app.test_client()
+    _test_client_auth(module)
+    admin_headers = _admin_client_auth(module)
+    user = _user(module)
+    report_url = f"/compute/api/auth/admin/reports/resources?subject={user['id']}"
+    period = module.task_store.gpu_credit_summary(user["id"])["period"]
+    ledger = module.task_store.resource_ledger_table
+    with module.task_store.engine.begin() as conn:
+        conn.execute(sa.insert(ledger).values(
+            subject_type="user", subject_id=user["id"], period=period,
+            kind="admin_adjustment", unit="gpu_second", resource_class="",
+            quantity=2**53, actor_user_id=99, reason="Corrupt fixture",
+            reason_code="admin_adjustment", evidence_source="policy",
+            idempotency_key="overflow-admin-fixture", created_at=time.time(),
+        ))
+    overflow = client.get(report_url, headers=admin_headers)
+    assert overflow.status_code == 503
+    assert overflow.get_json()["unavailable_reason"] == "ledger_value_out_of_range"
+    assert "canonical_envelope" not in overflow.get_json()
+
+    monkeypatch.setattr(module.task_store, "resource_ledger_window", _store_outage)
+    outage = client.get(report_url, headers=admin_headers)
+    assert outage.status_code == 503
+    assert outage.get_json()["unavailable_reason"] == "ledger_unavailable"
+    assert "ledger" not in outage.get_json()
 
 
 def test_the_admin_drill_in_serves_the_same_waterfall_and_respects_rbac(monkeypatch, tmp_path):

@@ -208,15 +208,13 @@ export function quotaLedgerSection(ledger: ResourceLedger): HTMLElement {
     attribution.append(text('span', attributionLabel(entry)));
     if (entry.resource_class) attribution.append(text('small', entry.resource_class));
     if (entry.reason) attribution.append(text('small', entry.reason));
-    const row = element('tr', '', [
+    body.append(element('tr', '', [
       text('td', formatDate(entry.created_at)),
       text('td', kindLabel(entry.kind)),
       text('td', unitLabel(entry.unit)),
       text('td', amount),
       attribution,
-    ]);
-    row.id = `ledger-entry-${entry.id}`;
-    body.append(row);
+    ]));
   }
   table.append(head, body);
   section.append(element('div', 'admin-table-scroll', [table]));
@@ -334,9 +332,6 @@ export function waterfallSection(
       'quota-waterfall-note',
     ));
   }
-  if (!waterfall.summary.reconciled) {
-    section.append(text('p', t('quota.waterfall.mismatch'), 'quota-waterfall-note is-negative'));
-  }
   if (!waterfall.summary.usage_complete) {
     section.append(text('p', t('quota.bar.incomplete'), 'quota-waterfall-note'));
   }
@@ -344,10 +339,14 @@ export function waterfallSection(
     section.append(text('p', t('quota.waterfall.negative'), 'quota-waterfall-note is-negative'));
   }
   section.append(text('p', t('quota.waterfall.commitments'), 'quota-waterfall-note'));
-  const status = text('p', t('quota.waterfall.loaded', { count: waterfall.entry_count }), 'quota-waterfall-status');
+  // The live region is attached empty and populated afterwards, so a screen
+  // reader announces the loaded count instead of treating the first text as
+  // pre-existing content.
+  const status = text('p', '', 'quota-waterfall-status');
   status.setAttribute('role', 'status');
   status.setAttribute('aria-live', 'polite');
   section.append(status);
+  status.textContent = t('quota.waterfall.loaded', { count: waterfall.entry_count });
 
   const table = element('table', 'admin-table quota-waterfall-table');
   table.append(text('caption', t('quota.waterfall.caption', { period })));
@@ -418,7 +417,13 @@ export function waterfallSection(
   );
   foot.append(closingRow);
   table.append(head, body, foot);
-  section.append(element('div', 'admin-table-scroll', [table]));
+  // A wide table inside an overflow container is only reachable by keyboard if
+  // the container itself takes focus; the label says what the region holds.
+  const scroll = element('div', 'admin-table-scroll', [table]);
+  scroll.setAttribute('tabindex', '0');
+  scroll.setAttribute('role', 'region');
+  scroll.setAttribute('aria-label', t('quota.waterfall.tableLabel', { period }));
+  section.append(scroll);
 
   const raw = element('p', 'quota-waterfall-raw');
   const rawLink = element('a');

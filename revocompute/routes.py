@@ -4339,6 +4339,10 @@ def admin_report_resources():
         # them can interpret makes it unanswerable: the same bounded refusal the
         # other read surfaces give, rather than a traceback.
         return _typed_resource_refusal(exc)
+    except (rloan.AccountingOverflow, SQLAlchemyError) as exc:
+        # The drill-in reads the same ledger window the account does; a ledger
+        # that cannot publish a truthful number is refused the same way here.
+        return _ledger_read_refusal(exc)
     return jsonify(report)
 
 
@@ -4980,6 +4984,29 @@ def current_gpu_credit():
     return jsonify(payload), 200
 
 
+def _ledger_read_refusal(exc: Exception):
+    """The bounded 503 every ledger read gives instead of a fabricated number.
+
+    A quantity no JSON client can represent exactly and an unavailable store are
+    different failures, but both make the read unable to publish a truthful
+    ledger.  Returning an empty window or a zero balance would be worse than an
+    error: it would state a spend or a history nobody measured.  One mapping
+    serves the account's own read and the Admin report so the two scopes cannot
+    disagree about how the same failure is reported.
+    """
+    if isinstance(exc, rloan.AccountingOverflow):
+        logging.error("Resource ledger refused an unrepresentable value: %s", exc)
+        return jsonify({
+            "error": "The resource ledger contains a value this API cannot represent exactly.",
+            "unavailable_reason": "ledger_value_out_of_range",
+        }), 503
+    logging.exception("Resource ledger could not be read", exc_info=exc)
+    return jsonify({
+        "error": "The resource ledger is temporarily unavailable.",
+        "unavailable_reason": "ledger_unavailable",
+    }), 503
+
+
 @app.route("/compute/api/resource-ledger", methods=["GET"])
 @login_required
 def current_resource_ledger():
@@ -5003,18 +5030,8 @@ def current_resource_ledger():
         return jsonify({"error": str(exc)}), 400
     try:
         payload = admin_reports.resource_ledger_window(task_store, int(g.current_user["id"]), limit=limit)
-    except rloan.AccountingOverflow as exc:
-        logging.error("Resource ledger refused an unrepresentable value: %s", exc)
-        return jsonify({
-            "error": "The resource ledger contains a value this API cannot represent exactly.",
-            "unavailable_reason": "ledger_value_out_of_range",
-        }), 503
-    except SQLAlchemyError:
-        logging.exception("Resource ledger could not be read")
-        return jsonify({
-            "error": "The resource ledger is temporarily unavailable.",
-            "unavailable_reason": "ledger_unavailable",
-        }), 503
+    except (rloan.AccountingOverflow, SQLAlchemyError) as exc:
+        return _ledger_read_refusal(exc)
     return jsonify(payload), 200
 
 
