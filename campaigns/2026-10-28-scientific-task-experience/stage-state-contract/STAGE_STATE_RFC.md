@@ -107,6 +107,12 @@ and the GPU/CPU ledger settles from measured allocation lifetime. StageRun rows
 never move entitlement; an attempt without an allocation creates no ledger fact,
 and duplicate callbacks stay idempotent through ``slurm_job_id``.
 
+A failed attempt's reason comes from the adapter instance whose ``poll()``
+produced that outcome, never from the Task-level diagnostics row. That row is
+overwritten by the next stage or attempt, so borrowing it would attribute one
+allocation's failure to another; when the adapter reports no reason, the attempt
+is settled as ``allocation_failed``.
+
 ## Evidence monotonicity
 
 Attempt creation runs under ``BEGIN IMMEDIATE`` (so "reuse the live attempt or

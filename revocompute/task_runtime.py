@@ -596,7 +596,7 @@ def _create_job(
     allocation_dispatched_callback=None,
     allocation_started_callback=None,
     allocation_finished_callback=None,
-    allocation_accounting: bool = True,
+    allocation_accounting: bool | None = None,
 ) -> Job:
     """Create the production Slurm/Apptainer job adapter."""
     return SlurmJob(
@@ -1000,7 +1000,9 @@ def _run_compute_job(
         task_store.release_reservation(
             task_id=task_id, reason_code=ReservationReason.RELEASED.value, at=time.time()
         )
-    _finish_stage_attempt(task_id, 0, attempt, state)
+    _finish_stage_attempt(
+        task_id, 0, attempt, state, failure_reason=getattr(job, "failure_reason", None)
+    )
     return state
 
 
@@ -1093,7 +1095,7 @@ def _finish_stage_attempt(
     attempt: int | None,
     state: JobState,
     *,
-    reason_code: str | None = None,
+    failure_reason: str | None = None,
 ) -> None:
     """Settle one attempt from the allocation outcome Core observed.
 
@@ -1101,6 +1103,10 @@ def _finish_stage_attempt(
     rewrite a completed Runner as a failed Task.  The allocation itself is
     settled by its own callback, so nothing here can double-charge or lose the
     ledger fact.
+
+    The reason comes from the job that produced this outcome, never from the
+    Task-level diagnostics row: that row is overwritten by the next stage or
+    attempt, so borrowing it would attribute another allocation's failure here.
     """
     status = {
         JobState.COMPLETED: stage_state.COMPLETED,
@@ -1109,14 +1115,12 @@ def _finish_stage_attempt(
     }.get(state)
     if status is None:
         return
-    if reason_code is None:
-        if status == stage_state.COMPLETED:
-            reason_code = stage_state.Reason.COMPLETED
-        elif status == stage_state.CANCELLED:
-            reason_code = stage_state.Reason.TASK_CANCELLED
-        else:
-            evidence = task_store.get_task_diagnostics(task_id) or {}
-            reason_code = str(evidence.get("reason_code") or "allocation_failed")
+    if status == stage_state.COMPLETED:
+        reason_code = stage_state.Reason.COMPLETED
+    elif status == stage_state.CANCELLED:
+        reason_code = stage_state.Reason.TASK_CANCELLED
+    else:
+        reason_code = failure_reason or "allocation_failed"
     _settle_stage_attempt(task_id, stage_index, attempt, status=status, reason_code=reason_code)
 
 
@@ -1214,9 +1218,7 @@ def _run_compute_workflow(
             handles["slurm_job_id"] = jid
         if not task_store.update_task(task_id, **handles):
             job.cancel()
-            _finish_stage_attempt(
-                task_id, index, attempt, JobState.CANCELLED, reason_code=stage_state.Reason.TASK_CANCELLED
-            )
+            _finish_stage_attempt(task_id, index, attempt, JobState.CANCELLED)
             return JobState.CANCELLED
         try:
             result = job.poll()
@@ -1233,7 +1235,9 @@ def _run_compute_workflow(
             task_store.release_reservation(
                 task_id=task_id, reason_code=ReservationReason.RELEASED.value, at=time.time()
             )
-        _finish_stage_attempt(task_id, index, attempt, result)
+        _finish_stage_attempt(
+            task_id, index, attempt, result, failure_reason=getattr(job, "failure_reason", None)
+        )
         settled: dict[str, Any] = {"slurm_job_id": None, "container_id": None}
         mirror = _mirror_json(task_id, legacy_state)
         if mirror is not None:

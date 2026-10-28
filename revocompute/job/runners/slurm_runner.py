@@ -667,6 +667,11 @@ class SlurmJob(Job):
         return self._allocation_live and self._admission_error is None
 
     @property
+    def failure_reason(self) -> str | None:
+        """Why this allocation failed, as this adapter observed it."""
+        return self._failure_reason
+
+    @property
     def wrapper_executed(self) -> bool:
         """Whether the wrapper was observed executing on a compute node.
 

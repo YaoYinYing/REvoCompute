@@ -136,11 +136,13 @@ def test_workflow_keeps_task_running_while_the_next_stage_is_queued(tmp_path, mo
     tt = _task_type()
     monkeypatch.setattr(task_runtime, "_get_task_type", lambda name: (tt, None))
 
-    snapshots: list[tuple[str, dict]] = []
+    snapshots: list[tuple[str, dict, str]] = []
 
     def _snapshot(label: str) -> None:
         task = database.get_task(task_id)
-        snapshots.append((label, task_runtime.stage_projection(task)))
+        # Capture the Task status at this exact boundary, not after the whole
+        # workflow has run: a per-stage `status="queued"` regression must fail.
+        snapshots.append((label, task_runtime.stage_projection(task), task["status"]))
 
     class _Job:
         def __init__(self, callbacks):
@@ -185,31 +187,33 @@ def test_workflow_keeps_task_running_while_the_next_stage_is_queued(tmp_path, mo
     )
 
     assert result == task_runtime.JobState.COMPLETED
-    by_label: dict[str, list[tuple[str, dict]]] = {}
-    for label, projection in snapshots:
-        by_label.setdefault(label, []).append(projection)
+    by_label: dict[str, list[tuple[dict, str]]] = {}
+    for label, projection, status in snapshots:
+        by_label.setdefault(label, []).append((projection, status))
 
-    features_dispatched = by_label["dispatched"][0]
+    features_dispatched, features_dispatched_status = by_label["dispatched"][0]
     assert features_dispatched["items"][0]["status"] == stage_state.QUEUED
     assert features_dispatched["items"][1]["status"] == stage_state.NOT_STARTED
+    assert features_dispatched_status == "queued"
 
-    features_started = by_label["started"][0]
+    features_started, features_started_status = by_label["started"][0]
     assert features_started["items"][0]["status"] == stage_state.RUNNING
     # The allocation, not a stdout marker, made the Task running.
-    assert database.get_task(task_id)["status"] == "running"
+    assert features_started_status == "running"
 
-    model_dispatched = by_label["dispatched"][1]
+    model_dispatched, model_dispatched_status = by_label["dispatched"][1]
     assert [item["status"] for item in model_dispatched["items"]] == [
         stage_state.COMPLETED,
         stage_state.QUEUED,
     ]
-    # The regression this change removes: the Task must not fall back to queued
-    # while its GPU stage waits.
-    assert database.get_task(task_id)["status"] == "running"
+    # The regression this change removes: at the moment the GPU stage is queued
+    # (before its allocation starts), the Task is still running.
+    assert model_dispatched_status == "running"
 
-    model_started = by_label["started"][1]
+    model_started, model_started_status = by_label["started"][1]
     assert model_started["current"]["name"] == "multistage_runner.model"
     assert model_started["current"]["status"] == stage_state.RUNNING
+    assert model_started_status == "running"
 
     final = task_runtime.stage_projection(database.get_task(task_id))
     assert final["source"] == "record"
@@ -219,7 +223,7 @@ def test_workflow_keeps_task_running_while_the_next_stage_is_queued(tmp_path, mo
     assert [step["status"] for step in mirror.values()] == ["completed", "completed"]
 
 
-def test_failed_attempt_uses_the_diagnostic_reason_and_rejects_late_completion(tmp_path, monkeypatch):
+def test_failed_attempt_uses_the_adapter_reason_and_never_another_attempt_evidence(tmp_path, monkeypatch):
     database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
     task_id = "f" * 32
     _insert_task(database, task_id, status="running")
@@ -228,14 +232,22 @@ def test_failed_attempt_uses_the_diagnostic_reason_and_rejects_late_completion(t
         task_id=task_id, stage_index=0, stage_name="multistage_runner.model"
     )
     database.record_stage_running(task_id=task_id, stage_index=0, attempt=attempt["attempt"])
+    # The Task-level diagnostics row belongs to whichever allocation wrote last;
+    # it must not supply the reason for this attempt.
     database.record_task_diagnostics(task_id, {"reason_code": "timeout"})
 
     task_runtime._finish_stage_attempt(
-        task_id, 0, attempt["attempt"], task_runtime.JobState.FAILED
+        task_id, 0, attempt["attempt"], task_runtime.JobState.FAILED, failure_reason="nonzero_exit"
     )
 
     run = database.list_stage_runs(task_id)[0]
-    assert (run["status"], run["reason_code"]) == (stage_state.FAILED, "timeout")
+    assert (run["status"], run["reason_code"]) == (stage_state.FAILED, "nonzero_exit")
+
+    retry = database.begin_stage_attempt(
+        task_id=task_id, stage_index=0, stage_name="multistage_runner.model"
+    )
+    task_runtime._finish_stage_attempt(task_id, 0, retry["attempt"], task_runtime.JobState.FAILED)
+    assert database.list_stage_runs(task_id)[-1]["reason_code"] == "allocation_failed"
     # A stale worker reporting completion afterwards cannot rewrite the record.
     assert not database.finish_stage_attempt(
         task_id=task_id, stage_index=0, attempt=attempt["attempt"], status=stage_state.COMPLETED
