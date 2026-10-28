@@ -79,6 +79,23 @@ def _fixture_response(router: FrontendFixtureRouter, path: str, method: str = "G
     return route.status, route.payload
 
 
+def test_access_detail_omits_request_history_where_the_list_includes_it() -> None:
+    """The detail route projects the policy with ``include_history=False``."""
+    from frontend_fixtures import builders
+    from frontend_fixtures.models import AccessState
+
+    access = AccessState(
+        restricted=True, granted=False, requestable=True, expired=True,
+        expires_at=1704067200, request_status="pending",
+    )
+    listing = builders.runner_access_payload(access)
+    detail = builders.runner_access_payload(access, include_history=False)
+    assert listing["expired"] is True and listing["expires_at"] == 1704067200
+    assert "expired" not in detail and "expires_at" not in detail
+    builders.validate_payload("RunnerAccess", listing)
+    builders.validate_payload("RunnerAccess", detail)
+
+
 def test_demo_fixture_answers_exactly_what_the_real_demo_server_answers(monkeypatch, tmp_path):
     """The fixture's demo refusal and replay responses are the Server's responses."""
     _install_demo_replays(tmp_path)

@@ -53,6 +53,29 @@ def _evidence(page: Page, name: str) -> None:
     page.screenshot(path=target / f"{name}.png")
 
 
+DEMO_FETCH_PROBE = """
+(() => {
+  const original = window.fetch;
+  window.__demoFetchesSettled = 0;
+  window.fetch = async (...args) => {
+    const response = await original(...args);
+    if (String(args[0]).includes('/demos')) window.__demoFetchesSettled += 1;
+    return response;
+  };
+})();
+"""
+
+
+def _probe_demo_fetches(page: Page) -> None:
+    page.add_init_script(DEMO_FETCH_PROBE)
+
+
+def _settle_demo_fetch(page: Page) -> None:
+    """Wait until the observed catalog response has been consumed by the page."""
+    page.wait_for_function("window.__demoFetchesSettled >= 1")
+    page.evaluate("() => new Promise(resolve => setTimeout(resolve, 0))")
+
+
 def _open_demo(page: Page) -> None:
     page.goto(f"{ORIGIN}/compute/create_task?task_type={RUNNER}")
     expect(page.locator(".ct-workbench")).to_be_visible()
@@ -178,6 +201,7 @@ def test_the_example_picker_fits_and_closes_on_a_narrow_screen(page: Page) -> No
 
 def test_closing_a_picker_while_its_catalog_is_in_flight_cancels_it(page: Page) -> None:
     """A dismissed picker cannot surface a late catalog response."""
+    _probe_demo_fetches(page)
     router = mount_scenario(page, controlled_scenario().with_demos([sequence_demo()]))
     page.goto(f"{ORIGIN}/compute/create_task?task_type={RUNNER}")
     expect(page.locator(".ct-workbench")).to_be_visible()
@@ -203,7 +227,7 @@ def test_closing_a_picker_while_its_catalog_is_in_flight_cancels_it(page: Page) 
     # Deliver the late answer only after the dialog is gone: neither the demo
     # cards nor an error may be written into the detached dialog.
     held[0].fulfill(json=router.scenario.demo_catalog(RUNNER))
-    page.wait_for_timeout(400)
+    _settle_demo_fetch(page)
     assert page.evaluate("window.__closedPicker.querySelectorAll('.ct-demo').length") == 0
     assert page.evaluate("window.__closedPicker.querySelector('.ct-status').textContent") == ""
 
@@ -216,6 +240,7 @@ def test_closing_a_picker_while_its_catalog_is_in_flight_cancels_it(page: Page) 
 
 def test_a_late_catalog_failure_is_not_written_into_a_dismissed_picker(page: Page) -> None:
     """The failure path respects the dismissal as the success path does."""
+    _probe_demo_fetches(page)
     mount_scenario(page, controlled_scenario().with_demos([sequence_demo()]))
     page.goto(f"{ORIGIN}/compute/create_task?task_type={RUNNER}")
     expect(page.locator(".ct-workbench")).to_be_visible()
@@ -230,7 +255,7 @@ def test_a_late_catalog_failure_is_not_written_into_a_dismissed_picker(page: Pag
 
     assert len(held) == 1
     held[0].fulfill(status=503, content_type="application/json", body='{"error": "catalog unavailable"}')
-    page.wait_for_timeout(400)
+    _settle_demo_fetch(page)
     assert page.evaluate("window.__closedPicker.querySelector('.ct-status').textContent") == ""
     expect(page.locator("dialog.ct-demo-dialog")).to_have_count(0)
 
@@ -295,8 +320,31 @@ def test_the_access_request_dialog_is_labelled_keyboard_safe_and_sends_one_polic
     dialog.get_by_role("button", name="Request access", exact=True).click()
     expect(dialog).to_have_count(0)
     expect(page.locator(".ct-access-panel")).to_contain_text("Access requested")
+    assert page.evaluate(
+        "document.activeElement && document.activeElement.tagName === 'H2' && document.activeElement.textContent === 'Access requested'"
+    ), "focus did not move to the answered panel"
     requests = [body for path, body in posted if path.endswith("/access/requests")]
     assert requests == [{"policy_id": "academic-only", "reason": "Non-commercial work at Example Institute"}]
+
+
+def test_a_failed_create_task_access_request_restores_focus_to_the_button(page: Page) -> None:
+    runner = replace(controlled_runner(), access=AccessState.requestable_policy())
+    mount_scenario(page, controlled_scenario(runner=runner))
+    page.route(
+        f"{ORIGIN}/compute/api/access/requests",
+        lambda route: route.fulfill(status=500, content_type="application/json", body='{"error": "server unavailable"}'),
+    )
+    page.goto(f"{ORIGIN}/compute/create_task?task_type={RUNNER}")
+    page.locator(".ct-access-panel").get_by_role("button", name="Request access", exact=True).click()
+    page.get_by_label("Research use and affiliation").fill("Non-commercial work at Example Institute")
+    page.get_by_role("dialog").get_by_role("button", name="Request access", exact=True).click()
+    expect(page.locator("dialog.ct-dialog")).to_have_count(0)
+    expect(page.locator(".ct-status.error")).to_contain_text("Access request failed")
+    button = page.locator(".ct-access-panel").get_by_role("button", name="Request access", exact=True)
+    expect(button).to_be_enabled()
+    assert page.evaluate(
+        "document.activeElement && document.activeElement.textContent === 'Request access'"
+    ), "focus did not return to the re-enabled request control"
 
 
 @pytest.mark.parametrize("theme", ["light", "dark"])
@@ -362,3 +410,53 @@ def test_demo_provenance_never_renders_an_unsafe_link(page: Page) -> None:
     assert page.evaluate(
         "[...document.querySelectorAll('a[href]')].every(anchor => !anchor.getAttribute('href').startsWith('javascript:'))"
     )
+
+
+def _open_task_from_catalog(page: Page) -> None:
+    """Reach Create Task through in-app navigation so Back is a same-document SPA step."""
+    page.goto(f"{ORIGIN}/runners")
+    expect(page.locator(".runner-card").first).to_be_visible()
+    page.locator('.app-nav a[href="/compute/create_task"]').click()
+    expect(page.locator(".ct-chooser")).to_be_visible()
+    page.locator(".ct-method").first.click()
+    expect(page.locator(".ct-workbench")).to_be_visible()
+
+
+def test_leaving_the_task_with_the_access_dialog_open_removes_it(page: Page) -> None:
+    """SPA Back disposes the create-task view and every modal it owns."""
+    _pin_theme(page, "light")
+    runner = replace(controlled_runner(), access=AccessState.requestable_policy())
+    mount_scenario(page, controlled_scenario(runner=runner))
+    posted: list[str] = []
+    page.on(
+        "request",
+        lambda request: posted.append(request.url)
+        if urlsplit(request.url).path.endswith("/access/requests") else None,
+    )
+    _open_task_from_catalog(page)
+    page.locator(".ct-access-panel").get_by_role("button", name="Request access", exact=True).click()
+    expect(page.locator("dialog.ct-dialog")).to_be_visible()
+    page.get_by_label("Research use and affiliation").fill("Non-commercial work at Example Institute")
+
+    page.go_back()
+    expect(page).to_have_url(f"{ORIGIN}/runners")
+    expect(page.locator(".runner-card").first).to_be_visible()
+    expect(page.locator("dialog.ct-dialog")).to_have_count(0)
+    page.evaluate("() => new Promise(resolve => setTimeout(resolve, 0))")
+    assert posted == [], "a dismissed access dialog still submitted its request"
+
+
+def test_leaving_the_task_with_the_replace_confirmation_open_removes_it(page: Page) -> None:
+    """A pending replacement decision is settled as cancelled on route leave."""
+    mount_scenario(page, controlled_scenario().with_demos([sequence_demo()]))
+    _open_task_from_catalog(page)
+    page.locator('[data-ct-parameter="iterations"]').fill("1")
+    page.locator("[data-ct-demo-open]").click()
+    page.locator("[data-ct-demo-choose]").click()
+    expect(page.locator("dialog.ct-dialog:not(.ct-demo-dialog)")).to_be_visible()
+
+    page.go_back()
+    expect(page).to_have_url(f"{ORIGIN}/runners")
+    expect(page.locator(".runner-card").first).to_be_visible()
+    expect(page.locator("dialog.ct-dialog")).to_have_count(0)
+    expect(page.locator(".ct-demo-applied")).to_have_count(0)

@@ -62,16 +62,24 @@ REJECTED_CLOSED = AccessState(
     policy_id="rejected-closed", label="Rejected closed model",
 )
 RESTRICTED = AccessState(restricted=True, granted=False, requestable=False, policy_id="closed-policy", label="Closed model")
+APPROVED = AccessState(
+    restricted=True, granted=False, requestable=True, request_status="approved",
+    policy_id="approved-policy", label="Approved model",
+)
+CANCELLED_CLOSED = AccessState(
+    restricted=True, granted=False, requestable=False, request_status="cancelled",
+    policy_id="cancelled-closed", label="Cancelled closed model",
+)
 
 
-def _evidence(page: Page, name: str) -> None:
+def _evidence(page: Page, name: str, *, full_page: bool = False) -> None:
     """Save a screenshot only when a caller names an evidence directory."""
     directory = os.environ.get("REVOCOMPUTE_UI_EVIDENCE_DIR")
     if not directory:
         return
     target = Path(directory)
     target.mkdir(parents=True, exist_ok=True)
-    page.screenshot(path=target / f"{name}.png")
+    page.screenshot(path=target / f"{name}.png", full_page=full_page)
 
 
 def _mount(page: Page, policies=None) -> None:
@@ -169,14 +177,14 @@ def test_policy_states_are_grouped_and_only_requestable_states_offer_a_form(page
     expect(requestable.get_by_role("link", name="Upstream terms")).to_have_attribute(
         "href", "https://example.org/terms"
     )
-    _evidence(page, "runner-access-grouped")
+    _evidence(page, "runner-access-grouped", full_page=True)
 
 
 def test_runner_access_is_readable_in_the_dark_theme(page: Page) -> None:
     page.add_init_script("localStorage.setItem('revocompute-theme', 'dark')")
     _mount(page)
     expect(page.locator('[data-access-group="action"] .access-request')).to_have_count(4)
-    _evidence(page, "runner-access-dark")
+    _evidence(page, "runner-access-dark", full_page=True)
 
 
 def test_the_request_form_is_full_width_and_inside_a_narrow_viewport(page: Page) -> None:
@@ -195,7 +203,7 @@ def test_the_request_form_is_full_width_and_inside_a_narrow_viewport(page: Page)
     assert widths["field"] >= widths["form"] - 40, widths
     assert widths["right"] <= 390, widths
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth + 1")
-    _evidence(page, "runner-access-mobile")
+    _evidence(page, "runner-access-mobile", full_page=True)
 
 
 def test_requesting_access_sends_one_policy_and_moves_the_row_into_review(page: Page) -> None:
@@ -250,6 +258,51 @@ def test_an_expired_grant_with_a_live_request_renders_as_pending(page: Page) -> 
     expect(pending.locator(".access-detail")).to_contain_text("awaiting an administrator decision")
     expect(page.locator(".access-request")).to_have_count(0)
     expect(page.locator('[data-access-group="action"]')).to_have_count(0)
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        # The route must echo the policy that was posted; a different id is not
+        # this reader's answer.
+        {"policy_id": "other-policy", "requests": [{"entitlement": "academic-models", "status": "pending"}]},
+        # A matched policy with no pending record is not a confirmed request.
+        {"policy_id": "request-policy", "requests": [{"entitlement": "academic-models", "status": "approved"}]},
+    ],
+)
+def test_an_unconfirmed_201_does_not_move_the_row(page: Page, answer: dict) -> None:
+    """A 201 that does not confirm this policy leaves the form usable."""
+    _mount(page)
+    page.route(
+        f"{ORIGIN}/compute/api/access/requests",
+        lambda route: route.fulfill(status=201, json=answer),
+    )
+    posted = _posts(page)
+    row = page.locator('[data-policy-id="request-policy"]')
+    row.get_by_label("Research use and affiliation").fill("Non-commercial work at Example Institute")
+    row.get_by_role("button", name="Request access", exact=True).click()
+
+    expect(row).to_have_attribute("data-access-state", "requestable")
+    expect(row.get_by_role("alert")).to_contain_text("did not confirm")
+    expect(row.get_by_role("button", name="Request access", exact=True)).to_be_enabled()
+    expect(page.locator('[data-access-group="pending"] .access-row')).to_have_count(1)
+    assert len(posted) == 1
+
+
+def test_a_granted_policy_without_a_published_expiry_says_so(page: Page) -> None:
+    _mount(page, [AccessState.granted_policy(policy_id="granted-open", label="Granted open", expires_at=None)])
+    expect(page.locator(".access-granted-expiry")).to_have_text("No expiry date is published")
+    expect(page.locator(".access-request")).to_have_count(0)
+
+
+def test_approved_and_cancelled_request_history_is_stated(page: Page) -> None:
+    _mount(page, [APPROVED, CANCELLED_CLOSED])
+    approved = page.locator('[data-policy-id="approved-policy"]')
+    expect(approved.locator(".access-detail")).to_have_text("Your previous request was approved.")
+    expect(approved.locator(".access-request")).to_have_count(1)
+    cancelled = page.locator('[data-access-group="restricted"] [data-policy-id="cancelled-closed"]')
+    expect(cancelled.locator(".access-detail")).to_have_text("Your previous request was cancelled.")
+    expect(cancelled.locator(".access-request")).to_have_count(0)
 
 
 def test_the_empty_and_failed_states_are_answers_not_a_broken_page(page: Page) -> None:

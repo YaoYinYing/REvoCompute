@@ -64,6 +64,9 @@ export class CreateTask {
   // inside it and the view owns its lifetime explicitly: leaving the method
   // takes it with it.
   private demoDialog: HTMLDialogElement | null = null;
+  // Every modal this view owns, so leaving the route removes all of them and
+  // settles any promise they were holding open.
+  private readonly dialogs = new Set<HTMLDialogElement>();
   private revision = 0;
   // A demo deployment serves this form for inspection only. The Server refuses
   // every submission regardless; the form states the same fact before the reader
@@ -279,16 +282,20 @@ export class CreateTask {
     const heading = node('h2', '', t('ct.access.heading')); const label = node('label', 'ct-label', t('ct.access.reasonLabel')); const reason = node('textarea', 'ct-sequence'); reason.required = true; reason.maxLength = 1000; label.htmlFor = 'ct-access-reason'; reason.id = 'ct-access-reason';
     const cancel = node('button', 'ct-secondary', t('ct.cancel')); cancel.type = 'button'; cancel.addEventListener('click', () => dialog.close('cancel'));
     const submit = node('button', 'ct-primary', t('ct.access.request')); submit.type = 'submit'; submit.value = 'submit';
-    const actions = node('div', 'ct-actions'); actions.append(cancel, submit); form.append(heading, node('p', 'ct-help', t('ct.access.policyNote')), label, reason, actions); dialog.append(form); labelled(dialog, heading); document.body.append(dialog); dialog.showModal();
+    const actions = node('div', 'ct-actions'); actions.append(cancel, submit); form.append(heading, node('p', 'ct-help', t('ct.access.policyNote')), label, reason, actions); dialog.append(form); labelled(dialog, heading);
     dialog.addEventListener('close', async () => {
       const value = reason.value.trim(); const accepted = dialog.returnValue === 'submit' && value; dialog.remove(); if (!accepted) return;
       button.disabled = true;
       try {
         await requestAccess(this.definition!.access.policy_id!, value); this.definition!.access.request_status = 'pending';
-        panel.replaceChildren(node('h2', '', t('ct.access.requested')), node('p', '', this.definition!.access.description || t('ct.access.awaitingReview')));
-        this.setStatus(t('ct.access.requestedNotice'), 'ok'); this.refreshValidation();
-      } catch (error) { button.disabled = false; this.setStatus(t('ct.access.requestFailed', { message: error instanceof Error ? error.message : String(error) }), 'error'); }
+        // The answered panel is the reader's new position; the control that
+        // opened the dialog no longer exists.
+        const requested = node('h2', '', t('ct.access.requested')); requested.tabIndex = -1;
+        panel.replaceChildren(requested, node('p', '', this.definition!.access.description || t('ct.access.awaitingReview')));
+        this.setStatus(t('ct.access.requestedNotice'), 'ok'); this.refreshValidation(); requested.focus();
+      } catch (error) { button.disabled = false; this.setStatus(t('ct.access.requestFailed', { message: error instanceof Error ? error.message : String(error) }), 'error'); button.focus(); }
     }, { once: true });
+    this.showDialog(dialog);
   }
 
   private refreshValidation(preservePreflight = false): string[] {
@@ -435,7 +442,7 @@ export class CreateTask {
     const status = node('p', 'ct-status'); status.setAttribute('role', 'status'); form.append(status);
     const close = node('button', 'ct-secondary', t('ct.cancel')); close.type = 'button'; close.addEventListener('click', () => dialog.close('cancel'));
     const actions = node('div', 'ct-actions'); actions.append(close); form.append(actions);
-    dialog.append(form); labelled(dialog, heading); document.body.append(dialog);
+    dialog.append(form); labelled(dialog, heading);
     // The picker serves one decision and then leaves the document, whether it
     // was dismissed, answered, or closed by leaving the method, so a stale
     // dialog can never shadow a later one or outlive the method it belonged to.
@@ -443,7 +450,7 @@ export class CreateTask {
       dialog.remove();
       if (this.demoDialog === dialog) this.demoDialog = null;
     }, { once: true });
-    dialog.showModal();
+    this.showDialog(dialog);
     let demos: TaskDemo[];
     try { demos = await getTaskDemos(definition.name); }
     catch (error) {
@@ -457,10 +464,26 @@ export class CreateTask {
     demos.forEach(demo => list.append(this.demoOption(demo, dialog)));
   }
 
+  /** Adopt a top-layer dialog: the view closes and removes it on teardown. */
+  private showDialog(dialog: HTMLDialogElement): void {
+    this.dialogs.add(dialog);
+    dialog.addEventListener('close', () => this.dialogs.delete(dialog), { once: true });
+    document.body.append(dialog); dialog.showModal();
+  }
+
+  /** Dismiss one owned dialog; its close handler settles whatever it awaited. */
+  private closeDialog(dialog: HTMLDialogElement): void {
+    this.dialogs.delete(dialog);
+    if (dialog.open) dialog.close('cancel');
+    dialog.remove();
+  }
+
+  private closeDialogs(): void { for (const dialog of [...this.dialogs]) this.closeDialog(dialog); }
+
   /** Close and forget any dialog the demo flow owns. */
   private closeDemoDialog(): void {
     const dialog = this.demoDialog; this.demoDialog = null;
-    if (dialog) { dialog.close('cancel'); dialog.remove(); }
+    if (dialog) this.closeDialog(dialog);
   }
 
   private demoOption(demo: TaskDemo, dialog: HTMLDialogElement): HTMLElement {
@@ -542,7 +565,7 @@ export class CreateTask {
     // The question itself names the dialog: it states what will be replaced.
     const heading = node('h2', '', t('ct.demo.replace', { title: demo.title }));
     form.append(heading, actions);
-    dialog.append(form); labelled(dialog, heading); document.body.append(dialog); dialog.showModal();
+    dialog.append(form); labelled(dialog, heading); this.showDialog(dialog);
     return new Promise(resolve => dialog.addEventListener('close', () => { const accepted = dialog.returnValue === 'replace'; dialog.remove(); resolve(accepted); }, { once: true }));
   }
 
@@ -576,5 +599,13 @@ export class CreateTask {
     this.chooser.querySelector<HTMLInputElement>('input[type="search"]')?.focus();
   }
 
-  destroy(): void { this.loadController?.abort(); this.closeDemoDialog(); this.workspace.destroy(); this.root.replaceChildren(); }
+  destroy(): void {
+    this.loadController?.abort();
+    // A route change must not leave a modal in the top layer over the next page,
+    // and any await holding it open settles as a cancelled decision.
+    this.generation++;
+    this.closeDialogs();
+    this.workspace.destroy();
+    this.root.replaceChildren();
+  }
 }

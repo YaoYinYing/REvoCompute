@@ -280,6 +280,13 @@ function accessDate(seconds: number): string {
   return new Date(seconds * 1000).toLocaleDateString(undefined, { dateStyle: 'medium' });
 }
 
+/** A request history the projection can still report outside pending/rejected. */
+function requestHistory(policy: RunnerAccess): string {
+  if (policy.request_status === 'approved') return 'Your previous request was approved. ';
+  if (policy.request_status === 'cancelled') return 'Your previous request was cancelled. ';
+  return '';
+}
+
 function accessDetail(policy: RunnerAccess, state: AccessState): string {
   if (state === 'Pending') return 'Your request is awaiting an administrator decision.';
   if (state === 'Expired') {
@@ -291,8 +298,8 @@ function accessDetail(policy: RunnerAccess, state: AccessState): string {
       : 'A previous grant expired. This Runner is not requestable on this deployment.'}`;
   }
   if (state === 'Rejected') return 'Your previous request was not approved.';
-  if (state === 'Restricted') return policy.description || 'This Runner is not available to request on this deployment.';
-  return policy.description || 'Operator verification is required before use.';
+  if (state === 'Restricted') return requestHistory(policy) || policy.description || 'This Runner is not available to request on this deployment.';
+  return requestHistory(policy) || policy.description || 'Operator verification is required before use.';
 }
 
 /** The owning policy's published terms, in its own words. */

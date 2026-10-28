@@ -294,7 +294,7 @@ async function render(route: AppRoute, historyNavigation: boolean): Promise<void
       case 'runners': { const { mountRunnerCatalog } = await import('./features/runners/index.js'); await mountRunnerCatalog(mount.holder); break; }
       case 'runner-detail': { const { mountRunnerDetail } = await import('./features/runners/index.js'); await mountRunnerDetail(mount.holder, route.name, shell); break; }
       case 'dashboard': { const { mountDashboard } = await import('./features/dashboard/index.js'); const view = mountDashboard(mount.holder, shell, sessionUser!); mount.view = view; await view.load(); break; }
-      case 'create-task': { const { mountCreateTask } = await import('./features/create-task/index.js'); await mountCreateTask(mount.holder); break; }
+      case 'create-task': { const { mountCreateTask } = await import('./features/create-task/index.js'); mount.view = await mountCreateTask(mount.holder); break; }
       case 'result': { const { mountResultWorkspace } = await import('./features/results/index.js'); mount.view = await mountResultWorkspace(mount.holder); break; }
       // The Local Result Workspace reads a folder the reader chooses; it starts no Task,
       // requests no result, and holds no server state of its own.
