@@ -101,6 +101,10 @@ def test_escape_in_the_excerpt_search_keeps_the_dashboard_evidence_dialog_open(p
     expect(page.locator("mark")).to_have_count(0)
     page.locator("#app-dialog").screenshot(path=str(tmp_path / "pr121-excerpt-escape-zh-dark-390.png"))
 
+    # A second Escape on the empty query belongs to the dialog and closes it.
+    page.keyboard.press("Escape")
+    expect(dialog).to_be_hidden()
+
 
 def test_loading_and_failure_feedback_are_visible_before_the_excerpt_region(page: Page) -> None:
     """A pending or failed excerpt reports beside the toggle, not inside the hidden region."""
@@ -112,6 +116,13 @@ def test_loading_and_failure_feedback_are_visible_before_the_excerpt_region(page
 
     toggle = page.get_by_role("button", name="Read full retained stderr excerpt", exact=True)
     toggle.click()
+    # The route callback runs on the Playwright event loop, so wait for the
+    # interception itself instead of indexing the list after one action.
+    for _ in range(100):
+        if pending:
+            break
+        page.wait_for_timeout(10)
+    assert pending, "the excerpt request was not intercepted"
     loading = page.get_by_text("Loading the retained excerpt…", exact=True)
     expect(loading).to_be_visible()
     expect(loading).to_have_role("status")

@@ -26,18 +26,18 @@ async function responseError(response: Response): Promise<ApiError> {
   return new ApiError(String(payload.error || payload.message || `Request failed (HTTP ${response.status})`), response.status);
 }
 
-async function sameOriginResponse(url: string, init: RequestInit = {}): Promise<Response> {
+async function responseOrThrow(url: string, init: RequestInit = {}): Promise<Response> {
   const response = await fetch(url, { ...init, credentials: 'same-origin' });
   if (!response.ok) throw await responseError(response);
   return response;
 }
 
 export async function requestJson<T>(url: string, init: RequestInit = {}): Promise<T> {
-  return (await sameOriginResponse(url, init)).json() as Promise<T>;
+  return (await responseOrThrow(url, init)).json() as Promise<T>;
 }
 
 export async function requestText(url: string, init: RequestInit = {}): Promise<string> {
-  return (await sameOriginResponse(url, init)).text();
+  return (await responseOrThrow(url, init)).text();
 }
 
 async function mintToken(force = false): Promise<string> {

@@ -47,7 +47,7 @@ function paint(body: HTMLElement, text: string, matches: Match[]): void {
  * Add on-demand reading and literal search over one retained excerpt.
  *
  * The fetched bytes are the same bounded, redacted text the download offers;
- * the server stays authoritative for the 64 KiB bound, redaction and ownership.
+ * the server stays authoritative for the bound, redaction and ownership.
  */
 function addRetainedExcerpt(
   section: HTMLElement, stream: string, url: string, preview: HTMLElement, truncatedNote: HTMLElement, signal: AbortSignal,
@@ -70,9 +70,9 @@ function addRetainedExcerpt(
   const cappedNote = element('p'); cappedNote.className = 'task-diagnostic-note task-diagnostic-capped'; cappedNote.hidden = true;
   const linesHost = element('div'); linesHost.className = 'task-diagnostic-lines'; linesHost.tabIndex = 0;
   linesHost.setAttribute('role', 'region'); linesHost.setAttribute('aria-label', t('diagnostics.excerptLabel', { stream }));
-  const loading = element('p', t('diagnostics.excerptLoading')); loading.className = 'task-diagnostic-note';
+  const loading = element('p'); loading.className = 'task-diagnostic-note';
   loading.setAttribute('role', 'status'); loading.hidden = true;
-  const failure = element('p', t('diagnostics.excerptFailed')); failure.className = 'task-diagnostic-error';
+  const failure = element('p'); failure.className = 'task-diagnostic-error';
   failure.setAttribute('role', 'alert'); failure.hidden = true;
   region.append(searchBar, status, note, cappedNote, linesHost);
   // Loading and failure feedback belong beside the toggle: `region` stays hidden
@@ -140,9 +140,10 @@ function addRetainedExcerpt(
     if (key.key === 'Enter') {
       if (typeof key.preventDefault === 'function') key.preventDefault();
       if (matches.length) select(active + (key.shiftKey ? -1 : 1));
-    } else if (key.key === 'Escape') {
+    } else if (key.key === 'Escape' && input.value !== '') {
       // The Dashboard mounts this panel inside a native <dialog>, whose Escape
-      // default action closes it; clearing the search must not dismiss the panel.
+      // default action closes it; clearing a search must not dismiss the panel.
+      // An empty query leaves Escape to the dialog so the panel stays closable.
       key.preventDefault();
       input.value = ''; runSearch();
     }
@@ -171,14 +172,18 @@ function addRetainedExcerpt(
     if (loaded) { show(region.hidden); return; }
     // The button stays enabled so a keyboard reader does not lose focus; the
     // busy guard, not disabled state, prevents a duplicate request.
-    busy = true; failure.hidden = true; loading.hidden = false;
+    busy = true; failure.hidden = true;
+    // Fill live-region text at reveal, not at construction, so a screen reader
+    // announces the state change rather than a node created already populated.
+    loading.textContent = t('diagnostics.excerptLoading'); loading.hidden = false;
     getTaskDiagnosticExcerpt(url, signal).then((text) => {
       if (signal.aborted) return;
       render(text); loaded = true; loading.hidden = true;
       preview.hidden = true; truncatedNote.hidden = true; show(true);
     }).catch((error: Error) => {
       if (signal.aborted || error.name === 'AbortError') return;
-      loading.hidden = true; failure.hidden = false;
+      loading.hidden = true;
+      failure.textContent = t('diagnostics.excerptFailed'); failure.hidden = false;
     }).finally(() => { busy = false; });
   });
 }
