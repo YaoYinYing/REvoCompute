@@ -1,0 +1,38 @@
+result:
+  files:
+    structures:
+      pattern: '*/seed_*/predictions/*_sample_*.cif'
+      cardinality: many
+      required: true
+      type: structure
+      role: artifact
+    summaries:
+      pattern: '*/seed_*/predictions/*_summary_confidence_sample_*.json'
+      cardinality: many
+      required: true
+      type: json
+      role: evidence
+    full_confidences:
+      pattern: '*/seed_*/predictions/*_full_data_sample_*.json'
+      cardinality: many
+      required: false
+      type: json
+      role: evidence
+    provenance:
+      path: mol1-provenance.json
+      cardinality: one
+      required: true
+      type: json
+      role: provenance
+    model_assets:
+      path: mol1-model-assets.sha256
+      cardinality: one
+      required: true
+      type: text
+      role: provenance
+    search_assets:
+      path: mol1-search-assets.sha256
+      cardinality: one
+      required: true
+      type: text
+      role: provenance

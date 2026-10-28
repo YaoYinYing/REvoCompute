@@ -151,8 +151,9 @@ def test_fleet_report_separates_covered_unaudited_and_defective():
     # Coverage is a partition ...
     assert report.covered | report.unaudited == frozenset(report.tasks)
     assert not (report.covered & report.unaudited)
-    assert len(report.covered) == 46 and len(report.unaudited) == 12
+    assert len(report.covered) == 47 and len(report.unaudited) == 12
     assert "caver" in report.covered
+    assert "mol1_predict" in report.covered
     # ... and defect status is orthogonal: it is empty here, while 12 Tasks are
     # still unaudited, so a clean defect set is not a clean coverage set.
     assert set(report.defective) == set()

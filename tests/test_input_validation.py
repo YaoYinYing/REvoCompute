@@ -491,6 +491,8 @@ def test_parquet_transport_magic_is_checked(tmp_path):
         ("tests/data/json/opendde_tiny.json", "opendde_specification"),
         ("tests/data/foundry/rf3_monomer.json", "foundry_specification"),
         ("tests/data/foundry/rfd3_unconditional.json", "foundry_specification"),
+        ("tests/data/mol1/minimal.json", "mol1_specification"),
+        ("tests/data/mol1/supplied_msa.json", "mol1_specification"),
     ],
 )
 def test_production_json_specification_profiles_accept_real_fixtures(relative, logical_type):
@@ -559,6 +561,124 @@ def test_foundry_specification_allows_confined_assets_and_rejects_escapes(tmp_pa
     assert validate_logical_input(str(safe), "json", "foundry_specification") is None
     for path in (absolute, traversal, remote):
         assert "confined uploaded asset" in validate_logical_input(str(path), "json", "foundry_specification")
+
+
+def _mol1_job(entity: dict, **job) -> str:
+    return json.dumps([{"name": "job", "sequences": [entity], **job}])
+
+
+def test_mol1_specification_requires_a_job_list(tmp_path):
+    path = _write(tmp_path, b'{"name": "job", "sequences": []}', "input.json")
+
+    assert "non-empty top-level list" in validate_logical_input(str(path), "json", "mol1_specification")
+
+
+def test_mol1_specification_rejects_unconfined_asset_paths(tmp_path):
+    for field in ("pairedMsaPath", "unpairedMsaPath", "templatesPath"):
+        absolute = _write(
+            tmp_path,
+            _mol1_job({"proteinChain": {"sequence": "ACDE", "count": 1, field: "/etc/passwd"}}).encode(),
+            "absolute.json",
+        )
+        traversal = _write(
+            tmp_path,
+            _mol1_job({"proteinChain": {"sequence": "ACDE", "count": 1, field: "../msa.a3m"}}).encode(),
+            "traversal.json",
+        )
+        for path in (absolute, traversal):
+            assert "confined uploaded asset" in validate_logical_input(str(path), "json", "mol1_specification")
+
+
+def test_mol1_specification_rejects_external_urls(tmp_path):
+    path = _write(
+        tmp_path,
+        _mol1_job(
+            {"proteinChain": {"sequence": "ACDE", "count": 1, "templatesPath": "https://example.invalid/t.json"}}
+        ).encode(),
+        "input.json",
+    )
+
+    assert "external URL" in validate_logical_input(str(path), "json", "mol1_specification")
+
+
+def test_mol1_specification_accepts_a_confined_msa_reference(tmp_path):
+    path = _write(
+        tmp_path,
+        _mol1_job({"proteinChain": {"sequence": "ACDE", "count": 1, "unpairedMsaPath": "msa.a3m"}}).encode(),
+        "input.json",
+    )
+
+    assert validate_logical_input(str(path), "json", "mol1_specification") is None
+
+
+def test_mol1_chain_ids_are_scoped_to_their_job(tmp_path):
+    chain = {"proteinChain": {"sequence": "ACDE", "count": 1, "id": ["A"]}}
+    path = _write(
+        tmp_path,
+        json.dumps(
+            [{"name": "first", "sequences": [chain]}, {"name": "second", "sequences": [chain]}]
+        ).encode(),
+        "input.json",
+    )
+
+    assert validate_logical_input(str(path), "json", "mol1_specification") is None
+
+
+@pytest.mark.parametrize(
+    ("entity", "message"),
+    [
+        ({"protein": {"sequence": "ACDE", "count": 1}}, "unsupported entity type"),
+        ({"proteinChain": {"sequence": "ACDE", "count": 0}}, "positive integer count"),
+        ({"proteinChain": {"sequence": "ACDE", "count": 2, "id": ["A"]}}, "one short chain id per copy"),
+        ({"proteinChain": {"sequence": "ACDE", "count": 1, "msa": {"precomputed_msa_dir": "x"}}}, "unsupported field"),
+        (
+            {
+                "proteinChain": {
+                    "sequence": "ACDE",
+                    "count": 1,
+                    "modifications": [{"ptmType": "CCD_HY3", "ptmPosition": 9}],
+                }
+            },
+            "residue position",
+        ),
+        ({"ligand": {"ligand": "FILE_/etc/passwd", "count": 1}}, "confined uploaded asset"),
+        ({"ligand": {"ligand": "CCD_", "count": 1}}, "malformed"),
+    ],
+)
+def test_mol1_specification_rejects_malformed_entities(tmp_path, entity, message):
+    path = _write(tmp_path, _mol1_job(entity).encode(), "input.json")
+
+    assert message in validate_logical_input(str(path), "json", "mol1_specification")
+
+
+def test_mol1_specification_rejects_inconsistent_covalent_bonds(tmp_path):
+    document = [
+        {
+            "name": "job",
+            "sequences": [{"proteinChain": {"sequence": "ACDE", "count": 1}}],
+            "covalent_bonds": [
+                {"entity1": 1, "entity2": 2, "position1": 1, "position2": 1, "atom1": "N", "atom2": "C"}
+            ],
+        }
+    ]
+    path = _write(tmp_path, json.dumps(document).encode(), "input.json")
+
+    assert "entity2 must name an entity" in validate_logical_input(str(path), "json", "mol1_specification")
+
+
+def test_mol1_specification_rejects_an_unsafe_job_name(tmp_path):
+    document = [{"name": "../escape", "sequences": [{"proteinChain": {"sequence": "ACDE", "count": 1}}]}]
+    path = _write(tmp_path, json.dumps(document).encode(), "input.json")
+
+    assert "needs a name" in validate_logical_input(str(path), "json", "mol1_specification")
+
+
+def test_mol1_specification_rejects_a_job_owned_seed_list(tmp_path):
+    chain = {"proteinChain": {"sequence": "ACDE", "count": 1}}
+    document = [{"name": "job", "modelSeeds": [7], "sequences": [chain]}]
+    path = _write(tmp_path, json.dumps(document).encode(), "input.json")
+
+    assert "unsupported field" in validate_logical_input(str(path), "json", "mol1_specification")
 
 
 @pytest.mark.parametrize(

@@ -1,0 +1,64 @@
+Bootstrap: docker
+From: nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
+
+%files
+    mol1/requirements.in /opt/mol1-requirements.in
+    mol1/upstream.json /app/revocompute/upstream.json
+    mol1/model-assets.sha256 /app/revocompute/model-assets.sha256
+    mol1/search-assets.sha256 /app/revocompute/search-assets.sha256
+
+%post
+    attempt=1
+    until apt-get -o Acquire::Retries=5 update; do
+      test "$attempt" -ge 10 && exit 1
+      sleep $((attempt * 5))
+      attempt=$((attempt + 1))
+    done
+    attempt=1
+    until DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
+        python3 python3-venv python3-dev build-essential git ca-certificates hmmer kalign; do
+      test "$attempt" -ge 10 && exit 1
+      sleep $((attempt * 5))
+      attempt=$((attempt + 1))
+    done
+    rm -rf /var/lib/apt/lists/*
+    python3 -m venv /opt/venv
+    /opt/venv/bin/pip install --no-cache-dir uv==0.8.22
+    UV_HTTP_TIMEOUT=600 /opt/venv/bin/uv pip install --python /opt/venv/bin/python --no-cache \
+      -r /opt/mol1-requirements.in
+    # Pinned upstream revision; provenance is recorded in mol1/upstream.json.
+    git init /opt/mol1
+    git -C /opt/mol1 remote add origin https://github.com/molence/Mol-1.git
+    git -C /opt/mol1 fetch --depth 1 origin 7480cc41a7c64b5c517709184bdc81c08dbd5fdb
+    git -C /opt/mol1 checkout --detach FETCH_HEAD
+    /opt/venv/bin/uv pip install --python /opt/venv/bin/python --no-cache --no-deps /opt/mol1
+    rm -rf /opt/mol1/.git
+    # Reserved Runtime Bundle mount point. This image is the environment;
+    # REvoCompute's entrypoint and shared runtime helpers arrive at execution
+    # time as a read-only bundle mounted here.
+    mkdir -p /opt/revocompute/runtime
+    chmod 0555 /opt/revocompute/runtime
+
+%environment
+    export PATH=/opt/venv/bin:$PATH
+    export MOL_ROOT_DIR=/mnt/db/mol1
+    export LAYERNORM_TYPE=torch
+    export PYTHONNOUSERSITE=1
+    export WANDB_MODE=disabled
+    export HF_HUB_OFFLINE=1
+    export TRANSFORMERS_OFFLINE=1
+    export XDG_CACHE_HOME=/tmp/.cache
+    export TORCH_EXTENSIONS_DIR=/tmp/.torch-extensions
+    export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
+
+%test
+    set -e
+    /opt/venv/bin/python -c 'import torch, mol, rdkit, biotite, gemmi; print(torch.__version__, torch.version.cuda)'
+    /opt/venv/bin/mol --help >/dev/null
+    /opt/venv/bin/mol doctor >/dev/null
+    command -v hmmsearch >/dev/null
+    command -v kalign >/dev/null
+    test -d /opt/revocompute/runtime
+
+%runscript
+    exec /bin/bash /opt/revocompute/runtime/mol1/run.sh "$@"

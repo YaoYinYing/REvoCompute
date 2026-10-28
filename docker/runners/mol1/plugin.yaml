@@ -1,0 +1,22 @@
+api_version: 1
+id: mol1
+version: '1'
+name: Mol-1 biomolecular structure prediction
+runtime:
+  image_artifact: mol1_v1.sif
+  definition: mol1.def
+  build_inputs:
+  - mol1/requirements.in
+  - mol1/upstream.json
+  - mol1/model-assets.sha256
+  - mol1/search-assets.sha256
+  runtime_overlay:
+  - common/runtime/
+  - mol1/run.sh
+  - mol1/prepare_input.py
+  - mol1/estimate_tokens.py
+  entrypoint:
+  - bash
+  - /opt/revocompute/runtime/mol1/run.sh
+tasks:
+- tasks/mol1_predict/task.yaml
