@@ -2693,7 +2693,7 @@
           "index": {"type": "integer", "minimum": 0},
           "name": {"type": "string", "description": "Manifest stage name (or the Task type itself for a single-stage Task)."},
           "display_name": {"type": "string"},
-          "status": {"type": "string", "enum": ["NOT_STARTED", "READY", "QUEUED", "RUNNING", "COMPLETED", "FAILED", "CANCELLED", "INTERRUPTED", "SKIPPED"], "description": "READY and SKIPPED are reserved: Core currently opens attempts in QUEUED and writes no SKIPPED stage; both are declared for a future stage selector."},
+          "status": {"type": "string", "enum": ["NOT_STARTED", "QUEUED", "RUNNING", "COMPLETED", "FAILED", "CANCELLED", "INTERRUPTED"], "description": "NOT_STARTED is reported for a declared stage with no attempt record; stored attempts open in QUEUED."},
           "source": {"type": "string", "enum": ["record", "legacy", "definition"], "description": "record: durable StageRun evidence; legacy: the pre-StageRun workflow_state mirror; definition: the declared stage has no evidence yet."},
           "attempt": {"type": ["integer", "null"], "minimum": 1},
           "started_at": {"type": ["string", "null"], "format": "date-time"},

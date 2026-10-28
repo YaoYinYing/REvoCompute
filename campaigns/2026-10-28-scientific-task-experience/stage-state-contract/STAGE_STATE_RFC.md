@@ -40,7 +40,7 @@ table is required. `stage_runs` is the **only** stage authority;
 | --- | --- | --- |
 | Task | ``tasks.md5sum`` | Core |
 | StageDefinition | owning ``task.yaml`` ``workflow[i]`` | Server manifest |
-| **StageRun / attempt** | ``(task_id, stage_index, attempt)`` | **Core, durable** |
+| **StageRun / attempt** | ``(task_id, stage_index, attempt)`` | **Core, durable**; the live-attempt constraint is keyed by stage *name* |
 | Scheduler allocation | ``slurm_job_id`` | Slurm; accounting in ``resource_allocations`` |
 | Progress observation | stdout marker | Runner, advisory |
 | Artifact publication | anchored manifest | Core |
@@ -53,23 +53,22 @@ settle a StageRun.
 ## Statuses and transitions
 
 ```text
-NOT_STARTED -> READY -> QUEUED -> RUNNING -> COMPLETED
-     |           |         |         |- FAILED
-     |           |         |         |- CANCELLED
-     |           |         |         \- INTERRUPTED
-     |           |         \- COMPLETED (missed start) / FAILED / CANCELLED / INTERRUPTED
-     |           \- SKIPPED / CANCELLED / FAILED
-     \- SKIPPED / CANCELLED
+NOT_STARTED -> QUEUED -> RUNNING -> COMPLETED
+     |            |         |- FAILED
+     |            |         |- CANCELLED
+     |            |         \- INTERRUPTED
+     |            \- COMPLETED (missed start) / FAILED / CANCELLED / INTERRUPTED
+     \- CANCELLED
 ```
 
 Transitions are enforced by each guarded UPDATE's predicate (the legal-predecessor
 set); attempt identity is enforced by unique indexes. Terminal statuses
-(``COMPLETED``, ``FAILED``, ``CANCELLED``, ``INTERRUPTED``, ``SKIPPED``) have no
-outgoing edge, so late markers and stale/duplicate callbacks cannot regress an
-attempt. ``READY`` and ``SKIPPED`` are **reserved**: ``READY`` is legal between
-stages but Core opens an attempt directly in ``QUEUED`` before submission, and no
-current selector writes ``SKIPPED`` (stage selection is PR #119). The API enum
-declares both so a future selector does not change the contract.
+(``COMPLETED``, ``FAILED``, ``CANCELLED``, ``INTERRUPTED``) have no outgoing
+edge, so late markers and stale/duplicate callbacks cannot regress an attempt.
+``NOT_STARTED`` is not stored: it is what the API reports for a declared stage
+with no record, and every attempt opens directly in ``QUEUED``. A future stage
+selector adds its own skipped state together with the writer that produces it;
+the contract does not pre-declare one.
 
 **Retries.** One attempt = one allocation attempt. Worker-loss recovery
 (``INTERRUPTED``) or re-dispatch creates the next attempt; terminal attempts are

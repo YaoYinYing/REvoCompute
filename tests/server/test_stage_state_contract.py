@@ -611,19 +611,34 @@ def test_a_terminal_task_cannot_acquire_a_live_attempt(tmp_path):
     ) is None
 
 
-def test_delete_then_resubmit_starts_a_fresh_attempt(tmp_path, monkeypatch):
+def test_delete_then_resubmit_settles_the_old_attempt_and_keeps_its_history(tmp_path):
     database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
     task_id = "c1" * 16
     _insert_task(database, task_id, status="queued")
     database.begin_stage_attempt(task_id=task_id, stage_index=0, stage_name="cpu_runner")
-    database.delete_task(task_id)
-    assert database.list_stage_runs(task_id) == []
+    # The production deletion path is the cleanup claim; it settles the live
+    # attempt instead of erasing it, so the history of the deleted lifecycle
+    # stays truthful.
+    assert database.claim_task_cleanup(
+        task_id,
+        expected_status="queued",
+        expected_finished_at=None,
+        claim_status="deleting:cancel",
+    )
+    assert database.list_stage_runs(task_id)[0]["status"] == stage_state.CANCELLED
+    assert database.complete_task_cleanup(
+        task_id, claim_status="deleting:cancel", cleaned_status="deleted:cancel"
+    )
 
     _insert_task(database, task_id, status="queued")
     fresh = database.begin_stage_attempt(
         task_id=task_id, stage_index=0, stage_name="cpu_runner"
     )
-    assert fresh is not None and fresh["attempt"] == 1
+    assert fresh is not None and fresh["attempt"] == 2
+    assert [run["status"] for run in database.list_stage_runs(task_id)] == [
+        stage_state.CANCELLED,
+        stage_state.QUEUED,
+    ]
 
 
 def test_a_cancelled_single_stage_task_cannot_acquire_an_attempt(tmp_path, monkeypatch):
@@ -681,3 +696,222 @@ def test_legacy_projection_is_labelled_and_historical_rows_survive_migration(tmp
         assert task_runtime.stage_projection(reopened.get_task(task_id))["source"] == "legacy"
     finally:
         reopened.engine.dispose()
+
+
+def test_late_allocation_start_cannot_resurrect_a_settled_task(tmp_path, monkeypatch):
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    monkeypatch.setattr(task_runtime, "task_store", database)
+    try:
+        # Recovery interleaving: the old worker's "started" observation arrives
+        # after recovery interrupted its attempt and reset the Task to pending.
+        task_id = "2a" * 16
+        _insert_task(database, task_id, status="pending")
+        attempt = database.begin_stage_attempt(task_id=task_id, stage_index=0, stage_name="model")
+        database.finish_stage_attempt(
+            task_id=task_id,
+            stage_index=0,
+            attempt=attempt["attempt"],
+            status=stage_state.INTERRUPTED,
+            reason_code=stage_state.Reason.WORKER_LOST,
+        )
+        callbacks = task_runtime._compute_allocation_callbacks(
+            task_id=task_id,
+            user_id=0,
+            stage_id="model",
+            resource_policy=None,
+            stage_index=0,
+            attempt=attempt["attempt"],
+        )
+        callbacks[1]("403300", time.time())
+        assert database.get_task(task_id)["status"] == "pending"
+        assert database.list_stage_runs(task_id)[0]["status"] == stage_state.INTERRUPTED
+        # The replacement worker's claim is still the only one that can win.
+        assert database.claim_task_execution(task_id) is True
+
+        # A late start must not move a failed Task back to running either.
+        failed_id = "2b" * 16
+        _insert_task(database, failed_id, status="running")
+        failed_attempt = database.begin_stage_attempt(
+            task_id=failed_id, stage_index=0, stage_name="model"
+        )
+        database.finish_stage_attempt(
+            task_id=failed_id,
+            stage_index=0,
+            attempt=failed_attempt["attempt"],
+            status=stage_state.FAILED,
+            reason_code="nonzero_exit",
+        )
+        assert database.update_task(failed_id, status="failed") is True
+        task_runtime._compute_allocation_callbacks(
+            task_id=failed_id,
+            user_id=0,
+            stage_id="model",
+            resource_policy=None,
+            stage_index=0,
+            attempt=failed_attempt["attempt"],
+        )[1]("403301", time.time())
+        assert database.get_task(failed_id)["status"] == "failed"
+    finally:
+        database.engine.dispose()
+
+
+def test_duplicate_allocation_start_is_idempotent_but_a_settled_attempt_is_rejected(tmp_path):
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "2c" * 16
+    _insert_task(database, task_id, status="queued")
+    attempt = database.begin_stage_attempt(task_id=task_id, stage_index=0, stage_name="model")
+    try:
+        assert database.record_stage_running(
+            task_id=task_id, stage_index=0, attempt=attempt["attempt"]
+        )
+        # A duplicate observation of the same live allocation is accepted.
+        assert database.record_stage_running(
+            task_id=task_id, stage_index=0, attempt=attempt["attempt"]
+        )
+        database.finish_stage_attempt(
+            task_id=task_id, stage_index=0, attempt=attempt["attempt"], status=stage_state.COMPLETED,
+            reason_code=stage_state.Reason.COMPLETED,
+        )
+        assert not database.record_stage_running(
+            task_id=task_id, stage_index=0, attempt=attempt["attempt"]
+        )
+    finally:
+        database.engine.dispose()
+
+
+def test_cleanup_settlement_rewrites_the_workflow_state_mirror(tmp_path):
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "2d" * 16
+    _insert_task(database, task_id, status="running")
+    attempt = database.begin_stage_attempt(task_id=task_id, stage_index=0, stage_name="model")
+    database.record_stage_running(task_id=task_id, stage_index=0, attempt=attempt["attempt"])
+    mirror = {"model": {"status": "running", "attempt": attempt["attempt"]}}
+    database.update_task(task_id, workflow_state=json.dumps(mirror))
+    try:
+        assert database.claim_task_cleanup(
+            task_id,
+            expected_status="running",
+            expected_finished_at=None,
+            claim_status="deleting:cancel",
+        )
+        settled = database.list_stage_runs(task_id)[0]
+        assert (settled["status"], settled["reason_code"]) == (
+            stage_state.CANCELLED,
+            stage_state.Reason.TASK_DELETED,
+        )
+        mirrored = json.loads(database.get_task(task_id)["workflow_state"])["model"]
+        assert mirrored["status"] == "cancelled"
+        assert mirrored["reason_code"] == stage_state.Reason.TASK_DELETED
+    finally:
+        database.engine.dispose()
+
+
+def test_settled_tasks_cannot_begin_an_attempt_but_failed_can_retry(tmp_path):
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    try:
+        finished_id = "2e" * 16
+        _insert_task(database, finished_id, status="finished")
+        assert database.begin_stage_attempt(
+            task_id=finished_id, stage_index=0, stage_name="model"
+        ) is None
+        assert database.list_stage_runs(finished_id) == []
+
+        failed_id = "2f" * 16
+        _insert_task(database, failed_id, status="failed")
+        retry = database.begin_stage_attempt(
+            task_id=failed_id, stage_index=0, stage_name="model"
+        )
+        assert retry is not None and retry["attempt"] == 1
+    finally:
+        database.engine.dispose()
+
+
+def test_reordered_manifest_resume_reuses_the_live_attempt_by_name(tmp_path):
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "3a" * 16
+    _insert_task(database, task_id, status="running")
+    try:
+        original = database.begin_stage_attempt(
+            task_id=task_id, stage_index=1, stage_name="multistage_runner.model"
+        )
+        # The same manifest stage now sits at index 0 (an inserted/reordered
+        # workflow): it must reuse the live attempt rather than open a second one.
+        reused = database.begin_stage_attempt(
+            task_id=task_id, stage_index=0, stage_name="multistage_runner.model"
+        )
+        assert reused["id"] == original["id"]
+        assert (reused["attempt"], reused["stage_index"]) == (1, 1)
+        live = [
+            run for run in database.list_stage_runs(task_id)
+            if run["status"] in stage_state.ACTIVE_STATUSES
+        ]
+        assert len(live) == 1
+
+        # Transitions follow the record's own index, which is what the caller
+        # uses after a reused attempt.
+        assert database.record_stage_dispatched(
+            task_id=task_id, stage_index=reused["stage_index"], attempt=1, slurm_job_id="77"
+        )
+        assert database.record_stage_running(
+            task_id=task_id, stage_index=reused["stage_index"], attempt=1
+        )
+        assert database.finish_stage_attempt(
+            task_id=task_id, stage_index=reused["stage_index"], attempt=1,
+            status=stage_state.COMPLETED, reason_code=stage_state.Reason.COMPLETED,
+        )
+        assert database.list_stage_runs(task_id)[0]["reason_code"] == stage_state.Reason.COMPLETED
+
+        # A new attempt after a reorder advances the stage's attempt number, so
+        # the newest record wins even though its index moved.
+        next_attempt = database.begin_stage_attempt(
+            task_id=task_id, stage_index=0, stage_name="multistage_runner.model"
+        )
+        assert (next_attempt["attempt"], next_attempt["stage_index"]) == (2, 0)
+    finally:
+        database.engine.dispose()
+
+
+def test_failure_settlement_does_not_borrow_another_attempt_diagnostic_reason(tmp_path, monkeypatch):
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "3b" * 16
+    _insert_task(database, task_id, status="running")
+    monkeypatch.setattr(task_runtime, "task_store", database)
+    monkeypatch.setattr(task_runtime, "_capture_debug_submission", lambda *args: None)
+    monkeypatch.setattr(task_runtime, "_finalize_failed_results", lambda *args, **kwargs: None)
+    monkeypatch.setattr(task_runtime, "_cleanup_task_workspace", lambda *args: None)
+    attempt = database.begin_stage_attempt(task_id=task_id, stage_index=0, stage_name="model")
+    database.record_task_diagnostics(task_id, {"reason_code": "timeout", "stage_id": "earlier-stage"})
+    try:
+        task_runtime._record_failure(task_id, database.get_task(task_id), 1.0, "model", "boom")
+        run = database.list_stage_runs(task_id)[0]
+        assert (run["status"], run["reason_code"]) == (stage_state.FAILED, "execution_exception")
+        assert database.get_task(task_id)["status"] == "failed"
+    finally:
+        database.engine.dispose()
+
+
+def test_stage_run_indexes_are_repaired_when_the_table_already_exists(tmp_path):
+    path = str(tmp_path / "tasks.sqlite3")
+    database = TaskDatabase(path)
+    database.engine.dispose()
+    with sqlite3.connect(path) as conn:
+        conn.execute("DROP INDEX idx_stage_runs_live_stage")
+    repaired = TaskDatabase(path)
+    try:
+        with repaired.engine.connect() as conn:
+            names = {
+                row[0]
+                for row in conn.exec_driver_sql(
+                    "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='stage_runs'"
+                )
+            }
+            live_columns = [
+                row[2]
+                for row in conn.exec_driver_sql("PRAGMA index_info('idx_stage_runs_live_stage')")
+            ]
+        assert {"idx_stage_runs_task_stage_attempt", "idx_stage_runs_live_stage"} <= names
+        # The live-attempt constraint is keyed by stage name, so a reordered
+        # manifest cannot open a second live attempt for one stage.
+        assert live_columns == ["task_id", "stage_name"]
+    finally:
+        repaired.engine.dispose()

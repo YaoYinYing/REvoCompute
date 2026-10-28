@@ -18,23 +18,22 @@ from typing import Any
 from revocompute.execution_diagnostics import REASONS
 
 NOT_STARTED = "NOT_STARTED"
-READY = "READY"
 QUEUED = "QUEUED"
 RUNNING = "RUNNING"
 COMPLETED = "COMPLETED"
 FAILED = "FAILED"
 CANCELLED = "CANCELLED"
 INTERRUPTED = "INTERRUPTED"
-SKIPPED = "SKIPPED"
 
-STATUSES = (NOT_STARTED, READY, QUEUED, RUNNING, COMPLETED, FAILED, CANCELLED, INTERRUPTED, SKIPPED)
+#: ``NOT_STARTED`` is what the API reports for a declared stage with no record;
+#: every stored attempt opens directly in ``QUEUED``.
+STATUSES = (NOT_STARTED, QUEUED, RUNNING, COMPLETED, FAILED, CANCELLED, INTERRUPTED)
 
-ACTIVE_STATUSES = frozenset({READY, QUEUED, RUNNING})
-TERMINAL_STATUSES = frozenset({COMPLETED, FAILED, CANCELLED, INTERRUPTED, SKIPPED})
+ACTIVE_STATUSES = frozenset({QUEUED, RUNNING})
+TERMINAL_STATUSES = frozenset({COMPLETED, FAILED, CANCELLED, INTERRUPTED})
 
 TRANSITIONS: dict[str, frozenset[str]] = {
-    NOT_STARTED: frozenset({READY, QUEUED, SKIPPED, CANCELLED}),
-    READY: frozenset({QUEUED, SKIPPED, CANCELLED, FAILED}),
+    NOT_STARTED: frozenset({QUEUED, CANCELLED}),
     # COMPLETED from QUEUED covers an allocation whose start observation was
     # missed (a very short run, or a backend that returns its outcome directly).
     # The completed outcome is stronger evidence than the absent start line.
@@ -44,7 +43,6 @@ TRANSITIONS: dict[str, frozenset[str]] = {
     FAILED: frozenset(),
     CANCELLED: frozenset(),
     INTERRUPTED: frozenset(),
-    SKIPPED: frozenset(),
 }
 
 

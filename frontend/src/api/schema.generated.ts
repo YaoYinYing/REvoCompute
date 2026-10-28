@@ -2675,10 +2675,10 @@ export interface components {
             name: string;
             display_name: string;
             /**
-             * @description READY and SKIPPED are reserved: Core currently opens attempts in QUEUED and writes no SKIPPED stage; both are declared for a future stage selector.
+             * @description NOT_STARTED is reported for a declared stage with no attempt record; stored attempts open in QUEUED.
              * @enum {string}
              */
-            status: "NOT_STARTED" | "READY" | "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED" | "CANCELLED" | "INTERRUPTED" | "SKIPPED";
+            status: "NOT_STARTED" | "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED" | "CANCELLED" | "INTERRUPTED";
             /**
              * @description record: durable StageRun evidence; legacy: the pre-StageRun workflow_state mirror; definition: the declared stage has no evidence yet.
              * @enum {string}

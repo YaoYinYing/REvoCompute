@@ -364,7 +364,6 @@ _LEGACY_STAGE_STATUS = {
     "failed": stage_state.FAILED,
     "cancelled": stage_state.CANCELLED,
     "interrupted": stage_state.INTERRUPTED,
-    "skipped": stage_state.SKIPPED,
     "pending": stage_state.NOT_STARTED,
 }
 
@@ -671,7 +670,6 @@ def _compute_allocation_callbacks(
                 attempt=attempt,
                 slurm_job_id=str(slurm_job_id),
                 at=dispatched_at,
-                evidence={"wrapper_executed": bool(wrapper_executed)},
             )
         except Exception:
             # Stage records are bookkeeping; the allocation fact and the
@@ -823,13 +821,17 @@ def _compute_allocation_callbacks(
             # boundary.  A cancelled attempt rejects the transition, which is why
             # the write is guarded in the store rather than by a read here.
             try:
-                task_store.record_stage_running(
+                # The Task-running boundary belongs to the attempt transition.
+                # A rejected start (the attempt already settled, or a recovery
+                # already replaced it) must not resurrect the Task or steal the
+                # pending claim from the replacement worker.
+                if task_store.record_stage_running(
                     task_id=task_id,
                     stage_index=stage_index,
                     attempt=attempt,
                     started_at=started_at,
-                )
-                task_store.update_task(task_id, status="running")
+                ):
+                    task_store.update_task(task_id, status="running")
             except Exception:
                 # Bookkeeping must not withhold a grant for an allocation whose
                 # fact the accounting transition already wrote.
@@ -946,6 +948,9 @@ def _run_compute_job(
     accounting = submitted_by_user_id > 0 and resource_policy is not None
     attempt_row = _begin_stage_attempt(task_id, 0, tt.name, resource_policy)
     attempt = int(attempt_row["attempt"]) if attempt_row else None
+    # The record's index, not this call's index: a reused live attempt keeps
+    # the index it was created under.
+    attempt_index = int(attempt_row["stage_index"]) if attempt_row else 0
     # No entitlement read here: the decision belongs to the atomic
     # allocation-start transition, which knows whether this Task holds a
     # reservation of its own (the workflow and re-dispatch cases do not).
@@ -956,7 +961,7 @@ def _run_compute_job(
         resource_policy=resource_policy,
         required_entitlements=(tt.runtime.access_policy.requires if tt.runtime.access_policy else ()),
         runner_family=tt.runtime.name,
-        stage_index=0 if attempt is not None else None,
+        stage_index=attempt_index if attempt is not None else None,
         attempt=attempt,
     )
     try:
@@ -976,7 +981,7 @@ def _run_compute_job(
         )
         jid = job.submit()
     except Exception:
-        _settle_unsubmitted_attempt(task_id, 0, attempt)
+        _settle_unsubmitted_attempt(task_id, attempt_index, attempt)
         raise
     # Persist the job handle so cancel can stop the running process even
     # after a server restart (Celery/Redis state is ephemeral).
@@ -987,7 +992,7 @@ def _run_compute_job(
         state = job.poll()
     except GPUCreditUnavailableError:
         _settle_stage_attempt(
-            task_id, 0, attempt, status=stage_state.FAILED, reason_code="admission_failed"
+            task_id, attempt_index, attempt, status=stage_state.FAILED, reason_code="admission_failed"
         )
         raise
     if isinstance(job, SlurmJob) and not job.wrapper_executed:
@@ -1001,7 +1006,7 @@ def _run_compute_job(
             task_id=task_id, reason_code=ReservationReason.RELEASED.value, at=time.time()
         )
     _finish_stage_attempt(
-        task_id, 0, attempt, state, failure_reason=getattr(job, "failure_reason", None)
+        task_id, attempt_index, attempt, state, failure_reason=getattr(job, "failure_reason", None)
     )
     return state
 
@@ -1176,6 +1181,9 @@ def _run_compute_workflow(
             return JobState.CANCELLED
         attempt_row = _begin_stage_attempt(task_id, index, stage.name, policy)
         attempt = int(attempt_row["attempt"]) if attempt_row else None
+        # A live attempt reused across a manifest reorder keeps the index it was
+        # created under; every write below must name that same record.
+        attempt_index = int(attempt_row["stage_index"]) if attempt_row else index
         user_id = int(task.get("submitted_by_user_id") or 0)
         # A workflow stage has no reservation of its own after the first one
         # consumed the Task's single submission hold, so its allocation start is
@@ -1188,7 +1196,7 @@ def _run_compute_workflow(
             resource_policy=policy,
             required_entitlements=(tt.runtime.access_policy.requires if tt.runtime.access_policy else ()),
             runner_family=tt.runtime.name,
-            stage_index=index if attempt is not None else None,
+            stage_index=attempt_index if attempt is not None else None,
             attempt=attempt,
         )
         try:
@@ -1208,7 +1216,7 @@ def _run_compute_workflow(
             )
             jid = job.submit()
         except Exception:
-            _settle_unsubmitted_attempt(task_id, index, attempt)
+            _settle_unsubmitted_attempt(task_id, attempt_index, attempt)
             raise
         handles: dict[str, Any] = {}
         mirror = _mirror_json(task_id, legacy_state)
@@ -1218,13 +1226,13 @@ def _run_compute_workflow(
             handles["slurm_job_id"] = jid
         if not task_store.update_task(task_id, **handles):
             job.cancel()
-            _finish_stage_attempt(task_id, index, attempt, JobState.CANCELLED)
+            _finish_stage_attempt(task_id, attempt_index, attempt, JobState.CANCELLED)
             return JobState.CANCELLED
         try:
             result = job.poll()
         except GPUCreditUnavailableError:
             _settle_stage_attempt(
-                task_id, index, attempt, status=stage_state.FAILED, reason_code="admission_failed"
+                task_id, attempt_index, attempt, status=stage_state.FAILED, reason_code="admission_failed"
             )
             raise
         if isinstance(job, SlurmJob) and not job.wrapper_executed:
@@ -1236,7 +1244,7 @@ def _run_compute_workflow(
                 task_id=task_id, reason_code=ReservationReason.RELEASED.value, at=time.time()
             )
         _finish_stage_attempt(
-            task_id, index, attempt, result, failure_reason=getattr(job, "failure_reason", None)
+            task_id, attempt_index, attempt, result, failure_reason=getattr(job, "failure_reason", None)
         )
         settled: dict[str, Any] = {"slurm_job_id": None, "container_id": None}
         mirror = _mirror_json(task_id, legacy_state)
@@ -2348,12 +2356,14 @@ def _record_failure(
     run_stage = (task_store.get_task(md5sum) or {}).get("run_stage") or run_stage
     stage_reason = reason_code or "execution_exception"
     try:
+        # The diagnostic row is Task-level and may describe an earlier stage;
+        # the attempts this boundary settles are classified by this failure,
+        # not by whatever reason the row happens to carry.
         evidence = task_store.get_task_diagnostics(md5sum) or {}
         if reason_code is not None or not evidence.get("reason_code"):
             evidence["reason_code"] = stage_reason
         if run_stage:
             evidence["stage_id"] = run_stage
-        stage_reason = str(evidence.get("reason_code") or stage_reason)
         task_store.record_task_diagnostics(md5sum, evidence)
     except Exception:
         logging.exception("Could not retain failure classification for task %s", md5sum)
