@@ -390,9 +390,14 @@ def validate_structure(params: dict[str, Any], parsed: ParsedParams, residues: l
         ):
             raise PreparationError(f"target_res {parsed.target_res!r} matches no protein residue in the input.")
     elif not ligands:
-        # An apo input needs a protein center even when crop/corruption centers
-        # are given; upstream then builds an empty center list and indexes it.
         raise PreparationError("target_res is required when the input structure has no ligand.")
+    if not ligands and (parsed.crop_centers or parsed.corruption_centers):
+        # Upstream builds one center per non-fixed ligand; with no ligand that
+        # list is empty and get_crop indexes it (dataloader_pdb.py:279).
+        raise PreparationError(
+            "crop_centers and corruption_centers require a ligand in the input structure; "
+            "use target_res alone for a ligand-free structure."
+        )
 
     for flag in _CENTER_FLAGS:
         for token in getattr(parsed, flag):

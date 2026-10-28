@@ -204,6 +204,17 @@ def test_target_res_is_required_for_a_ligand_free_structure(tmp_path):
     prepare.validate_structure(target, prepare.validate_params(target), records, structure)
 
 
+def test_centers_are_rejected_for_a_ligand_free_structure(tmp_path):
+    # Even with target_res, upstream builds one center per non-fixed ligand;
+    # an empty list reaches get_crop and raises IndexError.
+    structure = _write(tmp_path, "apo.pdb", _apo())
+    records = prepare.read_structure(structure)
+    for overrides in ({"crop_centers": "A-1-ALA-CA"}, {"corruption_centers": "A-1-ALA-CA"}):
+        params = _params(predict_ligand="", target_res="A-1", **overrides)
+        with pytest.raises(prepare.PreparationError, match="require a ligand"):
+            prepare.validate_structure(params, prepare.validate_params(params), records, structure)
+
+
 def test_corruption_centers_need_one_per_non_fixed_ligand_in_every_mode(tmp_path):
     two = _write(tmp_path, "two.pdb", _complex_with_ligands([("B", "LIG", 1), ("C", "HEM", 2)]))
     records = prepare.read_structure(two)

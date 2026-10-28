@@ -25,6 +25,8 @@ considerations:
 - Ligand identifiers use name3, name3-resno, or chain-name3-resno; the target
   residue uses chain-resno. Mutations use resno+chain:name3. Crop and
   corruption centers use chain-resno-name3-atom.
+- Crop and corruption centers need at least one ligand in the input; a
+  ligand-free structure uses target_res alone.
 - PLACER does not preserve insertion codes or alternate locations, and does not
   predict hydrogens; inputs containing insertion codes or alternate locations
   are rejected.
