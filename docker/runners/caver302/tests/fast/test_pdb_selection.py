@@ -13,6 +13,7 @@ or absent selections fail instead of guessing.
 from __future__ import annotations
 
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -24,9 +25,11 @@ sys.path.insert(0, str(FAMILY))
 
 from pdb_selection import (  # noqa: E402
     SelectionError,
+    altloc_policy,
     assert_snapshot_matches,
     parse_pdb,
     resolve_start_point,
+    retained_atoms,
     validate_exclusions,
 )
 
@@ -89,7 +92,7 @@ def test_selected_atom_honours_altloc_and_defaults_to_highest_occupancy() -> Non
         )
 
 
-def test_residue_centroid_averages_every_coordinate_record() -> None:
+def test_residue_centroid_uses_the_atoms_caver_retains() -> None:
     atoms = _atoms()
     residue = resolve_start_point(
         atoms, {"start_point_mode": "residue", "start_chain": "A", "start_residue_number": 1}
@@ -175,6 +178,82 @@ def test_empty_chain_never_resolves_to_the_blank_chain_next_to_named_chains(tmp_
     # An explicitly named residue still resolves to that chain.
     resolved = resolve_start_point(atoms, {"start_point_mode": "residue", "start_residue_number": 1})
     assert resolved.provenance["chain"] == "A"
+
+
+def test_equal_occupancy_keeps_the_highest_conformation_label() -> None:
+    atoms = parse_pdb(FIXTURES / "tie.pdb")
+    # CAVER kept conformation B on a 0.50/0.50 tie (verified in the SIF).
+    kept = resolve_start_point(atoms, {"start_point_mode": "residue", "start_chain": "A", "start_residue_number": 9})
+    assert kept.provenance["point_angstrom"] == [8 / 3, 1.0, 1.0]
+    assert kept.provenance["removed_altlocs"] == ["A"]
+    selected = resolve_start_point(
+        atoms,
+        {
+            "start_point_mode": "atom",
+            "start_chain": "A",
+            "start_residue_number": 9,
+            "start_atom_name": "CB",
+            "start_altloc": "B",
+        },
+    )
+    assert selected.provenance["point_angstrom"] == [5.0, 1.0, 1.0]
+    with pytest.raises(SelectionError, match="keeps conformation B"):
+        resolve_start_point(
+            atoms,
+            {
+                "start_point_mode": "atom",
+                "start_chain": "A",
+                "start_residue_number": 9,
+                "start_atom_name": "CB",
+                "start_altloc": "A",
+            },
+        )
+
+
+def test_conformers_without_the_same_atoms_keep_every_atom() -> None:
+    atoms = parse_pdb(FIXTURES / "difficult.pdb")
+    # CAVER removes nothing anywhere in that case, so all four atoms count.
+    assert len(retained_atoms(atoms)) == 4
+    assert altloc_policy(atoms).startswith("difficult case")
+    resolved = resolve_start_point(atoms, {"start_point_mode": "residue", "start_chain": "A", "start_residue_number": 9})
+    assert resolved.provenance["point_angstrom"] == [13 / 4, 1.0, 1.0]
+    assert resolved.provenance["removed_altlocs"] == []
+
+
+def test_blank_occupancy_is_unknown_not_one() -> None:
+    for atom in parse_pdb(FIXTURES / "tie.pdb"):
+        assert atom.occupancy is not None
+    blank = (
+        "ATOM      1    N ALA A   9       1.000   1.000   1.000  1.00 20.00           N\n"
+        "ATOM      2   CA ALA A   9       2.000   1.000   1.000         20.00           C\n"
+    )
+    path = Path(tempfile.mkdtemp()) / "blank_occ.pdb"
+    path.write_text(blank + "END\n", encoding="utf-8")
+    assert [atom.occupancy for atom in parse_pdb(path)] == [1.0, None]
+
+
+def test_group_blank_chain_marker_is_explicit() -> None:
+    atoms = parse_pdb(FIXTURES / "blank_chain.pdb")
+    group = resolve_start_point(atoms, {"start_point_mode": "group", "start_group": "_:1-2"})
+    assert group.directives == (("starting_point_residue", "1 2"),)
+    assert group.provenance["point_angstrom"] == [2.5, 1.5, 1.0]
+
+    text = (FIXTURES / "selection.pdb").read_text(encoding="utf-8")
+    blank = "ATOM      1    N ALA     9       7.000   7.000   7.000  1.00 20.00           N\n"
+    path = Path(tempfile.mkdtemp()) / "mixed.pdb"
+    path.write_text(blank + text, encoding="utf-8")
+    mixed_atoms = parse_pdb(path)
+    with pytest.raises(SelectionError, match="blank chain"):
+        resolve_start_point(mixed_atoms, {"start_point_mode": "group", "start_group": "_:9"})
+    # A named chain in the same structure still resolves normally.
+    named = resolve_start_point(mixed_atoms, {"start_point_mode": "group", "start_group": "B:1"})
+    assert named.directives == (("starting_point_residue", "B:1"),)
+
+
+def test_group_removed_altlocs_carry_the_residue_identity() -> None:
+    atoms = _atoms()
+    group = resolve_start_point(atoms, {"start_point_mode": "group", "start_group": "A:1-2"})
+    assert group.provenance["removed_altlocs"] == ["A:1:B"]
 
 
 def test_multi_model_pdb_is_rejected(tmp_path: Path) -> None:

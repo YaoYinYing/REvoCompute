@@ -71,7 +71,6 @@ def test_renders_residue_directive_and_exclusion_lists() -> None:
         ({"clustering_threshold": -1}, "not be negative"),
         ({"min_middle_zone": 0}, "greater than zero"),
         ({"cost_function_exponent": 101}, "not be greater than 100"),
-        ({"max_limiting_radius": 101}, "not be greater than 100"),
         ({"clustering": "matrix"}, "unsupported CAVER parameters"),
         ({"last_frame": 1, "first_frame": 5}, "last_frame must not be smaller"),
         ({"one_tunnel_in_snapshot": "every"}, "must be one of"),

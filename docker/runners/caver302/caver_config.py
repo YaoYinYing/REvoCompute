@@ -38,8 +38,9 @@ FLOAT_PARAMETERS = {
     "residue_contact_distance": "exclusive",
     "bottleneck_contact_distance": "exclusive",
 }
-#: Upstream caps these at 100 (guide: 0 <= n <= 100).
-FLOAT_MAXIMUM = {"cost_function_exponent": 100.0, "max_limiting_radius": 100.0}
+#: The JAR caps the cost-function exponent at 100; max_limiting_radius has no
+#: enforced cap, so none is invented here.
+FLOAT_MAXIMUM = {"cost_function_exponent": 100.0}
 INTEGER_PARAMETERS = {
     "first_frame": 1,
     "last_frame": 1,

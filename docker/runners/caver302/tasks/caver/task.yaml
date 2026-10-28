@@ -168,7 +168,7 @@ parameters:
     start_chain:
       type: string
       pattern: '^[A-Za-z0-9]?$'
-      description: PDB chain identifier for atom, residue or ligand mode. Leave empty to use CAVER's default, the first chain in file order that contains the residue; the resolved chain is recorded in provenance. Leave it empty as well for structures without chain identifiers.
+      description: PDB chain identifier for atom, residue or ligand mode. Leave empty to select the first matching named chain, which the Task resolves and passes explicitly; the resolved chain and all candidates are recorded in provenance. In a structure without chain identifiers the residues are addressed without a chain. A residue that exists only in the blank chain of a structure that also has named chains cannot be selected, because CAVER resolves a chainless identifier to a named chain.
     start_residue_number:
       type: integer
       description: PDB residue sequence number for atom, residue or ligand mode.
@@ -179,7 +179,7 @@ parameters:
     start_altloc:
       type: string
       pattern: '^[A-Za-z0-9]?$'
-      description: Alternate-location identifier for atom mode. Leave empty to accept the highest-occupancy alternate location, with a blank alternate location preferred on ties; the chosen one is recorded in provenance.
+      description: Alternate-location identifier for atom mode. Leave empty to accept the alternate location CAVER keeps, the one with the highest mean occupancy (the highest label wins a tie) together with the blank-altloc atoms; the chosen one is recorded in provenance. Requesting a conformation CAVER removes is rejected.
     start_residue_name:
       type: string
       pattern: '^[A-Za-z0-9]{1,4}$'
@@ -187,7 +187,7 @@ parameters:
     start_group:
       type: string
       pattern: '^[A-Za-z0-9_]+:[0-9]+(-[0-9]+)?(,[A-Za-z0-9_]+:[0-9]+(-[0-9]+)?)*$'
-      description: Comma-separated CHAIN:RESIDUE or CHAIN:START-END terms whose centroid is the start point for group mode; use _ for the blank chain. Ranges are expanded to individual residues because CAVER's start-point list has no range syntax.
+      description: Comma-separated CHAIN:RESIDUE or CHAIN:START-END terms whose centroid is the start point for group mode. Use _ for the blank chain; that form is accepted only in a structure without named chains, because CAVER resolves a chainless identifier to a named chain. Ranges are expanded to individual residues because CAVER's start-point list has no range syntax.
     probe_radius:
       type: number
       description: Minimum tunnel radius in Angstrom; edges the probe cannot traverse are discarded (upstream probe_radius).
@@ -245,10 +245,9 @@ parameters:
       minimum: 1
     max_limiting_radius:
       type: number
-      description: Radius in Angstrom above which tunnel segments are optimized for length only (upstream max_limiting_radius, 0 to 100).
+      description: Radius in Angstrom above which tunnel segments are optimized for length only (upstream max_limiting_radius).
       default: 100
       minimum: 0
-      maximum: 100
     cost_function_exponent:
       type: number
       description: Exponent of the tunnel cost function balancing width against length (upstream cost_function_exponent, 0 to 100).
