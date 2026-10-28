@@ -257,6 +257,15 @@ def test_prepare_rejects_rna_msa_supply_when_msas_are_off(tmp_path: Path, monkey
         _prepare(tmp_path, manifest, monkeypatch)
 
 
+def test_prepare_rejects_rna_msa_supply_with_search(tmp_path: Path, monkeypatch) -> None:
+    manifest = _manifest(
+        tmp_path, specification=FIXTURES / "minimal.json", msa_mode="search", rna_msa_mode="supply"
+    )
+
+    with pytest.raises(prepare_input.PreparationError, match="needs msa_mode 'supply'"):
+        _prepare(tmp_path, manifest, monkeypatch)
+
+
 def test_prepare_rejects_msa_search_when_a_protein_msa_is_supplied(tmp_path: Path, monkeypatch) -> None:
     manifest = _manifest(
         tmp_path,

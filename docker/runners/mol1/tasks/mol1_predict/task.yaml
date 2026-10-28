@@ -22,8 +22,8 @@ considerations:
 - A run may publish at most 500 structures. The job count x `sample_seeds` count x
   `num_samples` is refused before inference when it exceeds that server projection
   limit.
-- The admission bound is an estimated token count, not a measured fit. A 40 GiB A100
-  has not been validated for systems above the smallest test case.
+- The admission bound is an estimated token count, not a measured fit. No 40 GiB A100
+  fit has been validated; the bound is an estimate.
 - Seeds come only from the `sample_seeds` parameter. A job list that carries
   `modelSeeds` or `assembly_id` is rejected rather than silently ignored.
 - Predictions and confidence values are computational estimates requiring independent
@@ -182,7 +182,7 @@ parameters:
       type: string
       enum: [none, supply]
       description: 'RNA MSAs: ignore them, or use the uploaded `unpairedMsaPath` of every
-        RNA chain. Requires `msa_mode` other than none, because upstream reads MSAs only
-        when they are enabled. RNA MSA search is not offered because its databases are
-        not distributed with this runner.'
+        RNA chain. Requires `msa_mode: supply`; upstream reads MSAs only when they are
+        enabled, and `search` refuses a supplied RNA MSA. RNA MSA search is not offered
+        because its databases are not distributed with this runner.'
       default: none

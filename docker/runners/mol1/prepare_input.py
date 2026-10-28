@@ -174,9 +174,9 @@ def _enforce_modes(document: list[dict[str, Any]], params: dict[str, Any]) -> No
             "template search needs a searched MSA: use msa_mode 'search', "
             "or supply templates with template_mode 'supply'"
         )
-    # Upstream builds every MSA feature only when use_msa is true, so an RNA
-    # MSA supplied with msa_mode 'none' would never be read.
-    if rna_msa_mode == "supply" and msa_mode == "none":
+    # Upstream builds every MSA feature only when use_msa is true, and search
+    # refuses a supplied RNA MSA, so supply is the only workable MSA mode here.
+    if rna_msa_mode == "supply" and msa_mode != "supply":
         raise PreparationError(
             "rna_msa_mode 'supply' needs msa_mode 'supply': upstream reads RNA MSAs only when MSAs are enabled"
         )

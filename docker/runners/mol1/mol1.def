@@ -1,12 +1,13 @@
 # Mol-1 inference environment.
 #
-# Reproducibility: the base image digest, the direct apt packages and every
-# Python wheel (requirements.lock, --require-hashes) are pinned. The image is
-# not bit-reproducible: transitive apt dependencies and the apt/PyPI index
-# contents can change, the uv bootstrap is version-pinned but not hash-pinned,
-# and the upstream source is fetched by git commit (SHA-1) rather than a
-# verified archive. Pin apt to a snapshot repository if bit-identical images
-# are required.
+# Reproducibility: the base image digest, the direct apt packages, and every
+# Python wheel, including the setuptools build backend, are pinned;
+# requirements.lock is installed with --require-hashes and --no-build-isolation.
+# The image is not bit-reproducible: transitive apt dependencies and the
+# apt/PyPI index contents can change, the uv bootstrap is version-pinned but
+# not hash-pinned, and the upstream source is fetched by git commit (SHA-1)
+# rather than a verified archive. Pin apt to a snapshot repository if
+# bit-identical images are required.
 Bootstrap: docker
 # nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04 at this manifest digest.
 # Apptainer 1.4.5 rejects a Docker reference that carries both a tag and a
@@ -42,14 +43,22 @@ From: nvidia/cuda@sha256:ac55d124da4882b497f732d8dfd9a702d5447a5f29d08d56da6f64f
     rm -rf /var/lib/apt/lists/*
     python3 -m venv /opt/venv
     /opt/venv/bin/pip install --no-cache-dir uv==0.8.22
+    # The lock carries the setuptools build backend. Install it first so the
+    # ihm/modelcif sdists and the molence source build without PEP 517
+    # isolation, which would otherwise resolve an unpinned setuptools.
+    awk '/^setuptools==/{flag=1} flag{print} flag && /^    # via/{exit}' \
+      /opt/mol1-requirements.lock > /opt/mol1-build-backends.lock
+    UV_HTTP_TIMEOUT=600 /opt/venv/bin/uv pip install --python /opt/venv/bin/python --no-cache \
+      --require-hashes -r /opt/mol1-build-backends.lock
     UV_HTTP_TIMEOUT=600 /opt/venv/bin/uv pip sync --python /opt/venv/bin/python --no-cache \
-      --require-hashes --index-strategy unsafe-best-match /opt/mol1-requirements.lock
+      --require-hashes --no-build-isolation --index-strategy unsafe-best-match /opt/mol1-requirements.lock
     # Pinned upstream revision; provenance is recorded in mol1/upstream.json.
     git init /opt/mol1
     git -C /opt/mol1 remote add origin https://github.com/molence/Mol-1.git
     git -C /opt/mol1 fetch --depth 1 origin 7480cc41a7c64b5c517709184bdc81c08dbd5fdb
     git -C /opt/mol1 checkout --detach FETCH_HEAD
-    /opt/venv/bin/uv pip install --python /opt/venv/bin/python --no-cache --no-deps /opt/mol1
+    /opt/venv/bin/uv pip install --python /opt/venv/bin/python --no-cache --no-deps \
+      --no-build-isolation /opt/mol1
     rm -rf /opt/mol1/.git
     # Reserved Runtime Bundle mount point. This image is the environment;
     # REvoCompute's entrypoint and shared runtime helpers arrive at execution

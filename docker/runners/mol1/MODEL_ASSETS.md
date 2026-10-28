@@ -1,11 +1,11 @@
 # Mol-1 model and reference assets
 
-Mol-1 inference needs an operator-provisioned weights and reference-data root.
-No weights or reference data are downloaded by a scheduled task: a missing file
-stops the run before the checkpoint is loaded. Template use can still download
-PDBe structures into task scratch (see Runtime decisions). This page records
-the pinned identities and the mount layout; it does not copy upstream
-documentation.
+Mol-1 inference needs operator-provisioned weights and reference files; a
+missing file stops the run before the checkpoint is loaded. The model does not
+download weights or reference data during a task. Template use downloads PDBe
+hit structures into task scratch on every run (see Runtime decisions). This
+page records the pinned identities and the mount layout; it does not copy
+upstream documentation.
 
 ## Pinned upstream
 
