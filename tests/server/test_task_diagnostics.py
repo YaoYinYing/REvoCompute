@@ -197,6 +197,10 @@ def test_diagnostic_context_is_not_a_user_facing_failure_explanation(text):
     assert "service.internal" not in sanitized
 
 
+def test_c1_control_characters_are_removed_with_ansi_controls():
+    assert safe_diagnostic_text("\x9b31mred\n") == "31mred\n"
+
+
 def test_invisible_format_controls_cannot_reorder_the_retained_excerpt(task_context):
     module, client, task_id, root, owner, *_ = task_context
     # Arabic letter mark, zero-width joiners, soft hyphen: every Unicode Cf

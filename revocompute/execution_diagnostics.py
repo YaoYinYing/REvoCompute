@@ -31,10 +31,10 @@ REASONS = {
     "runner_validation_failed": "Runner output validation failed.",
 }
 _SECRET_KEY = re.compile(r"secret|password|passwd|token|credential|api.?key|authorization|private.?key", re.I)
-# ANSI escapes and C0 controls. Invisible format characters (bidi marks,
+# ANSI escapes and C0/C1 controls. Invisible format characters (bidi marks,
 # zero-width controls, soft hyphen, tag characters) are stripped by their
 # Unicode category so the set cannot go stale.
-_ANSI_CONTROL = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+_ANSI_CONTROL = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\x80-\x9f]")
 _SECRET_ASSIGNMENT = re.compile(
     r"(?im)(?<![\w.-])([\w.-]*(?:secret|password|passwd|token|credential|api.?key|authorization)"
     r"[\w.-]*[\"']?\s*[=:]\s*)(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^\s,;]+)"
