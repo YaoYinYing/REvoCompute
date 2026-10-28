@@ -1674,6 +1674,43 @@ def test_poll_timeout_kills_srun_and_returns_failed(tmp_path):
     assert fake_proc.wait_calls == 2
 
 
+def test_srun_error_file_is_published_and_reported_as_the_job_stderr(tmp_path):
+    """A failed job's traceback goes to ``srun --error=``, not the srun pipe."""
+    from revocompute.execution_diagnostics import STATUS_PATH
+
+    job = SlurmJob(
+        "task-1",
+        _make_task_type(),
+        _make_runner(),
+        _make_entities(),
+        str(tmp_path / "out"),
+        username="alice",
+    )
+    job._slurm_job_id = "4217"
+    job._stderr_lines = ["srun: error: allocation failed\n"]
+    (tmp_path / "out").mkdir()
+    os.makedirs(job.allocation_dir, exist_ok=True)
+    Path(job.allocation_dir, "allocation-4217.err").write_text(
+        "Traceback (most recent call last):\nRuntimeError: Failed to find C compiler.\n", encoding="utf-8"
+    )
+    captured = []
+    job._task_store = SimpleNamespace(
+        record_task_diagnostics=lambda task_id, evidence, **kwargs: captured.append(evidence)
+    )
+
+    job._save_output()
+    job._persist_execution_evidence()
+
+    published = (tmp_path / "out" / "execution" / "slurm-alice-cpu_runner-task-1.stderr.log").read_text()
+    assert published == (
+        "srun: error: allocation failed\n"
+        "Traceback (most recent call last):\n"
+        "RuntimeError: Failed to find C compiler.\n"
+    )
+    record = json.loads((tmp_path / "out" / STATUS_PATH).read_text())
+    assert "RuntimeError: Failed to find C compiler." in record["logs"]["stderr"]
+
+
 def test_slurm_output_is_named_previewable_execution_diagnostics(tmp_path):
     job = SlurmJob(
         "task-1",

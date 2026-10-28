@@ -30,7 +30,14 @@ from typing import Any
 from revocompute.job import ExecutionBuilder, ExecutionPlan, Job, JobState
 from revocompute.job._stages import extract_stage_from_log_line
 from revocompute import runtime_bundle
-from revocompute.execution_diagnostics import STATUS_PATH, diagnostic_secret_values, redacted_log_lines, scheduler_failure
+from revocompute.execution_diagnostics import (
+    MAX_LOG_BYTES,
+    STATUS_PATH,
+    bounded_log,
+    diagnostic_secret_values,
+    redacted_log_lines,
+    scheduler_failure,
+)
 from revocompute.storage import publish_result_text
 from revocompute.operational_events import emit_event
 from revocompute.resource_observations import (
@@ -917,11 +924,14 @@ class SlurmJob(Job):
         # nodes.  Use the task-specific shared output directory so slurmstepd
         # never falls back to /tmp and every job has an isolated valid cwd.
         opts.append(f"--chdir={self.output_dir}")
-        # Slurm creates this file the instant the job is allocated a node, which
-        # is the only durable trace of an allocation killed before the wrapper's
-        # first statement.  It is written into the host-only directory (never
-        # bind-mounted into the container), and only stderr is redirected so the
-        # wrapper's own stdout protocol stays on the pipe this runner reads.
+        # ``--error`` connects the *job's* stderr -- including the container's
+        # traceback -- to this host-only file, and Slurm creates it the instant
+        # the job is allocated, so an allocation killed before the wrapper's
+        # first statement still leaves a trace. Only stderr is redirected: the
+        # wrapper's stdout protocol must stay on the pipe this runner reads.
+        # The file is read back into the persisted diagnostics by
+        # ``_job_stderr_lines``, since otherwise that stderr never reaches the
+        # user.
         opts.append(f"--error={os.path.join(self.allocation_dir, ALLOCATION_SCHEDULER_LOG_NAME)}")
         opts.append(f"--job-name=revocomput_{_sanitize_name(self._username)}_{self.tt.name}_{self.task_id[:8]}")
         return opts
@@ -1675,7 +1685,11 @@ class SlurmJob(Job):
             "stage_id": str(self.tt.name), **(self._scheduler_failure or {}),
         }
         logs: dict[str, str] = {}
-        for stream_name, lines in (("stdout", self._stdout_lines), ("stderr", self._stderr_lines)):
+        streams = (
+            ("stdout", tuple(self._stdout_lines)),
+            ("stderr", (*self._stderr_lines, *self._job_stderr_lines())),
+        )
+        for stream_name, lines in streams:
             # Redact complete lines before bounding the excerpt. Track PEM
             # blocks across discarded lines so a long key cannot lose its label.
             retained: deque[str] = deque()
@@ -1734,11 +1748,41 @@ class SlurmJob(Job):
             )
             publish_result_text(
                 self.output_dir, os.path.relpath(err_path, self.output_dir),
-                redacted_log_lines(islice(self._stderr_lines, len(self._stderr_lines)), secret_values=self._diagnostic_secrets()),
+                redacted_log_lines(
+                    (*self._stderr_lines, *self._job_stderr_lines()),
+                    secret_values=self._diagnostic_secrets(),
+                ),
             )
             self._save_resource_observation(execution_dir, username, task_name, task_id)
         except OSError as exc:
             logging.warning("Could not save SLURM output for %s: %s", self._job_id, exc)
+
+    def _job_stderr_lines(self) -> list[str]:
+        """The job's own stderr, which ``srun --error=`` keeps off this pipe.
+
+        ``--error`` redirects the *job's* stderr — the container's traceback on a
+        failed task — into the host-only allocation file, so this process's
+        stderr carries only the srun client's own messages. A failure report
+        built from the pipe alone therefore shows an exit banner and no reason.
+        Reading the file here gives the same evidence the scheduler kept, under
+        the same redaction and bound as every other captured stream. A partial
+        first line from a truncated tail is dropped rather than shown as text.
+        """
+        job_id = self._slurm_job_id
+        if not job_id or not job_id.isdigit():
+            return []
+        path = os.path.join(self.allocation_dir, ALLOCATION_SCHEDULER_LOG_NAME.replace("%j", job_id))
+        try:
+            with open(path, "rb") as handle:
+                handle.seek(0, os.SEEK_END)
+                handle.seek(max(0, handle.tell() - MAX_LOG_BYTES))
+                text = handle.read(MAX_LOG_BYTES + 1).decode("utf-8", errors="replace")
+        except OSError:
+            return []
+        text, _ = bounded_log(text, limit=MAX_LOG_BYTES)
+        if text and not text.endswith("\n"):
+            text += "\n"
+        return text.splitlines(keepends=True)
 
     @staticmethod
     def _is_captured_protocol_line(line: str) -> bool:
