@@ -83,7 +83,7 @@ def test_escape_in_the_excerpt_search_keeps_the_dashboard_evidence_dialog_open(p
 
     dialog = page.get_by_role("dialog")
     expect(dialog).to_be_visible()
-    page.get_by_role("button", name="查看完整保留片段", exact=True).click()
+    page.get_by_role("button", name="查看完整保留的 stderr 片段", exact=True).click()
 
     search = page.locator(".task-diagnostic-search-input")
     expect(search).to_be_visible()
@@ -110,7 +110,7 @@ def test_loading_and_failure_feedback_are_visible_before_the_excerpt_region(page
     page.route(excerpt_url, lambda route: pending.append(route))
     _open_evidence(page)
 
-    toggle = page.get_by_role("button", name="Read full retained excerpt", exact=True)
+    toggle = page.get_by_role("button", name="Read full retained stderr excerpt", exact=True)
     toggle.click()
     loading = page.get_by_text("Loading the retained excerpt…", exact=True)
     expect(loading).to_be_visible()

@@ -511,11 +511,11 @@ def test_retained_excerpt_reads_and_searches_without_leaving_the_panel(task_cont
         panel = page.locator(".task-diagnostics")
         expect(panel).to_be_visible()
         expect(panel.locator("pre").first).not_to_contain_text("EARLY-MARKER")
-        opener = panel.get_by_role("button", name="Read full retained excerpt", exact=True)
+        opener = panel.get_by_role("button", name="Read full retained stderr excerpt", exact=True)
         expect(opener).to_be_visible()
         opener.focus()
         page.keyboard.press("Enter")
-        toggle = panel.get_by_role("button", name="Hide retained excerpt", exact=True)
+        toggle = panel.get_by_role("button", name="Hide retained stderr excerpt", exact=True)
         expect(toggle).to_have_attribute("aria-expanded", "true")
         expect(toggle).to_be_focused()
         lines = panel.locator(".task-diagnostic-lines")
@@ -525,7 +525,7 @@ def test_retained_excerpt_reads_and_searches_without_leaving_the_panel(task_cont
         expect(lines).not_to_contain_text("diagnostic-token")
         expect(panel.locator(".task-diagnostic-gutter").first).to_have_text("1")
 
-        search = panel.get_by_label("Search this excerpt")
+        search = panel.get_by_label("Search this stderr excerpt")
         search.fill("early-marker")
         expect(panel.locator(".task-diagnostic-search-status")).to_have_text("Match 1 of 1")
         expect(panel.locator("mark")).to_have_count(1)
@@ -553,7 +553,7 @@ def test_retained_excerpt_reads_and_searches_without_leaving_the_panel(task_cont
 
         # The toggle restores the bounded preview without a second request.
         toggle.click()
-        expect(panel.get_by_role("button", name="Read full retained excerpt", exact=True)).to_have_attribute(
+        expect(panel.get_by_role("button", name="Read full retained stderr excerpt", exact=True)).to_have_attribute(
             "aria-expanded", "false"
         )
         expect(panel.locator("pre").first).to_be_visible()

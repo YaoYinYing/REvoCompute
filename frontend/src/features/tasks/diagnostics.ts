@@ -2,7 +2,7 @@ import { getTaskDiagnosticExcerpt, getTaskDiagnostics } from '../../api/app-api'
 import { t } from '../../app/i18n';
 import './diagnostics.css';
 
-/** The server bounds one retained excerpt to 64 KiB; the line list needs no virtualization. */
+/** The server already bounds one retained excerpt, so the line list needs no virtualization. */
 const MAX_MATCHES = 1000;
 /** A pathological line-per-byte excerpt still renders at most this many recent lines. */
 const MAX_RENDERED_LINES = 10_000;
@@ -24,8 +24,7 @@ function findMatches(lines: string[], query: string): { matches: Match[]; capped
     let hit: RegExpExecArray | null;
     while ((hit = pattern.exec(text)) !== null) {
       if (matches.length === MAX_MATCHES) return { matches, capped: true };
-      if (hit[0].length === 0) pattern.lastIndex += 1;
-      else matches.push({ line, start: hit.index, end: hit.index + hit[0].length });
+      matches.push({ line, start: hit.index, end: hit.index + hit[0].length });
     }
   }
   return { matches, capped: false };
@@ -53,13 +52,13 @@ function paint(body: HTMLElement, text: string, matches: Match[]): void {
 function addRetainedExcerpt(
   section: HTMLElement, stream: string, url: string, preview: HTMLElement, truncatedNote: HTMLElement, signal: AbortSignal,
 ): void {
-  const toggle = element('button', t('diagnostics.showExcerpt')); toggle.type = 'button';
+  const toggle = element('button', t('diagnostics.showExcerpt', { stream })); toggle.type = 'button';
   const region = element('div'); region.className = 'task-diagnostic-excerpt'; region.hidden = true;
   region.id = `task-diagnostic-excerpt-${stream}`;
   toggle.setAttribute('aria-expanded', 'false'); toggle.setAttribute('aria-controls', region.id);
 
   const searchBar = element('div'); searchBar.className = 'task-diagnostic-search';
-  const label = element('label', t('diagnostics.search')); label.htmlFor = `task-diagnostic-search-${stream}`;
+  const label = element('label', t('diagnostics.search', { stream })); label.htmlFor = `task-diagnostic-search-${stream}`;
   const input = element('input'); input.type = 'search'; input.id = label.htmlFor;
   input.className = 'task-diagnostic-search-input'; input.placeholder = t('diagnostics.searchPlaceholder');
   const previous = element('button', t('diagnostics.searchPrev')); previous.type = 'button'; previous.disabled = true;
@@ -94,7 +93,7 @@ function addRetainedExcerpt(
     region.hidden = !visible;
     preview.hidden = visible; truncatedNote.hidden = visible;
     toggle.setAttribute('aria-expanded', String(visible));
-    toggle.textContent = visible ? t('diagnostics.hideExcerpt') : t('diagnostics.showExcerpt');
+    toggle.textContent = visible ? t('diagnostics.hideExcerpt', { stream }) : t('diagnostics.showExcerpt', { stream });
   };
 
   const setNavigation = (enabled: boolean): void => {
