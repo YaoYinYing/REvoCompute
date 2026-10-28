@@ -131,6 +131,9 @@ class AccessState:
     expired: bool = False
     expires_at: int | None = None
     policy_id: str = "academic-only"
+    # The entitlement a request record is created for; the real route returns
+    # the policy's ``requires`` entries, not the policy id.
+    entitlement: str = "academic-models"
     label: str = "Academic models"
     description: str = "Academic eligibility is required."
     notice_title: str = "Academic use only"

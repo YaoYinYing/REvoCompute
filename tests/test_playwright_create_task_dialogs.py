@@ -18,6 +18,7 @@ from __future__ import annotations
 import os
 from dataclasses import replace
 from pathlib import Path
+import re
 from urllib.parse import urlsplit
 
 from playwright.sync_api import Page, expect
@@ -213,6 +214,27 @@ def test_closing_a_picker_while_its_catalog_is_in_flight_cancels_it(page: Page) 
     page.get_by_role("button", name="Cancel", exact=True).click()
 
 
+def test_a_late_catalog_failure_is_not_written_into_a_dismissed_picker(page: Page) -> None:
+    """The failure path respects the dismissal as the success path does."""
+    mount_scenario(page, controlled_scenario().with_demos([sequence_demo()]))
+    page.goto(f"{ORIGIN}/compute/create_task?task_type={RUNNER}")
+    expect(page.locator(".ct-workbench")).to_be_visible()
+
+    held: list = []
+    page.route(f"{ORIGIN}/compute/api/types/{RUNNER}/demos", lambda route: held.append(route))
+    page.locator("[data-ct-demo-open]").click()
+    expect(page.locator("dialog.ct-demo-dialog")).to_be_visible()
+    page.evaluate("() => { window.__closedPicker = document.querySelector('dialog.ct-demo-dialog'); }")
+    page.keyboard.press("Escape")
+    expect(page.locator("dialog.ct-demo-dialog")).to_have_count(0)
+
+    assert len(held) == 1
+    held[0].fulfill(status=503, content_type="application/json", body='{"error": "catalog unavailable"}')
+    page.wait_for_timeout(400)
+    assert page.evaluate("window.__closedPicker.querySelector('.ct-status').textContent") == ""
+    expect(page.locator("dialog.ct-demo-dialog")).to_have_count(0)
+
+
 def test_a_failed_example_catalog_is_reported_inside_the_picker(page: Page) -> None:
     """A catalog that cannot be read leaves the reader in a closable dialog."""
     mount_scenario(page, controlled_scenario().with_demos([sequence_demo()]))
@@ -300,12 +322,14 @@ def test_the_replace_confirmation_is_a_labelled_opaque_dialog(page: Page, theme:
             return id ? document.getElementById(id)?.textContent : null;
         }"""
     )
-    # The accessible name is the destructive question the reader answers, and it
-    # is the heading the dialog actually shows.
+    # The accessible name is the question the reader answers, not the button's
+    # imperative label, and it is the heading the dialog actually shows.
     heading = dialog.locator("h2").inner_text()
     assert labelled == heading and heading, labelled
-    expect(dialog.locator("h2")).to_contain_text("Replace")
-    expect(dialog).to_contain_text("replaces the inputs and settings")
+    assert re.fullmatch(
+        r"Loading the .+ replaces the inputs and settings you have already entered\.", heading
+    ), heading
+    assert heading != "Replace current inputs"
     _evidence(page, f"replace-confirmation-{theme}")
     page.keyboard.press("Escape")
     expect(dialog).to_have_count(0)

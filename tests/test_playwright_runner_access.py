@@ -42,6 +42,10 @@ EXPIRED_CLOSED = AccessState(
     restricted=True, granted=False, requestable=False, expired=True,
     policy_id="expired-closed", label="Expired closed model",
 )
+EXPIRED_REJECTED = AccessState(
+    restricted=True, granted=False, requestable=True, expired=True, request_status="rejected",
+    policy_id="expired-rejected", label="Expired rejected model",
+)
 # The projection's own shape for an expired grant with a newer live request:
 # ``routes.py`` counts this policy as pending.
 EXPIRED_PENDING = AccessState(
@@ -51,6 +55,11 @@ EXPIRED_PENDING = AccessState(
 REJECTED = AccessState(
     restricted=True, granted=False, requestable=True, request_status="rejected",
     policy_id="rejected-policy", label="Rejected model",
+)
+# A non-requestable policy whose request history is a rejection.
+REJECTED_CLOSED = AccessState(
+    restricted=True, granted=False, requestable=False, request_status="rejected",
+    policy_id="rejected-closed", label="Rejected closed model",
 )
 RESTRICTED = AccessState(restricted=True, granted=False, requestable=False, policy_id="closed-policy", label="Closed model")
 
@@ -67,7 +76,10 @@ def _evidence(page: Page, name: str) -> None:
 
 def _mount(page: Page, policies=None) -> None:
     scenario = controlled_scenario().with_access_policies(
-        policies or [GRANTED, REQUESTABLE, PENDING, EXPIRED, REJECTED, RESTRICTED, EXPIRED_CLOSED]
+        policies or [
+            GRANTED, REQUESTABLE, PENDING, EXPIRED, EXPIRED_REJECTED, REJECTED,
+            RESTRICTED, EXPIRED_CLOSED, REJECTED_CLOSED,
+        ]
     )
     mount_scenario(page, scenario)
     page.goto(URL)
@@ -97,24 +109,26 @@ def test_policy_states_are_grouped_and_only_requestable_states_offer_a_form(page
     expect(page.locator('[data-access-group="granted"] > h2')).to_have_text("Granted access")
     expect(page.locator('[data-access-group="restricted"] > h2')).to_have_text("Not requestable")
 
-    # Requestable, expired and rejected each carry a form; pending and a policy
-    # that accepts no requests never do.
+    # Requestable policies carry a form; pending and every policy that accepts
+    # no requests never do, whatever history they hold.
     action_rows = page.locator('[data-access-group="action"] .access-row')
-    expect(action_rows).to_have_count(3)
-    expect(action_rows.locator(".access-request")).to_have_count(3)
+    expect(action_rows).to_have_count(4)
+    expect(action_rows.locator(".access-request")).to_have_count(4)
     expect(page.locator('[data-access-group="pending"] .access-request')).to_have_count(0)
     expect(page.locator('[data-access-group="restricted"] .access-request')).to_have_count(0)
 
     # The state sentences are the server's facts. An expired policy has no
     # published date, so the sentence stays generic rather than inventing one.
-    expect(page.locator('[data-access-group="action"] [data-access-state="expired"] .access-detail')).to_have_text(
+    expect(page.locator('[data-policy-id="expired-policy"] .access-detail')).to_have_text(
         "A previous grant expired. You may request access again."
     )
-    expect(page.locator('[data-access-state="rejected"] .access-detail')).to_contain_text("not approved")
+    expect(page.locator('[data-policy-id="rejected-policy"] .access-detail')).to_have_text(
+        "Your previous request was not approved."
+    )
     expect(page.locator('[data-access-state="pending"] .access-detail')).to_contain_text(
         "awaiting an administrator decision"
     )
-    expect(page.locator('[data-access-group="action"] [data-access-state="expired"] .access-policy')).to_be_visible()
+    expect(page.locator('[data-policy-id="expired-policy"] .access-policy')).to_be_visible()
     # The metrics/credit h3 rule must not leak its section margin into a row.
     assert page.eval_on_selector(
         '[data-access-state="requestable"] .access-heading h3', "element => getComputedStyle(element).marginTop"
@@ -122,13 +136,23 @@ def test_policy_states_are_grouped_and_only_requestable_states_offer_a_form(page
 
     # An expired policy that accepts no requests is a restriction, not a promise
     # of a request form, and its sentence does not offer a retry.
-    closed = page.locator('[data-access-group="restricted"] [data-access-state="expired"]')
+    closed = page.locator('[data-access-group="restricted"] [data-policy-id="expired-closed"]')
     expect(closed).to_be_visible()
     expect(closed.locator(".access-detail")).to_have_text(
         "A previous grant expired. This Runner is not requestable on this deployment."
     )
     expect(closed.locator(".access-request")).to_have_count(0)
-    expect(page.locator('[data-access-group="restricted"] .access-row')).to_have_count(2)
+    # A rejected request on a policy that no longer accepts requests is also a
+    # restriction, not an actionable row.
+    rejected_closed = page.locator('[data-access-group="restricted"] [data-policy-id="rejected-closed"]')
+    expect(rejected_closed).to_be_visible()
+    expect(rejected_closed.locator(".access-detail")).to_have_text("Your previous request was not approved.")
+    expect(rejected_closed.locator(".access-request")).to_have_count(0)
+    expect(page.locator('[data-access-group="restricted"] .access-row')).to_have_count(3)
+    # The rejection is the more recent fact when an expired grant also exists.
+    expect(page.locator('[data-policy-id="expired-rejected"] .access-detail')).to_have_text(
+        "Your previous request was not approved. A previous grant expired. You may request access again."
+    )
 
     # Granted is a compact list, not another request surface.
     granted = page.locator(".access-granted")
@@ -151,7 +175,7 @@ def test_policy_states_are_grouped_and_only_requestable_states_offer_a_form(page
 def test_runner_access_is_readable_in_the_dark_theme(page: Page) -> None:
     page.add_init_script("localStorage.setItem('revocompute-theme', 'dark')")
     _mount(page)
-    expect(page.locator('[data-access-group="action"] .access-request')).to_have_count(3)
+    expect(page.locator('[data-access-group="action"] .access-request')).to_have_count(4)
     _evidence(page, "runner-access-dark")
 
 
@@ -179,20 +203,21 @@ def test_requesting_access_sends_one_policy_and_moves_the_row_into_review(page: 
     posted = _posts(page)
     # A draft in another policy's form is the reader's work and survives the
     # answered row moving.
-    page.locator('[data-access-state="expired"] textarea').fill("Draft for the expired policy")
-    row = page.locator('[data-access-state="requestable"]')
+    page.locator('[data-policy-id="expired-policy"] textarea').fill("Draft for the expired policy")
+    row = page.locator('[data-policy-id="request-policy"]')
     row.get_by_label("Research use and affiliation").fill("Non-commercial work at Example Institute")
-    row.get_by_role("button", name="Request access", exact=True).click()
+    with page.expect_response(lambda response: urlsplit(response.url).path.endswith("/access/requests")) as answered:
+        row.get_by_role("button", name="Request access", exact=True).click()
 
     expect(page.locator('[data-access-group="pending"] .access-row')).to_have_count(2)
-    expect(page.locator('[data-access-state="requestable"]')).to_have_count(0)
-    expect(page.locator('[data-access-group="action"] .access-row')).to_have_count(2)
+    expect(page.locator('[data-policy-id="request-policy"]')).to_have_attribute("data-access-state", "pending")
+    expect(page.locator('[data-access-group="action"] .access-row')).to_have_count(3)
     expect(page.get_by_text("Access request submitted.")).to_be_visible()
-    expect(page.locator('[data-access-state="expired"] textarea')).to_have_value("Draft for the expired policy")
+    expect(page.locator('[data-policy-id="expired-policy"] textarea')).to_have_value("Draft for the expired policy")
     # Focus lands on the row the server answered, not on the first pending row.
-    assert page.evaluate(
-        "document.activeElement && document.activeElement.querySelector('h3')?.textContent === 'Requestable model'"
-    )
+    assert page.evaluate("document.activeElement && document.activeElement.dataset.policyId === 'request-policy'")
+    # The fixture echoes the posted policy, matching the server route contract.
+    assert answered.value.json()["policy_id"] == "request-policy"
     assert posted == [{"policy_id": "request-policy", "reason": "Non-commercial work at Example Institute"}]
 
     # No form survives on the answered row, so the request cannot be repeated.

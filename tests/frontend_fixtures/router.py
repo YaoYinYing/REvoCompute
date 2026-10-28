@@ -731,10 +731,20 @@ class FrontendFixtureRouter:
         return route.fulfill(json={"policies": policies})
 
     def _access_request(self, route: Any, query: Any) -> None:
+        """Answer with the posted policy and its entitlement, as the route does.
+
+        Echoing the submitted ``policy_id`` makes a client that binds the answer
+        to the wrong row observable instead of silently agreeing with it.
+        """
+        payload = _json_object(route.request.post_data) or {}
+        posted = payload.get("policy_id")
+        policy = next((item for item in self.scenario.policy_states() if item.policy_id == posted), None)
+        if not isinstance(posted, str) or policy is None:
+            return route.fulfill(status=400, json={"error": "Unknown Runner access policy"})
         self._state.access_requests += 1
         return route.fulfill(
             status=201,
-            json={"policy_id": self.scenario.access_policy_id, "requests": [{"entitlement": "academic-models", "status": "pending"}]},
+            json={"policy_id": posted, "requests": [{"entitlement": policy.entitlement, "status": "pending"}]},
         )
 
     # -- mutating task actions ---------------------------------------------

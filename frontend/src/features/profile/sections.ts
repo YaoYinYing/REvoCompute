@@ -270,10 +270,9 @@ function accessGroup(policy: RunnerAccess): AccessGroup {
   const state = accessState(policy);
   if (state === 'Granted') return 'granted';
   if (state === 'Pending') return 'pending';
-  if (state === 'Restricted') return 'restricted';
-  // An expired policy that accepts no requests is not actionable, so it belongs
-  // with the restrictions rather than under a promise of a request form.
-  if (state === 'Expired' && !policy.requestable) return 'restricted';
+  // Any policy that accepts no requests is a restriction, whatever history it
+  // carries (expired grant, rejected request), not an actionable request row.
+  if (!policy.requestable) return 'restricted';
   return 'action';
 }
 
@@ -284,11 +283,12 @@ function accessDate(seconds: number): string {
 function accessDetail(policy: RunnerAccess, state: AccessState): string {
   if (state === 'Pending') return 'Your request is awaiting an administrator decision.';
   if (state === 'Expired') {
-    // The projection publishes an expiry only for a grant, so an expired policy
-    // states the history without inventing a date.
-    return policy.requestable
+    // The administrator's decision is the more recent fact, and the projection
+    // publishes an expiry only for a live grant, so no date is invented here.
+    const rejected = policy.request_status === 'rejected' ? 'Your previous request was not approved. ' : '';
+    return `${rejected}${policy.requestable
       ? 'A previous grant expired. You may request access again.'
-      : 'A previous grant expired. This Runner is not requestable on this deployment.';
+      : 'A previous grant expired. This Runner is not requestable on this deployment.'}`;
   }
   if (state === 'Rejected') return 'Your previous request was not approved.';
   if (state === 'Restricted') return policy.description || 'This Runner is not available to request on this deployment.';
@@ -367,8 +367,8 @@ function accessRequestForm(
       const result = await requestAccess(policy.policy_id || '', requestReason);
       // The 201 body is the server's answer; no client-side state is invented.
       const records = Array.isArray(result.requests) ? result.requests as Array<{ status?: unknown }> : [];
-      if (!records.some(record => record?.status === 'pending')) {
-        status(message, 'The server did not confirm the request state. Reload the page to see its decision.', 'error');
+      if (result.policy_id !== policy.policy_id || !records.some(record => record?.status === 'pending')) {
+        status(message, 'The server did not confirm this policy’s request. Reload the page to see its decision.', 'error');
         button.disabled = false; return;
       }
       markAnswered(row, policy, policies, host, shell);
@@ -380,7 +380,7 @@ function accessRequestForm(
 
 function accessRow(policy: RunnerAccess, policies: RunnerAccess[], host: HTMLElement, shell: AppShell): HTMLElement {
   const state = accessState(policy);
-  const row = document.createElement('article'); row.className = 'access-row'; row.dataset.accessState = state.toLowerCase(); row.tabIndex = -1;
+  const row = document.createElement('article'); row.className = 'access-row'; row.dataset.accessState = state.toLowerCase(); row.dataset.policyId = policy.policy_id || ''; row.tabIndex = -1;
   const heading = document.createElement('div'); heading.className = 'access-heading';
   const title = document.createElement('h3'); title.textContent = policy.label || policy.policy_id || 'Restricted Runner';
   const badge = document.createElement('span'); badge.className = `badge access-${state.toLowerCase()}`; badge.textContent = state; heading.append(title, badge); row.append(heading);

@@ -539,9 +539,9 @@ export class CreateTask {
     const keep = node('button', 'ct-secondary', t('ct.demo.keep')); keep.type = 'button'; keep.addEventListener('click', () => dialog.close('keep'));
     const replace = node('button', 'ct-primary', t('ct.demo.confirmReplace')); replace.type = 'button'; replace.addEventListener('click', () => dialog.close('replace'));
     const actions = node('div', 'ct-actions'); actions.append(keep, replace);
-    // The destructive question names the dialog, not the action that led here.
-    const heading = node('h2', '', t('ct.demo.confirmReplace'));
-    form.append(heading, node('p', '', t('ct.demo.replace', { title: demo.title })), actions);
+    // The question itself names the dialog: it states what will be replaced.
+    const heading = node('h2', '', t('ct.demo.replace', { title: demo.title }));
+    form.append(heading, actions);
     dialog.append(form); labelled(dialog, heading); document.body.append(dialog); dialog.showModal();
     return new Promise(resolve => dialog.addEventListener('close', () => { const accepted = dialog.returnValue === 'replace'; dialog.remove(); resolve(accepted); }, { once: true }));
   }
