@@ -27,6 +27,19 @@ from typing import Any
 
 _CENTER_FLAGS = ("crop_centers", "corruption_centers")
 
+# Mirror of modules/utils.py::get_common_ligands() at PLACER 7dc5563.
+# ``--exclude_common_ligands`` drops these names during parsing, so the ligand
+# census below must drop them too or every count drifts from upstream.
+_COMMON_LIGANDS = frozenset(
+    """144 15P 1PE 2F2 2JC 3HR 3SY 7N5 7PE 9JE AAE ABA ACE ACN ACT ACY AZI BAM BCN
+    BCT BDN BEN BME BO3 BTB BTC BU1 C8E CAD CAQ CBM CCN CIT CL CLR CM CMO CO3 CXS D10
+    DEP DIO DMS DN DOD DOX EDO EEE EGL EOH EOX EPE ETF FCY FJO FLC FMT FW5 GOL GSH
+    GTT GYF HED IHP IHS IMD IOD IPA IPH LDA MB3 MEG MES MLA MLI MOH MPD MRD MSE MYR N
+    NA NH2 NH4 NHE NO3 O4B OHE OLA OLC OMB OME OXA P6G PE3 PE4 PEG PEO PEP PG0 PG4 PGE
+    PGR PLM PO4 POL POP PVO SAR SCN SEO SEP SIN SO4 SPD SPM SR STE STO STU TAR TBU TME
+    TPO TRS UNK UNL UNX UPL URE""".split()
+)
+
 
 class PreparationError(ValueError):
     """A user-correctable manifest, parameter, or input-structure failure."""
@@ -71,13 +84,13 @@ def _parse_ligand_spec(token: str) -> tuple[str, ...]:
     )
 
 
-def _parse_target_res(token: str) -> tuple[str, ...]:
+def _parse_target_res(token: str) -> tuple[str, int]:
+    # Upstream parses a three-part target as chain-resno-name3, so the former
+    # chain-name3-resno help drove ``int('ALA')`` and failed inside the SIF.
     parts = token.split("-")
     if len(parts) == 2 and parts[0] and parts[1].isdigit():
-        return ("chain_res", parts[0], int(parts[1]))
-    if len(parts) == 3 and parts[0] and parts[1] and parts[2].isdigit():
-        return ("chain_name_res", parts[0], parts[1], int(parts[2]))
-    raise PreparationError(f"Invalid target residue {token!r}; use chain-resno or chain-name3-resno.")
+        return (parts[0], int(parts[1]))
+    raise PreparationError(f"Invalid target residue {token!r}; use chain-resno, for example A-149.")
 
 
 def _parse_center(token: str, flag: str) -> tuple[str, int, str, str]:
@@ -135,6 +148,11 @@ def validate_params(params: dict[str, Any]) -> ParsedParams:
         raise PreparationError("predict_ligand and fixed_ligand cannot both be set.")
     if parsed.crop_centers and parsed.corruption_centers:
         raise PreparationError("crop_centers and corruption_centers cannot both be set.")
+    if params.get("use_sm", True) is False and (parsed.predict_ligand or parsed.fixed_ligand):
+        raise PreparationError(
+            "use_sm: false removes the small molecule from the model, so it cannot be combined with "
+            "predict_ligand or fixed_ligand."
+        )
     for token in (*parsed.predict_ligand, *parsed.fixed_ligand):
         _parse_ligand_spec(token)
     if parsed.target_res:
@@ -277,18 +295,21 @@ def _cif_residues(text: str) -> list[Residue]:
 def read_structure(path: str) -> list[Residue]:
     suffix = Path(path).suffix.lower()
     text = Path(path).read_text(encoding="utf-8", errors="replace")
-    if suffix in {".pdb", ".ent"}:
+    if suffix == ".pdb":
         return _pdb_residues(text)
     if suffix in {".cif", ".mmcif"}:
         return _cif_residues(text)
+    # PLACER's -f dispatch recognizes only .pdb, .cif and .cif.gz, so a legacy
+    # .ent upload (also outside this Task's format list) is not forwarded.
     raise PreparationError(f"Unsupported structure format {suffix or path!r}; use PDB or mmCIF.")
 
 
-def _ligands(residues: list[Residue]) -> list[tuple[str, int, str]]:
+def _ligands(residues: list[Residue], skip_common: bool = False) -> list[tuple[str, int, str]]:
+    skipped = {"HOH", *_COMMON_LIGANDS} if skip_common else {"HOH"}
     instances = {
         (residue.chain, residue.number, residue.name)
         for residue in residues
-        if residue.record == "HETATM" and residue.name != "HOH" and residue.number is not None
+        if residue.record == "HETATM" and residue.name not in skipped and residue.number is not None
     }
     return sorted(instances)
 
@@ -344,22 +365,33 @@ def validate_structure(params: dict[str, Any], parsed: ParsedParams, residues: l
             "PLACER would merge them."
         )
 
-    ligands = _ligands(residues)
-    predicted = _matching_ligands(parsed.predict_ligand, ligands) if parsed.predict_ligand else []
-    if parsed.fixed_ligand:
-        _matching_ligands(parsed.fixed_ligand, ligands)
+    ligands = _ligands(residues, bool(params.get("exclude_common_ligands")))
+    ligand_chains = {ligand[0] for ligand in ligands}
+    protein_chains = {residue.chain for residue in relevant if residue.record == "ATOM"}
+    shared_chains = sorted(ligand_chains & protein_chains)
+    if shared_chains:
+        raise PreparationError(
+            "Chain(s) "
+            + ", ".join(repr(chain) for chain in shared_chains)
+            + " contain both protein residues and ligands; PLACER needs a separate chain letter for each ligand."
+        )
+
+    predicted = set(ligands)
+    if parsed.predict_ligand:
+        predicted = set(_matching_ligands(parsed.predict_ligand, ligands))
+    elif parsed.fixed_ligand:
+        predicted -= set(_matching_ligands(parsed.fixed_ligand, ligands))
 
     target = _parse_target_res(parsed.target_res) if parsed.target_res else None
     if target is not None:
-        if target[0] == "chain_res":
-            chain, number = target[1], target[2]
-        else:
-            chain, number = target[1], target[3]
+        chain, number = target
         if not any(
             residue.record == "ATOM" and residue.chain == chain and residue.number == number for residue in relevant
         ):
             raise PreparationError(f"target_res {parsed.target_res!r} matches no protein residue in the input.")
-    elif not ligands and not parsed.crop_centers and not parsed.corruption_centers:
+    elif not ligands:
+        # An apo input needs a protein center even when crop/corruption centers
+        # are given; upstream then builds an empty center list and indexes it.
         raise PreparationError("target_res is required when the input structure has no ligand.")
 
     for flag in _CENTER_FLAGS:
@@ -398,10 +430,10 @@ def validate_structure(params: dict[str, Any], parsed: ParsedParams, residues: l
 
     if params.get("predict_multi") and len(ligands) < 2:
         raise PreparationError("predict_multi requires more than one ligand in the input structure.")
-    if parsed.corruption_centers and predicted and len(parsed.corruption_centers) < len(predicted):
+    if parsed.corruption_centers and len(parsed.corruption_centers) < len(predicted):
         raise PreparationError(
-            "corruption_centers needs at least one center per predicted ligand "
-            f"({len(predicted)} predicted, {len(parsed.corruption_centers)} given)."
+            "corruption_centers needs at least one center per non-fixed ligand "
+            f"({len(predicted)} to predict, {len(parsed.corruption_centers)} given)."
         )
 
 

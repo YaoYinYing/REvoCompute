@@ -22,11 +22,15 @@ considerations:
   does not search the whole protein surface by default.
 - Without predict_ligand, PLACER picks one ligand at random per sample when the
   input has several; use predict_multi to rebuild and score several together.
-- Ligand identifiers use name3, name3-resno, or chain-name3-resno. Mutations use
-  resno+chain:name3. Crop and corruption centers use chain-resno-name3-atom.
+- Ligand identifiers use name3, name3-resno, or chain-name3-resno; the target
+  residue uses chain-resno. Mutations use resno+chain:name3. Crop and
+  corruption centers use chain-resno-name3-atom.
 - PLACER does not preserve insertion codes or alternate locations, and does not
   predict hydrogens; inputs containing insertion codes or alternate locations
   are rejected.
+- Ligand bond orders, hybridization and atom typing are inferred from the input
+  structure; PLACER's optional ligand reference file is not exposed, so a
+  ligand whose PDB chemistry is ambiguous may be rebuilt incorrectly.
 - mmCIF input must be RCSB-style; mmCIF written by other prediction methods may
   not parse.
 - fape, lddt, rmsd and kabsch are measured against the input reference; prmsd is
@@ -161,6 +165,13 @@ parameters:
       required: [crop_centers]
     then:
       properties: {corruption_centers: {maxLength: 0}}
+  - if:
+      properties: {use_sm: {const: false}}
+      required: [use_sm]
+    then:
+      properties:
+        predict_ligand: {maxLength: 0}
+        fixed_ligand: {maxLength: 0}
   properties:
     num_samples:
       type: integer
@@ -180,6 +191,7 @@ parameters:
       type: boolean
       description: Keep the small molecule in the model. Turn off for an apo run
         that rebuilds only protein residues; rmsd and kabsch then report zero.
+        Cannot be combined with predict_ligand or fixed_ligand.
       default: true
     fixed_ligand:
       type: string
@@ -190,10 +202,10 @@ parameters:
     target_res:
       type: string
       description: Protein residue that centers the crop when rebuilding side
-        chains, as chain-resno or chain-name3-resno. Required when the input has
+        chains, as chain-resno (for example A-149). Required when the input has
         no ligand.
       default: ''
-      pattern: '^(?:[A-Za-z0-9]+-[0-9]+|[A-Za-z0-9]+-[A-Za-z0-9]+-[0-9]+)?$'
+      pattern: '^(?:[A-Za-z0-9]+-[0-9]+)?$'
     fixed_ligand_noise:
       type: number
       description: Coordinate noise added to fixed ligand atoms. Defaults to

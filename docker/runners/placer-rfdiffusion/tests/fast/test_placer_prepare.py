@@ -49,6 +49,14 @@ def _apo() -> str:
     )
 
 
+def _complex_with_ligands(ligands: list[tuple[str, str, int]]) -> str:
+    lines = [_line("ATOM", 1, "CA", "ALA", "A", 1)]
+    for serial, (chain, name, number) in enumerate(ligands, start=2):
+        lines.append(_line("HETATM", serial, "C1", name, chain, number, x=float(serial)))
+    lines.append("END")
+    return "\n".join(lines)
+
+
 def _cif_complex() -> str:
     return "\n".join(
         [
@@ -142,6 +150,13 @@ def test_apo_run_emits_no_use_sm():
          "cannot both be set"),
         ({"predict_ligand": "LIG-1-extra"}, "Invalid ligand identifier"),
         ({"target_res": "A-B-C"}, "Invalid target residue"),
+        # Upstream's three-part order is chain-resno-name3; the retired
+        # chain-name3-resno help made it evaluate int("ALA").
+        ({"target_res": "A-42-ALA"}, "Invalid target residue"),
+        ({"target_res": "A-ALA-42"}, "Invalid target residue"),
+        ({"use_sm": False}, "cannot be combined with predict_ligand or fixed_ligand"),
+        ({"predict_ligand": "", "fixed_ligand": "LIG", "use_sm": False},
+         "cannot be combined with predict_ligand or fixed_ligand"),
         ({"crop_centers": "B-1-LIG"}, "Invalid center"),
         ({"bonds": "A-1-ALA-CA:B-1-LIG-C1"}, "Invalid bond"),
         ({"mutate": "ALA:1A"}, "Invalid mutation"),
@@ -179,24 +194,33 @@ def test_ligand_and_center_identifiers_must_exist(tmp_path):
 def test_target_res_is_required_for_a_ligand_free_structure(tmp_path):
     structure = _write(tmp_path, "apo.pdb", _apo())
     records = prepare.read_structure(structure)
-    params = _params(predict_ligand="")
-    with pytest.raises(prepare.PreparationError, match="target_res is required"):
-        prepare.validate_structure(params, prepare.validate_params(params), records, structure)
+    # Crop or corruption centers do not replace the protein center upstream
+    # needs: it still builds an empty center list and indexes it.
+    for overrides in ({}, {"crop_centers": "A-1-ALA-CA"}, {"corruption_centers": "A-1-ALA-CA"}):
+        params = _params(predict_ligand="", **overrides)
+        with pytest.raises(prepare.PreparationError, match="target_res is required"):
+            prepare.validate_structure(params, prepare.validate_params(params), records, structure)
     target = _params(predict_ligand="", target_res="A-1")
     prepare.validate_structure(target, prepare.validate_params(target), records, structure)
 
 
-def test_corruption_centers_need_one_per_predicted_ligand(tmp_path):
-    structure = _write(tmp_path, "complex.pdb", "\n".join([
-        _line("ATOM", 1, "CA", "ALA", "A", 1),
-        _line("HETATM", 2, "C1", "LIG", "B", 1, x=5.0),
-        _line("HETATM", 3, "C1", "HEM", "C", 2, x=8.0),
-        "END",
-    ]))
-    params = _params(predict_ligand="LIG HEM", corruption_centers="A-1-ALA-CA")
-    with pytest.raises(prepare.PreparationError, match="at least one center per predicted ligand"):
-        prepare.validate_structure(params, prepare.validate_params(params), prepare.read_structure(structure),
-                                   structure)
+def test_corruption_centers_need_one_per_non_fixed_ligand_in_every_mode(tmp_path):
+    two = _write(tmp_path, "two.pdb", _complex_with_ligands([("B", "LIG", 1), ("C", "HEM", 2)]))
+    records = prepare.read_structure(two)
+    # No ligand specification: both ligands are non-fixed.
+    params = _params(predict_ligand="", corruption_centers="A-1-ALA-CA")
+    with pytest.raises(prepare.PreparationError, match="per non-fixed ligand"):
+        prepare.validate_structure(params, prepare.validate_params(params), records, two)
+
+    three = _write(tmp_path, "three.pdb", _complex_with_ligands([("B", "LIG", 1), ("C", "HEM", 2), ("D", "JRP", 3)]))
+    records = prepare.read_structure(three)
+    # One fixed ligand still leaves two to predict.
+    params = _params(predict_ligand="", fixed_ligand="LIG", corruption_centers="A-1-ALA-CA")
+    with pytest.raises(prepare.PreparationError, match="per non-fixed ligand"):
+        prepare.validate_structure(params, prepare.validate_params(params), records, three)
+    # Fixing all but one satisfies the upstream count.
+    params = _params(predict_ligand="", fixed_ligand="LIG HEM", corruption_centers="A-1-ALA-CA")
+    prepare.validate_structure(params, prepare.validate_params(params), records, three)
 
 
 def test_predict_multi_requires_more_than_one_ligand(tmp_path):
@@ -205,6 +229,49 @@ def test_predict_multi_requires_more_than_one_ligand(tmp_path):
     with pytest.raises(prepare.PreparationError, match="predict_multi requires more than one ligand"):
         prepare.validate_structure(params, prepare.validate_params(params), prepare.read_structure(structure),
                                    structure)
+
+
+def test_excluded_common_ligands_leave_the_ligand_census(tmp_path):
+    structure = _write(tmp_path, "ligands.pdb", _complex_with_ligands([("B", "LIG", 1), ("C", "SO4", 2)]))
+    records = prepare.read_structure(structure)
+    # Without the flag PLACER parses both ligands, so predict_multi is legal.
+    params = _params(predict_ligand="", predict_multi=True)
+    prepare.validate_structure(params, prepare.validate_params(params), records, structure)
+    # With --exclude_common_ligands only LIG remains.
+    params = _params(predict_ligand="", predict_multi=True, exclude_common_ligands=True)
+    with pytest.raises(prepare.PreparationError, match="predict_multi requires more than one ligand"):
+        prepare.validate_structure(params, prepare.validate_params(params), records, structure)
+    params = _params(predict_ligand="SO4", exclude_common_ligands=True)
+    with pytest.raises(prepare.PreparationError, match="matches no ligand"):
+        prepare.validate_structure(params, prepare.validate_params(params), records, structure)
+
+    # A structure whose only hetero group is a skipped additive has no ligand.
+    so4_only = _write(tmp_path, "so4.pdb", _complex_with_ligands([("C", "SO4", 2)]))
+    params = _params(predict_ligand="", exclude_common_ligands=True)
+    with pytest.raises(prepare.PreparationError, match="target_res is required"):
+        prepare.validate_structure(params, prepare.validate_params(params), prepare.read_structure(so4_only),
+                                   so4_only)
+
+
+def test_ligand_chain_cannot_be_reused_by_protein(tmp_path):
+    # Upstream parses protein ATOM records and ligand HETATM records separately
+    # and asserts that no ligand chain letter already exists in the protein.
+    structure = _write(tmp_path, "shared.pdb", "\n".join([
+        _line("ATOM", 1, "CA", "ALA", "A", 1),
+        _line("HETATM", 2, "C1", "LIG", "A", 5, x=5.0),
+        "END",
+    ]))
+    params = _params(predict_ligand="LIG")
+    with pytest.raises(prepare.PreparationError, match="both protein residues and ligands"):
+        prepare.validate_structure(params, prepare.validate_params(params), prepare.read_structure(structure),
+                                   structure)
+
+
+def test_legacy_ent_extension_is_not_forwarded(tmp_path):
+    # PLACER's -f dispatch parses only .pdb/.cif, so .ent is dead on this Task.
+    path = _write(tmp_path, "model.ent", _complex())
+    with pytest.raises(prepare.PreparationError, match="Unsupported structure format"):
+        prepare.read_structure(path)
 
 
 def test_mutation_is_pdb_only(tmp_path):
