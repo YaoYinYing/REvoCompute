@@ -107,6 +107,12 @@ ALLOCATION_RECEIPT_NAME = "allocation.receipt"
 #: what supplies job identity before the wrapper runs.
 ALLOCATION_SCHEDULER_LOG_NAME = "allocation-%j.err"
 
+#: How far back a truncated stderr tail may look for an open PEM block. The
+#: redactor recognizes key material only by its BEGIN line, so a tail that
+#: starts inside a key would publish the body. A key larger than this bound is
+#: not something a runner emits, and the bound keeps the extra read finite.
+PRIVATE_KEY_LOOKBACK_BYTES = 4 * 1024 * 1024
+
 #: Hard ceiling for one Task's ephemeral scratch, in bytes.  Scratch is a
 #: per-execution safety concern, never durable user quota: a runaway temporary
 #: file must hit this wall instead of filling the host.  The allocation wrapper
@@ -645,6 +651,11 @@ class SlurmJob(Job):
                 self._emit_terminal("slurm.allocation.failed", reason_code="timeout")
                 return JobState.FAILED
 
+            # The allocation is over. Capture the scheduler's stderr file now,
+            # before the reader joins and terminal reporting give a concurrent
+            # dispatch's reconciliation time to retire it.
+            self._job_stderr_snapshot = self._job_stderr_lines()
+
             if self._stdout_thread:
                 self._stdout_thread.join(timeout=10)
             if self._stderr_thread:
@@ -709,10 +720,10 @@ class SlurmJob(Job):
             # Freeze execution end before diagnostic I/O without moving protocol ingest after settlement.
             if self._allocation_finished_at is None:
                 self._allocation_finished_at = time.time()
-            # Capture the scheduler's stderr file before diagnostic I/O: the
-            # allocation row is already durable, so any concurrent dispatch's
-            # reconciliation would otherwise be free to retire the file first.
-            self._job_stderr_snapshot = self._job_stderr_lines()
+            # Fallback for outcomes that never reached the post-wait snapshot
+            # (a timeout or an admission refusal); a normal exit already has it.
+            if self._job_stderr_snapshot is None:
+                self._job_stderr_snapshot = self._job_stderr_lines()
             self._persist_output()
             # Ingest before the terminal event, and for every outcome: an OOM
             # row is the evidence the estimator exists to learn from, and a
@@ -1754,12 +1765,20 @@ class SlurmJob(Job):
                     secret_values=self._diagnostic_secrets(),
                 ),
             )
-            publish_result_text(
-                self.output_dir, os.path.relpath(err_path, self.output_dir),
-                redacted_log_lines(
-                    (*self._stderr_lines, *self._job_stderr_lines()),
-                    secret_values=self._diagnostic_secrets(),
+            # Redact first: a private-key window widened back to its BEGIN line
+            # can exceed the bound, and bounding a redacted excerpt is safe
+            # because the label has already replaced the key body.
+            stderr_text, _ = bounded_log(
+                "".join(
+                    redacted_log_lines(
+                        (*self._stderr_lines, *self._job_stderr_lines()),
+                        secret_values=self._diagnostic_secrets(),
+                    )
                 ),
+                limit=MAX_LOG_BYTES,
+            )
+            publish_result_text(
+                self.output_dir, os.path.relpath(err_path, self.output_dir), stderr_text
             )
             self._save_resource_observation(execution_dir, username, task_name, task_id)
         except OSError as exc:
@@ -1776,7 +1795,10 @@ class SlurmJob(Job):
         the same redaction and bound as every other captured stream. The read
         starts one byte before the window so a truncated tail always yields a
         partial first line, which is dropped rather than published: a cut inside
-        a credential assignment would no longer match the redactor.
+        a single-line credential assignment would no longer match the redactor.
+        The redactor tracks PEM blocks only from their BEGIN line, so a window
+        that opens inside a key is moved back to that BEGIN line first -- the
+        body is never published in place of a label it lost.
         """
         if self._job_stderr_snapshot is not None:
             return self._job_stderr_snapshot
@@ -1786,13 +1808,43 @@ class SlurmJob(Job):
         path = os.path.join(self.allocation_dir, ALLOCATION_SCHEDULER_LOG_NAME.replace("%j", job_id))
         try:
             with open(path, "rb") as handle:
-                handle.seek(0, os.SEEK_END)
-                handle.seek(max(0, handle.tell() - MAX_LOG_BYTES - 1))
-                text = handle.read(MAX_LOG_BYTES + 1).decode("utf-8", errors="replace")
+                size = handle.seek(0, os.SEEK_END)
+                tail_start = max(0, size - MAX_LOG_BYTES - 1)
+                start = self._private_key_start(handle, tail_start) if tail_start else 0
+                handle.seek(start)
+                text = handle.read(size - start).decode("utf-8", errors="replace")
         except OSError:
             return []
-        text, _ = bounded_log(text, limit=MAX_LOG_BYTES)
+        if start == tail_start:
+            text, _ = bounded_log(text, limit=MAX_LOG_BYTES)
         return text.splitlines(keepends=True)
+
+    @staticmethod
+    def _private_key_start(handle, start: int) -> int:
+        """Move a truncated window back to an open private-key BEGIN line.
+
+        The redactor recognizes a key only when it sees the BEGIN line, so a
+        window whose BEGIN was cut would publish the body. The nearest marker
+        in a bounded prefix decides: if the last one seen is a BEGIN, the key is
+        still open at *start* and the window opens there. A prefix with no
+        marker is ordinary stderr, and a window whose last marker is an END is
+        already past the block.
+        """
+        prefix_start = max(0, start - PRIVATE_KEY_LOOKBACK_BYTES)
+        handle.seek(prefix_start)
+        prefix = handle.read(start - prefix_start)
+        offset = prefix_start
+        last_begin: int | None = None
+        last_end: int | None = None
+        for line in prefix.splitlines(keepends=True):
+            if b"-----BEGIN " in line and b"PRIVATE KEY-----" in line:
+                last_begin = offset
+            elif b"-----END " in line and b"PRIVATE KEY-----" in line:
+                last_end = offset
+            offset += len(line)
+        if last_begin is not None and (last_end is None or last_begin > last_end):
+            return last_begin
+        return start
 
     @staticmethod
     def _is_captured_protocol_line(line: str) -> bool:

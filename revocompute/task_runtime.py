@@ -2864,15 +2864,21 @@ def _reconcile_host_scheduler_logs() -> dict[str, int]:
         if state not in _ACTIVE_SLURM_STATES and state not in _TERMINAL_SLURM_STATES:
             result["unavailable" if scontrol else "rejected"] += 1
             continue
+        if state in _ACTIVE_SLURM_STATES:
+            # A live allocation is not recovery evidence yet. This file is the
+            # running job's own stderr, and its wrapper records the allocation
+            # itself. This pass runs on every dispatch, so adopting and retiring
+            # the file here would erase the output the adapter publishes when
+            # the job ends; a later terminal pass adopts whatever is still
+            # unrecorded then.
+            result["surviving"] += 1
+            continue
         if task_store.allocation_row_exists(job_id):
             # A real shape already exists for this job, so there is nothing to
-            # learn from the file; retire it rather than mint a second claim.
-            # An allocation the scheduler still reports active is the exception:
-            # this file is that job's own stderr, still being written, and the
-            # adapter publishes it when the job ends. This pass runs on every
-            # dispatch, so unlinking it here would erase the one place a failed
-            # long run's traceback exists.
-            if state in _ACTIVE_SLURM_STATES:
+            # learn from the file. Retire it once its Task has stopped running:
+            # until then the adapter may still be publishing this stderr.
+            owner_status = str((owner or {}).get("status") or "")
+            if owner_status and owner_status not in task_store.STOP_POLLING_STATUSES:
                 result["surviving"] += 1
                 continue
             try:

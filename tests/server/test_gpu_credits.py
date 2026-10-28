@@ -2560,6 +2560,9 @@ def test_a_running_jobs_scheduler_log_is_retired_only_after_it_ends(monkeypatch,
     assert module.task_store.allocation_row_exists("8826") is True
     task = module.task_store.get_task(task_id)
     log = _plant_scheduler_log(module, task, job_id="8826", observed_at=at + 2)
+    # A second live job with no row and no wrapper receipt: the window between
+    # allocation and the wrapper's first write must not be adopted away either.
+    log_without_row = _plant_scheduler_log(module, task, job_id="8827", observed_at=at + 2)
 
     monkeypatch.setattr(module.task_runtime.shutil, "which", lambda command: f"/usr/bin/{command}")
     monkeypatch.setattr(
@@ -2569,14 +2572,22 @@ def test_a_running_jobs_scheduler_log_is_retired_only_after_it_ends(monkeypatch,
     )
     module.task_runtime._recover_surviving_host_allocations()
     assert log.exists()
+    assert log_without_row.exists()
 
+    # Terminal scheduler state alone is not enough: the Task row is still
+    # running, so its adapter may still be publishing this stderr.
     monkeypatch.setattr(
         module.task_runtime.subprocess,
         "run",
         lambda *args, **kwargs: SimpleNamespace(stdout="JobId=8826 JobState=COMPLETED RunTime=00:00:45\n"),
     )
     module.task_runtime._recover_surviving_host_allocations()
+    assert log.exists()
+
+    module.task_store.update_task(task_id, status="finished")
+    module.task_runtime._recover_surviving_host_allocations()
     assert not log.exists()
+    assert not log_without_row.exists()
 
 
 def test_a_dispatch_never_runs_the_unbounded_settle_phase(monkeypatch, tmp_path):
