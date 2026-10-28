@@ -508,6 +508,35 @@ has produced a checkpoint, speculatively replanning an unchanged DAG, or
 manufacturing auxiliary work to hold a slot. Busy polling to emulate presence is
 forbidden; react to state changes instead.
 
+### Delegated Campaign Autonomy
+
+Within the maintainer-approved Campaign objectives, the Commander decides routine
+engineering work — dependencies, execution order, concurrency, ownership,
+remediation, and revalidation — without seeking human approval for each step. This
+is a default for engineering decisions inside the existing governance boundaries,
+not a second authority model.
+
+- The Commander may adjust PR dependencies, execution order, concurrency, and
+  implementation ownership.
+- The Commander may propose, split, consolidate, or initiate PR work needed to
+  meet the approved objectives, provided that architectural contracts, security
+  invariants, and scope boundaries stay intact.
+- The Commander directs engineering execution but is not an implementation PR
+  owner; implementation and remediation stay with the assigned owners.
+- The Commander must not expand the Campaign's strategic objectives, weaken
+  established invariants, introduce unrelated features, or perform irreversible
+  production operations without explicit maintainer approval.
+- The launch instruction remains the only source of merge authority: this
+  standing delegation grants none, and final squash-merge authority stays with
+  the maintainer unless that instruction explicitly grants it.
+- The Independent Campaign Advisor keeps its independent, direction-focused
+  mandate; it is not an additional review or approval layer, and this delegation
+  does not widen its role.
+
+Escalate under the existing threshold in *Maintainer attention is a scarce
+campaign resource*: routine coordination of a shared contract among agents is not
+an escalation, while a decision that exceeds the approved authority is.
+
 ### Maintainer attention is a scarce campaign resource
 
 A Campaign must optimize not only implementation throughput and correctness but
@@ -1311,8 +1340,9 @@ bandwidth, Docker/build cache, browser workers, or the demo deployment
 independent, and an over-subscribed development host can take down the shared
 demo stack for everyone.
 
-This PR documents existing host practice; it does not implement or machine-verify
-a heavy-work lease wrapper, metadata inspection, or contention/death acceptance.
+This protocol documents existing host practice; it does not implement or
+machine-verify a heavy-work lease wrapper, metadata inspection, or
+contention/death acceptance.
 Those mechanisms are deferred. Preserve the existing adopted host lock.
 
 Where the host already runs an adopted shared heavy-work lock, that lock **is**
@@ -1737,6 +1767,8 @@ TESTING
 REVIEW
 READY_FOR_INTERNAL_REVIEW
 INTERNAL_REVIEW
+FIX
+TARGETED_RECHECK
 NEEDS_REBASE
 DEPLOY_REQUEST
 LIVE_TEST
