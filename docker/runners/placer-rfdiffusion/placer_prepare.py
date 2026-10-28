@@ -70,6 +70,7 @@ class Residue:
     atom: str
     insertion: str = ""
     altloc: str = ""
+    element: str = ""
 
 
 @dataclass(frozen=True)
@@ -306,6 +307,7 @@ def _cif_residues(text: str) -> list[Residue]:
         auth_number = column("_atom_site.auth_seq_id")
         name_column = column("_atom_site.auth_comp_id", "_atom_site.label_comp_id")
         atom_column = column("_atom_site.label_atom_id", "_atom_site.auth_atom_id")
+        symbol_column = column("_atom_site.type_symbol")
         model_column = column("_atom_site.pdbx_PDB_model_num")
         if (
             chain_column is None
@@ -353,6 +355,7 @@ def _cif_residues(text: str) -> list[Residue]:
                     number=number,
                     name=value(row[name_column]),
                     atom=value(row[atom_column]),
+                    element=value(row[symbol_column]).upper() if symbol_column is not None else "",
                 )
             )
         index = cursor
@@ -422,9 +425,9 @@ def validate_structure(params: dict[str, Any], parsed: ParsedParams, residues: l
     # any count, selector, or validation below.
     relevant = [residue for residue in residues if residue.name not in skipped]
     ligands = _ligands(residues, skip_common)
-    # PLACER resolves residues through its shipped library; check mmCIF ligands,
-    # PDB ligands that name a library entry, targets and every selector against it.
-    needs_ccd = cif_input or bool(ligands) or bool(
+    # PLACER resolves mmCIF residues through its shipped library; PDB ligands are
+    # parsed by OpenBabel instead, so only targets and selectors are checked there.
+    needs_ccd = cif_input or bool(
         parsed.mutate or parsed.crop_centers or parsed.corruption_centers or parsed.bonds or parsed.target_res
     )
     ccd = _ccd_library() if needs_ccd else {}
@@ -436,21 +439,26 @@ def validate_structure(params: dict[str, Any], parsed: ParsedParams, residues: l
                 + ", ".join(repr(name) for name in unknown)
                 + " is not in PLACER's shipped residue library; PLACER would drop it."
             )
-    ligand_atoms: dict[tuple[str, int, str], set[str]] = {}
-    for residue in residues:
-        if residue.record == "HETATM" and residue.number is not None and residue.name not in skipped:
-            ligand_atoms.setdefault((residue.chain, residue.number, residue.name), set()).add(residue.atom)
-    for ligand in ligands:
-        template = ccd.get(ligand[2])
-        if template is None:
-            # A PDB ligand name outside the library is parsed by OpenBabel.
-            continue
-        extra = sorted(atom for atom in ligand_atoms.get(ligand, ()) if atom not in template)
-        if extra:
-            raise PreparationError(
-                f"Ligand {ligand[0]}-{ligand[1]}-{ligand[2]} has atoms PLACER does not parse for residue "
-                f"name3 {ligand[2]!r}: " + ", ".join(repr(atom) for atom in extra) + "."
+        # cifutils masks a residue only for an unmatched heavy atom; unmatched
+        # H/D atoms are skipped. Mirror that before dispatch.
+        ligand_atoms: dict[tuple[str, int, str], set[tuple[str, str]]] = {}
+        for residue in residues:
+            if residue.record == "HETATM" and residue.number is not None and residue.name not in skipped:
+                ligand_atoms.setdefault((residue.chain, residue.number, residue.name), set()).add(
+                    (residue.atom, residue.element)
+                )
+        for ligand in ligands:
+            template = ccd[ligand[2]]
+            extra = sorted(
+                atom
+                for atom, element in ligand_atoms.get(ligand, ())
+                if atom not in template and element not in {"H", "D"}
             )
+            if extra:
+                raise PreparationError(
+                    f"Ligand {ligand[0]}-{ligand[1]}-{ligand[2]} has heavy atoms PLACER does not parse for "
+                    f"residue name3 {ligand[2]!r}: " + ", ".join(repr(atom) for atom in extra) + "."
+                )
     # The mmCIF parser resolves alternates by highest occupancy and never reads
     # insertion codes, so these PDB-parser restrictions apply to PDB only.
     if not cif_input:

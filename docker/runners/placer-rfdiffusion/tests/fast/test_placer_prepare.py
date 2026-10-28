@@ -481,19 +481,26 @@ def test_the_adapter_does_not_restate_the_num_samples_default():
         prepare.validate_params(params)
 
 
-def _cif_atom_site(rows: list[str], *, model: bool = False) -> str:
-    columns = [
-        "_atom_site.group_PDB",
-        "_atom_site.id",
+def _cif_atom_site(rows: list[str], *, model: bool = False, type_symbol: bool = False) -> str:
+    columns = ["_atom_site.group_PDB", "_atom_site.id"]
+    if type_symbol:
+        columns.append("_atom_site.type_symbol")
+    columns.extend([
         "_atom_site.label_atom_id",
         "_atom_site.label_comp_id",
         "_atom_site.label_asym_id",
         "_atom_site.label_seq_id",
         "_atom_site.auth_seq_id",
-    ]
+    ])
     if model:
         columns.append("_atom_site.pdbx_PDB_model_num")
     return "\n".join(["data_test", "loop_", *columns, *rows, "#"])
+
+
+def _cif_with_typed_ligand(atoms: list[tuple[str, str]]) -> str:
+    rows = ["ATOM 1 C CA ALA A 1 1"]
+    rows.extend(f"HETATM {serial} {element} {atom} LIG B . 1" for serial, (atom, element) in enumerate(atoms, start=2))
+    return _cif_atom_site(rows, type_symbol=True)
 
 
 def _cif_with_models(count: int) -> str:
@@ -630,21 +637,38 @@ def test_cif_ligand_atoms_must_match_the_residue_library(tmp_path):
     # ZZQ is a real CCD name, but its template does not contain 4dtz LDP's atoms.
     structure = _write(tmp_path, "zzq.cif", _cif_with_ligand("ZZQ"))
     params = _params(predict_ligand="ZZQ")
-    with pytest.raises(prepare.PreparationError, match="has atoms PLACER does not parse"):
+    with pytest.raises(prepare.PreparationError, match="has heavy atoms PLACER does not parse"):
         prepare.validate_structure(params, prepare.validate_params(params), prepare.read_structure(structure),
                                    structure)
 
 
-def test_pdb_ligand_atoms_must_match_the_residue_library(tmp_path):
-    structure = _write(tmp_path, "hem.pdb", "\n".join([
+def test_cif_ligand_unknown_heavy_atom_is_rejected(tmp_path):
+    structure = _write(tmp_path, "heavy.cif", _cif_with_typed_ligand([("C1", "C"), ("ZZ", "C")]))
+    params = _params(predict_ligand="LIG")
+    with pytest.raises(prepare.PreparationError, match="has heavy atoms PLACER does not parse"):
+        prepare.validate_structure(params, prepare.validate_params(params), prepare.read_structure(structure),
+                                   structure)
+
+
+@pytest.mark.parametrize("element", ["H", "D"])
+def test_cif_ligand_unknown_hydrogen_is_ignored(tmp_path, element):
+    # cifutils skips unmatched H/D atoms but masks the residue for a heavy atom.
+    structure = _write(tmp_path, "hydrogen.cif", _cif_with_typed_ligand([("C1", "C"), ("H9", element)]))
+    params = _params(predict_ligand="LIG")
+    prepare.validate_structure(params, prepare.validate_params(params), prepare.read_structure(structure), structure)
+
+
+def test_pdb_ligand_atoms_are_parsed_by_openbabel_without_the_library(tmp_path, monkeypatch):
+    # PDB ligands never go through getRes; dnHEM-style HEM atoms C1/FE1 are valid.
+    structure = _write(tmp_path, "dnhem.pdb", "\n".join([
         _line("ATOM", 1, "CA", "ALA", "A", 1),
-        _line("HETATM", 2, "ZZZ", "HEM", "B", 1, x=5.0),
+        _line("HETATM", 2, "FE1", "HEM", "B", 213, x=5.0),
+        _line("HETATM", 3, "C1", "HEM", "B", 213, x=6.0),
         "END",
     ]))
+    monkeypatch.setattr(prepare, "_ccd_library", lambda: pytest.fail("PDB ligands must not load the CCD"))
     params = _params(predict_ligand="HEM")
-    with pytest.raises(prepare.PreparationError, match="has atoms PLACER does not parse"):
-        prepare.validate_structure(params, prepare.validate_params(params), prepare.read_structure(structure),
-                                   structure)
+    prepare.validate_structure(params, prepare.validate_params(params), prepare.read_structure(structure), structure)
 
 
 def test_pdb_ligand_name_outside_the_library_is_parsed_by_openbabel(tmp_path):
