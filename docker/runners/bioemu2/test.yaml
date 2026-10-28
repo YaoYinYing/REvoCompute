@@ -4,5 +4,7 @@ collections:
     cases:
     - id: minimal-bioemu2
       task: bioemu2_equilibrium
-      input: {roles: {sequence: [tests/data/msa/2KL8.fasta]}}
+      # Longer than cuEquivariance's 100-residue fallback threshold, so the case
+      # runs the Triton kernels that need the image's C toolchain.
+      input: {roles: {sequence: [tests/data/test_esm.fasta]}}
       parameters: {num_samples: 2, num_steps: 4, seed: 0}
