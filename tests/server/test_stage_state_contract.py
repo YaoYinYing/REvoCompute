@@ -996,3 +996,104 @@ def test_workflow_state_mirror_prefers_the_newest_attempt_after_a_reorder(tmp_pa
         assert mirror["multistage_runner.model"]["reason_code"] == stage_state.Reason.COMPLETED
     finally:
         database.engine.dispose()
+
+
+def test_index_migration_reports_duplicate_live_attempts_and_keeps_the_old_indexes(tmp_path):
+    path = str(tmp_path / "tasks.sqlite3")
+    database = TaskDatabase(path)
+    database.engine.dispose()
+    task_id = "4a" * 16
+    with sqlite3.connect(path) as conn:
+        conn.execute("DROP INDEX idx_stage_runs_identity")
+        conn.execute("DROP INDEX idx_stage_runs_live_name")
+        conn.execute(
+            "CREATE UNIQUE INDEX idx_stage_runs_task_stage_attempt "
+            "ON stage_runs (task_id, stage_index, attempt)"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX idx_stage_runs_live_stage ON stage_runs (task_id, stage_index) "
+            "WHERE status IN ('QUEUED', 'RUNNING')"
+        )
+        now = time.time()
+        for index in (0, 1):
+            conn.execute(
+                "INSERT INTO stage_runs "
+                "(task_id, stage_index, stage_name, attempt, status, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (task_id, index, "dup_stage", index + 1, stage_state.QUEUED, now, now),
+            )
+
+    with pytest.raises(RuntimeError) as failure:
+        TaskDatabase(path)
+    message = str(failure.value)
+    assert task_id in message
+    assert "dup_stage" in message
+    assert "2 live attempts" in message
+    assert "Resolve these duplicate stage_runs rows" in message
+
+    # The failed migration rolled back to the indexes the database already had,
+    # so it is not left without its stage-run constraints.
+    with sqlite3.connect(path) as conn:
+        names = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='stage_runs'"
+            )
+        }
+        assert {"idx_stage_runs_task_stage_attempt", "idx_stage_runs_live_stage"} <= names
+        assert "idx_stage_runs_identity" not in names
+        assert "idx_stage_runs_live_name" not in names
+        conn.execute(
+            "DELETE FROM stage_runs WHERE task_id = ? AND stage_index = 1", (task_id,)
+        )
+
+    # Once the conflict is resolved, the same database opens and migrates.
+    reopened = TaskDatabase(path)
+    try:
+        with reopened.engine.connect() as conn:
+            names = {
+                row[0]
+                for row in conn.exec_driver_sql(
+                    "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='stage_runs'"
+                )
+            }
+        assert {"idx_stage_runs_identity", "idx_stage_runs_live_name"} <= names
+    finally:
+        reopened.engine.dispose()
+
+
+def test_projection_keeps_a_removed_stage_out_of_a_current_stages_index(tmp_path, monkeypatch):
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "4b" * 16
+    _insert_task(database, task_id, status="running")
+    monkeypatch.setattr(task_runtime, "task_store", database)
+    monkeypatch.setattr(task_runtime, "_get_task_type", lambda name: (_task_type(), None))
+    try:
+        features = database.begin_stage_attempt(
+            task_id=task_id, stage_index=0, stage_name="multistage_runner.features"
+        )
+        database.finish_stage_attempt(
+            task_id=task_id, stage_name="multistage_runner.features", attempt=features["attempt"],
+            status=stage_state.COMPLETED, reason_code=stage_state.Reason.COMPLETED,
+        )
+        # A stage that left the manifest keeps the index it was recorded under,
+        # which is now features' index; it must get a display position of its own.
+        removed = database.begin_stage_attempt(
+            task_id=task_id, stage_index=0, stage_name="retired_stage"
+        )
+        database.record_stage_running(
+            task_id=task_id, stage_name="retired_stage", attempt=removed["attempt"]
+        )
+        database.begin_stage_attempt(
+            task_id=task_id, stage_index=1, stage_name="multistage_runner.model"
+        )
+
+        projection = task_runtime.stage_projection(database.get_task(task_id))
+        by_name = {item["name"]: item for item in projection["items"]}
+        assert len(projection["items"]) == 3
+        assert by_name["multistage_runner.features"]["status"] == stage_state.COMPLETED
+        assert by_name["retired_stage"]["status"] == stage_state.RUNNING
+        assert by_name["multistage_runner.model"]["status"] == stage_state.QUEUED
+        assert by_name["retired_stage"]["index"] == 2
+    finally:
+        database.engine.dispose()

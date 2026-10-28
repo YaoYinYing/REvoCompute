@@ -454,8 +454,22 @@ def stage_projection(task: dict[str, Any]) -> dict[str, Any] | None:
     # attempts stay visible in history but not as the stage's state.
     latest: dict[int, dict[str, Any]] = {}
     by_name_index = {stage.name: index for index, stage in enumerate(declared)}
+    # A stage removed from the manifest keeps a display position of its own; it
+    # must not overwrite a current stage that now occupies its stored index.
+    removed_positions: dict[str, int] = {}
+    next_extra = len(declared)
     for run in runs:
-        index = by_name_index.get(str(run["stage_name"]), int(run["stage_index"]))
+        name = str(run["stage_name"])
+        index = by_name_index.get(name)
+        if index is None:
+            index = removed_positions.get(name)
+            if index is None:
+                candidate = int(run["stage_index"])
+                if candidate in by_name_index.values() or candidate in removed_positions.values():
+                    candidate = next_extra
+                    next_extra += 1
+                removed_positions[name] = candidate
+                index = candidate
         if index not in latest or run["attempt"] > latest[index]["attempt"]:
             latest[index] = run
     displays = {index: stage.display_name for index, stage in enumerate(declared)}

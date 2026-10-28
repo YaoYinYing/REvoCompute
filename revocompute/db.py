@@ -858,11 +858,54 @@ class TaskDatabase:
     _LEGACY_STAGE_RUN_INDEXES = ("idx_stage_runs_task_stage_attempt", "idx_stage_runs_live_stage")
 
     def _migrate_stage_run_indexes(self, conn) -> None:
-        """Apply the current stage-run index definitions to an existing table."""
-        for name in self._LEGACY_STAGE_RUN_INDEXES:
-            conn.exec_driver_sql(f'DROP INDEX IF EXISTS "{name}"')
-        for index in self.stage_runs_table.indexes:
-            index.create(bind=conn, checkfirst=True)
+        """Apply the current stage-run index definitions to an existing table.
+
+        The whole change is one savepoint: if the new constraints cannot be
+        built, the database keeps the indexes it had rather than losing them to
+        a failed migration.  A pre-head database can hold duplicate live
+        attempts (or attempt numbers) for one stage name; that is a data conflict
+        to report by identity, not a bare constraint error.
+        """
+        savepoint = conn.begin_nested()
+        try:
+            for name in self._LEGACY_STAGE_RUN_INDEXES:
+                conn.exec_driver_sql(f'DROP INDEX IF EXISTS "{name}"')
+            for index in self.stage_runs_table.indexes:
+                index.create(bind=conn, checkfirst=True)
+        except IntegrityError as exc:
+            savepoint.rollback()
+            raise RuntimeError(self._stage_run_index_conflict(conn)) from exc
+        except Exception:
+            savepoint.rollback()
+            raise
+        else:
+            savepoint.commit()
+
+    @staticmethod
+    def _stage_run_index_conflict(conn) -> str:
+        """Name the duplicate rows that block the stage-run constraints."""
+        active = ", ".join(f"'{status}'" for status in sorted(stage_state.ACTIVE_STATUSES))
+        live = conn.exec_driver_sql(
+            "SELECT task_id, stage_name, COUNT(*), GROUP_CONCAT(id) FROM stage_runs "
+            f"WHERE status IN ({active}) GROUP BY task_id, stage_name HAVING COUNT(*) > 1"
+        ).fetchall()
+        attempts = conn.exec_driver_sql(
+            "SELECT task_id, stage_name, attempt, COUNT(*), GROUP_CONCAT(id) FROM stage_runs "
+            "GROUP BY task_id, stage_name, attempt HAVING COUNT(*) > 1"
+        ).fetchall()
+        details = [
+            f"task {task_id} stage {stage_name!r} has {count} live attempts (run ids {run_ids})"
+            for task_id, stage_name, count, run_ids in live
+        ]
+        details += [
+            f"task {task_id} stage {stage_name!r} attempt {attempt} has {count} rows (run ids {run_ids})"
+            for task_id, stage_name, attempt, count, run_ids in attempts
+        ]
+        detail = "; ".join(details) or "the stage_runs rows violate the new unique constraints"
+        return (
+            "Cannot enforce one live attempt and one attempt number per stage name: "
+            f"{detail}. Resolve these duplicate stage_runs rows, then reopen the database."
+        )
 
     @contextmanager
     def _startup_lock(self):
