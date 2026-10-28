@@ -746,17 +746,20 @@ class SlurmJob(Job):
             # Fallback for outcomes that never reached the post-wait snapshot
             # (a timeout or an admission refusal); a normal exit already has it.
             self._capture_job_stderr()
-            self._persist_output()
+            try:
+                self._persist_output()
+            finally:
+                # Persistence is this process's last read of the file; only now
+                # may another worker's reconciliation retire it. The release
+                # must survive a failing post-persist cleanup, and must happen
+                # before the host-only directory is dropped.
+                self._release_job_stderr_claim()
             # Ingest before the terminal event, and for every outcome: an OOM
             # row is the evidence the estimator exists to learn from, and a
             # failed run is where it appears.
             self._ingest_runner_protocol()
             self._notify_allocation_finished()
             self._remove_allocation_approval()
-            # The snapshot above is this process's last read; only now may
-            # another worker's reconciliation retire the file.  It must go
-            # before the host-only directory is dropped.
-            self._release_job_stderr_claim()
             self._remove_wrapper_script()
             self._cleanup_scratch_dir()
 
@@ -782,11 +785,13 @@ class SlurmJob(Job):
             if running and self._slurm_job_id:
                 self._emit_terminal("slurm.allocation.cancelled")
         finally:
-            self._persist_output()
+            try:
+                self._persist_output()
+            finally:
+                self._release_job_stderr_claim()
             if running:
                 self._remove_allocation_approval()
             self._cleanup_scratch_dir()
-            self._release_job_stderr_claim()
 
     # -- srun arguments ------------------------------------------------------
 
@@ -1860,8 +1865,25 @@ class SlurmJob(Job):
                 pass
 
     def _release_job_stderr_claim(self) -> None:
+        """Drop the handoff, but only while this process still owns it.
+
+        A retry can start a new adapter in the same directory before the old
+        one reaches its terminal path; unlinking by name alone would strip the
+        newer adapter's claim.
+        """
+        claim = os.path.join(self.allocation_dir, ALLOCATION_STDERR_CLAIM_NAME)
         try:
-            os.unlink(os.path.join(self.allocation_dir, ALLOCATION_STDERR_CLAIM_NAME))
+            with open(claim, encoding="ascii") as handle:
+                parts = handle.read().split()
+        except OSError:
+            return
+        if not parts or parts[0] != str(os.getpid()):
+            return
+        ticks = _process_start_ticks(os.getpid())
+        if ticks is not None and len(parts) > 1 and parts[1].isdigit() and int(parts[1]) not in (0, ticks):
+            return
+        try:
+            os.unlink(claim)
         except OSError:
             pass
 
@@ -2456,11 +2478,14 @@ def retire_scheduler_log(path: str) -> bool:
             return False
     # The directory claim belongs to whichever adapter now owns the directory,
     # not to this retired file: unlinking it here could strip a claim a new
-    # stage wrote in the same window. Only the legacy per-log claim is ours.
-    try:
-        os.unlink(path + ALLOCATION_STDERR_CLAIM_SUFFIX)
-    except OSError:
-        pass
+    # stage wrote in the same window. Only the legacy per-log claim is ours,
+    # and only while it still names a dead process.
+    legacy = path + ALLOCATION_STDERR_CLAIM_SUFFIX
+    if not _claim_is_live(legacy):
+        try:
+            os.unlink(legacy)
+        except OSError:
+            pass
     return True
 
 

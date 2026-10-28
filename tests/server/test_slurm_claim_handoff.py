@@ -152,6 +152,51 @@ def test_the_directory_claim_exists_before_popen_and_is_released_on_exit(tmp_pat
     assert not _claim(output_dir).exists()
 
 
+def test_the_claim_is_released_when_post_persist_cleanup_fails(tmp_path, monkeypatch):
+    """The handoff ends at persistence, not at the first step that can raise.
+
+    A task can leave a directory where the approval gate was, so the cleanup
+    after persistence may raise. The claim must already be gone by then.
+    """
+    output_dir = tmp_path / "out"
+    job = SlurmJob("task-1", _make_task_type(), _make_runner(), _make_entities(), str(output_dir))
+    with patch("subprocess.Popen", return_value=_FakeSrunProcess(stdout="REVODESIGN_JOB_ID=4217\n")):
+        assert job.submit() == "4217"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_dir.joinpath("result.csv").write_text("score\n1\n")
+        monkeypatch.setattr(
+            job,
+            "_remove_allocation_approval",
+            lambda: (_ for _ in ()).throw(IsADirectoryError("allocation approval is a directory")),
+        )
+        with pytest.raises(IsADirectoryError):
+            job.poll()
+
+    assert not _claim(output_dir).exists()
+
+
+@pytest.mark.parametrize(
+    "content",
+    ["999999 1", f"{os.getpid()} 1"],
+    ids=["another-process", "replaced-process"],
+)
+def test_releasing_leaves_a_claim_this_process_no_longer_owns(tmp_path, content):
+    """A retry can claim the directory before the old adapter exits.
+
+    Unlinking by name alone would strip that newer handoff and let
+    reconciliation retire a live file.
+    """
+    output_dir = tmp_path / "out"
+    job = SlurmJob("task-1", _make_task_type(), _make_runner(), _make_entities(), str(output_dir))
+    os.makedirs(job.allocation_dir, exist_ok=True)
+    claim = _claim(output_dir)
+    claim.write_text(content, encoding="ascii")
+
+    job._release_job_stderr_claim()
+
+    assert claim.exists()
+
+
 # -- reconciliation handoff ---------------------------------------------------
 
 
