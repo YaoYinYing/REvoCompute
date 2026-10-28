@@ -63,6 +63,7 @@ from revocompute.manage_db import ManageDatabase  # noqa: E402
 from revocompute.operational_events import emit_event
 from revocompute import resource_ledger as rloan
 from revocompute.resource_ledger import AdmissionReason, EvidenceSource, LedgerReason, ReservationReason
+from revocompute import stage_state
 from revocompute.resource_observations import work_items_projection
 from revocompute.resource_policy import ResolvedResources, ResourceValidationError
 from revocompute.result_projection import artifact_capability
@@ -356,6 +357,164 @@ def _build_running_trace(task: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+_LEGACY_STAGE_STATUS = {
+    "completed": stage_state.COMPLETED,
+    "running": stage_state.RUNNING,
+    "queued": stage_state.QUEUED,
+    "failed": stage_state.FAILED,
+    "cancelled": stage_state.CANCELLED,
+    "interrupted": stage_state.INTERRUPTED,
+    "skipped": stage_state.SKIPPED,
+    "pending": stage_state.NOT_STARTED,
+}
+
+
+def _stage_item(
+    *,
+    index: int,
+    name: str,
+    display_name: str,
+    status: str,
+    attempt: Any = None,
+    started_at: Any = None,
+    ended_at: Any = None,
+    reason_code: Any = None,
+    planned: Any = None,
+) -> dict[str, Any]:
+    return {
+        "index": index,
+        "name": name,
+        "display_name": display_name,
+        "status": status,
+        "attempt": attempt,
+        "started_at": _iso_timestamp(started_at),
+        "ended_at": _iso_timestamp(ended_at),
+        "reason_code": reason_code,
+        # The semantic request, never placement internals: a client may explain
+        # what a stage is waiting for without learning the partition or account.
+        "planned_resources": {
+            key: planned.get(key)
+            for key in ("cpus", "memory", "max_runtime_seconds", "requires_gpu")
+        }
+        if isinstance(planned, dict)
+        else None,
+    }
+
+
+def stage_projection(task: dict[str, Any]) -> dict[str, Any] | None:
+    """The Task's per-stage view, from durable records or the legacy mirror.
+
+    Records are authoritative.  A Task that predates them is projected from
+    ``workflow_state`` and labelled ``legacy`` so a client can tell recorded
+    attempts from historical phase markers.  A Task with neither reports
+    nothing rather than inventing stages.
+    """
+    task_id = str(task.get("md5sum") or "")
+    task_type_name = task.get("task_type") or default_task_type()
+    try:
+        tt, _ = _get_task_type(task_type_name)
+    except KeyError:
+        tt = None
+    declared = list(tt.workflow) if tt is not None else []
+    runs = task_store.list_stage_runs(task_id) if task_id else []
+    if not runs:
+        legacy = _workflow_state(task)
+        if not legacy:
+            return None
+        names = [stage.name for stage in declared if stage.name in legacy]
+        names += [name for name in legacy if name not in names]
+        displays = {stage.name: stage.display_name for stage in declared}
+        items = []
+        for index, name in enumerate(names):
+            step = legacy.get(name) or {}
+            items.append(
+                _stage_item(
+                    index=index,
+                    name=name,
+                    display_name=displays.get(name, name),
+                    status=_LEGACY_STAGE_STATUS.get(str(step.get("status") or "").lower(), stage_state.NOT_STARTED),
+                    attempt=step.get("attempt"),
+                    started_at=step.get("started_at"),
+                    ended_at=step.get("finished_at"),
+                    reason_code=step.get("reason_code"),
+                    planned=None,
+                )
+            )
+        return _stage_summary("legacy", items)
+
+    legacy = _workflow_state(task)
+    # The newest attempt of a stage is the stage's current evidence; earlier
+    # attempts stay visible in history but not as the stage's state.
+    latest: dict[int, dict[str, Any]] = {}
+    by_name_index = {stage.name: index for index, stage in enumerate(declared)}
+    for run in runs:
+        index = by_name_index.get(str(run["stage_name"]), int(run["stage_index"]))
+        if index not in latest or run["attempt"] > latest[index]["attempt"]:
+            latest[index] = run
+    displays = {index: stage.display_name for index, stage in enumerate(declared)}
+    if not declared and tt is not None:
+        # The implicit single stage is the Task type itself.
+        displays[0] = tt.display_name
+    total = max(len(declared), (max(latest) + 1) if latest else 0)
+    items = []
+    for index in range(total):
+        run = latest.get(index)
+        if run is None:
+            stage = declared[index] if index < len(declared) else None
+            name = stage.name if stage else f"stage-{index}"
+            # A Task that straddles the migration can have a StageRun for its
+            # later work and only the mirror for an earlier stage.  The mirror
+            # supplies that stage until a record exists for it; a record always
+            # wins when one does.
+            step = legacy.get(name) or {}
+            items.append(
+                _stage_item(
+                    index=index,
+                    name=name,
+                    display_name=stage.display_name if stage else f"Stage {index + 1}",
+                    status=_LEGACY_STAGE_STATUS.get(
+                        str(step.get("status") or "").lower(), stage_state.NOT_STARTED
+                    ),
+                    attempt=step.get("attempt"),
+                    started_at=step.get("started_at"),
+                    ended_at=step.get("finished_at"),
+                    reason_code=step.get("reason_code"),
+                )
+            )
+            continue
+        try:
+            planned = json.loads(run["planned_resources"]) if run.get("planned_resources") else None
+        except (TypeError, json.JSONDecodeError):
+            planned = None
+        items.append(
+            _stage_item(
+                index=index,
+                name=str(run["stage_name"]),
+                display_name=displays.get(index, str(run["stage_name"])),
+                status=str(run["status"]),
+                attempt=run.get("attempt"),
+                started_at=run.get("started_at"),
+                ended_at=run.get("ended_at"),
+                reason_code=run.get("reason_code"),
+                planned=planned,
+            )
+        )
+    return _stage_summary("record", items)
+
+
+def _stage_summary(source: str, items: list[dict[str, Any]]) -> dict[str, Any]:
+    current = next((item for item in items if item["status"] == stage_state.RUNNING), None)
+    if current is None:
+        current = next((item for item in items if item["status"] == stage_state.QUEUED), None)
+    return {
+        "source": source,
+        "total": len(items),
+        "completed": sum(1 for item in items if item["status"] == stage_state.COMPLETED),
+        "current": current,
+        "items": items,
+    }
+
+
 def _progress_summary(task: dict[str, Any]) -> dict[str, Any] | None:
     """Per-item progress for one task, from the live manifest or the report.
 
@@ -462,9 +621,11 @@ def _compute_allocation_callbacks(
     task_id: str,
     user_id: int,
     stage_id: str,
-    resource_policy: ResolvedResources,
+    resource_policy: ResolvedResources | None,
     required_entitlements: tuple[str, ...] = (),
     runner_family: str = "",
+    stage_index: int | None = None,
+    attempt: int | None = None,
 ) -> tuple[Any, Any, Any]:
     """The three resource-accounting edges of one Slurm allocation.
 
@@ -483,8 +644,22 @@ def _compute_allocation_callbacks(
     CPUs and GPUs for the time they were held, so its measured elapsed time is a
     real charge and only *unknown* evidence stays unsettled.
     """
-    gpu_count = _gpu_count(resource_policy)
-    cpu_cores = max(1, int(resource_policy.cpus or 0))
+    gpu_count = _gpu_count(resource_policy) if resource_policy is not None else 0
+    cpu_cores = max(1, int(resource_policy.cpus or 0)) if resource_policy is not None else 1
+    accounting = user_id > 0 and resource_policy is not None
+    stage_target = stage_index is not None and attempt is not None
+
+    def _record_stage_dispatch(slurm_job_id: str, dispatched_at: float, wrapper_executed: bool) -> None:
+        if not stage_target:
+            return
+        task_store.record_stage_dispatched(
+            task_id=task_id,
+            stage_index=stage_index,
+            attempt=attempt,
+            slurm_job_id=str(slurm_job_id),
+            at=dispatched_at,
+            evidence={"wrapper_executed": bool(wrapper_executed)},
+        )
 
     def dispatched(
         slurm_job_id: str,
@@ -499,7 +674,8 @@ def _compute_allocation_callbacks(
         deleted, so anything it declined (an unknown subject, a receipt naming a
         different job) stays on disk for reconciliation.
         """
-        if user_id <= 0:
+        _record_stage_dispatch(slurm_job_id, dispatched_at, wrapper_executed)
+        if not accounting:
             return False
         if wrapper_executed:
             # The wrapper's own stdout id line — not the srun stderr banner —
@@ -567,62 +743,75 @@ def _compute_allocation_callbacks(
         return False
 
     def started(slurm_job_id: str, started_at: float) -> None:
-        # Runner readiness is checked here because only the caller knows the
-        # runner family, but the outcome is handed to the store as the grant
-        # decision: the allocation fact is written first and unconditionally, so
-        # a not-ready runner denies the *command* without erasing the allocation
-        # the scheduler already handed this Task.
-        denied_reason = None
-        if runner_family and not resolve_submission_readiness(CONFIG.server_dir, runner_family).ready:
-            denied_reason = "Runner readiness is unavailable"
-        # The allocation is recorded here — fact first, then the grant decision
-        # in the same transaction.  There is deliberately no separate entitlement
-        # read: a bare read cannot see that the hold which admitted this Task is
-        # the Task's own authority, and would refuse it for holding the final
-        # entitlement.
-        entitlement = task_store.record_allocation_start(
-            user_id=user_id,
-            task_id=task_id,
-            stage_id=stage_id,
-            slurm_job_id=slurm_job_id,
-            gpu_count=gpu_count,
-            cpu_cores=cpu_cores,
-            started_at=started_at,
-            required_entitlements=required_entitlements,
-            denied_reason=denied_reason,
-            gres=resource_policy.gres or "",
-        )
-        if not entitlement.get("granted", True):
-            reason_code = str(entitlement.get("reason_code") or AdmissionReason.COMPUTE_EXHAUSTED.value)
+        if accounting:
+            # Runner readiness is checked here because only the caller knows the
+            # runner family, but the outcome is handed to the store as the grant
+            # decision: the allocation fact is written first and unconditionally,
+            # so a not-ready runner denies the *command* without erasing the
+            # allocation the scheduler already handed this Task.
+            denied_reason = None
+            if runner_family and not resolve_submission_readiness(CONFIG.server_dir, runner_family).ready:
+                denied_reason = "Runner readiness is unavailable"
+            # The allocation is recorded here — fact first, then the grant
+            # decision in the same transaction.  There is deliberately no
+            # separate entitlement read: a bare read cannot see that the hold
+            # which admitted this Task is the Task's own authority, and would
+            # refuse it for holding the final entitlement.
+            entitlement = task_store.record_allocation_start(
+                user_id=user_id,
+                task_id=task_id,
+                stage_id=stage_id,
+                slurm_job_id=slurm_job_id,
+                gpu_count=gpu_count,
+                cpu_cores=cpu_cores,
+                started_at=started_at,
+                required_entitlements=required_entitlements,
+                denied_reason=denied_reason,
+                gres=resource_policy.gres or "",
+            )
+            if not entitlement.get("granted", True):
+                reason_code = str(entitlement.get("reason_code") or AdmissionReason.COMPUTE_EXHAUSTED.value)
+                emit_event(
+                    "resource.admission.denied",
+                    level="WARNING",
+                    reason_code=reason_code,
+                    task_id=task_id,
+                    stage_id=stage_id,
+                    slurm_job_id=slurm_job_id,
+                    user_id=user_id,
+                    gpu_count=gpu_count,
+                    gpu_seconds=0,
+                )
+                raise GPUCreditUnavailableError(reason_code)
             emit_event(
-                "resource.admission.denied",
-                level="WARNING",
-                reason_code=reason_code,
+                "resource.admission.checked",
                 task_id=task_id,
                 stage_id=stage_id,
                 slurm_job_id=slurm_job_id,
                 user_id=user_id,
                 gpu_count=gpu_count,
-                gpu_seconds=0,
+                gpu_seconds=max(0, int(entitlement.get("remaining_gpu_seconds") or 0)),
             )
-            raise GPUCreditUnavailableError(reason_code)
-        emit_event(
-            "resource.admission.checked",
-            task_id=task_id,
-            stage_id=stage_id,
-            slurm_job_id=slurm_job_id,
-            user_id=user_id,
-            gpu_count=gpu_count,
-            gpu_seconds=max(0, int(entitlement.get("remaining_gpu_seconds") or 0)),
-        )
-        emit_event(
-            "resource.allocation.started",
-            task_id=task_id,
-            stage_id=stage_id,
-            slurm_job_id=slurm_job_id,
-            user_id=user_id,
-            gpu_count=gpu_count,
-        )
+            emit_event(
+                "resource.allocation.started",
+                task_id=task_id,
+                stage_id=stage_id,
+                slurm_job_id=slurm_job_id,
+                user_id=user_id,
+                gpu_count=gpu_count,
+            )
+        if stage_target:
+            # The allocation is observable, so the attempt is RUNNING and the
+            # whole Task is running.  This — not a stdout marker — is the state
+            # boundary.  A cancelled attempt rejects the transition, which is why
+            # the write is guarded in the store rather than by a read here.
+            task_store.record_stage_running(
+                task_id=task_id,
+                stage_index=stage_index,
+                attempt=attempt,
+                started_at=started_at,
+            )
+            task_store.update_task(task_id, status="running")
 
     def finished(slurm_job_id: str, finished_at: float) -> None:
         # Settlement is a post-allocation accounting step, not part of the
@@ -713,22 +902,35 @@ def _run_compute_job(
     username: str = "",
     resource_policy: ResolvedResources | None = None,
 ) -> JobState:
-    """Submit and poll through the production Slurm adapter."""
-    dispatched_callback = started_callback = finished_callback = None
+    """Submit and poll through the production Slurm adapter.
+
+    A Task type with no manifest workflow still has one implicit stage: this
+    allocation.  Its StageRun makes the same durable record and monotonic state
+    machine available for single-stage Tasks, so the API and recovery have one
+    implementation rather than two.
+    """
     stored_task = task_store.get_task(task_id) or {}
     submitted_by_user_id = int(stored_task.get("submitted_by_user_id") or 0)
-    if resource_policy is not None and submitted_by_user_id > 0:
-        # No entitlement read here: the decision belongs to the atomic
-        # allocation-start transition, which knows whether this Task holds a
-        # reservation of its own (the workflow and re-dispatch cases do not).
-        dispatched_callback, started_callback, finished_callback = _compute_allocation_callbacks(
-            task_id=task_id,
-            user_id=submitted_by_user_id,
-            stage_id=tt.name,
-            resource_policy=resource_policy,
-            required_entitlements=(tt.runtime.access_policy.requires if tt.runtime.access_policy else ()),
-            runner_family=tt.runtime.name,
-        )
+    attempt_row = task_store.begin_stage_attempt(
+        task_id=task_id,
+        stage_index=0,
+        stage_name=tt.name,
+        planned_resources=stage_state.planned_resources(resource_policy),
+    )
+    attempt = int(attempt_row["attempt"])
+    # No entitlement read here: the decision belongs to the atomic
+    # allocation-start transition, which knows whether this Task holds a
+    # reservation of its own (the workflow and re-dispatch cases do not).
+    dispatched_callback, started_callback, finished_callback = _compute_allocation_callbacks(
+        task_id=task_id,
+        user_id=submitted_by_user_id,
+        stage_id=tt.name,
+        resource_policy=resource_policy,
+        required_entitlements=(tt.runtime.access_policy.requires if tt.runtime.access_policy else ()),
+        runner_family=tt.runtime.name,
+        stage_index=0,
+        attempt=attempt,
+    )
     job = _create_job(
         task_id,
         tt,
@@ -759,6 +961,7 @@ def _run_compute_job(
         task_store.release_reservation(
             task_id=task_id, reason_code=ReservationReason.RELEASED.value, at=time.time()
         )
+    _finish_stage_attempt(task_id, 0, attempt, state)
     return state
 
 
@@ -773,6 +976,90 @@ def _workflow_state(task: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def _workflow_state_projection(runs: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Project StageRun records into the historical ``workflow_state`` shape.
+
+    ``workflow_state`` is a compatibility view for consumers that predate
+    StageRun records (live-test evidence, older tooling).  It is written from
+    the records, never the other way round, so the two cannot disagree about a
+    Task that has records.  The newest attempt of each stage wins.
+    """
+    latest: dict[str, dict[str, Any]] = {}
+    for run in sorted(runs, key=lambda item: (item["stage_index"], item["attempt"])):
+        latest[str(run["stage_name"])] = run
+    return {
+        name: {
+            "status": str(run["status"]).lower(),
+            "job_id": run.get("slurm_job_id"),
+            "started_at": run.get("started_at"),
+            "finished_at": run.get("ended_at"),
+            "attempt": run.get("attempt"),
+            "reason_code": run.get("reason_code"),
+        }
+        for name, run in sorted(latest.items(), key=lambda item: item[1]["stage_index"])
+    }
+
+
+def _workflow_state_mirror(
+    task_id: str, legacy_state: dict[str, dict[str, Any]]
+) -> dict[str, dict[str, Any]]:
+    """Records projected into the mirror, plus historical entries they omit.
+
+    A Task that began before StageRun records existed can still own a
+    ``workflow_state`` stage with no row.  Reusing that entry keeps a historical
+    completed stage visible without letting it override a recorded one.
+    """
+    runs = task_store.list_stage_runs(task_id)
+    mirror = _workflow_state_projection(runs)
+    recorded = {str(run["stage_name"]) for run in runs}
+    for name, step in legacy_state.items():
+        if name not in recorded:
+            mirror[name] = step
+    return mirror
+
+
+def _finish_stage_attempt(
+    task_id: str,
+    stage_index: int,
+    attempt: int,
+    state: JobState,
+    *,
+    reason_code: str | None = None,
+) -> None:
+    """Settle one attempt from the allocation outcome Core observed.
+
+    This is bookkeeping beside the scientific outcome: a failed write must not
+    rewrite a completed Runner as a failed Task.  The allocation itself is
+    settled by its own callback, so nothing here can double-charge or lose the
+    ledger fact.
+    """
+    status = {
+        JobState.COMPLETED: stage_state.COMPLETED,
+        JobState.FAILED: stage_state.FAILED,
+        JobState.CANCELLED: stage_state.CANCELLED,
+    }.get(state)
+    if status is None:
+        return
+    if reason_code is None:
+        if status == stage_state.COMPLETED:
+            reason_code = stage_state.Reason.COMPLETED
+        elif status == stage_state.CANCELLED:
+            reason_code = stage_state.Reason.TASK_CANCELLED
+        else:
+            evidence = task_store.get_task_diagnostics(task_id) or {}
+            reason_code = str(evidence.get("reason_code") or stage_state.Reason.ALLOCATION_FAILED)
+    try:
+        task_store.finish_stage_attempt(
+            task_id=task_id,
+            stage_index=stage_index,
+            attempt=attempt,
+            status=status,
+            reason_code=reason_code,
+        )
+    except Exception:
+        logging.exception("Could not settle stage attempt %s/%s for task %s", stage_index, attempt, task_id)
+
+
 def _run_compute_workflow(
     task_id: str,
     task: dict[str, Any],
@@ -783,11 +1070,27 @@ def _run_compute_workflow(
     resource_policies: dict[str, ResolvedResources],
     stage_callback,
 ) -> JobState:
-    """Run an ordered workflow through the existing one-allocation Job API."""
-    state = _workflow_state(task)
-    for stage in tt.workflow:
-        previous = state.get(stage.name, {})
-        if previous.get("status") == "completed":
+    """Run an ordered workflow through the existing one-allocation Job API.
+
+    A stage's durable StageRun is the authority.  The Task stays ``running``
+    while the next attempt is ``QUEUED``: only the attempt carries the queued
+    state, so completing one allocation never reports the whole computation as
+    queued.  ``workflow_state`` is rewritten from the records as a compatibility
+    mirror at each boundary.
+    """
+    legacy_state = _workflow_state(task)
+    runs = task_store.list_stage_runs(task_id)
+    completed = {str(run["stage_name"]) for run in runs if run["status"] == stage_state.COMPLETED}
+    # The historical mirror is consulted only for a stage that has no StageRun
+    # record at all: a record, including a failed or interrupted one, always
+    # wins over what an older writer claimed.
+    recorded_names = {str(run["stage_name"]) for run in runs}
+    completed |= {
+        name for name, step in legacy_state.items()
+        if step.get("status") == "completed" and name not in recorded_names
+    }
+    for index, stage in enumerate(tt.workflow):
+        if stage.name in completed:
             continue
         policy = resource_policies.get(stage.name)
         if policy is None:
@@ -803,23 +1106,31 @@ def _run_compute_workflow(
             workflow=(),
         )
         first_marker = next(iter(markers))
-        if not task_store.update_task(task_id, status="queued", run_stage=first_marker):
+        # A progress-only write that is also the cancellation gate: a terminal
+        # Task rejects it, so no attempt or allocation starts for it.
+        if not task_store.update_task(task_id, run_stage=first_marker):
             return JobState.CANCELLED
-        dispatched_callback = started_callback = finished_callback = None
-        user_id = int(task.get("submitted_by_user_id") or 0)
-        if user_id > 0:
-            # A workflow stage has no reservation of its own after the first
-            # one consumed the Task's single submission hold, so its allocation
-            # start is admitted on the balance that is actually left — decided
-            # atomically with the allocation itself, not by a read here.
-            dispatched_callback, started_callback, finished_callback = _compute_allocation_callbacks(
-                task_id=task_id,
-                user_id=user_id,
-                stage_id=stage.name,
-                resource_policy=policy,
-                required_entitlements=(tt.runtime.access_policy.requires if tt.runtime.access_policy else ()),
-                runner_family=tt.runtime.name,
-            )
+        attempt_row = task_store.begin_stage_attempt(
+            task_id=task_id,
+            stage_index=index,
+            stage_name=stage.name,
+            planned_resources=stage_state.planned_resources(policy),
+        )
+        attempt = int(attempt_row["attempt"])
+        # A workflow stage has no reservation of its own after the first one
+        # consumed the Task's single submission hold, so its allocation start is
+        # admitted on the balance that is actually left — decided atomically with
+        # the allocation itself, not by a read here.
+        callbacks = _compute_allocation_callbacks(
+            task_id=task_id,
+            user_id=int(task.get("submitted_by_user_id") or 0),
+            stage_id=stage.name,
+            resource_policy=policy,
+            required_entitlements=(tt.runtime.access_policy.requires if tt.runtime.access_policy else ()),
+            runner_family=tt.runtime.name,
+            stage_index=index,
+            attempt=attempt,
+        )
         job = _create_job(
             task_id,
             stage_tt,
@@ -829,17 +1140,20 @@ def _run_compute_workflow(
             stage_callback,
             username=task.get("username", ""),
             resource_policy=policy,
-            allocation_dispatched_callback=dispatched_callback,
-            allocation_started_callback=started_callback,
-            allocation_finished_callback=finished_callback,
+            allocation_dispatched_callback=callbacks[0],
+            allocation_started_callback=callbacks[1],
+            allocation_finished_callback=callbacks[2],
         )
         jid = job.submit()
-        state[stage.name] = {"status": "running", "job_id": jid, "started_at": time.time()}
-        handles = {"workflow_state": json.dumps(state, sort_keys=True)}
+        mirror = _workflow_state_mirror(task_id, legacy_state)
+        handles: dict[str, Any] = {"workflow_state": json.dumps(mirror, sort_keys=True)}
         if isinstance(job, SlurmJob):
             handles["slurm_job_id"] = jid
         if not task_store.update_task(task_id, **handles):
             job.cancel()
+            _finish_stage_attempt(
+                task_id, index, attempt, JobState.CANCELLED, reason_code=stage_state.Reason.TASK_CANCELLED
+            )
             return JobState.CANCELLED
         result = job.poll()
         if isinstance(job, SlurmJob) and not job.wrapper_executed:
@@ -850,10 +1164,11 @@ def _run_compute_workflow(
             task_store.release_reservation(
                 task_id=task_id, reason_code=ReservationReason.RELEASED.value, at=time.time()
             )
-        state[stage.name].update(status=result.value, finished_at=time.time())
+        _finish_stage_attempt(task_id, index, attempt, result)
+        mirror = _workflow_state_mirror(task_id, legacy_state)
         task_store.update_task(
             task_id,
-            workflow_state=json.dumps(state, sort_keys=True),
+            workflow_state=json.dumps(mirror, sort_keys=True),
             slurm_job_id=None,
             container_id=None,
         )
@@ -1960,15 +2275,26 @@ def _record_failure(
     if _task_is_terminal(md5sum):
         return
     run_stage = (task_store.get_task(md5sum) or {}).get("run_stage") or run_stage
+    stage_reason = reason_code or "execution_exception"
     try:
         evidence = task_store.get_task_diagnostics(md5sum) or {}
         if reason_code is not None or not evidence.get("reason_code"):
-            evidence["reason_code"] = reason_code or "execution_exception"
+            evidence["reason_code"] = stage_reason
         if run_stage:
             evidence["stage_id"] = run_stage
+        stage_reason = str(evidence.get("reason_code") or stage_reason)
         task_store.record_task_diagnostics(md5sum, evidence)
     except Exception:
         logging.exception("Could not retain failure classification for task %s", md5sum)
+    try:
+        # A failed Task settles every live attempt it owns; the guard inside the
+        # store keeps this from rewriting one that already reached a terminal
+        # state (cancelled or completed) first.
+        task_store.finish_active_stage_runs(
+            md5sum, status=stage_state.FAILED, reason_code=stage_reason
+        )
+    except Exception:
+        logging.exception("Could not settle stage attempts for failed task %s", md5sum)
     _capture_debug_submission(task, _entities_from_input_form(task))
     _finalize_failed_results(task, error_message, finished_at=finish_time)
     task_store.update_task(
@@ -2295,6 +2621,16 @@ def _execute_compute_task(
 
     is_slurm = _get_job_executor() == "slurm"
     initial_status = "queued" if is_slurm else "running"
+    if is_slurm and tt.workflow:
+        # A resumed workflow has already run part of its work, so the Task is
+        # running even while the next stage waits in the queue.  Re-entering it
+        # must never present the whole computation as queued again.
+        completed_runs = [
+            run for run in task_store.list_stage_runs(md5sum)
+            if run["status"] == stage_state.COMPLETED
+        ]
+        if completed_runs:
+            initial_status = "running"
     update_fields: dict[str, Any] = {
         "status": initial_status,
         "error": None,
@@ -2324,6 +2660,12 @@ def _execute_compute_task(
     }
 
     def _on_stage_change(stage: str) -> None:
+        """Record a Runner progress marker.  Never a Task or StageRun state.
+
+        stdout is optional progress detail: the allocation-start boundary owns
+        ``status=running`` and the StageRun lifecycle.  A marker only advances
+        the compatibility ``run_stage`` view.
+        """
         if _task_is_terminal(md5sum):
             return
         stage_changed = stage != stage_state["current"]
@@ -2339,7 +2681,7 @@ def _execute_compute_task(
         stage_state["current"] = stage
         if is_first:
             stage_state["first"] = False
-            task_store.update_task(md5sum, status="running", run_stage=stage)
+            task_store.update_task(md5sum, run_stage=stage)
         elif stage_changed:
             task_store.update_task(md5sum, run_stage=stage)
 
@@ -3151,10 +3493,22 @@ def _recover_orphaned_tasks() -> int:
                 logging.error("Recovery left workflow %s queued: %s", md5sum, stop_error)
                 handled += 1
                 continue
-            state = _workflow_state(task)
-            for step in state.values():
-                if step.get("status") == "running":
-                    step["status"] = "interrupted"
+            # Every live attempt belongs to a worker that no longer exists.
+            # Interrupting it (not completing or failing it) keeps the evidence
+            # truthful: Core never observed the scientific outcome.  The next
+            # attempt gets a new number; the interrupted one stays as history.
+            task_store.finish_active_stage_runs(
+                md5sum, status=stage_state.INTERRUPTED, reason_code=stage_state.Reason.WORKER_LOST
+            )
+            legacy_state = _workflow_state(task)
+            runs = task_store.list_stage_runs(md5sum)
+            if runs:
+                state = _workflow_state_mirror(md5sum, legacy_state)
+            else:
+                state = legacy_state
+                for step in state.values():
+                    if step.get("status") == "running":
+                        step["status"] = "interrupted"
             if not task_store.update_task(
                 md5sum,
                 status="pending",
@@ -3192,6 +3546,7 @@ def _recover_orphaned_tasks() -> int:
                 task.get("started_at") or time.time(),
                 str(task.get("run_stage") or ""),
                 f"SLURM task lost its worker{cancellation_error}",
+                reason_code=stage_state.Reason.WORKER_LOST,
             )
             handled += 1
             continue
@@ -3202,6 +3557,7 @@ def _recover_orphaned_tasks() -> int:
                 task.get("started_at") or time.time(),
                 str(task.get("run_stage") or ""),
                 "Compute task lost its worker before recording a resource handle",
+                reason_code=stage_state.Reason.WORKER_LOST,
             )
             handled += 1
             continue

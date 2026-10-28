@@ -2686,6 +2686,39 @@
         "properties": {"tasks": {"type": "array", "items": {"$ref": "#/components/schemas/TaskSummary"}}},
         "additionalProperties": false
       },
+      "TaskStageItem": {
+        "type": "object",
+        "required": ["index", "name", "display_name", "status", "attempt", "started_at", "ended_at", "reason_code", "planned_resources"],
+        "properties": {
+          "index": {"type": "integer", "minimum": 0},
+          "name": {"type": "string", "description": "Manifest stage name (or the Task type itself for a single-stage Task)."},
+          "display_name": {"type": "string"},
+          "status": {"type": "string", "enum": ["NOT_STARTED", "READY", "QUEUED", "RUNNING", "COMPLETED", "FAILED", "CANCELLED", "INTERRUPTED", "SKIPPED"]},
+          "attempt": {"type": ["integer", "null"], "minimum": 1},
+          "started_at": {"type": ["string", "null"], "format": "date-time"},
+          "ended_at": {"type": ["string", "null"], "format": "date-time"},
+          "reason_code": {"type": ["string", "null"], "description": "Bounded Core reason for a terminal stage state; never scheduler output."},
+          "planned_resources": {
+            "oneOf": [
+              {"type": "null"},
+              {"type": "object", "additionalProperties": true, "description": "Semantic request for this attempt; placement internals are not exposed."}
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "TaskStages": {
+        "type": "object",
+        "required": ["source", "total", "completed", "current", "items"],
+        "properties": {
+          "source": {"type": "string", "enum": ["record", "legacy"], "description": "record: durable StageRun evidence. legacy: the pre-StageRun workflow_state mirror, reported only for historical Tasks."},
+          "total": {"type": "integer", "minimum": 0},
+          "completed": {"type": "integer", "minimum": 0},
+          "current": {"oneOf": [{"type": "null"}, {"$ref": "#/components/schemas/TaskStageItem"}], "description": "The running attempt, else the queued attempt, else null."},
+          "items": {"type": "array", "items": {"$ref": "#/components/schemas/TaskStageItem"}}
+        },
+        "additionalProperties": false
+      },
       "TaskSummary": {
         "type": "object",
         "required": ["task_id", "task_type", "display_name", "status", "terminal", "submitted_at", "finished_at", "walltime_seconds", "owner", "placement", "progress", "outcome", "error", "result", "actions", "input_preview"],
@@ -2708,6 +2741,7 @@
           },
           "progress": {"type": ["object", "null"], "additionalProperties": true, "description": "Runner-owned structured progress, when available."},
           "outcome": {"type": ["string", "null"], "description": "Standardized Runner outcome, when reported."},
+          "stages": {"$ref": "#/components/schemas/TaskStages"},
           "error": {"type": ["string", "null"], "description": "Sanitized terminal error, when present."},
           "result": {"$ref": "#/components/schemas/TaskResultCapability"},
           "actions": {"$ref": "#/components/schemas/TaskActions"},
@@ -2855,6 +2889,7 @@
             "description": "Publication state of the task's result; null when no task row is visible. A terminal task whose results are not readable reports the state that explains it (for example \"unanchored\" for a result finalized before server-owned publication identity existed) rather than only result_available=false. The same state vocabulary is reported on the results endpoint's 404 body."
           },
           "task_status": {"type": "string", "description": "Current execution state when status retains a legacy compatibility message"},
+          "stages": {"$ref": "#/components/schemas/TaskStages"},
           "error": {"type": "string"},
           "message": {"type": "string"}
         },

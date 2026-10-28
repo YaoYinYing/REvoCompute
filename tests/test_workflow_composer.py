@@ -188,16 +188,20 @@ def test_gpu_workflow_uses_owning_runtime_for_allocation_authorization(monkeypat
     )
 
     assert result == JobState.COMPLETED
-    assert callback_requests == [
-        {
-            "task_id": "f" * 32,
-            "user_id": 17,
-            "stage_id": "multistage_runner.model",
-            "resource_policy": _policy(True),
-            "required_entitlements": ("synthetic_terms",),
-            "runner_family": "multistage_runner",
-        }
-    ]
+    # Each allocation callback is bound to the durable attempt it belongs to, so
+    # a duplicate dispatch cannot create a second StageRun for the same work.
+    assert len(callback_requests) == 1
+    request = dict(callback_requests[0])
+    assert request.pop("stage_index") == 0
+    assert request.pop("attempt") == 1
+    assert request == {
+        "task_id": "f" * 32,
+        "user_id": 17,
+        "stage_id": "multistage_runner.model",
+        "resource_policy": _policy(True),
+        "required_entitlements": ("synthetic_terms",),
+        "runner_family": "multistage_runner",
+    }
 
 
 def test_composer_does_not_submit_after_cancellation_claim_fails(monkeypatch):

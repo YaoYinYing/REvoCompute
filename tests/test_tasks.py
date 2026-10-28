@@ -635,7 +635,11 @@ def test_run_compute_task_finalizes_uncompressed_result_manifest(monkeypatch, tm
         return original_update_task(md5_value, **fields)
 
     def _fake_runner(task_id, tt, runner, entities, output_dir, stage_callback=None, username=""):
-        del task_id, tt, runner, entities, username
+        del tt, runner, entities, username
+        # Stand in for the allocation-started boundary the real
+        # ``_run_compute_job`` writes: the Task is running because it holds
+        # resources, not because a stdout marker was seen.
+        module.task_store.update_task(task_id, status="running")
         if stage_callback:
             stage_callback("hhblits")
             stage_callback("hhfilter")
@@ -723,7 +727,10 @@ def test_single_stage_slurm_task_transitions_from_queued_to_running(monkeypatch,
         return original_update_task(md5_value, **fields)
 
     def _fake_runner(task_id, tt, runner, entities, output_dir, stage_callback=None, username=""):
-        del task_id, tt, runner, entities, username
+        del tt, runner, entities, username
+        # The real ``_run_compute_job`` writes this at allocation start; stdout
+        # markers below are progress detail only.
+        module.task_store.update_task(task_id, status="running")
         if stage_callback:
             stage_callback("cpu_runner")
         output_path = Path(output_dir)
@@ -765,7 +772,7 @@ def test_worker_recovery_cancels_slurm_orphans_and_preserves_unstarted_queue(mon
     monkeypatch.setattr(runtime.task_store, "list_tasks", lambda: tasks)
     monkeypatch.setattr(runtime.shutil, "which", lambda command: f"/usr/bin/{command}")
     monkeypatch.setattr(runtime.subprocess, "run", lambda args, **kwargs: cancellations.append((args, kwargs)))
-    monkeypatch.setattr(runtime, "_record_failure", lambda *args: failures.append(args))
+    monkeypatch.setattr(runtime, "_record_failure", lambda *args, **kwargs: failures.append(args))
     monkeypatch.setattr(
         runtime.SlurmJob,
         "submit",

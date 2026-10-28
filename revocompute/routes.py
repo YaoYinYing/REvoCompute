@@ -201,6 +201,7 @@ from revocompute.task_runtime import (
     _safe_join,
     _sanitize_task_error,
     _task_zip_path,
+    stage_projection,
     build_results_archive,
     cancel_compute_resources,
     reconcile_slurm_allocations,
@@ -1869,6 +1870,9 @@ def _task_follow_up_payload(md5sum: str, status: str) -> dict[str, Any]:
     if task is not None:
         summary = _progress_summary(task) or {}
         payload.update({key: value for key, value in summary.items() if value is not None})
+        stages = stage_projection(task)
+        if stages is not None:
+            payload["stages"] = stages
     return payload
 
 
@@ -3625,6 +3629,7 @@ def _task_list_summary(task: dict[str, Any], *, include_owner: bool) -> dict[str
         and _task_mutation_allowed(task)
         and status not in task_store.CLEANUP_CLAIM_STATUSES
     )
+    stages = stage_projection(task)
 
     return {
         "task_id": task_id,
@@ -3638,6 +3643,7 @@ def _task_list_summary(task: dict[str, Any], *, include_owner: bool) -> dict[str
         "owner": (task.get("username") or None) if include_owner else None,
         "placement": _recorded_execution_class(task),
         **_task_execution_state_payload(task),
+        **({"stages": stages} if stages is not None else {}),
         "error": _sanitize_task_error(task, task.get("error")),
         "result": {
             "available": result_available,
