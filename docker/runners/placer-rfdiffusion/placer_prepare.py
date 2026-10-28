@@ -182,12 +182,16 @@ def _pdb_residues(text: str) -> list[Residue]:
     residues: list[Residue] = []
     block_chains: set[str] = set()
     current_chain: str | None = None
+    models = 0
     for line in text.splitlines():
         if line.startswith("MODEL"):
-            raise PreparationError(
-                "Multi-MODEL PDB input is not supported; PLACER keeps only the last model. "
-                "Submit a single model."
-            )
+            models += 1
+            if models > 1:
+                raise PreparationError(
+                    "Multi-MODEL PDB input is not supported; PLACER keeps only the last model. "
+                    "Submit a single model."
+                )
+            continue
         if line[:6] not in {"ATOM  ", "HETATM"} or len(line) < 27:
             continue
         chain = line[21:22].strip()

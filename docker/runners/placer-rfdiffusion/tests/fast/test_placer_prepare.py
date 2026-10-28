@@ -391,6 +391,16 @@ def test_cif_alternate_locations_and_insertion_codes_are_not_rejected(tmp_path):
     prepare.validate_structure(params, prepare.validate_params(params), records, structure)
 
 
+def test_single_model_pdb_block_is_accepted(tmp_path):
+    path = _write(tmp_path, "model.pdb", "\n".join([
+        "MODEL        1",
+        _line("ATOM", 1, "CA", "ALA", "A", 1),
+        "ENDMDL",
+        "END",
+    ]))
+    assert [residue.name for residue in prepare.read_structure(path)] == ["ALA"]
+
+
 def test_multi_model_pdb_is_rejected(tmp_path):
     path = _write(tmp_path, "models.pdb", "\n".join([
         "MODEL        1",

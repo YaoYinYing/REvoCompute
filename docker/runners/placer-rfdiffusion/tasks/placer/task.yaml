@@ -45,7 +45,9 @@ inputs:
     cardinality: {min: 1, max: 1}
     formats: [pdb, cif, mmcif]
     description: The structure PLACER rebuilds. A ligand to sample must already be
-      present; an apo structure needs a target residue.
+      present; an apo structure needs a target residue. For mmCIF, chains are
+      label_asym_id, protein numbering is label_seq_id, and ligand numbering is
+      auth_seq_id.
 input_workspace:
   steps:
   - id: material
@@ -233,7 +235,7 @@ parameters:
     mutate:
       type: string
       description: Residue mutations as space-separated resno+chain:name3, for
-        example 128A:75I. The target must be in PLACER's shipped residue
+        example 128A:TRP. The target must be in PLACER's shipped residue
         library; custom residue definitions are not exposed. PDB input only.
       default: ''
       pattern: '^(?:[0-9]+[A-Za-z0-9]*:[A-Za-z0-9]+(?:\s+[0-9]+[A-Za-z0-9]*:[A-Za-z0-9]+)*)?$'
