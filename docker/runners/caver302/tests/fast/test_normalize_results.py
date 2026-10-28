@@ -221,12 +221,22 @@ def test_insertion_coded_residues_are_parsed_by_column(tmp_path: Path) -> None:
 
 def test_lining_residue_count_counts_distinct_residues(tmp_path: Path) -> None:
     raw, output = prepare(tmp_path)
+    (raw / "analysis/residues.txt").write_bytes((FIXTURES / "residues_duplicates.txt").read_bytes())
     summary = normalize(raw, output, {})
     rows = read_csv(output / "residues.csv")
-    distinct = {(row["chain"], row["residue_number"], row["insertion_code"]) for row in rows}
-    assert summary["lining_residue_row_count"] == len(rows)
-    assert summary["lining_residue_count"] == len(distinct)
-    assert summary["lining_residue_count"] <= summary["lining_residue_row_count"]
+    assert len(rows) == 3
+    # A:98 lines two clusters, so the distinct count must be smaller than the row count.
+    assert summary["lining_residue_row_count"] == 3
+    assert summary["lining_residue_count"] == 2
+    assert {(row["chain"], row["residue_number"]) for row in rows} == {("A", "98"), ("A", "101")}
+
+
+def test_residues_with_an_unknown_cluster_are_an_error(tmp_path: Path) -> None:
+    raw, output = prepare(tmp_path)
+    text = (raw / "analysis/residues.txt").read_text(encoding="utf-8").replace("Tunnel cluster 1 ==", "Tunnel cluster 99 ==")
+    (raw / "analysis/residues.txt").write_text(text, encoding="utf-8")
+    with pytest.raises(OutputError, match="unknown tunnel cluster 99"):
+        normalize(raw, output, {})
 
 
 def test_snapshot_labels_are_ordered_numerically(tmp_path: Path) -> None:

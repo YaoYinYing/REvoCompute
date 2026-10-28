@@ -28,7 +28,7 @@ FLOAT_PARAMETERS = {
     "clustering_threshold": "nonnegative",
     "exclude_start_zone": "nonnegative",
     "exclude_end_zone": "nonnegative",
-    "min_middle_zone": "nonnegative",
+    "min_middle_zone": "exclusive",
     "max_limiting_radius": "nonnegative",
     "cost_function_exponent": "nonnegative",
     "max_distance": "nonnegative",
@@ -38,6 +38,8 @@ FLOAT_PARAMETERS = {
     "residue_contact_distance": "exclusive",
     "bottleneck_contact_distance": "exclusive",
 }
+#: Upstream caps these at 100 (guide: 0 <= n <= 100).
+FLOAT_MAXIMUM = {"cost_function_exponent": 100.0, "max_limiting_radius": 100.0}
 INTEGER_PARAMETERS = {
     "first_frame": 1,
     "last_frame": 1,
@@ -101,6 +103,9 @@ def _number(params: dict[str, object], name: str) -> float:
         raise ConfigError(f"{name} must be greater than zero")
     if FLOAT_PARAMETERS[name] == "nonnegative" and value < 0:
         raise ConfigError(f"{name} must not be negative")
+    maximum = FLOAT_MAXIMUM.get(name)
+    if maximum is not None and value > maximum:
+        raise ConfigError(f"{name} must not be greater than {maximum:g}")
     return value
 
 

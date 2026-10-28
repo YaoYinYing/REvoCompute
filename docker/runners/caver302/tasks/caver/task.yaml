@@ -26,7 +26,7 @@ inputs:
     type: protein_structure
     cardinality: {min: 0, max: 50}
     formats: [pdb, ent]
-    description: Optional ordered frames that share the reference atom and residue mapping; frame indexes start at 1 for the reference structure.
+    description: Optional ordered frames that share the reference atom and residue mapping; frame indexes start at 1 for the reference structure. Each snapshot must also be a single-model PDB, the same rule the reference structure follows.
 input_workspace:
   steps:
   - id: material
@@ -102,7 +102,7 @@ result_workspace:
     id: tunnel_summary
     role: evidence
     title: Analysis summary
-    description: Counts of clusters, tunnels and tunnel-lining residues together with the pinned upstream and input provenance.
+    description: Counts of tunnel clusters, reported tunnels and distinct tunnel-lining residues. The complete provenance record is published in the evidence bundle.
     sources:
       data:
       - {path: summary.json, required: true}
@@ -225,9 +225,9 @@ parameters:
       minimum: 0
     min_middle_zone:
       type: number
-      description: Minimum separation in Angstrom between the start and end zones used for tunnel comparison (upstream min_middle_zone).
+      description: Minimum separation in Angstrom between the start and end zones used for tunnel comparison; it must be greater than zero (upstream min_middle_zone).
       default: 5
-      minimum: 0
+      exclusiveMinimum: 0
     one_tunnel_in_snapshot:
       type: string
       enum: [cheapest, random, no]
@@ -245,14 +245,16 @@ parameters:
       minimum: 1
     max_limiting_radius:
       type: number
-      description: Radius in Angstrom above which tunnel segments are optimized for length only (upstream max_limiting_radius).
+      description: Radius in Angstrom above which tunnel segments are optimized for length only (upstream max_limiting_radius, 0 to 100).
       default: 100
       minimum: 0
+      maximum: 100
     cost_function_exponent:
       type: number
-      description: Exponent of the tunnel cost function balancing width against length (upstream cost_function_exponent).
+      description: Exponent of the tunnel cost function balancing width against length (upstream cost_function_exponent, 0 to 100).
       default: 2
       minimum: 0
+      maximum: 100
     number_of_approximating_balls:
       type: integer
       enum: [4, 6, 8, 12, 20]
@@ -310,7 +312,7 @@ parameters:
     exclude_residue_names:
       type: string
       default: ''
-      description: Space- or comma-separated residue names to exclude from the whole calculation, such as HOH or SO4 (upstream exclude_residue_names).
+      description: Space- or comma-separated residue names to exclude from the whole calculation, such as HOH or SO4; every name is validated against the structure, so a typo fails instead of silently excluding nothing (upstream exclude_residue_names).
     exclude_atom_numbers:
       type: string
       default: ''

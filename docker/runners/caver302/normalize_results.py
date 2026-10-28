@@ -16,14 +16,12 @@ zero.
 
 from __future__ import annotations
 
-import argparse
 import csv
 import hashlib
 import json
 import math
 import re
 import shutil
-import sys
 from pathlib import Path
 
 SUMMARY_COLUMNS = (
@@ -394,6 +392,9 @@ def normalize(raw_out: Path, output_dir: Path, provenance: dict[str, object]) ->
     for tunnel in tunnels:
         if int(tunnel["tunnel_cluster"]) not in cluster_ids:
             raise OutputError(f"tunnel_characteristics.csv names unknown cluster {tunnel['tunnel_cluster']}")
+    for row in residues:
+        if int(row["tunnel_cluster"]) not in cluster_ids:
+            raise OutputError(f"residues.txt names unknown tunnel cluster {row['tunnel_cluster']}")
     for name, rows in (("tunnel_profiles.csv", profiles), ("bottlenecks.csv", bottlenecks)):
         for row in rows:
             key = (str(row["snapshot"]), int(row["tunnel_cluster"]), int(row["tunnel"]))
@@ -445,24 +446,3 @@ def normalize(raw_out: Path, output_dir: Path, provenance: dict[str, object]) ->
     return summary
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("raw_out", type=Path)
-    parser.add_argument("output_dir", type=Path)
-    parser.add_argument("--provenance", type=Path, required=True)
-    args = parser.parse_args()
-    try:
-        provenance = json.loads(args.provenance.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise SystemExit(f"Invalid run provenance: {exc}") from exc
-    if not isinstance(provenance, dict):
-        raise SystemExit("Run provenance must be a JSON object")
-    try:
-        normalize(args.raw_out, args.output_dir, provenance)
-    except OutputError as exc:
-        sys.stderr.write(f"CAVER output validation failed: {exc}\n")
-        raise SystemExit(1) from exc
-
-
-if __name__ == "__main__":
-    main()

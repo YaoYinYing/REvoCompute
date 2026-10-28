@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -33,6 +34,10 @@ from pdb_selection import (
     resolve_start_point,
     validate_exclusions,
 )
+
+#: CAVER writes the initial start point it actually used to data/origins.pdb.
+#: The resolved point must match it; the slack absorbs the file's 3 decimals.
+ORIGIN_TOLERANCE_ANGSTROM = 0.05
 
 MAX_SNAPSHOTS = 50
 DEFAULT_TIMEOUT_SECONDS = 3600
@@ -114,6 +119,17 @@ def _distribution(root: Path) -> dict[str, object]:
         "library_sha256": libraries,
         "atom_radii_sha256": sha256_file(root / "bin" / "atom_radii.csv"),
     }
+
+
+def read_origin(path: Path) -> tuple[float, float, float]:
+    """Read the initial start point CAVER used from its origins.pdb."""
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.startswith(("ATOM", "HETATM")):
+            try:
+                return float(line[30:38]), float(line[38:46]), float(line[46:54])
+            except ValueError as exc:
+                raise SystemExit(f"CAVER origin record is malformed: {exc}") from exc
+    raise SystemExit("CAVER origins.pdb carries no origin record")
 
 
 def run(argv: list[str], timeout: int, cwd: Path, log_dir: Path, env: dict[str, str]) -> None:
@@ -218,6 +234,22 @@ def main() -> None:
 
     print("REVODESIGN_STAGE:compute_tunnels")
     run(argv, timeout, work, output_dir, env)
+
+    # CAVER's own origin is the authoritative initial point; publish it and
+    # refuse to attach provenance to a point CAVER did not use.
+    origin_path = raw_out / "data" / "origins.pdb"
+    if origin_path.is_file():
+        origin = read_origin(origin_path)
+        delta = math.dist(origin, (start_point.x, start_point.y, start_point.z))
+        provenance["caver_origin_angstrom"] = list(origin)
+        provenance["origin_delta_angstrom"] = round(delta, 4)
+        provenance_path.write_text(json.dumps(provenance, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        if delta > ORIGIN_TOLERANCE_ANGSTROM:
+            raise SystemExit(
+                f"CAVER started from {origin} but the resolved start point is "
+                f"({start_point.x:.3f}, {start_point.y:.3f}, {start_point.z:.3f}); "
+                f"the difference of {delta:.3f} A means the selection does not describe CAVER's origin"
+            )
 
     print("REVODESIGN_STAGE:normalize_results")
     shutil.copyfile(config_path, output_dir / "caver_config.txt")

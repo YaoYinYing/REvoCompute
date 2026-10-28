@@ -59,19 +59,6 @@ def test_manual_point_accepts_inside_and_rejects_outside_or_non_finite() -> None
 
 def test_selected_atom_honours_altloc_and_defaults_to_highest_occupancy() -> None:
     atoms = _atoms()
-    selected = resolve_start_point(
-        atoms,
-        {
-            "start_point_mode": "atom",
-            "start_chain": "A",
-            "start_residue_number": 1,
-            "start_atom_name": "CB",
-            "start_altloc": "B",
-        },
-    )
-    assert selected.provenance["point_angstrom"] == [3.0, 2.0, 1.0]
-    assert selected.directives == (("starting_point_atom", "4"),)
-
     # Empty altloc is documented as "highest occupancy", and that is what happens.
     default = resolve_start_point(
         atoms,
@@ -80,6 +67,20 @@ def test_selected_atom_honours_altloc_and_defaults_to_highest_occupancy() -> Non
     assert default.provenance["altloc"] == "A"
     assert default.provenance["atom_serial"] == 3
     assert default.directives == (("starting_point_atom", "3"),)
+
+    # CAVER deletes conformation B, so selecting it must fail rather than
+    # publish an origin CAVER never uses.
+    with pytest.raises(SelectionError, match="removed by CAVER"):
+        resolve_start_point(
+            atoms,
+            {
+                "start_point_mode": "atom",
+                "start_chain": "A",
+                "start_residue_number": 1,
+                "start_atom_name": "CB",
+                "start_altloc": "B",
+            },
+        )
 
     with pytest.raises(SelectionError, match="is absent from residue"):
         resolve_start_point(
@@ -93,9 +94,10 @@ def test_residue_centroid_averages_every_coordinate_record() -> None:
     residue = resolve_start_point(
         atoms, {"start_point_mode": "residue", "start_chain": "A", "start_residue_number": 1}
     )
-    # All four records, both CB alternate locations included, as CAVER averages them.
-    assert residue.provenance["point_angstrom"] == [2.25, 1.25, 1.0]
-    assert residue.provenance["atom_count"] == 4
+    # CAVER removes conformation B before averaging, so only N, CA and CB(A) count.
+    assert residue.provenance["point_angstrom"] == [2.0, 1.0, 1.0]
+    assert residue.provenance["atom_count"] == 3
+    assert residue.provenance["removed_altlocs"] == ["B"]
     assert residue.directives == (("starting_point_residue", "A:1"),)
 
     # An insertion-coded residue cannot be named by CAVER, so it is refused.
@@ -108,10 +110,11 @@ def test_residue_centroid_averages_every_coordinate_record() -> None:
 def test_residue_group_expands_ranges_into_individual_identifiers() -> None:
     atoms = _atoms()
     group = resolve_start_point(atoms, {"start_point_mode": "group", "start_group": "A:1-2"})
-    # Mean of the two residue centres: A:1 = (2.25, 1.25, 1.0), A:2 = (1.5, 2.0, 1.5).
-    assert group.provenance["point_angstrom"] == [1.875, 1.625, 1.25]
+    # Mean of the two residue centres: A:1 = (2.0, 1.0, 1.0), A:2 = (1.5, 2.0, 1.5).
+    assert group.provenance["point_angstrom"] == [1.75, 1.5, 1.25]
     assert group.provenance["residue_count"] == 2
-    assert group.provenance["atom_count"] == 6
+    # Conformation B is removed from A:1, so five atoms are averaged.
+    assert group.provenance["atom_count"] == 5
     # CAVER's start-point list has no range syntax, so the range is expanded.
     assert group.directives == (("starting_point_residue", "A:1 A:2"),)
 
@@ -157,6 +160,21 @@ def test_blank_chain_structure_uses_bare_identifiers() -> None:
     assert resolved.provenance["chain"] == ""
     assert resolved.provenance["point_angstrom"] == [3.5, 2.0, 1.0]
     assert resolved.directives == (("starting_point_residue", "2"),)
+
+
+def test_empty_chain_never_resolves_to_the_blank_chain_next_to_named_chains(tmp_path: Path) -> None:
+    text = (FIXTURES / "selection.pdb").read_text(encoding="utf-8")
+    blank = "ATOM      1    N ALA     9       7.000   7.000   7.000  1.00 20.00           N\n"
+    mixed = tmp_path / "mixed.pdb"
+    mixed.write_text(blank + text, encoding="utf-8")
+    atoms = parse_pdb(mixed)
+    # Residue 9 exists only in the blank chain while chain A/B are present;
+    # CAVER would resolve a chainless identifier to a named chain.
+    with pytest.raises(SelectionError, match="only in the blank chain"):
+        resolve_start_point(atoms, {"start_point_mode": "residue", "start_residue_number": 9})
+    # An explicitly named residue still resolves to that chain.
+    resolved = resolve_start_point(atoms, {"start_point_mode": "residue", "start_residue_number": 1})
+    assert resolved.provenance["chain"] == "A"
 
 
 def test_multi_model_pdb_is_rejected(tmp_path: Path) -> None:

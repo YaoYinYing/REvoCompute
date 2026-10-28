@@ -34,6 +34,7 @@ RAW_FILES = {
     "analysis/residues.txt": FIXTURES / "caver/residues.txt",
     "analysis/atoms.txt": FIXTURES / "caver/atoms.txt",
     "log.txt": FIXTURES / "caver/log.txt",
+    "data/origins.pdb": FIXTURES / "caver/origins.pdb",
 }
 MANIFEST_PARAMS = {
     "start_point_mode": "ligand",
@@ -155,6 +156,8 @@ def test_orchestrates_selection_config_execution_and_normalization(tmp_path: Pat
     assert provenance["start_point"]["residue_number"] == 500
     # Centroid of the 43 HEM atoms in 1SUO, computed independently from the structure.
     assert provenance["start_point"]["point_angstrom"] == pytest.approx([-22.31088, 90.26135, 8.80723], abs=1e-4)
+    assert provenance["caver_origin_angstrom"] == pytest.approx([-22.311, 90.261, 8.807], abs=1e-3)
+    assert provenance["origin_delta_angstrom"] < 0.05
     assert [frame["frame"] for frame in provenance["frames"]] == ["frame_1.pdb", "frame_2.pdb"]
     assert [frame["source_name"] for frame in provenance["frames"]] == ["1SUO.pdb", "second_frame.pdb"]
     assert provenance["distribution"]["jar_sha256"] == hashlib.sha256(b"caver-jar").hexdigest()
@@ -174,6 +177,18 @@ def test_unknown_exclusion_is_a_failure(tmp_path: Path, monkeypatch: pytest.Monk
     completed = invoke(tmp_path, manifest, stub_java(tmp_path), fake_distribution(tmp_path), tmp_path / "published")
     assert completed.returncode != 0
     assert "absent from the structure" in completed.stderr
+
+
+def test_origin_that_contradicts_the_selection_is_a_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    raw = raw_output_tree(tmp_path)
+    origin = raw / "data/origins.pdb"
+    origin.write_text(
+        origin.read_text(encoding="utf-8").replace("-22.311  90.261", "-17.311  90.261"), encoding="utf-8"
+    )
+    monkeypatch.setenv("CAVER_STUB_OUTPUT", str(raw))
+    completed = invoke(tmp_path, task_manifest(tmp_path), stub_java(tmp_path), fake_distribution(tmp_path), tmp_path / "published")
+    assert completed.returncode != 0
+    assert "does not describe CAVER's origin" in completed.stderr
 
 
 def test_nonzero_tool_exit_is_a_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
