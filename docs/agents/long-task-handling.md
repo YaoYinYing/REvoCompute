@@ -998,8 +998,8 @@ environment evidence    whether a live or deployment target still matches the
                         environment that was tested
 ```
 
-Record a **review receipt** when merge-grade review completes, inside the PR
-thread or as a structured PR comment — not in a new store. It carries the identity
+Record a **review receipt** for each required review round — merge-grade or
+not — inside the PR thread or as a structured PR comment, not in a new store. It carries the identity
 the next decision needs: `pr`, `head_sha`, `base_sha`, `patch_digest`,
 `changed_paths_digest`, `risk_tier`, `dependency_class`, `dependency_surface`,
 `review_result`, and `reviewed_at`. The validation lanes that ran are the CI
