@@ -64,7 +64,6 @@ def compile_graph(task_type: Any) -> CompiledGraph:
             raise GraphValidationError(f"duplicate node id: {stage.name}")
         by_id[stage.name] = stage
     graph_inputs = {}
-    role_types = {role.name: role.type for role in task_type.inputs}
     edges = {name: set() for name in by_id}
     nodes = {}
     for name, stage in by_id.items():
@@ -79,6 +78,7 @@ def compile_graph(task_type: Any) -> CompiledGraph:
             bindings[port.name] = binding
             if binding.startswith("graph:"):
                 role = binding[6:]
+                role_types = {item.name: item.type for item in task_type.inputs}
                 if role not in role_types:
                     raise GraphValidationError(f"unknown graph input: {role}")
                 if role_types[role] != port.type:
