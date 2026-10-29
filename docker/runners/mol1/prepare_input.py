@@ -54,6 +54,17 @@ class PreparationError(ValueError):
     """The task manifest cannot be prepared without guessing."""
 
 
+class DeliveryError(PreparationError):
+    """Inference output is incomplete or inconsistent with the admitted jobs."""
+
+
+_DELIVERY_PATTERNS = {
+    "structure": re.compile(r"(?P<job>.+)_sample_(?P<sample>[0-9]+)\.cif"),
+    "summary": re.compile(r"(?P<job>.+)_summary_confidence_sample_(?P<sample>[0-9]+)\.json"),
+    "full confidence": re.compile(r"(?P<job>.+)_full_data_sample_(?P<sample>[0-9]+)\.json"),
+}
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -213,6 +224,11 @@ def _seed_list(params: dict[str, Any]) -> list[int]:
     seeds = [int(value) for value in raw.split(",")]
     if any(seed > MAX_SEED_VALUE for seed in seeds):
         raise PreparationError(f"sample_seeds values must not exceed {MAX_SEED_VALUE}")
+    seen: set[int] = set()
+    for seed in seeds:
+        if seed in seen:
+            raise PreparationError(f"sample_seeds contains duplicate seed {seed}")
+        seen.add(seed)
     return seeds
 
 
@@ -326,8 +342,89 @@ def _asset_records(path: Path) -> list[dict[str, str]]:
     return records
 
 
-def finalize(manifest_path: Path, output_dir: Path) -> Path:
-    manifest, params = _load_manifest(manifest_path)
+def _identity_text(identity: tuple[str, int, int]) -> str:
+    job, seed, sample = identity
+    return f"job={job} seed={seed} sample={sample}"
+
+
+def _delivery_identities(paths: list[Path], kind: str) -> dict[tuple[str, int, int], Path]:
+    """Map every delivered file to exactly one (job, seed, sample) identity."""
+    pattern = _DELIVERY_PATTERNS[kind]
+    identities: dict[tuple[str, int, int], Path] = {}
+    for path in paths:
+        match = pattern.fullmatch(path.name)
+        if match is None:
+            raise DeliveryError(f"unexpected {kind} file name: {path.name}")
+        seed_dir = path.parent.parent.name
+        if not seed_dir.startswith("seed_") or not seed_dir[len("seed_") :].isdigit():
+            raise DeliveryError(f"{kind} file is not under a seed directory: {path}")
+        job = path.parent.parent.parent.name
+        if match.group("job") != job:
+            raise DeliveryError(f"{kind} name does not match its job directory: {path}")
+        identity = (job, int(seed_dir[len("seed_") :]), int(match.group("sample")))
+        if identity in identities:
+            raise DeliveryError(f"duplicate {kind} identity {_identity_text(identity)}")
+        if path.stat().st_size == 0:
+            raise DeliveryError(f"empty {kind} {_identity_text(identity)}")
+        identities[identity] = path
+    return identities
+
+
+def _expected_delivery(document: list[dict[str, Any]], params: dict[str, Any]) -> set[tuple[str, int, int]]:
+    seeds = _seed_list(params)
+    samples = params.get("num_samples")
+    if isinstance(samples, bool) or not isinstance(samples, int) or samples < 1:
+        raise PreparationError("num_samples must be a positive integer")
+    jobs = [str(job.get("name") or f"job_{index + 1}") for index, job in enumerate(document)]
+    return {(job, seed, sample) for job in jobs for seed in seeds for sample in range(samples)}
+
+
+def _require_delivery(
+    kind: str, actual: set[tuple[str, int, int]], expected: set[tuple[str, int, int]]
+) -> None:
+    missing = sorted(expected - actual)
+    if missing:
+        raise DeliveryError(f"missing {kind} {_identity_text(missing[0])}")
+    unexpected = sorted(actual - expected)
+    if unexpected:
+        raise DeliveryError(f"unexpected {kind} {_identity_text(unexpected[0])}")
+
+
+def _validate_delivery(document: list[dict[str, Any]], params: dict[str, Any], output_dir: Path) -> None:
+    """Require exactly one structure and summary per admitted job, seed and sample.
+
+    The filename sample index is the upstream rank, a permutation of the
+    requested samples, so every (job, seed) must carry ``range(num_samples)``.
+    """
+    expected = _expected_delivery(document, params)
+    structures = _delivery_identities(
+        sorted(output_dir.glob("*/seed_*/predictions/*_sample_*.cif")), "structure"
+    )
+    summaries = _delivery_identities(
+        sorted(output_dir.glob("*/seed_*/predictions/*_summary_confidence_sample_*.json")), "summary"
+    )
+    full = _delivery_identities(
+        sorted(output_dir.glob("*/seed_*/predictions/*_full_data_sample_*.json")), "full confidence"
+    )
+    _require_delivery("structure", set(structures), expected)
+    _require_delivery("summary", set(summaries), expected)
+    if params.get("need_atom_confidence") is True:
+        _require_delivery("full confidence", set(full), expected)
+    elif full:
+        raise DeliveryError(
+            f"unexpected full confidence data {_identity_text(sorted(full)[0])}; atom confidence was not requested"
+        )
+
+
+def finalize(manifest_path: Path, output_dir: Path, input_path: Path) -> Path:
+    _manifest, params = _load_manifest(manifest_path)
+    try:
+        document = json.loads(input_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise DeliveryError(f"Invalid admitted Mol-1 JSON: {exc}") from exc
+    if not isinstance(document, list) or not all(isinstance(job, dict) for job in document):
+        raise DeliveryError("Admitted Mol-1 JSON is not a job list")
+    _validate_delivery(document, params, output_dir)
     prepared = json.loads((output_dir / "normalized_inputs/provenance.json").read_text(encoding="utf-8"))
     upstream_path = Path(os.environ.get("MOL1_UPSTREAM", "/app/revocompute/upstream.json"))
     model_manifest = Path(os.environ.get("MOL1_MODEL_MANIFEST", "/app/revocompute/model-assets.sha256"))
@@ -377,6 +474,7 @@ def _main() -> None:
     finalize_parser = subparsers.add_parser("finalize")
     finalize_parser.add_argument("manifest", type=Path)
     finalize_parser.add_argument("output_dir", type=Path)
+    finalize_parser.add_argument("input", type=Path)
     args = parser.parse_args()
     try:
         if args.command == "prepare":
@@ -389,7 +487,9 @@ def _main() -> None:
                 rna_msa_mode=args.rna_msa_mode,
             )
         else:
-            print(finalize(args.manifest, args.output_dir))
+            print(finalize(args.manifest, args.output_dir, args.input))
+    except DeliveryError as exc:
+        raise SystemExit(f"Mol-1 delivery validation failed: {exc}") from exc
     except PreparationError as exc:
         raise SystemExit(f"Mol-1 input preparation failed: {exc}") from exc
 

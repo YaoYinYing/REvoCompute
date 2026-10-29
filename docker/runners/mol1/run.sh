@@ -181,6 +181,6 @@ if [[ -d "$output_dir/ERR" ]] && find "$output_dir/ERR" -type f -size +0c -print
   echo "Mol-1 reported an internal inference error" >&2; exit 1
 fi
 
-python3 "$prepare_input" finalize "$TASK_MANIFEST" "$output_dir" >/dev/null
+python3 "$prepare_input" finalize "$TASK_MANIFEST" "$output_dir" "$current" >/dev/null
 touch "$output_dir/task_finished"
 echo "Mol-1 inference complete."

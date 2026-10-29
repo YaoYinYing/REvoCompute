@@ -474,7 +474,10 @@ def _asset_tree(tmp_path: Path) -> tuple[Path, Path, Path]:
         "".join(f"{hashlib.sha256(content).hexdigest()}  {relative}\n" for relative, content in files.items()),
         encoding="ascii",
     )
-    template_files = {"common/obsolete_to_successor.json": b"successor"}
+    template_files = {
+        "common/obsolete_to_successor.json": b"successor",
+        "common/release_date_cache.json": b"cache",
+    }
     for relative, content in template_files.items():
         target = assets / relative
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -519,6 +522,119 @@ def _run(env: dict[str, str], manifest: Path, output: Path) -> subprocess.Comple
         capture_output=True,
         check=False,
     )
+
+
+def _two_job_document() -> list[dict]:
+    first = _document("minimal.json")[0]
+    second = json.loads(json.dumps(first))
+    second["name"] = "trp_cage_2"
+    return [first, second]
+
+
+def _write_delivery(
+    output: Path,
+    jobs: list[str],
+    seeds: list[int],
+    samples: list[int],
+    *,
+    full: bool = False,
+    skip: set[tuple[str, int, int]] | None = None,
+) -> None:
+    for job in jobs:
+        for seed in seeds:
+            predictions = output / job / f"seed_{seed}" / "predictions"
+            predictions.mkdir(parents=True, exist_ok=True)
+            for sample in samples:
+                if (job, seed, sample) in (skip or set()):
+                    continue
+                (predictions / f"{job}_sample_{sample}.cif").write_text("data_x\n", encoding="ascii")
+                (predictions / f"{job}_summary_confidence_sample_{sample}.json").write_text("{}", encoding="ascii")
+                if full:
+                    (predictions / f"{job}_full_data_sample_{sample}.json").write_text("{}", encoding="ascii")
+
+
+def _delivery_tree(
+    tmp_path: Path, monkeypatch, document: list[dict], **params
+) -> tuple[Path, Path, Path]:
+    _assets, model_manifest, search_manifest = _asset_tree(tmp_path)
+    monkeypatch.setenv("MOL1_UPSTREAM", str(FAMILY / "upstream.json"))
+    monkeypatch.setenv("MOL1_MODEL_MANIFEST", str(model_manifest))
+    monkeypatch.setenv("MOL1_SEARCH_MANIFEST", str(search_manifest))
+    input_path = tmp_path / "admitted.json"
+    input_path.write_text(json.dumps(document), encoding="utf-8")
+    manifest = _manifest(tmp_path, specification=input_path, **params)
+    output = tmp_path / "result"
+    (output / "normalized_inputs").mkdir(parents=True)
+    (output / "normalized_inputs/provenance.json").write_text("{}", encoding="utf-8")
+    return manifest, output, input_path
+
+
+def test_finalize_rejects_a_two_job_run_with_one_result(tmp_path: Path, monkeypatch) -> None:
+    manifest, output, input_path = _delivery_tree(tmp_path, monkeypatch, _two_job_document())
+    _write_delivery(output, ["trp_cage"], [101], [0])
+
+    with pytest.raises(
+        prepare_input.DeliveryError, match=r"missing structure job=trp_cage_2 seed=101 sample=0"
+    ):
+        prepare_input.finalize(manifest, output, input_path)
+
+
+def test_finalize_rejects_mismatched_structure_and_summary_identities(tmp_path: Path, monkeypatch) -> None:
+    manifest, output, input_path = _delivery_tree(
+        tmp_path, monkeypatch, _document("minimal.json"), num_samples=2
+    )
+    _write_delivery(output, ["trp_cage"], [101], [0, 1])
+    summary = output / "trp_cage" / "seed_101" / "predictions" / "trp_cage_summary_confidence_sample_1.json"
+    moved = output / "other" / "seed_101" / "predictions"
+    moved.mkdir(parents=True)
+    summary.rename(moved / "other_summary_confidence_sample_1.json")
+
+    with pytest.raises(
+        prepare_input.DeliveryError, match=r"missing summary job=trp_cage seed=101 sample=1"
+    ):
+        prepare_input.finalize(manifest, output, input_path)
+
+
+def test_finalize_rejects_duplicate_seeds(tmp_path: Path, monkeypatch) -> None:
+    manifest, output, input_path = _delivery_tree(
+        tmp_path, monkeypatch, _document("minimal.json"), sample_seeds="101,101"
+    )
+    _write_delivery(output, ["trp_cage"], [101], [0])
+
+    with pytest.raises(prepare_input.PreparationError, match="duplicate seed 101"):
+        prepare_input.finalize(manifest, output, input_path)
+
+
+def test_finalize_accepts_a_complete_multi_sample_run(tmp_path: Path, monkeypatch) -> None:
+    manifest, output, input_path = _delivery_tree(
+        tmp_path,
+        monkeypatch,
+        _document("minimal.json"),
+        sample_seeds="101,102",
+        num_samples=2,
+        need_atom_confidence=True,
+    )
+    _write_delivery(output, ["trp_cage"], [101, 102], [0, 1], full=True)
+
+    target = prepare_input.finalize(manifest, output, input_path)
+
+    provenance = json.loads(target.read_text(encoding="utf-8"))
+    assert provenance["delivered"] == {"structures": 4, "summaries": 4, "full_confidences": 4}
+
+
+def test_runner_rejects_a_partial_multi_job_delivery(tmp_path: Path) -> None:
+    specification = tmp_path / "two-jobs.json"
+    specification.write_text(json.dumps(_two_job_document()), encoding="utf-8")
+    manifest = _manifest(tmp_path, specification=specification)
+    env = _runner_env(tmp_path, manifest)
+    output = tmp_path / "result"
+
+    completed = _run(env, manifest, output)
+
+    assert completed.returncode != 0
+    assert "missing structure job=trp_cage_2 seed=101 sample=0" in completed.stderr
+    assert not (output / "task_finished").exists()
+    assert not (output / "mol1-provenance.json").exists()
 
 
 def test_runner_maps_parameters_and_keeps_msa_search_off(tmp_path: Path) -> None:
@@ -669,6 +785,28 @@ def test_runner_uses_a_supplied_template_without_search(tmp_path: Path) -> None:
     prepared = json.loads((output / "normalized_inputs/normalized-input.json").read_text(encoding="utf-8"))
     reference = prepared[0]["sequences"][0]["proteinChain"]["templatesPath"]
     assert Path(reference).is_absolute() and Path(reference).is_file()
+
+
+def test_runner_fails_when_a_supplied_template_index_is_corrupt(tmp_path: Path) -> None:
+    templates = tmp_path / "complex_templates.a3m"
+    templates.write_text(">hit\nACDE\n", encoding="utf-8")
+    manifest = _manifest(
+        tmp_path,
+        specification=_template_specification(tmp_path, with_template=True),
+        assets=[(templates, "complex_templates.a3m")],
+        template_mode="supply",
+    )
+    env = _runner_env(tmp_path, manifest)
+    # A retained template index that no longer matches its manifest entry must
+    # stop the run before prediction, even though the seqres database is not
+    # read in supply mode.
+    (Path(env["MOL_ROOT_DIR"]) / "common/release_date_cache.json").write_text("corrupt", encoding="ascii")
+
+    completed = _run(env, manifest, tmp_path / "result")
+
+    assert completed.returncode != 0
+    assert "template index integrity verification failed" in completed.stderr
+    assert not (tmp_path / "call.json").exists()
 
 
 def test_runner_refuses_template_supply_without_an_uploaded_template(tmp_path: Path) -> None:
