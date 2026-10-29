@@ -416,6 +416,10 @@ If one of these is false, continue the refactor.
 
 ## Multi-agent Campaign Protocol
 
+**Protocol version: 1.5.** The pre-#127 `main` baseline is version **1**, at
+commit `edd5fbe068bce7c5a3082f0c8558f32bad682cc4`. This version belongs to
+the Campaign protocol, not to the REvoCompute software release.
+
 A **Campaign** is a set of related PRs delivered as one effort, identified by a
 coordinating GitHub issue or by an explicitly named PR group in the launch
 instruction. Use this protocol when the task is identified as a Campaign, when a
@@ -834,9 +838,11 @@ itself justify a permanent rule.
 
 #### Protocol versions and active-Campaign compatibility
 
-Record the applicable launch instruction and protocol commit at Campaign
-start. Each governance PR states its effective scope and a bounded migration
-note. An adopted security/authority correction applies immediately to actions
+Record the applicable launch instruction, protocol **version**, and commit at
+Campaign start. Each substantive protocol revision updates the version in this
+section and records the old/new versions, baseline commit, rationale, effective
+scope, and a bounded migration note in its PR. Editorial-only changes do not
+require a version bump. An adopted security/authority correction applies immediately to actions
 not yet taken; otherwise, process changes are prospective unless an explicitly
 approved transition says otherwise. Do not retrospectively invalidate a
 completed independent review merely because documentation moved: evaluate
