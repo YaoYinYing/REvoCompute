@@ -23,6 +23,8 @@ REASONS = {
     "nonzero_exit": "The execution process exited unsuccessfully.",
     "missing_result": "Execution exited successfully but produced no non-empty result artifact.",
     "stage_output_missing": "A required stage output is missing, empty, or outside the task output directory.",
+    "stage_output_invalid": "A completed stage output changed, disappeared, or escaped the task output directory.",
+    "stage_output_unverified": "A completed stage's output identity was never recorded and cannot be reused safely.",
     "submission_failed": "The allocation request could not be submitted.",
     "job_id_unavailable": "The allocation request returned no usable scheduler job identity.",
     "allocation_unrecorded": "Execution was stopped because its allocation could not be recorded safely.",

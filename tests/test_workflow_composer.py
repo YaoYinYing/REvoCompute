@@ -136,7 +136,85 @@ def test_graph_scheduler_validates_outputs_and_preserves_attempts(monkeypatch, t
         assert runs[0]["reason_code"] == "stage_output_missing"
 
 
-def test_composer_resumes_after_completed_feature_stage(monkeypatch):
+@pytest.mark.parametrize(("mutation", "expected_reason"), [
+    ("unchanged", None),
+    ("deleted", "stage_output_invalid"),
+    ("changed", "stage_output_invalid"),
+    ("unverified", "stage_output_unverified"),
+])
+def test_resume_revalidates_completed_producer_outputs(monkeypatch, tmp_path, mutation, expected_reason):
+    task_runtime = _live_task_runtime()
+    runtime = RuntimeFamily("multistage_runner", ("bash", "run.sh"), "runner.def", "image.sif")
+    features = WorkflowStage(
+        "multistage_runner.features", "Features", False, ("-s", "features"), ("msa",),
+        outputs=(StagePortSpec("features", "features", path="features.dat"),),
+    )
+    model = WorkflowStage(
+        "multistage_runner.model", "Model", True, ("-s", "model"), ("model",),
+        inputs=(StagePortSpec("features", "features", source="multistage_runner.features:features"),),
+    )
+    task_type = TaskType(
+        "multistage_runner", "Synthetic staged calculation", runtime, (),
+        stage_markers={"msa": "MSA", "model": "Model"}, workflow=(features, model),
+    )
+    output = tmp_path / "output"
+    output.mkdir()
+    task_id = mutation.encode().hex().ljust(32, "0")[:32]
+    _ensure_task_row(task_runtime, task_id)
+
+    first_call = {"done": False}
+
+    class Job:
+        def __init__(self, name):
+            self.name = name
+
+        def submit(self):
+            return "42"
+
+        def poll(self):
+            if self.name.endswith("features"):
+                (output / "features.dat").write_text("features")
+                return JobState.COMPLETED
+            return JobState.COMPLETED if first_call["done"] else JobState.FAILED
+
+    def create(_task_id, stage_tt, *_args, **_kwargs):
+        return Job(stage_tt.name)
+
+    monkeypatch.setattr(task_runtime, "_create_job", create)
+    monkeypatch.setattr(task_runtime.task_store, "update_task", lambda *args, **kwargs: True)
+    policies = {stage.name: _policy(stage.requires_gpu) for stage in task_type.workflow}
+    assert task_runtime._run_compute_workflow(
+        task_id, {}, task_type, RunnerConfig(), [], str(output), policies, lambda _: None,
+    ) == JobState.FAILED
+    first_call["done"] = True
+    assert task_runtime.task_store.list_stage_runs(task_id)[0]["output_identity"]
+
+    if mutation == "deleted":
+        (output / "features.dat").unlink()
+    elif mutation == "changed":
+        (output / "features.dat").write_text("tampered")
+    elif mutation == "unverified":
+        with task_runtime.task_store.engine.begin() as conn:
+            conn.exec_driver_sql(
+                "UPDATE stage_runs SET output_identity = NULL WHERE task_id = ?",
+                (task_id,),
+            )
+
+    started = []
+    monkeypatch.setattr(task_runtime, "_create_job", lambda _id, tt, *a, **kw: started.append(tt.name) or Job(tt.name))
+    result = task_runtime._run_compute_workflow(
+        task_id, {}, task_type, RunnerConfig(), [], str(output), policies, lambda _: None,
+    )
+    if expected_reason is None:
+        assert result == JobState.COMPLETED
+        assert started == ["multistage_runner-model"]
+    else:
+        assert result == JobState.FAILED
+        assert started == []
+        assert (task_runtime.task_store.get_task_diagnostics(task_id) or {})["reason_code"] == expected_reason
+
+
+def test_composer_refuses_unverified_legacy_completed_stage(monkeypatch):
     task_runtime = _live_task_runtime()
 
     runtime = RuntimeFamily("multistage_runner", ("bash", "run.sh"), "runner.def", "image.sif")
@@ -153,28 +231,11 @@ def test_composer_resumes_after_completed_feature_stage(monkeypatch):
         stage_markers={"msa": "MSA", "model": "Model"},
         workflow=stages,
     )
-    updates = []
     created = []
-
-    class _Job:
-        def submit(self):
-            return "42"
-
-        def poll(self):
-            return JobState.COMPLETED
-
-    def _create(*args, **kwargs):
-        created.append((args[1], kwargs["resource_policy"]))
-        return _Job()
-
-    monkeypatch.setattr(task_runtime, "_create_job", _create)
-
-    def _update(task_id, **fields):
-        del task_id
-        updates.append(fields)
-        return True
-
-    monkeypatch.setattr(task_runtime.task_store, "update_task", _update)
+    monkeypatch.setattr(
+        task_runtime, "_create_job", lambda *args, **kwargs: created.append(args[1].name) or pytest.fail("no dispatch")
+    )
+    monkeypatch.setattr(task_runtime.task_store, "update_task", lambda *args, **kwargs: True)
     task = {
         "username": "tester",
         "workflow_state": json.dumps({"multistage_runner.features": {"status": "completed", "job_id": "41"}}),
@@ -182,24 +243,69 @@ def test_composer_resumes_after_completed_feature_stage(monkeypatch):
     _ensure_task_row(task_runtime, "a" * 32)
 
     result = task_runtime._run_compute_workflow(
-        "a" * 32,
-        task,
-        task_type,
-        RunnerConfig(),
-        [],
-        "/tmp/results",
+        "a" * 32, task, task_type, RunnerConfig(), [], "/tmp/results",
         {"multistage_runner.features": _policy(False), "multistage_runner.model": _policy(True)},
         lambda stage: None,
     )
 
+    assert result == JobState.FAILED
+    assert created == []
+    assert (task_runtime.task_store.get_task_diagnostics("a" * 32) or {})["reason_code"] == "stage_output_unverified"
+
+
+def test_latest_failed_attempt_is_not_reused(monkeypatch, tmp_path):
+    task_runtime = _live_task_runtime()
+    runtime = RuntimeFamily("multistage_runner", ("bash", "run.sh"), "runner.def", "image.sif")
+    features = WorkflowStage(
+        "multistage_runner.features", "Features", False, ("-s", "features"), ("msa",),
+        outputs=(StagePortSpec("features", "features", path="features.dat"),),
+    )
+    task_type = TaskType(
+        "multistage_runner", "Synthetic staged calculation", runtime, (),
+        stage_markers={"msa": "MSA"}, workflow=(features,),
+    )
+    task_id = "9" * 32
+    _ensure_task_row(task_runtime, task_id)
+    first = task_runtime.task_store.begin_stage_attempt(
+        task_id=task_id, stage_index=0, stage_name=features.name
+    )
+    task_runtime.task_store.finish_stage_attempt(
+        task_id=task_id, stage_name=features.name, attempt=first["attempt"],
+        status="COMPLETED", reason_code="completed", output_identity='{"output_identity_format":1,"files":[]}',
+    )
+    second = task_runtime.task_store.begin_stage_attempt(
+        task_id=task_id, stage_index=0, stage_name=features.name
+    )
+    task_runtime.task_store.finish_stage_attempt(
+        task_id=task_id, stage_name=features.name, attempt=second["attempt"],
+        status="FAILED", reason_code="allocation_failed",
+    )
+    output = tmp_path / "output"
+    output.mkdir()
+    started = []
+
+    class Job:
+        def submit(self):
+            return "42"
+
+        def poll(self):
+            (output / "features.dat").write_text("features")
+            return JobState.COMPLETED
+
+    monkeypatch.setattr(
+        task_runtime, "_create_job", lambda _id, tt, *a, **kw: started.append(tt.name) or Job()
+    )
+    monkeypatch.setattr(task_runtime.task_store, "update_task", lambda *args, **kwargs: True)
+    result = task_runtime._run_compute_workflow(
+        task_id, {}, task_type, RunnerConfig(), [], str(output),
+        {features.name: _policy(False)}, lambda _: None,
+    )
+
     assert result == JobState.COMPLETED
-    assert len(created) == 1
-    assert created[0][0].name == "multistage_runner-model"
-    assert created[0][0].gpus is True
-    assert created[0][1].requires_gpu is True
-    final_state = json.loads(updates[-1]["workflow_state"])
-    assert final_state["multistage_runner.features"]["status"] == "completed"
-    assert final_state["multistage_runner.model"]["status"] == "completed"
+    assert started == ["multistage_runner-features"]
+    runs = task_runtime.task_store.list_stage_runs(task_id)
+    assert max(int(run["attempt"]) for run in runs) == 3
+    assert [run["status"] for run in runs if run["attempt"] == 3] == ["COMPLETED"]
 
 
 def test_gpu_workflow_uses_owning_runtime_for_allocation_authorization(monkeypatch):

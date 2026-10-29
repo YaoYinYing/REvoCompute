@@ -42,6 +42,17 @@ def test_invalid_graph_rejected(stages, message):
         compile_graph(graph(*stages))
 
 
+def test_declared_output_paths_must_not_overlap():
+    first = WorkflowStage(
+        "a", "a", False, outputs=(StagePortSpec("out", "x", path="features/*.dat"),),
+    )
+    second = WorkflowStage(
+        "b", "b", False, outputs=(StagePortSpec("out", "x", path="features/result.dat"),),
+    )
+    with pytest.raises(GraphValidationError, match="output paths overlap"):
+        compile_graph(graph(first, second))
+
+
 def test_branch_rejected_as_unsupported_capability():
     with pytest.raises(UnsupportedGraphCapability, match="branch at a"):
         compile_graph(graph(stage("a"), stage("b", "a:out"), stage("c", "a:out")))

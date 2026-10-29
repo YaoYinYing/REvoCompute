@@ -736,6 +736,10 @@ class TaskDatabase:
             Column("started_at", Float),
             Column("ended_at", Float),
             Column("reason_code", String),
+            # Validated declared outputs of a COMPLETED attempt, written in the
+            # same guarded UPDATE that settles it: a versioned JSON document of
+            # sorted relative path, size and sha256. NULL on older attempts.
+            Column("output_identity", Text),
             Column("created_at", Float, nullable=False),
             Column("updated_at", Float, nullable=False),
         )
@@ -870,6 +874,9 @@ class TaskDatabase:
         try:
             for name in self._LEGACY_STAGE_RUN_INDEXES:
                 conn.exec_driver_sql(f'DROP INDEX IF EXISTS "{name}"')
+            columns = {column["name"] for column in sa_inspect(conn).get_columns("stage_runs")}
+            if "output_identity" not in columns:
+                conn.exec_driver_sql("ALTER TABLE stage_runs ADD COLUMN output_identity TEXT DEFAULT NULL")
             for index in self.stage_runs_table.indexes:
                 index.create(bind=conn, checkfirst=True)
         except IntegrityError as exc:
@@ -3029,6 +3036,7 @@ class TaskDatabase:
         status: str,
         reason_code: str | None = None,
         ended_at: float | None = None,
+        output_identity: str | None = None,
     ) -> bool:
         """Settle one attempt with a terminal status, monotonically.
 
@@ -3045,6 +3053,8 @@ class TaskDatabase:
             "ended_at": timestamp,
             "updated_at": time.time(),
         }
+        if status == stage_state.COMPLETED:
+            values["output_identity"] = output_identity
         stmt = (
             update(self.stage_runs_table)
             .where(

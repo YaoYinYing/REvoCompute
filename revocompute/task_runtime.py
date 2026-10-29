@@ -1053,7 +1053,8 @@ def _workflow_state_mirror(
 
 
 def _settle_stage_attempt(
-    task_id: str, stage_name: str, attempt: int | None, *, status: str, reason_code: str
+    task_id: str, stage_name: str, attempt: int | None, *, status: str, reason_code: str,
+    output_identity: str | None = None,
 ) -> bool:
     """Best-effort attempt settlement; bookkeeping never fails an allocation."""
     if attempt is None:
@@ -1065,6 +1066,7 @@ def _settle_stage_attempt(
             attempt=attempt,
             status=status,
             reason_code=stage_state.bounded_reason(reason_code),
+            output_identity=output_identity,
         )
     except Exception:
         logging.exception("Could not settle stage attempt %s/%s for task %s", stage_name, attempt, task_id)
@@ -1119,6 +1121,7 @@ def _finish_stage_attempt(
     state: JobState,
     *,
     failure_reason: str | None = None,
+    output_identity: str | None = None,
 ) -> None:
     """Settle one attempt from the allocation outcome Core observed.
 
@@ -1144,7 +1147,20 @@ def _finish_stage_attempt(
         reason_code = stage_state.Reason.TASK_CANCELLED
     else:
         reason_code = failure_reason or "allocation_failed"
-    _settle_stage_attempt(task_id, stage_name, attempt, status=status, reason_code=reason_code)
+    _settle_stage_attempt(
+        task_id, stage_name, attempt, status=status, reason_code=reason_code,
+        output_identity=output_identity,
+    )
+
+
+def _record_reuse_refusal(task_id: str, stage_name: str, reason_code: str) -> None:
+    """Classify a pre-dispatch refusal without touching the completed attempt."""
+    try:
+        evidence = task_store.get_task_diagnostics(task_id) or {}
+        evidence.update(reason_code=reason_code, stage_id=stage_name)
+        task_store.record_task_diagnostics(task_id, evidence)
+    except Exception:
+        logging.exception("Could not retain reuse refusal for task %s", task_id)
 
 
 def _run_compute_workflow(
@@ -1167,21 +1183,27 @@ def _run_compute_workflow(
     """
     legacy_state = _workflow_state(task)
     runs = task_store.list_stage_runs(task_id)
-    completed = {str(run["stage_name"]) for run in runs if run["status"] == stage_state.COMPLETED}
-    # The historical mirror is consulted only for a stage that has no StageRun
-    # record at all: a record, including a failed or interrupted one, always
-    # wins over what an older writer claimed.
-    recorded_names = {str(run["stage_name"]) for run in runs}
-    completed |= {
-        name for name, step in legacy_state.items()
-        if step.get("status") == "completed" and name not in recorded_names
-    }
+    latest_runs: dict[str, dict[str, Any]] = {}
+    for run in runs:
+        current = latest_runs.get(str(run["stage_name"]))
+        if current is None or int(run["attempt"]) > int(current["attempt"]):
+            latest_runs[str(run["stage_name"])] = run
     graph = compile_graph(tt)
     stages = {stage.name: (index, stage) for index, stage in enumerate(tt.workflow)}
     for node in graph.nodes:
         index, stage = stages[node.id]
-        if stage.name in completed:
+        latest = latest_runs.get(stage.name)
+        if latest is not None and latest["status"] == stage_state.COMPLETED:
+            refusal = _stage_reuse_valid(output_dir, node.outputs, latest)
+            if refusal is not None:
+                _record_reuse_refusal(task_id, stage.name, refusal)
+                return JobState.FAILED
             continue
+        if latest is None and (legacy_state.get(stage.name) or {}).get("status") == "completed":
+            # No row means the mirror's completion has no verified artifact
+            # identity; skipping it would trust evidence the Server never saw.
+            _record_reuse_refusal(task_id, stage.name, "stage_output_unverified")
+            return JobState.FAILED
         policy = resource_policies.get(stage.name)
         if policy is None:
             raise ResourceValidationError(f"Workflow stage {stage.name!r} has no resource snapshot")
@@ -1261,10 +1283,14 @@ def _run_compute_workflow(
                 task_id=task_id, reason_code=ReservationReason.RELEASED.value, at=time.time()
             )
         failure_reason = getattr(job, "failure_reason", None)
-        if result == JobState.COMPLETED and not _stage_outputs_present(output_dir, node.outputs):
+        identity = _stage_output_identity(output_dir, node.outputs)
+        if result == JobState.COMPLETED and identity is None:
             result = JobState.FAILED
             failure_reason = "stage_output_missing"
-        _finish_stage_attempt(task_id, stage.name, attempt, result, failure_reason=failure_reason)
+        _finish_stage_attempt(
+            task_id, stage.name, attempt, result, failure_reason=failure_reason,
+            output_identity=identity,
+        )
         settled: dict[str, Any] = {"slurm_job_id": None, "container_id": None}
         mirror = _mirror_json(task_id, legacy_state)
         if mirror is not None:
@@ -1272,26 +1298,68 @@ def _run_compute_workflow(
         task_store.update_task(task_id, **settled)
         if result != JobState.COMPLETED:
             return result
-        completed.add(stage.name)
     return JobState.COMPLETED
 
 
-def _stage_outputs_present(output_dir: str, outputs) -> bool:
-    for port in outputs:
-        try:
-            matches = list(Path(output_dir).glob(port.path))
-            if not matches:
-                if port.required:
-                    return False
-                continue
-            if any(
-                not _path_is_within(output_dir, str(path)) or not path.is_file() or path.stat().st_size == 0
-                for path in matches
-            ):
-                return False
-        except (OSError, ValueError):
-            return False
-    return True
+_OUTPUT_IDENTITY_FORMAT = 1
+
+
+def _stage_output_identity(output_dir: str, outputs) -> str | None:
+    """Hash declared output matches through the published-artifact verifier."""
+    if not outputs:
+        return json.dumps(
+            {"output_identity_format": _OUTPUT_IDENTITY_FORMAT, "files": []},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    listing = []
+    total_bytes = 0
+    try:
+        with _ResultTreeWalker(output_dir) as walker:
+            for port in outputs:
+                matches = []
+                for path in Path(output_dir).glob(port.path):
+                    if not _path_is_within(output_dir, str(path)):
+                        return None
+                    relative = Path(os.path.relpath(path, output_dir))
+                    matches.append(tuple(relative.parts))
+                if not matches and port.required:
+                    return None
+                for parts in sorted(set(matches)):
+                    verified = walker.open_published_file(
+                        parts, max_bytes=max(_published_byte_limit() - total_bytes, 0)
+                    )
+                    verified.handle.close()
+                    if verified.size == 0:
+                        return None
+                    listing.append({"path": "/".join(parts), "size": verified.size, "sha256": verified.digest})
+                    total_bytes += verified.size
+                    if len(listing) > _published_artifact_limit() or total_bytes > _published_byte_limit():
+                        return None
+    except (OSError, ValueError, ArtifactChangedError, ArtifactIdentityError, ArtifactOversizedError):
+        return None
+    listing.sort(key=lambda item: item["path"])
+    return json.dumps(
+        {"output_identity_format": _OUTPUT_IDENTITY_FORMAT, "files": listing},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _stage_reuse_valid(output_dir: str, outputs, recorded: dict[str, Any] | None) -> str | None:
+    """Return the refusal reason for the latest completed attempt's outputs."""
+    if not outputs:
+        return None
+    if not recorded or not recorded.get("output_identity"):
+        return "stage_output_unverified"
+    try:
+        document = json.loads(recorded["output_identity"])
+        if document.get("output_identity_format") != _OUTPUT_IDENTITY_FORMAT:
+            return "stage_output_unverified"
+    except (TypeError, ValueError, AttributeError):
+        return "stage_output_unverified"
+    current = _stage_output_identity(output_dir, outputs)
+    return "stage_output_invalid" if current is None or current != recorded["output_identity"] else None
 
 
 # ---------------------------------------------------------------------------

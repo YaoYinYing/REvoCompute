@@ -98,6 +98,15 @@ def compile_graph(task_type: Any) -> CompiledGraph:
             edges[producer].add(name)
         nodes[name] = StageNode(name, stage.runner_args, stage.requires_gpu, stage.requires_network,
                                 stage.stage_markers, bindings, outputs)
+    declared_outputs = [
+        (node.id, port.path) for node in nodes.values() for port in node.outputs if port.path is not None
+    ]
+    for position, (node_id, path) in enumerate(declared_outputs):
+        for other_node, other_path in declared_outputs[position + 1:]:
+            if node_id != other_node and _paths_overlap(path, other_path):
+                raise GraphValidationError(
+                    f"output paths overlap between {node_id} ({path}) and {other_node} ({other_path})"
+                )
     for name, targets in edges.items():
         if len(targets) > 8:
             raise GraphValidationError(f"graph exceeds fan-out bound of 8 at {name}")
@@ -124,3 +133,24 @@ def compile_graph(task_type: Any) -> CompiledGraph:
                  "graph_inputs": [asdict(port) for port in inputs], "execution_order": order}
     digest = hashlib.sha256(json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     return CompiledGraph(ordered_nodes, inputs, tuple(order), digest)
+
+
+def _paths_overlap(first: str | None, second: str | None) -> bool:
+    """Conservatively decide whether two declared output patterns can collide."""
+    if first is None or second is None:
+        return True
+    first_static = _static_prefix(first)
+    second_static = _static_prefix(second)
+    if first_static == second_static:
+        return True
+    shorter, longer = sorted((first_static, second_static), key=len)
+    return len(shorter) < len(longer) and longer[: len(shorter)] == shorter
+
+
+def _static_prefix(path: str) -> tuple[str, ...]:
+    parts = []
+    for part in path.split("/"):
+        if any(character in part for character in "*?["):
+            break
+        parts.append(part)
+    return tuple(parts)
