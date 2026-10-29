@@ -25,7 +25,15 @@ FAMILY = ROOT / "docker/runners/caver302"
 FIXTURES = Path(__file__).resolve().parent / "fixtures/caver"
 sys.path.insert(0, str(FAMILY))
 
-from normalize_results import OutputError, normalize, parse_bottlenecks, parse_residues  # noqa: E402
+from normalize_results import (  # noqa: E402
+    OutputError,
+    normalize,
+    parse_bottlenecks,
+    parse_characteristics,
+    parse_profiles,
+    parse_residues,
+    parse_summary,
+)
 
 RAW_FILES = {
     "summary.txt": FIXTURES / "summary.txt",
@@ -156,6 +164,65 @@ def test_non_finite_or_non_numeric_value_is_an_error(tmp_path: Path) -> None:
     (raw / "analysis/tunnel_characteristics.csv").write_text("\n".join(lines) + "\n", encoding="utf-8")
     with pytest.raises(OutputError, match="not finite"):
         normalize(raw, output, {})
+
+
+def test_non_integer_summary_identity_is_an_error(tmp_path: Path) -> None:
+    path = tmp_path / "summary.txt"
+    lines = (FIXTURES / "summary.txt").read_text(encoding="utf-8").splitlines()
+    index = next(i for i, line in enumerate(lines) if len(line.split()) == 18 and line.split()[0].isdigit())
+    fields = lines[index].split()
+    fields[0] = "one"
+    lines[index] = "  ".join(fields)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    with pytest.raises(OutputError, match="summary.txt has a non-integer cluster ID"):
+        parse_summary(path)
+
+
+def test_non_integer_characteristic_tunnel_key_is_an_error(tmp_path: Path) -> None:
+    path = tmp_path / "tunnel_characteristics.csv"
+    rows = list(csv.reader((FIXTURES / "tunnel_characteristics.csv").read_text(encoding="utf-8").splitlines()))
+    rows[1][[cell.strip() for cell in rows[0]].index("Tunnel cluster")] = "x"
+    path.write_text("\n".join(",".join(row) for row in rows) + "\n", encoding="utf-8")
+    with pytest.raises(OutputError, match="tunnel_characteristics.csv has a non-integer Tunnel cluster"):
+        parse_characteristics(path)
+
+
+def test_non_integer_profile_tunnel_key_is_an_error(tmp_path: Path) -> None:
+    path = tmp_path / "tunnel_profiles.csv"
+    rows = list(csv.reader((FIXTURES / "tunnel_profiles.csv").read_text(encoding="utf-8").splitlines()))
+    axis_index = [cell.strip() for cell in rows[0]].index("Axis")
+    row = next(candidate for candidate in rows[1:] if candidate[axis_index].strip() == "X")
+    row[[cell.strip() for cell in rows[0]].index("Tunnel")] = "x"
+    path.write_text("\n".join(",".join(candidate) for candidate in rows) + "\n", encoding="utf-8")
+    with pytest.raises(OutputError, match="tunnel_profiles.csv has a non-integer Tunnel"):
+        parse_profiles(path)
+
+
+def test_non_integer_bottleneck_tunnel_key_is_an_error(tmp_path: Path) -> None:
+    path = tmp_path / "bottlenecks.csv"
+    lines = (FIXTURES / "bottlenecks.csv").read_text(encoding="utf-8").splitlines()
+    header_index = next(i for i, line in enumerate(lines) if line.startswith("Snapshot,"))
+    rows = list(csv.reader(lines[header_index:]))
+    rows[1][[cell.strip() for cell in rows[0]].index("Tunnel cluster")] = "x"
+    path.write_text("\n".join([*lines[:header_index], *((",".join(row)) for row in rows)]) + "\n", encoding="utf-8")
+    with pytest.raises(OutputError, match="bottlenecks.csv has a non-integer Tunnel cluster"):
+        parse_bottlenecks(path)
+
+
+def test_non_integer_residue_snapshot_count_is_an_error(tmp_path: Path) -> None:
+    path = tmp_path / "residues.txt"
+    lines = (FIXTURES / "residues.txt").read_text(encoding="utf-8").splitlines()
+    index = next(
+        i
+        for i, line in enumerate(lines)
+        if line.strip() and not line.lstrip().startswith(("#", "==")) and len(line[14:].split()) >= 2
+    )
+    fields = lines[index][14:].split()
+    fields[0] = "x"
+    lines[index] = lines[index][:14] + " ".join(fields)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    with pytest.raises(OutputError, match="residues.txt has a non-integer snapshot count"):
+        parse_residues(path)
 
 
 def test_profile_axis_length_mismatch_is_an_error(tmp_path: Path) -> None:

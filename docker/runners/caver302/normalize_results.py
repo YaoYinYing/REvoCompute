@@ -127,6 +127,14 @@ def optional_number(text: str) -> str:
     return "" if stripped in ("", "-") else f"{number(stripped, 'value'):.10g}"
 
 
+def integer_field(text: str, field: str, path: Path) -> int:
+    """Parse one integer identity or count cell inside the normalizer's error boundary."""
+    try:
+        return int(text.strip())
+    except ValueError as exc:
+        raise OutputError(f"{path.name} has a non-integer {field}: {text!r}") from exc
+
+
 def parse_summary(path: Path) -> list[dict[str, object]]:
     """Parse the fixed-width tunnel-cluster summary table."""
     lines = path.read_text(encoding="utf-8").splitlines()
@@ -145,9 +153,9 @@ def parse_summary(path: Path) -> list[dict[str, object]]:
             raise OutputError("summary.txt contains a malformed tunnel-cluster row")
         clusters.append(
             {
-                "cluster": int(fields[0]),
-                "tunnel_count": int(fields[1]),
-                "snapshot_count": int(fields[2]),
+                "cluster": integer_field(fields[0], "cluster ID", path),
+                "tunnel_count": integer_field(fields[1], "tunnel count", path),
+                "snapshot_count": integer_field(fields[2], "snapshot count", path),
                 "mean_bottleneck_radius_angstrom": optional_number(fields[3]),
                 "max_bottleneck_radius_angstrom": optional_number(fields[5]),
                 "mean_length_angstrom": optional_number(fields[6]),
@@ -186,8 +194,8 @@ def parse_characteristics(path: Path) -> list[dict[str, object]]:
         tunnels.append(
             {
                 "snapshot": row[index["Snapshot"]],
-                "tunnel_cluster": int(row[index["Tunnel cluster"]]),
-                "tunnel": int(row[index["Tunnel"]]),
+                "tunnel_cluster": integer_field(row[index["Tunnel cluster"]], "Tunnel cluster", path),
+                "tunnel": integer_field(row[index["Tunnel"]], "Tunnel", path),
                 "throughput": f"{number(row[index['Throughput']], 'Throughput'):.10g}",
                 "cost": f"{number(row[index['Cost']], 'Cost'):.10g}",
                 "bottleneck_radius_angstrom": f"{number(row[index['Bottleneck radius']], 'Bottleneck radius'):.10g}",
@@ -232,8 +240,8 @@ def parse_profiles(path: Path) -> list[dict[str, object]]:
             raise OutputError(f"tunnel_profiles.csv has no values for axis {axis!r}")
         key = (
             row[key_index["Snapshot"]],
-            int(row[key_index["Tunnel cluster"]]),
-            int(row[key_index["Tunnel"]]),
+            integer_field(row[key_index["Tunnel cluster"]], "Tunnel cluster", path),
+            integer_field(row[key_index["Tunnel"]], "Tunnel", path),
         )
         if (*key, axis) in seen:
             # CAVER writes one row per axis; a repeated axis would silently
@@ -292,8 +300,8 @@ def parse_bottlenecks(path: Path) -> list[dict[str, object]]:
         rows.append(
             {
                 "snapshot": cells[index["Snapshot"]],
-                "tunnel_cluster": int(cells[index["Tunnel cluster"]]),
-                "tunnel": int(cells[index["Tunnel"]]),
+                "tunnel_cluster": integer_field(cells[index["Tunnel cluster"]], "Tunnel cluster", path),
+                "tunnel": integer_field(cells[index["Tunnel"]], "Tunnel", path),
                 "throughput": f"{number(cells[index['Throughput']], 'Throughput'):.10g}",
                 "cost": f"{number(cells[index['Cost']], 'Cost'):.10g}",
                 "bottleneck_x_angstrom": f"{number(cells[index['Bottleneck X']], 'Bottleneck X'):.6g}",
@@ -360,8 +368,8 @@ def parse_residues(path: Path) -> list[dict[str, object]]:
                 "residue_number": number,
                 "insertion_code": icode,
                 "residue_name": name,
-                "snapshot_count": int(fields[0]),
-                "sidechain_snapshot_count": int(fields[1]),
+                "snapshot_count": integer_field(fields[0], "snapshot count", path),
+                "sidechain_snapshot_count": integer_field(fields[1], "sidechain snapshot count", path),
                 "lining_atoms": ";".join(fields[2:]),
             }
         )
