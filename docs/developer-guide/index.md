@@ -11,6 +11,8 @@ execution boundaries, extension contracts, and the test policy.
   typed registry.
 - [Execution Model](execution-model.md) — from API request to Slurm/Apptainer
   execution and parsed outputs.
+- [Execution Stage State](execution-stage-state.md) — the `stage_runs` attempt
+  record that owns stage status, transitions, and Task-status projection.
 
 ## Extension contracts
 

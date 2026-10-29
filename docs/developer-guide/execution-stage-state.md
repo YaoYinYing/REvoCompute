@@ -1,6 +1,6 @@
-# RFC — durable execution-stage state
+# Execution Stage State
 
-> Status: accepted for implementation in PR #118. Core only. No Runner protocol
+> Status: implemented by PR #118. Core owns stage state. No Runner protocol
 > change, no stage-selection UI, no artifact reuse (PR #119).
 
 ## Problem

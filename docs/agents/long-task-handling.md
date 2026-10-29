@@ -416,11 +416,12 @@ If one of these is false, continue the refactor.
 
 ## Multi-agent Campaign Protocol
 
-**Protocol version: 1.5** (baseline: v1 at `edd5fbe`, pre-#127). The version
-covers this Campaign protocol, not the software release. A Campaign records its
-launch instruction, governing version, and commit at start; a revision records
-the old/new version, baseline commit, rationale, effective scope, and a bounded
-migration note in its PR, while editorial changes need no bump.
+**Protocol version: 1.6** (baseline: v1 at `edd5fbe`, pre-#127; v1.5 at
+`0e6629f`). The version covers this Campaign protocol, not the software release.
+A Campaign records its launch instruction, governing version, and commit at
+start; a revision records the old/new version, baseline commit, rationale,
+effective scope, and a bounded migration note in its PR, while editorial changes
+need no bump.
 
 A revision carries two kinds of change. A change that **restricts** what any
 Campaign may do — an unverified instruction never authorizes work, a security or
@@ -432,12 +433,12 @@ revision merges. Where the two readings differ, the restrictive one wins. A
 running Campaign otherwise keeps the version it recorded at launch unless the
 maintainer approves a transition.
 
-Adopting v1.5 while Campaigns are running is therefore one intentional C3 event:
-each active PR takes a fresh full merge-grade review against its exact head after
-the revision lands, because nothing distinguishes a safe clarification from a
-requirement change (see Drift). Reviews completed before the adoption stay on the
-record but do not carry into that gate, and evidence is never carried across a
-changed scientific or safety rule.
+Adopting a revision while Campaigns are running is therefore one intentional C3
+event: each active PR takes a fresh full merge-grade review against its exact
+head after the revision lands, because nothing distinguishes a safe
+clarification from a requirement change (see Drift). Reviews completed before
+the adoption stay on the record but do not carry into that gate, and evidence is
+never carried across a changed scientific or safety rule.
 
 A **Campaign** is a set of related PRs delivered as one effort, identified by a
 coordinating GitHub issue or by an explicitly named PR group in the launch
@@ -1386,6 +1387,14 @@ artifacts from the final tree:
 
 Durable project or Campaign policy belongs in stable documentation such as
 `CLAUDE.md`, this protocol, and the developer/operator docs.
+
+Campaign coordination documents under `campaigns/<date>/<workstream>/` are
+transient too, even though they are tracked rather than gitignored. A completed
+PR must not leave one behind: migrate any still-durable architectural or
+operational content to its canonical documentation owner and delete the campaign
+copy before `READY_FOR_FINAL_REVIEW`. Enduring architectural or operational value
+is the only justification for keeping that content, and it is satisfied by the
+migration, not by retaining the campaign path.
 
 ### Per-PR execution state
 
