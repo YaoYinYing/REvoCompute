@@ -372,26 +372,19 @@ def test_snapshot_topology_must_match_the_reference(tmp_path: Path) -> None:
         assert_snapshot_matches(reference, parse_pdb(truncated), "truncated.pdb")
 
 
-def test_coordinates_only_records_are_accepted(tmp_path: Path) -> None:
+def test_coordinates_only_records_need_the_full_coordinate_block(tmp_path: Path) -> None:
     # CAVER derives the element from the atom name when columns 77-78 are absent,
-    # so a coordinates-only PDB is legitimate input.
-    lines = [line for line in (FIXTURES / "blank_chain.pdb").read_text(encoding="utf-8").splitlines()
-             if line.startswith("ATOM")]
-    assert len(parse_pdb(_write(tmp_path, "short.pdb", [line[:54] for line in lines]))) == len(lines)
-
-    # A record truncated inside its coordinate fields is still a real error.
-    with pytest.raises(SelectionError, match="malformed coordinate record"):
-        parse_pdb(_write(tmp_path, "broken.pdb", [lines[0][:45]]))
-
-
-def test_coordinates_only_records_select_the_same_atom_as_the_full_form(tmp_path: Path) -> None:
-    lines = [line for line in (FIXTURES / "blank_chain.pdb").read_text(encoding="utf-8").splitlines()
-             if line.startswith("ATOM")]
-    full = parse_pdb(_write(tmp_path, "full.pdb", lines))
-    short = parse_pdb(_write(tmp_path, "short.pdb", [line[:54] for line in lines]))
-    assert [atom.identity for atom in short] == [atom.identity for atom in full]
-    params = {"start_point_mode": "atom", "start_residue_number": 2, "start_atom_name": "CA"}
-    assert resolve_start_point(short, params).directives == resolve_start_point(full, params).directives
+    # but it still reads x, y and z from the fixed 31-54 slice, so a record must
+    # carry the whole coordinate block.
+    line = next(
+        line
+        for line in (FIXTURES / "blank_chain.pdb").read_text(encoding="utf-8").splitlines()
+        if line.startswith("ATOM")
+    )
+    for width in (50, 53):
+        with pytest.raises(SelectionError, match="malformed coordinate record"):
+            parse_pdb(_write(tmp_path, f"short_{width}.pdb", [line[:width]]))
+    assert len(parse_pdb(_write(tmp_path, "coordinates_only.pdb", [line[:54]]))) == 1
 
 
 def test_residue_whose_alternate_locations_have_no_occupancy_is_refused(tmp_path: Path) -> None:

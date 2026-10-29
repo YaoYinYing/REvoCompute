@@ -134,6 +134,11 @@ def parse_pdb(path: Path) -> list[Atom]:
             continue
         if not (record.startswith("ATOM") or record.startswith("HETATM")):
             continue
+        # CAVER reads x, y and z from the fixed 31-54 slice and aborts with
+        # StringIndexOutOfBoundsException below 54 columns; a shorter line would
+        # also let the slices parse a silently truncated coordinate here.
+        if len(line) < 54:
+            raise SelectionError(f"structure {path.name} contains a malformed coordinate record")
         try:
             atoms.append(
                 Atom(
