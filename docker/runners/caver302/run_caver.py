@@ -50,6 +50,32 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def prepared_input(item: object, root: Path) -> Path:
+    """Resolve one manifest input and refuse anything outside the prepared input root.
+
+    The Server writes ``task.json`` inside the immutable role snapshot and its
+    ``path`` values are mounted siblings under that same root, so the manifest's
+    own directory is the only tree this Runner may read. A traversal, an
+    absolute path elsewhere or a symlink pointing out of the root is refused
+    instead of being parsed.
+    """
+    raw = item.get("path") if isinstance(item, dict) else None
+    if not isinstance(raw, str) or not raw.strip():
+        raise SystemExit("CAVER input entry has no path")
+    candidate = Path(raw)
+    if not candidate.is_absolute():
+        candidate = root / candidate
+    try:
+        resolved = candidate.resolve(strict=True)
+    except OSError:
+        raise SystemExit(f"CAVER input is missing: {candidate.name}") from None
+    if not resolved.is_relative_to(root):
+        raise SystemExit(f"CAVER input {candidate.name} escapes the prepared input root")
+    if not resolved.is_file():
+        raise SystemExit(f"CAVER input is missing: {candidate.name}")
+    return resolved
+
+
 def load_manifest(path: Path) -> tuple[dict[str, object], list[Path], list[Path]]:
     try:
         document = json.loads(path.read_text(encoding="utf-8"))
@@ -70,11 +96,9 @@ def load_manifest(path: Path) -> tuple[dict[str, object], list[Path], list[Path]
         raise SystemExit("CAVER requires exactly one structure input")
     if not isinstance(snapshots, list) or len(snapshots) > MAX_SNAPSHOTS:
         raise SystemExit(f"CAVER accepts at most {MAX_SNAPSHOTS} additional snapshots")
-    structure_paths = [Path(str(item["path"])) for item in structure]
-    snapshot_paths = [Path(str(item["path"])) for item in snapshots]
-    for candidate in (*structure_paths, *snapshot_paths):
-        if not candidate.is_file():
-            raise SystemExit(f"CAVER input is missing: {candidate.name}")
+    root = path.resolve().parent
+    structure_paths = [prepared_input(item, root) for item in structure]
+    snapshot_paths = [prepared_input(item, root) for item in snapshots]
     return params, structure_paths, snapshot_paths
 
 

@@ -44,8 +44,10 @@ MANIFEST_PARAMS = {
     "start_residue_number": 500,
 }
 
+sys.path.insert(0, str(FAMILY))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from caver_params import BASE_PARAMS  # noqa: E402
+from run_caver import load_manifest  # noqa: E402
 
 
 def fake_distribution(tmp_path: Path) -> Path:
@@ -100,17 +102,62 @@ def stub_java(tmp_path: Path, *, exit_code: int = 0) -> Path:
 def task_manifest(
     tmp_path: Path, snapshot: Path | None = None, overrides: dict[str, object] | None = None
 ) -> Path:
-    inputs = {"structure": [{"path": str(ROOT / "tests/data/pdb/1SUO.pdb")}]}
+    root = tmp_path / "inputs"
+    structure = root / "structure" / "1SUO.pdb"
+    structure.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(ROOT / "tests/data/pdb/1SUO.pdb", structure)
+    inputs = {"structure": [{"path": str(structure)}]}
     if snapshot is not None:
-        inputs["snapshots"] = [{"path": str(snapshot)}]
+        staged = root / "snapshots" / snapshot.name
+        staged.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(snapshot, staged)
+        inputs["snapshots"] = [{"path": str(staged)}]
     manifest = {
         "task_type": "caver",
         "params": {**BASE_PARAMS, **MANIFEST_PARAMS, **(overrides or {})},
         "inputs": inputs,
     }
-    path = tmp_path / "task.json"
+    path = root / "task.json"
     path.write_text(json.dumps(manifest), encoding="utf-8")
     return path
+
+
+def test_manifest_paths_must_stay_inside_the_prepared_input_root(tmp_path: Path) -> None:
+    root = tmp_path / "inputs"
+    structure = root / "structure" / "1SUO.pdb"
+    structure.parent.mkdir(parents=True)
+    shutil.copyfile(ROOT / "tests/data/pdb/1SUO.pdb", structure)
+    snapshot = root / "snapshots" / "second_frame.pdb"
+    snapshot.parent.mkdir()
+    shutil.copyfile(ROOT / "tests/data/pdb/1SUO.pdb", snapshot)
+    outside = tmp_path / "outside.pdb"
+    shutil.copyfile(ROOT / "tests/data/pdb/1SUO.pdb", outside)
+    escape = root / "structure" / "escape.pdb"
+    escape.symlink_to(outside)
+
+    def manifest(structure_path: str, snapshot_path: str | None = None) -> Path:
+        inputs: dict[str, list[dict[str, str]]] = {"structure": [{"path": structure_path}]}
+        if snapshot_path is not None:
+            inputs["snapshots"] = [{"path": snapshot_path}]
+        path = root / "task.json"
+        path.write_text(
+            json.dumps({"task_type": "caver", "params": BASE_PARAMS, "inputs": inputs}), encoding="utf-8"
+        )
+        return path
+
+    _, structures, snapshots = load_manifest(manifest(str(structure), str(snapshot)))
+    assert structures == [structure.resolve()]
+    assert snapshots == [snapshot.resolve()]
+
+    for structure_path, snapshot_path in (
+        (str(outside), None),
+        (str(root / ".." / "outside.pdb"), None),
+        (str(escape), None),
+        (str(structure), str(escape)),
+        (str(structure), "../outside.pdb"),
+    ):
+        with pytest.raises(SystemExit, match="escapes the prepared input root"):
+            load_manifest(manifest(structure_path, snapshot_path))
 
 
 def invoke(
