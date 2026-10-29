@@ -77,6 +77,50 @@ def test_workflow_live_task_form_carries_a_dispatchable_frozen_graph(tmp_path):
     assert frozen["digest"] == graph["digest"]
 
 
+def test_composed_live_test_pins_every_referenced_family(monkeypatch, tmp_path):
+    from dataclasses import replace
+
+    from revocompute import runtime_bundle, task_runtime
+    from revocompute.task_types import get, get_family
+
+    base, _ = get("multistage_runner")
+    foreign_runtime, _ = get_family("cpu_runner")
+    composed = replace(
+        base,
+        workflow=(base.workflow[0], replace(base.workflow[1], family=foreign_runtime.name)),
+    )
+    runner_root = tmp_path / "runner_root"
+    for family in (base.runtime, foreign_runtime):
+        for relative in family.runtime_overlay:
+            path = runner_root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(family.name, encoding="utf-8")
+    store = tmp_path / "bundles"
+    published = {
+        family.name: runtime_bundle.materialize(runner_root, family.runtime_overlay, store)[0]
+        for family in (base.runtime, foreign_runtime)
+    }
+    runtime_bundle.write_index(store, published)
+    for relative in base.runtime.runtime_overlay:
+        (runner_root / relative).write_text("candidate", encoding="utf-8")
+    candidate = runtime_bundle.materialize(runner_root, base.runtime.runtime_overlay, store)[0]
+    assert candidate != published[base.runtime.name]
+    monkeypatch.setattr(
+        task_runtime, "CONFIG", replace(task_runtime.CONFIG, runtime_bundle_root=str(store))
+    )
+
+    pins = live_test_executor._pinned_runtime_bundles(composed, candidate)
+
+    assert pins == {
+        base.runtime.name: candidate,
+        foreign_runtime.name: published[foreign_runtime.name],
+    }
+
+    runtime_bundle.write_index(store, {base.runtime.name: published[base.runtime.name]})
+    with pytest.raises(ValueError, match="runtime bundle is unavailable"):
+        live_test_executor._pinned_runtime_bundles(composed, candidate)
+
+
 def test_gpu_accounting_uses_any_gpu_stage_in_the_graph(monkeypatch):
     from revocompute.task_types import RuntimeFamily, TaskType, WorkflowStage
 

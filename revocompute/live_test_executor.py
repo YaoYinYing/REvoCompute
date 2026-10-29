@@ -19,9 +19,11 @@ from typing import Any
 
 from revocompute import task_runtime
 from revocompute import resource_ledger as rloan
+from revocompute import runtime_bundle
 from revocompute.execution_graph import execution_graph_payload
 from revocompute.live_tests import atomic_write_json, sha256_file
 from revocompute.resource_observations import observations_for_guidance
+from revocompute.task_types import get_family
 
 
 _LIVE_TEST_GPU_USER_ID = 1
@@ -42,7 +44,7 @@ def _task_input_form(
     snapshot_root: Path,
     storage_key: str,
     resources: dict,
-    runtime_bundles: dict[str, str],
+    runtime_bundles: dict[str, str | None],
     execution_graph: dict[str, Any] | None,
 ) -> str:
     """Serialize the live-test task row's ``input_form``.
@@ -74,7 +76,7 @@ def _live_task_manifest(
     task_type_def: Any,
     parameters: dict[str, Any],
     manifest_inputs: dict[str, list[dict[str, Any]]],
-    runtime_bundles: dict[str, str],
+    runtime_bundles: dict[str, str | None],
 ) -> dict[str, Any]:
     """Build the runner manifest exactly as the submission handler does.
 
@@ -263,6 +265,40 @@ def _evidence(task: dict[str, Any], output_root: Path | None = None) -> dict[str
         "slurm_job_id": job_id or None,
         "slurm_jobs": jobs,
     }
+
+
+def _pinned_runtime_bundles(task_type_def: Any, candidate_digest: str | None) -> dict[str, str | None]:
+    """Pin every runtime family the live-test graph will execute.
+
+    The family under test uses the candidate digest the controller materialized;
+    every other referenced family uses its published binding. A family that
+    declares an overlay but has no resolvable bundle fails the live test before
+    launch, matching production submission.
+    """
+    families = {task_type_def.runtime.name: task_type_def.runtime}
+    for stage in task_type_def.workflow:
+        family_id = stage.family or task_type_def.runtime.name
+        if family_id in families:
+            continue
+        try:
+            families[family_id] = get_family(family_id)[0]
+        except KeyError as exc:
+            raise ValueError(f"live-test references unknown runtime family: {family_id}") from exc
+    bundle_root = task_runtime.CONFIG.runtime_bundle_root
+    index = runtime_bundle.load_index(bundle_root)
+    try:
+        return {
+            family.name: runtime_bundle.resolve_for_submission(
+                bundle_root,
+                index,
+                family.name,
+                declares_overlay=bool(family.runtime_overlay),
+                digest=candidate_digest if family.name == task_type_def.runtime.name else None,
+            )
+            for family in families.values()
+        }
+    except runtime_bundle.RuntimeBundleError as exc:
+        raise ValueError(f"live-test runtime bundle is unavailable: {exc}") from exc
 
 
 def _prepare_gpu_accounting(task_type_def: Any) -> dict[str, Any] | None:
@@ -486,23 +522,9 @@ def execute(request_path: str | os.PathLike[str]) -> dict[str, Any]:
             }
         )
     atomic = snapshot_root / "task.json"
-    # The candidate digest travels in the request, and the snapshot records it
-    # as the production submission path does.  A declared-but-unresolvable
-    # candidate fails the run rather than silently executing without a bundle.
-    from revocompute import runtime_bundle
-
-    bundle_root = task_runtime.CONFIG.runtime_bundle_root
-    try:
-        pinned = runtime_bundle.resolve_for_submission(
-            bundle_root,
-            runtime_bundle.load_index(bundle_root),
-            task_type_def.runtime.name,
-            declares_overlay=bool(task_type_def.runtime.runtime_overlay),
-            digest=request.get("runtime_bundle_sha256") or None,
-        )
-    except runtime_bundle.RuntimeBundleError as exc:
-        raise ValueError(f"live-test runtime bundle is unavailable: {exc}") from exc
-    runtime_bundles = {task_type_def.runtime.name: pinned} if pinned else {}
+    # The candidate digest travels in the request; every other referenced family
+    # resolves its published pin, exactly as a production submission does.
+    runtime_bundles = _pinned_runtime_bundles(task_type_def, request.get("runtime_bundle_sha256") or None)
     input_form = _task_input_form(
         entities,
         snapshot_root,
