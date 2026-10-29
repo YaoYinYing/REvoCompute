@@ -123,6 +123,40 @@ downstream stages become eligible only when their *specific* required input
 artifacts are complete and authorized. A failed independent branch retains
 other branches' valid artifacts. Retry must never duplicate publication.
 
+### Cross-family stage references (delivered contract)
+
+A workflow stage may name the Runner Family that owns it:
+
+~~~yaml
+workflow:
+- name: msa_preparation
+  family: gremlin            # owning fleet family; defaults to the task's own
+  stage: msa                 # stage entrypoint the family supports
+  outputs:
+  - {name: alignment, type: a3m_alignment, path: "alignment/*.a3m"}
+~~~
+
+Rules, all enforced at discovery or submission rather than at dispatch:
+
+- `family` must resolve to an enabled, installed Runner Family; an unknown or
+  disabled family is a manifest error.
+- The owning family's resource policy and access policy apply to that stage.
+  The composing Task Type owns the merged user-facing parameter namespace and
+  input roles; a family contributes only its stage's own parameters.
+- Submission requires every referenced family to be admission-ready. One
+  unready family refuses the whole submission before any allocation.
+- Dispatch resolves the runtime image, entrypoint, mounts and runtime bundle
+  per stage from that stage's family; the Task-level runtime is not used as a
+  fallback.
+- The frozen graph records each stage's family identity, so a later change to
+  a family's stage implementation is a digest change, not a silent
+  substitution.
+- A composition that would cross a family's licence or data-export boundary is
+  refused at submission.
+
+Cross-family references are additive to the existing single-family manifest:
+a task that omits `family` keeps its current meaning.
+
 ## Scheduling and state
 
 - Dependency state (WAITING/READY/BLOCKED) is distinct from scheduler
