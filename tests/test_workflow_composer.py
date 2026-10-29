@@ -14,6 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 from revocompute.access_control import AccessPolicy
+from revocompute.execution_graph import compile_graph
 from revocompute.job import JobState
 from revocompute.job.runners.slurm_runner import SlurmJob
 from revocompute.resource_policy import ResolvedResources
@@ -60,6 +61,19 @@ def _ensure_task_row(task_runtime, task_id: str) -> None:
         storage_key="owner-key",
         submitted_by_user_id=0,
     )
+
+
+def _frozen(task_type, **fields) -> dict:
+    graph = compile_graph(task_type)
+    fields.setdefault(
+        "input_form",
+        json.dumps({
+            "execution_graph": {
+                "ir_version": graph.ir_version, "digest": graph.digest, "document": graph.document,
+            },
+        }),
+    )
+    return fields
 
 
 def _policy(requires_gpu: bool) -> ResolvedResources:
@@ -118,7 +132,7 @@ def test_graph_scheduler_validates_outputs_and_preserves_attempts(monkeypatch, t
     task_id = {"valid": "1", "missing": "2", "escape": "3"}[output_kind] * 32
     _ensure_task_row(task_runtime, task_id)
     result = task_runtime._run_compute_workflow(
-        task_id, {}, task_type, RunnerConfig(), [], str(output),
+        task_id, _frozen(task_type), task_type, RunnerConfig(), [], str(output),
         {stage.name: _policy(stage.requires_gpu) for stage in task_type.workflow}, lambda _: None,
     )
     runs = task_runtime.task_store.list_stage_runs(task_id)
@@ -184,7 +198,7 @@ def test_resume_revalidates_completed_producer_outputs(monkeypatch, tmp_path, mu
     monkeypatch.setattr(task_runtime.task_store, "update_task", lambda *args, **kwargs: True)
     policies = {stage.name: _policy(stage.requires_gpu) for stage in task_type.workflow}
     assert task_runtime._run_compute_workflow(
-        task_id, {}, task_type, RunnerConfig(), [], str(output), policies, lambda _: None,
+        task_id, _frozen(task_type), task_type, RunnerConfig(), [], str(output), policies, lambda _: None,
     ) == JobState.FAILED
     first_call["done"] = True
     assert task_runtime.task_store.list_stage_runs(task_id)[0]["output_identity"]
@@ -203,7 +217,7 @@ def test_resume_revalidates_completed_producer_outputs(monkeypatch, tmp_path, mu
     started = []
     monkeypatch.setattr(task_runtime, "_create_job", lambda _id, tt, *a, **kw: started.append(tt.name) or Job(tt.name))
     result = task_runtime._run_compute_workflow(
-        task_id, {}, task_type, RunnerConfig(), [], str(output), policies, lambda _: None,
+        task_id, _frozen(task_type), task_type, RunnerConfig(), [], str(output), policies, lambda _: None,
     )
     if expected_reason is None:
         assert result == JobState.COMPLETED
@@ -236,10 +250,11 @@ def test_composer_refuses_unverified_legacy_completed_stage(monkeypatch):
         task_runtime, "_create_job", lambda *args, **kwargs: created.append(args[1].name) or pytest.fail("no dispatch")
     )
     monkeypatch.setattr(task_runtime.task_store, "update_task", lambda *args, **kwargs: True)
-    task = {
-        "username": "tester",
-        "workflow_state": json.dumps({"multistage_runner.features": {"status": "completed", "job_id": "41"}}),
-    }
+    task = _frozen(
+        task_type,
+        username="tester",
+        workflow_state=json.dumps({"multistage_runner.features": {"status": "completed", "job_id": "41"}}),
+    )
     _ensure_task_row(task_runtime, "a" * 32)
 
     result = task_runtime._run_compute_workflow(
@@ -251,6 +266,36 @@ def test_composer_refuses_unverified_legacy_completed_stage(monkeypatch):
     assert result == JobState.FAILED
     assert created == []
     assert (task_runtime.task_store.get_task_diagnostics("a" * 32) or {})["reason_code"] == "stage_output_unverified"
+
+
+@pytest.mark.parametrize(("frozen", "reason"), [(None, "execution_graph_unverified"), ("changed", "execution_graph_changed")])
+def test_dispatch_refuses_graph_that_differs_from_submission(monkeypatch, frozen, reason):
+    task_runtime = _live_task_runtime()
+    runtime = RuntimeFamily("multistage_runner", ("bash", "run.sh"), "runner.def", "image.sif")
+    features = WorkflowStage(
+        "multistage_runner.features", "Features", False, ("-s", "features"), ("msa",),
+        outputs=(StagePortSpec("features", "features", path="features.dat"),),
+    )
+    task_type = TaskType(
+        "multistage_runner", "Synthetic staged calculation", runtime, (),
+        stage_markers={"msa": "MSA"}, workflow=(features,),
+    )
+    task = {} if frozen is None else _frozen(task_type)
+    if frozen == "changed":
+        task_type = replace(
+            task_type,
+            workflow=(replace(features, runner_args=("-s", "features-v2")),),
+        )
+    monkeypatch.setattr(task_runtime, "_create_job", lambda *args, **kwargs: pytest.fail("no dispatch"))
+    monkeypatch.setattr(task_runtime.task_store, "update_task", lambda *args, **kwargs: True)
+    task_id = ("1" if frozen is None else "2") * 32
+    _ensure_task_row(task_runtime, task_id)
+    result = task_runtime._run_compute_workflow(
+        task_id, task, task_type, RunnerConfig(), [], "/tmp/results",
+        {features.name: _policy(False)}, lambda _: None,
+    )
+    assert result == JobState.FAILED
+    assert (task_runtime.task_store.get_task_diagnostics(task_id) or {})["reason_code"] == reason
 
 
 def test_latest_failed_attempt_is_not_reused(monkeypatch, tmp_path):
@@ -297,7 +342,7 @@ def test_latest_failed_attempt_is_not_reused(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(task_runtime.task_store, "update_task", lambda *args, **kwargs: True)
     result = task_runtime._run_compute_workflow(
-        task_id, {}, task_type, RunnerConfig(), [], str(output),
+        task_id, _frozen(task_type), task_type, RunnerConfig(), [], str(output),
         {features.name: _policy(False)}, lambda _: None,
     )
 
@@ -355,7 +400,7 @@ def test_gpu_workflow_uses_owning_runtime_for_allocation_authorization(monkeypat
     _ensure_task_row(task_runtime, "f" * 32)
     result = task_runtime._run_compute_workflow(
         "f" * 32,
-        {"submitted_by_user_id": 17, "username": "tester"},
+        _frozen(task_type, submitted_by_user_id=17, username="tester"),
         task_type,
         RunnerConfig(),
         [],
@@ -399,7 +444,7 @@ def test_composer_does_not_submit_after_cancellation_claim_fails(monkeypatch):
 
     result = task_runtime._run_compute_workflow(
         "b" * 32,
-        {},
+        _frozen(task_type),
         task_type,
         RunnerConfig(),
         [],
@@ -441,7 +486,7 @@ def test_composer_cancels_submitted_job_when_handle_cannot_be_persisted(monkeypa
     _ensure_task_row(task_runtime, "c" * 32)
     result = task_runtime._run_compute_workflow(
         "c" * 32,
-        {},
+        _frozen(task_type),
         task_type,
         RunnerConfig(),
         [],
@@ -728,7 +773,7 @@ def test_composed_af3_workflow_advances_task_run_stage_through_all_markers(monke
     _ensure_task_row(task_runtime, "a" * 32)
     result = task_runtime._run_compute_workflow(
         "a" * 32,
-        {"username": "tester"},
+        _frozen(task_type, username="tester"),
         task_type,
         runner,
         [],

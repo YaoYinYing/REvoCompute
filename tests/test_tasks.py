@@ -31,6 +31,7 @@ from conftest import (
     _task_owner,
 )
 from jsonschema import Draft202012Validator
+from revocompute.execution_graph import GraphValidationError, UnsupportedGraphCapability, compile_graph
 from revocompute.resource_ledger import DataLifecycleState
 from revocompute.task_types import TaskInputRole
 from werkzeug.utils import secure_filename
@@ -408,6 +409,48 @@ def test_multistage_runner_multimer_submission_preserves_selected_preset(monkeyp
     assert set(input_form["resource_policies"]) == {"multistage_runner.features", "multistage_runner.model"}
     assert input_form["resource_policies"]["multistage_runner.features"]["requires_gpu"] is False
     assert input_form["resource_policies"]["multistage_runner.model"]["requires_gpu"] is True
+    frozen = input_form["execution_graph"]
+    assert len(frozen["digest"]) == 64
+    assert frozen["document"]["execution_order"] == ["multistage_runner.features", "multistage_runner.model"]
+
+
+@pytest.mark.parametrize(("error", "status"), [
+    (GraphValidationError("graph contains a cycle"), 400),
+    (UnsupportedGraphCapability("native executor does not support branch at demo"), 503),
+])
+def test_submission_refuses_a_task_whose_graph_cannot_run(monkeypatch, tmp_path, error, status):
+    module = _load_pssm_module(
+        monkeypatch, tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "multistage_runner"},
+    )
+    client = module.app.test_client()
+    auth_header = _test_client_auth(module)
+    user = module.app.config["user_db"].get_user_by_username("tester")
+    module.app.config["user_db"].update_user(user["id"], allow_gpu_use=True)
+    before = {task["md5sum"] for task in module.task_store.list_tasks()}
+    from inspect import unwrap
+
+    routes_globals = unwrap(module.app.view_functions["upload_file"]).__globals__
+
+    def refuse(_task_type):
+        raise error
+
+    monkeypatch.setitem(routes_globals, "compile_graph", refuse)
+    fasta_path = Path(__file__).resolve().parents[1] / "tests/data/fasta/Sli_S4.fasta"
+    with fasta_path.open("rb") as handle:
+        response = client.post(
+            "/compute/api/post",
+            headers=auth_header,
+            data={
+                "task_type": "multistage_runner",
+                "file": (handle, fasta_path.name),
+                "input_roles": "sequence",
+            },
+            content_type="multipart/form-data",
+        )
+
+    assert response.status_code == status
+    assert {task["md5sum"] for task in module.task_store.list_tasks()} == before
 
 
 def test_dashboard_serves_structure_preview_for_pdb_tasks(monkeypatch, tmp_path):
@@ -850,6 +893,11 @@ def test_worker_redispatch_with_existing_stage_run_keeps_task_running(monkeypatc
     )
     md5sum = _insert_pending_task(module, tmp_path / "result", task_type="multistage_runner")
     form = json.loads(module.task_store.get_task(md5sum)["input_form"])
+    task_type, _ = module.task_runtime._get_task_type("multistage_runner")
+    graph = compile_graph(task_type)
+    form["execution_graph"] = {
+        "ir_version": graph.ir_version, "digest": graph.digest, "document": graph.document,
+    }
     form["resource_policies"] = {
         "multistage_runner.features": {
             "cpus": 4, "memory": "8G", "max_runtime_seconds": 600,

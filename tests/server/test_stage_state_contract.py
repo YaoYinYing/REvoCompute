@@ -16,6 +16,7 @@ import pytest
 from revocompute import stage_state
 from revocompute import task_runtime
 from revocompute.db import TaskDatabase
+from revocompute.execution_graph import compile_graph
 from revocompute.resource_policy import ResolvedResources
 from revocompute.task_types import RunnerConfig, RuntimeFamily, TaskType, WorkflowStage
 
@@ -65,6 +66,18 @@ def _single_stage_type() -> TaskType:
         ".fasta",
         "FASTA",
         stage_markers={"execute": "Execute"},
+    )
+
+
+def _freeze(database: TaskDatabase, task_id: str, task_type: TaskType) -> None:
+    graph = compile_graph(task_type)
+    database.update_task(
+        task_id,
+        input_form=json.dumps({
+            "execution_graph": {
+                "ir_version": graph.ir_version, "digest": graph.digest, "document": graph.document,
+            },
+        }),
     )
 
 
@@ -172,6 +185,7 @@ def test_workflow_keeps_task_running_while_the_next_stage_is_queued(tmp_path, mo
         )
 
     monkeypatch.setattr(task_runtime, "_create_job", _create_job)
+    _freeze(database, task_id, tt)
 
     result = task_runtime._run_compute_workflow(
         task_id,
@@ -294,6 +308,7 @@ def test_failed_stage_stops_the_workflow_before_the_next_allocation(tmp_path, mo
         )
 
     monkeypatch.setattr(task_runtime, "_create_job", _create_job)
+    _freeze(database, task_id, tt)
 
     result = task_runtime._run_compute_workflow(
         task_id,

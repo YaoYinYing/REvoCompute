@@ -8,7 +8,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from revocompute.execution_graph import GraphValidationError, UnsupportedGraphCapability, compile_graph
+from revocompute.execution_graph import (
+    GraphValidationError,
+    UnsupportedGraphCapability,
+    canonical_digest,
+    compile_graph,
+)
 from revocompute.task_types import StagePortSpec, WorkflowStage
 
 
@@ -26,6 +31,7 @@ def test_stable_digest_and_topological_order():
     compiled = compile_graph(task)
     assert compiled.execution_order == ("a", "b")
     assert compiled.digest == compile_graph(task).digest
+    assert canonical_digest(compiled.document) == compiled.digest
 
 
 @pytest.mark.parametrize(("stages", "message"), [

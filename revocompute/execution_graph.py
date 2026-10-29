@@ -51,6 +51,7 @@ class CompiledGraph:
     graph_inputs: tuple[ArtifactPort, ...]
     execution_order: tuple[str, ...]
     digest: str
+    document: dict[str, Any]
     ir_version: int = GRAPH_IR_VERSION
 
 
@@ -129,10 +130,15 @@ def compile_graph(task_type: Any) -> CompiledGraph:
             raise UnsupportedGraphCapability(f"native executor does not support branch at {name}")
     ordered_nodes = tuple(nodes[name] for name in order)
     inputs = tuple(graph_inputs[name] for name in sorted(graph_inputs))
-    canonical = {"ir_version": GRAPH_IR_VERSION, "nodes": [asdict(node) for node in ordered_nodes],
-                 "graph_inputs": [asdict(port) for port in inputs], "execution_order": order}
-    digest = hashlib.sha256(json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-    return CompiledGraph(ordered_nodes, inputs, tuple(order), digest)
+    document = {"ir_version": GRAPH_IR_VERSION, "nodes": [asdict(node) for node in ordered_nodes],
+                "graph_inputs": [asdict(port) for port in inputs], "execution_order": order}
+    digest = canonical_digest(document)
+    return CompiledGraph(ordered_nodes, inputs, tuple(order), digest, document)
+
+
+def canonical_digest(document: dict[str, Any]) -> str:
+    """The one digest definition shared by compilation and frozen-graph checks."""
+    return hashlib.sha256(json.dumps(document, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 def _paths_overlap(first: str | None, second: str | None) -> bool:

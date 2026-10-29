@@ -110,6 +110,11 @@ from revocompute.ingress_security import (
     phase_for_code,
 )
 from revocompute.db import GPUCreditUnavailableError, TaskIdReservedError
+from revocompute.execution_graph import (
+    GraphValidationError,
+    UnsupportedGraphCapability,
+    compile_graph,
+)
 from revocompute.operational_events import emit_event
 from revocompute.ratelimit import rate_limit
 from revocompute import resource_lifecycle
@@ -2346,6 +2351,20 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
     resource_policy = placement.primary
     resource_policies = placement.stage_resources
 
+    execution_graph = None
+    if tt.workflow:
+        try:
+            compiled_graph = compile_graph(tt)
+        except GraphValidationError as exc:
+            return jsonify({"error": f"This task type's execution graph is invalid: {exc}"}), 400
+        except UnsupportedGraphCapability as exc:
+            return jsonify({"error": f"This task type's execution graph cannot run here: {exc}"}), 503
+        execution_graph = {
+            "ir_version": compiled_graph.ir_version,
+            "digest": compiled_graph.digest,
+            "document": compiled_graph.document,
+        }
+
     uploaded_inputs, upload_error = _validate_input_uploads(task_type)
     if upload_error is not None:
         return upload_error
@@ -2644,6 +2663,8 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
         "workspace": workspace_payload,
         "request_id": g.request_id,
     }
+    if execution_graph is not None:
+        input_form["execution_graph"] = execution_graph
 
     # Runner protocol v3: the immutable snapshot carries task.json — the
     # single manifest every runner reads (params + file paths).  No

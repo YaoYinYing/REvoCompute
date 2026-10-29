@@ -36,7 +36,7 @@ from celery import Celery
 from revocompute.admission import resolve_submission_readiness
 from revocompute.config import ComputeConfig, ensure_directories, env_csv, env_int, env_path
 from revocompute.db import GPUAuthorizationUnavailableError, GPUCreditUnavailableError, TaskDatabase
-from revocompute.execution_graph import compile_graph
+from revocompute.execution_graph import canonical_digest, compile_graph
 from revocompute.infrastructure import (
     InfrastructureComponent,
     _gpu_inventory_probe,
@@ -1153,14 +1153,33 @@ def _finish_stage_attempt(
     )
 
 
-def _record_reuse_refusal(task_id: str, stage_name: str, reason_code: str) -> None:
-    """Classify a pre-dispatch refusal without touching the completed attempt."""
+def _record_workflow_refusal(task_id: str, stage_name: str, reason_code: str) -> None:
+    """Classify a pre-dispatch refusal without touching a completed attempt."""
     try:
         evidence = task_store.get_task_diagnostics(task_id) or {}
         evidence.update(reason_code=reason_code, stage_id=stage_name)
         task_store.record_task_diagnostics(task_id, evidence)
     except Exception:
-        logging.exception("Could not retain reuse refusal for task %s", task_id)
+        logging.exception("Could not retain workflow refusal for task %s", task_id)
+
+
+def _frozen_execution_graph(task: dict[str, Any]) -> dict[str, Any] | None:
+    """The submission-frozen graph, or ``None`` when it is absent or malformed."""
+    raw = task.get("input_form")
+    try:
+        form = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, ValueError):
+        return None
+    frozen = form.get("execution_graph") if isinstance(form, dict) else None
+    if not isinstance(frozen, dict):
+        return None
+    document = frozen.get("document")
+    digest = frozen.get("digest")
+    if not isinstance(document, dict) or not isinstance(digest, str):
+        return None
+    if canonical_digest(document) != digest:
+        return None
+    return frozen
 
 
 def _run_compute_workflow(
@@ -1181,6 +1200,14 @@ def _run_compute_workflow(
     queued.  ``workflow_state`` is rewritten from the records as a compatibility
     mirror at each boundary.
     """
+    frozen = _frozen_execution_graph(task)
+    if frozen is None:
+        _record_workflow_refusal(task_id, tt.name, "execution_graph_unverified")
+        return JobState.FAILED
+    graph = compile_graph(tt)
+    if frozen["digest"] != graph.digest:
+        _record_workflow_refusal(task_id, tt.name, "execution_graph_changed")
+        return JobState.FAILED
     legacy_state = _workflow_state(task)
     runs = task_store.list_stage_runs(task_id)
     latest_runs: dict[str, dict[str, Any]] = {}
@@ -1188,7 +1215,6 @@ def _run_compute_workflow(
         current = latest_runs.get(str(run["stage_name"]))
         if current is None or int(run["attempt"]) > int(current["attempt"]):
             latest_runs[str(run["stage_name"])] = run
-    graph = compile_graph(tt)
     stages = {stage.name: (index, stage) for index, stage in enumerate(tt.workflow)}
     for node in graph.nodes:
         index, stage = stages[node.id]
@@ -1196,13 +1222,13 @@ def _run_compute_workflow(
         if latest is not None and latest["status"] == stage_state.COMPLETED:
             refusal = _stage_reuse_valid(output_dir, node.outputs, latest)
             if refusal is not None:
-                _record_reuse_refusal(task_id, stage.name, refusal)
+                _record_workflow_refusal(task_id, stage.name, refusal)
                 return JobState.FAILED
             continue
         if latest is None and (legacy_state.get(stage.name) or {}).get("status") == "completed":
             # No row means the mirror's completion has no verified artifact
             # identity; skipping it would trust evidence the Server never saw.
-            _record_reuse_refusal(task_id, stage.name, "stage_output_unverified")
+            _record_workflow_refusal(task_id, stage.name, "stage_output_unverified")
             return JobState.FAILED
         policy = resource_policies.get(stage.name)
         if policy is None:

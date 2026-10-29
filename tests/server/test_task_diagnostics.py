@@ -389,7 +389,18 @@ def test_workflow_submission_failure_cannot_inherit_previous_stage_evidence(task
     enabled = [True]
     jobs = []
     (root / "result.txt").write_text("stage one scientific result")
-    module.task_store.update_task(task_id, status="queued", run_stage="first")
+    from revocompute.execution_graph import compile_graph
+
+    graph = compile_graph(tt)
+    module.task_store.update_task(
+        task_id,
+        run_stage="first",
+        input_form=json.dumps({
+            "execution_graph": {
+                "ir_version": graph.ir_version, "digest": graph.digest, "document": graph.document,
+            },
+        }),
+    )
 
     def create(task_id, stage_tt, runner, entities, output_dir, callback, **kwargs):
         job = SlurmJob(
