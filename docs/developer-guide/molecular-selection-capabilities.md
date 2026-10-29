@@ -80,4 +80,6 @@ runner defines it, the resolved point, and the runner's own origin and delta. Th
 workspace payload is provenance, not authority: the runner reads canonical
 parameters, so acceptance asserts the submitted parameters as well as the stored
 payload. The centroid rule is the runner's, not the UI's; the UI must not define
-its own.
+its own. The centroid and origin semantics were worked out in the PyMOL plugin
+at `YaoYinYing/caver-pymol-plugin` commit `5322f22`; that is prior art, and
+the owning runner remains the authority.
