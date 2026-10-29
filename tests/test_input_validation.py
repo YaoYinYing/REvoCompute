@@ -568,13 +568,19 @@ def _mol1_job(entity: dict, **job) -> str:
 
 
 @pytest.mark.parametrize("invalid_bond_integer", ["²", "9" * 5000])
-def test_mol1_bond_integer_conversion_refuses_invalid_decimal(tmp_path, invalid_bond_integer):
+@pytest.mark.parametrize("field", ["entity1", "position1", "copy1"])
+def test_mol1_bond_integer_conversion_refuses_invalid_decimal(tmp_path, invalid_bond_integer, field):
     document = [{
         "name": "job",
-        "sequences": [{"proteinChain": {"sequence": "ACDE", "count": 1}}],
+        "sequences": [
+            {"proteinChain": {"sequence": "ACDE", "count": 1}},
+            {"proteinChain": {"sequence": "ACDE", "count": 1}},
+        ],
         "covalent_bonds": [{
-            "entity1": invalid_bond_integer, "entity2": 1,
+            "entity1": 1, "entity2": 2,
+            "copy1": 1, "copy2": 1,
             "position1": 1, "position2": 1, "atom1": "N", "atom2": "C",
+            field: invalid_bond_integer,
         }],
     }]
     path = _write(tmp_path, json.dumps(document).encode(), "input.json")
@@ -582,7 +588,11 @@ def test_mol1_bond_integer_conversion_refuses_invalid_decimal(tmp_path, invalid_
     error = validate_logical_input(str(path), "json", "mol1_specification")
 
     assert error is not None
-    assert "entity1 must name an entity in the job" in error
+    assert {
+        "entity1": "entity1 must name an entity in the job",
+        "position1": "position1 is outside its entity",
+        "copy1": "copy1 is outside its entity",
+    }[field] in error
 
 
 def test_mol1_specification_requires_a_job_list(tmp_path):
