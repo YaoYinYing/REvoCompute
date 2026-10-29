@@ -24,9 +24,10 @@ import uuid
 import zipfile
 
 import pytest
+from revocompute import stage_state
 from revocompute.result_storyboard import ResultContractError, declared_file_roles, load_expected_file_tree
 from revocompute.storage import ResultPublicationError
-from revocompute.task_types import ArtifactSelector, ResultView
+from revocompute.task_types import ArtifactSelector, ResultView, RuntimeFamily, TaskType, WorkflowStage
 
 from conftest import _load_pssm_module, _publish_archive, _replace_archive, _test_client_auth, _upsert_task_for_user
 
@@ -2352,3 +2353,96 @@ def test_a_retry_after_a_failed_publication_leaves_no_false_published_state(monk
     assert (
         module.app.config["storage_resolver"].publication_state(module.task_store.get_task(task_id)) == "available"
     )
+
+
+def test_a_recorded_stage_projection_and_a_scientific_view_are_independent(monkeypatch, tmp_path) -> None:
+    """Execution-stage state and result-view eligibility derive from one Task
+    without either projection shadowing the other."""
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_id = uuid.uuid4().hex
+    result_dir = tmp_path / "result"
+    result_dir.mkdir()
+    # A live Task may own stage attempts; ``finished`` is terminal and refuses them.
+    _upsert_task_for_user(
+        module,
+        task_id,
+        filename="input.fasta",
+        file_path=result_dir / "input.fasta",
+        result_dir=result_dir,
+        username="tester",
+        status="running",
+        task_type="multistage_runner",
+    )
+    runtime = RuntimeFamily("multistage_runner", ("bash", "run.sh"), "runner.def", "image.sif")
+    view = ResultView(
+        plugin="candidate-collection",
+        id="complex_models",
+        role="primary",
+        title="Complex models",
+        description="Synthetic view.",
+        sources={"candidates": (ArtifactSelector(value="*_model.pdb", is_glob=True, required=True),)},
+        mapping={},
+    )
+    task_type = TaskType(
+        "multistage_runner",
+        "Synthetic staged calculation",
+        runtime,
+        (),
+        workflow=(
+            WorkflowStage("multistage_runner.features", "Features", False, ("-s", "features")),
+            WorkflowStage("multistage_runner.model", "Model", True, ("-s", "model")),
+        ),
+        result_workspace=(view,),
+    )
+    monkeypatch.setattr(module.task_runtime, "_get_task_type", lambda *_args: (task_type, None))
+    monkeypatch.setattr(module.task_runtime, "expected_file_tree", lambda *_args: {})
+    monkeypatch.setattr(module.task_runtime, "storyboard_declaration", lambda *_args: None)
+
+    store = module.task_store
+    store.begin_stage_attempt(task_id=task_id, stage_index=0, stage_name="multistage_runner.features")
+    assert store.record_stage_dispatched(
+        task_id=task_id, stage_name="multistage_runner.features", attempt=1, slurm_job_id="4100"
+    )
+    assert store.record_stage_running(task_id=task_id, stage_name="multistage_runner.features", attempt=1)
+    store.finish_stage_attempt(
+        task_id=task_id,
+        stage_name="multistage_runner.features",
+        attempt=1,
+        status=stage_state.COMPLETED,
+        reason_code=stage_state.Reason.COMPLETED,
+    )
+
+    manifest = _finalize(
+        module,
+        task_id,
+        {
+            "3fap_model.pdb": "MODEL        1\nENDMDL\n",
+            "debug/inputs/structures/3fap_model.pdb": "ATOM      1  CA  ALA A   1\n",
+        },
+    )
+
+    # #118's stage projection reports the recorded attempt and keeps the
+    # not-yet-run declared stage visible as a definition.
+    projection = module.task_runtime.stage_projection(store.get_task(task_id))
+    assert projection["source"] == "record"
+    assert [(item["name"], item["source"]) for item in projection["items"]] == [
+        ("multistage_runner.features", "record"),
+        ("multistage_runner.model", "definition"),
+    ]
+
+    # This PR's view eligibility still keeps the server-owned input snapshot out
+    # of the primary view while the runner's own file sources it.
+    assert manifest["views"] == [
+        {
+            "id": "complex_models",
+            "plugin": "candidate-collection",
+            "role": "primary",
+            "title": "Complex models",
+            "description": "Synthetic view.",
+            "sources": {"candidates": ["3fap_model.pdb"]},
+            "mapping": {},
+        }
+    ]
+    roles = {artifact["path"]: artifact["role"] for artifact in manifest["artifacts"]}
+    assert roles["3fap_model.pdb"] == "primary"
+    assert roles["debug/inputs/structures/3fap_model.pdb"] == "provenance"
