@@ -197,11 +197,14 @@ parameters:
     target_res:
       type: string
       description: Protein residue used as the crop target, as chain-resno (for
-        example A-149). On PDB it selects that residue for side-chain rebuilding
-        and fixes every other residue; without an explicit center the crop is
-        centered there. On mmCIF upstream uses only the chain, so the residue
-        number does not constrain the crop, which otherwise centers on a
-        non-backbone atom in that chain. Required when the input has no ligand.
+        example A-149). On PDB the target residue is the only eligible crop
+        center; every other residue is excluded from center selection, and
+        without an explicit center the crop centers on a non-backbone atom of
+        that residue. In target mode no atoms are marked corrupted, so every
+        atom in the crop is predicted. On mmCIF upstream uses only the chain, so
+        the residue number does not constrain the crop, which otherwise centers
+        on a non-backbone atom in that chain. Required when the input has no
+        ligand.
       default: ''
       pattern: '^(?:[A-Za-z0-9]+-[0-9]+)?$'
     fixed_ligand_noise:
