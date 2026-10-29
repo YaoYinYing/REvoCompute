@@ -74,6 +74,30 @@ transferred through the authenticated parent into the sandboxed Mol\* shell.
 Inline image and structure previews retain size limits so large artifacts are
 downloaded instead of loaded wholesale into browser memory.
 
+## Failure evidence
+
+A `failed` task exposes failure evidence on its result page and from the
+Dashboard error action: the confirmed classification, execution stage, process
+exit status, scheduler state, and a bounded, redacted excerpt of the retained
+standard error and standard output.
+
+- Evidence is published only for a failure and only while the Task's diagnostic
+  data is retained. A running task has no log stream.
+- The excerpt is a size-limited tail, not the whole log. **Read full retained
+  stderr excerpt** (or **stdout**) loads that same bounded excerpt into the
+  failure panel on request; nothing is polled. **Search this stderr excerpt**
+  (or **stdout**) matches literal text case-insensitively and reports the match
+  count. Regular expressions are not accepted, and line numbers are relative to
+  the retained excerpt rather than the original log. Search reports at most
+  1,000 matches and covers only the rendered excerpt: a longer excerpt renders,
+  and searches, its most recent 10,000 lines.
+- Credentials, private paths, host details, and terminal control characters
+  other than line breaks and tabs are removed before the excerpt is published,
+  so the preview, search, and download all see the same sanitized text.
+- The excerpt reports what the executor observed; it does not establish a root
+  cause. Authorized original artifacts remain available under **Files &
+  diagnostics** while retained.
+
 ## SLURM task states
 
 SLURM tasks use an additional `queued` status:

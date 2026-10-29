@@ -6,13 +6,17 @@ let bearerToken: string | null = null;
 let tokenRequest: Promise<string> | null = null;
 export const sessionExpiredEvent = 'revocompute:session-expired';
 
-function authorizedPath(url: string): string {
+export function authorizedPath(url: string): string {
   if (!url.startsWith('/') || url.startsWith('//') || url.includes('\\')) {
     throw new Error('Authorized requests must be same-origin paths.');
   }
   const base = new URL('https://revocompute.invalid/');
   const resolved = new URL(url, base);
-  if (resolved.origin !== base.origin) throw new Error('Authorized requests must be same-origin paths.');
+  // Dot-segment normalization can yield a protocol-relative pathname
+  // (`/..//evil.example/x`), which fetch would resolve cross-origin.
+  if (resolved.origin !== base.origin || resolved.pathname.startsWith('//')) {
+    throw new Error('Authorized requests must be same-origin paths.');
+  }
   return `${resolved.pathname}${resolved.search}${resolved.hash}`;
 }
 
@@ -26,10 +30,18 @@ async function responseError(response: Response): Promise<ApiError> {
   return new ApiError(String(payload.error || payload.message || `Request failed (HTTP ${response.status})`), response.status);
 }
 
-export async function requestJson<T>(url: string, init: RequestInit = {}): Promise<T> {
+async function responseOrThrow(url: string, init: RequestInit = {}): Promise<Response> {
   const response = await fetch(url, { ...init, credentials: 'same-origin' });
   if (!response.ok) throw await responseError(response);
-  return response.json() as Promise<T>;
+  return response;
+}
+
+export async function requestJson<T>(url: string, init: RequestInit = {}): Promise<T> {
+  return (await responseOrThrow(url, init)).json() as Promise<T>;
+}
+
+export async function requestText(url: string, init: RequestInit = {}): Promise<string> {
+  return (await responseOrThrow(url, init)).text();
 }
 
 async function mintToken(force = false): Promise<string> {

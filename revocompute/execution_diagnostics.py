@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import unicodedata
 from collections.abc import Iterable, Iterator, Mapping
 from typing import Any
 
@@ -30,7 +31,10 @@ REASONS = {
     "runner_validation_failed": "Runner output validation failed.",
 }
 _SECRET_KEY = re.compile(r"secret|password|passwd|token|credential|api.?key|authorization|private.?key", re.I)
-_CONTROL = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+# ANSI escapes and C0/C1 controls. Invisible format characters (bidi marks,
+# zero-width controls, soft hyphen, tag characters) are stripped by their
+# Unicode category so the set cannot go stale.
+_ANSI_CONTROL = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\x80-\x9f]")
 _SECRET_ASSIGNMENT = re.compile(
     r"(?im)(?<![\w.-])([\w.-]*(?:secret|password|passwd|token|credential|api.?key|authorization)"
     r"[\w.-]*[\"']?\s*[=:]\s*)(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^\s,;]+)"
@@ -53,11 +57,30 @@ def diagnostic_secret_values(environment: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(str(value) for key, value in environment.items() if _SECRET_KEY.search(key) and value)
 
 
+def _without_format_characters(text: str) -> str:
+    """Drop every Unicode ``Cf`` character, which is invisible but reorders or conceals text."""
+    return "".join(character for character in text if unicodedata.category(character) != "Cf")
+
+
+def _normalized_text(text: str) -> str:
+    """Strip terminal controls and every invisible ``Cf`` character.
+
+    Log text and known secrets must pass through this identical filter, or a
+    secret containing a control byte normalized out of the log would no longer
+    match the unnormalized secret and would leak.
+    """
+    return _without_format_characters(_ANSI_CONTROL.sub("", text))
+
+
 def safe_diagnostic_text(value: Any, *, secret_values: tuple[str, ...] = ()) -> str:
     """Redact known credentials, credential syntax, URLs and private path context."""
-    text = _CONTROL.sub("", str(value or ""))
-    known = set(secret_values)
-    known.update(diagnostic_secret_values(os.environ))
+    text = _normalized_text(str(value or ""))
+    # Normalize every secret source exactly like the text above; otherwise a
+    # control byte stripped from the log would survive in the secret and defeat
+    # the replacement.
+    known = {_normalized_text(secret) for secret in secret_values}
+    known.update(_normalized_text(value) for value in diagnostic_secret_values(os.environ))
+    known.discard("")
     for secret in sorted(known, key=len, reverse=True):
         if secret:
             text = text.replace(secret, "[redacted]")
@@ -71,13 +94,16 @@ def safe_diagnostic_text(value: Any, *, secret_values: tuple[str, ...] = ()) -> 
     text = _HOST_PATH.sub("[path redacted]", text)
     text = _HOST_DETAIL.sub("[host detail redacted]", text)
     text = _PRIVATE_NETWORK.sub("[private network redacted]", text)
-    return _CONTROL.sub("", text)
+    return _normalized_text(text)
 
 
 def redacted_log_lines(lines: Iterable[str], *, secret_values: tuple[str, ...] = ()) -> Iterator[str]:
     """Retain log context while withholding credentials and private host details."""
     known = (*secret_values, *diagnostic_secret_values(os.environ))
-    pieces = tuple(piece for secret in known for piece in secret.splitlines() if piece)
+    pieces = tuple(
+        normalized for secret in known for line in secret.splitlines()
+        if (normalized := _normalized_text(line))
+    )
     private_key = False
     for line in lines:
         if "-----BEGIN " in line and "PRIVATE KEY-----" in line:

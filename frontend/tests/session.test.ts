@@ -46,7 +46,7 @@ describe('browser mutation authorization', () => {
     expect(fetch).toHaveBeenCalledTimes(4);
   });
 
-  it.each(['https://evil.example/delete', '//evil.example/delete', '/\\evil.example/delete'])(
+  it.each(['https://evil.example/delete', '//evil.example/delete', '/\\evil.example/delete', '/..//evil.example/delete'])(
     'rejects non-canonical authorized URL %s before minting a token',
     async (url) => {
       const fetchMock = vi.fn(); vi.stubGlobal('fetch', fetchMock);

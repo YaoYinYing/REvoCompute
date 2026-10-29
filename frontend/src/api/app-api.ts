@@ -1,5 +1,5 @@
 import type { components } from './schema.generated';
-import { authorizedJson, establishSessionCredential, requestJson } from '../app/session';
+import { authorizedJson, authorizedPath, establishSessionCredential, requestJson, requestText } from '../app/session';
 
 export type CurrentUser = components['schemas']['CurrentUser'];
 export type CurrentUserUpdate = components['schemas']['UpdateCurrentUserRequest'];
@@ -114,3 +114,8 @@ export const prepareArchive = (url: string): Promise<Record<string, unknown>> =>
 export type TaskDiagnostics = components['schemas']['TaskDiagnostics'];
 export const getTaskDiagnostics = (taskId: string, signal?: AbortSignal): Promise<TaskDiagnostics> =>
   requestJson(`/compute/api/tasks/${encodeURIComponent(taskId)}/diagnostics`, { signal });
+
+/** Fetch the bounded, redacted excerpt a diagnostic log already offers for download. */
+export async function getTaskDiagnosticExcerpt(url: string, signal?: AbortSignal): Promise<string> {
+  return requestText(authorizedPath(url), { signal });
+}
