@@ -416,6 +416,20 @@ def test_prepare_confines_file_ligand_references(tmp_path: Path) -> None:
     assert document[0]["sequences"][0]["ligand"]["ligand"] == f"FILE_{ligand}"
 
 
+@pytest.mark.parametrize("relative", ["../escape.a3m", "/etc/passwd", "a/../../escape.a3m"])
+def test_relative_path_refuses_an_escaping_relative_path(tmp_path: Path, relative: str) -> None:
+    with pytest.raises(prepare_input.PreparationError, match="unsafe input relative path"):
+        prepare_input._relative_path({"path": str(tmp_path / "msa.a3m"), "relative_path": relative})
+
+
+@pytest.mark.parametrize("reference", ["../escape.a3m", "/etc/passwd", "a/../../escape.a3m"])
+def test_resolve_reference_refuses_an_escaping_reference(tmp_path: Path, reference: str) -> None:
+    root = tmp_path / "prepared"
+    root.mkdir()
+    with pytest.raises(prepare_input.PreparationError, match="escapes the input tree"):
+        prepare_input._resolve_reference(reference, root, {})
+
+
 def test_verify_rejects_a_search_input_without_msa(tmp_path: Path) -> None:
     final = tmp_path / "final.json"
     final.write_text(json.dumps(_document("minimal.json")), encoding="utf-8")

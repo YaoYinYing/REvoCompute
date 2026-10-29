@@ -20,6 +20,7 @@ from revocompute.input_validators.common import (
     MAX_FASTA_TOTAL_RESIDUES,
     _read_text,
 )
+from revocompute.storage import RESERVED_RESULT_ROOT_FILES
 
 _URL_PATTERN = re.compile(r"[a-z][a-z0-9+.-]*://", re.IGNORECASE)
 _FOUNDRY_PATH_KEYS = {"input", "path", "msa_path", "template_path"}
@@ -246,6 +247,11 @@ def _validate_mol1_specification(value: Any) -> str | None:
         name = job.get("name")
         if not isinstance(name, str) or not _MOL1_JOB_NAME.fullmatch(name):
             return f"{label} needs a name of letters, digits, '.', '_' or '-'"
+        # Upstream makes each job a directory under the result root.  A name the
+        # Server writes there as a file would become that file's directory and
+        # break publication after inference; the shared set is Server-owned.
+        if name in RESERVED_RESULT_ROOT_FILES:
+            return f"{label} name {name!r} collides with a Server-owned result file"
         if name in names:
             return f"Mol-1 job names must be unique: {name!r}"
         names.add(name)

@@ -725,6 +725,34 @@ def test_mol1_specification_rejects_an_unsafe_job_name(tmp_path):
     assert "needs a name" in validate_logical_input(str(path), "json", "mol1_specification")
 
 
+@pytest.mark.parametrize("name", ["manifest.json", "citations.bib", "task_failed.txt"])
+def test_mol1_specification_rejects_a_job_named_for_a_server_result_file(tmp_path, name):
+    chain = {"proteinChain": {"sequence": "ACDE", "count": 1}}
+    document = [{"name": name, "sequences": [chain]}]
+    path = _write(tmp_path, json.dumps(document).encode(), "input.json")
+
+    assert "Server-owned result file" in validate_logical_input(str(path), "json", "mol1_specification")
+
+
+def test_mol1_specification_accepts_a_name_that_is_not_a_server_result_file(tmp_path):
+    chain = {"proteinChain": {"sequence": "ACDE", "count": 1}}
+    document = [{"name": "trp_cage", "sequences": [chain]}]
+    path = _write(tmp_path, json.dumps(document).encode(), "input.json")
+
+    assert validate_logical_input(str(path), "json", "mol1_specification") is None
+
+
+def test_mol1_specification_checks_every_job_for_a_server_result_name(tmp_path):
+    chain = {"proteinChain": {"sequence": "ACDE", "count": 1}}
+    document = [
+        {"name": "first", "sequences": [chain]},
+        {"name": "manifest.json", "sequences": [chain]},
+    ]
+    path = _write(tmp_path, json.dumps(document).encode(), "input.json")
+
+    assert "Server-owned result file" in validate_logical_input(str(path), "json", "mol1_specification")
+
+
 def test_mol1_specification_rejects_a_job_owned_seed_list(tmp_path):
     chain = {"proteinChain": {"sequence": "ACDE", "count": 1}}
     document = [{"name": "job", "modelSeeds": [7], "sequences": [chain]}]
