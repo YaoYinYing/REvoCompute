@@ -442,6 +442,43 @@ def test_start_point_fields_the_mode_cannot_honour_are_refused() -> None:
     assert point.provenance["parameters"] == {}
 
 
+@pytest.mark.parametrize(
+    ("params", "message"),
+    [
+        (
+            {"start_point_mode": "residue", "start_chain": "A", "start_residue_number": 1, "start_x": 999},
+            "start_x does not apply to residue mode",
+        ),
+        (
+            {
+                "start_point_mode": "atom",
+                "start_chain": "A",
+                "start_residue_number": 1,
+                "start_atom_name": "CB",
+                "start_y": 999,
+            },
+            "start_y does not apply to atom mode",
+        ),
+        (
+            {"start_point_mode": "group", "start_group": "A:1", "start_x": 999},
+            "start_x does not apply to group mode",
+        ),
+        (
+            {"start_point_mode": "ligand", "start_residue_name": "HEM", "start_z": 999},
+            "start_z does not apply to ligand mode",
+        ),
+    ],
+)
+def test_coordinates_are_refused_outside_point_mode(params: dict[str, object], message: str) -> None:
+    with pytest.raises(SelectionError, match=message):
+        resolve_start_point(_atoms(), params)
+
+
+def test_point_mode_still_uses_coordinates() -> None:
+    point = resolve_start_point(_atoms(), {"start_point_mode": "point", "start_x": 4, "start_y": 4, "start_z": 4})
+    assert point.provenance["point_angstrom"] == [4.0, 4.0, 4.0]
+
+
 def test_atom_serial_must_be_unique_among_retained_atoms(tmp_path: Path) -> None:
     records = [
         _record(1, "N", " ", "ALA", "A", 1, 1, 1, 1, 1.0, "N"),

@@ -363,16 +363,23 @@ def _resolve_residue(
     return key, by_key[key], resolution
 
 
+#: Manual coordinates, honoured only by point mode.
+_COORDINATE_FIELDS = ("start_x", "start_y", "start_z")
+
 #: The start-point fields each mode can honour. A non-empty field outside its
 #: mode's set would be recorded in provenance while changing nothing, so it is
 #: refused instead.
 _MODE_FIELDS = {
-    "point": frozenset(),
+    "point": frozenset(_COORDINATE_FIELDS),
     "atom": frozenset({"start_chain", "start_residue_number", "start_atom_name", "start_altloc"}),
     "residue": frozenset({"start_chain", "start_residue_number"}),
     "group": frozenset({"start_group"}),
     "ligand": frozenset({"start_residue_name", "start_chain", "start_residue_number"}),
 }
+
+
+def _nonempty(params: dict[str, object], fields: tuple[str, ...]) -> dict[str, object]:
+    return {name: params.get(name) for name in fields if params.get(name) not in (None, "")}
 
 
 def _selection_fields(params: dict[str, object]) -> dict[str, object]:
@@ -384,7 +391,7 @@ def _selection_fields(params: dict[str, object]) -> dict[str, object]:
         "start_residue_name",
         "start_group",
     )
-    return {name: params.get(name) for name in fields if params.get(name) not in (None, "")}
+    return _nonempty(params, fields)
 
 
 def _manual_point(params: dict[str, object], atoms: list[Atom], difficult: bool) -> StartPoint:
@@ -717,7 +724,8 @@ def resolve_start_point(atoms: list[Atom], params: dict[str, object]) -> StartPo
     resolver = _RESOLVERS.get(mode)
     if resolver is None:
         raise SelectionError(f"unknown start_point_mode {mode!r}; expected one of {', '.join(_RESOLVERS)}")
-    irrelevant = sorted(set(_selection_fields(params)) - _MODE_FIELDS[mode])
+    supplied = set(_selection_fields(params)) | set(_nonempty(params, _COORDINATE_FIELDS))
+    irrelevant = sorted(supplied - _MODE_FIELDS[mode])
     if irrelevant:
         fields = ", ".join(irrelevant)
         raise SelectionError(
