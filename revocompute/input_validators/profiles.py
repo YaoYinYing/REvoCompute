@@ -20,6 +20,7 @@ from revocompute.input_validators.common import (
     MAX_FASTA_TOTAL_RESIDUES,
     _read_text,
 )
+from revocompute.storage import RESERVED_RESULT_ROOT_FILES
 
 _URL_PATTERN = re.compile(r"[a-z][a-z0-9+.-]*://", re.IGNORECASE)
 _FOUNDRY_PATH_KEYS = {"input", "path", "msa_path", "template_path"}
@@ -115,6 +116,254 @@ def _validate_opendde_specification(value: Any) -> str | None:
     return None
 
 
+_MOL1_ENTITY_TYPES = frozenset({"proteinChain", "dnaSequence", "rnaSequence", "ligand", "ion"})
+_MOL1_ENTITY_KEYS = {
+    "proteinChain": frozenset(
+        {"sequence", "count", "id", "modifications", "pairedMsaPath", "unpairedMsaPath", "templatesPath"}
+    ),
+    "dnaSequence": frozenset({"sequence", "count", "id", "modifications"}),
+    "rnaSequence": frozenset({"sequence", "count", "id", "modifications", "unpairedMsaPath"}),
+    "ligand": frozenset({"ligand", "count", "id"}),
+    "ion": frozenset({"ion", "count", "id"}),
+}
+_MOL1_SEQUENCE_ALPHABETS = {
+    "proteinChain": frozenset("ACDEFGHIKLMNPQRSTVWYX"),
+    "dnaSequence": frozenset("ACGTNXIU"),
+    "rnaSequence": frozenset("ACGUNXI"),
+}
+# modelSeeds and assembly_id are accepted by upstream tooling but not by this
+# Task's contract: seeds belong to the sample_seeds parameter, and assembly
+# extension belongs to the JSON converter, not prediction.
+_MOL1_JOB_KEYS = frozenset({"name", "sequences", "covalent_bonds"})
+_MOL1_BOND_KEYS = frozenset(
+    {"entity1", "entity2", "copy1", "copy2", "position1", "position2", "atom1", "atom2"}
+)
+_MOL1_JOB_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+_MOL1_CHAIN_ID = re.compile(r"[A-Za-z0-9]{1,4}")
+_MOL1_MODIFICATION_CODE = re.compile(r"CCD_[A-Za-z0-9]+")
+_MOL1_LIGAND_CCD = re.compile(r"CCD_[A-Za-z0-9_]+")
+_MOL1_ION_CODE = re.compile(r"[A-Za-z0-9]{1,8}")
+_MOL1_TEMPLATE_EXTENSIONS = (".a3m", ".json")
+_MOL1_MSA_EXTENSIONS = (".a3m",)
+_MOL1_LIGAND_FILE_EXTENSIONS = (".pdb", ".sdf", ".mol2")
+_MOL1_MAX_JOBS = 32
+_MOL1_MAX_ENTITIES = 256
+_MOL1_MAX_COPY_COUNT = 1024
+_MOL1_MAX_POLYMER_RESIDUES = 20_000
+_MOL1_MAX_BONDS = 1024
+_MOL1_MAX_LIGAND_LENGTH = 10_000
+
+
+def _mol1_int(value: Any) -> int | None:
+    """A true integer: upstream adds and ranges over `count` and modification positions."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
+
+
+def _mol1_bond_int(value: Any) -> int | None:
+    """Bond fields: upstream calls ``int()`` on these and its docs show strings."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.isdigit():
+        try:
+            return int(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _mol1_asset_reference(value: Any, extensions: tuple[str, ...]) -> str | None:
+    """Return an error unless *value* is a confined uploaded-asset reference.
+
+    Upstream matches these suffixes case-sensitively, so the reference must
+    carry the canonical lowercase extension.
+    """
+    if not isinstance(value, str) or not _safe_relative_asset_reference(value):
+        return "must be a confined uploaded asset name"
+    if not value.endswith(extensions):
+        return f"must name one of: {', '.join(extensions)}"
+    return None
+
+
+def _mol1_modifications(
+    entity_type: str, modifications: Any, sequence_length: int
+) -> str | None:
+    if modifications is None:
+        return None
+    if not isinstance(modifications, list):
+        return "modifications must be a list"
+    code_key, position_key = (
+        ("ptmType", "ptmPosition") if entity_type == "proteinChain" else ("modificationType", "basePosition")
+    )
+    seen_positions: set[int] = set()
+    for modification in modifications:
+        if not isinstance(modification, dict) or set(modification) != {code_key, position_key}:
+            return f"each modification must declare exactly '{code_key}' and '{position_key}'"
+        if not isinstance(modification[code_key], str) or not _MOL1_MODIFICATION_CODE.fullmatch(
+            modification[code_key]
+        ):
+            return f"'{code_key}' must be one CCD code"
+        position = _mol1_int(modification[position_key])
+        if position is None or not 1 <= position <= sequence_length:
+            return f"'{position_key}' must be a residue position in the sequence"
+        if position in seen_positions:
+            return "modifications must not repeat a residue position"
+        seen_positions.add(position)
+    return None
+
+
+def _mol1_entity_positions(entity_type: str, entity: dict[str, Any]) -> int:
+    """Number of bond-addressable positions in one entity."""
+    if entity_type in _MOL1_SEQUENCE_ALPHABETS:
+        return len(entity.get("sequence") or "")
+    if entity_type == "ligand" and isinstance(entity.get("ligand"), str):
+        value = entity["ligand"]
+        if value.startswith("CCD_"):
+            return len(value.split("_")) - 1
+    return 1
+
+
+def _validate_mol1_specification(value: Any) -> str | None:
+    """Validate Mol-1's AlphaFold-Server-like job list without scientific preparation.
+
+    The upstream CLI accepts a top-level list of jobs. Path fields may name only
+    confined uploaded assets, because a missing path makes upstream silently
+    search the public ColabFold service instead.
+    """
+    if not isinstance(value, list) or not value:
+        return "Mol-1 JSON must be a non-empty top-level list of jobs"
+    if len(value) > _MOL1_MAX_JOBS:
+        return f"Mol-1 JSON contains more than {_MOL1_MAX_JOBS} jobs"
+    if _contains_external_url(value):
+        return "Mol-1 JSON must not contain an external URL"
+    names: set[str] = set()
+    total_residues = 0
+    for job_index, job in enumerate(value):
+        label = f"Mol-1 job {job_index + 1}"
+        if not isinstance(job, dict):
+            return f"{label} must be an object"
+        if set(job) - _MOL1_JOB_KEYS:
+            return f"{label} contains an unsupported field"
+        name = job.get("name")
+        if not isinstance(name, str) or not _MOL1_JOB_NAME.fullmatch(name):
+            return f"{label} needs a name of letters, digits, '.', '_' or '-'"
+        # Upstream makes each job a directory under the result root.  A name the
+        # Server writes there as a file would become that file's directory and
+        # break publication after inference; the shared set is Server-owned.
+        if name in RESERVED_RESULT_ROOT_FILES:
+            return f"{label} name {name!r} collides with a Server-owned result file"
+        if name in names:
+            return f"Mol-1 job names must be unique: {name!r}"
+        names.add(name)
+        chain_ids: set[str] = set()
+        sequences = job.get("sequences")
+        if not isinstance(sequences, list) or not sequences or len(sequences) > _MOL1_MAX_ENTITIES:
+            return f"{label} needs a non-empty sequences list of at most {_MOL1_MAX_ENTITIES} entities"
+        entity_counts: list[int] = []
+        entity_positions: list[int] = []
+        for entity_index, entry in enumerate(sequences):
+            entity_label = f"{label} sequence {entity_index + 1}"
+            if not isinstance(entry, dict) or len(entry) != 1:
+                return f"{entity_label} must declare exactly one entity type"
+            entity_type, entity = next(iter(entry.items()))
+            if entity_type not in _MOL1_ENTITY_TYPES:
+                return f"{entity_label} has an unsupported entity type {entity_type!r}"
+            if not isinstance(entity, dict) or set(entity) - _MOL1_ENTITY_KEYS[entity_type]:
+                return f"{entity_label} contains an unsupported field"
+            count = _mol1_int(entity.get("count"))
+            if count is None or not 1 <= count <= _MOL1_MAX_COPY_COUNT:
+                return f"{entity_label} needs a positive integer count"
+            entity_counts.append(count)
+            ids = entity.get("id")
+            if ids is not None:
+                if (
+                    not isinstance(ids, list)
+                    or len(ids) != count
+                    or not all(isinstance(item, str) and _MOL1_CHAIN_ID.fullmatch(item) for item in ids)
+                ):
+                    return f"{entity_label} id must list one short chain id per copy"
+                if len(set(ids)) != len(ids) or chain_ids & set(ids):
+                    return f"{entity_label} chain ids must be unique across the job"
+                chain_ids.update(ids)
+            if entity_type in _MOL1_SEQUENCE_ALPHABETS:
+                sequence = entity.get("sequence")
+                if not isinstance(sequence, str) or not sequence:
+                    return f"{entity_label} needs a non-empty sequence"
+                if len(sequence) > _MOL1_MAX_POLYMER_RESIDUES:
+                    return f"{entity_label} sequence exceeds {_MOL1_MAX_POLYMER_RESIDUES} residues"
+                invalid = sorted(set(sequence) - _MOL1_SEQUENCE_ALPHABETS[entity_type])
+                if invalid:
+                    return f"{entity_label} sequence contains unsupported residues: {''.join(invalid)}"
+                total_residues += len(sequence) * count
+                error = _mol1_modifications(entity_type, entity.get("modifications"), len(sequence))
+                if error:
+                    return f"{entity_label} {error}"
+                for field, extensions in (
+                    ("pairedMsaPath", _MOL1_MSA_EXTENSIONS),
+                    ("unpairedMsaPath", _MOL1_MSA_EXTENSIONS),
+                    ("templatesPath", _MOL1_TEMPLATE_EXTENSIONS),
+                ):
+                    if field in entity:
+                        error = _mol1_asset_reference(entity[field], extensions)
+                        if error:
+                            return f"{entity_label} {field} {error}"
+            elif entity_type == "ligand":
+                ligand = entity.get("ligand")
+                if not isinstance(ligand, str) or not ligand or len(ligand) > _MOL1_MAX_LIGAND_LENGTH:
+                    return f"{entity_label} needs a non-empty ligand description"
+                if ligand.startswith("CCD_"):
+                    if not _MOL1_LIGAND_CCD.fullmatch(ligand):
+                        return f"{entity_label} ligand CCD codes are malformed"
+                elif ligand.startswith("FILE_"):
+                    error = _mol1_asset_reference(ligand[len("FILE_") :], _MOL1_LIGAND_FILE_EXTENSIONS)
+                    if error:
+                        return f"{entity_label} ligand FILE_ reference {error}"
+                elif "://" in ligand:
+                    return f"{entity_label} ligand must be a CCD code, SMILES, or uploaded FILE_ asset"
+            else:
+                ion = entity.get("ion")
+                if not isinstance(ion, str) or not _MOL1_ION_CODE.fullmatch(ion):
+                    return f"{entity_label} needs a CCD ion code"
+            entity_positions.append(_mol1_entity_positions(entity_type, entity))
+        if total_residues > _MOL1_MAX_POLYMER_RESIDUES:
+            return f"Mol-1 JSON exceeds {_MOL1_MAX_POLYMER_RESIDUES} total polymer residues"
+        bonds = job.get("covalent_bonds")
+        if bonds is not None:
+            if not isinstance(bonds, list) or len(bonds) > _MOL1_MAX_BONDS:
+                return f"{label} covalent_bonds must be a list of at most {_MOL1_MAX_BONDS} bonds"
+            for bond_index, bond in enumerate(bonds):
+                bond_label = f"{label} covalent_bonds {bond_index + 1}"
+                if not isinstance(bond, dict) or set(bond) - _MOL1_BOND_KEYS:
+                    return f"{bond_label} contains an unsupported field"
+                entity_numbers: list[int] = []
+                for suffix in ("1", "2"):
+                    entity_number = _mol1_bond_int(bond.get(f"entity{suffix}"))
+                    if entity_number is None or not 1 <= entity_number <= len(sequences):
+                        return f"{bond_label} entity{suffix} must name an entity in the job"
+                    entity_numbers.append(entity_number)
+                    position = _mol1_bond_int(bond.get(f"position{suffix}"))
+                    if position is None or not 1 <= position <= entity_positions[entity_number - 1]:
+                        return f"{bond_label} position{suffix} is outside its entity"
+                    atom = bond.get(f"atom{suffix}")
+                    if not isinstance(atom, str) or not atom or len(atom) > 32:
+                        return f"{bond_label} atom{suffix} must name an atom"
+                has_copy1, has_copy2 = "copy1" in bond, "copy2" in bond
+                if has_copy1 != has_copy2:
+                    return f"{bond_label} must declare copy1 and copy2 together"
+                if has_copy1:
+                    for suffix in ("1", "2"):
+                        entity_number = _mol1_bond_int(bond[f"entity{suffix}"])
+                        copy = _mol1_bond_int(bond[f"copy{suffix}"])
+                        if copy is None or not 1 <= copy <= entity_counts[entity_number - 1]:
+                            return f"{bond_label} copy{suffix} is outside its entity"
+                elif entity_counts[entity_numbers[0] - 1] != entity_counts[entity_numbers[1] - 1]:
+                    return f"{bond_label} must declare copy1 and copy2 when the entity counts differ"
+    return None
+
+
 def _validate_foundry_specification(value: Any) -> str | None:
     if not _is_nonempty_object_or_object_list(value):
         return "Foundry JSON must have a non-empty object or object-list top-level shape"
@@ -131,6 +380,7 @@ def _validate_foundry_specification(value: Any) -> str | None:
 _SPECIFICATION_VALIDATORS: dict[str, Any] = {
     "alphafold3_specification": _validate_alphafold3_specification,
     "foundry_specification": _validate_foundry_specification,
+    "mol1_specification": _validate_mol1_specification,
     "opendde_specification": _validate_opendde_specification,
 }
 

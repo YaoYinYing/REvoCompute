@@ -1,0 +1,91 @@
+# Mol-1 inference environment.
+#
+# Reproducibility: the base image digest, the direct apt packages, and every
+# Python wheel, including the setuptools build backend, are pinned;
+# requirements.lock is installed with --require-hashes and --no-build-isolation.
+# The image is not bit-reproducible: transitive apt dependencies and the
+# apt/PyPI index contents can change, the uv bootstrap is version-pinned but
+# not hash-pinned, and the upstream source is fetched by git commit (SHA-1)
+# rather than a verified archive. Pin apt to a snapshot repository if
+# bit-identical images are required.
+Bootstrap: docker
+# nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04 at this manifest digest.
+# Apptainer 1.4.5 rejects a Docker reference that carries both a tag and a
+# digest, so the tag is recorded here and the digest is the From reference.
+From: nvidia/cuda@sha256:ac55d124da4882b497f732d8dfd9a702d5447a5f29d08d56da6f64f0a1eb34bc
+
+%files
+    mol1/requirements.in /opt/mol1-requirements.in
+    mol1/requirements.lock /opt/mol1-requirements.lock
+    mol1/upstream.json /app/revocompute/upstream.json
+    mol1/model-assets.sha256 /app/revocompute/model-assets.sha256
+    mol1/search-assets.sha256 /app/revocompute/search-assets.sha256
+
+%post
+    attempt=1
+    until apt-get -o Acquire::Retries=5 update; do
+      test "$attempt" -ge 10 && exit 1
+      sleep $((attempt * 5))
+      attempt=$((attempt + 1))
+    done
+    # Direct packages are pinned to the versions resolved for noble. Transitive
+    # apt dependencies and the apt index are not pinned, so the image is not
+    # bit-reproducible; see the header comment.
+    attempt=1
+    until DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
+        python3=3.12.3-0ubuntu2.1 python3-venv=3.12.3-0ubuntu2.1 python3-dev=3.12.3-0ubuntu2.1 \
+        build-essential=12.10ubuntu1 git=1:2.43.0-1ubuntu7.4 ca-certificates=20260816ubuntu0.24.04.1 \
+        hmmer=3.4+dfsg-2 kalign=1:3.3.5-1; do
+      test "$attempt" -ge 10 && exit 1
+      sleep $((attempt * 5))
+      attempt=$((attempt + 1))
+    done
+    rm -rf /var/lib/apt/lists/*
+    python3 -m venv /opt/venv
+    /opt/venv/bin/pip install --no-cache-dir uv==0.8.22
+    # The lock carries the setuptools build backend. Install it first so the
+    # ihm/modelcif sdists and the molence source build without PEP 517
+    # isolation, which would otherwise resolve an unpinned setuptools.
+    awk '/^setuptools==/{flag=1} flag{print} flag && /^    # via/{exit}' \
+      /opt/mol1-requirements.lock > /opt/mol1-build-backends.lock
+    UV_HTTP_TIMEOUT=600 /opt/venv/bin/uv pip install --python /opt/venv/bin/python --no-cache \
+      --require-hashes -r /opt/mol1-build-backends.lock
+    UV_HTTP_TIMEOUT=600 /opt/venv/bin/uv pip sync --python /opt/venv/bin/python --no-cache \
+      --require-hashes --no-build-isolation --index-strategy unsafe-best-match /opt/mol1-requirements.lock
+    # Pinned upstream revision; provenance is recorded in mol1/upstream.json.
+    git init /opt/mol1
+    git -C /opt/mol1 remote add origin https://github.com/molence/Mol-1.git
+    git -C /opt/mol1 fetch --depth 1 origin 7480cc41a7c64b5c517709184bdc81c08dbd5fdb
+    git -C /opt/mol1 checkout --detach FETCH_HEAD
+    /opt/venv/bin/uv pip install --python /opt/venv/bin/python --no-cache --no-deps \
+      --no-build-isolation /opt/mol1
+    rm -rf /opt/mol1/.git
+    # Reserved Runtime Bundle mount point. This image is the environment;
+    # REvoCompute's entrypoint and shared runtime helpers arrive at execution
+    # time as a read-only bundle mounted here.
+    mkdir -p /opt/revocompute/runtime
+    chmod 0555 /opt/revocompute/runtime
+
+%environment
+    export PATH=/opt/venv/bin:$PATH
+    # MOL_ROOT_DIR is the operator's mount; runner.yaml supplies it per run.
+    export LAYERNORM_TYPE=torch
+    export PYTHONNOUSERSITE=1
+    export WANDB_MODE=disabled
+    export HF_HUB_OFFLINE=1
+    export TRANSFORMERS_OFFLINE=1
+    export XDG_CACHE_HOME=/tmp/.cache
+    export TORCH_EXTENSIONS_DIR=/tmp/.torch-extensions
+    export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
+
+%test
+    set -e
+    /opt/venv/bin/python -c 'import torch, mol, rdkit, biotite, gemmi; print(torch.__version__, torch.version.cuda)'
+    /opt/venv/bin/mol --help >/dev/null
+    /opt/venv/bin/mol doctor >/dev/null
+    command -v hmmsearch >/dev/null
+    command -v kalign >/dev/null
+    test -d /opt/revocompute/runtime
+
+%runscript
+    exec /bin/bash /opt/revocompute/runtime/mol1/run.sh "$@"

@@ -1,0 +1,194 @@
+id: mol1_predict
+display_name: Mol-1 biomolecular complex prediction
+category: structure
+summary: Predict protein, nucleic-acid, ligand, ion, and mixed-complex structures with Mol-1.
+use_when: Use this to predict a biomolecular complex from Mol-1's AlphaFold-Server-style
+  job JSON, with supplied or searched MSAs and templates.
+input_summary: One Mol-1 JSON job list plus any MSAs, templates, or ligand files it references.
+output_summary: Per-seed, confidence-ranked mmCIF samples with summary confidence, optional
+  per-atom confidence and token-indexed error matrices, and run provenance.
+considerations:
+- '`plddt` and the mmCIF B-factor use a 0-100 scale; `chain_plddt` and `atom_plddt` use 0-1.
+  The PAE, PDE, and contact matrices are indexed by token, not by residue number.'
+- MSA search uploads protein sequences to the public ColabFold MMseqs2 service at
+  `https://api.colabfold.com`. It is off by default; select it only for sequences this
+  deployment may disclose. When any protein or RNA MSA is supplied, `search` is
+  refused because upstream re-searches every protein chain in a job that has one
+  missing chain and replaces supplied MSAs, so the supplied sequences would be
+  uploaded too; a supplied RNA MSA is likewise refused because the stage cannot
+  preserve it. Supply every MSA with `msa_mode` set to `supply` for the
+  non-disclosure path.
+- Template use with `.a3m` hits downloads each hit structure from PDBe at
+  `https://www.ebi.ac.uk/pdbe/entry-files/download/<pdb_id>.cif` on every run, into
+  task scratch that is discarded with the allocation; template search depends on a
+  searched MSA. Inline JSON templates need no download.
+- A run may publish at most 500 structures. The job count x `sample_seeds` count x
+  `num_samples` is refused before inference when it exceeds that server projection
+  limit.
+- The admission bound is an estimated token count. The smallest test case fits a
+  40 GiB A100 (measured); larger systems and the default-parameter bound remain
+  estimates.
+- Seeds come only from the `sample_seeds` parameter. A job list that carries
+  `modelSeeds` or `assembly_id` is rejected rather than silently ignored.
+- Predictions and confidence values are computational estimates requiring independent
+  scientific validation.
+gpus: true
+# MSA and template search are parameter-selected paths, not separate stages, so the
+# Task declares the capability unconditionally. With the default `none` modes the
+# runtime passes `--use_msa false --use_template false` and contacts nothing, but
+# `requires_network` still runs the Task in the host network namespace: the default
+# is an offline code path, not network isolation.
+requires_network: true
+inputs:
+  specification:
+    title: Mol-1 job specification
+    type: mol1_specification
+    cardinality: {min: 1, max: 1}
+    formats: [json]
+  assets:
+    title: Referenced MSAs, templates, and ligand files
+    type: supporting_data
+    cardinality: {min: 0, max: 31}
+    formats: [a3m, json, sdf, mol2, pdb]
+input_workspace:
+  steps:
+  - id: material
+    title: Provide the molecular system
+    description: Upload one Mol-1 JSON job list and every MSA, template, or ligand file
+      it references.
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: Mol-1 input files
+  - id: settings
+    title: Set the prediction controls
+    description: Choose sampling, MSA, and template behavior.
+    capabilities:
+    - plugin: parameters
+      id: task_parameters
+      title: Prediction settings
+  - id: review
+    title: Review and run
+    description: Check the job list, referenced files, and settings before creating the
+      task snapshot.
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Molecule review
+      options:
+        show_paths: true
+result_workspace:
+  views:
+  - plugin: candidate-collection
+    id: predicted_structures
+    role: primary
+    title: Predicted structures
+    description: Per-seed Mol-1 samples in mmCIF format, numbered by decreasing ranking
+      score within each seed.
+    sources:
+      candidates:
+      - glob: '*/seed_*/predictions/*_sample_*.cif'
+        required: true
+    mapping:
+      confidence_encoding: plddt_bfactor
+  - plugin: scalar-summary
+    id: confidence_summary
+    role: evidence
+    title: Structure confidence
+    description: Whole-structure confidence measures for each ranked sample. pLDDT here
+      uses the upstream 0-100 scale.
+    sources:
+      data:
+      - glob: '*/seed_*/predictions/*_summary_confidence_sample_*.json'
+        required: true
+    mapping:
+      fields:
+      - {path: plddt, label: pLDDT (0-100), unit: score, direction: higher}
+      - {path: ptm, label: pTM, unit: score, direction: higher}
+      - {path: iptm, label: ipTM, unit: score, direction: higher}
+      - {path: gpde, label: Global PDE, unit: distance, direction: lower}
+      - {path: ranking_score, label: Ranking score, unit: score, direction: higher}
+      - {path: has_clash, label: Has clash, unit: flag, direction: lower}
+  - plugin: evidence-bundle
+    id: prediction_evidence
+    role: evidence
+    title: Confidence data and provenance
+    description: Optional per-atom confidence and token-indexed error matrices, the upstream
+      and asset identities, the admitted input hashes, and the effective MSA and template modes.
+    sources:
+      items:
+      - glob: '*/seed_*/predictions/*_full_data_sample_*.json'
+        required: false
+      - path: mol1-provenance.json
+        required: true
+      - path: mol1-model-assets.sha256
+        required: true
+      - path: mol1-search-assets.sha256
+        required: true
+    mapping: {}
+stage_markers:
+  input_preparation: Preparing and validating the molecule and its referenced files
+  msa_template_preparation: Searching for or loading MSAs and templates
+  inference: Mol-1 structure inference
+  output_validation: Validating prediction output
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties:
+    sample_seeds:
+      type: string
+      pattern: '^[0-9]{1,19}(,[0-9]{1,19})*$'
+      maxLength: 256
+      description: Comma-separated 64-bit integer seeds. Each seed produces its own
+        independent set of ranked samples. The job count x seed count x `num_samples`
+        must not exceed 500 structures.
+      default: '101'
+    num_samples:
+      type: integer
+      description: Number of independently sampled structures generated for each seed.
+        The job count x seed count x `num_samples` must not exceed 500 structures.
+      default: 5
+      minimum: 1
+      maximum: 25
+    num_recycles:
+      type: integer
+      description: Number of Pairformer recycling iterations used to refine each prediction.
+      default: 20
+      minimum: 1
+      maximum: 100
+    diffusion_steps:
+      type: integer
+      description: Number of denoising steps in each structure diffusion trajectory.
+      default: 200
+      minimum: 1
+      maximum: 1000
+    need_atom_confidence:
+      type: boolean
+      description: Publishes per-atom pLDDT and the token-indexed PAE, PDE, and contact matrices.
+      default: false
+    msa_mode:
+      type: string
+      enum: [none, supply, search]
+      description: 'Protein MSAs: predict without them, use only the uploaded MSA files,
+        or search on the public ColabFold MMseqs2 service at `https://api.colabfold.com`,
+        which uploads protein sequences. Search is refused when any protein or RNA MSA
+        is supplied, because a job with one missing chain is re-searched and every
+        protein chain in it has its MSA replaced.'
+      default: none
+    template_mode:
+      type: string
+      enum: [none, supply, search]
+      description: 'Protein templates: use none, use only the uploaded template files,
+        or search. Searching requires `msa_mode: search`; `.a3m` hits download their
+        structures from PDBe (`https://www.ebi.ac.uk/pdbe/entry-files/download/<pdb_id>.cif`)
+        on every run.'
+      default: none
+    rna_msa_mode:
+      type: string
+      enum: [none, supply]
+      description: 'RNA MSAs: ignore them, or use the uploaded `unpairedMsaPath` of every
+        RNA chain. Requires `msa_mode: supply`; upstream reads MSAs only when they are
+        enabled, and `search` refuses a supplied RNA MSA. RNA MSA search is not offered
+        because its databases are not distributed with this runner.'
+      default: none

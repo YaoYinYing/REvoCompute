@@ -1,0 +1,7 @@
+identifier: mol1-result
+entrypoint: ./index.js
+requires:
+  - structures
+  - summaries
+optional:
+  - full_confidences

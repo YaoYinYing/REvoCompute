@@ -1,0 +1,18 @@
+# Mol-1 weights and reference data are operator-managed and mounted read-only.
+# The layout is documented in MODEL_ASSETS.md; MOL_ROOT_DIR is the same root
+# the upstream CLI reads.
+mounts:
+- host_path: "/mnt/db/weights/mol1"
+  container_path: "/mnt/db/weights/mol1"
+  mode: "ro"
+env:
+  MOL_ROOT_DIR: "/mnt/db/weights/mol1"
+  # The fused LayerNorm extension compiles CUDA at first use. This image is a
+  # runtime image without nvcc, so use the PyTorch LayerNorm path. Set to
+  # fast_layernorm only with a devel image that carries a matching toolchain.
+  LAYERNORM_TYPE: "torch"
+  # Conservative pre-flight admission bound for a 40 GiB A100. It is an
+  # estimated token count, rejected before the checkpoint is loaded. Raise it
+  # only after measuring peak device memory on the target card.
+  MOL1_MAX_TOKENS: "800"
+max_runtime_seconds: 86400

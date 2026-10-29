@@ -1,0 +1,16 @@
+version: 1
+collections:
+  smoke:
+    cases:
+    - id: minimal-mol1
+      task: mol1_predict
+      input: {roles: {specification: [tests/data/mol1/minimal.json]}}
+      parameters:
+        sample_seeds: '101'
+        num_samples: 1
+        num_recycles: 1
+        diffusion_steps: 1
+        need_atom_confidence: false
+        msa_mode: none
+        template_mode: none
+        rna_msa_mode: none

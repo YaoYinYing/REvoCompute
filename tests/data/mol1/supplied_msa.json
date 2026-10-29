@@ -1,0 +1,15 @@
+[
+  {
+    "name": "supplied_msa",
+    "sequences": [
+      {
+        "proteinChain": {
+          "sequence": "GSGSGSGSGSGS",
+          "count": 1,
+          "id": ["A"],
+          "unpairedMsaPath": "msa.a3m"
+        }
+      }
+    ]
+  }
+]

@@ -1,0 +1,32 @@
+# Mol-1 inference dependencies, pinned to the upstream tested stack except for
+# PyTorch: this family runs CUDA 12 (the A100 host driver predates CUDA 13), so
+# it uses upstream's `cuda12` extra shape, torch 2.10 + cu12 operator wheels.
+# Versions otherwise follow the upstream 7480cc4 requirements.txt; `click` is
+# absent there but declared in pyproject.toml, and the CLI cannot start without
+# it because the package installs with --no-deps.
+torch==2.10.0
+
+click==8.5.0
+numpy==2.4.4
+scipy==1.18.0
+pandas==2.3.1
+networkx==3.7
+ml_collections==1.1.0
+PyYAML==6.0.2
+tqdm==4.67.1
+pydantic==2.14.1
+optree==0.17.0
+protobuf==6.31.1
+
+biotite==1.7.1
+biopython==1.85
+rdkit==2025.9.3
+gemmi==0.6.7
+modelcif==1.4
+pdbeccdutils==1.0.0
+scikit-learn==1.7.1
+
+cuequivariance==0.10.0
+cuequivariance-torch==0.10.0
+cuequivariance-ops-cu12==0.10.0
+cuequivariance-ops-torch-cu12==0.10.0
