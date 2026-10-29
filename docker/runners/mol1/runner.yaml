@@ -2,11 +2,11 @@
 # The layout is documented in MODEL_ASSETS.md; MOL_ROOT_DIR is the same root
 # the upstream CLI reads.
 mounts:
-- host_path: "/mnt/db/mol1"
-  container_path: "/mnt/db/mol1"
+- host_path: "/mnt/db/weights/mol1"
+  container_path: "/mnt/db/weights/mol1"
   mode: "ro"
 env:
-  MOL_ROOT_DIR: "/mnt/db/mol1"
+  MOL_ROOT_DIR: "/mnt/db/weights/mol1"
   # The fused LayerNorm extension compiles CUDA at first use. This image is a
   # runtime image without nvcc, so use the PyTorch LayerNorm path. Set to
   # fast_layernorm only with a devel image that carries a matching toolchain.

@@ -28,6 +28,9 @@ no citation rather than an unpublished one.
 
 ## Layout under `MOL_ROOT_DIR`
 
+`MOL_ROOT_DIR` is `/mnt/db/weights/mol1` on the target host: runner weights live
+under `/mnt/db/weights/<model>/`, mounted read-only at the same path.
+
 ```text
 $MOL_ROOT_DIR/
 ├── checkpoint/mol-1-base.pt
