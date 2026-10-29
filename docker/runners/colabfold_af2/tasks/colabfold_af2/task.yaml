@@ -178,6 +178,11 @@ workflow:
   - features
   stage_markers:
   - msa_searching
+  outputs:
+  - name: msa
+    type: a3m_alignment
+    # The runner searches recursively; its exact output location is input-dependent.
+    path: "**/*.a3m"
 - name: model
   display_name: Model and optional relax
   requires_gpu: true
@@ -185,6 +190,10 @@ workflow:
   runner_args:
   - -s
   - model
+  inputs:
+  - name: features
+    type: a3m_alignment
+    from: colabfold_af2.features:msa
   stage_markers:
   - modeling
 id: colabfold_af2

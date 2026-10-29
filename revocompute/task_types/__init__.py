@@ -138,8 +138,19 @@ class RuntimeFamily:
 
 
 @dataclass(frozen=True)
+class StagePortSpec:
+    """One typed workflow artifact port and its optional upstream binding."""
+
+    name: str
+    type: str
+    path: str | None = None
+    required: bool = True
+    source: str | None = None
+
+
+@dataclass(frozen=True)
 class WorkflowStage:
-    """One scheduler allocation in an ordered task workflow."""
+    """One scheduler allocation in a task workflow."""
 
     name: str
     display_name: str
@@ -147,6 +158,8 @@ class WorkflowStage:
     runner_args: tuple[str, ...] = ()
     stage_markers: tuple[str, ...] = ()
     requires_network: bool = False
+    inputs: tuple[StagePortSpec, ...] = ()
+    outputs: tuple[StagePortSpec, ...] = ()
     #: What this stage needs from an accelerator, in semantic terms (device class
     #: and count).  Declared by the owning manifest, never as this deployment's
     #: partition or GRES name: placement resolves the requirement against the
@@ -1161,19 +1174,36 @@ def _load_result_workspace(raw: Any) -> tuple[ResultView, ...]:
     return tuple(views)
 
 
-def _load_workflow(raw: Any, task_name: str, stage_markers: dict[str, str]) -> tuple[WorkflowStage, ...]:
-    """Load a task's ordered workflow and enforce the marker-partition invariant.
+def _load_stage_ports(raw: Any, task_name: str, stage_name: str, *, input_port: bool) -> tuple[StagePortSpec, ...]:
+    if not isinstance(raw, list):
+        raise ValueError(f"Workflow stage {task_name}.{stage_name} ports must be a list")
+    ports = []
+    seen: set[str] = set()
+    for port in raw:
+        allowed = {"name", "type", "required", "from"} if input_port else {"name", "type", "path", "required"}
+        if not isinstance(port, dict) or set(port) - allowed:
+            raise ValueError(f"Workflow stage {task_name}.{stage_name} has an invalid artifact port")
+        name, data_type = port.get("name"), port.get("type")
+        if not isinstance(name, str) or not name or name in seen:
+            raise ValueError(f"Workflow stage {task_name}.{stage_name} has an invalid or duplicate port name")
+        if not isinstance(data_type, str) or not data_type:
+            raise ValueError(f"Workflow stage {task_name}.{stage_name} port {name!r} requires a type")
+        path = port.get("path")
+        if path is not None and (not isinstance(path, str) or not path or Path(path).is_absolute() or ".." in Path(path).parts):
+            raise ValueError(f"Workflow stage {task_name}.{stage_name} port {name!r} has an invalid path")
+        required = port.get("required", True)
+        if not isinstance(required, bool):
+            raise ValueError(f"Workflow stage {task_name}.{stage_name} port {name!r} required must be a boolean")
+        source = port.get("from") if input_port else None
+        if input_port and (not isinstance(source, str) or not source):
+            raise ValueError(f"Workflow stage {task_name}.{stage_name} input {name!r} requires a binding")
+        ports.append(StagePortSpec(name=name, type=data_type, path=path, required=required, source=source))
+        seen.add(name)
+    return tuple(ports)
 
-    A composed task replaces its TaskType with a stage-local one that exposes
-    only that stage's declared markers, so the Runner's emitted marker set is
-    exactly the union of what the stages declare.  The workflow stage markers
-    must therefore form an exact ordered partition of the task-level markers:
-    ``concatenate(workflow[i].stage_markers in order) == list(stage_markers)``.
-    That single invariant gives every declared marker exactly one workflow
-    owner, in the task's user-visible order, and fails closed — discovery is the
-    only correct place to reject an ambiguous ownership, because the runtime
-    cannot know which stage a marker the manifest omitted was meant to belong to.
-    """
+
+def _load_workflow(raw: Any, task_name: str, stage_markers: dict[str, str]) -> tuple[WorkflowStage, ...]:
+    """Load workflow stages and assign every task marker to exactly one stage."""
     if raw is None:
         return ()
     if not isinstance(raw, list) or len(raw) < 2:
@@ -1189,6 +1219,8 @@ def _load_workflow(raw: Any, task_name: str, stage_markers: dict[str, str]) -> t
             "runner_args",
             "stage_markers",
             "accelerator_requirement",
+            "inputs",
+            "outputs",
         }:
             raise ValueError(f"Task type {task_name!r} has an invalid workflow stage")
         name = entry.get("name")
@@ -1239,6 +1271,8 @@ def _load_workflow(raw: Any, task_name: str, stage_markers: dict[str, str]) -> t
                 requires_network=requires_network,
                 runner_args=tuple(runner_args),
                 stage_markers=markers,
+                inputs=_load_stage_ports(entry.get("inputs", []), task_name, name, input_port=True),
+                outputs=_load_stage_ports(entry.get("outputs", []), task_name, name, input_port=False),
                 accelerator_requirement=accelerator_requirement,
             )
         )
@@ -1257,11 +1291,6 @@ def _load_workflow(raw: Any, task_name: str, stage_markers: dict[str, str]) -> t
         raise ValueError(
             f"Task type {task_name!r} workflow must assign every declared stage marker: "
             f"{', '.join(omitted)} is unassigned"
-        )
-    if declared != task_level:
-        raise ValueError(
-            f"Task type {task_name!r} workflow stage markers must partition the declared stage markers in order: "
-            f"expected {task_level}, got {declared}"
         )
     return tuple(stages)
 

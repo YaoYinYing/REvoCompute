@@ -393,11 +393,9 @@ def test_workflow_stage_markers_must_partition_declared_markers(tmp_path):
     with pytest.raises(ValueError, match="undeclared stage markers: unknown"):
         discover_plugins(str(tmp_path))
 
-    # Declaring second before first keeps every marker but reorders the
-    # user-visible sequence.
+    # Marker ownership is order-free; explicit graph edges define execution order.
     write("second", "first")
-    with pytest.raises(ValueError, match="must partition the declared stage markers in order"):
-        discover_plugins(str(tmp_path))
+    discover_plugins(str(tmp_path))
 
     # A third task-level marker needs an owning stage; omitting "second" fails.
     task_yaml.write_text(
