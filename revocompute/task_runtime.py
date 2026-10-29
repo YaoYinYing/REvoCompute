@@ -467,7 +467,10 @@ def stage_projection(task: dict[str, Any]) -> dict[str, Any] | None:
                 candidate = int(run["stage_index"])
                 if candidate in by_name_index.values() or candidate in removed_positions.values():
                     candidate = next_extra
-                    next_extra += 1
+                # A kept candidate occupies its position too, so the fallback
+                # must start past it: a second retired stage stored at the same
+                # historical index would otherwise take the same slot.
+                next_extra = max(next_extra, candidate + 1)
                 removed_positions[name] = candidate
                 index = candidate
         if index not in latest or run["attempt"] > latest[index]["attempt"]:

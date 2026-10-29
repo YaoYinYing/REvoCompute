@@ -84,6 +84,16 @@ def _make_entities():
     ]
 
 
+def _fake_compute_node_bin(tmp_path: Path) -> Path:
+    """A PATH entry whose ``squeue`` reports the job RUNNING, as a node sees it."""
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir(exist_ok=True)
+    squeue = fake_bin / "squeue"
+    squeue.write_text("#!/bin/bash\nprintf 'RUNNING\\n'\n", encoding="utf-8")
+    squeue.chmod(0o700)
+    return fake_bin
+
+
 class _FakeSrunProcess:
     """A subprocess.Popen-shaped scheduler boundary fake."""
 
@@ -232,8 +242,7 @@ def test_gpu_wrapper_samples_assigned_device_and_emits_resource_evidence(tmp_pat
         username="alice",
     )
     job._prepare_scratch_dir()
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
+    fake_bin = _fake_compute_node_bin(tmp_path)
     fake_apptainer = fake_bin / "apptainer"
     fake_apptainer.write_text("#!/bin/bash\nsleep 1.1\n", encoding="utf-8")
     fake_apptainer.chmod(0o700)
@@ -305,8 +314,7 @@ def _run_gpu_wrapper(tmp_path, *, env_gpus: dict[str, str]) -> dict:
         resource_policy=_policy(gres="gpu:2", requires_gpu=True),
     )
     job._prepare_scratch_dir()
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir(exist_ok=True)
+    fake_bin = _fake_compute_node_bin(tmp_path)
     fake_apptainer = fake_bin / "apptainer"
     fake_apptainer.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
     fake_apptainer.chmod(0o700)
@@ -433,8 +441,7 @@ def test_resource_markers_start_a_line_after_output_without_a_trailing_newline(t
         username="alice",
     )
     job._prepare_scratch_dir()
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
+    fake_bin = _fake_compute_node_bin(tmp_path)
     fake_apptainer = fake_bin / "apptainer"
     fake_apptainer.write_text('#!/bin/bash\nprintf "design done\\033[0m"\n', encoding="utf-8")
     fake_apptainer.chmod(0o700)
@@ -596,9 +603,13 @@ def test_unaccounted_run_renders_no_wrapper_accounting_gates(tmp_path):
     script = job._render_wrapper()
 
     assert f"start={_sh_quote(job._allocation_release_path)}" not in script
-    assert "squeue -h -j" not in script
     assert f"grant={_sh_quote(job._allocation_grant_path)}" not in script
     assert "allocation was not released to run" not in script
+    # The scheduler observation is not an accounting gate: an unaccounted run
+    # still reports its allocation live, so its stage reads as running while
+    # the command executes.
+    assert "squeue -h -j" in script
+    assert "REVODESIGN_ALLOCATION_LIVE=" in script
     # The science still runs.
     assert "apptainer" in script
 

@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 import sqlite3
 import time
@@ -542,6 +543,118 @@ def test_unaccounted_callbacks_never_settle_an_allocation(tmp_path, monkeypatch)
     )
 
     callbacks[2]("77", time.time())
+
+
+def test_an_unaccounted_run_reports_its_stage_running_when_the_scheduler_says_so(tmp_path, monkeypatch):
+    """Stage RUNNING is driven by the allocation observation, not by billing.
+
+    A live test Task has ``submitted_by_user_id=0`` and therefore no accounting
+    subject.  It still holds an allocation, so the wrapper must observe the
+    scheduler and report allocation-live while the command executes; only then
+    does the StageRun become RUNNING.  With the observation behind the
+    accounting gates it never happens, and the Task reads QUEUED for its whole
+    run.
+    """
+    import hashlib
+    import os
+    import subprocess
+    import threading
+
+    from revocompute.job.runners.slurm_runner import SlurmJob
+    from tests.test_slurm_runner import _fake_compute_node_bin
+
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "5a" * 16
+    _insert_task(database, task_id, status="queued", task_type="cpu_runner")
+    monkeypatch.setattr(task_runtime, "task_store", database)
+    attempt = database.begin_stage_attempt(
+        task_id=task_id, stage_index=0, stage_name="cpu_runner"
+    )
+    callbacks = task_runtime._compute_allocation_callbacks(
+        task_id=task_id,
+        user_id=0,
+        stage_id="cpu_runner",
+        resource_policy=_policy(False),
+        attempt=attempt["attempt"],
+    )
+
+    workspace = tmp_path / "workspace" / task_id
+    inputs = workspace / "inputs"
+    inputs.mkdir(parents=True)
+    input_path = inputs / "input.fasta"
+    input_path.write_text(">test\nACDE\n", encoding="utf-8")
+    entities = [{
+        "name": "sequence",
+        "type": "file",
+        "value": "input.fasta",
+        "snapshot_path": str(input_path),
+        "snapshot_root": str(inputs),
+        "hash": hashlib.sha256(input_path.read_bytes()).hexdigest(),
+        "workspace_key": "owner-key",
+    }]
+    output_dir = tmp_path / "out"
+    job = SlurmJob(
+        task_id,
+        _single_stage_type(),
+        RunnerConfig(),
+        entities,
+        str(output_dir),
+        resource_policy=_policy(False),
+        allocation_dispatched_callback=callbacks[0],
+        allocation_started_callback=callbacks[1],
+        allocation_finished_callback=callbacks[2],
+        allocation_accounting=False,
+    )
+    job._prepare_scratch_dir()
+
+    started = tmp_path / "command-started"
+    done = tmp_path / "command-done"
+    fake_bin = _fake_compute_node_bin(tmp_path)
+    apptainer = fake_bin / "apptainer"
+    apptainer.write_text(
+        '#!/bin/bash\n: > "${COMMAND_STARTED:?}"\nsleep 3\n: > "${COMMAND_DONE:?}"\n',
+        encoding="utf-8",
+    )
+    apptainer.chmod(0o700)
+    environment = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "SLURM_JOB_ID": "42",
+        "SLURM_CPUS_PER_TASK": "1",
+        "SLURM_NTASKS": "1",
+        "COMMAND_STARTED": str(started),
+        "COMMAND_DONE": str(done),
+    }
+
+    process = subprocess.Popen(
+        ["bash"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, env=environment,
+    )
+    job._process = process
+    process.stdin.write(job._render_wrapper())
+    process.stdin.close()
+    reader = threading.Thread(target=job._read_stdout, daemon=True)
+    reader.start()
+
+    deadline = time.monotonic() + 10
+    while not started.is_file() and time.monotonic() < deadline:
+        time.sleep(0.02)
+
+    # The observation is the live allocation, so the stage is RUNNING while the
+    # scientific command is still executing -- never from the post-exit fallback.
+    assert started.is_file()
+    run = database.list_stage_runs(task_id)[0]
+    assert run["status"] == stage_state.RUNNING
+    assert not done.is_file()
+    assert process.poll() is None
+    # Unaccounted means uncharged: no allocation fact and no ledger row exist.
+    with database.engine.connect() as connection:
+        for table in ("resource_ledger", "resource_allocations"):
+            assert connection.exec_driver_sql(f"SELECT COUNT(*) FROM {table}").scalar() == 0
+
+    reader.join(timeout=15)
+    assert not reader.is_alive()
+    assert process.wait(timeout=10) == 0
 
 
 def test_projection_keeps_a_legacy_stage_that_predates_the_later_record(tmp_path, monkeypatch):
@@ -1095,5 +1208,49 @@ def test_projection_keeps_a_removed_stage_out_of_a_current_stages_index(tmp_path
         assert by_name["retired_stage"]["status"] == stage_state.RUNNING
         assert by_name["multistage_runner.model"]["status"] == stage_state.QUEUED
         assert by_name["retired_stage"]["index"] == 2
+    finally:
+        database.engine.dispose()
+
+
+def test_two_retired_stages_at_one_historical_index_get_distinct_positions(tmp_path, monkeypatch):
+    """A retired stage that keeps its stored index still occupies that slot.
+
+    Two stages removed from a manifest can both be recorded at the same
+    historical index.  The first keeps the index, so the fallback for the second
+    must start past it instead of handing out the same position and dropping one
+    stage — the one that was running — from the projection.
+    """
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "4c" * 16
+    _insert_task(database, task_id, status="running")
+    monkeypatch.setattr(task_runtime, "task_store", database)
+    declared = _task_type()
+    monkeypatch.setattr(
+        task_runtime,
+        "_get_task_type",
+        lambda name: (replace(declared, workflow=(declared.workflow[0],)), None),
+    )
+    try:
+        first = database.begin_stage_attempt(
+            task_id=task_id, stage_index=1, stage_name="retired_first"
+        )
+        database.finish_stage_attempt(
+            task_id=task_id, stage_name="retired_first", attempt=first["attempt"],
+            status=stage_state.COMPLETED, reason_code=stage_state.Reason.COMPLETED,
+        )
+        second = database.begin_stage_attempt(
+            task_id=task_id, stage_index=1, stage_name="retired_second"
+        )
+        database.record_stage_running(
+            task_id=task_id, stage_name="retired_second", attempt=second["attempt"]
+        )
+
+        projection = task_runtime.stage_projection(database.get_task(task_id))
+        by_name = {item["name"]: item for item in projection["items"]}
+        assert set(by_name) == {
+            "multistage_runner.features", "retired_first", "retired_second",
+        }
+        assert by_name["retired_first"]["index"] != by_name["retired_second"]["index"]
+        assert by_name["retired_second"]["status"] == stage_state.RUNNING
     finally:
         database.engine.dispose()
