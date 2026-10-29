@@ -36,6 +36,7 @@ from celery import Celery
 from revocompute.admission import resolve_submission_readiness
 from revocompute.config import ComputeConfig, ensure_directories, env_csv, env_int, env_path
 from revocompute.db import GPUAuthorizationUnavailableError, GPUCreditUnavailableError, TaskDatabase
+from revocompute.execution_graph import compile_graph
 from revocompute.infrastructure import (
     InfrastructureComponent,
     _gpu_inventory_probe,
@@ -1175,9 +1176,17 @@ def _run_compute_workflow(
         name for name, step in legacy_state.items()
         if step.get("status") == "completed" and name not in recorded_names
     }
-    for index, stage in enumerate(tt.workflow):
+    graph = compile_graph(tt)
+    stages = {stage.name: (index, stage) for index, stage in enumerate(tt.workflow)}
+    for node in graph.nodes:
+        index, stage = stages[node.id]
         if stage.name in completed:
             continue
+        if any(
+            not binding.startswith("graph:") and binding.rsplit(":", 1)[0] not in completed
+            for binding in node.inputs.values()
+        ):
+            return JobState.FAILED
         policy = resource_policies.get(stage.name)
         if policy is None:
             raise ResourceValidationError(f"Workflow stage {stage.name!r} has no resource snapshot")
@@ -1256,9 +1265,11 @@ def _run_compute_workflow(
             task_store.release_reservation(
                 task_id=task_id, reason_code=ReservationReason.RELEASED.value, at=time.time()
             )
-        _finish_stage_attempt(
-            task_id, stage.name, attempt, result, failure_reason=getattr(job, "failure_reason", None)
-        )
+        failure_reason = getattr(job, "failure_reason", None)
+        if result == JobState.COMPLETED and not _stage_outputs_present(output_dir, node.outputs):
+            result = JobState.FAILED
+            failure_reason = "stage_output_missing"
+        _finish_stage_attempt(task_id, stage.name, attempt, result, failure_reason=failure_reason)
         settled: dict[str, Any] = {"slurm_job_id": None, "container_id": None}
         mirror = _mirror_json(task_id, legacy_state)
         if mirror is not None:
@@ -1266,7 +1277,30 @@ def _run_compute_workflow(
         task_store.update_task(task_id, **settled)
         if result != JobState.COMPLETED:
             return result
+        completed.add(stage.name)
     return JobState.COMPLETED
+
+
+def _stage_outputs_present(output_dir: str, outputs) -> bool:
+    for port in outputs:
+        if not port.path:
+            if port.required:
+                return False
+            continue
+        try:
+            matches = list(Path(output_dir).glob(port.path))
+            if not matches:
+                if port.required:
+                    return False
+                continue
+            if any(
+                not _path_is_within(output_dir, str(path)) or not path.is_file() or path.stat().st_size == 0
+                for path in matches
+            ):
+                return False
+        except (OSError, ValueError):
+            return False
+    return True
 
 
 # ---------------------------------------------------------------------------

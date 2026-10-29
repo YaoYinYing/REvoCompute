@@ -17,7 +17,7 @@ from revocompute.access_control import AccessPolicy
 from revocompute.job import JobState
 from revocompute.job.runners.slurm_runner import SlurmJob
 from revocompute.resource_policy import ResolvedResources
-from revocompute.task_types import RunnerConfig, RuntimeFamily, TaskType, WorkflowStage, get
+from revocompute.task_types import RunnerConfig, RuntimeFamily, StagePortSpec, TaskType, WorkflowStage, get
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -80,6 +80,62 @@ def _policy(requires_gpu: bool) -> ResolvedResources:
     )
 
 
+@pytest.mark.parametrize("output_kind", ["valid", "missing", "escape"])
+def test_graph_scheduler_validates_outputs_and_preserves_attempts(monkeypatch, tmp_path, output_kind):
+    task_runtime = _live_task_runtime()
+    runtime = RuntimeFamily("multistage_runner", ("bash", "run.sh"), "runner.def", "image.sif")
+    features = WorkflowStage(
+        "multistage_runner.features", "Features", False, ("-s", "features"), ("msa",),
+        outputs=(StagePortSpec("features", "features", path="features.dat"),),
+    )
+    model = WorkflowStage(
+        "multistage_runner.model", "Model", True, ("-s", "model"), ("model",),
+        inputs=(StagePortSpec("features", "features", source="multistage_runner.features:features"),),
+    )
+    task_type = TaskType(
+        "multistage_runner", "Synthetic staged calculation", runtime, (),
+        stage_markers={"msa": "MSA", "model": "Model"}, workflow=(model, features),
+    )
+    output = tmp_path / "output"
+    output.mkdir()
+    if output_kind == "valid":
+        (output / "features.dat").write_text("features")
+    elif output_kind == "escape":
+        outside = tmp_path / "outside"
+        outside.write_text("features")
+        (output / "features.dat").symlink_to(outside)
+
+    class Job:
+        def submit(self):
+            return "42"
+
+        def poll(self):
+            return JobState.COMPLETED
+
+    started = []
+    monkeypatch.setattr(task_runtime, "_create_job", lambda *args, **kwargs: started.append(args[1].name) or Job())
+    monkeypatch.setattr(task_runtime.task_store, "update_task", lambda *args, **kwargs: True)
+    task_id = {"valid": "1", "missing": "2", "escape": "3"}[output_kind] * 32
+    _ensure_task_row(task_runtime, task_id)
+    result = task_runtime._run_compute_workflow(
+        task_id, {}, task_type, RunnerConfig(), [], str(output),
+        {stage.name: _policy(stage.requires_gpu) for stage in task_type.workflow}, lambda _: None,
+    )
+    runs = task_runtime.task_store.list_stage_runs(task_id)
+    if output_kind == "valid":
+        assert result == JobState.COMPLETED
+        assert started == ["multistage_runner-features", "multistage_runner-model"]
+        assert {(run["stage_name"], run["attempt"], run["stage_index"], run["status"]) for run in runs} == {
+            (features.name, 1, 1, "COMPLETED"), (model.name, 1, 0, "COMPLETED")
+        }
+    else:
+        assert result == JobState.FAILED
+        assert started == ["multistage_runner-features"]
+        assert len(runs) == 1
+        assert runs[0]["status"] == "FAILED"
+        assert runs[0]["reason_code"] == "stage_output_missing"
+
+
 def test_composer_resumes_after_completed_feature_stage(monkeypatch):
     task_runtime = _live_task_runtime()
 
@@ -92,8 +148,7 @@ def test_composer_resumes_after_completed_feature_stage(monkeypatch):
         "multistage_runner",
         "Synthetic staged calculation",
         runtime,
-        ".fasta",
-        "FASTA",
+        (),
         gpus=True,
         stage_markers={"msa": "MSA", "model": "Model"},
         workflow=stages,
@@ -169,8 +224,7 @@ def test_gpu_workflow_uses_owning_runtime_for_allocation_authorization(monkeypat
         "multistage_runner",
         "Synthetic staged calculation",
         runtime,
-        ".fasta",
-        "FASTA",
+        (),
         gpus=True,
         stage_markers={"model": "Model"},
         workflow=(stage,),
@@ -229,8 +283,7 @@ def test_composer_does_not_submit_after_cancellation_claim_fails(monkeypatch):
         "multistage_runner",
         "Synthetic staged calculation",
         runtime,
-        ".fasta",
-        "FASTA",
+        (),
         gpus=True,
         stage_markers={"model": "Model"},
         workflow=(stage,),
@@ -261,8 +314,7 @@ def test_composer_cancels_submitted_job_when_handle_cannot_be_persisted(monkeypa
         "multistage_runner",
         "Synthetic staged calculation",
         runtime,
-        ".fasta",
-        "FASTA",
+        (),
         gpus=True,
         stage_markers={"model": "Model"},
         workflow=(stage,),
