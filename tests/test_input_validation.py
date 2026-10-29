@@ -567,6 +567,24 @@ def _mol1_job(entity: dict, **job) -> str:
     return json.dumps([{"name": "job", "sequences": [entity], **job}])
 
 
+@pytest.mark.parametrize("invalid_bond_integer", ["²", "9" * 5000])
+def test_mol1_bond_integer_conversion_refuses_invalid_decimal(tmp_path, invalid_bond_integer):
+    document = [{
+        "name": "job",
+        "sequences": [{"proteinChain": {"sequence": "ACDE", "count": 1}}],
+        "covalent_bonds": [{
+            "entity1": invalid_bond_integer, "entity2": 1,
+            "position1": 1, "position2": 1, "atom1": "N", "atom2": "C",
+        }],
+    }]
+    path = _write(tmp_path, json.dumps(document).encode(), "input.json")
+
+    error = validate_logical_input(str(path), "json", "mol1_specification")
+
+    assert error is not None
+    assert "entity1 must name an entity in the job" in error
+
+
 def test_mol1_specification_requires_a_job_list(tmp_path):
     path = _write(tmp_path, b'{"name": "job", "sequences": []}', "input.json")
 
