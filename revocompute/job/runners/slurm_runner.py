@@ -1184,9 +1184,9 @@ class SlurmJob(Job):
             # anything is running.
             f'echo "{JOB_ID_PREFIX}${{SLURM_JOB_ID}}"',
         ]
-        # The gates are the accounting decision.  The allocation-live observation
-        # between them is not: it is the scheduler fact the stage state is driven
-        # by, so an unaccounted run reports it too.
+        # The gates are the accounting decision.  The allocation-live line
+        # between them is not: it is what moves the stage to RUNNING while the
+        # command executes, so an unaccounted run reports it too.
         accounting_enabled = self._resolve_accounting_enabled()
         if accounting_enabled:
             lines.extend(
@@ -1201,41 +1201,57 @@ class SlurmJob(Job):
                     'rm -f -- "$start"',
                 ]
             )
-        lines.extend(
-            [
-                "# -- allocation-live observation --",
-                # ``squeue`` answers from the scheduler's own state: a PENDING or
-                # CONFIGURING job has been allocated nothing yet, and charging it
-                # would charge queue latency as GPU- and CPU-seconds.  Only
-                # RUNNING is allocation-live.  The observation is made for every
-                # run: it is what moves the stage to RUNNING while the command
-                # executes, not an accounting gate.
-                "allocation_live=0",
-                f"for _ in {{1..{ALLOCATION_LIVE_POLLS}}}; do",
-                '  state="$(squeue -h -j "${SLURM_JOB_ID}" -o "%T" 2>/dev/null | head -n 1)"',
-                '  case "${state}" in',
-                '    (RUNNING) allocation_live=1; break ;;',
-                # No answer yet: keep waiting for the state rather than
-                # reporting a job that has not been allocated anything as
-                # live.  A query that errors is retried for the same reason.
-                '    ("") ;;',
-                # A state was read and it is not RUNNING: this job has been
-                # allocated nothing and never will be, so stop waiting.
-                "    (*) break ;;",
-                "  esac",
-                f"  sleep {ALLOCATION_LIVE_POLL_SECONDS}",
-                "done",
-                'if [[ "${allocation_live}" != 1 ]]; then',
-                # The state was read and was not RUNNING (a queued job that can
-                # no longer run, or one already gone).  The command never runs
-                # on an allocation that was not observed live, and one that
-                # never reached RUNNING is charged nothing.
-                '  echo "SLURM job ${SLURM_JOB_ID} did not reach RUNNING state" >&2',
-                "  exit 1",
-                "fi",
-                f'echo "{ALLOCATION_LIVE_PREFIX}${{SLURM_JOB_ID}}"',
-            ]
-        )
+        lines.append("# -- allocation-live observation --")
+        if accounting_enabled:
+            lines.extend(
+                [
+                    # The accounting clock is measured against the scheduler's
+                    # RUNNING instant, so it needs the scheduler's own state: a
+                    # PENDING or CONFIGURING job has been allocated nothing yet,
+                    # and charging it would charge queue latency as GPU- and
+                    # CPU-seconds.
+                    'if ! command -v squeue >/dev/null 2>&1; then',
+                    '  echo "squeue is not available on this node, so the allocation state cannot be observed" >&2',
+                    "  exit 1",
+                    "fi",
+                    "allocation_live=0",
+                    "allocation_state=''",
+                    "allocation_query_error=''",
+                    f"for _ in {{1..{ALLOCATION_LIVE_POLLS}}}; do",
+                    # A failed query and an empty answer are both non-final: one
+                    # transient read must never fail a job that is running.
+                    '  if ! allocation_state="$(squeue -h -j "${SLURM_JOB_ID}" -o "%T" 2>&1)"; then',
+                    '    allocation_query_error="${allocation_state}"',
+                    '    allocation_state=""',
+                    "  else",
+                    '    allocation_state="$(head -n 1 <<< "${allocation_state}")"',
+                    '    allocation_query_error=""',
+                    "  fi",
+                    '  case "${allocation_state}" in',
+                    '    (RUNNING) allocation_live=1; break ;;',
+                    # A terminal state can never become RUNNING, so stop now and
+                    # name it rather than waiting out the poll budget.
+                    "    (BOOT_FAIL|CANCELLED|COMPLETED|DEADLINE|FAILED|NODE_FAIL|OUT_OF_MEMORY|PREEMPTED|TIMEOUT)",
+                    '      echo "SLURM job ${SLURM_JOB_ID} is ${allocation_state} before it reached RUNNING state" >&2',
+                    "      exit 1 ;;",
+                    "    (*) ;;",
+                    "  esac",
+                    f"  sleep {ALLOCATION_LIVE_POLL_SECONDS}",
+                    "done",
+                    'if [[ "${allocation_live}" != 1 ]]; then',
+                    '  if [[ -n "${allocation_query_error}" ]]; then',
+                    '    echo "SLURM job ${SLURM_JOB_ID}: squeue failed while observing the allocation: ${allocation_query_error}" >&2',
+                    "  else",
+                    '    echo "SLURM job ${SLURM_JOB_ID} did not reach RUNNING state" >&2',
+                    "  fi",
+                    "  exit 1",
+                    "fi",
+                ]
+            )
+        # An unaccounted run needs no scheduler query: the wrapper executing on a
+        # compute node is itself the allocation-live fact, and must not depend on
+        # one being installed.
+        lines.append(f'echo "{ALLOCATION_LIVE_PREFIX}${{SLURM_JOB_ID}}"')
         if accounting_enabled:
             lines.extend(
                 [

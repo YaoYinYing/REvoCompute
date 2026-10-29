@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import threading
 from dataclasses import replace
@@ -19,7 +20,13 @@ from unittest.mock import patch
 
 import pytest
 from revocompute.job import JobState
-from revocompute.job.runners.slurm_runner import JOB_ID_PREFIX, SlurmJob, _sanitize_name, _sh_quote
+from revocompute.job.runners.slurm_runner import (
+    ALLOCATION_LIVE_PREFIX,
+    JOB_ID_PREFIX,
+    SlurmJob,
+    _sanitize_name,
+    _sh_quote,
+)
 from revocompute.resource_policy import ResolvedResources
 
 
@@ -92,6 +99,36 @@ def _fake_compute_node_bin(tmp_path: Path) -> Path:
     squeue.write_text("#!/bin/bash\nprintf 'RUNNING\\n'\n", encoding="utf-8")
     squeue.chmod(0o700)
     return fake_bin
+
+
+def _minimal_tool_path(tmp_path: Path, names: tuple[str, ...]) -> Path:
+    """A PATH holding only ``names``, so a stray ``squeue`` cannot be found."""
+    tools = tmp_path / "tools"
+    tools.mkdir(exist_ok=True)
+    for name in names:
+        resolved = shutil.which(name)
+        assert resolved, f"{name} is required to execute the wrapper"
+        (tools / name).symlink_to(resolved)
+    return tools
+
+
+def _runnable_job(tmp_path: Path, **kwargs) -> SlurmJob:
+    """A CPU job whose wrapper can be executed against a synthetic workspace."""
+    workspace = tmp_path / "workspace" / "task-1"
+    inputs = workspace / "inputs"
+    inputs.mkdir(parents=True)
+    input_path = inputs / "input.fasta"
+    input_path.write_text(">test\nACDE\n", encoding="utf-8")
+    entities = _make_entities()
+    entities[0] = {
+        **entities[0],
+        "snapshot_path": str(input_path),
+        "snapshot_root": str(inputs),
+        "hash": hashlib.sha256(input_path.read_bytes()).hexdigest(),
+    }
+    job = SlurmJob("task-1", _make_task_type(), _make_runner(), entities, str(tmp_path / "out"), **kwargs)
+    job._prepare_scratch_dir()
+    return job
 
 
 class _FakeSrunProcess:
@@ -605,11 +642,11 @@ def test_unaccounted_run_renders_no_wrapper_accounting_gates(tmp_path):
     assert f"start={_sh_quote(job._allocation_release_path)}" not in script
     assert f"grant={_sh_quote(job._allocation_grant_path)}" not in script
     assert "allocation was not released to run" not in script
-    # The scheduler observation is not an accounting gate: an unaccounted run
-    # still reports its allocation live, so its stage reads as running while
-    # the command executes.
-    assert "squeue -h -j" in script
-    assert "REVODESIGN_ALLOCATION_LIVE=" in script
+    # An unaccounted run still reports the allocation live, but it must not
+    # depend on a scheduler query to do it: the wrapper running on the node is
+    # the fact.
+    assert "squeue -h -j" not in script
+    assert f'echo "{ALLOCATION_LIVE_PREFIX}${{SLURM_JOB_ID}}"' in script
     # The science still runs.
     assert "apptainer" in script
 
@@ -622,6 +659,130 @@ def test_accounted_run_still_renders_the_accounting_gates(tmp_path):
     assert "squeue -h -j" in script
     assert f"grant={_sh_quote(job._allocation_grant_path)}" in script
     assert "allocation was not released to run" in script
+
+
+def _accounted_runnable_job(tmp_path: Path) -> SlurmJob:
+    return _runnable_job(
+        tmp_path,
+        allocation_dispatched_callback=lambda *args, **kwargs: False,
+        allocation_started_callback=lambda *args, **kwargs: None,
+        allocation_accounting=True,
+    )
+
+
+def _open_the_accounting_gates(job: SlurmJob) -> None:
+    """Pre-answer the start and grant gates for a wrapper run in isolation."""
+    os.makedirs(job.output_dir, exist_ok=True)
+    for path in (job._allocation_release_path, job._allocation_grant_path):
+        Path(path).write_text("", encoding="utf-8")
+
+
+def test_an_unaccounted_wrapper_reports_live_without_a_scheduler_query(tmp_path):
+    """The wrapper running on the node is the live fact, so no squeue is needed."""
+    job = _runnable_job(tmp_path)
+    script = job._render_wrapper()
+    assert "squeue" not in script
+
+    started = tmp_path / "command-started"
+    fake_bin = _fake_compute_node_bin(tmp_path)
+    apptainer = fake_bin / "apptainer"
+    apptainer.write_text('#!/bin/bash\n: > "${COMMAND_STARTED:?}"\n', encoding="utf-8")
+    apptainer.chmod(0o700)
+    # A scheduler query that exists only to fail: the wrapper must never call it.
+    (fake_bin / "squeue").write_text("#!/bin/bash\nexit 99\n", encoding="utf-8")
+    environment = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "SLURM_JOB_ID": "42",
+        "SLURM_CPUS_PER_TASK": "1",
+        "SLURM_NTASKS": "1",
+        "COMMAND_STARTED": str(started),
+    }
+
+    result = subprocess.run(
+        ["bash"], input=script, text=True, capture_output=True, env=environment,
+        check=False, timeout=15,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert f"{ALLOCATION_LIVE_PREFIX}42" in result.stdout
+    assert started.is_file()
+
+
+def test_a_transient_pending_read_does_not_fail_a_running_allocation(tmp_path):
+    """One PENDING/CONFIGURING read is queue latency, not a terminal outcome."""
+    job = _accounted_runnable_job(tmp_path)
+    _open_the_accounting_gates(job)
+    counter = tmp_path / "squeue-calls"
+    fake_bin = _fake_compute_node_bin(tmp_path)
+    (fake_bin / "squeue").write_text(
+        "#!/bin/bash\n"
+        'calls="${SQUEUE_CALLS:?}"\n'
+        'n=0; [[ -f "${calls}" ]] && n="$(cat "${calls}")"\n'
+        "n=$((n + 1)); printf '%s\\n' \"${n}\" > \"${calls}\"\n"
+        'if (( n < 3 )); then printf "PENDING\\n"; else printf "RUNNING\\n"; fi\n',
+        encoding="utf-8",
+    )
+    (fake_bin / "squeue").chmod(0o700)
+    apptainer = fake_bin / "apptainer"
+    apptainer.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
+    apptainer.chmod(0o700)
+    environment = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "SLURM_JOB_ID": "42",
+        "SLURM_CPUS_PER_TASK": "1",
+        "SLURM_NTASKS": "1",
+        "SQUEUE_CALLS": str(counter),
+    }
+
+    result = subprocess.run(
+        ["bash"], input=job._render_wrapper(), text=True, capture_output=True, env=environment,
+        check=False, timeout=15,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert f"{ALLOCATION_LIVE_PREFIX}42" in result.stdout
+    assert int(counter.read_text(encoding="utf-8")) == 3
+
+
+def test_a_terminal_scheduler_state_ends_the_wait_with_the_named_state(tmp_path):
+    job = _accounted_runnable_job(tmp_path)
+    _open_the_accounting_gates(job)
+    fake_bin = _fake_compute_node_bin(tmp_path)
+    (fake_bin / "squeue").write_text("#!/bin/bash\nprintf 'CANCELLED\\n'\n", encoding="utf-8")
+    environment = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "SLURM_JOB_ID": "42",
+        "SLURM_CPUS_PER_TASK": "1",
+        "SLURM_NTASKS": "1",
+    }
+
+    result = subprocess.run(
+        ["bash"], input=job._render_wrapper(), text=True, capture_output=True, env=environment,
+        check=False, timeout=15,
+    )
+
+    assert result.returncode == 1
+    assert "CANCELLED" in result.stderr
+    assert "before it reached RUNNING state" in result.stderr
+    assert ALLOCATION_LIVE_PREFIX not in result.stdout
+
+
+def test_a_missing_squeue_names_the_problem_instead_of_aborting_silently(tmp_path):
+    job = _accounted_runnable_job(tmp_path)
+    _open_the_accounting_gates(job)
+    tools = _minimal_tool_path(tmp_path, ("dirname", "mkdir", "date", "sync", "mv", "rm", "sleep"))
+    environment = {"PATH": str(tools), "SLURM_JOB_ID": "42"}
+
+    result = subprocess.run(
+        [shutil.which("bash")], input=job._render_wrapper(), text=True, capture_output=True,
+        env=environment, check=False, timeout=15,
+    )
+
+    assert result.returncode == 1
+    assert "squeue is not available" in result.stderr
 
 
 def test_render_apptainer_omits_nvidia_flag_for_cpu_task(tmp_path):
