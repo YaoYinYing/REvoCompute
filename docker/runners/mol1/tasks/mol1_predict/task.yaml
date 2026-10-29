@@ -22,8 +22,9 @@ considerations:
 - A run may publish at most 500 structures. The job count x `sample_seeds` count x
   `num_samples` is refused before inference when it exceeds that server projection
   limit.
-- The admission bound is an estimated token count, not a measured fit. No 40 GiB A100
-  fit has been validated; the bound is an estimate.
+- The admission bound is an estimated token count. The smallest test case fits a
+  40 GiB A100 (measured); larger systems and the default-parameter bound remain
+  estimates.
 - Seeds come only from the `sample_seeds` parameter. A job list that carries
   `modelSeeds` or `assembly_id` is rejected rather than silently ignored.
 - Predictions and confidence values are computational estimates requiring independent

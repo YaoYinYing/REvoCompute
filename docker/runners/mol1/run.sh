@@ -56,9 +56,18 @@ need_atom_confidence=$(_parse_param need_atom_confidence)
 }
 if [[ "$template_mode" != "none" ]]; then
   [[ -s "$search_manifest" ]] || { echo "Mol-1 template asset manifest is missing: $search_manifest" >&2; exit 1; }
-  (cd "$mol_root" && sha256sum --strict --check --status "$search_manifest") || {
-    echo "Mol-1 template asset integrity verification failed" >&2; exit 1
-  }
+  # Supplied templates never run the sequence search, so the seqres database is
+  # required only for `search`; every template mode reads the release indexes.
+  if [[ "$template_mode" == "search" ]]; then
+    (cd "$mol_root" && sha256sum --strict --check --status "$search_manifest") || {
+      echo "Mol-1 template asset integrity verification failed" >&2; exit 1
+    }
+  else
+    (cd "$mol_root" && grep -v ' search_database/' "$search_manifest" |
+      sha256sum --strict --check --status -) || {
+      echo "Mol-1 template index integrity verification failed" >&2; exit 1
+    }
+  fi
 fi
 
 # Template feasibility downloads hit structures from PDBe into a fresh

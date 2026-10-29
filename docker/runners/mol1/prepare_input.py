@@ -20,7 +20,6 @@ import json
 import os
 import re
 import shutil
-import sys
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -76,7 +75,7 @@ def _relative_path(entity: dict[str, Any]) -> PurePosixPath:
     return relative
 
 
-def _load_manifest(path: Path) -> tuple[Path, dict[str, Any], dict[str, Any]]:
+def _load_manifest(path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     try:
         manifest = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -91,7 +90,7 @@ def _load_manifest(path: Path) -> tuple[Path, dict[str, Any], dict[str, Any]]:
     for mode, allowed in MODES.items():
         if params.get(mode) not in allowed:
             raise PreparationError(f"{mode} must be one of {', '.join(sorted(allowed))}")
-    return Path(str(specification[0].get("path", ""))), manifest, params
+    return manifest, params
 
 
 def _copy_inputs(
@@ -248,7 +247,7 @@ def _ccd_cache_path() -> Path | None:
 
 
 def prepare(manifest_path: Path, destination: Path) -> Path:
-    _specification, manifest, params = _load_manifest(manifest_path)
+    manifest, params = _load_manifest(manifest_path)
     destination.mkdir(parents=True, exist_ok=True)
     prepared_specification, available, hashes, specification_key = _copy_inputs(manifest, destination)
     try:
@@ -328,7 +327,7 @@ def _asset_records(path: Path) -> list[dict[str, str]]:
 
 
 def finalize(manifest_path: Path, output_dir: Path) -> Path:
-    _specification, manifest, params = _load_manifest(manifest_path)
+    manifest, params = _load_manifest(manifest_path)
     prepared = json.loads((output_dir / "normalized_inputs/provenance.json").read_text(encoding="utf-8"))
     upstream_path = Path(os.environ.get("MOL1_UPSTREAM", "/app/revocompute/upstream.json"))
     model_manifest = Path(os.environ.get("MOL1_MODEL_MANIFEST", "/app/revocompute/model-assets.sha256"))

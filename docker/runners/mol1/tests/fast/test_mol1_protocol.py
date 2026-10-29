@@ -650,6 +650,14 @@ def test_runner_uses_a_supplied_template_without_search(tmp_path: Path) -> None:
         template_mode="supply",
     )
     env = _runner_env(tmp_path, manifest)
+    # Supplied templates never run the sequence search: the manifest names a
+    # seqres database that is not provisioned, and the run must not require it.
+    search_manifest = Path(env["MOL1_SEARCH_MANIFEST"])
+    search_manifest.write_text(
+        search_manifest.read_text(encoding="ascii")
+        + f"{'0' * 64}  search_database/pdb_seqres_20261001.fasta\n",
+        encoding="ascii",
+    )
     output = tmp_path / "result"
 
     completed = _run(env, manifest, output)

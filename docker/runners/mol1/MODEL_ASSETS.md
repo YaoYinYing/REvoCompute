@@ -89,9 +89,10 @@ tar -xzf /tmp/search_database.tar.gz -C "$MOL_ROOT_DIR"
 (cd "$MOL_ROOT_DIR" && sha256sum -c /path/to/repo/docker/runners/mol1/model-assets.sha256)
 ```
 
-`model-assets.sha256` is verified on every run; `search-assets.sha256` whenever
-templates are enabled, because supplied templates read the same indexes as a
-search.
+`model-assets.sha256` is verified on every run. With templates enabled,
+`search-assets.sha256` is verified too, but its `search_database/` entry is
+required only for `template_mode: search`: supplied templates read the
+release-date indexes and never run the sequence search.
 
 ## Runtime decisions
 

@@ -19,8 +19,6 @@ admission check never admits a system larger than the number it reports.
 
 from __future__ import annotations
 
-import argparse
-import json
 import pickle
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -201,17 +199,3 @@ def estimate(
             raise TokenEstimateError(f"Duplicate job name: {name!r}")
         by_job[name] = job_tokens
     return TokenEstimate(total=sum(by_job.values()), by_job=by_job)
-
-
-def _main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("json", type=Path)
-    parser.add_argument("--ccd-cache", type=Path, default=None)
-    args = parser.parse_args()
-    document = json.loads(args.json.read_text(encoding="utf-8"))
-    result = estimate(document, CcdAtomCounts(args.ccd_cache))
-    print(json.dumps({"total": result.total, "by_job": result.by_job}, indent=2))
-
-
-if __name__ == "__main__":
-    _main()
