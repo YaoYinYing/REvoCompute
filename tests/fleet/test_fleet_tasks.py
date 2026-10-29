@@ -256,10 +256,10 @@ def test_rfdiffusion_workspace_normalization_and_structure_free_submission(monke
     assert manifest["params"]["contig"] == "40-40"
 
 
-def test_placer_apo_run_cannot_carry_corruption_centers(monkeypatch, tmp_path):
-    """Upstream drops every corruption center when the small molecule is
-    excluded, so the Task schema rejects the combination instead of forwarding
-    a silent no-op; apo-only and holo-plus-center forms stay valid."""
+def test_placer_apo_run_may_center_its_crop_on_corruption_centers(monkeypatch, tmp_path):
+    """use_sm: false zeroes ligand corruption but build_crop still uses the
+    corruption centers as the crop center, so an apo run may center on them;
+    the schema keeps rejecting only predict_ligand/fixed_ligand under it."""
     module = _load_fleet_module(
         monkeypatch,
         tmp_path,
@@ -274,8 +274,7 @@ def test_placer_apo_run_cannot_carry_corruption_centers(monkeypatch, tmp_path):
         "fixed_ligand": "",
         "corruption_centers": "B-1-LIG-C1",
     }
-    assert [(list(error.path), error.message) for error in validator.iter_errors(apo_with_center)] == [
-        (["corruption_centers"], "'B-1-LIG-C1' is expected to be empty")
+    assert not list(validator.iter_errors(apo_with_center))
+    assert [list(error.path) for error in validator.iter_errors({**apo_with_center, "predict_ligand": "LIG"})] == [
+        ["predict_ligand"]
     ]
-    assert not list(validator.iter_errors({**apo_with_center, "corruption_centers": ""}))
-    assert not list(validator.iter_errors({**apo_with_center, "use_sm": True}))

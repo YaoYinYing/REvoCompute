@@ -305,6 +305,28 @@ def test_ligand_and_center_identifiers_must_exist(tmp_path):
                                    records, structure)
 
 
+def test_predict_ligand_bare_token_that_is_also_a_chain_is_rejected(tmp_path):
+    # A bare token is validated by residue name, but upstream also matches it
+    # against a chain id. Ligand "A" in chain B plus HEM in chain A make "A"
+    # both a name and a chain, so the whole-chain selection must be refused.
+    structure = _write(
+        tmp_path,
+        "ambiguous.pdb",
+        "\n".join(
+            [
+                _line("ATOM", 1, "CA", "ALA", "P", 1),
+                _line("HETATM", 2, "FE", "HEM", "A", 1, x=4.0),
+                _line("HETATM", 3, "C1", "A", "B", 1, x=5.0),
+                "END",
+            ]
+        ),
+    )
+    records = prepare.read_structure(structure)
+    params = _params(predict_ligand="A")
+    with pytest.raises(prepare.PreparationError, match="ambiguous"):
+        prepare.validate_structure(params, prepare.validate_params(params), records, structure)
+
+
 def test_target_res_is_required_for_a_ligand_free_structure(tmp_path):
     structure = _write(tmp_path, "apo.pdb", _apo())
     records = prepare.read_structure(structure)

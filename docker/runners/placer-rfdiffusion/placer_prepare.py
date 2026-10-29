@@ -420,11 +420,27 @@ def _ligand_matches(spec: tuple[str, ...], ligand: tuple[str, int, str]) -> bool
     return spec[1] == chain and spec[2] == name and spec[3] == number
 
 
-def _matching_ligands(specs: list[str], ligands: list[tuple[str, int, str]]) -> list[tuple[str, int, str]]:
+def _matching_ligands(
+    specs: list[str],
+    ligands: list[tuple[str, int, str]],
+    *,
+    ligand_chains: frozenset[str] = frozenset(),
+) -> list[tuple[str, int, str]]:
     matched = set()
     for token in specs:
         spec = _parse_ligand_spec(token)
         hits = [ligand for ligand in ligands if _ligand_matches(spec, ligand)]
+        # Upstream also matches a bare ``predict_ligand`` token against a chain
+        # id (protocol.parse_fixed_ligand_input), so a token that is both a
+        # residue name and a ligand chain would predict a different set than
+        # this name-only validation did. Refuse it rather than select extra
+        # chains; the explicit chain-name3-resno form is unambiguous.
+        if spec[0] == "name" and hits and token in ligand_chains:
+            raise PreparationError(
+                f"Ligand identifier {token!r} is ambiguous: it is both a residue name and a chain id in "
+                "this structure, and PLACER would predict every ligand in that chain. Use the explicit "
+                "chain-name3-resno form to name the ligand you mean."
+            )
         if not hits:
             raise PreparationError(f"Ligand identifier {token!r} matches no ligand in the input structure.")
         matched.update(hits)
@@ -543,8 +559,12 @@ def validate_structure(params: dict[str, Any], parsed: ParsedParams, residues: l
 
     predicted = set(ligands)
     if parsed.predict_ligand:
-        predicted = set(_matching_ligands(parsed.predict_ligand, ligands))
+        predicted = set(
+            _matching_ligands(parsed.predict_ligand, ligands, ligand_chains=frozenset(ligand_chains))
+        )
     elif parsed.fixed_ligand:
+        # Upstream matches a bare fixed_ligand token by name3 only, so it is
+        # already unambiguous; the chain check applies to predict_ligand alone.
         predicted -= set(_matching_ligands(parsed.fixed_ligand, ligands))
 
     target = _parse_target_res(parsed.target_res) if parsed.target_res else None
