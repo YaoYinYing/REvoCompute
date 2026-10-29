@@ -131,34 +131,36 @@ other branches' valid artifacts. Retry must never duplicate publication.
 
 ### Cross-family stage references (delivered contract)
 
-A workflow stage may name the Runner Family that owns it:
+A workflow stage may name the Runner Family that executes it:
 
 ~~~yaml
 workflow:
 - name: msa_preparation
-  family: gremlin            # owning fleet family; defaults to the task's own
-  stage: msa                 # stage entrypoint the family supports
+  family: gremlin            # registered runtime family; defaults to the task's own
   outputs:
   - {name: alignment, type: a3m_alignment, path: "alignment/*.a3m"}
 ~~~
 
-Rules, all enforced at discovery or submission rather than at dispatch:
+Rules the code enforces:
 
-- `family` must resolve to an enabled, installed Runner Family; an unknown or
-  disabled family is a manifest error.
-- The owning family's resource policy and access policy apply to that stage.
-  The composing Task Type owns the merged user-facing parameter namespace and
-  input roles; a family contributes only its stage's own parameters.
-- Submission requires every referenced family to be admission-ready. One
-  unready family refuses the whole submission before any allocation.
-- Dispatch resolves the runtime image, entrypoint, mounts and runtime bundle
-  per stage from that stage's family; the Task-level runtime is not used as a
-  fallback.
-- The frozen graph records each stage's family identity, so a later change to
-  a family's stage implementation is a digest change, not a silent
-  substitution.
-- A composition that would cross a family's licence or data-export boundary is
-  refused at submission.
+- `family` is identifier-validated in the owning task manifest. After every
+  family and task is registered, discovery refuses a stage naming a family
+  that is not registered (unknown or disabled).
+- Submission resolves every referenced family, requires each family's access
+  policy to admit the user, requires each family's submission admission
+  evidence to be ready, and pins one Runtime Bundle per referenced family. One
+  refusal rejects the whole submission before any allocation.
+- GPU eligibility is graph-aware: if any stage in any referenced family
+  requires an accelerator, the user needs GPU access.
+- Dispatch resolves each node's runtime image, entrypoint, mounts,
+  RunnerConfig, access-policy entitlements and pinned bundle from that node's
+  family. The composing Task's runtime is the default only for stages that
+  omit `family`.
+- Resource policy remains resolved by Task/stage name; placement keeps using
+  the composing runner's timeout default.
+- The frozen graph records each node's resolved family id. The family's SIF
+  image and entrypoint are not part of the digest, so re-deploying an image
+  does not change a submitted Task's frozen graph.
 
 Cross-family references are additive to the existing single-family manifest:
 a task that omits `family` keeps its current meaning.

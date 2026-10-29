@@ -159,5 +159,6 @@ leave it stale, but it is never the authority for a Task that has records.
 
 ## Non-goals
 
-No DAG engine, conditional/fan-out stages, Runner marker requirement, stage
-selection, artifact reuse, or rewrite of placement/reservations/ledger.
+No Pipeline editor or user-authored graphs, conditional edges, per-stage
+concurrency, Runner marker requirement, stage selection, or rewrite of
+placement/reservations/ledger.
