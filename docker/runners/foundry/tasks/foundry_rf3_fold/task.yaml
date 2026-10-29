@@ -1,5 +1,5 @@
 id: foundry_rf3_fold
-display_name: RoseTTAFold3 biomolecular folding
+display_name: RoseTTAFold3
 category: structure
 summary: Predict protein and biomolecular complex structures with the Foundry RF3 checkpoint.
 use_when: Use this for RF3 folding of proteins, nucleic acids, ligands, and mixed complexes from its JSON input API.

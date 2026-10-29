@@ -240,53 +240,204 @@ async function bindApiKey(root: HTMLElement, shell: AppShell): Promise<void> {
 }
 
 export function accessState(policy: RunnerAccess): 'Granted' | 'Expired' | 'Pending' | 'Rejected' | 'Requestable' | 'Restricted' {
-  if (policy.granted) return 'Granted'; if (policy.expired) return 'Expired';
-  if (policy.request_status === 'pending') return 'Pending'; if (policy.request_status === 'rejected') return 'Rejected';
+  // A live grant decides the state. A pending request outranks an expiry: the
+  // server's own projection can carry both (an expired grant plus a newer
+  // request) and its access list counts that policy as pending, so the page must
+  // show the live request rather than a closed history.
+  if (policy.granted) return 'Granted';
+  if (policy.request_status === 'pending') return 'Pending';
+  if (policy.expired) return 'Expired';
+  if (policy.request_status === 'rejected') return 'Rejected';
   return policy.requestable ? 'Requestable' : 'Restricted';
+}
+
+type AccessState = ReturnType<typeof accessState>;
+type AccessGroup = 'action' | 'pending' | 'granted' | 'restricted';
+
+/**
+ * The page's information hierarchy is the reader's next decision, not the
+ * server's list order: a request they can make, one already under review,
+ * access they already hold, then restrictions they cannot act on.
+ */
+const ACCESS_GROUPS: ReadonlyArray<{ key: AccessGroup; title: string; note: string }> = [
+  { key: 'action', title: 'Access you can request', note: 'An administrator reviews each request against the Runner’s upstream licence.' },
+  { key: 'pending', title: 'Awaiting review', note: 'Your request is with an administrator; nothing else is needed from you.' },
+  { key: 'granted', title: 'Granted access', note: '' },
+  { key: 'restricted', title: 'Not requestable', note: 'These restrictions do not accept requests on this deployment.' },
+];
+
+function accessGroup(policy: RunnerAccess): AccessGroup {
+  const state = accessState(policy);
+  if (state === 'Granted') return 'granted';
+  if (state === 'Pending') return 'pending';
+  // Any policy that accepts no requests is a restriction, whatever history it
+  // carries (expired grant, rejected request), not an actionable request row.
+  if (!policy.requestable) return 'restricted';
+  return 'action';
+}
+
+function accessDate(seconds: number): string {
+  return new Date(seconds * 1000).toLocaleDateString(undefined, { dateStyle: 'medium' });
+}
+
+/** A request history the projection can still report outside pending/rejected. */
+function requestHistory(policy: RunnerAccess): string {
+  if (policy.request_status === 'approved') return 'Your previous request was approved. ';
+  if (policy.request_status === 'cancelled') return 'Your previous request was cancelled. ';
+  return '';
+}
+
+function accessDetail(policy: RunnerAccess, state: AccessState): string {
+  if (state === 'Pending') return 'Your request is awaiting an administrator decision.';
+  if (state === 'Expired') {
+    // The administrator's decision is the more recent fact, and the projection
+    // publishes an expiry only for a live grant, so no date is invented here.
+    const rejected = policy.request_status === 'rejected' ? 'Your previous request was not approved. ' : '';
+    return `${rejected}${policy.requestable
+      ? 'A previous grant expired. You may request access again.'
+      : 'A previous grant expired. This Runner is not requestable on this deployment.'}`;
+  }
+  if (state === 'Rejected') return 'Your previous request was not approved.';
+  if (state === 'Restricted') return requestHistory(policy) || policy.description || 'This Runner is not available to request on this deployment.';
+  return requestHistory(policy) || policy.description || 'Operator verification is required before use.';
+}
+
+/** The owning policy's published terms, in its own words. */
+function policyDetails(policy: RunnerAccess): HTMLDetailsElement | null {
+  const licenseName = metadataValue(policy.license, 'name'); const licenseUrl = safeExternalUrl(metadataValue(policy.license, 'url'));
+  const noticeTitle = metadataValue(policy.notice, 'title'); const noticeSummary = metadataValue(policy.notice, 'summary');
+  if (!licenseUrl && !noticeTitle && !noticeSummary) return null;
+  const more = document.createElement('details'); const summary = document.createElement('summary'); summary.textContent = 'Policy details'; more.append(summary);
+  if (noticeTitle) { const strong = document.createElement('strong'); strong.textContent = noticeTitle; more.append(strong); }
+  if (noticeSummary) { const p = document.createElement('p'); p.textContent = noticeSummary; more.append(p); }
+  if (licenseUrl) { const a = document.createElement('a'); a.href = licenseUrl; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.textContent = licenseName || 'Upstream terms'; more.append(a); }
+  return more;
+}
+
+/** Announce an answer without re-rendering the forms the reader is filling in. */
+function accessAnnouncement(host: HTMLElement, message: string): void {
+  let notice = host.querySelector<HTMLElement>('[data-access-announcement]');
+  if (!notice) {
+    notice = document.createElement('p'); notice.dataset.accessAnnouncement = '';
+    notice.className = 'form-status status-success'; notice.setAttribute('role', 'status'); host.prepend(notice);
+  }
+  notice.textContent = message;
+}
+
+function pendingGroup(host: HTMLElement): HTMLElement {
+  const existing = host.querySelector<HTMLElement>('[data-access-group="pending"]');
+  if (existing) return existing;
+  const group = ACCESS_GROUPS.find(item => item.key === 'pending')!;
+  const section = document.createElement('section'); section.className = 'access-group'; section.dataset.accessGroup = 'pending';
+  const heading = document.createElement('h2'); heading.textContent = group.title;
+  const note = document.createElement('p'); note.className = 'access-group-note'; note.textContent = group.note;
+  section.append(heading, note);
+  host.insertBefore(section, host.querySelector('[data-access-group="granted"], [data-access-group="restricted"]'));
+  return section;
+}
+
+/**
+ * Move one answered row into review from the server's own 201 answer.
+ *
+ * Only that row changes: any draft typed into another policy's form survives,
+ * and the reader's focus lands on the row the server just answered.
+ */
+function markAnswered(row: HTMLElement, policy: RunnerAccess, policies: RunnerAccess[], host: HTMLElement, shell: AppShell): void {
+  const updated: RunnerAccess = { ...policy, request_status: 'pending' };
+  const index = policies.indexOf(policy); if (index >= 0) policies[index] = updated;
+  const action = row.closest<HTMLElement>('[data-access-group="action"]');
+  const answered = accessRow(updated, policies, host, shell);
+  row.replaceWith(answered);
+  pendingGroup(host).append(answered);
+  if (action && !action.querySelector('.access-row')) action.remove();
+  answered.focus();
+  shell.notify('Runner access requested.', 'success');
+}
+
+function accessRequestForm(
+  policy: RunnerAccess,
+  policies: RunnerAccess[],
+  host: HTMLElement,
+  shell: AppShell,
+  row: HTMLElement,
+): HTMLFormElement {
+  const form = document.createElement('form'); form.className = 'access-request profile-form';
+  const label = document.createElement('label'); label.textContent = 'Research use and affiliation';
+  const reason = document.createElement('textarea'); reason.required = true; reason.maxLength = 1000; reason.rows = 3; reason.placeholder = 'Describe the non-commercial research use and your affiliation.'; label.append(reason);
+  const button = document.createElement('button'); button.className = 'primary-button'; button.type = 'submit'; button.textContent = 'Request access';
+  const message = document.createElement('p'); message.className = 'form-status'; message.hidden = true; message.setAttribute('role', 'alert'); form.append(label, button, message);
+  form.addEventListener('submit', async event => {
+    event.preventDefault(); const requestReason = reason.value.trim();
+    if (!requestReason) { status(message, 'Describe your research use before requesting access.', 'error'); reason.focus(); return; }
+    button.disabled = true;
+    try {
+      const result = await requestAccess(policy.policy_id || '', requestReason);
+      // The 201 body is the server's answer; no client-side state is invented.
+      const records = Array.isArray(result.requests) ? result.requests as Array<{ status?: unknown }> : [];
+      if (result.policy_id !== policy.policy_id || !records.some(record => record?.status === 'pending')) {
+        status(message, 'The server did not confirm this policy’s request. Reload the page to see its decision.', 'error');
+        button.disabled = false; return;
+      }
+      markAnswered(row, policy, policies, host, shell);
+      accessAnnouncement(host, 'Access request submitted.');
+    } catch (error) { status(message, errorMessage(error, 'Access request could not be submitted.'), 'error'); button.disabled = false; }
+  });
+  return form;
+}
+
+function accessRow(policy: RunnerAccess, policies: RunnerAccess[], host: HTMLElement, shell: AppShell): HTMLElement {
+  const state = accessState(policy);
+  const row = document.createElement('article'); row.className = 'access-row'; row.dataset.accessState = state.toLowerCase(); row.dataset.policyId = policy.policy_id || ''; row.tabIndex = -1;
+  const heading = document.createElement('div'); heading.className = 'access-heading';
+  const title = document.createElement('h3'); title.textContent = policy.label || policy.policy_id || 'Restricted Runner';
+  const badge = document.createElement('span'); badge.className = `badge access-${state.toLowerCase()}`; badge.textContent = state; heading.append(title, badge); row.append(heading);
+  const detail = document.createElement('p'); detail.className = 'access-detail'; detail.textContent = accessDetail(policy, state); row.append(detail);
+  if (policy.description && policy.description !== detail.textContent) {
+    const context = document.createElement('p'); context.className = 'access-policy'; context.textContent = policy.description; row.append(context);
+  }
+  if (!policy.granted && policy.requestable && policy.request_status !== 'pending') row.append(accessRequestForm(policy, policies, host, shell, row));
+  const more = policyDetails(policy); if (more) row.append(more);
+  return row;
+}
+
+function grantedItem(policy: RunnerAccess): HTMLLIElement {
+  const item = document.createElement('li'); item.className = 'access-granted';
+  const name = document.createElement('span'); name.className = 'access-granted-name'; name.textContent = policy.label || policy.policy_id || 'Restricted Runner';
+  const expiry = document.createElement('span'); expiry.className = 'access-granted-expiry';
+  expiry.textContent = policy.expires_at ? `Valid until ${accessDate(policy.expires_at)}` : 'No expiry date is published';
+  item.append(name, expiry);
+  const more = policyDetails(policy); if (more) item.append(more);
+  return item;
+}
+
+function renderAccessPolicies(host: HTMLElement, policies: RunnerAccess[], shell: AppShell): void {
+  host.replaceChildren();
+  if (!policies.length) { host.innerHTML = '<p class="empty-state">No restricted Runner policies are configured.</p>'; return; }
+  const grouped = new Map<AccessGroup, RunnerAccess[]>();
+  policies.forEach(policy => {
+    const key = accessGroup(policy);
+    grouped.set(key, [...(grouped.get(key) || []), policy]);
+  });
+  ACCESS_GROUPS.forEach(group => {
+    const items = grouped.get(group.key); if (!items?.length) return;
+    const section = document.createElement('section'); section.className = 'access-group'; section.dataset.accessGroup = group.key;
+    const heading = document.createElement('h2'); heading.textContent = group.title; section.append(heading);
+    if (group.note) { const note = document.createElement('p'); note.className = 'access-group-note'; note.textContent = group.note; section.append(note); }
+    if (group.key === 'granted') {
+      const list = document.createElement('ul'); list.className = 'access-granted-list';
+      items.forEach(policy => list.append(grantedItem(policy)));
+      section.append(list);
+    } else {
+      items.forEach(policy => section.append(accessRow(policy, policies, host, shell)));
+    }
+    host.append(section);
+  });
 }
 
 async function loadAccess(root: HTMLElement, shell: AppShell): Promise<void> {
   const host = root.querySelector<HTMLElement>('[data-access-list]')!;
   try {
-    const response = await getAccess(); host.replaceChildren();
-    if (!response.policies.length) { host.innerHTML = '<p class="empty-state">No restricted Runner policies are configured.</p>'; return; }
-    response.policies.forEach(policy => {
-      const state = accessState(policy); const row = document.createElement('article'); row.className = 'access-row';
-      const heading = document.createElement('div'); heading.className = 'access-heading';
-      const title = document.createElement('h3'); title.textContent = policy.label || policy.policy_id || 'Restricted Runner';
-      const badge = document.createElement('span'); badge.className = `badge access-${state.toLowerCase()}`; badge.textContent = state; heading.append(title, badge); row.append(heading);
-      const detail = document.createElement('p'); detail.className = 'access-detail';
-      if (state === 'Granted' && policy.expires_at) detail.textContent = `Valid until ${new Date(policy.expires_at * 1000).toLocaleString()}.`;
-      else if (state === 'Pending') detail.textContent = 'Your request is awaiting an administrator decision.';
-      else if (state === 'Expired') detail.textContent = 'A previous grant expired. You may request access again.';
-      else if (state === 'Rejected') detail.textContent = 'Your previous request was not approved.';
-      else detail.textContent = policy.description || 'Operator verification is required before use.';
-      row.append(detail);
-      if (!policy.granted && policy.requestable && policy.request_status !== 'pending') {
-        const form = document.createElement('form'); form.className = 'access-request profile-form';
-        const label = document.createElement('label'); label.textContent = 'Research use and affiliation';
-        const reason = document.createElement('textarea'); reason.required = true; reason.maxLength = 1000; reason.rows = 3; reason.placeholder = 'Describe the non-commercial research use and your affiliation.'; label.append(reason);
-        const button = document.createElement('button'); button.className = 'primary-button'; button.type = 'submit'; button.textContent = 'Request access';
-        const message = document.createElement('p'); message.className = 'form-status'; message.hidden = true; message.setAttribute('role', 'alert'); form.append(label, button, message);
-        form.addEventListener('submit', async event => {
-          event.preventDefault(); const requestReason = reason.value.trim();
-          if (!requestReason) { status(message, 'Describe your research use before requesting access.', 'error'); reason.focus(); return; }
-          button.disabled = true;
-          try { await requestAccess(policy.policy_id || '', requestReason); status(message, 'Access request submitted.', 'success'); button.remove(); reason.disabled = true; badge.textContent = 'Pending'; badge.className = 'badge access-pending'; shell.notify('Runner access requested.', 'success'); }
-          catch (error) { status(message, errorMessage(error, 'Access request could not be submitted.'), 'error'); button.disabled = false; }
-        }); row.append(form);
-      }
-      const licenseName = metadataValue(policy.license, 'name'); const licenseUrl = safeExternalUrl(metadataValue(policy.license, 'url'));
-      const noticeTitle = metadataValue(policy.notice, 'title'); const noticeSummary = metadataValue(policy.notice, 'summary');
-      if (licenseUrl || noticeTitle || noticeSummary) {
-        const more = document.createElement('details'); const summary = document.createElement('summary'); summary.textContent = 'Policy details'; more.append(summary);
-        if (noticeTitle) { const strong = document.createElement('strong'); strong.textContent = noticeTitle; more.append(strong); }
-        if (noticeSummary) { const p = document.createElement('p'); p.textContent = noticeSummary; more.append(p); }
-        if (licenseUrl) { const a = document.createElement('a'); a.href = licenseUrl; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.textContent = licenseName || 'Upstream terms'; more.append(a); }
-        row.append(more);
-      }
-      host.append(row);
-    });
+    renderAccessPolicies(host, (await getAccess()).policies, shell);
   } catch (error) { host.innerHTML = '<p class="error-state" data-error></p>'; host.querySelector<HTMLElement>('[data-error]')!.textContent = errorMessage(error, 'Runner access is unavailable.'); }
 }
 

@@ -59,7 +59,7 @@ export default {
 
     const head = el('header', 'be2-head');
     head.append(
-      el('h2', '', 'BioEmu2 equilibrium ensemble'),
+      el('h2', '', 'Equilibrium ensemble'),
       el('p', 'be2-note', 'Each published sample is one conformation drawn by the released BioEmu2 checkpoint from the input sequence. Sample order is generation order, not physical time.'),
     );
 

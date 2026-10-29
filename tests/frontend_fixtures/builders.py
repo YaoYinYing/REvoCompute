@@ -247,7 +247,12 @@ def catalog_access_payload(access: AccessState) -> dict[str, Any]:
     return {"restricted": True, "granted": access.granted, "request_status": access.request_status}
 
 
-def runner_access_payload(access: AccessState) -> dict[str, Any]:
+def runner_access_payload(access: AccessState, *, include_history: bool = True) -> dict[str, Any]:
+    """One policy projection; request history only where the route includes it.
+
+    The access list serves the reader's own history (``expired``/``expires_at``);
+    the method detail route projects the policy with ``include_history=False``.
+    """
     if not access.restricted:
         return {"restricted": False}
     payload: dict[str, Any] = {
@@ -261,6 +266,9 @@ def runner_access_payload(access: AccessState) -> dict[str, Any]:
         "notice": {"title": access.notice_title, "summary": access.notice_summary},
         "license": {"name": access.license_name, "url": access.license_url},
     }
+    if include_history:
+        payload["expired"] = access.expired
+        payload["expires_at"] = access.expires_at
     return payload
 
 
@@ -352,7 +360,7 @@ def build_detail(definition: RunnerDefinition) -> dict[str, Any]:
         "input_summary": definition.input_summary,
         "output_summary": definition.output_summary,
         "considerations": list(definition.considerations),
-        "access": runner_access_payload(definition.access),
+        "access": runner_access_payload(definition.access, include_history=False),
         "submission": dict(READY_SUBMISSION),
         "detail_url": f"/compute/api/types/{definition.name}",
         "parameters_url": f"/compute/api/task-parameters/{definition.name}",
