@@ -1230,8 +1230,11 @@ class SlurmJob(Job):
                     '  case "${allocation_state}" in',
                     '    (RUNNING) allocation_live=1; break ;;',
                     # A terminal state can never become RUNNING, so stop now and
-                    # name it rather than waiting out the poll budget.
-                    "    (BOOT_FAIL|CANCELLED|COMPLETED|DEADLINE|FAILED|NODE_FAIL|OUT_OF_MEMORY|PREEMPTED|TIMEOUT)",
+                    # name it rather than waiting out the poll budget.  The
+                    # REQUEUE_* and RESV_DEL_HOLD states stay transient: they can
+                    # still lead to RUNNING.
+                    "    (BOOT_FAIL|CANCELLED|COMPLETED|COMPLETING|DEADLINE|FAILED|NODE_FAIL|"
+                    "OUT_OF_MEMORY|PREEMPTED|REVOKED|SIGNALING|SPECIAL_EXIT|STAGE_OUT|TIMEOUT)",
                     '      echo "SLURM job ${SLURM_JOB_ID} is ${allocation_state} before it reached RUNNING state" >&2',
                     "      exit 1 ;;",
                     "    (*) ;;",

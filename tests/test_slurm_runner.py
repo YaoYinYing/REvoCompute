@@ -677,6 +677,31 @@ def _open_the_accounting_gates(job: SlurmJob) -> None:
         Path(path).write_text("", encoding="utf-8")
 
 
+def _run_accounted_wrapper(tmp_path: Path, squeue_body: str, extra_env: dict[str, str] | None = None):
+    """Execute an accounted wrapper against a synthetic scheduler."""
+    job = _accounted_runnable_job(tmp_path)
+    _open_the_accounting_gates(job)
+    fake_bin = _fake_compute_node_bin(tmp_path)
+    squeue = fake_bin / "squeue"
+    squeue.write_text(squeue_body, encoding="utf-8")
+    squeue.chmod(0o700)
+    apptainer = fake_bin / "apptainer"
+    apptainer.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
+    apptainer.chmod(0o700)
+    environment = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "SLURM_JOB_ID": "42",
+        "SLURM_CPUS_PER_TASK": "1",
+        "SLURM_NTASKS": "1",
+    }
+    environment.update(extra_env or {})
+    return subprocess.run(
+        ["bash"], input=job._render_wrapper(), text=True, capture_output=True, env=environment,
+        check=False, timeout=15,
+    )
+
+
 def test_an_unaccounted_wrapper_reports_live_without_a_scheduler_query(tmp_path):
     """The wrapper running on the node is the live fact, so no squeue is needed."""
     job = _runnable_job(tmp_path)
@@ -711,34 +736,15 @@ def test_an_unaccounted_wrapper_reports_live_without_a_scheduler_query(tmp_path)
 
 def test_a_transient_pending_read_does_not_fail_a_running_allocation(tmp_path):
     """One PENDING/CONFIGURING read is queue latency, not a terminal outcome."""
-    job = _accounted_runnable_job(tmp_path)
-    _open_the_accounting_gates(job)
     counter = tmp_path / "squeue-calls"
-    fake_bin = _fake_compute_node_bin(tmp_path)
-    (fake_bin / "squeue").write_text(
+    result = _run_accounted_wrapper(
+        tmp_path,
         "#!/bin/bash\n"
         'calls="${SQUEUE_CALLS:?}"\n'
         'n=0; [[ -f "${calls}" ]] && n="$(cat "${calls}")"\n'
         "n=$((n + 1)); printf '%s\\n' \"${n}\" > \"${calls}\"\n"
         'if (( n < 3 )); then printf "PENDING\\n"; else printf "RUNNING\\n"; fi\n',
-        encoding="utf-8",
-    )
-    (fake_bin / "squeue").chmod(0o700)
-    apptainer = fake_bin / "apptainer"
-    apptainer.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
-    apptainer.chmod(0o700)
-    environment = {
-        **os.environ,
-        "PATH": f"{fake_bin}:{os.environ['PATH']}",
-        "SLURM_JOB_ID": "42",
-        "SLURM_CPUS_PER_TASK": "1",
-        "SLURM_NTASKS": "1",
-        "SQUEUE_CALLS": str(counter),
-    }
-
-    result = subprocess.run(
-        ["bash"], input=job._render_wrapper(), text=True, capture_output=True, env=environment,
-        check=False, timeout=15,
+        {"SQUEUE_CALLS": str(counter)},
     )
 
     assert result.returncode == 0, result.stderr
@@ -746,28 +752,39 @@ def test_a_transient_pending_read_does_not_fail_a_running_allocation(tmp_path):
     assert int(counter.read_text(encoding="utf-8")) == 3
 
 
-def test_a_terminal_scheduler_state_ends_the_wait_with_the_named_state(tmp_path):
-    job = _accounted_runnable_job(tmp_path)
-    _open_the_accounting_gates(job)
-    fake_bin = _fake_compute_node_bin(tmp_path)
-    (fake_bin / "squeue").write_text("#!/bin/bash\nprintf 'CANCELLED\\n'\n", encoding="utf-8")
-    environment = {
-        **os.environ,
-        "PATH": f"{fake_bin}:{os.environ['PATH']}",
-        "SLURM_JOB_ID": "42",
-        "SLURM_CPUS_PER_TASK": "1",
-        "SLURM_NTASKS": "1",
-    }
-
-    result = subprocess.run(
-        ["bash"], input=job._render_wrapper(), text=True, capture_output=True, env=environment,
-        check=False, timeout=15,
-    )
+@pytest.mark.parametrize("state", ["CANCELLED", "COMPLETING", "SPECIAL_EXIT"])
+def test_a_terminal_scheduler_state_ends_the_wait_with_the_named_state(tmp_path, state):
+    result = _run_accounted_wrapper(tmp_path, f"#!/bin/bash\nprintf '{state}\\n'\n")
 
     assert result.returncode == 1
-    assert "CANCELLED" in result.stderr
+    assert state in result.stderr
     assert "before it reached RUNNING state" in result.stderr
     assert ALLOCATION_LIVE_PREFIX not in result.stdout
+
+
+def test_an_exhausted_poll_without_a_state_reports_the_generic_reason(tmp_path, monkeypatch):
+    from revocompute.job.runners import slurm_runner
+
+    monkeypatch.setattr(slurm_runner, "ALLOCATION_LIVE_POLLS", 3)
+    monkeypatch.setattr(slurm_runner, "ALLOCATION_LIVE_POLL_SECONDS", "0")
+
+    result = _run_accounted_wrapper(tmp_path, "#!/bin/bash\n:\n")
+
+    assert result.returncode == 1
+    assert "did not reach RUNNING state" in result.stderr
+    assert "squeue failed" not in result.stderr
+
+
+def test_an_exhausted_poll_reports_the_last_query_error(tmp_path, monkeypatch):
+    from revocompute.job.runners import slurm_runner
+
+    monkeypatch.setattr(slurm_runner, "ALLOCATION_LIVE_POLLS", 3)
+    monkeypatch.setattr(slurm_runner, "ALLOCATION_LIVE_POLL_SECONDS", "0")
+
+    result = _run_accounted_wrapper(tmp_path, "#!/bin/bash\nprintf 'boom\\n' >&2\nexit 1\n")
+
+    assert result.returncode == 1
+    assert "squeue failed while observing the allocation: boom" in result.stderr
 
 
 def test_a_missing_squeue_names_the_problem_instead_of_aborting_silently(tmp_path):
