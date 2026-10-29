@@ -23,8 +23,9 @@ execution boundaries, extension contracts, and the test policy.
   semantics audit.
 - [Input and Result Workspace (Design Record)](input-result-workspace.md) — the
   pluggable input/result workspace design and its status.
-- [CAVER Spatial Starting-Point Selection (Design Record)](caver-spatial-selection.md) —
-  the click-to-Task contract for choosing a CAVER starting point and its status.
+- [Molecular Selection Capabilities (Design Record)](caver-spatial-selection.md) —
+  the reusable selection identity, viewer facade, parameter mapping, refusal,
+  and provenance contract.
 - [Local Result Workspace (PR #86)](local-result-workspace.md) — the
   browser-local source for extracted result archives, its observed archive
   contract, verification, and accepted limitations.
