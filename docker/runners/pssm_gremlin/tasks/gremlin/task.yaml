@@ -60,10 +60,39 @@ stage_markers:
   hhfilter: HHfilter filtering
   gremlin: GREMLIN optimization
   blast: PSI-BLAST PSSM
+workflow:
+- name: msa
+  display_name: MSA search and filtering
+  requires_gpu: false
+  requires_network: false
+  runner_args: ["-s", "msa", "-j", "${allocated_cpus}"]
+  stage_markers: [hhblits, hhfilter]
+  inputs:
+  - {name: sequence, type: protein_sequence, from: "graph:sequence"}
+  outputs:
+  - {name: alignment, type: alignment, path: "gremlin_msa/*.i90c75_aln.fas"}
+- name: fit
+  display_name: GREMLIN model fit
+  requires_gpu: false
+  requires_network: false
+  runner_args: ["-s", "fit", "-j", "${allocated_cpus}"]
+  stage_markers: [gremlin]
+  inputs:
+  - {name: alignment, type: alignment, from: "gremlin.msa:alignment"}
+  outputs:
+  - {name: coupling_model, type: model, path: "gremlin_res/*.GREMLIN.mrf.pkl"}
+  - {name: coupling_matrix, type: image, path: "gremlin_res/*_GREMLIN_mtx.png"}
+- name: pssm
+  display_name: PSI-BLAST PSSM
+  requires_gpu: false
+  requires_network: false
+  runner_args: ["-s", "pssm", "-j", "${allocated_cpus}"]
+  stage_markers: [blast]
+  inputs:
+  - {name: sequence, type: protein_sequence, from: "graph:sequence"}
+  outputs:
+  - {name: pssm, type: table, path: "pssm_msa/*_ascii_mtx_file"}
 id: gremlin
-runner_args:
-- -j
-- ${allocated_cpus}
 parameters:
   $schema: https://json-schema.org/draft/2020-12/schema
   type: object
