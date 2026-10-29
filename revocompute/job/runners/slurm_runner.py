@@ -326,6 +326,7 @@ class SlurmJob(Job):
         allocation_dispatched_callback: Any = None,
         allocation_started_callback: Any = None,
         allocation_finished_callback: Any = None,
+        allocation_accounting: bool | None = None,
         task_store: Any = None,
         runtime_bundle_root: str = "",
     ):
@@ -376,6 +377,11 @@ class SlurmJob(Job):
         self._allocation_dispatched_callback = allocation_dispatched_callback
         self._allocation_started_callback = allocation_started_callback
         self._allocation_finished_callback = allocation_finished_callback
+        # Callback presence is not the accounting decision: stage bookkeeping
+        # callbacks exist for unaccounted runs too, and must not open the
+        # wrapper's start/squeue/grant gates.  ``None`` keeps the historical
+        # inference for direct adapter callers.
+        self._allocation_accounting = allocation_accounting
         self._job_id_event = threading.Event()
         # Identity is available as soon as either reader finds it.  Completion
         # of one reader is insufficient: the other may still contain the
@@ -397,7 +403,25 @@ class SlurmJob(Job):
 
     # -- Job ABC -------------------------------------------------------------
 
+    def _resolve_accounting_enabled(self) -> bool:
+        """The one effective-accounting decision for this allocation.
+
+        The wrapper gates, the host releases, and settlement all use this same
+        answer.  Callback presence is not it: stage bookkeeping callbacks exist
+        for unaccounted runs, and gating such a run would leave the wrapper
+        waiting for a release that never comes.
+        """
+        if self._allocation_accounting is not None:
+            return self._allocation_accounting
+        return (
+            self._allocation_dispatched_callback is not None
+            or self._allocation_started_callback is not None
+        )
+
     def submit(self) -> str:
+        # Resolve once, before the wrapper is rendered, so its gate shape and the
+        # host's release paths cannot disagree.
+        self._accounting_enabled = self._resolve_accounting_enabled()
         if self._task_store is not None:
             attempt_id = uuid.uuid4().hex
             try:
@@ -481,13 +505,9 @@ class SlurmJob(Job):
             )
             raise RuntimeError(f"SLURM submission did not return a scheduler job ID{suffix}")
         self._job_id = self._slurm_job_id
-        # Snapshot before the callbacks run: each may block, and this is the only
-        # stable answer to "does the wrapper gate on resource accounting?".
-        accounting_enabled = (
-            self._allocation_dispatched_callback is not None
-            or self._allocation_started_callback is not None
-        )
-        self._accounting_enabled = accounting_enabled
+        # The decision was made before the wrapper was rendered; the host uses
+        # the same value for release and grant.
+        accounting_enabled = self._accounting_enabled
         try:
             # Job identity is now known, so the scheduler owns the request.
             # ``_notify_dispatched`` writes the scheduler-owned reservation and,
@@ -645,6 +665,11 @@ class SlurmJob(Job):
         back rather than kept.
         """
         return self._allocation_live and self._admission_error is None
+
+    @property
+    def failure_reason(self) -> str | None:
+        """Why this allocation failed, as this adapter observed it."""
+        return self._failure_reason
 
     @property
     def wrapper_executed(self) -> bool:
@@ -1159,11 +1184,14 @@ class SlurmJob(Job):
             # anything is running.
             f'echo "{JOB_ID_PREFIX}${{SLURM_JOB_ID}}"',
         ]
-        if self._allocation_dispatched_callback is not None or self._allocation_started_callback is not None:
+        # The gates are the accounting decision.  The allocation-live line
+        # between them is not: it is what moves the stage to RUNNING while the
+        # command executes, so an unaccounted run reports it too.
+        accounting_enabled = self._resolve_accounting_enabled()
+        if accounting_enabled:
             lines.extend(
                 [
-                    # Two gates, because there are two different questions.  The
-                    # start gate releases the wrapper to observe its own
+                    # The start gate releases the wrapper to observe its own
                     # allocation; it is not permission to run the task.  The
                     # grant gate after the live line is the admission decision,
                     # and only then does the scientific command run.
@@ -1171,36 +1199,65 @@ class SlurmJob(Job):
                     'for _ in {1..300}; do test -f "$start" && break; sleep 0.1; done',
                     'test -f "$start"',
                     'rm -f -- "$start"',
-                    "# -- allocation-live observation --",
-                    # ``squeue`` answers from the scheduler's own state: a
+                ]
+            )
+        lines.append("# -- allocation-live observation --")
+        if accounting_enabled:
+            lines.extend(
+                [
+                    # The accounting clock is measured against the scheduler's
+                    # RUNNING instant, so it needs the scheduler's own state: a
                     # PENDING or CONFIGURING job has been allocated nothing yet,
                     # and charging it would charge queue latency as GPU- and
-                    # CPU-seconds.  Only RUNNING is allocation-live, and only
-                    # this line starts the accounting clock.
+                    # CPU-seconds.
+                    'if ! command -v squeue >/dev/null 2>&1; then',
+                    '  echo "squeue is not available on this node, so the allocation state cannot be observed" >&2',
+                    "  exit 1",
+                    "fi",
                     "allocation_live=0",
+                    "allocation_state=''",
+                    "allocation_query_error=''",
                     f"for _ in {{1..{ALLOCATION_LIVE_POLLS}}}; do",
-                    '  state="$(squeue -h -j "${SLURM_JOB_ID}" -o "%T" 2>/dev/null | head -n 1)"',
-                    '  case "${state}" in',
+                    # A failed query and an empty answer are both non-final: one
+                    # transient read must never fail a job that is running.
+                    '  if ! allocation_state="$(squeue -h -j "${SLURM_JOB_ID}" -o "%T" 2>&1)"; then',
+                    '    allocation_query_error="${allocation_state}"',
+                    '    allocation_state=""',
+                    "  else",
+                    '    allocation_state="$(head -n 1 <<< "${allocation_state}")"',
+                    '    allocation_query_error=""',
+                    "  fi",
+                    '  case "${allocation_state}" in',
                     '    (RUNNING) allocation_live=1; break ;;',
-                    # No answer yet: keep waiting for the state rather than
-                    # reporting a job that has not been allocated anything as
-                    # live.  A query that errors is retried for the same reason.
-                    '    ("") ;;',
-                    # A state was read and it is not RUNNING: this job has been
-                    # allocated nothing and never will be, so stop waiting.
-                    "    (*) break ;;",
+                    # A terminal state can never become RUNNING, so stop now and
+                    # name it rather than waiting out the poll budget.  The
+                    # REQUEUE_* and RESV_DEL_HOLD states stay transient: they can
+                    # still lead to RUNNING.
+                    "    (BOOT_FAIL|CANCELLED|COMPLETED|COMPLETING|DEADLINE|FAILED|NODE_FAIL|"
+                    "OUT_OF_MEMORY|PREEMPTED|REVOKED|SIGNALING|SPECIAL_EXIT|STAGE_OUT|TIMEOUT)",
+                    '      echo "SLURM job ${SLURM_JOB_ID} is ${allocation_state} before it reached RUNNING state" >&2',
+                    "      exit 1 ;;",
+                    "    (*) ;;",
                     "  esac",
                     f"  sleep {ALLOCATION_LIVE_POLL_SECONDS}",
                     "done",
                     'if [[ "${allocation_live}" != 1 ]]; then',
-                    # The state was read and was not RUNNING (a queued job that
-                    # can no longer run, or one already gone).  No allocation is
-                    # ever accounted without this evidence, so one that never
-                    # reached RUNNING is charged nothing.
-                    '  echo "SLURM job ${SLURM_JOB_ID} did not reach RUNNING state" >&2',
+                    '  if [[ -n "${allocation_query_error}" ]]; then',
+                    '    echo "SLURM job ${SLURM_JOB_ID}: squeue failed while observing the allocation: ${allocation_query_error}" >&2',
+                    "  else",
+                    '    echo "SLURM job ${SLURM_JOB_ID} did not reach RUNNING state" >&2',
+                    "  fi",
                     "  exit 1",
                     "fi",
-                    f'echo "{ALLOCATION_LIVE_PREFIX}${{SLURM_JOB_ID}}"',
+                ]
+            )
+        # An unaccounted run needs no scheduler query: the wrapper executing on a
+        # compute node is itself the allocation-live fact, and must not depend on
+        # one being installed.
+        lines.append(f'echo "{ALLOCATION_LIVE_PREFIX}${{SLURM_JOB_ID}}"')
+        if accounting_enabled:
+            lines.extend(
+                [
                     "# -- admission grant --",
                     # Allocation-live is a fact about the scheduler, not a grant:
                     # the server makes the admission decision when it observes it,

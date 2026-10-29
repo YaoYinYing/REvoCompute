@@ -45,6 +45,7 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 
 from revocompute import resource_ledger as rloan
 from revocompute import resource_model as rm
+from revocompute import stage_state
 from revocompute import storage_quota as squota
 from revocompute.operational_events import emit_event
 from revocompute.schema_epoch import require_current_schema
@@ -685,11 +686,11 @@ class TaskDatabase:
             self.resource_observations_table.c.id,
         )
         # Live per-item progress and the runner's task outcome, as reported on
-        # stdout.  Deliberately NOT ``tasks.workflow_state``: that column is the
-        # workflow engine's durable per-stage record, and a resumable workflow
-        # reads it back to decide what to run next.  A runner signal has a
-        # different meaning and lifetime, so sharing the column would make it
-        # two facts at once and let a progress write corrupt a workflow resume.
+        # stdout.  Deliberately NOT ``tasks.workflow_state``: that column is a
+        # compatibility projection of ``stage_runs`` (and the only evidence for
+        # Tasks that predate them), so a stdout write there would mix a progress
+        # observation into workflow evidence.  A runner signal has a different
+        # meaning and lifetime.
         # There is deliberately no foreign key to ``tasks``: the id is reused by
         # an identical resubmission, so the row's lifetime is tied to the task's
         # and :meth:`delete_task` removes both together.
@@ -709,6 +710,51 @@ class TaskDatabase:
             Column("task_id", String(32), primary_key=True),
             Column("evidence_json", Text, nullable=False),
             Column("updated_at", Float, nullable=False),
+        )
+        # Durable execution-stage attempts.  This is the sole authority for
+        # "which stage is queued/running and why it ended": a stage outlives any
+        # one scheduler allocation (it is QUEUED before dispatch, and it can
+        # fail before an allocation exists), which is why ``resource_allocations``
+        # cannot hold it.  ``tasks.workflow_state`` remains a compatibility
+        # projection written from these rows for historical consumers, never a
+        # second authority.  The unique key is the exactly-once attempt identity;
+        # the partial unique index permits at most one live attempt per stage
+        # name, so a duplicate dispatch — or a resumed workflow whose manifest
+        # reordered the stage — reuses the attempt instead of creating a second
+        # allocation record for the same work.
+        self.stage_runs_table = Table(
+            "stage_runs",
+            self.metadata,
+            Column("id", Integer, primary_key=True, autoincrement=True),
+            Column("task_id", String(32), nullable=False),
+            Column("stage_index", Integer, nullable=False),
+            Column("stage_name", String, nullable=False),
+            Column("attempt", Integer, nullable=False),
+            Column("status", String, nullable=False),
+            Column("slurm_job_id", String),
+            Column("planned_resources", Text),
+            Column("started_at", Float),
+            Column("ended_at", Float),
+            Column("reason_code", String),
+            Column("created_at", Float, nullable=False),
+            Column("updated_at", Float, nullable=False),
+        )
+        # Attempt identity follows the stage, not its current position: a
+        # manifest reorder must not collide with another stage's attempt at the
+        # index this one moved to.
+        Index(
+            "idx_stage_runs_identity",
+            self.stage_runs_table.c.task_id,
+            self.stage_runs_table.c.stage_name,
+            self.stage_runs_table.c.attempt,
+            unique=True,
+        )
+        Index(
+            "idx_stage_runs_live_name",
+            self.stage_runs_table.c.task_id,
+            self.stage_runs_table.c.stage_name,
+            unique=True,
+            sqlite_where=text(stage_state.active_status_predicate()),
         )
         # The publication identity of a finalized result manifest, in canonical
         # server-owned state.  The result directory belongs to the runner's
@@ -789,6 +835,12 @@ class TaskDatabase:
                     if "already exists" not in str(exc).lower():
                         raise
                     logging.warning("TaskDatabase metadata already present, skipping creation")
+                # ``create_all(checkfirst=True)`` skips a table that already
+                # exists, together with every index declared on it: a database
+                # whose first creation died between the table and its indexes
+                # would stay unconstrained forever.  Create each index by name
+                # as its own idempotent step.
+                self._migrate_stage_run_indexes(conn)
                 self._migrate_subject_columns(conn)
                 self._migrate_resource_columns(conn)
             # The legacy copy normalizes idempotency keys in place, so it must
@@ -798,6 +850,62 @@ class TaskDatabase:
             self._migrate_legacy_gpu_tables()
             with self.engine.begin() as conn:
                 self._install_append_only_guards(conn)
+
+    #: Index names from earlier heads of this branch.  Their columns changed
+    #: (index-keyed identity and live attempt), and ``checkfirst`` matches by
+    #: name, so a database created by one of those heads would otherwise keep
+    #: the old definition forever.
+    _LEGACY_STAGE_RUN_INDEXES = ("idx_stage_runs_task_stage_attempt", "idx_stage_runs_live_stage")
+
+    def _migrate_stage_run_indexes(self, conn) -> None:
+        """Apply the current stage-run index definitions to an existing table.
+
+        The whole change is one savepoint: if the new constraints cannot be
+        built, the database keeps the indexes it had rather than losing them to
+        a failed migration.  A pre-head database can hold duplicate live
+        attempts (or attempt numbers) for one stage name; that is a data conflict
+        to report by identity, not a bare constraint error.
+        """
+        savepoint = conn.begin_nested()
+        try:
+            for name in self._LEGACY_STAGE_RUN_INDEXES:
+                conn.exec_driver_sql(f'DROP INDEX IF EXISTS "{name}"')
+            for index in self.stage_runs_table.indexes:
+                index.create(bind=conn, checkfirst=True)
+        except IntegrityError as exc:
+            savepoint.rollback()
+            raise RuntimeError(self._stage_run_index_conflict(conn)) from exc
+        except Exception:
+            savepoint.rollback()
+            raise
+        else:
+            savepoint.commit()
+
+    @staticmethod
+    def _stage_run_index_conflict(conn) -> str:
+        """Name the duplicate rows that block the stage-run constraints."""
+        active = ", ".join(f"'{status}'" for status in sorted(stage_state.ACTIVE_STATUSES))
+        live = conn.exec_driver_sql(
+            "SELECT task_id, stage_name, COUNT(*), GROUP_CONCAT(id) FROM stage_runs "
+            f"WHERE status IN ({active}) GROUP BY task_id, stage_name HAVING COUNT(*) > 1"
+        ).fetchall()
+        attempts = conn.exec_driver_sql(
+            "SELECT task_id, stage_name, attempt, COUNT(*), GROUP_CONCAT(id) FROM stage_runs "
+            "GROUP BY task_id, stage_name, attempt HAVING COUNT(*) > 1"
+        ).fetchall()
+        details = [
+            f"task {task_id} stage {stage_name!r} has {count} live attempts (run ids {run_ids})"
+            for task_id, stage_name, count, run_ids in live
+        ]
+        details += [
+            f"task {task_id} stage {stage_name!r} attempt {attempt} has {count} rows (run ids {run_ids})"
+            for task_id, stage_name, attempt, count, run_ids in attempts
+        ]
+        detail = "; ".join(details) or "the stage_runs rows violate the new unique constraints"
+        return (
+            "Cannot enforce one live attempt and one attempt number per stage name: "
+            f"{detail}. Resolve these duplicate stage_runs rows, then reopen the database."
+        )
 
     @contextmanager
     def _startup_lock(self):
@@ -1276,6 +1384,12 @@ class TaskDatabase:
         # cancellation.
         if status is None or (not self._is_deleted_status(status)):
             stmt = stmt.where(self.tasks_table.c.status.notin_(tuple(self.TERMINAL_STATUSES)))
+        if status in {"queued", "running"}:
+            # An allocation callback can arrive after the Task settled.  A late
+            # "started" observation must not resurrect a failed/finished Task
+            # (and, during recovery, must not steal the pending claim from the
+            # replacement worker).
+            stmt = stmt.where(self.tasks_table.c.status.notin_(("finished", "failed")))
         with self.engine.begin() as conn:
             return conn.execute(stmt).rowcount == 1
 
@@ -1333,7 +1447,12 @@ class TaskDatabase:
             return conn.execute(stmt).rowcount == 1
 
     def claim_task_cancellation(self, md5sum: str, **fields) -> bool:
-        """Atomically cancel a task only while it remains active."""
+        """Atomically cancel a task and every live stage attempt it owns.
+
+        The cancellation claim is a Core boundary: no later worker callback may
+        turn a cancelled attempt back into a running one, which is why the stage
+        rows are settled under the same transaction as the Task status.
+        """
         stmt = (
             update(self.tasks_table)
             .where(
@@ -1342,8 +1461,66 @@ class TaskDatabase:
             )
             .values(status="cancelled", **fields)
         )
+        timestamp = time.time()
         with self.engine.begin() as conn:
-            return conn.execute(stmt).rowcount == 1
+            if conn.execute(stmt).rowcount != 1:
+                return False
+            self._settle_live_stage_runs(
+                conn, md5sum, status=stage_state.CANCELLED, reason_code=stage_state.Reason.TASK_CANCELLED,
+                timestamp=timestamp,
+            )
+            self._write_workflow_state_mirror(conn, md5sum)
+            return True
+
+    def _settle_live_stage_runs(
+        self, conn, task_id: str, *, status: str, reason_code: str, timestamp: float
+    ) -> int:
+        """Guarded active→terminal update shared by the Task-level boundaries."""
+        allowed = tuple(stage_state.ACTIVE_STATUSES & stage_state.predecessors(status))
+        if not allowed:
+            return 0
+        return conn.execute(
+            update(self.stage_runs_table)
+            .where(
+                self.stage_runs_table.c.task_id == task_id,
+                self.stage_runs_table.c.status.in_(allowed),
+            )
+            .values(
+                status=status,
+                reason_code=stage_state.bounded_reason(reason_code),
+                ended_at=timestamp,
+                updated_at=timestamp,
+            )
+        ).rowcount
+
+    def _write_workflow_state_mirror(self, conn, task_id: str) -> None:
+        """Rewrite the compatibility mirror from records, inside the caller's txn.
+
+        The mirror is derived, but a Task-level boundary that settles stage rows
+        has the rows and the old mirror in one transaction, so leaving the mirror
+        stale there would be a needless disagreement.  Historical entries for
+        stages with no record are preserved.
+        """
+        rows = [dict(row) for row in conn.execute(
+            select(self.stage_runs_table).where(self.stage_runs_table.c.task_id == task_id)
+        ).mappings()]
+        if not rows:
+            return
+        existing = conn.execute(
+            select(self.tasks_table.c.workflow_state).where(self.tasks_table.c.md5sum == task_id)
+        ).scalar()
+        try:
+            legacy = json.loads(existing) if existing else {}
+        except (TypeError, json.JSONDecodeError):
+            legacy = {}
+        if not isinstance(legacy, dict):
+            legacy = {}
+        mirror = stage_state.workflow_state_mirror(rows, legacy)
+        conn.execute(
+            update(self.tasks_table)
+            .where(self.tasks_table.c.md5sum == task_id)
+            .values(workflow_state=json.dumps(mirror, sort_keys=True))
+        )
 
     def claim_task_cleanup(
         self,
@@ -1365,8 +1542,22 @@ class TaskDatabase:
             )
             .values(status=claim_status, celery_task_id=None)
         )
+        timestamp = time.time()
         with self.engine.begin() as conn:
-            return conn.execute(stmt).rowcount == 1
+            if conn.execute(stmt).rowcount != 1:
+                return False
+            # A Task can be deleted while an allocation is still queued or
+            # running.  The claim is terminal, so its live attempts are settled
+            # here rather than left as a permanently live record.
+            self._settle_live_stage_runs(
+                conn, md5sum, status=stage_state.CANCELLED, reason_code=stage_state.Reason.TASK_DELETED,
+                timestamp=timestamp,
+            )
+            # The mirror is derived from the rows this transaction just settled,
+            # so it is rewritten here for the same reason cancellation does it:
+            # a deleted Task must not keep advertising a running stage.
+            self._write_workflow_state_mirror(conn, md5sum)
+            return True
 
     def complete_task_cleanup(self, md5sum: str, *, claim_status: str, cleaned_status: str, **fields) -> bool:
         """Finish a claimed cleanup without overwriting a replacement task."""
@@ -1501,6 +1692,7 @@ class TaskDatabase:
             conn.execute(self.tasks_table.delete().where(self.tasks_table.c.md5sum == md5sum))
             conn.execute(self.task_progress_table.delete().where(self.task_progress_table.c.task_id == md5sum))
             conn.execute(self.task_diagnostics_table.delete().where(self.task_diagnostics_table.c.task_id == md5sum))
+            conn.execute(self.stage_runs_table.delete().where(self.stage_runs_table.c.task_id == md5sum))
             conn.execute(
                 self.result_publications_table.delete().where(
                     self.result_publications_table.c.task_id == md5sum
@@ -2665,6 +2857,229 @@ class TaskDatabase:
                 )
             ).scalar_one_or_none()
         return json.loads(encoded) if encoded else None
+
+    # -- Execution-stage attempts --------------------------------------------
+
+    def begin_stage_attempt(
+        self,
+        *,
+        task_id: str,
+        stage_index: int,
+        stage_name: str,
+        planned_resources: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        """Open the next attempt of one stage, or reuse the live one.
+
+        A Task that no longer exists, or has settled, cannot acquire a live
+        attempt: the check runs inside the same ``BEGIN IMMEDIATE`` as the
+        insert, so a delete/resubmit race cannot leave an orphan record.  There
+        is no retry path for a settled Task, so ``failed`` and ``finished`` are
+        refused exactly like cancellation and deletion; a retry must first move
+        the Task back to an active status.  When the Task is active, of two
+        duplicate dispatches exactly one creates attempt *n+1* and the other
+        observes the live attempt; the unique ``(task_id, stage_name, attempt)``
+        identity and the partial live-attempt index keyed by stage *name* back
+        that property in the database rather than in this read.  The name is the
+        stage's identity across a manifest edit, so a reordered workflow reuses
+        its live attempt instead of opening a second one at a new index.
+        """
+        if not isinstance(stage_index, int) or isinstance(stage_index, bool) or stage_index < 0:
+            raise ValueError("stage_index must be a non-negative integer")
+        timestamp = time.time()
+        encoded = json.dumps(planned_resources, sort_keys=True) if planned_resources is not None else None
+        ineligible = self.STOP_POLLING_STATUSES | self.CLEANUP_CLAIM_STATUSES
+        with self.engine.connect() as conn:
+            conn.exec_driver_sql("BEGIN IMMEDIATE")
+            try:
+                task_status = conn.execute(
+                    select(self.tasks_table.c.status).where(self.tasks_table.c.md5sum == task_id)
+                ).scalar()
+                if task_status is None or str(task_status).strip().lower() in ineligible:
+                    conn.commit()
+                    return None
+                live = (
+                    conn.execute(
+                        select(self.stage_runs_table).where(
+                            self.stage_runs_table.c.task_id == task_id,
+                            self.stage_runs_table.c.stage_name == stage_name,
+                            self.stage_runs_table.c.status.in_(tuple(stage_state.ACTIVE_STATUSES)),
+                        )
+                    )
+                    .mappings()
+                    .first()
+                )
+                if live is not None:
+                    conn.commit()
+                    return dict(live)
+                # Attempt numbers belong to the stage identity (its name), not
+                # its current manifest position, so a new attempt after a
+                # reorder still advances and the projection prefers it.
+                previous = conn.execute(
+                    select(func.max(self.stage_runs_table.c.attempt)).where(
+                        self.stage_runs_table.c.task_id == task_id,
+                        self.stage_runs_table.c.stage_name == stage_name,
+                    )
+                ).scalar()
+                attempt = int(previous or 0) + 1
+                conn.execute(
+                    self.stage_runs_table.insert().values(
+                        task_id=task_id,
+                        stage_index=stage_index,
+                        stage_name=stage_name,
+                        attempt=attempt,
+                        status=stage_state.QUEUED,
+                        planned_resources=encoded,
+                        created_at=timestamp,
+                        updated_at=timestamp,
+                    )
+                )
+                row = (
+                    conn.execute(
+                        select(self.stage_runs_table).where(
+                            self.stage_runs_table.c.task_id == task_id,
+                            self.stage_runs_table.c.stage_name == stage_name,
+                            self.stage_runs_table.c.attempt == attempt,
+                        )
+                    )
+                    .mappings()
+                    .one()
+                )
+                conn.commit()
+                return dict(row)
+            except Exception:
+                conn.rollback()
+                raise
+
+    def record_stage_dispatched(
+        self,
+        *,
+        task_id: str,
+        stage_name: str,
+        attempt: int,
+        slurm_job_id: str,
+        at: float | None = None,
+    ) -> bool:
+        """Attach the scheduler's identity to the attempt that requested it."""
+        timestamp = time.time() if at is None else at
+        stmt = (
+            update(self.stage_runs_table)
+            .where(
+                self.stage_runs_table.c.task_id == task_id,
+                self.stage_runs_table.c.stage_name == stage_name,
+                self.stage_runs_table.c.attempt == attempt,
+                self.stage_runs_table.c.status == stage_state.QUEUED,
+                # The first observed handle is the attempt's identity; a later
+                # duplicate dispatch may refresh its timestamp but never rewrite
+                # which allocation this attempt owns.
+                or_(
+                    self.stage_runs_table.c.slurm_job_id.is_(None),
+                    self.stage_runs_table.c.slurm_job_id == str(slurm_job_id),
+                ),
+            )
+            .values(slurm_job_id=str(slurm_job_id), updated_at=timestamp)
+        )
+        with self.engine.begin() as conn:
+            return conn.execute(stmt).rowcount == 1
+
+    def record_stage_running(
+        self,
+        *,
+        task_id: str,
+        stage_name: str,
+        attempt: int,
+        started_at: float | None = None,
+    ) -> bool:
+        """Promote the attempt only once its allocation is observable.
+
+        ``True`` means the attempt is RUNNING after this call: a transition this
+        call made, or one a duplicate callback already made.  ``False`` means
+        the attempt refused the transition (terminal, missing, or not yet
+        queued), which is what keeps a late callback from resurrecting a Task.
+        """
+        timestamp = time.time() if started_at is None else started_at
+        identity = (
+            self.stage_runs_table.c.task_id == task_id,
+            self.stage_runs_table.c.stage_name == stage_name,
+            self.stage_runs_table.c.attempt == attempt,
+        )
+        stmt = (
+            update(self.stage_runs_table)
+            .where(*identity, self.stage_runs_table.c.status == stage_state.QUEUED)
+            .values(
+                status=stage_state.RUNNING,
+                started_at=func.coalesce(self.stage_runs_table.c.started_at, timestamp),
+                updated_at=time.time(),
+            )
+        )
+        with self.engine.begin() as conn:
+            if conn.execute(stmt).rowcount == 1:
+                return True
+            return conn.execute(
+                select(self.stage_runs_table.c.id).where(
+                    *identity, self.stage_runs_table.c.status == stage_state.RUNNING
+                )
+            ).first() is not None
+
+    def finish_stage_attempt(
+        self,
+        *,
+        task_id: str,
+        stage_name: str,
+        attempt: int,
+        status: str,
+        reason_code: str | None = None,
+        ended_at: float | None = None,
+    ) -> bool:
+        """Settle one attempt with a terminal status, monotonically.
+
+        The predicate is the legal-predecessor set, so a late or stale write
+        aimed at an already-terminal attempt changes nothing and reports
+        ``False`` instead of regressing recorded evidence.
+        """
+        if status not in stage_state.TERMINAL_STATUSES:
+            raise ValueError(f"finish_stage_attempt needs a terminal status, got {status!r}")
+        timestamp = time.time() if ended_at is None else ended_at
+        values: dict[str, Any] = {
+            "status": status,
+            "reason_code": stage_state.bounded_reason(reason_code),
+            "ended_at": timestamp,
+            "updated_at": time.time(),
+        }
+        stmt = (
+            update(self.stage_runs_table)
+            .where(
+                self.stage_runs_table.c.task_id == task_id,
+                self.stage_runs_table.c.stage_name == stage_name,
+                self.stage_runs_table.c.attempt == attempt,
+                self.stage_runs_table.c.status.in_(tuple(stage_state.predecessors(status))),
+            )
+            .values(**values)
+        )
+        with self.engine.begin() as conn:
+            return conn.execute(stmt).rowcount == 1
+
+    def finish_active_stage_runs(self, task_id: str, *, status: str, reason_code: str) -> int:
+        """Settle every live attempt of one Task at a Core boundary.
+
+        Cancellation and worker-loss recovery are about the whole Task, so they
+        do not need to know which stage index is current: every live attempt is
+        moved by the same guarded update and terminal attempts are untouched.
+        """
+        if status not in stage_state.TERMINAL_STATUSES:
+            raise ValueError(f"finish_active_stage_runs needs a terminal status, got {status!r}")
+        with self.engine.begin() as conn:
+            return self._settle_live_stage_runs(
+                conn, task_id, status=status, reason_code=reason_code, timestamp=time.time()
+            )
+
+    def list_stage_runs(self, task_id: str) -> list[dict[str, Any]]:
+        stmt = (
+            select(self.stage_runs_table)
+            .where(self.stage_runs_table.c.task_id == task_id)
+            .order_by(self.stage_runs_table.c.stage_index, self.stage_runs_table.c.attempt)
+        )
+        with self.engine.connect() as conn:
+            return [dict(row) for row in conn.execute(stmt).mappings().all()]
 
     def record_result_publication(
         self,
