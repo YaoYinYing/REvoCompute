@@ -6,10 +6,10 @@ use_when: Use this to predict a biomolecular complex from Mol-1's AlphaFold-Serv
   job JSON, with supplied or searched MSAs and templates.
 input_summary: One Mol-1 JSON job list plus any MSAs, templates, or ligand files it references.
 output_summary: Per-seed, confidence-ranked mmCIF samples with summary confidence, optional
-  per-token confidence, and run provenance.
+  per-atom confidence and token-indexed error matrices, and run provenance.
 considerations:
 - '`plddt` and the mmCIF B-factor use a 0-100 scale; `chain_plddt` and `atom_plddt` use 0-1.
-  The per-token PAE, PDE, and contact matrices are indexed by token, not by residue number.'
+  The PAE, PDE, and contact matrices are indexed by token, not by residue number.'
 - MSA search uploads protein sequences to the public ColabFold MMseqs2 service. It is
   off by default; select it only for sequences this deployment may disclose. When any
   protein or RNA MSA is supplied, `search` is refused because upstream re-searches
@@ -108,8 +108,8 @@ result_workspace:
     id: prediction_evidence
     role: evidence
     title: Confidence data and provenance
-    description: Optional per-token confidence arrays, the upstream and asset identities,
-      the admitted input hashes, and the effective MSA and template modes.
+    description: Optional per-atom confidence and token-indexed error matrices, the upstream
+      and asset identities, the admitted input hashes, and the effective MSA and template modes.
     sources:
       items:
       - glob: '*/seed_*/predictions/*_full_data_sample_*.json'
@@ -160,8 +160,7 @@ parameters:
       maximum: 1000
     need_atom_confidence:
       type: boolean
-      description: Publishes per-token and per-atom confidence data, including the
-        token-indexed PAE, PDE, and contact matrices.
+      description: Publishes per-atom pLDDT and the token-indexed PAE, PDE, and contact matrices.
       default: false
     msa_mode:
       type: string

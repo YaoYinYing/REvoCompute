@@ -42,6 +42,18 @@ RESERVED_ARTIFACT_NAMES = frozenset(
         "normalized-input-final-updated.json",
     }
 )
+# Result-root entries this runner writes or interprets. Upstream writes each job
+# to <out>/<job>/, so a job with one of these names turns a runner file into a
+# directory (or, for ERR, fails the internal-error check) after inference.
+RESERVED_JOB_NAMES = frozenset(
+    {
+        "ERR",
+        "mol1-provenance.json",
+        "mol1-model-assets.sha256",
+        "mol1-search-assets.sha256",
+        "task_finished",
+    }
+)
 MAX_SEEDS_LENGTH = 256
 MAX_SEED_VALUE = 2**63 - 1
 # Mirrors the server result-projection cap (revocompute/result_storyboard.py and
@@ -247,6 +259,14 @@ def _check_projected_samples(document: list[dict[str, Any]], params: dict[str, A
         )
 
 
+def _check_job_names(document: list[dict[str, Any]]) -> None:
+    """Refuse a job name that would collide with a runner-owned result path."""
+    for job in document:
+        name = str(job.get("name") or "")
+        if name in RESERVED_JOB_NAMES:
+            raise PreparationError(f"Mol-1 job name {name!r} collides with a runner-owned result path")
+
+
 def _token_limit() -> int:
     raw = os.environ.get("MOL1_MAX_TOKENS", "")
     if not raw.isdigit() or int(raw) < 1:
@@ -270,6 +290,7 @@ def prepare(manifest_path: Path, destination: Path) -> Path:
         document = json.loads(prepared_specification.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise PreparationError(f"Invalid Mol-1 JSON specification: {exc}") from exc
+    _check_job_names(document)
     _enforce_modes(document, params)
     _check_projected_samples(document, params)
     _resolve_references(document, destination, available)

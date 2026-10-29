@@ -332,6 +332,24 @@ def test_prepare_rejects_a_supplied_name_reserved_for_generated_output(tmp_path:
         _prepare(tmp_path, manifest, monkeypatch)
 
 
+@pytest.mark.parametrize(
+    "name", ["ERR", "mol1-provenance.json", "mol1-model-assets.sha256", "mol1-search-assets.sha256", "task_finished"]
+)
+def test_prepare_rejects_a_job_name_reserved_for_a_runner_result_path(
+    tmp_path: Path, monkeypatch, name: str
+) -> None:
+    document = _document("minimal.json")
+    document[0]["name"] = name
+    specification = tmp_path / "reserved-job.json"
+    specification.write_text(json.dumps(document), encoding="utf-8")
+    manifest = _manifest(tmp_path, specification=specification)
+
+    # The refusal comes before token estimation, so a 1-token bound stays unreached.
+    with pytest.raises(prepare_input.PreparationError) as excinfo:
+        _prepare(tmp_path, manifest, monkeypatch, limit=1)
+    assert f"job name {name!r}" in str(excinfo.value)
+
+
 def test_prepare_rejects_an_over_long_seed_list(tmp_path: Path, monkeypatch) -> None:
     manifest = _manifest(
         tmp_path,
