@@ -1,0 +1,21 @@
+api_version: 1
+id: caver302
+version: '1'
+name: CAVER 3.0.2 tunnel analysis
+runtime:
+  image_artifact: caver302_v1.sif
+  definition: caver302.def
+  # The SIF is the environment: pinned JRE 8 plus the verified read-only CAVER
+  # distribution. All REvoCompute-owned executable code is mounted as a Runtime
+  # Bundle instead of being baked into the image.
+  build_inputs: []
+  runtime_overlay:
+  - common/runtime/
+  - caver302/run.sh
+  - caver302/run_caver.py
+  - caver302/caver_config.py
+  - caver302/pdb_selection.py
+  - caver302/normalize_results.py
+  - caver302/upstream.json
+  entrypoint: [bash, /opt/revocompute/runtime/caver302/run.sh]
+tasks: [tasks/caver/task.yaml]

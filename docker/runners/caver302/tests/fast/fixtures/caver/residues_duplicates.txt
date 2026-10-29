@@ -1,0 +1,15 @@
+# Tunnel-lining resiudes (residues wihtin the 3.0 A distnace from individual tunnels)
+# Column content
+# C:     chain
+# res:   residue index in PDB file
+# AA:    amino acid
+# N:     number of snapshots in which the residue lined the tunnel
+# sideN: same as N, but backbone atoms are not counted (those named H, N, C, O, CA or HA)
+# atoms: tunnel-lining atoms. Format is <number of snapshots>:<atom name>_<atom serial number>
+== Tunnel cluster 1 ==
+# C    res  AA       N   sideN atoms
+  A     98 ARG       1       1 1:NE_542 1:CZ_543 1:NH2_545 
+  A    101 ILE       1       1 1:CB_563 1:CG2_565 
+== Tunnel cluster 2 ==
+# C    res  AA       N   sideN atoms
+  A     98 ARG       1       1 1:NE_542 1:CZ_543 1:NH2_545 
