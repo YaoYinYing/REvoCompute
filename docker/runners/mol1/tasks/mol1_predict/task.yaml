@@ -10,15 +10,18 @@ output_summary: Per-seed, confidence-ranked mmCIF samples with summary confidenc
 considerations:
 - '`plddt` and the mmCIF B-factor use a 0-100 scale; `chain_plddt` and `atom_plddt` use 0-1.
   The PAE, PDE, and contact matrices are indexed by token, not by residue number.'
-- MSA search uploads protein sequences to the public ColabFold MMseqs2 service. It is
-  off by default; select it only for sequences this deployment may disclose. When any
-  protein or RNA MSA is supplied, `search` is refused because upstream re-searches
-  every protein chain in a job that has one missing chain and replaces supplied MSAs,
-  so the supplied sequences would be uploaded too. Supply every MSA with
-  `msa_mode` set to `supply` for the non-disclosure path.
-- Template use with `.a3m` hits downloads each hit structure from PDBe on every run,
-  into task scratch that is discarded with the allocation. Inline JSON templates need
-  no download.
+- MSA search uploads protein sequences to the public ColabFold MMseqs2 service at
+  `https://api.colabfold.com`. It is off by default; select it only for sequences this
+  deployment may disclose. When any protein or RNA MSA is supplied, `search` is
+  refused because upstream re-searches every protein chain in a job that has one
+  missing chain and replaces supplied MSAs, so the supplied sequences would be
+  uploaded too; a supplied RNA MSA is likewise refused because the stage cannot
+  preserve it. Supply every MSA with `msa_mode` set to `supply` for the
+  non-disclosure path.
+- Template use with `.a3m` hits downloads each hit structure from PDBe at
+  `https://www.ebi.ac.uk/pdbe/entry-files/download/<pdb_id>.cif` on every run, into
+  task scratch that is discarded with the allocation; template search depends on a
+  searched MSA. Inline JSON templates need no download.
 - A run may publish at most 500 structures. The job count x `sample_seeds` count x
   `num_samples` is refused before inference when it exceeds that server projection
   limit.
@@ -32,7 +35,9 @@ considerations:
 gpus: true
 # MSA and template search are parameter-selected paths, not separate stages, so the
 # Task declares the capability unconditionally. With the default `none` modes the
-# runtime passes `--use_msa false --use_template false` and contacts nothing.
+# runtime passes `--use_msa false --use_template false` and contacts nothing, but
+# `requires_network` still runs the Task in the host network namespace: the default
+# is an offline code path, not network isolation.
 requires_network: true
 inputs:
   specification:
@@ -166,17 +171,18 @@ parameters:
       type: string
       enum: [none, supply, search]
       description: 'Protein MSAs: predict without them, use only the uploaded MSA files,
-        or search on the public ColabFold MMseqs2 service. Search uploads the protein
-        sequences and is refused when any protein or RNA MSA is supplied, because a job
-        with one missing chain is re-searched and every protein chain in it has its MSA
-        replaced.'
+        or search on the public ColabFold MMseqs2 service at `https://api.colabfold.com`,
+        which uploads protein sequences. Search is refused when any protein or RNA MSA
+        is supplied, because a job with one missing chain is re-searched and every
+        protein chain in it has its MSA replaced.'
       default: none
     template_mode:
       type: string
       enum: [none, supply, search]
       description: 'Protein templates: use none, use only the uploaded template files,
         or search. Searching requires `msa_mode: search`; `.a3m` hits download their
-        structures from PDBe on every run.'
+        structures from PDBe (`https://www.ebi.ac.uk/pdbe/entry-files/download/<pdb_id>.cif`)
+        on every run.'
       default: none
     rna_msa_mode:
       type: string

@@ -2,10 +2,13 @@
 
 Mol-1 inference needs operator-provisioned weights and reference files; a
 missing file stops the run before the checkpoint is loaded. The model does not
-download weights or reference data during a task. Template use downloads PDBe
-hit structures into task scratch on every run (see Runtime decisions). This
-page records the pinned identities and the mount layout; it does not copy
-upstream documentation.
+download weights or reference data during a task. MSA search uploads protein
+sequences to the public ColabFold MMseqs2 service at
+`https://api.colabfold.com`; template use downloads PDBe hit structures from
+`https://www.ebi.ac.uk/pdbe/entry-files/` into task scratch on every run (see
+Runtime decisions). These are separate destinations with separate data
+exposure. This page records the pinned identities and the mount layout; it
+does not copy upstream documentation.
 
 ## Pinned upstream
 
