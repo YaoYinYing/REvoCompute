@@ -2586,6 +2586,17 @@ export interface components {
             parameters_url: string;
             max_request_bytes: number;
             input_workspace: components["schemas"]["InputWorkspace"];
+            /** @description The canonical graph a workflow Task freezes at submission; omitted for single-stage Task Types. */
+            execution_graph?: components["schemas"]["ExecutionGraph"];
+        };
+        ExecutionGraph: {
+            ir_version: number;
+            /** @description Canonical sha256 of document. */
+            digest: string;
+            /** @description Canonical execution graph document: nodes, graph inputs, and execution order. */
+            document: {
+                [key: string]: unknown;
+            };
         };
         TaskCitation: {
             num: number;
@@ -2694,6 +2705,11 @@ export interface components {
             planned_resources: null | {
                 [key: string]: unknown;
             };
+            /**
+             * @description Graph dependency state, independent of scheduler status: completed (latest attempt completed and reuse-verified), blocked (this stage or an ancestor failed), ready (every producer completed), waiting otherwise.
+             * @enum {string}
+             */
+            dependency: "completed" | "blocked" | "ready" | "waiting";
         };
         TaskStages: {
             /**

@@ -4,6 +4,7 @@ export type ApiArtifact = components['schemas']['Artifact'];
 export type LogicalResultFile = components['schemas']['LogicalResultFile'];
 export type ApiResultManifest = components['schemas']['ResultManifest'];
 export type TaskStatus = components['schemas']['TaskStatus'];
+export type TaskStage = components['schemas']['TaskStageItem'];
 export type ResultView = components['schemas']['ResultView'];
 export type ResultStoryboardDeclaration = components['schemas']['Storyboard'];
 export type ResultRun = components['schemas']['ResultRun'];
