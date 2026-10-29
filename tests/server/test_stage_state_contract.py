@@ -651,6 +651,29 @@ def test_cancellation_during_submission_settles_the_attempt(tmp_path, monkeypatc
     )
 
 
+def test_single_stage_attempt_failure_blocks_the_allocation(tmp_path, monkeypatch):
+    import sqlite3
+
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "9" * 32
+    _insert_task(database, task_id, status="queued", task_type="cpu_runner")
+    monkeypatch.setattr(task_runtime, "task_store", database)
+
+    def unavailable(**_kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(database, "begin_stage_attempt", unavailable)
+    monkeypatch.setattr(task_runtime, "_create_job", lambda *args, **kwargs: pytest.fail("no allocation"))
+
+    state = task_runtime._run_compute_job(
+        task_id, _single_stage_type(), RunnerConfig(), [], str(tmp_path / "out"),
+        resource_policy=_policy(False),
+    )
+
+    assert state == task_runtime.JobState.FAILED
+    assert database.get_task_diagnostics(task_id)["reason_code"] == "stage_attempt_unavailable"
+
+
 def test_single_stage_job_records_its_lifecycle_through_the_allocation_boundary(tmp_path, monkeypatch):
     database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
     task_id = "8" * 32

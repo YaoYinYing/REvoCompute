@@ -28,6 +28,7 @@ REASONS = {
     "execution_graph_unverified": "The submission-frozen execution graph is missing or cannot be verified.",
     "execution_graph_changed": "The execution graph changed after submission.",
     "stage_blocked_by_failed_dependency": "A stage could not run because an upstream stage failed or was blocked.",
+    "stage_attempt_unavailable": "A stage attempt could not be opened durably, so no allocation was submitted.",
     "stage_settlement_failed": (
         "A completed stage could not be recorded durably, so its dependents were not dispatched."
     ),

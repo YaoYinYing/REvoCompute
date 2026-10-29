@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import signal
+import sqlite3
 from dataclasses import replace
 from io import StringIO
 import sys
@@ -403,6 +404,35 @@ def test_foreign_family_node_uses_that_family_runtime_runner_and_policy(monkeypa
     own_tt, own_job_runner = by_name["dag-a"]
     assert own_tt.runtime.name == "multistage_runner"
     assert own_job_runner is get_family("multistage_runner")[1]
+
+
+def test_unavailable_stage_attempt_blocks_every_allocation(monkeypatch, tmp_path):
+    """No durable attempt means no allocation authority: never submit the Runner."""
+    task_runtime = _live_task_runtime()
+    task_type = _diamond_workflow()
+    output = tmp_path / "output"
+    output.mkdir()
+    created = []
+
+    def unavailable(**_kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(task_runtime.task_store, "begin_stage_attempt", unavailable)
+    monkeypatch.setattr(task_runtime, "_create_job", lambda *args, **kwargs: created.append(args))
+    monkeypatch.setattr(task_runtime.task_store, "update_task", lambda *args, **kwargs: True)
+    task_id = "b2" * 16
+    _ensure_task_row(task_runtime, task_id)
+    policies = {stage.name: _policy(False) for stage in task_type.workflow}
+
+    result = task_runtime._run_compute_workflow(
+        task_id, _frozen(task_type), task_type, [], str(output), policies, lambda _: None,
+    )
+
+    assert result == JobState.FAILED
+    assert created == []
+    evidence = task_runtime.task_store.get_task_diagnostics(task_id)
+    assert evidence["reason_code"] == "stage_attempt_unavailable"
+    assert evidence["stage_id"] == "dag.a"
 
 
 def test_unsettled_completion_stops_before_consumer_dispatch(monkeypatch, tmp_path):

@@ -2425,7 +2425,7 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
             # the scheduler/worker/storage path, and only GPU work additionally
             # depends on GPU inventory.  The global aggregate still drives the
             # operator/user overview.
-            block = readiness_service.admission_block(requires_gpu=bool(tt.gpus))
+            block = readiness_service.admission_block(requires_gpu=graph_requires_gpu)
             if block is not None:
                 # The refusal is an admission decision like any other, so it is
                 # reported in the same bounded vocabulary instead of only as
@@ -2511,7 +2511,7 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
                 ),
                 403,
             )
-        if tt.gpus:
+        if graph_requires_gpu:
             try:
                 gpu_credit = task_store.require_compute_entitlement(user_id)
             except GPUCreditUnavailableError:
@@ -2801,12 +2801,23 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
     # the same final entitlement loses here instead of both being dispatched.
     # The hold is taken on the class-agnostic scope: the allowance is one
     # deployment budget, and the requested GRES class is preserved on the hold
-    # rather than opening a per-class balance.  A CPU-only Task holds nothing.
-    if tt.gpus:
+    # rather than opening a per-class balance.  A graph with no GPU stage holds
+    # nothing; a CPU-composed Task whose graph contains one still holds.
+    gpu_resource_policy = resource_policy
+    if not tt.gpus and graph_requires_gpu:
+        gpu_resource_policy = next(
+            (
+                placement.stage_resources[stage.name]
+                for stage in tt.workflow
+                if stage.requires_gpu and stage.name in placement.stage_resources
+            ),
+            None,
+        )
+    if graph_requires_gpu:
         reservation = task_store.reserve_compute_admission(
             user_id=int(g.current_user["id"]),
             task_id=md5sum,
-            gres=(resource_policy.gres if resource_policy is not None else None) or "",
+            gres=(gpu_resource_policy.gres if gpu_resource_policy is not None else None) or "",
         )
         if not reservation["allowed"]:
             task_store.release_task_preparation(md5sum, token=claim.token)

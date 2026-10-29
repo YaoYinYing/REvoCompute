@@ -152,6 +152,68 @@ def test_foreign_family_access_policy_must_admit_the_user_and_is_audited(monkeyp
     assert events[0]["outcome"] == "denied"
 
 
+def test_graph_gpu_stage_refuses_when_credit_is_exhausted(monkeypatch, tmp_path):
+    module = _composed_module(monkeypatch, tmp_path, foreign_gpu=True, task_gpus=False)
+
+    def exhausted(_user_id):
+        raise module.task_runtime.GPUCreditUnavailableError("compute_exhausted")
+
+    monkeypatch.setattr(module.task_store, "require_compute_entitlement", exhausted)
+    _queued(module, monkeypatch)
+    before = {task["md5sum"] for task in module.task_store.list_tasks()}
+
+    response = _submit(module, allow_gpu=True)
+
+    assert response.status_code == 403, response.get_data(as_text=True)[:500]
+    assert response.get_json()["details"][0]["code"] == "gpu_credit_exhausted"
+    assert {task["md5sum"] for task in module.task_store.list_tasks()} == before
+
+
+def test_graph_gpu_stage_refuses_when_gpu_infrastructure_is_unavailable(monkeypatch, tmp_path):
+    module = _composed_module(monkeypatch, tmp_path, foreign_gpu=True, task_gpus=False)
+    module.app.config["manage_db"].resource_set("slurm_enabled", "true")
+    readiness = Path(module.CONFIG.server_dir) / "readiness"
+    readiness.mkdir(parents=True, exist_ok=True)
+    for family in ("multistage_runner", "cpu_runner"):
+        (readiness / f"{family}.json").write_text(
+            json.dumps({"runner_family": family, "status": "READY", "ready": True, "reason_code": "READY"}),
+            encoding="utf-8",
+        )
+
+    class _GpuUnavailable:
+        def report(self):
+            return {}
+
+        def admission_block(self, *, requires_gpu, force=False):
+            if not requires_gpu:
+                return None
+            return {"component": "gpu_inventory", "reason_code": "evidence_missing", "stale": True}
+
+    module.app.config["infrastructure_readiness"] = _GpuUnavailable()
+    _queued(module, monkeypatch)
+    before = {task["md5sum"] for task in module.task_store.list_tasks()}
+
+    response = _submit(module, allow_gpu=True)
+
+    assert response.status_code == 503, response.get_data(as_text=True)[:500]
+    assert response.get_json()["details"][0]["code"] == "infrastructure_unavailable"
+    assert {task["md5sum"] for task in module.task_store.list_tasks()} == before
+
+
+def test_graph_gpu_stage_takes_exactly_one_submission_reservation(monkeypatch, tmp_path):
+    module = _composed_module(monkeypatch, tmp_path, foreign_gpu=True, task_gpus=False)
+    _queued(module, monkeypatch)
+
+    response = _submit(module, allow_gpu=True)
+
+    assert response.status_code == 302, response.get_data(as_text=True)[:500]
+    task_id = response.headers["Location"].rsplit("/", 1)[-1]
+    holds = [hold for hold in module.task_store.list_live_reservations() if hold["task_id"] == task_id]
+    assert len(holds) == 1
+    assert holds[0]["state"] == "held"
+    assert int(holds[0]["quantity"]) > 0
+
+
 def test_graph_gpu_stage_requires_entitlement_even_when_the_task_is_cpu(monkeypatch, tmp_path):
     module = _composed_module(monkeypatch, tmp_path, foreign_gpu=True, task_gpus=False)
     _queued(module, monkeypatch)

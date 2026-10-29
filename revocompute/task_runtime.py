@@ -1085,6 +1085,9 @@ def _run_compute_job(
     accounting = submitted_by_user_id > 0 and resource_policy is not None
     attempt_row = _begin_stage_attempt(task_id, 0, tt.name, resource_policy)
     attempt = int(attempt_row["attempt"]) if attempt_row else None
+    if attempt is None:
+        _record_workflow_refusal(task_id, tt.name, "stage_attempt_unavailable")
+        return JobState.FAILED
     # No entitlement read here: the decision belongs to the atomic
     # allocation-start transition, which knows whether this Task holds a
     # reservation of its own (the workflow and re-dispatch cases do not).
@@ -1466,6 +1469,11 @@ def _execute_workflow_node(
         return JobState.CANCELLED
     attempt_row = _begin_stage_attempt(task_id, index, stage.name, policy)
     attempt = int(attempt_row["attempt"]) if attempt_row else None
+    if attempt is None:
+        # No durable attempt means no authority to allocate: a Runner that ran
+        # would be invisible to settlement, recovery, and the cancellation gate.
+        _record_workflow_refusal(task_id, stage.name, "stage_attempt_unavailable")
+        return JobState.FAILED
     user_id = int(task.get("submitted_by_user_id") or 0)
     # A workflow stage has no reservation of its own after the first one
     # consumed the Task's single submission hold, so its allocation start is
