@@ -417,11 +417,11 @@ If one of these is false, continue the refactor.
 ## Multi-agent Campaign Protocol
 
 **Protocol version: 1.6** (baseline: v1 at `edd5fbe`, pre-#127; v1.5 at
-`0e6629f`). The version covers this Campaign protocol, not the software release.
-A Campaign records its launch instruction, governing version, and commit at
-start; a revision records the old/new version, baseline commit, rationale,
-effective scope, and a bounded migration note in its PR, while editorial changes
-need no bump.
+`0e6629f`; v1.6 at `7ed9e9c`). The version covers this Campaign protocol, not the
+software release. A Campaign records its launch instruction, governing version,
+and commit at start; a revision records the old/new version, baseline commit,
+rationale, effective scope, and a bounded migration note in its PR, while
+editorial changes need no bump.
 
 A revision carries two kinds of change. A change that **restricts** what any
 Campaign may do — an unverified instruction never authorizes work, a security or
@@ -1388,13 +1388,13 @@ artifacts from the final tree:
 Durable project or Campaign policy belongs in stable documentation such as
 `CLAUDE.md`, this protocol, and the developer/operator docs.
 
-Campaign coordination documents under `campaigns/<date>/<workstream>/` are
-transient too, even though they are tracked rather than gitignored. A completed
-PR must not leave one behind: migrate any still-durable architectural or
-operational content to its canonical documentation owner and delete the campaign
-copy before `READY_FOR_FINAL_REVIEW`. Enduring architectural or operational value
-is the only justification for keeping that content, and it is satisfied by the
-migration, not by retaining the campaign path.
+Documents under `campaigns/` are working artifacts too, including ones the
+`.gitignore` basename rules did not stop. Apply the steps above to them before
+`READY_FOR_FINAL_REVIEW`: a document that is a PR's deliverable or carries
+scientific evidence is migrated, not deleted — a contract to its canonical docs
+page, runner evidence beside its runner. Enduring architectural, operational, or
+scientific value is the only justification for preserving the content, and the
+migration satisfies it; nothing stays in the campaign path.
 
 ### Per-PR execution state
 
