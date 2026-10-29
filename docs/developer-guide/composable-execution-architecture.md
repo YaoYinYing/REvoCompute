@@ -1,15 +1,14 @@
 # Composable Scientific Execution Architecture
 
-> **Status: PROPOSAL ONLY — NOT IMPLEMENTED.**
-> This is the design record for the exclusive Draft PR. Its presence does not
-> authorize coding, Runner rebuild, deployment, concurrent PR integration, or
-> a backend cutover. The PR BODY contains the binding start gate.
+> **Status: ACTIVE CAMPAIGN DESIGN RECORD — NOT YET IMPLEMENTED.**
+> PR #130 is activated as an exclusive single-PR campaign under Protocol v1.6.
+> This page stays non-normative until it is reconciled with the delivered code
+> and approved at final merge review; in conflict, current executable contracts
+> and `CLAUDE.md` remain authoritative until cutover. It does not authorize a
+> production deployment, database migration, or SIF promotion.
 >
-> **Current baseline:** main at 7b9a7c9c2b1cdff4db81b30d2b5461a8dd3fceb3;
-> Protocol v1.6. Refresh exact main and all open PRs before activation.
-> This page becomes normative only when reconciled with the delivered code
-> and approved at final merge review. In conflict, current executable contracts
-> and CLAUDE.md remain authoritative until cutover.
+> **Activation baseline:** main at 36e30afa234595d8af09bf7aa3818b9bb6d06487;
+> Protocol v1.6. The live activation record is the PR #130 thread.
 
 ## Intent and non-negotiable principles
 
@@ -273,24 +272,20 @@ All modes require negative/positive regression evidence for:
   merge-grade verification, docs/API schema coherence and subtraction of all
   legacy/duplicate paths.
 
-## Strict exclusive execution gate
+## Exclusive execution gate
 
-This is a **large exclusive single-PR campaign**. Before any implementation,
-all other open PRs in YaoYinYing/REvoCompute must be either MERGED or CLOSED.
-There is no exemption for draft/planning PRs. In the current inventory:
-#119, #122, #123, #124, #125, #126 and #128. Refresh the list and repeat
-the empty-open-others check when activating; later-created PRs also block
-activation. Keep this PR DRAFT and PARKED with no implementer assignments,
-code commits, SIF builds or live runs until that condition holds and the
-maintainer explicitly issues the start instruction.
+This is a **large exclusive single-PR campaign**. Activation required that every
+other PR in `YaoYinYing/REvoCompute` was MERGED or CLOSED and that the
+maintainer then issued an explicit start instruction; both held at activation
+(main `36e30af`, no other open PR). A later PR that needs to proceed alongside
+this work is a maintainer decision, not a Commander one.
 
 After activation, this PR owns the architectural write scope exclusively;
 subagents may work in isolated worktrees *under this one PR* with serialized
 integration. No competing product PR may implement/merge overlapping changes.
-A maintainer may suspend this project and reconsider exclusivity explicitly;
-agents cannot silently waive the gate. Independent Campaign Adviser,
-separate Examiner and final Acceptance Auditor remain required. Only the
-maintainer decides squash merge and production promotion.
+Independent Campaign Adviser, separate Examiner and final Acceptance Auditor
+remain required. Only the maintainer decides squash merge and production
+promotion.
 
 ## Documentation lifecycle
 

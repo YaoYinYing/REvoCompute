@@ -1,17 +1,11 @@
 # TODO — Composable Scientific Execution Architecture
 
-> **PARKED / DRAFT / DO NOT IMPLEMENT.** This is a large **exclusive**
-> single-PR architectural campaign. **No implementation, code assignment,
-> source edit, runtime test, SIF build, backend installation, merge, or
-> production action is authorized while ANY other REvoCompute PR remains
-> open.** Draft PR creation and this initial planning skeleton are the only
-> work authorized by the launch request. The maintainer must explicitly
-> activate it after all other PRs are MERGED or CLOSED.
->
-> Baseline when prepared: main 7b9a7c9c2b1cdff4db81b30d2b5461a8dd3fceb3,
-> Protocol v1.6. This SHA becomes stale as current Campaign PRs close.
-> **Refresh live main/heads/CI at activation. Never reuse this baseline as
-> an implementation approval.**
+> **ACTIVATED — EXCLUSIVE SINGLE-PR CAMPAIGN.** Activated 2026-10-29 on main
+> 36e30afa234595d8af09bf7aa3818b9bb6d06487 under Protocol v1.6, after the live
+> open-PR list contained no other PR and the maintainer issued the start
+> instruction. Implementation, tests and isolated worktrees are authorized under
+> this PR only; production deployment, restart, destructive migration, SIF
+> promotion and squash merge are not.
 >
 > Permanent proposal: docs/developer-guide/composable-execution-architecture.md
 > Normative agent guidance: CLAUDE.md, docs/agents/long-task-handling.md,
@@ -20,29 +14,27 @@
 
 ## 0 — Exclusive activation / stop gate
 
-- [ ] Keep PR **Draft** and the Commander control state **PARKED**.
-- [ ] Do not appoint implementers, start technical worktrees, run the feasibility
+- [x] Keep PR **Draft** and the Commander control state **PARKED** until
+      activation instructions arrived.
+- [x] Do not appoint implementers, start technical worktrees, run the feasibility
       spike, mutate source, change Fleet, submit Slurm work or install Nextflow
       during the parked period.
-- [ ] Check GitHub's LIVE complete list of Open PRs in YaoYinYing/REvoCompute.
-      The initial blockers were **#119 #122 #123 #124 #125 #126 #128**.
-      Any later-created other PR is also a blocker; draft status is irrelevant.
-- [ ] Verify **the set of Open PRs excluding this PR is empty**: each other PR
-      is actually MERGED or CLOSED, not merely READY, frozen or green.
-- [ ] Get an **explicit new maintainer start instruction** after that check.
-      An empty list alone does not silently activate work.
-- [ ] Record activation date, current main SHA, Protocol revision,
+- [x] Check GitHub's LIVE complete list of Open PRs in YaoYinYing/REvoCompute.
+      At activation the only open PR was #130 itself; #119, #122, #123, #124,
+      #125, #126 and #128 were closed or merged.
+- [x] Verify **the set of Open PRs excluding this PR is empty**.
+- [x] Get an **explicit new maintainer start instruction** after that check.
+- [x] Record activation date, current main SHA, Protocol revision,
       single-PR ownership, allowed live-test budget, backend feasibility gates
       and a compact dependency/ownership ledger in IMPLEMENTATION_STATE.md.
-- [ ] Appoint Commander, Independent Campaign Adviser, scoped independent
-      reviewers, Examiner, and a final disinterested Campaign Acceptance
-      Auditor. Integrate all implementation under this one PR; isolated
-      worktrees permitted only after activation.
+- [ ] Appoint scoped independent reviewers, Examiner, and a final disinterested
+      Campaign Acceptance Auditor. Integrate all implementation under this one
+      PR; isolated worktrees permitted only after activation.
 - [ ] If another PR needs to proceed during exclusive execution, stop,
       escalate to the maintainer, and explicitly re-plan the exclusivity.
       Do not grant a subagent a unilateral exception.
 
-**Gate 0 verdict: BLOCKED as long as another Open PR exists.**
+**Gate 0 verdict: MET at main `36e30af`.**
 
 ## 1 — Evidence-first architectural feasibility
 
