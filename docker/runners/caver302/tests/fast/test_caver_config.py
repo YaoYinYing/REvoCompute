@@ -34,15 +34,24 @@ def test_renders_only_allowlisted_keys_with_the_selected_start_point() -> None:
     lines = text.splitlines()
     assert "starting_point_coordinates 4.000 4.000 4.000" in lines
     assert "probe_radius 0.9" in lines
-    assert "shell_radius 3" in lines
+    assert "shell_radius 3.0" in lines
     assert "clustering average_link" in lines
-    assert "clustering_threshold 2" in lines
+    assert "clustering_threshold 2.0" in lines
     assert "compute_tunnel_residues yes" in lines
     assert "compute_bottleneck_residues yes" in lines
     assert "swap no" in lines
     assert "seed 1" in lines
     assert lines[-1] == "seed 1"
     assert not any(line.startswith(("exclude_residue", "exclude_atom")) for line in lines)
+
+
+def test_float_directives_keep_the_server_value_at_full_precision() -> None:
+    params = {**BASE_PARAMS, "probe_radius": 0.9000001234, "shell_radius": 3.000049999}
+    lines = render_config(params, point()).splitlines()
+    # The config must carry the same binary value the server recorded, not a
+    # formatting-truncated approximation of it.
+    assert f"probe_radius {params['probe_radius']!r}" in lines
+    assert f"shell_radius {params['shell_radius']!r}" in lines
 
 
 def test_renders_residue_directive_and_exclusion_lists() -> None:
@@ -70,6 +79,8 @@ def test_renders_residue_directive_and_exclusion_lists() -> None:
         ({"probe_radius": 0}, "greater than zero"),
         ({"clustering_threshold": -1}, "not be negative"),
         ({"min_middle_zone": 0}, "greater than zero"),
+        ({"automatic_shell_radius_bottleneck_multiplier": 1}, "greater than one"),
+        ({"automatic_shell_radius_bottleneck_multiplier": 0.5}, "greater than one"),
         ({"cost_function_exponent": 101}, "not be greater than 100"),
         ({"clustering": "matrix"}, "unsupported CAVER parameters"),
         ({"last_frame": 1, "first_frame": 5}, "last_frame must not be smaller"),

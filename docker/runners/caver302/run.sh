@@ -38,7 +38,10 @@ caver_home="${CAVER_HOME:-/opt/caver302/caver}"
 [[ -d "$caver_home/lib" ]] || { echo "CAVER libraries are missing: $caver_home/lib" >&2; exit 1; }
 [[ -s "$caver_home/bin/atom_radii.csv" ]] || { echo "CAVER home lacks bin/atom_radii.csv" >&2; exit 1; }
 
-java_heap="${CAVER_JAVA_XMX:-1200m}"
+# The SIF environment is the single source of the heap bound. The internal
+# timeout is set here, 300 s below runner.yaml's max_runtime_seconds, so a
+# stuck JVM is killed and reported before the scheduler kills the job.
+java_heap="${CAVER_JAVA_XMX:?CAVER_JAVA_XMX must be supplied by the SIF environment}"
 [[ "$java_heap" =~ ^[1-9][0-9]{0,4}[mMgG]$ ]] || {
     echo "CAVER_JAVA_XMX must be a bounded heap size such as 1200m or 4g" >&2
     exit 1

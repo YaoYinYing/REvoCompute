@@ -40,8 +40,6 @@ from pdb_selection import (
 ORIGIN_TOLERANCE_ANGSTROM = 0.05
 
 MAX_SNAPSHOTS = 50
-DEFAULT_TIMEOUT_SECONDS = 3600
-DEFAULT_HEAP = "1200m"
 
 
 def sha256_file(path: Path) -> str:
@@ -121,6 +119,14 @@ def _distribution(root: Path) -> dict[str, object]:
     }
 
 
+def required_environment(name: str) -> str:
+    """Read one value the runner entrypoint exports; never guess a default."""
+    value = os.environ.get(name)
+    if not value:
+        raise SystemExit(f"{name} must be set by the runner entrypoint")
+    return value
+
+
 def read_origin(path: Path) -> tuple[float, float, float]:
     """Read the initial start point CAVER used from its origins.pdb."""
     for line in path.read_text(encoding="utf-8").splitlines():
@@ -196,8 +202,14 @@ def main() -> None:
     if args.upstream.is_file():
         upstream = json.loads(args.upstream.read_text(encoding="utf-8"))
     distribution = _distribution(args.distribution)
-    heap = os.environ.get("CAVER_JAVA_XMX", DEFAULT_HEAP)
-    timeout = int(os.environ.get("CAVER_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS))
+    # run.sh is the single place these defaults live: the SIF supplies the heap
+    # bound and the entrypoint sets an internal timeout below the declared
+    # maximum runtime so a stuck JVM is killed before the scheduler kills the job.
+    heap = required_environment("CAVER_JAVA_XMX")
+    try:
+        timeout = int(required_environment("CAVER_TIMEOUT_SECONDS"))
+    except ValueError as exc:
+        raise SystemExit("CAVER_TIMEOUT_SECONDS must be an integer") from exc
     argv = build_command(
         java=args.java,
         heap=heap,
@@ -236,20 +248,30 @@ def main() -> None:
     run(argv, timeout, work, output_dir, env)
 
     # CAVER's own origin is the authoritative initial point; publish it and
-    # refuse to attach provenance to a point CAVER did not use.
+    # refuse to attach provenance to a point CAVER did not use. A missing file
+    # is a failure: without it the selection cannot be verified at all.
     origin_path = raw_out / "data" / "origins.pdb"
-    if origin_path.is_file():
-        origin = read_origin(origin_path)
-        delta = math.dist(origin, (start_point.x, start_point.y, start_point.z))
-        provenance["caver_origin_angstrom"] = list(origin)
-        provenance["origin_delta_angstrom"] = round(delta, 4)
-        provenance_path.write_text(json.dumps(provenance, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        if delta > ORIGIN_TOLERANCE_ANGSTROM:
-            raise SystemExit(
-                f"CAVER started from {origin} but the resolved start point is "
-                f"({start_point.x:.3f}, {start_point.y:.3f}, {start_point.z:.3f}); "
-                f"the difference of {delta:.3f} A means the selection does not describe CAVER's origin"
-            )
+    if not origin_path.is_file():
+        raise SystemExit("CAVER did not produce data/origins.pdb; the resolved start point cannot be verified")
+    origin = read_origin(origin_path)
+    first_frame = int(params["first_frame"])
+    # CAVER writes one origin per analyzed frame, starting with the first one it
+    # analyzed, and resolves atom/residue selections per frame.
+    analyzed_start = (
+        start_point
+        if first_frame == 1
+        else resolve_start_point(parse_pdb(pdb_dir / f"frame_{first_frame}.pdb"), params)
+    )
+    delta = math.dist(origin, (analyzed_start.x, analyzed_start.y, analyzed_start.z))
+    provenance["caver_origin_angstrom"] = list(origin)
+    provenance["origin_delta_angstrom"] = round(delta, 4)
+    provenance_path.write_text(json.dumps(provenance, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if delta > ORIGIN_TOLERANCE_ANGSTROM:
+        raise SystemExit(
+            f"CAVER started from {origin} but the resolved start point for frame {first_frame} is "
+            f"({analyzed_start.x:.3f}, {analyzed_start.y:.3f}, {analyzed_start.z:.3f}); "
+            f"the difference of {delta:.3f} A means the selection does not describe CAVER's origin"
+        )
 
     print("REVODESIGN_STAGE:normalize_results")
     shutil.copyfile(config_path, output_dir / "caver_config.txt")

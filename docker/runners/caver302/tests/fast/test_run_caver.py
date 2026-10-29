@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -66,7 +67,7 @@ def raw_output_tree(tmp_path: Path) -> Path:
     return raw
 
 
-def stub_java(tmp_path: Path, *, exit_code: int = 0, publish: bool = True) -> Path:
+def stub_java(tmp_path: Path, *, exit_code: int = 0) -> Path:
     script = tmp_path / "java"
     script.write_text(
         "\n".join(
@@ -85,13 +86,10 @@ def stub_java(tmp_path: Path, *, exit_code: int = 0, publish: bool = True) -> Pa
                 f"exit_code={exit_code}",
                 '[[ "$exit_code" -eq 0 ]] || exit "$exit_code"',
                 '[[ -d "$pdb" && -f "$conf" ]] || exit 4',
+                'mkdir -p "$out"',
+                'cp -r "$CAVER_STUB_OUTPUT"/. "$out"/',
+                "",
             )
-            + (
-                ('mkdir -p "$out"', 'cp -r "$CAVER_STUB_OUTPUT"/. "$out"/')
-                if publish
-                else ()
-            )
-            + ("",)
         ),
         encoding="utf-8",
     )
@@ -99,13 +97,15 @@ def stub_java(tmp_path: Path, *, exit_code: int = 0, publish: bool = True) -> Pa
     return script
 
 
-def task_manifest(tmp_path: Path, snapshot: Path | None = None) -> Path:
+def task_manifest(
+    tmp_path: Path, snapshot: Path | None = None, overrides: dict[str, object] | None = None
+) -> Path:
     inputs = {"structure": [{"path": str(ROOT / "tests/data/pdb/1SUO.pdb")}]}
     if snapshot is not None:
         inputs["snapshots"] = [{"path": str(snapshot)}]
     manifest = {
         "task_type": "caver",
-        "params": {**BASE_PARAMS, **MANIFEST_PARAMS},
+        "params": {**BASE_PARAMS, **MANIFEST_PARAMS, **(overrides or {})},
         "inputs": inputs,
     }
     path = tmp_path / "task.json"
@@ -113,7 +113,18 @@ def task_manifest(tmp_path: Path, snapshot: Path | None = None) -> Path:
     return path
 
 
-def invoke(tmp_path: Path, manifest: Path, java: Path, home: Path, output: Path) -> subprocess.CompletedProcess[str]:
+def invoke(
+    tmp_path: Path,
+    manifest: Path,
+    java: Path,
+    home: Path,
+    output: Path,
+    environment: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    # These are exactly the values run.sh exports from the SIF environment and
+    # its own internal timeout; run_caver.py carries no defaults of its own.
+    if environment is None:
+        environment = {**os.environ, "CAVER_JAVA_XMX": "1200m", "CAVER_TIMEOUT_SECONDS": "3300"}
     return subprocess.run(
         [
             sys.executable,
@@ -131,6 +142,7 @@ def invoke(tmp_path: Path, manifest: Path, java: Path, home: Path, output: Path)
         ],
         capture_output=True,
         text=True,
+        env=environment,
     )
 
 
@@ -205,13 +217,79 @@ def test_nonzero_tool_exit_is_a_failure(tmp_path: Path, monkeypatch: pytest.Monk
 
 
 def test_incomplete_output_is_a_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("CAVER_STUB_OUTPUT", str(raw_output_tree(tmp_path)))
+    raw = raw_output_tree(tmp_path)
+    (raw / "summary.txt").unlink()
+    monkeypatch.setenv("CAVER_STUB_OUTPUT", str(raw))
     completed = invoke(
         tmp_path,
         task_manifest(tmp_path),
-        stub_java(tmp_path, publish=False),
+        stub_java(tmp_path),
         fake_distribution(tmp_path),
         tmp_path / "published",
     )
     assert completed.returncode != 0
     assert "did not produce summary.txt" in completed.stderr
+
+
+def test_missing_origin_file_is_a_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    raw = raw_output_tree(tmp_path)
+    (raw / "data/origins.pdb").unlink()
+    monkeypatch.setenv("CAVER_STUB_OUTPUT", str(raw))
+    completed = invoke(
+        tmp_path,
+        task_manifest(tmp_path),
+        stub_java(tmp_path),
+        fake_distribution(tmp_path),
+        tmp_path / "published",
+    )
+    assert completed.returncode != 0
+    assert "did not produce data/origins.pdb" in completed.stderr
+
+
+def test_origin_is_checked_against_the_first_analyzed_frame(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    reference = ROOT / "tests/data/pdb/1SUO.pdb"
+    snapshot = tmp_path / "shifted_frame.pdb"
+    snapshot.write_text(
+        "\n".join(
+            f"{line[:30]}{float(line[30:38]) + 1.0:8.3f}{line[38:]}"
+            if line.startswith(("ATOM", "HETATM"))
+            else line
+            for line in reference.read_text(encoding="utf-8").splitlines()
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    raw = raw_output_tree(tmp_path)
+    origin = (raw / "data/origins.pdb").read_text(encoding="utf-8")
+    shifted = origin.replace("-22.311", "-21.311").replace("MODEL        1", "MODEL        2")
+    assert shifted != origin
+    (raw / "data/origins.pdb").write_text(shifted, encoding="utf-8")
+    monkeypatch.setenv("CAVER_STUB_OUTPUT", str(raw))
+
+    completed = invoke(
+        tmp_path,
+        task_manifest(tmp_path, snapshot, {"first_frame": 2}),
+        stub_java(tmp_path),
+        fake_distribution(tmp_path),
+        tmp_path / "published",
+    )
+    assert completed.returncode == 0, completed.stderr
+    provenance = json.loads((tmp_path / "published/provenance.json").read_text(encoding="utf-8"))
+    assert provenance["origin_delta_angstrom"] < 0.05
+
+
+def test_heap_and_timeout_are_required_not_defaulted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CAVER_STUB_OUTPUT", str(raw_output_tree(tmp_path)))
+    environment = {
+        key: value for key, value in os.environ.items() if key not in {"CAVER_JAVA_XMX", "CAVER_TIMEOUT_SECONDS"}
+    }
+    completed = invoke(
+        tmp_path,
+        task_manifest(tmp_path),
+        stub_java(tmp_path),
+        fake_distribution(tmp_path),
+        tmp_path / "published",
+        environment,
+    )
+    assert completed.returncode != 0
+    assert "CAVER_JAVA_XMX must be set by the runner entrypoint" in completed.stderr

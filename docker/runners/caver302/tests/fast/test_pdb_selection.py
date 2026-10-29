@@ -138,6 +138,18 @@ def test_residue_centroid_uses_the_atoms_caver_retains() -> None:
         )
 
 
+def test_overlapping_group_terms_are_resolved_once() -> None:
+    atoms = _atoms()
+    overlapping = resolve_start_point(atoms, {"start_point_mode": "group", "start_group": "A:1-2,A:2"})
+    plain = resolve_start_point(atoms, {"start_point_mode": "group", "start_group": "A:1-2"})
+    # The overlapping term must not repeat the residue in the CAVER directive
+    # or count its atoms twice.
+    assert overlapping.directives == plain.directives == (("starting_point_residue", "A:1 A:2"),)
+    assert overlapping.provenance["residue_count"] == plain.provenance["residue_count"] == 2
+    assert overlapping.provenance["atom_count"] == plain.provenance["atom_count"] == 5
+    assert overlapping.provenance["point_angstrom"] == plain.provenance["point_angstrom"]
+
+
 def test_residue_group_expands_ranges_into_individual_identifiers() -> None:
     atoms = _atoms()
     group = resolve_start_point(atoms, {"start_point_mode": "group", "start_group": "A:1-2"})
@@ -493,6 +505,30 @@ def test_atom_serial_must_be_unique_among_retained_atoms(tmp_path: Path) -> None
             atoms,
             {"start_point_mode": "atom", "start_chain": "A", "start_residue_number": 3, "start_atom_name": "CB"},
         )
+
+
+def test_a_single_large_altloc_conformer_is_not_a_difficult_case(tmp_path: Path) -> None:
+    records = [_record(1, "N", " ", "ALA", "A", 1, 1, 1, 1, 1.0, "N")]
+    records += [_record(100 + index, "C", "A", "ALA", "A", 3, 20 + index * 3, 3, 3, None) for index in range(128)]
+    atoms = parse_pdb(_write(tmp_path, "single_128.pdb", records))
+    # CAVER compares conformer sizes only when two distinct altloc labels
+    # exist, so one 128-atom conformer is an ordinary file. It also has no
+    # occupancy, which CAVER cannot compare, so the resolution is refused.
+    assert difficult_conformations(atoms) is False
+    with pytest.raises(SelectionError, match=r"A:3 has alternate locations but no atom carries an occupancy"):
+        resolve_start_point(atoms, {"start_point_mode": "residue", "start_chain": "A", "start_residue_number": 3})
+
+
+def test_a_chain_that_is_unsafe_in_a_directive_is_refused(tmp_path: Path) -> None:
+    records = [
+        _record(1, "N", " ", "ALA", "#", 1, 1, 1, 1, 1.0, "N"),
+        _record(2, "CA", " ", "ALA", "#", 1, 2, 1, 1, 1.0),
+    ]
+    atoms = parse_pdb(_write(tmp_path, "hash_chain.pdb", records))
+    # Upstream treats '#' as a comment marker, so emitting it would silently
+    # drop the directive.
+    with pytest.raises(SelectionError, match="cannot be named in a CAVER residue directive"):
+        resolve_start_point(atoms, {"start_point_mode": "residue", "start_chain": "#", "start_residue_number": 1})
 
 
 def test_128_atom_conformers_are_a_difficult_case(tmp_path: Path) -> None:

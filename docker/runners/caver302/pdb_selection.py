@@ -94,7 +94,16 @@ class StartPoint:
 
 
 def residue_identifier(chain: str, number: int) -> str:
-    """Render one upstream ``starting_point_residue`` / ``exclude_residue_ids`` identifier."""
+    """Render one upstream ``starting_point_residue`` identifier.
+
+    CAVER's list parser treats ``#`` as a comment marker and splits identifiers
+    on punctuation, so a chain character outside the PDB alphanumeric set would
+    silently truncate the directive. Such a structure is refused instead.
+    """
+    if chain and not re.fullmatch(r"[A-Za-z0-9]", chain):
+        raise SelectionError(
+            f"chain {chain!r} cannot be named in a CAVER residue directive; only letter and digit chains are accepted"
+        )
     prefix = f"{chain}:" if chain else ""
     return f"{prefix}{number}"
 
@@ -244,7 +253,10 @@ def difficult_conformations(atoms: list[Atom]) -> bool:
     """
     for residue_atoms in _residues(atoms).values():
         counts = [len(group) for group in _conformer_labels(residue_atoms).values()]
-        if counts and (len(set(counts)) > 1 or max(counts) > 127):
+        # CAVER compares conformer sizes only when a residue has at least two
+        # non-blank alternate locations; a lone 128-atom conformer is an
+        # ordinary file upstream.
+        if len(counts) >= 2 and (len(set(counts)) > 1 or max(counts) > 127):
             return True
     return False
 
@@ -611,6 +623,7 @@ def _group_centroid(params: dict[str, object], atoms: list[Atom], difficult: boo
     selected: list[Atom] = []
     resolved: list[tuple[str, int, int, bool]] = []
     missing: list[str] = []
+    seen: set[tuple[str, int, str]] = set()
     named_chains_exist = any(candidate[0] for candidate in by_key)
     for chain, start, end, blank in ranges:
         for number in range(start, end + 1):
@@ -625,14 +638,20 @@ def _group_centroid(params: dict[str, object], atoms: list[Atom], difficult: boo
                     key = ("", number, "")
                     if key not in by_key:
                         raise SelectionError(f"residue _:{number} is absent from the structure")
-                    residue_chain, residue_atoms = "", by_key[key]
+                    residue_atoms = by_key[key]
                 else:
-                    (residue_chain, _, _), residue_atoms, _resolution = _resolve_residue(by_key, chain, number)
+                    key, residue_atoms, _resolution = _resolve_residue(by_key, chain, number)
             except SelectionError as exc:
                 missing.append(str(exc))
                 continue
+            # Overlapping terms name the same residue twice; counting it once
+            # keeps the directive and the provenance consistent with the
+            # centroid CAVER computes over the distinct residues.
+            if key in seen:
+                continue
+            seen.add(key)
             selected.extend(residue_atoms)
-            resolved.append((residue_chain, number, number, blank))
+            resolved.append((key[0], number, number, blank))
     if missing:
         raise SelectionError(f"start_group cannot be resolved: {'; '.join(missing[:10])}")
     # CAVER weights each named residue equally: the initial point is the mean of

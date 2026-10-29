@@ -1,6 +1,6 @@
-# CPU-only family: no host mounts, no GPU, no network. The heap bound and the
-# internal timeout are environment values supplied by the SIF and overridable
-# only by the deployment, never by a Task submission.
+# CPU-only family: no host mounts, no GPU, no network. The SIF supplies the heap
+# bound and the entrypoint sets an internal timeout below this maximum; neither
+# is a Task parameter.
 max_runtime_seconds: 3600
 # Memory is a deployment resource policy, not a runner field. CAVER's JVM
 # reserves ~1 GB regardless of -Xmx (observed MaxRSS ~0.9 GB on a single
