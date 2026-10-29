@@ -151,7 +151,7 @@ def test_fleet_report_separates_covered_unaudited_and_defective():
     # Coverage is a partition ...
     assert report.covered | report.unaudited == frozenset(report.tasks)
     assert not (report.covered & report.unaudited)
-    assert len(report.covered) == 47 and len(report.unaudited) == 12
+    assert len(report.covered) == 48 and len(report.unaudited) == 12
     assert "caver" in report.covered
     assert "mol1_predict" in report.covered
     # ... and defect status is orthogonal: it is empty here, while 12 Tasks are
@@ -167,8 +167,8 @@ def test_fleet_audit_surfaces_the_families_with_no_declared_result_tree():
     """The uncovered set is explicit: required sources that no tree can be checked against.
 
     The required-source and renderer-kind invariants are statements about a view
-    and the ``expected_files.yaml`` identities a family publishes. Of the 59 Tasks,
-    47 are covered (a declared tree lets their required sources be evaluated) and
+    and the ``expected_files.yaml`` identities a family publishes. Of the 60 Tasks,
+    48 are covered (a declared tree lets their required sources be evaluated) and
     12 are unaudited -- each declaring a required view source with no shipped tree
     to check it against. This test names that gap rather than letting the audit
     report those Tasks green, and it fails if the set changes -- either a family

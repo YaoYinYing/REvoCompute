@@ -13,3 +13,19 @@ collections:
           iter: 1
           maxfilt: 1000
           neffmax: 5
+      # The composed Task hands its own MSA to another family: this case proves
+      # the produced alignment crosses the family boundary as a verified stage
+      # input, which no single-family smoke can exercise.
+      - id: minimal-gremlin-msa-to-lh-fit
+        task: gremlin_msa_to_lh_fit
+        input:
+          roles:
+            sequence:
+            - tests/data/msa/2KL8.fasta
+        parameters:
+          iter: 1
+          maxfilt: 1000
+          neffmax: 5
+          iterations: 2
+          batch_size: 4
+          seed: 7
