@@ -186,7 +186,7 @@ parameters:
       description: HETATM residue name such as HEM or CPZ for ligand mode.
     start_group:
       type: string
-      pattern: '^[A-Za-z0-9_]+:[0-9]+(-[0-9]+)?(,[A-Za-z0-9_]+:[0-9]+(-[0-9]+)?)*$'
+      pattern: '^[A-Za-z0-9_]:[0-9]+(-[0-9]+)?(,[A-Za-z0-9_]:[0-9]+(-[0-9]+)?)*$'
       description: Comma-separated CHAIN:RESIDUE or CHAIN:START-END terms whose centroid is the start point for group mode. Use _ for the blank chain; that form is accepted only in a structure without named chains, because CAVER resolves a chainless identifier to a named chain. Ranges are expanded to individual residues because CAVER's start-point list has no range syntax.
     probe_radius:
       type: number

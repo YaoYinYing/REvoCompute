@@ -121,7 +121,7 @@ def parse_pdb(path: Path) -> list[Atom]:
         raise SelectionError(f"cannot read structure {path.name}: {exc}") from exc
     atoms: list[Atom] = []
     saw_model = False
-    for lineno, line in enumerate(lines, start=1):
+    for line in lines:
         record = line[:6]
         if record.startswith("MODEL"):
             if saw_model:
@@ -134,11 +134,6 @@ def parse_pdb(path: Path) -> list[Atom]:
             continue
         if not (record.startswith("ATOM") or record.startswith("HETATM")):
             continue
-        if len(line) < 79:
-            raise SelectionError(
-                f"structure {path.name} line {lineno} is a coordinate record shorter than 79 columns; "
-                "CAVER reads the element from columns 77-78 and aborts when they are absent"
-            )
         try:
             atoms.append(
                 Atom(
