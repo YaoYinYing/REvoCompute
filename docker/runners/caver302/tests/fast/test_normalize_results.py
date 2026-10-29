@@ -166,6 +166,21 @@ def test_non_finite_or_non_numeric_value_is_an_error(tmp_path: Path) -> None:
         normalize(raw, output, {})
 
 
+def test_malformed_utf8_output_is_an_error(tmp_path: Path) -> None:
+    parsers = {
+        "summary.txt": parse_summary,
+        "tunnel_characteristics.csv": parse_characteristics,
+        "tunnel_profiles.csv": parse_profiles,
+        "bottlenecks.csv": parse_bottlenecks,
+        "residues.txt": parse_residues,
+    }
+    for name, parser in parsers.items():
+        path = tmp_path / name
+        path.write_bytes((FIXTURES / name).read_bytes() + b"\xff\n")
+        with pytest.raises(OutputError, match="is not valid UTF-8 text"):
+            parser(path)
+
+
 def test_non_integer_summary_identity_is_an_error(tmp_path: Path) -> None:
     path = tmp_path / "summary.txt"
     lines = (FIXTURES / "summary.txt").read_text(encoding="utf-8").splitlines()

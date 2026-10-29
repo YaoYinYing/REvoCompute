@@ -135,9 +135,17 @@ def integer_field(text: str, field: str, path: Path) -> int:
         raise OutputError(f"{path.name} has a non-integer {field}: {text!r}") from exc
 
 
+def read_text(path: Path) -> str:
+    """Read one CAVER output file as UTF-8 inside the normalizer's error boundary."""
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise OutputError(f"{path.name} is not valid UTF-8 text") from exc
+
+
 def parse_summary(path: Path) -> list[dict[str, object]]:
     """Parse the fixed-width tunnel-cluster summary table."""
-    lines = path.read_text(encoding="utf-8").splitlines()
+    lines = read_text(path).splitlines()
     header_index = next(
         (index for index, line in enumerate(lines) if tuple(line.split()) == SUMMARY_COLUMNS),
         None,
@@ -170,8 +178,11 @@ def parse_summary(path: Path) -> list[dict[str, object]]:
 
 
 def _csv_rows(path: Path) -> tuple[list[str], list[list[str]]]:
-    with path.open(encoding="utf-8", newline="") as handle:
-        rows = [[cell.strip() for cell in row] for row in csv.reader(handle)]
+    try:
+        with path.open(encoding="utf-8", newline="") as handle:
+            rows = [[cell.strip() for cell in row] for row in csv.reader(handle)]
+    except UnicodeDecodeError as exc:
+        raise OutputError(f"{path.name} is not valid UTF-8 text") from exc
     if not rows:
         raise OutputError(f"{path.name} is empty")
     return rows[0], rows[1:]
@@ -280,7 +291,7 @@ def parse_profiles(path: Path) -> list[dict[str, object]]:
 
 def parse_bottlenecks(path: Path) -> list[dict[str, object]]:
     """Parse the bottleneck residue table, skipping its explanatory first line."""
-    lines = path.read_text(encoding="utf-8").splitlines()
+    lines = read_text(path).splitlines()
     header_index = next((index for index, line in enumerate(lines) if line.startswith("Snapshot,")), None)
     if header_index is None:
         raise OutputError("bottlenecks.csv has no header row")
@@ -341,7 +352,7 @@ def parse_residues(path: Path) -> list[dict[str, object]]:
     """Parse the per-cluster tunnel-lining residue blocks."""
     residues = []
     cluster: int | None = None
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for line in read_text(path).splitlines():
         stripped = line.strip()
         if not stripped:
             continue

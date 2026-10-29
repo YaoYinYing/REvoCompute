@@ -47,7 +47,7 @@ MANIFEST_PARAMS = {
 sys.path.insert(0, str(FAMILY))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from caver_params import BASE_PARAMS  # noqa: E402
-from run_caver import load_manifest  # noqa: E402
+from run_caver import load_manifest, read_origin  # noqa: E402
 
 
 def fake_distribution(tmp_path: Path) -> Path:
@@ -120,6 +120,13 @@ def task_manifest(
     path = root / "task.json"
     path.write_text(json.dumps(manifest), encoding="utf-8")
     return path
+
+
+def test_non_utf8_origin_file_is_a_failure(tmp_path: Path) -> None:
+    path = tmp_path / "origins.pdb"
+    path.write_bytes((FIXTURES / "caver/origins.pdb").read_bytes() + b"\xff\n")
+    with pytest.raises(SystemExit, match="origins.pdb is not valid UTF-8 text"):
+        read_origin(path)
 
 
 def test_manifest_paths_must_stay_inside_the_prepared_input_root(tmp_path: Path) -> None:

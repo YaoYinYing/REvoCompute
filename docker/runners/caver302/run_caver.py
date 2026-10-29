@@ -153,7 +153,11 @@ def required_environment(name: str) -> str:
 
 def read_origin(path: Path) -> tuple[float, float, float]:
     """Read the initial start point CAVER used from its origins.pdb."""
-    for line in path.read_text(encoding="utf-8").splitlines():
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except UnicodeDecodeError as exc:
+        raise SystemExit("CAVER origins.pdb is not valid UTF-8 text") from exc
+    for line in lines:
         if line.startswith(("ATOM", "HETATM")):
             try:
                 return float(line[30:38]), float(line[38:46]), float(line[46:54])
