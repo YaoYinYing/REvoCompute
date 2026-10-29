@@ -3067,26 +3067,10 @@ class TaskDatabase:
         """
         if status not in stage_state.TERMINAL_STATUSES:
             raise ValueError(f"finish_active_stage_runs needs a terminal status, got {status!r}")
-        allowed = tuple(stage_state.ACTIVE_STATUSES & stage_state.predecessors(status))
-        if not allowed:
-            return 0
-        timestamp = time.time()
-        values: dict[str, Any] = {
-            "status": status,
-            "reason_code": stage_state.bounded_reason(reason_code),
-            "ended_at": timestamp,
-            "updated_at": timestamp,
-        }
-        stmt = (
-            update(self.stage_runs_table)
-            .where(
-                self.stage_runs_table.c.task_id == task_id,
-                self.stage_runs_table.c.status.in_(allowed),
-            )
-            .values(**values)
-        )
         with self.engine.begin() as conn:
-            return conn.execute(stmt).rowcount
+            return self._settle_live_stage_runs(
+                conn, task_id, status=status, reason_code=reason_code, timestamp=time.time()
+            )
 
     def list_stage_runs(self, task_id: str) -> list[dict[str, Any]]:
         stmt = (

@@ -761,6 +761,20 @@ def test_delete_then_resubmit_settles_the_old_attempt_and_keeps_its_history(tmp_
     ]
 
 
+def test_deleting_a_task_removes_its_stage_rows(tmp_path):
+    """A row-level delete leaves no attempt for a re-submitted identical id."""
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "c2" * 16
+    _insert_task(database, task_id, status="queued")
+    database.begin_stage_attempt(task_id=task_id, stage_index=0, stage_name="cpu_runner")
+    assert database.list_stage_runs(task_id) != []
+
+    database.delete_task(task_id)
+
+    assert database.get_task(task_id) is None
+    assert database.list_stage_runs(task_id) == []
+
+
 def test_a_cancelled_single_stage_task_cannot_acquire_an_attempt(tmp_path, monkeypatch):
     database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
     task_id = "d1" * 16
@@ -1208,6 +1222,48 @@ def test_projection_keeps_a_removed_stage_out_of_a_current_stages_index(tmp_path
         assert by_name["retired_stage"]["status"] == stage_state.RUNNING
         assert by_name["multistage_runner.model"]["status"] == stage_state.QUEUED
         assert by_name["retired_stage"]["index"] == 2
+    finally:
+        database.engine.dispose()
+
+
+def test_projection_does_not_fabricate_stages_for_a_recorded_index_gap(tmp_path, monkeypatch):
+    """A retired stage's stored index is a position, not a run of empty stages.
+
+    A task with two declared stages whose only record is a retired stage at
+    index 5 has three stages, not six: the unoccupied positions between the
+    manifest and the record are not stages.
+    """
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "4d" * 16
+    _insert_task(database, task_id, status="running")
+    monkeypatch.setattr(task_runtime, "task_store", database)
+    monkeypatch.setattr(task_runtime, "_get_task_type", lambda name: (_task_type(), None))
+    try:
+        retired = database.begin_stage_attempt(
+            task_id=task_id, stage_index=5, stage_name="retired_stage"
+        )
+        database.record_stage_running(
+            task_id=task_id, stage_name="retired_stage", attempt=retired["attempt"]
+        )
+
+        projection = task_runtime.stage_projection(database.get_task(task_id))
+        assert [item["name"] for item in projection["items"]] == [
+            "multistage_runner.features",
+            "multistage_runner.model",
+            "retired_stage",
+        ]
+        assert [item["source"] for item in projection["items"]] == [
+            "definition",
+            "definition",
+            "record",
+        ]
+        assert [item["status"] for item in projection["items"]] == [
+            stage_state.NOT_STARTED,
+            stage_state.NOT_STARTED,
+            stage_state.RUNNING,
+        ]
+        assert projection["total"] == 3
+        assert projection["current"]["name"] == "retired_stage"
     finally:
         database.engine.dispose()
 

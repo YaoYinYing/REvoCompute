@@ -479,9 +479,11 @@ def stage_projection(task: dict[str, Any]) -> dict[str, Any] | None:
     if not declared and tt is not None:
         # The implicit single stage is the Task type itself.
         displays[0] = tt.display_name
-    total = max(len(declared), (max(latest) + 1) if latest else 0)
     items = []
-    for index in range(total):
+    # A position exists only if a declared stage or a record occupies it.  A
+    # retired stage's stored index is one position, not the start of a run of
+    # empty stages, so the gap between it and the manifest is not fabricated.
+    for index in sorted(set(range(len(declared))) | set(latest)):
         run = latest.get(index)
         if run is None:
             stage = declared[index] if index < len(declared) else None
@@ -676,7 +678,7 @@ def _compute_allocation_callbacks(
     accounting = user_id > 0 and resource_policy is not None
     stage_target = bool(stage_id) and attempt is not None
 
-    def _record_stage_dispatch(slurm_job_id: str, dispatched_at: float, wrapper_executed: bool) -> None:
+    def _record_stage_dispatch(slurm_job_id: str, dispatched_at: float) -> None:
         if not stage_target:
             return
         try:
@@ -705,7 +707,7 @@ def _compute_allocation_callbacks(
         deleted, so anything it declined (an unknown subject, a receipt naming a
         different job) stays on disk for reconciliation.
         """
-        _record_stage_dispatch(slurm_job_id, dispatched_at, wrapper_executed)
+        _record_stage_dispatch(slurm_job_id, dispatched_at)
         if not accounting:
             return False
         if wrapper_executed:
