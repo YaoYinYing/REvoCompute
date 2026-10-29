@@ -1,19 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { clearSessionCredential } from '../src/app/session';
-import { getResourceEntitlement, getResourceLedger, type ResourceEntitlement, type ResourceLedger } from '../src/api/app-api';
+import { getResourceEntitlement, getResourceLedger, type GPUCreditWaterfall, type ResourceEntitlement, type ResourceLedger } from '../src/api/app-api';
 import { adminApi } from '../src/features/admin/api';
 import { formatCredits } from '../src/components/dom';
 import { gpuCell } from '../src/features/admin/users/UserAdmin';
 import {
   attributionLabel,
   attributionSummary,
+  creditAmount,
+  formatUtc,
   isUnattributed,
   kindLabel,
   quotaBar,
   quotaBars,
+  mountQuotaView,
   quotaLedgerSection,
   quotaPosition,
+  waterfallSection,
 } from '../src/features/quota/QuotaView';
 
 /*
@@ -36,6 +40,7 @@ class FakeNode {
   className = '';
   private attrs = new Map<string, string>();
   readonly style = { setProperty: (): void => undefined };
+  readonly dataset: Record<string, string> = {};
   constructor(readonly tagName: string) {}
   append(...nodes: Array<FakeNode | string>): this {
     for (const child of nodes) {
@@ -62,6 +67,9 @@ class FakeNode {
   querySelector<T extends FakeNode>(tag: string): T | null { return this.querySelectorAll<T>(tag)[0] ?? null; }
   addEventListener(): void {}
   removeEventListener(): void {}
+  remove(): void {
+    if (this.parent) this.parent.children = this.parent.children.filter(child => child !== this);
+  }
 }
 
 class FakeText extends FakeNode {
@@ -77,12 +85,23 @@ beforeEach(() => {
 });
 afterEach(() => { clearSessionCredential(); vi.unstubAllGlobals(); });
 
-function mockApi(payloads: Record<string, unknown>): { requests: RequestRecord[] } {
+function mockApi(
+  payloads: Record<string, unknown>,
+  failures: Record<string, { status: number; error: string; reason: string }> = {},
+): { requests: RequestRecord[] } {
   const requests: RequestRecord[] = [];
   vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init: RequestInit = {}) => {
     const url = String(input);
     if (url.endsWith('/compute/api/auth/token')) return new Response(JSON.stringify({ token: 'token' }), { status: 200 });
     requests.push({ url, init });
+    for (const [suffix, failure] of Object.entries(failures)) {
+      if (url.endsWith(suffix) || url.includes(suffix)) {
+        return new Response(
+          JSON.stringify({ error: failure.error, unavailable_reason: failure.reason }),
+          { status: failure.status, headers: { 'content-type': 'application/json' } },
+        );
+      }
+    }
     for (const [suffix, payload] of Object.entries(payloads)) {
       if (url.endsWith(suffix) || url.includes(suffix)) {
         return new Response(JSON.stringify(payload), { status: 200, headers: { 'content-type': 'application/json' } });
@@ -118,9 +137,47 @@ const envelope = (compute: Compute[]): ResourceEntitlement => ({
   storage: { logical_owned_bytes: 0, soft_limit_bytes: null, remaining_bytes: null, over_soft_limit: false },
 });
 
-const ledgerOf = (entries: ResourceLedger['entries']): ResourceLedger => ({
-  subject_id: 7, period: '2026-10', limit: 50, limit_ceiling: 200, entries,
+const waterfallOf = (overrides: Partial<GPUCreditWaterfall> = {}): GPUCreditWaterfall => ({
+  unit: 'gpu_second',
+  opening_gpu_seconds: 0,
+  closing_gpu_seconds: 30_000,
+  complete: true,
+  truncated: false,
+  entry_count: 2,
+  total_entry_count: 2,
+  steps: [
+    { entry_id: 1, delta_gpu_seconds: 60_000, balance_gpu_seconds: 60_000 },
+    { entry_id: 2, delta_gpu_seconds: -30_000, balance_gpu_seconds: 30_000 },
+  ],
+  summary: {
+    monthly_grant_gpu_seconds: 60_000,
+    usage_gpu_seconds: 30_000,
+    adjustment_gpu_seconds: 0,
+    settled_balance_gpu_seconds: 30_000,
+    reserved_gpu_seconds: 0,
+    unsettled_allocations: 0,
+    unsettled_gpu_seconds: 0,
+    remaining_gpu_seconds: 30_000,
+    usage_complete: true,
+  },
+  ...overrides,
 });
+
+const ledgerOf = (
+  entries: ResourceLedger['entries'],
+  gpu_waterfall: GPUCreditWaterfall = waterfallOf(),
+): ResourceLedger => ({
+  subject_id: 7, period: '2026-10', limit: 50, limit_ceiling: 200,
+  order: 'chronological', gpu_waterfall, entries,
+});
+
+const ledgerEntry = (overrides: Record<string, unknown> = {}) => ({
+  id: 1, subject_type: 'user', subject_id: 7, period: '2026-10', kind: 'monthly_grant',
+  unit: 'gpu_second', resource_class: '', quantity: 60_000, task_id: null, stage_id: null,
+  slurm_job_id: null, actor_user_id: null, reason: null, reason_code: null,
+  evidence_source: 'policy', created_at: 1_790_636_400,
+  ...overrides,
+}) as ResourceLedger['entries'][number];
 
 describe('quota usage bars', () => {
   it('draws a bar only against a finite, positive denominator', () => {
@@ -228,6 +285,125 @@ describe('the rendered position', () => {
   });
 });
 
+describe('the GPU credit waterfall', () => {
+  const entries = [
+    ledgerEntry(),
+    ledgerEntry({
+      id: 2, kind: 'usage', quantity: -30_000, task_id: 'd'.repeat(32), stage_id: 'model',
+      slurm_job_id: '42', evidence_source: 'slurm_accounting', created_at: 1_790_636_500,
+    }),
+  ];
+
+  it('formats timestamps as explicit UTC and credits only at presentation', () => {
+    expect(formatUtc(0)).toBe('1970-01-01 00:00:00 UTC');
+    expect(creditAmount(120, true)).toBe('+2 credits');
+    expect(creditAmount(-120)).toBe('-2 credits');
+  });
+
+  it('renders opening, signed steps, closing, and a link to the raw ledger', () => {
+    const rendered = waterfallSection(waterfallOf(), entries) as unknown as FakeNode;
+    const copy = rendered.textContent;
+    expect(copy).toContain('Opening balance');
+    expect(copy).toContain('+1,000 credits');
+    expect(copy).toContain('-500 credits');
+    expect(copy).toContain('Closing balance');
+    // Closing reconciles to the summary the bars read.
+    expect(copy).toContain(creditAmount(waterfallOf().summary.settled_balance_gpu_seconds));
+    expect(copy).toContain('monthly grant');
+    expect(copy).toContain(`Task ${'d'.repeat(32)}`);
+    expect(copy).toContain('stage model');
+    expect(copy).toContain('Scheduler job 42');
+    expect(copy).toContain('View the raw append-only ledger');
+
+    const table = rendered.querySelector('table')!;
+    expect(table.querySelector('caption')!.textContent).toContain('UTC chronological order');
+    // Every header declares its scope, and each row is headed by its timestamp.
+    const headers = table.querySelectorAll('th');
+    expect(headers.length).toBeGreaterThan(0);
+    expect(headers.every(header => header.getAttribute('scope') !== null)).toBe(true);
+    // The wide table's scroll container is keyboard-focusable and labelled.
+    const scroll = rendered.querySelectorAll('div').find(node => node.getAttribute('tabindex') === '0');
+    expect(scroll?.getAttribute('role')).toBe('region');
+    expect(scroll?.getAttribute('aria-label')).toContain('arrow keys');
+    expect(rendered.querySelectorAll('a').some(link => link.getAttribute('href') === '#ledger')).toBe(true);
+    expect(
+      rendered.querySelectorAll('a').some(link => link.getAttribute('href') === `/compute/results/${'d'.repeat(32)}`),
+    ).toBe(true);
+  });
+
+  it('announces what was loaded and exposes exact GPU-seconds to screen readers', async () => {
+    const rendered = waterfallSection(waterfallOf(), entries) as unknown as FakeNode;
+    const status = rendered.querySelectorAll('p').find(node => node.getAttribute('role') === 'status');
+    expect(status?.getAttribute('aria-live')).toBe('polite');
+    // The region is empty until the microtask after insertion: a count written
+    // during construction would be pre-existing text, not an announcement.
+    expect(status?.textContent).toBe('');
+    await Promise.resolve();
+    expect(status?.textContent).toContain('2 GPU fact');
+    const labels = rendered.querySelectorAll('td').map(node => node.getAttribute('aria-label') ?? '');
+    expect(labels.some(label => label.includes('-500 credits (-30000 GPU-seconds)'))).toBe(true);
+  });
+
+  it('states a partial window with its verified opening instead of a zero history', () => {
+    const partial = waterfallOf({
+      opening_gpu_seconds: 90_000,
+      closing_gpu_seconds: 120_000,
+      complete: false,
+      truncated: true,
+      entry_count: 2,
+      total_entry_count: 60,
+      steps: [
+        { entry_id: 1, delta_gpu_seconds: 40_000, balance_gpu_seconds: 130_000 },
+        { entry_id: 2, delta_gpu_seconds: -10_000, balance_gpu_seconds: 120_000 },
+      ],
+      summary: { ...waterfallOf().summary, settled_balance_gpu_seconds: 120_000, remaining_gpu_seconds: 120_000 },
+    });
+    const rendered = waterfallSection(partial, entries) as unknown as FakeNode;
+    expect(rendered.textContent).toContain('Partial history');
+    expect(rendered.textContent).toContain('newest 2 of 60');
+    expect(rendered.textContent).toContain('1,500 credits');
+    expect(rendered.textContent).toContain('2,000 credits');
+  });
+
+  it('reports a negative balance as a recorded fact rather than clamping it', () => {
+    const negative = waterfallOf({
+      opening_gpu_seconds: -600,
+      closing_gpu_seconds: -600,
+      steps: [{ entry_id: 1, delta_gpu_seconds: -600, balance_gpu_seconds: -600 }],
+      entry_count: 1,
+      total_entry_count: 1,
+      summary: {
+        ...waterfallOf().summary,
+        usage_gpu_seconds: 60_600,
+        settled_balance_gpu_seconds: -600,
+        remaining_gpu_seconds: -600,
+      },
+    });
+    const rendered = waterfallSection(negative, [ledgerEntry({ quantity: -600 })]) as unknown as FakeNode;
+    expect(rendered.textContent).toContain('below zero');
+    expect(rendered.textContent).toContain('-10 credits');
+    expect(rendered.querySelectorAll('tr').some(row => row.className.includes('is-negative'))).toBe(true);
+  });
+
+  it('names an unattributed fact explicitly instead of dropping it', () => {
+    const rendered = waterfallSection(
+      waterfallOf({
+        closing_gpu_seconds: 60_000,
+        entry_count: 1,
+        total_entry_count: 1,
+        steps: [{ entry_id: 1, delta_gpu_seconds: 60_000, balance_gpu_seconds: 60_000 }],
+      }),
+      [ledgerEntry()],
+    ) as unknown as FakeNode;
+    expect(rendered.textContent).toContain('Unattributed');
+  });
+
+  it('is part of the rendered account position', () => {
+    const position = quotaPosition(envelope([entry({})]), ledgerOf(entries)) as unknown as FakeNode;
+    expect(position.textContent).toContain('GPU credit waterfall');
+  });
+});
+
 describe('quota API reads', () => {
   it('reads the canonical envelope and the account ledger from their own endpoints', async () => {
     const { requests } = mockApi({
@@ -240,6 +416,32 @@ describe('quota API reads', () => {
       '/compute/api/resource-entitlement',
       '/compute/api/resource-ledger',
     ]);
+  });
+
+  it('keeps the envelope when only the ledger read is unavailable', async () => {
+    mockApi(
+      {
+        '/compute/api/resource-entitlement': envelope([entry({})]),
+        '/compute/api/resource-ledger': ledgerOf([]),
+      },
+      {
+        '/compute/api/resource-ledger': {
+          status: 503,
+          error: 'The resource ledger is unavailable.',
+          reason: 'ledger_unavailable',
+        },
+      },
+    );
+    const outlet = new FakeNode('div');
+    const view = await mountQuotaView(outlet as unknown as HTMLElement);
+    // The succeeded read is still rendered, and the failure is named as the
+    // ledger's own reason instead of sending the reader to a policy.
+    expect(outlet.textContent).toContain('Usage against allowance');
+    expect(outlet.textContent).toContain('Resource envelope');
+    expect(outlet.textContent).toContain('GPU credit ledger is currently unavailable');
+    expect(outlet.textContent).toContain('The resource ledger is unavailable.');
+    expect(outlet.textContent).not.toContain('stored resource policy');
+    view.destroy();
   });
 
   it('reads one account position through the Admin report when an operator drills in', async () => {

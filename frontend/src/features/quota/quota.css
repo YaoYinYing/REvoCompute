@@ -59,3 +59,24 @@
 .quota-storage-value { font: 500 1.25rem var(--font-mono); }
 .quota-policy { padding-block: 1rem; }
 .quota-policy > summary { cursor: pointer; }
+
+/* The cumulative GPU credit waterfall. Integer GPU-seconds are formatted as
+   credits only here; negative balances take the danger tone rather than being
+   clamped, and the table scrolls inside its own container on a narrow screen. */
+.quota-waterfall { padding-block: 1rem; border-bottom: 1px solid var(--app-line); }
+.quota-waterfall-summary { display: flex; flex-wrap: wrap; gap: .75rem 1.5rem; margin: .75rem 0; }
+.quota-waterfall-summary dt { color: var(--app-muted); font-size: .8rem; }
+.quota-waterfall-summary dd { margin: .15rem 0 0; font: 500 1rem var(--font-mono); font-variant-numeric: tabular-nums; }
+.quota-waterfall-note { margin: .4rem 0; color: var(--app-muted); font-size: .875rem; line-height: 1.45; }
+.quota-waterfall-status { margin: .4rem 0; color: var(--app-muted); font-size: .8rem; }
+.quota-waterfall .is-negative { color: var(--app-danger); }
+.quota-waterfall-table { white-space: nowrap; }
+.quota-waterfall-table caption { padding-block: .35rem; color: var(--app-muted); font-size: .8rem; text-align: left; }
+.quota-waterfall-table td, .quota-waterfall-table th { font-variant-numeric: tabular-nums; }
+.quota-waterfall-table tfoot th, .quota-waterfall-table tfoot td { border-top: 1px solid var(--app-line); font-weight: 650; }
+.quota-waterfall-attribution { white-space: normal; min-width: 12rem; }
+.quota-waterfall-attribution span, .quota-waterfall-attribution a { display: block; overflow-wrap: anywhere; }
+.quota-waterfall-attribution span { color: var(--app-muted); font-size: .8rem; }
+.quota-waterfall-unattributed span { color: var(--app-warning, var(--app-accent-2)); font-style: italic; }
+.quota-waterfall-raw { margin: .5rem 0 0; }
+@media (max-width: 48rem) { .quota-waterfall-summary { gap: .5rem 1rem; } }

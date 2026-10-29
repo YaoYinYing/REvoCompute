@@ -701,6 +701,53 @@ def _allocation_facts(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _ledger_window_with_entitlement(
+    task_store: Any, user_id: int, *, limit: int = DEFAULT_LIMIT
+) -> tuple[dict[str, Any], Any]:
+    """One bounded chronological ledger window with its settled GPU entitlement.
+
+    The entitlement is returned beside the payload rather than inside it: it is
+    already projected by ``canonical_envelope`` in the Admin report, and the
+    account route's contract has one balance, not two.
+
+    The store selects the window and the canonical summary in one transaction:
+    the newest ``limit`` facts by UTC timestamp (immutable identifier as
+    duplicate-time tie-break), plus the period-independent durable-ownership
+    rows, then reordered oldest-first for display.  The waterfall's opening
+    balance is not a guess: it is the period's settled balance minus the GPU
+    deltas present, so it is exactly the sum of every fact the bound omitted.
+
+    One builder serves the account's own route and the Admin drill-in, so the two
+    readers cannot be shown two different waterfalls for the same ledger.
+    """
+    subject_id = int(user_id)
+    window = task_store.resource_ledger_window(subject_id, limit=limit)
+    entries = rloan.ledger_chronology(rloan.normalize_ledger_rows(window["rows"]))
+    payload = {
+        "subject_id": subject_id,
+        "period": window["period"],
+        "limit": limit,
+        "limit_ceiling": MAX_LIMIT,
+        "order": "chronological",
+        "gpu_waterfall": rloan.gpu_waterfall_payload(
+            entries=entries,
+            summary=window["summary"],
+            entitlement=window["entitlement"],
+            total_entry_count=window["total_entry_count"],
+        ),
+        "entries": entries,
+    }
+    return payload, window["entitlement"]
+
+
+def resource_ledger_window(
+    task_store: Any, user_id: int, *, limit: int = DEFAULT_LIMIT
+) -> dict[str, Any]:
+    """The account's bounded chronological ledger window and GPU waterfall."""
+    payload, _ = _ledger_window_with_entitlement(task_store, user_id, limit=limit)
+    return payload
+
+
 def _measured_units(rows: Sequence[Mapping[str, Any]]) -> set[str]:
     """Which accounting units the ledger window actually measured, not just allowed.
 
@@ -720,7 +767,25 @@ def _resource_operations_for_user(
 ) -> dict[str, Any]:
     """One subject's complete resource position, projected from canonical reads."""
     envelope = task_store.resource_envelope(user_id)
-    window = task_store.list_ledger(user_id, limit=limit)
+    ledger_window, window_gpu = _ledger_window_with_entitlement(task_store, user_id, limit=limit)
+    # The envelope and the window are two snapshots.  Take the window's period
+    # and GPU entitlement so the GPU ``remaining`` in this payload is the one the
+    # waterfall summarizes; otherwise a settlement between the reads could
+    # publish two different balances in one response.  The CPU entitlement is
+    # ungated (its ``remaining`` is null) and durable storage is an independent
+    # ownership fact, so their earlier snapshot is display-only, not a second
+    # GPU balance.
+    envelope = rloan.ResourceEnvelope(
+        subject_type=envelope.subject_type,
+        subject_id=envelope.subject_id,
+        period=str(ledger_window["period"]),
+        compute=tuple(
+            window_gpu if entitlement.unit == rloan.UNIT_GPU_SECOND else entitlement
+            for entitlement in envelope.compute
+        ),
+        storage=envelope.storage,
+    )
+    window = ledger_window["entries"]
     unsettled = [
         record
         for record in task_store.list_unsettled_allocations()[:MAX_TASK_SCAN]
@@ -791,7 +856,7 @@ def _resource_operations_for_user(
         },
         "storage": _storage_block(envelope, int(user_id), task_store),
         "ledger": {
-            "entries": rloan.normalize_ledger_rows(window),
+            **ledger_window,
             "window_limit": limit,
             "basis": "append_only_ledger",
         },

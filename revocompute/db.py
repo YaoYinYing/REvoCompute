@@ -1616,28 +1616,40 @@ class TaskDatabase:
         at one class while admission refuses at the shared balance.
         """
         checked_at = time.time() if at is None else at
+        with self.engine.begin() as conn:
+            return self._entitlement_in_connection(conn, user_id, unit, checked_at, ensure_grant=True)
+
+    def _entitlement_in_connection(
+        self, conn, user_id: int, unit: str, checked_at: float, *, ensure_grant: bool
+    ) -> rloan.ComputeEntitlement:
+        """One unit's entitlement, read entirely from *conn*'s snapshot.
+
+        ``ensure_grant`` is ``False`` when the caller has already materialized
+        the period's base allowance in the same transaction, so a summary read
+        does not open a second one or cross a UTC month boundary between the
+        period totals and the position derived from them.
+        """
         enforce = unit == rloan.UNIT_GPU_SECOND
         period = self._gpu_period(checked_at) if rloan.periods_for_unit(unit) else ""
-        with self.engine.begin() as conn:
-            if enforce:
-                self._ensure_monthly_grant(conn, user_id, period, "", checked_at)
-            rows = conn.execute(
-                select(self.resource_ledger_table).where(
-                    self.resource_ledger_table.c.subject_type == rloan.SUBJECT_USER,
-                    self.resource_ledger_table.c.subject_id == user_id,
-                    self.resource_ledger_table.c.unit == unit,
-                )
-            ).mappings().all()
-            reserved = conn.execute(
-                select(func.coalesce(func.sum(self.resource_reservations_table.c.quantity), 0)).where(
-                    self.resource_reservations_table.c.subject_id == user_id,
-                    self.resource_reservations_table.c.unit == unit,
-                    self.resource_reservations_table.c.state.in_(rloan.COMMITTED_RESERVATION_STATES),
-                )
-            ).scalar_one()
-            unsettled, unsettled_quantity = self._unsettled_in_connection(
-                conn, user_id, unit, "", checked_at
+        if enforce and ensure_grant:
+            self._ensure_monthly_grant(conn, user_id, period, "", checked_at)
+        rows = conn.execute(
+            select(self.resource_ledger_table).where(
+                self.resource_ledger_table.c.subject_type == rloan.SUBJECT_USER,
+                self.resource_ledger_table.c.subject_id == user_id,
+                self.resource_ledger_table.c.unit == unit,
             )
+        ).mappings().all()
+        reserved = conn.execute(
+            select(func.coalesce(func.sum(self.resource_reservations_table.c.quantity), 0)).where(
+                self.resource_reservations_table.c.subject_id == user_id,
+                self.resource_reservations_table.c.unit == unit,
+                self.resource_reservations_table.c.state.in_(rloan.COMMITTED_RESERVATION_STATES),
+            )
+        ).scalar_one()
+        unsettled, unsettled_quantity = self._unsettled_in_connection(
+            conn, user_id, unit, "", checked_at
+        )
         totals = rloan.summarize_ledger(rows, unit=unit, resource_class="", period=period or None)
         sources = tuple(sorted({str(row["evidence_source"]) for row in rows if row["evidence_source"]}))
         return rloan.ComputeEntitlement(
@@ -1795,19 +1807,27 @@ class TaskDatabase:
     ) -> dict[str, Any]:
         """Return a balance derived from append-only entries for one UTC month."""
         checked_at = time.time() if at is None else at
-        period = self._gpu_period(checked_at)
-        resource_class = rloan.resource_class_for_gres(None)
         with self.engine.begin() as conn:
-            self._ensure_monthly_grant(conn, user_id, period, "", checked_at)
-        totals = self._period_totals(user_id, period, resource_class)
+            summary, _ = self._gpu_credit_position_in_connection(conn, user_id, checked_at)
+        return summary
+
+    def _gpu_credit_position_in_connection(
+        self, conn, user_id: int, checked_at: float
+    ) -> tuple[dict[str, Any], rloan.ComputeEntitlement]:
+        period = self._gpu_period(checked_at)
+        self._ensure_monthly_grant(conn, user_id, period, "", checked_at)
+        totals = self._ledger_totals_in_connection(conn, user_id, period, "")
+        entitlement = self._entitlement_in_connection(
+            conn, user_id, rloan.UNIT_GPU_SECOND, checked_at, ensure_grant=False
+        )
         return {
             "user_id": user_id,
             "period": period,
             "monthly_grant_gpu_seconds": self._effective_monthly_allowance(totals),
             "usage_gpu_seconds": -totals.get(rloan.LedgerKind.USAGE.value, 0),
             "adjustment_gpu_seconds": self._administrative_adjustments(totals),
-            "remaining_gpu_seconds": self.compute_entitlement(user_id, at=checked_at).remaining,
-        }
+            "remaining_gpu_seconds": entitlement.remaining,
+        }, entitlement
 
     @staticmethod
     def _effective_monthly_allowance(totals: dict[str, int]) -> int:
@@ -2945,6 +2965,28 @@ class TaskDatabase:
         with self.engine.connect() as conn:
             return [dict(row) for row in conn.execute(stmt).mappings().all()]
 
+    def _ledger_scope(
+        self, user_id: int, *, unit: str | None = None, period: str | None = None
+    ) -> tuple[Any, ...]:
+        """The subject/unit/period predicate every bounded ledger reader shares.
+
+        ``period`` applies only to the periodic units; durable-storage ownership
+        spans every period and is included regardless, exactly as the ledger
+        records it.
+        """
+        clauses: list[Any] = [
+            self.resource_ledger_table.c.subject_type == rloan.SUBJECT_USER,
+            self.resource_ledger_table.c.subject_id == user_id,
+        ]
+        if unit is not None:
+            clauses.append(self.resource_ledger_table.c.unit == unit)
+        if period is not None:
+            clauses.append(or_(
+                self.resource_ledger_table.c.period == period,
+                self.resource_ledger_table.c.unit == rloan.UNIT_STORAGE_BYTE,
+            ))
+        return tuple(clauses)
+
     def list_ledger(
         self,
         user_id: int,
@@ -2955,27 +2997,27 @@ class TaskDatabase:
     ) -> list[dict[str, Any]]:
         """Return recent immutable append-only facts for one subject, newest first.
 
+        "Newest" is UTC time, not insertion order: a backdated settlement or an
+        imported historical fact is placed where its timestamp says it belongs,
+        and the immutable identifier breaks a duplicate-timestamp tie.  Ordering
+        by identifier alone would let a page of the newest rows hold older
+        timestamps than the facts it excluded.
+
         One reader for every unit: a compute fact and a durable-ownership fact
         are the same kind of row, so scoping by unit is a filter rather than a
-        separate ledger.  ``period`` applies only to the periodic units; storage
-        ownership spans every period and is returned regardless.
+        separate ledger.
         """
         if limit < 1 or limit > 200:
             raise ValueError("limit must be between 1 and 200")
-        stmt = select(self.resource_ledger_table).where(
-            self.resource_ledger_table.c.subject_type == rloan.SUBJECT_USER,
-            self.resource_ledger_table.c.subject_id == user_id,
-        )
-        if unit is not None:
-            stmt = stmt.where(self.resource_ledger_table.c.unit == unit)
-        if period is not None:
-            stmt = stmt.where(
-                or_(
-                    self.resource_ledger_table.c.period == period,
-                    self.resource_ledger_table.c.unit == rloan.UNIT_STORAGE_BYTE,
-                )
+        stmt = (
+            select(self.resource_ledger_table)
+            .where(*self._ledger_scope(user_id, unit=unit, period=period))
+            .order_by(
+                desc(self.resource_ledger_table.c.created_at),
+                desc(self.resource_ledger_table.c.id),
             )
-        stmt = stmt.order_by(desc(self.resource_ledger_table.c.id)).limit(limit)
+            .limit(limit)
+        )
         with self.engine.connect() as conn:
             return [dict(row) for row in conn.execute(stmt).mappings().all()]
 
@@ -2984,6 +3026,64 @@ class TaskDatabase:
     ) -> list[dict[str, Any]]:
         """The GPU-compute projection of one subject's ledger, newest first."""
         return self.list_ledger(user_id, unit=rloan.UNIT_GPU_SECOND, period=period, limit=limit)
+
+    def resource_ledger_window(
+        self, user_id: int, *, limit: int = 50, at: float | None = None
+    ) -> dict[str, Any]:
+        """One bounded ledger window read from a single transaction.
+
+        Returns the raw window rows (newest by UTC timestamp, tie-broken by the
+        immutable identifier), the canonical period summary and entitlement
+        computed at the same instant, and how many GPU facts the period holds.
+        Reading all of them in one snapshot means a projection can derive an
+        opening balance from the summary and place the window's deltas after it
+        without a concurrent fact or a UTC month boundary landing between the
+        two reads.
+
+        The scope is a disjunction - this period's facts or any durable-storage
+        fact - so SQLite searches ``idx_resource_ledger_subject_unit`` on the
+        subject prefix and sorts the subject's matching rows in a temporary
+        B-tree (``EXPLAIN QUERY PLAN``: ``SEARCH ... USING INDEX
+        idx_resource_ledger_subject_unit (subject_type=? AND subject_id=?)`` +
+        ``USE TEMP B-TREE FOR ORDER BY``).  No index carries ``created_at`` for
+        this predicate, so the sort covers every matching row of this subject
+        and SQLite applies ``limit`` after it, not by the table; that is the
+        accepted cost of returning storage facts alongside a period window.
+        """
+        if limit < 1 or limit > 200:
+            raise ValueError("limit must be between 1 and 200")
+        checked_at = time.time() if at is None else at
+        ledger = self.resource_ledger_table
+        with self.engine.begin() as conn:
+            # pysqlite opens a DBAPI transaction on the first write, not on a
+            # SELECT.  A month whose grant already exists still executes the
+            # grant INSERT, and beginning deferred lets a concurrent settlement
+            # commit between the policy read and that write; SQLite cannot
+            # promote the stale read snapshot in WAL mode and returns
+            # SQLITE_BUSY_SNAPSHOT, which ``busy_timeout`` does not retry.
+            # ``BEGIN IMMEDIATE`` takes the write lock before the first read, so
+            # every read below sees one snapshot that no writer can invalidate.
+            conn.exec_driver_sql("BEGIN IMMEDIATE")
+            summary, entitlement = self._gpu_credit_position_in_connection(conn, user_id, checked_at)
+            period = str(summary["period"])
+            rows = conn.execute(
+                select(ledger)
+                .where(*self._ledger_scope(user_id, period=period))
+                .order_by(desc(ledger.c.created_at), desc(ledger.c.id))
+                .limit(limit)
+            ).mappings().all()
+            total_entry_count = int(conn.execute(
+                select(func.count())
+                .select_from(ledger)
+                .where(*self._ledger_scope(user_id, unit=rloan.UNIT_GPU_SECOND, period=period))
+            ).scalar_one() or 0)
+        return {
+            "summary": summary,
+            "entitlement": entitlement,
+            "period": period,
+            "rows": [dict(row) for row in rows],
+            "total_entry_count": total_entry_count,
+        }
 
     def list_policy_audit(self, user_id: int, *, limit: int = 50) -> list[dict[str, Any]]:
         """Return administrative policy mutations for one subject, newest first."""

@@ -225,7 +225,7 @@ from revocompute.tool_types import canonical_parameters, public_tool
 from revocompute.tool_workspace import ToolWorkspaceError
 from jsonschema import ValidationError as JSONSchemaValidationError
 from jsonschema import validate as validate_json_schema
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from werkzeug.security import check_password_hash, generate_password_hash
 
 # Read a verified descriptor in bounded chunks; no read is ever sized by the
@@ -4339,6 +4339,10 @@ def admin_report_resources():
         # them can interpret makes it unanswerable: the same bounded refusal the
         # other read surfaces give, rather than a traceback.
         return _typed_resource_refusal(exc)
+    except (rloan.AccountingOverflow, SQLAlchemyError) as exc:
+        # The drill-in reads the same ledger window the account does; a ledger
+        # that cannot publish a truthful number is refused the same way here.
+        return _ledger_read_refusal(exc)
     return jsonify(report)
 
 
@@ -4929,6 +4933,28 @@ def _gpu_credit_payload(user_id: int, *, admin: bool = False) -> dict[str, Any]:
     }
 
 
+def _exact_gpu_credit_payload(user_id: int, *, admin: bool = False) -> dict[str, Any]:
+    """A GPU credit payload whose every published quantity is JSON-exact.
+
+    The summary and history are exact Python integers on the server; one outside
+    ±(2^53-1) would be rounded by a JSON client, so a balance read refuses
+    instead of publishing a number the ledger does not contain. Mutation
+    responses still return the recorded fact: the write path already admitted it,
+    and reporting a committed change as a failed read would be untrue.
+    """
+    payload = _gpu_credit_payload(user_id, admin=admin)
+    for field in (
+        "monthly_grant_gpu_seconds",
+        "usage_gpu_seconds",
+        "adjustment_gpu_seconds",
+        "remaining_gpu_seconds",
+    ):
+        rloan.require_exact_units(int(payload[field]), what=field)
+    for entry in payload["history"]:
+        rloan.require_exact_units(int(entry["gpu_seconds"]), what="ledger quantity")
+    return payload
+
+
 def _typed_resource_refusal(exc: ResourceValidationError):
     """The bounded refusal for a stored resource policy no reader can interpret.
 
@@ -4956,8 +4982,19 @@ def _entitlement_payload(user_id: int) -> dict[str, Any]:
     A stored storage policy the reader refuses to interpret raises
     :class:`ResourceValidationError`; callers that answer a client translate it
     with :func:`_typed_resource_refusal` rather than letting it become a 500.
+    The GPU balance it publishes is guarded here, in the route projection, for
+    the same reason as :func:`_exact_gpu_credit_payload`: a client that rounds
+    the number would show a balance the ledger does not contain.
     """
-    return task_store.resource_envelope(user_id).to_dict()
+    payload = task_store.resource_envelope(user_id).to_dict()
+    for unit in payload["compute"]:
+        if unit["unit"] != rloan.UNIT_GPU_SECOND:
+            continue
+        for field in ("allowance", "remaining", "used", "reserved", "unsettled_quantity"):
+            value = unit.get(field)
+            if value is not None:
+                rloan.require_exact_units(int(value), what=field)
+    return payload
 
 
 @app.route("/compute/api/resource-entitlement", methods=["GET"])
@@ -4968,6 +5005,8 @@ def current_resource_entitlement():
         payload = _entitlement_payload(int(g.current_user["id"]))
     except ResourceValidationError as exc:
         return _typed_resource_refusal(exc)
+    except rloan.AccountingOverflow as exc:
+        return _ledger_read_refusal(exc)
     return jsonify(payload), 200
 
 
@@ -4975,9 +5014,37 @@ def current_resource_entitlement():
 @login_required
 def current_gpu_credit():
     """Return only the authenticated user's current UTC-period accounting."""
-    payload = _gpu_credit_payload(int(g.current_user["id"]))
+    try:
+        payload = _exact_gpu_credit_payload(int(g.current_user["id"]))
+    except (rloan.AccountingOverflow, SQLAlchemyError) as exc:
+        return _ledger_read_refusal(exc)
     payload["allow_gpu_use"] = bool(g.current_user.get("allow_gpu_use"))
     return jsonify(payload), 200
+
+
+def _ledger_read_refusal(exc: Exception):
+    """The bounded 503 a ledger-derived balance read gives instead of a number.
+
+    A quantity no JSON client can represent exactly and an unavailable store are
+    different failures, but both make the read unable to publish a truthful
+    balance.  Returning an empty window or a zero balance would be worse than an
+    error: it would state a spend or a history nobody measured.  One mapping
+    serves the account and Admin balance reads and the shared ledger window, so
+    those scopes cannot disagree about how the same failure is reported.  The
+    Admin user listing is an aggregate listing rather than a ledger window and
+    keeps its existing failure behavior.
+    """
+    if isinstance(exc, rloan.AccountingOverflow):
+        logging.error("Resource ledger refused an unrepresentable value: %s", exc)
+        return jsonify({
+            "error": "The resource ledger contains a value this API cannot represent exactly.",
+            "unavailable_reason": "ledger_value_out_of_range",
+        }), 503
+    logging.exception("Resource ledger could not be read", exc_info=exc)
+    return jsonify({
+        "error": "The resource ledger is temporarily unavailable.",
+        "unavailable_reason": "ledger_unavailable",
+    }), 503
 
 
 @app.route("/compute/api/resource-ledger", methods=["GET"])
@@ -5001,18 +5068,11 @@ def current_resource_ledger():
         limit = _bounded_query_limit()
     except admin_reports.AdminReportError as exc:
         return jsonify({"error": str(exc)}), 400
-    user_id = int(g.current_user["id"])
-    period = task_store.gpu_credit_summary(user_id)["period"]
-    rows = task_store.list_ledger(user_id, period=period, limit=limit)
-    return jsonify(
-        {
-            "subject_id": user_id,
-            "period": period,
-            "limit": limit,
-            "limit_ceiling": admin_reports.MAX_LIMIT,
-            "entries": rloan.normalize_ledger_rows(rows),
-        }
-    ), 200
+    try:
+        payload = admin_reports.resource_ledger_window(task_store, int(g.current_user["id"]), limit=limit)
+    except (rloan.AccountingOverflow, SQLAlchemyError) as exc:
+        return _ledger_read_refusal(exc)
+    return jsonify(payload), 200
 
 
 _USER_METRICS_WINDOWS: dict[str, tuple[str, int | None]] = {
@@ -5638,6 +5698,8 @@ def admin_user_resource_entitlement(user_id: int):
         payload = _entitlement_payload(user_id)
     except ResourceValidationError as exc:
         return _typed_resource_refusal(exc)
+    except rloan.AccountingOverflow as exc:
+        return _ledger_read_refusal(exc)
     return jsonify(payload), 200
 
 
@@ -5650,7 +5712,11 @@ def admin_user_gpu_credit(user_id: int):
     user = _get_user_db().get_user(user_id)
     if user is None or user.get("deleted"):
         return jsonify({"error": "User not found"}), 404
-    return jsonify(_gpu_credit_payload(user_id, admin=True)), 200
+    try:
+        payload = _exact_gpu_credit_payload(user_id, admin=True)
+    except (rloan.AccountingOverflow, SQLAlchemyError) as exc:
+        return _ledger_read_refusal(exc)
+    return jsonify(payload), 200
 
 
 @app.route("/compute/api/auth/admin/users/<int:user_id>/gpu-credit/adjustments", methods=["POST"])

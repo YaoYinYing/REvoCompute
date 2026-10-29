@@ -12,6 +12,9 @@ export type GPUCreditSummary = components['schemas']['GPUCreditSummary'];
 export type ResourceEntitlement = components['schemas']['ResourceEntitlement'];
 export type ResourceLedger = components['schemas']['ResourceLedger'];
 export type ResourceLedgerEntry = components['schemas']['ResourceLedgerEntry'];
+export type GPUCreditWaterfall = components['schemas']['GPUCreditWaterfall'];
+export type GPUCreditWaterfallStep = components['schemas']['GPUCreditWaterfallStep'];
+export type GPUCreditWaterfallSummary = components['schemas']['GPUCreditWaterfallSummary'];
 export type RunnerAccess = components['schemas']['RunnerAccess'];
 
 export type RegistrationCapability = components['schemas']['RegistrationCapability'];
@@ -90,7 +93,7 @@ export const getGpuCredit = (): Promise<GPUCreditSummary> => requestJson('/compu
 /** The canonical resource envelope admission decides against, for this account. */
 export const getResourceEntitlement = (signal?: AbortSignal): Promise<ResourceEntitlement> =>
   requestJson('/compute/api/resource-entitlement', { signal });
-/** This account's own append-only ledger, newest first and bounded by the server. */
+/** This account's own append-only ledger, bounded and returned in UTC chronological order. */
 export const getResourceLedger = (limit?: number, signal?: AbortSignal): Promise<ResourceLedger> =>
   requestJson(`/compute/api/resource-ledger${limit === undefined ? '' : `?limit=${encodeURIComponent(String(limit))}`}`, { signal });
 export const getAccess = (): Promise<AccessResponse> => requestJson('/compute/api/access');

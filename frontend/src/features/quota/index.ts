@@ -7,7 +7,15 @@
  * drill-in on the same canonical projection lives in ``envelope.ts``.
  */
 
-export { QuotaView, loadAdminQuota, mountQuotaView, quotaBar, quotaBars, quotaLedgerSection, quotaPosition } from './QuotaView';
+export {
+  QuotaView,
+  loadAdminQuota,
+  mountQuotaView,
+  quotaBar,
+  quotaBars,
+  quotaLedgerSection,
+  quotaPosition,
+} from './QuotaView';
 export {
   attributionLabel,
   attributionSummary,

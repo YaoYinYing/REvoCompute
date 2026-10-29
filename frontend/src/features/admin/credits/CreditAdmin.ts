@@ -1,5 +1,6 @@
 import type { AppShell } from '../../../app/shell';
 import { adminApi, idempotencyKey, type AdminUser, type GPUCreditSummary } from '../api';
+import { quotaLedgerSection, waterfallSection } from '../../quota/QuotaView';
 import { button, element, empty, formatCredits, formatDate, openDialog, reasonContent, setBusy, text } from '../../../components/dom';
 
 export const globalResetConfirmation = 'RESET ALL';
@@ -23,20 +24,6 @@ function creditSummary(data: GPUCreditSummary): HTMLElement {
   return summary;
 }
 
-function creditHistory(data: GPUCreditSummary): HTMLElement {
-  const history = element('div', 'admin-history');
-  if (!data.history.length) return empty('No credit activity has been recorded.');
-  for (const entry of data.history) {
-    const copy = element('div', '', [
-      text('strong', entry.kind.replaceAll('_', ' ')),
-      text('span', entry.reason || entry.task_id || 'Recorded usage'),
-      text('time', formatDate(entry.created_at)),
-    ]);
-    history.append(element('article', '', [copy, text('b', `${formatCredits(entry.gpu_seconds / 60, true)} credits`)]));
-  }
-  return history;
-}
-
 export class CreditAdmin {
   constructor(private readonly shell: AppShell, private readonly onChanged: () => Promise<void>) {}
 
@@ -45,12 +32,63 @@ export class CreditAdmin {
       let data = await adminApi.getUserCredit(user.id);
       const root = element('div', 'credit-admin');
       const accounting = element('section', 'credit-accounting');
+      // The ledger window is read separately and rendered when it arrives, so a
+      // ledger outage never removes the audited policy controls below.
+      const ledgerHost = element('div', 'credit-ledger-host', [empty('Loading the ledger window...')]);
+      let summaryError: string | null = null;
       const renderAccounting = (): void => accounting.replaceChildren(
-        creditSummary(data),
-        text('h3', 'Immutable activity'),
-        creditHistory(data),
+        summaryError
+          ? empty(`The GPU credit summary is currently unavailable (${summaryError}).`, true)
+          : creditSummary(data),
+        ledgerHost,
       );
+      // A later load invalidates an earlier one: without this token a load that
+      // started before a mutation could land after the refreshed window and show
+      // a superseded balance.
+      let ledgerGeneration = 0;
+      const loadLedger = async (): Promise<void> => {
+        const generation = ++ledgerGeneration;
+        ledgerHost.replaceChildren(empty('Loading the ledger window...'));
+        try {
+          // The operator's drill-in reads the same canonical ledger window the
+          // account reads about itself: chronological entries and the GPU
+          // waterfall over an authoritative opening balance.
+          const ledger = (await adminApi.getResourceReport(user.id)).ledger;
+          if (generation !== ledgerGeneration) return;
+          ledgerHost.replaceChildren(
+            waterfallSection(ledger.gpu_waterfall, ledger.entries, ledger.period),
+            // The raw append-only facts stay beside the chart: reasons, actors,
+            // and the `#ledger` anchor the waterfall links to live here.
+            quotaLedgerSection(ledger),
+          );
+        } catch (error) {
+          if (generation !== ledgerGeneration) return;
+          const detail = (error as Error).message || 'no response';
+          ledgerHost.replaceChildren(empty(
+            `The GPU credit ledger window is currently unavailable (${detail}). The policy controls below still work.`,
+            true,
+          ));
+        }
+      };
+      const reload = async (): Promise<void> => {
+        try {
+          data = await adminApi.getUserCredit(user.id);
+          summaryError = null;
+        } catch (error) {
+          summaryError = (error as Error).message || 'no response';
+        }
+        renderAccounting();
+      };
+      const afterMutation = async (message: string): Promise<void> => {
+        // A successful mutation is reported before any read it triggers: a
+        // ledger or listing refresh failure must not suppress the success fact.
+        this.shell.notify(message, 'success');
+        try { await this.onChanged(); } catch (error) { this.shell.notify((error as Error).message, 'error'); }
+        await reload();
+        await loadLedger();
+      };
       renderAccounting();
+      void loadLedger();
 
       const allowance = element('input'); allowance.type = 'number'; allowance.min = '0'; allowance.step = '0.01'; allowance.value = String(data.monthly_grant_credits);
       const allowanceButton = button('Set allowance');
@@ -62,8 +100,8 @@ export class CreditAdmin {
         if (!confirmed) return;
         setBusy(allowanceButton, true);
         try {
-          const result = await adminApi.setAllowance(user.id, Math.round(credits * 60), idempotencyKey(`allowance-${user.id}`));
-          data = result.gpu_credit; renderAccounting(); await this.onChanged(); this.shell.notify('Monthly allowance updated.', 'success');
+          await adminApi.setAllowance(user.id, Math.round(credits * 60), idempotencyKey(`allowance-${user.id}`));
+          await afterMutation('Monthly allowance updated.');
         } catch (error) { this.shell.notify((error as Error).message, 'error'); }
         finally { setBusy(allowanceButton, false); }
       });
@@ -87,8 +125,9 @@ export class CreditAdmin {
         if (!confirmed) return;
         setBusy(adjustButton, true);
         try {
-          const result = await adminApi.adjustCredit(user.id, gpuSeconds, reasonText, idempotencyKey(`adjust-${user.id}`));
-          data = result.gpu_credit; adjustment.value = ''; reason.value = ''; renderAccounting(); await this.onChanged(); this.shell.notify('GPU credit adjustment recorded.', 'success');
+          await adminApi.adjustCredit(user.id, gpuSeconds, reasonText, idempotencyKey(`adjust-${user.id}`));
+          adjustment.value = ''; reason.value = '';
+          await afterMutation('GPU credit adjustment recorded.');
         } catch (error) { this.shell.notify((error as Error).message, 'error'); }
         finally { setBusy(adjustButton, false); }
       });
@@ -109,8 +148,9 @@ export class CreditAdmin {
         if (!reasonText) return;
         try {
           const result = await adminApi.resetUserCredit(user.id, reasonText, idempotencyKey(`reset-${user.id}`));
-          data = result.gpu_credit; renderAccounting(); await this.onChanged();
-          this.shell.notify(result.changed ? `Credits reset by ${formatCredits(result.reset_delta_gpu_seconds / 60, true)}.` : 'Credits were already at the configured allowance.', 'success');
+          await afterMutation(result.changed
+            ? `Credits reset by ${formatCredits(result.reset_delta_gpu_seconds / 60, true)}.`
+            : 'Credits were already at the configured allowance.');
         } catch (error) { this.shell.notify((error as Error).message, 'error'); }
       });
 

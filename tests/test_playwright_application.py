@@ -13,6 +13,7 @@ from playwright.sync_api import Page, expect
 import pytest
 
 from browser_frontend_assets import result_dist
+from frontend_fixtures import builders
 from frontend_fixtures.router import serve_environment
 
 pytestmark = pytest.mark.browser
@@ -194,27 +195,6 @@ def _resource_entitlement(subject_id: int = 2) -> dict:
     }
 
 
-def _resource_ledger(subject_id: int = 2) -> dict:
-    """One bounded ledger window: an unattributed grant beside an attributed usage row."""
-    return {
-        "subject_id": subject_id, "period": "2026-09", "limit": 25, "limit_ceiling": 200,
-        "entries": [
-            {
-                "id": 1, "subject_type": "user", "subject_id": subject_id, "period": "2026-09",
-                "kind": "monthly_grant", "unit": "gpu_second", "resource_class": "", "quantity": 180000,
-                "task_id": None, "stage_id": None, "slurm_job_id": None, "actor_user_id": None,
-                "reason": None, "reason_code": None, "evidence_source": "policy", "created_at": 1790636400,
-            },
-            {
-                "id": 2, "subject_type": "user", "subject_id": subject_id, "period": "2026-09",
-                "kind": "usage", "unit": "gpu_second", "resource_class": "a100", "quantity": 74250,
-                "task_id": TASK_ID, "stage_id": "model", "slurm_job_id": "9711", "actor_user_id": None,
-                "reason": None, "reason_code": None, "evidence_source": "slurm_accounting", "created_at": 1790636500,
-            },
-        ],
-    }
-
-
 def _install_app(page: Page) -> list[str]:
     dist = result_dist()
     entry = json.loads((dist / ".vite" / "manifest.json").read_text(encoding="utf-8"))["index.html"]
@@ -338,7 +318,10 @@ def _install_app(page: Page) -> list[str]:
     page.route(f"{ORIGIN}/compute/api/user-metrics?*", lambda route: route.fulfill(json=_metrics(parse_qs(urlsplit(route.request.url).query).get("window", ["daily"])[0])))
     subject_id = 2
     page.route(f"{ORIGIN}/compute/api/resource-entitlement", lambda route: route.fulfill(json=_resource_entitlement(subject_id)))
-    page.route(f"{ORIGIN}/compute/api/resource-ledger**", lambda route: route.fulfill(json=_resource_ledger(subject_id)))
+    page.route(
+        f"{ORIGIN}/compute/api/resource-ledger**",
+        lambda route: route.fulfill(json=builders.build_resource_ledger(subject_id)),
+    )
 
     users = [_admin_user()]
 
@@ -362,7 +345,13 @@ def _install_app(page: Page) -> list[str]:
         else:
             route.fulfill(json=_gpu_credit())
 
+    def admin_report_resources(route) -> None:
+        query = parse_qs(urlsplit(route.request.url).query)
+        subject = int(query.get("subject", [subject_id])[0])
+        route.fulfill(json=builders.build_admin_resource_report(subject))
+
     page.route(f"{ORIGIN}/compute/api/auth/admin/users", admin_users)
+    page.route(f"{ORIGIN}/compute/api/auth/admin/reports/resources?*", admin_report_resources)
     page.route(f"{ORIGIN}/compute/api/auth/admin/users/*/gpu-credit/adjustments", admin_credit)
     page.route(f"{ORIGIN}/compute/api/auth/admin/users/*/gpu-credit/allowance", admin_credit)
     page.route(f"{ORIGIN}/compute/api/auth/admin/users/*/gpu-credit", admin_credit)
@@ -1198,12 +1187,85 @@ def test_admin_user_access_and_credit_mutations(page: Page) -> None:
     confirm.get_by_role("button", name="Apply adjustment").click()
     expect(page.get_by_text("GPU credit adjustment recorded.")).to_be_visible()
 
+    # The operator's drill-in renders the canonical waterfall and the raw ledger
+    # window that the waterfall links to, not just the credit totals.
+    expect(credit_dialog.get_by_role("heading", name="GPU credit waterfall")).to_be_visible()
+    expect(credit_dialog.get_by_role("heading", name="Ledger - 2026-10")).to_be_visible()
+    expect(credit_dialog).to_contain_text("UTC calendar-month allowance")
+    expect(credit_dialog.locator("#ledger")).to_be_visible()
+
     assert any(url.endswith("/admin/users") and method == "POST" and body["username"] == "created-user" for url, method, body in posted)
     decision = next(body for url, method, body in posted if url.endswith("/requests/7/decision") and method == "POST")
     assert decision["decision"] == "approved"
     adjustment = next(body for url, method, body in posted if url.endswith("/gpu-credit/adjustments") and method == "POST")
     assert adjustment["gpu_seconds"] == 720
     assert adjustment["reason"] == "Approved research allocation"
+
+
+def _open_admin_credit_dialog(page: Page) -> None:
+    page.goto(f"{ORIGIN}/compute/user_control")
+    expect(page.get_by_role("heading", name="User control")).to_be_visible()
+    page.get_by_role("tab", name="Users").click()
+    page.get_by_role("row").filter(has_text="Test Scientist").get_by_role("button", name="Credits").click()
+
+
+def _ledger_unavailable(route) -> None:
+    route.fulfill(status=503, json={
+        "error": "The resource ledger is unavailable.", "unavailable_reason": "ledger_unavailable",
+    })
+
+
+def test_admin_credit_controls_survive_a_ledger_outage(page: Page) -> None:
+    """A ledger outage hides the waterfall, never the audited policy controls."""
+    _install_app(page)
+    page.route(f"{ORIGIN}/compute/api/auth/me", lambda route: route.fulfill(json=_current_user("admin")))
+    page.route(f"{ORIGIN}/compute/api/auth/admin/reports/resources?*", _ledger_unavailable)
+    _open_admin_credit_dialog(page)
+    dialog = page.get_by_role("dialog")
+    expect(dialog.get_by_label("Adjustment in credits")).to_be_visible()
+    expect(dialog).to_contain_text("The GPU credit ledger window is currently unavailable")
+    dialog.get_by_label("Adjustment in credits").fill("3")
+    dialog.get_by_label("Reason").fill("Outage-safe adjustment")
+    dialog.get_by_role("button", name="Apply adjustment").click()
+    page.get_by_role("dialog").last.get_by_role("button", name="Apply adjustment").click()
+    expect(page.get_by_text("GPU credit adjustment recorded.")).to_be_visible()
+
+
+def test_admin_credit_mutation_success_survives_a_failed_refresh(page: Page) -> None:
+    """A recorded mutation is reported even when the reads after it fail."""
+    _install_app(page)
+    page.route(f"{ORIGIN}/compute/api/auth/me", lambda route: route.fulfill(json=_current_user("admin")))
+    state = {"mutated": False}
+
+    def credit(route) -> None:
+        if route.request.method == "POST" and route.request.url.endswith("/adjustments"):
+            state["mutated"] = True
+            route.fulfill(status=201, json={"entry_id": 2, "gpu_credit": _gpu_credit(2, 720)})
+        elif state["mutated"]:
+            _ledger_unavailable(route)
+        else:
+            route.fulfill(json=_gpu_credit())
+
+    def report(route) -> None:
+        if state["mutated"]:
+            _ledger_unavailable(route)
+        else:
+            route.fulfill(json=builders.build_admin_resource_report(2))
+
+    page.route(f"{ORIGIN}/compute/api/auth/admin/users/*/gpu-credit/adjustments", credit)
+    page.route(f"{ORIGIN}/compute/api/auth/admin/users/*/gpu-credit", credit)
+    page.route(f"{ORIGIN}/compute/api/auth/admin/reports/resources?*", report)
+    _open_admin_credit_dialog(page)
+    dialog = page.get_by_role("dialog")
+    expect(dialog.get_by_role("heading", name="GPU credit waterfall")).to_be_visible()
+    dialog.get_by_label("Adjustment in credits").fill("12")
+    dialog.get_by_label("Reason").fill("Refresh failure check")
+    dialog.get_by_role("button", name="Apply adjustment").click()
+    page.get_by_role("dialog").last.get_by_role("button", name="Apply adjustment").click()
+    expect(page.get_by_text("GPU credit adjustment recorded.")).to_be_visible()
+    expect(dialog.get_by_label("Adjustment in credits")).to_be_visible()
+    expect(dialog).to_contain_text("The GPU credit ledger window is currently unavailable")
+    expect(dialog).to_contain_text("The GPU credit summary is currently unavailable")
 
 
 def _fleet_payload() -> dict:
