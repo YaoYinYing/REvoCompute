@@ -18,7 +18,28 @@ def stage(name, source=None, *, input_type="x", output_type="x"):
 
 
 def graph(*stages):
-    return SimpleNamespace(workflow=stages, inputs=(SimpleNamespace(name="source", type="x"),))
+    return SimpleNamespace(
+        workflow=stages,
+        inputs=(SimpleNamespace(name="source", type="x"),),
+        runtime=SimpleNamespace(name="owner_family"),
+    )
+
+
+def test_each_node_records_its_resolved_family():
+    stages = (
+        stage("a"),
+        WorkflowStage(
+            "b", "b", False, family="foreign_family",
+            inputs=(StagePortSpec("input", "x", source="a:out"),),
+            outputs=(StagePortSpec("out", "x"),),
+        ),
+    )
+    compiled = compile_graph(graph(*stages))
+    assert [(node.id, node.family) for node in compiled.nodes] == [
+        ("a", "owner_family"),
+        ("b", "foreign_family"),
+    ]
+    assert [node["family"] for node in compiled.document["nodes"]] == ["owner_family", "foreign_family"]
 
 
 def test_stable_digest_and_topological_order():

@@ -37,7 +37,7 @@ _SACCT_ACCELERATOR_FIELDS = ("JobIDRaw", "TRESUsageInMax", "TRESUsageInAve")
 
 
 def _task_input_form(
-    entities: list[dict], snapshot_root: Path, storage_key: str, resources: dict, runtime_bundle_sha256: str | None
+    entities: list[dict], snapshot_root: Path, storage_key: str, resources: dict, runtime_bundles: dict[str, str]
 ) -> str:
     """Serialize the live-test task row's ``input_form``.
 
@@ -45,7 +45,7 @@ def _task_input_form(
     workspace from ``snapshot_root``/``workspace_key``.  A fileless task (for
     example unconditional generation) has no file entity to carry that
     identity, so it must be present at the top level or the job cannot resolve
-    its workspace.  ``runtime_bundle_sha256`` is recorded here because the task
+    its workspace.  ``runtime_bundles`` is recorded here because the task
     row is the only durable index of "a launchable Task references this bundle".
     """
     return json.dumps(
@@ -53,7 +53,7 @@ def _task_input_form(
             "entities": entities,
             "snapshot_root": str(snapshot_root),
             "workspace_key": storage_key,
-            "runtime_bundle_sha256": runtime_bundle_sha256,
+            "runtime_bundles": runtime_bundles,
             **resources,
         },
         sort_keys=True,
@@ -66,14 +66,14 @@ def _live_task_manifest(
     task_type_def: Any,
     parameters: dict[str, Any],
     manifest_inputs: dict[str, list[dict[str, Any]]],
-    runtime_bundle_sha256: str | None,
+    runtime_bundles: dict[str, str],
 ) -> dict[str, Any]:
     """Build the runner manifest exactly as the submission handler does.
 
     The live test must exercise the production protocol, so it projects the same
     runner-protocol v4 keys from the same owning manifest rather than a reduced
-    hand-built shape.  ``runtime_bundle_sha256`` is resolved by the caller: it is
-    the candidate digest the controller materialized, not the published binding,
+    hand-built shape.  ``runtime_bundles`` is resolved by the caller: it is the
+    candidate digest the controller materialized, not the published binding,
     so a live test validates exactly what it is about to activate.
     """
     return {
@@ -88,7 +88,7 @@ def _live_task_manifest(
         "resource_guidance": observations_for_guidance(
             task_type_def.runtime.name, task_type_def.resource_adaptation, store=task_runtime.task_store
         ),
-        "runtime_bundle_sha256": runtime_bundle_sha256,
+        "runtime_bundles": runtime_bundles,
     }
 
 
@@ -494,10 +494,11 @@ def execute(request_path: str | os.PathLike[str]) -> dict[str, Any]:
         )
     except runtime_bundle.RuntimeBundleError as exc:
         raise ValueError(f"live-test runtime bundle is unavailable: {exc}") from exc
-    input_form = _task_input_form(entities, snapshot_root, storage_key, request["resources"], pinned)
+    runtime_bundles = {task_type_def.runtime.name: pinned} if pinned else {}
+    input_form = _task_input_form(entities, snapshot_root, storage_key, request["resources"], runtime_bundles)
     atomic.write_text(
         json.dumps(
-            _live_task_manifest(task_id, task_type, task_type_def, parameters, manifest_inputs, pinned),
+            _live_task_manifest(task_id, task_type, task_type_def, parameters, manifest_inputs, runtime_bundles),
             sort_keys=True,
         )
         + "\n",

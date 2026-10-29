@@ -1323,7 +1323,8 @@ class SlurmJob(Job):
             )
         except (OSError, json.JSONDecodeError):
             manifest = None
-        pinned = manifest.get("runtime_bundle_sha256") if isinstance(manifest, dict) else None
+        bundles = manifest.get("runtime_bundles") if isinstance(manifest, dict) else None
+        pinned = bundles.get(self.tt.runtime.name) if isinstance(bundles, dict) else None
         if not isinstance(pinned, str) or not pinned:
             # A family that declares an overlay cannot execute without the
             # bundle: it would launch an entrypoint that is not mounted.  That

@@ -345,6 +345,80 @@ def test_workflow_stage_must_declare_both_capability_keys(tmp_path):
 
 
 
+def test_workflow_stage_family_must_resolve_to_a_registered_runtime_family(tmp_path):
+    family = tmp_path / "demo"
+    task_dir = family / "tasks" / "echo"
+    task_dir.mkdir(parents=True)
+    (family / "plugin.yaml").write_text(
+        "id: demo\nversion: '1'\nruntime: {image_artifact: demo.sif, definition: demo.def}\n"
+        "tasks: [tasks/echo/task.yaml]\n",
+        encoding="utf-8",
+    )
+    (family / "demo.def").write_text("Bootstrap: demo\n", encoding="utf-8")
+    (task_dir / "task.yaml").write_text(
+        _workflow_yaml(
+            "- name: features\n  requires_gpu: false\n  requires_network: false\n"
+            "  runner_args: [-s, features]\n  stage_markers: [first]\n"
+            "- name: model\n  requires_gpu: false\n  requires_network: false\n"
+            "  family: missing_family\n  runner_args: [-s, model]\n  stage_markers: [second]\n"
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError, match=r"echo' stage 'echo\.model' references unknown runtime family 'missing_family'"
+    ):
+        discover_plugins(str(tmp_path))
+
+    other = tmp_path / "other_family"
+    other.mkdir()
+    (other / "plugin.yaml").write_text(
+        "id: other_family\nversion: '1'\nruntime: {image_artifact: other.sif, definition: other.def}\n"
+        "tasks: []\n",
+        encoding="utf-8",
+    )
+    (other / "other.def").write_text("Bootstrap: other\n", encoding="utf-8")
+    (task_dir / "task.yaml").write_text(
+        _workflow_yaml(
+            "- name: features\n  requires_gpu: false\n  requires_network: false\n"
+            "  runner_args: [-s, features]\n  stage_markers: [first]\n"
+            "- name: model\n  requires_gpu: false\n  requires_network: false\n"
+            "  family: other_family\n  runner_args: [-s, model]\n  stage_markers: [second]\n"
+        ),
+        encoding="utf-8",
+    )
+    discover_plugins(str(tmp_path))
+    task, _ = get("echo")
+    assert [(stage.name, stage.family) for stage in task.workflow] == [
+        ("echo.features", None),
+        ("echo.model", "other_family"),
+    ]
+
+
+def test_workflow_stage_family_must_be_an_identifier(tmp_path):
+    family = tmp_path / "demo"
+    task_dir = family / "tasks" / "echo"
+    task_dir.mkdir(parents=True)
+    (family / "plugin.yaml").write_text(
+        "id: demo\nversion: '1'\nruntime: {image_artifact: demo.sif, definition: demo.def}\n"
+        "tasks: [tasks/echo/task.yaml]\n",
+        encoding="utf-8",
+    )
+    (family / "demo.def").write_text("Bootstrap: demo\n", encoding="utf-8")
+    (task_dir / "task.yaml").write_text(
+        _workflow_yaml(
+            "- name: features\n  requires_gpu: false\n  requires_network: false\n"
+            "  runner_args: [-s, features]\n  stage_markers: [first]\n"
+            "- name: model\n  requires_gpu: false\n  requires_network: false\n  family: ../escape\n"
+            "  runner_args: [-s, model]\n  stage_markers: [second]\n"
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="has an invalid runtime family"):
+        discover_plugins(str(tmp_path))
+
+
 def test_workflow_stage_markers_must_partition_declared_markers(tmp_path):
     """Every task-level marker has exactly one stage owner.
 

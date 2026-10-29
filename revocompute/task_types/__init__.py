@@ -158,6 +158,9 @@ class WorkflowStage:
     runner_args: tuple[str, ...] = ()
     stage_markers: tuple[str, ...] = ()
     requires_network: bool = False
+    #: Runtime family that executes this stage. ``None`` means the composing
+    #: task's own family.
+    family: str | None = None
     inputs: tuple[StagePortSpec, ...] = ()
     outputs: tuple[StagePortSpec, ...] = ()
     #: What this stage needs from an accelerator, in semantic terms (device class
@@ -461,6 +464,23 @@ def _load_ui_control(raw: Any, param_type: str | None, minimum: Any, maximum: An
     return {"kind": "seed", "random": {"minimum": lower, "maximum": upper}}
 
 
+def _validate_stage_families(manager: Any) -> None:
+    """Refuse a workflow stage that names a runtime family discovery never registered.
+
+    Resolution happens after every family and task is registered: a manifest may
+    reference a family that appears later in discovery, but not one that does not
+    exist at all.
+    """
+    registered = {identifier for identifier, _runtime in manager.contributions.items("runtime_families")}
+    for _task_id, task in manager.contributions.items("tasks"):
+        for stage in task.workflow:
+            if stage.family is not None and stage.family not in registered:
+                raise ValueError(
+                    f"Task type {task.name!r} stage {stage.name!r} references unknown runtime family "
+                    f"{stage.family!r}"
+                )
+
+
 def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
     """Load runner families and task contributions from deployed manifests.
 
@@ -680,6 +700,7 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
             runner_cfg = _load_runner_config(str(runner_file)) if runner_file.is_file() else RunnerConfig()
             manager.register_contribution(family_id, "tasks", task_id, task)
             manager.register_contribution(family_id, "runner_configs", task_id, runner_cfg)
+    _validate_stage_families(manager)
     _install_snapshot(_RegistryState(plugin_manager=manager, categories=categories, policies=policies))
 
 
@@ -821,6 +842,17 @@ def get(name: str) -> tuple[TaskType, RunnerConfig]:
         )
     except KeyError:
         raise KeyError(f"Unknown task type: {name!r}") from None
+
+
+def get_runtime_family(family_id: str) -> RuntimeFamily:
+    """Resolve a discovered runtime family from the active registry."""
+    manager = _active().plugin_manager
+    if manager is None:
+        raise KeyError(f"Unknown runtime family: {family_id!r}") from None
+    try:
+        return manager.contributions.resolve("runtime_families", family_id)
+    except KeyError:
+        raise KeyError(f"Unknown runtime family: {family_id!r}") from None
 
 
 def list_types() -> list[TaskType]:
@@ -1221,6 +1253,7 @@ def _load_workflow(raw: Any, task_name: str, stage_markers: dict[str, str]) -> t
             "runner_args",
             "stage_markers",
             "accelerator_requirement",
+            "family",
             "inputs",
             "outputs",
         }:
@@ -1243,6 +1276,9 @@ def _load_workflow(raw: Any, task_name: str, stage_markers: dict[str, str]) -> t
         raw_markers = entry.get("stage_markers", ())
         if not isinstance(name, str) or not name.replace("_", "").isalnum() or name in seen:
             raise ValueError(f"Task type {task_name!r} has an invalid or duplicate workflow stage name")
+        family = entry.get("family")
+        if family is not None and not _valid_identifier(family):
+            raise ValueError(f"Workflow stage {task_name}.{name} has an invalid runtime family")
         if not isinstance(requires_gpu, bool):
             raise ValueError(f"Workflow stage {task_name}.{name} requires_gpu must be a boolean")
         if not isinstance(requires_network, bool):
@@ -1273,6 +1309,7 @@ def _load_workflow(raw: Any, task_name: str, stage_markers: dict[str, str]) -> t
                 requires_network=requires_network,
                 runner_args=tuple(runner_args),
                 stage_markers=markers,
+                family=family,
                 inputs=_load_stage_ports(entry.get("inputs", []), task_name, name, input_port=True),
                 outputs=_load_stage_ports(entry.get("outputs", []), task_name, name, input_port=False),
                 accelerator_requirement=accelerator_requirement,

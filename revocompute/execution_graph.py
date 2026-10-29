@@ -32,6 +32,7 @@ class ArtifactPort:
 @dataclass(frozen=True)
 class StageNode:
     id: str
+    family: str
     runner_args: tuple[str, ...]
     requires_gpu: bool
     requires_network: bool
@@ -92,8 +93,16 @@ def compile_graph(task_type: Any) -> CompiledGraph:
             if output.type != port.type:
                 raise GraphValidationError(f"artifact type mismatch: {binding} -> {name}:{port.name}")
             edges[producer].add(name)
-        nodes[name] = StageNode(name, stage.runner_args, stage.requires_gpu, stage.requires_network,
-                                stage.stage_markers, bindings, outputs)
+        nodes[name] = StageNode(
+            name,
+            stage.family or task_type.runtime.name,
+            stage.runner_args,
+            stage.requires_gpu,
+            stage.requires_network,
+            stage.stage_markers,
+            bindings,
+            outputs,
+        )
     declared_outputs = [
         (node.id, port.path) for node in nodes.values() for port in node.outputs if port.path is not None
     ]

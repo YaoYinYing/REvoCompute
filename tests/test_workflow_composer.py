@@ -341,6 +341,49 @@ def _diamond_workflow() -> TaskType:
     )
 
 
+def test_foreign_family_node_is_refused_before_dispatch(monkeypatch, tmp_path):
+    """Until cross-family dispatch lands, a foreign node must not run in the wrong image."""
+    task_runtime = _live_task_runtime()
+    base = _diamond_workflow()
+    foreign = replace(base.workflow[1], family="foreign_runner")
+    task_type = replace(base, workflow=(base.workflow[0], foreign, *base.workflow[2:]))
+    output = tmp_path / "output"
+    output.mkdir()
+    started = []
+
+    class Job:
+        def __init__(self, name):
+            self.name = name
+
+        def submit(self):
+            return "42"
+
+        def poll(self):
+            (output / f"{self.name.rsplit('-', 1)[-1]}.dat").write_text("ok")
+            return JobState.COMPLETED
+
+    def create(_task_id, stage_tt, *_args, **_kwargs):
+        started.append(stage_tt.name)
+        return Job(stage_tt.name)
+
+    monkeypatch.setattr(task_runtime, "_create_job", create)
+    monkeypatch.setattr(task_runtime.task_store, "update_task", lambda *args, **kwargs: True)
+    task_id = "e" * 32
+    _ensure_task_row(task_runtime, task_id)
+    policies = {stage.name: _policy(False) for stage in task_type.workflow}
+
+    result = task_runtime._run_compute_workflow(
+        task_id, _frozen(task_type), task_type, RunnerConfig(), [], str(output), policies, lambda _: None,
+    )
+
+    assert result == JobState.FAILED
+    assert "dag-b" not in started
+    assert {run["stage_name"] for run in task_runtime.task_store.list_stage_runs(task_id)} == {"dag.a", "dag.c"}
+    evidence = task_runtime.task_store.get_task_diagnostics(task_id)
+    assert evidence["reason_code"] == "stage_family_unsupported"
+    assert evidence["blocked_stages"] == ["dag.d"]
+
+
 def test_fork_join_runs_serial_schedule_and_resume_after_branch_failure(monkeypatch, tmp_path):
     task_runtime = _live_task_runtime()
     task_type = _diamond_workflow()

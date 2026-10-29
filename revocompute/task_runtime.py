@@ -1289,6 +1289,14 @@ def _run_compute_workflow(
                 block_descendants(node.id)
                 progressed = True
                 continue
+            if node.family != tt.runtime.name:
+                # Until cross-family dispatch lands, refuse rather than run the
+                # node in the composing family's image.
+                _record_workflow_refusal(task_id, node.id, "stage_family_unsupported")
+                failed.add(node.id)
+                block_descendants(node.id)
+                progressed = True
+                continue
             index, stage = stages[node.id]
             result = _execute_workflow_node(
                 task_id, task, tt, stage, index, node, runner, entities, output_dir,

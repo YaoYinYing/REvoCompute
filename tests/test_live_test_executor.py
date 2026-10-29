@@ -34,7 +34,8 @@ def test_fileless_live_case_serializes_explicit_task_workspace_identity(tmp_path
     snapshot_root = tmp_path / "workspace" / ("a" * 32) / "inputs"
     form = json.loads(
         live_test_executor._task_input_form(
-            [], snapshot_root, "live-test-fileless_runner", {"resource_policy": None}, "sha256:" + "a" * 64
+            [], snapshot_root, "live-test-fileless_runner", {"resource_policy": None},
+            {"fileless_runner": "sha256:" + "a" * 64},
         )
     )
     assert form["entities"] == []
@@ -43,7 +44,7 @@ def test_fileless_live_case_serializes_explicit_task_workspace_identity(tmp_path
     assert form["workspace_key"] == "live-test-fileless_runner"
     assert form["snapshot_root"] == str(snapshot_root)
     assert form["resource_policy"] is None
-    assert form["runtime_bundle_sha256"] == "sha256:" + "a" * 64
+    assert form["runtime_bundles"] == {"fileless_runner": "sha256:" + "a" * 64}
 
 
 def test_worker_executor_records_every_workflow_scheduler_identity(monkeypatch):

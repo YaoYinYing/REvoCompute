@@ -211,8 +211,10 @@ from revocompute.task_runtime import (
 )
 from revocompute.task_types import default_task_type, get as get_task_type
 from revocompute.task_types import (
+    RuntimeFamily,
     declared_entitlements,
     get_policy,
+    get_runtime_family,
     iter_capabilities,
     list_categories,
     list_policies,
@@ -2254,87 +2256,116 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
         if enabled is False:
             return jsonify({"error": f"Task type {task_type!r} is currently disabled"}), 400
 
-    policy = tt.runtime.access_policy
+    # A composed Task executes every family its graph names, so the submission
+    # is admitted against each referenced family, never only the composing one.
+    referenced_families: dict[str, RuntimeFamily] = {tt.runtime.name: tt.runtime}
+    for stage in tt.workflow:
+        family_id = stage.family or tt.runtime.name
+        if family_id not in referenced_families:
+            referenced_families[family_id] = get_runtime_family(family_id)
+    graph_requires_gpu = bool(tt.gpus) or any(stage.requires_gpu for stage in tt.workflow)
+
     abuse_scope = getattr(_get_user_db(), "path", "")
-    if policy is not None:
-        suspension = access_guard.active_suspension(int(g.current_user["id"]), policy.id, abuse_scope)
+    checked_policies: set[str] = set()
+    for family in referenced_families.values():
+        family_policy = family.access_policy
+        if family_policy is None or family_policy.id in checked_policies:
+            continue
+        checked_policies.add(family_policy.id)
+        suspension = access_guard.active_suspension(int(g.current_user["id"]), family_policy.id, abuse_scope)
         if suspension.active:
-            already_granted, _ = authorize(policy, current_app.config["user_db"], int(g.current_user["id"]))
+            already_granted, _ = authorize(
+                family_policy, current_app.config["user_db"], int(g.current_user["id"])
+            )
             if already_granted:
-                access_guard.clear_policy_state(int(g.current_user["id"]), policy.id, abuse_scope)
+                access_guard.clear_policy_state(int(g.current_user["id"]), family_policy.id, abuse_scope)
                 suspension = access_guard.SuspensionState(active=False)
         if suspension.active:
-            if access_guard.mark_blocked_event(int(g.current_user["id"]), policy.id, abuse_scope):
+            if access_guard.mark_blocked_event(int(g.current_user["id"]), family_policy.id, abuse_scope):
                 _audit_runner_access(
-                    _get_user_db(), int(g.current_user["id"]), policy.id, "blocked", "temporary_suspension", tt
+                    _get_user_db(),
+                    int(g.current_user["id"]),
+                    family_policy.id,
+                    "blocked",
+                    "temporary_suspension",
+                    tt,
+                    runtime_family=family.name,
                 )
             response = jsonify(
                 {
                     "error": "Runner access temporarily suspended",
-                    "policy_id": policy.id,
+                    "policy_id": family_policy.id,
                     "retry_after_seconds": max(suspension.retry_after_seconds, 1),
                 }
             )
             response.headers["Retry-After"] = str(max(suspension.retry_after_seconds, 1))
             return response, 429
-    allowed, access_error = authorize(
-        tt.runtime.access_policy, current_app.config["user_db"], int(g.current_user["id"])
-    )
-    if not allowed:
-        if policy is not None:
-            state = access_guard.record_denial(int(g.current_user["id"]), policy.id, abuse_scope)
+        allowed, access_error = authorize(
+            family_policy, current_app.config["user_db"], int(g.current_user["id"])
+        )
+        if not allowed:
+            state = access_guard.record_denial(int(g.current_user["id"]), family_policy.id, abuse_scope)
             outcome = "suspended" if state.active else "denied"
             if not state.active or state.newly_suspended:
                 _audit_runner_access(
                     _get_user_db(),
                     int(g.current_user["id"]),
-                    policy.id,
+                    family_policy.id,
                     outcome,
                     "temporary_suspension" if state.active else "missing_entitlement",
                     tt,
+                    runtime_family=family.name,
                 )
-            elif access_guard.mark_blocked_event(int(g.current_user["id"]), policy.id, abuse_scope):
+            elif access_guard.mark_blocked_event(int(g.current_user["id"]), family_policy.id, abuse_scope):
                 _audit_runner_access(
-                    _get_user_db(), int(g.current_user["id"]), policy.id, "blocked", "temporary_suspension", tt
+                    _get_user_db(),
+                    int(g.current_user["id"]),
+                    family_policy.id,
+                    "blocked",
+                    "temporary_suspension",
+                    tt,
+                    runtime_family=family.name,
                 )
             if state.active and not state.newly_suspended:
                 response = jsonify(
                     {
                         "error": "Runner access temporarily suspended",
-                        "policy_id": policy.id,
+                        "policy_id": family_policy.id,
                         "retry_after_seconds": max(state.retry_after_seconds, 1),
                     }
                 )
                 response.headers["Retry-After"] = str(max(state.retry_after_seconds, 1))
                 return response, 429
-        return jsonify(access_error), 403
+            return jsonify(access_error), 403
     # Admission is based on the same immutable build/live-test evidence shown
     # by runner-status.  Evaluate it before validating or saving uploads so a
     # non-ready Runner cannot create task or scheduler side effects.
-    admission = submission_admission(CONFIG.server_dir, tt.runtime.name, manage_db=managedb)
-    if admission is not None and not admission.ready:
-        return (
-            jsonify(
-                {
-                    "error": "Runner is currently unavailable for new submissions",
-                    "runner": tt.runtime.name,
-                    "status": admission.status.value,
-                    "reason": admission.reason_code,
-                    "message": admission.message,
-                    "next_action": admission.next_action,
-                }
-            ),
-            503,
-        )
+    for family in referenced_families.values():
+        admission = submission_admission(CONFIG.server_dir, family.name, manage_db=managedb)
+        if admission is not None and not admission.ready:
+            return (
+                jsonify(
+                    {
+                        "error": "Runner is currently unavailable for new submissions",
+                        "runner": family.name,
+                        "status": admission.status.value,
+                        "reason": admission.reason_code,
+                        "message": admission.message,
+                        "next_action": admission.next_action,
+                    }
+                ),
+                503,
+            )
     # Reject GPU-ineligible users and invalid scheduler configuration before
     # writing uploads or creating a task record.
-    if tt.gpus and not g.current_user.get("allow_gpu_use"):
+    policy = tt.runtime.access_policy
+    if graph_requires_gpu and not g.current_user.get("allow_gpu_use"):
         if policy is not None:
             _audit_runner_access(
                 _get_user_db(), int(g.current_user["id"]), policy.id, "denied", "gpu_access_denied", tt
             )
         return jsonify({"error": "GPU access required for this task type. Contact an administrator."}), 403
-    if tt.gpus:
+    if graph_requires_gpu:
         _project_gpu_authorization(int(g.current_user["id"]))
     try:
         placement = resolve_submission_placement(managedb, tt, runner)
@@ -2692,20 +2723,23 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
     # is activated before Slurm starts it.  ``resolve_for_submission`` raises
     # when the family declares an overlay but its bound snapshot is missing, so
     # a submission never silently becomes one that cannot launch.
+    runtime_bundles: dict[str, str] = {}
     try:
-        bundle_digest = runtime_bundle.resolve_for_submission(
-            CONFIG.runtime_bundle_root,
-            runtime_bundle.load_index(CONFIG.runtime_bundle_root),
-            tt.runtime.name,
-            declares_overlay=bool(tt.runtime.runtime_overlay),
-        )
+        bundle_index = runtime_bundle.load_index(CONFIG.runtime_bundle_root)
+        for family in referenced_families.values():
+            runtime_bundles[family.name] = runtime_bundle.resolve_for_submission(
+                CONFIG.runtime_bundle_root,
+                bundle_index,
+                family.name,
+                declares_overlay=bool(family.runtime_overlay),
+            )
     except runtime_bundle.RuntimeBundleError as exc:
         return jsonify({"error": f"This Runner is not ready to accept submissions: {exc}"}), 503
-    # The digest is also recorded on the task row, because the task store is the
+    # The map is also recorded on the task row, because the task store is the
     # only durable index of "a Task that can still be launched references this
     # bundle" — retention reads it so a queued Task's runtime code is never
     # pruned before the Task runs.
-    input_form["runtime_bundle_sha256"] = bundle_digest
+    input_form["runtime_bundles"] = runtime_bundles
     task_manifest = {
         "version": 4,
         "task_id": md5sum,
@@ -2718,7 +2752,7 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
         "resource_guidance": observations_for_guidance(
             tt.runtime.name, tt.resource_adaptation, store=task_store
         ),
-        "runtime_bundle_sha256": bundle_digest,
+        "runtime_bundles": runtime_bundles,
     }
     # Claim the Task ID BEFORE destroying or rebuilding any content-derived
     # directory.  The input/output roots are keyed by the ID, so preparation is
@@ -4414,7 +4448,9 @@ def admin_report_activity():
     )
 
 
-def _audit_runner_access(db, user_id: int, policy_id: str, outcome: str, reason_code: str, tt=None) -> None:
+def _audit_runner_access(
+    db, user_id: int, policy_id: str, outcome: str, reason_code: str, tt=None, *, runtime_family: str | None = None
+) -> None:
     """Persist bounded access evidence without changing the admission decision."""
     try:
         metadata = _request_metadata()
@@ -4424,7 +4460,7 @@ def _audit_runner_access(db, user_id: int, policy_id: str, outcome: str, reason_
             outcome,
             reason_code,
             task_type=getattr(tt, "name", ""),
-            runtime_family=getattr(getattr(tt, "runtime", None), "name", ""),
+            runtime_family=runtime_family or getattr(getattr(tt, "runtime", None), "name", ""),
             ip_address=metadata.get("ip"),
             user_agent=metadata.get("user_agent"),
             auth_method=g.get("auth_method"),
