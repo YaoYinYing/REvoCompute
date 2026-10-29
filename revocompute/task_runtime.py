@@ -1167,11 +1167,10 @@ def _record_blocked_nodes(task_id: str, blocked: set[str]) -> None:
     """Record one bounded diagnostic naming every node blocked by a failure."""
     try:
         evidence = task_store.get_task_diagnostics(task_id) or {}
-        evidence.update(
-            reason_code="stage_blocked_by_failed_dependency",
-            blocked_stages=sorted(blocked),
-            stage_id=", ".join(sorted(blocked))[:255],
-        )
+        evidence["blocked_stages"] = sorted(blocked)
+        if not evidence.get("reason_code"):
+            evidence["reason_code"] = "stage_blocked_by_failed_dependency"
+            evidence["stage_id"] = ", ".join(sorted(blocked))[:255]
         task_store.record_task_diagnostics(task_id, evidence)
     except Exception:
         logging.exception("Could not retain blocked-stage evidence for task %s", task_id)
@@ -2618,7 +2617,7 @@ def _record_failure(
         evidence = task_store.get_task_diagnostics(md5sum) or {}
         if reason_code is not None or not evidence.get("reason_code"):
             evidence["reason_code"] = stage_reason
-        if run_stage:
+        if run_stage and evidence.get("reason_code") != "stage_blocked_by_failed_dependency":
             evidence["stage_id"] = run_stage
         task_store.record_task_diagnostics(md5sum, evidence)
     except Exception:

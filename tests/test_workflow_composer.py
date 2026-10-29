@@ -226,7 +226,7 @@ def test_resume_revalidates_completed_producer_outputs(monkeypatch, tmp_path, mu
         assert result == JobState.FAILED
         assert started == []
         evidence = task_runtime.task_store.get_task_diagnostics(task_id) or {}
-        assert evidence["reason_code"] == "stage_blocked_by_failed_dependency"
+        assert evidence["reason_code"] == expected_reason
         assert evidence["blocked_stages"] == ["multistage_runner.model"]
 
 
@@ -274,7 +274,7 @@ def test_composer_refuses_unverified_legacy_completed_stage(monkeypatch):
     assert result == JobState.FAILED
     assert created == []
     evidence = task_runtime.task_store.get_task_diagnostics("a" * 32) or {}
-    assert evidence["reason_code"] == "stage_blocked_by_failed_dependency"
+    assert evidence["reason_code"] == "stage_output_unverified"
     assert evidence["blocked_stages"] == ["multistage_runner.model"]
 
 
@@ -350,7 +350,8 @@ def test_fork_join_runs_serial_schedule_and_resume_after_branch_failure(monkeypa
     started = []
 
     class Job:
-        def __init__(self, name):
+        def __init__(self, task_id, name):
+            self.task_id = task_id
             self.name = name
 
         def submit(self):
@@ -359,13 +360,16 @@ def test_fork_join_runs_serial_schedule_and_resume_after_branch_failure(monkeypa
         def poll(self):
             suffix = self.name.rsplit("-", 1)[-1]
             if suffix == "b" and fail_b["value"]:
+                task_runtime.task_store.record_task_diagnostics(
+                    self.task_id, {"reason_code": "nonzero_exit", "stage_id": "dag.b"}
+                )
                 return JobState.FAILED
             (output / f"{suffix}.dat").write_text(suffix)
             return JobState.COMPLETED
 
-    def create(_task_id, stage_tt, *_args, **_kwargs):
+    def create(task_id, stage_tt, *_args, **_kwargs):
         started.append(stage_tt.name)
-        return Job(stage_tt.name)
+        return Job(task_id, stage_tt.name)
 
     monkeypatch.setattr(task_runtime, "_create_job", create)
     monkeypatch.setattr(task_runtime.task_store, "update_task", lambda *args, **kwargs: True)
@@ -384,7 +388,7 @@ def test_fork_join_runs_serial_schedule_and_resume_after_branch_failure(monkeypa
     assert set(runs) == {"dag.a", "dag.b", "dag.c"}
     assert runs["dag.c"]["status"] == "COMPLETED"
     evidence = task_runtime.task_store.get_task_diagnostics(task_id)
-    assert evidence["reason_code"] == "stage_blocked_by_failed_dependency"
+    assert evidence["reason_code"] == "nonzero_exit"
     assert evidence["blocked_stages"] == ["dag.d"]
 
     fail_b["value"] = False
