@@ -26,7 +26,9 @@
 - [x] Get an **explicit new maintainer start instruction** after that check.
 - [x] Record activation date, current main SHA, Protocol revision,
       single-PR ownership, allowed live-test budget, backend feasibility gates
-      and a compact dependency/ownership ledger in IMPLEMENTATION_STATE.md.
+      and a compact dependency/ownership ledger in the PR #130 thread. The
+      thread is the durable record; a local `IMPLEMENTATION_STATE.md` is
+      gitignored scratch and is not cited as evidence.
 - [ ] Appoint scoped independent reviewers, Examiner, and a final disinterested
       Campaign Acceptance Auditor. Integrate all implementation under this one
       PR; isolated worktrees permitted only after activation.

@@ -206,6 +206,25 @@ Nextflow official references to pin and verify at implementation:
 - https://docs.seqera.io/nextflow/plugins/developing-plugins
 - https://docs.seqera.io/nextflow/reference/process/directives
 
+### Backend capability matrix (current decision)
+
+| Requirement | Native | Nextflow |
+| --- | --- | --- |
+| Server-generated command and image only | yes | yes (generated DSL2) |
+| Admission before the scientific command runs | yes (wrapper grant gate) | unknown — no server round trip before `sbatch` |
+| Per-allocation ledger identity | yes (`slurm_job_id`) | needs mapping from Nextflow task hash to job id |
+| Cancellation ownership | yes (server owns the handle) | Nextflow owns submission; cancellation is indirect |
+| Crash reconciliation | yes (StageRun attempt + recovery) | requires controller-crash reconciliation, unproven |
+| Offline pinned runtime | yes (SIF) | requires offline Nextflow plus Java plugin build |
+
+**Verdict: Nextflow is disabled.** Its Slurm executor has no pre-submit
+hook, so meeting the admission and accounting invariant needs a custom
+executor plugin (Java/Groovy) with a second submit path. That is a separate
+integration with its own maintenance and offline-installation cost, and neither
+the runtime nor a pinned release is installed here. This deployment runs the
+native backend. Reopening the question requires the spike exit criteria named
+in the PR thread — not a documentation change.
+
 ## Scientific acceptance examples
 
 1. **AF2/AF3**: split only genuine upstream-supported MSA/search, feature
