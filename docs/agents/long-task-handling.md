@@ -479,8 +479,9 @@ Commander:
 
 The Commander should not make feature changes itself. Small coordination-only
 edits are allowed, but the Commander must not become a hidden additional PR
-owner. The Commander does not merge or squash-merge unless the launch
-instruction explicitly grants that authority; the normal endpoint is
+owner. The Commander does not merge or squash-merge unless the authenticated launch
+instruction, or an authenticated maintainer amendment to it, expressly grants
+that authority; the normal endpoint is
 `READY_FOR_FINAL_REVIEW`.
 
 #### Control-plane quiescence
@@ -546,9 +547,9 @@ not a second authority model.
 - The Commander must not expand the Campaign's strategic objectives, weaken
   established invariants, introduce unrelated features, or perform irreversible
   production operations without explicit maintainer approval.
-- The launch instruction remains the only source of merge authority: this
-  standing delegation grants none, and final squash-merge authority stays with
-  the maintainer unless that instruction explicitly grants it.
+- Only the authenticated launch instruction or its authenticated maintainer
+  amendment can delegate merge authority: this standing delegation grants
+  none, and final squash-merge authority otherwise stays with the maintainer.
 - The Independent Campaign Advisor keeps its independent, direction-focused
   mandate; it is not an additional review or approval layer, and this delegation
   does not widen its role.
