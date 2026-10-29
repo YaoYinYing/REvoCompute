@@ -167,6 +167,7 @@ parameters:
       properties:
         predict_ligand: {maxLength: 0}
         fixed_ligand: {maxLength: 0}
+        corruption_centers: {maxLength: 0}
   properties:
     num_samples:
       type: integer
@@ -186,7 +187,7 @@ parameters:
       type: boolean
       description: Keep the small molecule in the model. Turn off for an apo run
         that rebuilds only protein residues. Cannot be combined with
-        predict_ligand or fixed_ligand.
+        predict_ligand, fixed_ligand, or corruption_centers.
       default: true
     fixed_ligand:
       type: string
@@ -262,6 +263,7 @@ parameters:
       description: Atoms toward which PLACER corrupts each predicted ligand, with
         the same syntax as crop centers. One is chosen at random per ligand and
         becomes that ligand's starting coordinate; at least one per predicted
-        ligand is required. Cannot be combined with crop_centers.
+        ligand is required. Cannot be combined with crop_centers or an apo run
+        with use_sm off.
       default: ''
       pattern: '^(?:[A-Za-z0-9]+-[0-9]+-[A-Za-z0-9]+-[A-Za-z0-9'']+(?:\s+[A-Za-z0-9]+-[0-9]+-[A-Za-z0-9]+-[A-Za-z0-9'']+)*)?$'

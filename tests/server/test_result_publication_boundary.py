@@ -345,6 +345,31 @@ def test_declared_evidence_does_not_downgrade_a_diagnostic_artifact() -> None:
     assert artifacts[0]["role"] == "diagnostic"
 
 
+def test_an_evidence_view_never_sources_a_server_record() -> None:
+    """Evidence views may present runner-owned records; the server's own
+    snapshot/execution paths are never a source, so an evidence glob cannot
+    pick up ``execution/`` even though it does not restrict on role."""
+    import revocompute.task_runtime as task_runtime
+
+    artifacts = [
+        {"path": "scores.csv", "size": 10, "role": "artifact"},
+        {"path": "execution/run.log", "size": 10, "role": "diagnostic"},
+    ]
+    view = ResultView(
+        plugin="evidence-bundle",
+        id="evidence",
+        role="evidence",
+        title="Evidence",
+        description="Synthetic view.",
+        sources={"items": (ArtifactSelector(value="*", is_glob=True, required=True),)},
+        mapping={},
+    )
+    task_type = type("TaskType", (), {"result_workspace": (view,)})()
+    views, _checks, _problems = task_runtime._resolve_result_views(task_type, artifacts, ".")
+    assert views[0]["sources"]["items"] == ["scores.csv"]
+
+
+
 def test_exact_path_declarations_reach_the_published_manifest(monkeypatch, tmp_path) -> None:
     """Every declared role is carried to the published artifact, not only globs."""
     module = _load_pssm_module(

@@ -254,3 +254,28 @@ def test_rfdiffusion_workspace_normalization_and_structure_free_submission(monke
     assert manifest["inputs"] == {"assets": [], "structure": []}
     assert manifest["params"]["design_mode"] == "unconditional"
     assert manifest["params"]["contig"] == "40-40"
+
+
+def test_placer_apo_run_cannot_carry_corruption_centers(monkeypatch, tmp_path):
+    """Upstream drops every corruption center when the small molecule is
+    excluded, so the Task schema rejects the combination instead of forwarding
+    a silent no-op; apo-only and holo-plus-center forms stay valid."""
+    module = _load_fleet_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "placer-rfdiffusion"},
+    )
+    task_type, _runner = module.task_runtime._get_task_type("placer")
+    validator = Draft202012Validator(task_type.schema)
+    apo_with_center = {
+        "num_samples": 50,
+        "use_sm": False,
+        "predict_ligand": "",
+        "fixed_ligand": "",
+        "corruption_centers": "B-1-LIG-C1",
+    }
+    assert [(list(error.path), error.message) for error in validator.iter_errors(apo_with_center)] == [
+        (["corruption_centers"], "'B-1-LIG-C1' is expected to be empty")
+    ]
+    assert not list(validator.iter_errors({**apo_with_center, "corruption_centers": ""}))
+    assert not list(validator.iter_errors({**apo_with_center, "use_sm": True}))
