@@ -70,6 +70,11 @@ def _ensure_task_row(task_runtime, task_id: str) -> None:
     )
 
 
+def _workspace(tmp_path) -> list[dict]:
+    """The per-task execution workspace a dispatched stage is bound to."""
+    return [{"type": "workspace", "workspace_root": str(tmp_path / "workspace"), "workspace_key": "owner-key"}]
+
+
 def _frozen(task_type, **fields) -> dict:
     graph = compile_graph(task_type)
     fields.setdefault(
@@ -139,7 +144,7 @@ def test_graph_scheduler_validates_outputs_and_preserves_attempts(monkeypatch, t
     task_id = {"valid": "1", "missing": "2", "escape": "3"}[output_kind] * 32
     _ensure_task_row(task_runtime, task_id)
     result = task_runtime._run_compute_workflow(
-        task_id, _frozen(task_type), task_type, [], str(output),
+        task_id, _frozen(task_type), task_type, _workspace(tmp_path), str(output),
         {stage.name: _policy(stage.requires_gpu) for stage in task_type.workflow}, lambda _: None,
     )
     runs = task_runtime.task_store.list_stage_runs(task_id)
@@ -205,7 +210,7 @@ def test_resume_revalidates_completed_producer_outputs(monkeypatch, tmp_path, mu
     monkeypatch.setattr(task_runtime.task_store, "update_task", lambda *args, **kwargs: True)
     policies = {stage.name: _policy(stage.requires_gpu) for stage in task_type.workflow}
     assert task_runtime._run_compute_workflow(
-        task_id, _frozen(task_type), task_type, [], str(output), policies, lambda _: None,
+        task_id, _frozen(task_type), task_type, _workspace(tmp_path), str(output), policies, lambda _: None,
     ) == JobState.FAILED
     first_call["done"] = True
     assert task_runtime.task_store.list_stage_runs(task_id)[0]["output_identity"]
@@ -224,7 +229,7 @@ def test_resume_revalidates_completed_producer_outputs(monkeypatch, tmp_path, mu
     started = []
     monkeypatch.setattr(task_runtime, "_create_job", lambda _id, tt, *a, **kw: started.append(tt.name) or Job(tt.name))
     result = task_runtime._run_compute_workflow(
-        task_id, _frozen(task_type), task_type, [], str(output), policies, lambda _: None,
+        task_id, _frozen(task_type), task_type, _workspace(tmp_path), str(output), policies, lambda _: None,
     )
     if expected_reason is None:
         assert result == JobState.COMPLETED
@@ -388,7 +393,7 @@ def test_foreign_family_node_uses_that_family_runtime_runner_and_policy(monkeypa
     policies = {stage.name: _policy(False) for stage in task_type.workflow}
 
     result = task_runtime._run_compute_workflow(
-        task_id, _frozen(task_type), task_type, [], str(output), policies, lambda _: None,
+        task_id, _frozen(task_type), task_type, _workspace(tmp_path), str(output), policies, lambda _: None,
     )
 
     assert result == JobState.COMPLETED
@@ -425,7 +430,7 @@ def test_unavailable_stage_attempt_blocks_every_allocation(monkeypatch, tmp_path
     policies = {stage.name: _policy(False) for stage in task_type.workflow}
 
     result = task_runtime._run_compute_workflow(
-        task_id, _frozen(task_type), task_type, [], str(output), policies, lambda _: None,
+        task_id, _frozen(task_type), task_type, _workspace(tmp_path), str(output), policies, lambda _: None,
     )
 
     assert result == JobState.FAILED
@@ -466,7 +471,7 @@ def test_unsettled_completion_stops_before_consumer_dispatch(monkeypatch, tmp_pa
     policies = {stage.name: _policy(False) for stage in task_type.workflow}
 
     result = task_runtime._run_compute_workflow(
-        task_id, _frozen(task_type), task_type, [], str(output), policies, lambda _: None,
+        task_id, _frozen(task_type), task_type, _workspace(tmp_path), str(output), policies, lambda _: None,
     )
 
     assert result == JobState.FAILED
@@ -513,7 +518,7 @@ def test_fork_join_runs_serial_schedule_and_resume_after_branch_failure(monkeypa
     policies = {stage.name: _policy(False) for stage in task_type.workflow}
 
     first = task_runtime._run_compute_workflow(
-        task_id, _frozen(task_type), task_type, [], str(output), policies, lambda _: None,
+        task_id, _frozen(task_type), task_type, _workspace(tmp_path), str(output), policies, lambda _: None,
     )
 
     assert first == JobState.FAILED
@@ -529,7 +534,7 @@ def test_fork_join_runs_serial_schedule_and_resume_after_branch_failure(monkeypa
     fail_b["value"] = False
     started.clear()
     second = task_runtime._run_compute_workflow(
-        task_id, _frozen(task_type), task_type, [], str(output), policies, lambda _: None,
+        task_id, _frozen(task_type), task_type, _workspace(tmp_path), str(output), policies, lambda _: None,
     )
 
     assert second == JobState.COMPLETED
@@ -565,7 +570,7 @@ def test_fork_and_join_both_complete_in_deterministic_order(monkeypatch, tmp_pat
     task_id = "8" * 32
     _ensure_task_row(task_runtime, task_id)
     result = task_runtime._run_compute_workflow(
-        task_id, _frozen(task_type), task_type, [], str(output),
+        task_id, _frozen(task_type), task_type, _workspace(tmp_path), str(output),
         {stage.name: _policy(False) for stage in task_type.workflow}, lambda _: None,
     )
 

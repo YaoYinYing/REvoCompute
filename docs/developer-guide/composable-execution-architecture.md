@@ -4,12 +4,13 @@
 > PR #130 is activated as an exclusive single-PR campaign under Protocol v1.6.
 > Delivered in this PR: the versioned graph compiler and typed stage ports, the
 > submission-frozen graph, stage artifact identity with resume verification,
-> fork/join readiness with branch isolation (executed serially), cross-family
-> stage references with per-family readiness, bundles and dispatch, and the
-> graph-aware API projection. Not delivered: concurrent branch execution,
-> the PSSM-GREMLIN stage split and GREMLIN_LH composed path (runners bake
-> `run.sh` into the SIF), live scientific acceptance, and the browser
-> `[Stage] [Status]` surface. Sections below describe the target contract;
+> fork/join readiness with branch isolation (executed serially), produced-artifact
+> binding into a consumer stage's declared input role, cross-family stage
+> references with per-family readiness, bundles and dispatch, the graph-aware API
+> projection, and the `[Stage] [Status]` results surface. Not delivered:
+> concurrent branch execution, the registered composed PSSM-MSA → GREMLIN_LH Task
+> Type, live scientific acceptance and per-family re-acceptance, and browser
+> evidence for the stage surface. Sections below describe the target contract;
 > treat undelivered parts as design, not capability. This page does not
 > authorize a production deployment, database migration, or SIF promotion.
 >
@@ -164,6 +165,50 @@ Rules the code enforces:
 
 Cross-family references are additive to the existing single-family manifest:
 a task that omits `family` keeps its current meaning.
+
+### Produced-artifact binding (delivered contract)
+
+A stage input that is not a `graph:` role consumes a specific producer port:
+
+~~~yaml
+workflow:
+- name: msa
+  requires_gpu: false
+  requires_network: false
+  stage_markers: [hhblits]
+  outputs:
+  - {name: alignment, type: alignment, path: "msa/*.i90c75_aln.fas"}
+- name: fit
+  family: gremlin_lh
+  requires_gpu: false
+  requires_network: false
+  stage_markers: [gremlin]
+  inputs:
+  - {name: alignment, type: alignment, from: "<task>.msa:alignment"}
+~~~
+
+Rules the code enforces:
+
+- The consumer's input name is the Runner's input role, the port types must
+  match, and a required consumer input cannot bind an optional producer output.
+- Before the consumer owns a stage attempt, the Server resolves the producer's
+  latest attempt, requires `COMPLETED` with its recorded artifact identity,
+  matches the producer port's declared paths, re-verifies every file's size and
+  sha256 against that identity, and copies the files into a server-owned stage
+  input directory outside the shared output tree.
+- A role is a set. A producer port that publishes several files (one per chain,
+  for example) becomes a role directory with the layout below the port's static
+  prefix preserved; the server-written document lists every verified file and
+  names the file itself when the role is exactly one artifact.
+- The stage container binds that directory read-only and receives
+  `TASK_STAGE_INPUTS`; a Runner re-hashes the artifact before use. Single-stage
+  Tasks and `graph:` role inputs are unchanged.
+- A missing, changed, or unverifiable producer artifact refuses the stage before
+  any attempt or allocation (`stage_input_unavailable`, `stage_input_invalid`).
+  A consumer never falls back to the shared writable output tree.
+- A resumed workflow stays safe: a completed producer is re-hashed against its
+  recorded identity before its consumer clears dependency readiness, so a
+  changed artifact fails the producer instead of silently feeding a consumer.
 
 ## Scheduling and state
 

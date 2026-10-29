@@ -124,36 +124,44 @@ The document is versioned JSON:
   "stage": "<task>.<stage>",
   "inputs": {
     "alignment": {
-      "path": "/confined/stage/inputs/alignment/<name>",
-      "sha256": "<64 lowercase hex>",
-      "size": 1234,
+      "path": "/workspace/stage_inputs/alignment/<name>",
+      "files": [
+        {
+          "path": "/workspace/stage_inputs/alignment/<name>",
+          "source_path": "<producer-relative path>",
+          "sha256": "<64 lowercase hex>",
+          "size": 1234
+        }
+      ],
       "producer": "<producer node id>",
-      "producer_attempt": 1,
-      "source_path": "<producer-relative path>"
+      "producer_attempt": 1
     }
   }
 }
 ```
 
+A role is a set of files. `path` is the file itself when the producer port
+published exactly one, and the role's directory when it published several; the
+`files` list always names each verified file. This Runner's `alignment` role is
+one artifact, so `path` is a file it can fit directly.
+
 `run.sh` resolves `alignment` and re-hashes the file before fitting
 (`stage_inputs.py`); a missing role, a non-regular or symlinked path, or a
 digest mismatch fails the run before any model output exists.
 
-**Server contract this path needs.** Before dispatching the stage, the Server
-must (1) resolve the producer node's latest attempt and require `COMPLETED` with
-a recorded output identity, (2) match the declared producer port and verify the
-file against that identity, (3) copy the artifact into a confined, read-only
-stage input directory rather than the shared output tree, (4) write this
-document and export `TASK_STAGE_INPUTS` for that stage only, and (5) refuse
-before any allocation when any step fails.
+**Server contract this path uses.** Before dispatching the stage, the Server
+resolves the producer node's latest attempt and requires `COMPLETED` with a
+recorded output identity, verifies every file of the declared producer port
+against that identity, copies them into a server-owned stage input directory
+outside the shared output tree, writes this document, and binds that directory
+read-only at `/workspace/stage_inputs` with `TASK_STAGE_INPUTS` exported for
+that stage only. Any failure refuses the stage before an allocation exists. A
+composed Task Type that binds a produced alignment into this stage therefore
+needs no path from the Task or the user.
 
-That materialization is **not delivered at this head**: the scheduler passes
-every workflow stage the composing Task's original uploads and the shared output
-tree, and exports neither the document nor `TASK_STAGE_INPUTS`. A composed Task
-Type that binds a produced alignment into this stage is therefore not
-registered; only the standalone `gremlin_lh_fit` Task Type exists. Without the
-document, `run.sh` keeps its single-stage guard (`TASK_TYPE=gremlin_lh_fit`) and
-reads the uploaded `alignment` role from `task.json`.
+Without the document, `run.sh` keeps its single-stage guard
+(`TASK_TYPE=gremlin_lh_fit`) and reads the uploaded `alignment` role from
+`task.json`.
 
 ### The durable model artifact
 

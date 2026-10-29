@@ -32,6 +32,8 @@ REASONS = {
     "stage_settlement_failed": (
         "A completed stage could not be recorded durably, so its dependents were not dispatched."
     ),
+    "stage_input_unavailable": "An upstream artifact this stage consumes was never published durably.",
+    "stage_input_invalid": "An upstream artifact this stage consumes could not be verified for it.",
     "submission_failed": "The allocation request could not be submitted.",
     "job_id_unavailable": "The allocation request returned no usable scheduler job identity.",
     "allocation_unrecorded": "Execution was stopped because its allocation could not be recorded safely.",

@@ -27,7 +27,14 @@ from itertools import islice
 from pathlib import Path
 from typing import Any
 
-from revocompute.job import ExecutionBuilder, ExecutionPlan, Job, JobState
+from revocompute.job import (
+    STAGE_INPUTS_CONTAINER_DIR,
+    STAGE_INPUTS_DOCUMENT_NAME,
+    ExecutionBuilder,
+    ExecutionPlan,
+    Job,
+    JobState,
+)
 from revocompute.job._stages import extract_stage_from_log_line
 from revocompute import runtime_bundle
 from revocompute.execution_diagnostics import (
@@ -329,8 +336,13 @@ class SlurmJob(Job):
         allocation_accounting: bool | None = None,
         task_store: Any = None,
         runtime_bundle_root: str = "",
+        stage_inputs_dir: str | None = None,
     ):
         super().__init__(task_id, tt, runner, entities, output_dir, stage_callback)
+        #: Server-materialized directory holding this stage's verified upstream
+        #: artifacts and the document that names them.  ``None`` for a stage
+        #: whose inputs are all graph inputs or whose producer ran no artifact.
+        self._stage_inputs_dir = stage_inputs_dir
         self._db = manage_db
         # The task-row store, used to persist what the runner reports on stdout.
         # ``manage_db`` cannot serve that purpose: it is the admin configuration
@@ -1352,6 +1364,12 @@ class SlurmJob(Job):
             f"--bind {_sh_quote(self.input_snapshot_root)}:{_sh_quote(self.virtual_workspace_root + '/inputs')}:ro"
         )
         bind_parts.append(f"--bind {_sh_quote(self.output_dir)}:{_sh_quote(self.virtual_workspace_root + '/outputs')}")
+        if self._stage_inputs_dir is not None:
+            # Read-only: the consumer reads its verified upstream artifact, it
+            # never gets to write over the bytes the Server admitted.
+            bind_parts.append(
+                f"--bind {_sh_quote(self._stage_inputs_dir)}:{_sh_quote(STAGE_INPUTS_CONTAINER_DIR)}:ro"
+            )
         for m in self.execution_plan.mounts:
             bind_parts.append(
                 f"--bind {_sh_quote(str(m['source']))}:{_sh_quote(str(m['target']))}:{m.get('mode', 'ro')}"
@@ -1398,6 +1416,11 @@ class SlurmJob(Job):
         lines.append(
             "export APPTAINERENV_TASK_MANIFEST=" + _sh_quote(self.virtual_workspace_root + "/inputs/task.json")
         )
+        if self._stage_inputs_dir is not None:
+            lines.append(
+                "export APPTAINERENV_TASK_STAGE_INPUTS="
+                + _sh_quote(f"{STAGE_INPUTS_CONTAINER_DIR}/{STAGE_INPUTS_DOCUMENT_NAME}")
+            )
         gpu_flag = " --nv" if self.tt.gpus else ""
         if self.tt.gpus:
             # --cleanenv otherwise drops SLURM's selected GPU before OpenMM

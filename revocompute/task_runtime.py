@@ -36,7 +36,7 @@ from celery import Celery
 from revocompute.admission import resolve_submission_readiness
 from revocompute.config import ComputeConfig, ensure_directories, env_csv, env_int, env_path
 from revocompute.db import GPUAuthorizationUnavailableError, GPUCreditUnavailableError, TaskDatabase
-from revocompute.execution_graph import GraphValidationError, canonical_digest, compile_graph
+from revocompute.execution_graph import GraphValidationError, _static_prefix, canonical_digest, compile_graph
 from revocompute.infrastructure import (
     InfrastructureComponent,
     _gpu_inventory_probe,
@@ -44,7 +44,13 @@ from revocompute.infrastructure import (
     _slurm_submission_probe,
     publish_worker_probe_snapshot,
 )
-from revocompute.job import Job, JobState
+from revocompute.job import (
+    STAGE_INPUTS_CONTAINER_DIR,
+    STAGE_INPUTS_DOCUMENT_NAME,
+    Job,
+    JobState,
+    execution_workspace_root,
+)
 from revocompute.execution_diagnostics import REASONS, safe_diagnostic_text
 from revocompute.job.runners.slurm_runner import (
     SlurmJob,
@@ -734,6 +740,7 @@ def _create_job(
     allocation_started_callback=None,
     allocation_finished_callback=None,
     allocation_accounting: bool | None = None,
+    stage_inputs_dir: str | None = None,
 ) -> Job:
     """Create the production Slurm/Apptainer job adapter."""
     return SlurmJob(
@@ -756,6 +763,7 @@ def _create_job(
         allocation_started_callback=allocation_started_callback,
         allocation_finished_callback=allocation_finished_callback,
         allocation_accounting=allocation_accounting,
+        stage_inputs_dir=stage_inputs_dir,
     )
 
 
@@ -1348,6 +1356,7 @@ def _run_compute_workflow(
         if current is None or int(run["attempt"]) > int(current["attempt"]):
             latest_runs[str(run["stage_name"])] = run
     stages = {stage.name: (index, stage) for index, stage in enumerate(tt.workflow)}
+    nodes_by_id = {node.id: node for node in graph.nodes}
     producers = {
         node.id: {
             binding.rsplit(":", 1)[0]
@@ -1410,14 +1419,19 @@ def _run_compute_workflow(
                 continue
             index, stage = stages[node.id]
             result = _execute_workflow_node(
-                task_id, task, tt, stage, index, node, entities, output_dir,
-                resource_policies, stage_callback, legacy_state,
+                task_id, task, tt, stage, index, node, nodes_by_id, latest_runs, entities,
+                output_dir, resource_policies, stage_callback, legacy_state,
             )
             progressed = True
             if result == JobState.CANCELLED:
                 return result
             if result == JobState.COMPLETED:
                 completed.add(node.id)
+                # The next consumer stages its input from this attempt's
+                # recorded identity, not from the map read before the run.
+                refreshed = _latest_stage_run(task_id, node.id)
+                if refreshed is not None:
+                    latest_runs[node.id] = refreshed
             else:
                 failed.add(node.id)
                 block_descendants(node.id)
@@ -1440,6 +1454,8 @@ def _execute_workflow_node(
     stage,
     index: int,
     node,
+    nodes_by_id: dict[str, Any],
+    latest_runs: dict[str, dict[str, Any]],
     entities: list[dict],
     output_dir: str,
     resource_policies: dict[str, ResolvedResources],
@@ -1467,6 +1483,25 @@ def _execute_workflow_node(
     # Task rejects it, so no attempt or allocation starts for it.
     if not task_store.update_task(task_id, run_stage=first_marker):
         return JobState.CANCELLED
+    stage_inputs_dir = None
+    if _produced_bindings(node):
+        # Bind the upstream artifacts before any attempt exists: a stage whose
+        # declared input cannot be staged has nothing to execute, so it must not
+        # own an attempt or an allocation either.
+        try:
+            stage_inputs_dir = os.path.join(
+                execution_workspace_root(entities), "stage_inputs", node.id
+            )
+        except RuntimeError:
+            stage_inputs_dir = None
+        refusal = (
+            _materialize_stage_inputs(stage_inputs_dir, output_dir, node, nodes_by_id, latest_runs)
+            if stage_inputs_dir is not None
+            else "stage_input_unavailable"
+        )
+        if refusal is not None:
+            _record_workflow_refusal(task_id, stage.name, refusal)
+            return JobState.FAILED
     attempt_row = _begin_stage_attempt(task_id, index, stage.name, policy)
     attempt = int(attempt_row["attempt"]) if attempt_row else None
     if attempt is None:
@@ -1502,6 +1537,7 @@ def _execute_workflow_node(
             allocation_started_callback=callbacks[1],
             allocation_finished_callback=callbacks[2],
             allocation_accounting=user_id > 0,
+            stage_inputs_dir=stage_inputs_dir,
         )
         jid = job.submit()
     except Exception:
@@ -1558,6 +1594,20 @@ def _execute_workflow_node(
 _OUTPUT_IDENTITY_FORMAT = 1
 
 
+def _port_matches(output_dir: str, port) -> list[tuple[str, ...]] | None:
+    """Result-relative paths of every file one declared port publishes.
+
+    ``None`` means the port's own declaration reached outside the output root,
+    so its identity is unverifiable rather than empty.
+    """
+    matches = []
+    for path in Path(output_dir).glob(port.path):
+        if not _path_is_within(output_dir, str(path)):
+            return None
+        matches.append(tuple(Path(os.path.relpath(path, output_dir)).parts))
+    return sorted(set(matches))
+
+
 def _stage_output_identity(output_dir: str, outputs) -> str | None:
     """Hash declared output matches through the published-artifact verifier."""
     if not outputs:
@@ -1571,17 +1621,14 @@ def _stage_output_identity(output_dir: str, outputs) -> str | None:
     try:
         with _ResultTreeWalker(output_dir) as walker:
             for port in outputs:
-                matches = []
-                for path in Path(output_dir).glob(port.path):
-                    if not _path_is_within(output_dir, str(path)):
-                        return None
-                    relative = Path(os.path.relpath(path, output_dir))
-                    matches.append(tuple(relative.parts))
+                matches = _port_matches(output_dir, port)
+                if matches is None:
+                    return None
                 if not matches and port.required:
                     return None
                 if len(matches) > _published_artifact_limit():
                     return None
-                for parts in sorted(set(matches)):
+                for parts in matches:
                     verified = walker.open_published_file(
                         parts, max_bytes=max(_published_byte_limit() - total_bytes, 0)
                     )
@@ -1600,6 +1647,143 @@ def _stage_output_identity(output_dir: str, outputs) -> str | None:
         sort_keys=True,
         separators=(",", ":"),
     )
+
+
+def _produced_bindings(node) -> dict[str, tuple[str, str]]:
+    """``role -> (producer node id, producer port)`` for each upstream artifact.
+
+    ``graph:`` bindings are the composing Task's own uploaded inputs and need no
+    staging; every other binding names a published file this stage consumes.
+    """
+    produced = {}
+    for role, binding in node.inputs.items():
+        if binding.startswith("graph:"):
+            continue
+        producer, port = binding.rsplit(":", 1)
+        produced[role] = (producer, port)
+    return produced
+
+
+def _copy_verified_input(verified, directory: str, parts: tuple[str, ...]) -> None:
+    """Copy one verified upstream artifact into a role directory, keeping its layout."""
+    if not parts or any(part in {"", ".", ".."} for part in parts):
+        raise ArtifactIdentityError(f"upstream artifact path is not stageable: {'/'.join(parts)!r}")
+    target = os.path.join(directory, *parts)
+    os.makedirs(os.path.dirname(target), mode=0o700, exist_ok=True)
+    digest = hashlib.sha256()
+    descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            for chunk in iter(lambda: verified.handle.read(1 << 20), b""):
+                digest.update(chunk)
+                handle.write(chunk)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except BaseException:
+        os.unlink(target)
+        raise
+    if digest.hexdigest() != verified.digest or os.path.getsize(target) != verified.size:
+        os.unlink(target)
+        raise ArtifactChangedError(f"upstream artifact changed while it was staged: {'/'.join(parts)}")
+
+
+def _materialize_stage_inputs(
+    stage_inputs_dir: str,
+    output_dir: str,
+    node,
+    nodes_by_id: dict[str, Any],
+    latest_runs: dict[str, dict[str, Any]],
+) -> str | None:
+    """Stage every produced input this stage consumes; a refusal reason, else ``None``.
+
+    The producer's *recorded* attempt identity is the authority: only a
+    COMPLETED attempt whose identity names the file is stageable, the bytes are
+    re-verified while they are copied, and the Runner re-checks the digest it is
+    handed.  The copy is what binds a produced artifact to the consumer's
+    declared input role -- sharing the writable output tree would let a stage
+    consume bytes the Server never admitted.
+
+    A role is a set: a port such as ``features/*/*_data.json`` publishes one
+    file per chain.  Each role therefore lands in its own directory, with the
+    layout below the port's static prefix preserved, and the document names that
+    directory plus every file's verified digest.  A role of exactly one file
+    names the file itself, which is what a single-artifact consumer resolves.
+    """
+    entries: dict[str, dict[str, Any]] = {}
+    total_bytes = 0
+    total_files = 0
+    try:
+        if os.path.lexists(stage_inputs_dir):
+            # Server-owned: a stale copy from an earlier attempt is never a
+            # substitute for this attempt's verified bytes.
+            shutil.rmtree(stage_inputs_dir)
+        os.makedirs(stage_inputs_dir, mode=0o700)
+        with _ResultTreeWalker(output_dir) as walker:
+            for role, (producer_id, port_name) in sorted(_produced_bindings(node).items()):
+                producer = nodes_by_id.get(producer_id)
+                port = next((item for item in (producer.outputs if producer else ()) if item.name == port_name), None)
+                recorded = latest_runs.get(producer_id) or {}
+                if port is None:
+                    return "stage_input_invalid"
+                if recorded.get("status") != stage_state.COMPLETED or not recorded.get("output_identity"):
+                    return "stage_input_unavailable"
+                try:
+                    identity = json.loads(recorded["output_identity"])
+                    if identity["output_identity_format"] != _OUTPUT_IDENTITY_FORMAT:
+                        return "stage_input_unavailable"
+                    published = {item["path"]: (int(item["size"]), str(item["sha256"])) for item in identity["files"]}
+                except (TypeError, ValueError, KeyError, AttributeError):
+                    return "stage_input_unavailable"
+                matches = _port_matches(output_dir, port)
+                if matches is None or not matches or len(matches) > _published_artifact_limit():
+                    return "stage_input_invalid"
+                prefix = _static_prefix(port.path)
+                role_dir = os.path.join(stage_inputs_dir, role)
+                staged = []
+                for parts in matches:
+                    expected = published.get("/".join(parts))
+                    if expected is None or expected[0] == 0:
+                        return "stage_input_invalid"
+                    total_files += 1
+                    if total_files > _published_artifact_limit() or total_bytes + expected[0] > _published_byte_limit():
+                        return "stage_input_invalid"
+                    relative = parts[len(prefix):] if parts[: len(prefix)] == prefix else parts
+                    verified = walker.open_published_file(
+                        parts, max_bytes=_published_byte_limit() - total_bytes, expected=expected
+                    )
+                    try:
+                        _copy_verified_input(verified, role_dir, relative or parts[-1:])
+                    finally:
+                        verified.handle.close()
+                    total_bytes += verified.size
+                    staged.append({
+                        "path": "/".join((STAGE_INPUTS_CONTAINER_DIR, role, *(relative or parts[-1:]))),
+                        "source_path": "/".join(parts),
+                        "sha256": verified.digest,
+                        "size": verified.size,
+                    })
+                entries[role] = {
+                    "path": staged[0]["path"] if len(staged) == 1 else "/".join((STAGE_INPUTS_CONTAINER_DIR, role)),
+                    "files": staged,
+                    "producer": producer_id,
+                    "producer_attempt": int(recorded["attempt"]),
+                }
+        descriptor = os.open(
+            os.path.join(stage_inputs_dir, STAGE_INPUTS_DOCUMENT_NAME),
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o600,
+        )
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump({"version": 1, "stage": node.id, "inputs": entries}, handle, sort_keys=True)
+    except (OSError, ValueError, ArtifactChangedError, ArtifactIdentityError, ArtifactOversizedError):
+        return "stage_input_invalid"
+    return None
+
+
+def _latest_stage_run(task_id: str, stage_name: str) -> dict[str, Any] | None:
+    """The newest attempt row for one stage, or ``None`` when it never ran."""
+    runs = [run for run in task_store.list_stage_runs(task_id) if str(run["stage_name"]) == stage_name]
+    return max(runs, key=lambda run: int(run["attempt"])) if runs else None
 
 
 def _stage_reuse_valid(output_dir: str, outputs, recorded: dict[str, Any] | None) -> str | None:

@@ -19,7 +19,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
-from revocompute.job import JobState
+from revocompute.job import STAGE_INPUTS_CONTAINER_DIR, STAGE_INPUTS_DOCUMENT_NAME, JobState
 from revocompute.job.runners.slurm_runner import (
     ALLOCATION_LIVE_PREFIX,
     JOB_ID_PREFIX,
@@ -616,9 +616,32 @@ def test_render_apptainer_binds_and_env(tmp_path):
     assert "export APPTAINERENV_TASK_ID=" in script
     assert "export APPTAINERENV_TASK_TYPE=" in script
     assert "export APPTAINERENV_TASK_MANIFEST=" in script
+    # A stage with no produced inputs is not handed an empty staging contract.
+    assert "TASK_STAGE_INPUTS" not in script
     assert "export APPTAINERENV_CUDA_VISIBLE_DEVICES=" in script
     assert "-i '/workspace/inputs/task.json'" in script
     assert "/opt/images/cpu_runner_v1.sif" in script
+
+
+def test_render_apptainer_binds_staged_stage_inputs_read_only(tmp_path):
+    staged = tmp_path / "stage_inputs" / "cpu_runner.model"
+    job = SlurmJob(
+        "task-1",
+        _make_task_type(),
+        _make_runner(),
+        _make_entities(),
+        str(tmp_path / "out"),
+        stage_inputs_dir=str(staged),
+    )
+    script = job._render_wrapper()
+
+    assert (
+        f"--bind {_sh_quote(str(staged))}:{_sh_quote(STAGE_INPUTS_CONTAINER_DIR)}:ro" in script
+    )
+    assert (
+        f"export APPTAINERENV_TASK_STAGE_INPUTS="
+        f"{_sh_quote(f'{STAGE_INPUTS_CONTAINER_DIR}/{STAGE_INPUTS_DOCUMENT_NAME}')}" in script
+    )
 
 
 def _gated_job(tmp_path, *, accounting: bool) -> SlurmJob:
