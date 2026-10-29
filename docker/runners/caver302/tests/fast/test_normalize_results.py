@@ -246,6 +246,60 @@ def test_missing_bottleneck_row_is_an_error(tmp_path: Path) -> None:
         normalize(raw, output, {})
 
 
+def test_duplicate_bottleneck_row_is_an_error(tmp_path: Path) -> None:
+    raw, output = prepare(tmp_path)
+    path = raw / "analysis/bottlenecks.csv"
+    lines = path.read_text(encoding="utf-8").splitlines()
+    path.write_text("\n".join([*lines, lines[-1]]) + "\n", encoding="utf-8")
+    with pytest.raises(OutputError, match=r"bottlenecks\.csv repeats tunnel \('18\.pdb', 5, 2\)"):
+        normalize(raw, output, {})
+
+
+def test_duplicate_profile_axis_row_is_an_error(tmp_path: Path) -> None:
+    raw, output = prepare(tmp_path)
+    path = raw / "analysis/tunnel_profiles.csv"
+    rows = list(csv.reader(path.read_text(encoding="utf-8").splitlines()))
+    axis_index = [cell.strip() for cell in rows[0]].index("Axis")
+    duplicate = [*next(row for row in rows[1:] if row[axis_index].strip() == "X")]
+    duplicate[-1] = "99.0"
+    rows.append(duplicate)
+    path.write_text("\n".join(",".join(row) for row in rows) + "\n", encoding="utf-8")
+    with pytest.raises(OutputError, match=r"tunnel_profiles\.csv repeats the 'X' axis for tunnel \('1\.pdb', 1, 1\)"):
+        normalize(raw, output, {})
+
+
+def test_duplicate_characteristic_row_is_an_error(tmp_path: Path) -> None:
+    raw, output = prepare(tmp_path)
+    path = raw / "analysis/tunnel_characteristics.csv"
+    lines = path.read_text(encoding="utf-8").splitlines()
+    path.write_text("\n".join([*lines, lines[-1]]) + "\n", encoding="utf-8")
+    with pytest.raises(OutputError, match=r"tunnel_characteristics\.csv repeats tunnel \('18\.pdb', 5, 2\)"):
+        normalize(raw, output, {})
+
+
+def test_multi_point_profile_and_many_lining_residues_still_pass(tmp_path: Path) -> None:
+    """One row per axis may carry many profile points, and a residue block many rows."""
+    raw, output = prepare(tmp_path)
+    path = raw / "analysis/tunnel_profiles.csv"
+    rows = list(csv.reader(path.read_text(encoding="utf-8").splitlines()))
+    for row in rows[1:]:
+        if [cell.strip() for cell in row[:3]] == ["1.pdb", "1", "1"]:
+            row.append("2.5")
+    path.write_text("\n".join(",".join(row) for row in rows) + "\n", encoding="utf-8")
+
+    summary = normalize(raw, output, {})
+    assert summary["profile_point_count"] == 84
+    assert summary["lining_residue_row_count"] == 171
+    profiles = read_csv(output / "profiles.csv")
+    second_point = [
+        profile
+        for profile in profiles
+        if (profile["snapshot"], profile["tunnel_cluster"], profile["tunnel"], profile["point_index"])
+        == ("1.pdb", "1", "1", "1")
+    ]
+    assert [profile["x_angstrom"] for profile in second_point] == ["2.5"]
+
+
 def test_missing_profile_rows_are_an_error(tmp_path: Path) -> None:
     raw, output = prepare(tmp_path)
     path = raw / "analysis/tunnel_profiles.csv"

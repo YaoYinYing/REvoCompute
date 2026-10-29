@@ -212,6 +212,7 @@ def parse_profiles(path: Path) -> list[dict[str, object]]:
     key_index = {name: header.index(name) for name in key_names}
     required_axes = ("X", "Y", "Z", "distance", "length", "R")
     grouped: dict[tuple[str, int, int], dict[str, list[float]]] = {}
+    seen: set[tuple[str, int, int, str]] = set()
     for row in rows:
         if not row or not any(row):
             continue
@@ -234,6 +235,12 @@ def parse_profiles(path: Path) -> list[dict[str, object]]:
             int(row[key_index["Tunnel cluster"]]),
             int(row[key_index["Tunnel"]]),
         )
+        if (*key, axis) in seen:
+            # CAVER writes one row per axis; a repeated axis would silently
+            # replace the earlier values, so the published geometry would
+            # depend on row order.
+            raise OutputError(f"tunnel_profiles.csv repeats the {axis!r} axis for tunnel {key}")
+        seen.add((*key, axis))
         grouped.setdefault(key, {})[axis] = values
     points = []
     for (snapshot, cluster, tunnel), axes in grouped.items():
@@ -391,6 +398,9 @@ def normalize(raw_out: Path, output_dir: Path, provenance: dict[str, object]) ->
         (str(tunnel["snapshot"]), int(tunnel["tunnel_cluster"]), int(tunnel["tunnel"])) for tunnel in tunnels
     ]
     tunnel_key_set = set(tunnel_keys)
+    repeated_tunnel = next((key for key, count in Counter(tunnel_keys).items() if count > 1), None)
+    if repeated_tunnel is not None:
+        raise OutputError(f"tunnel_characteristics.csv repeats tunnel {repeated_tunnel}")
     for tunnel in tunnels:
         if int(tunnel["tunnel_cluster"]) not in cluster_ids:
             raise OutputError(f"tunnel_characteristics.csv names unknown cluster {tunnel['tunnel_cluster']}")
@@ -426,13 +436,18 @@ def normalize(raw_out: Path, output_dir: Path, provenance: dict[str, object]) ->
                 f"summary.txt reports {cluster['snapshot_count']} snapshots in cluster {cluster_id} "
                 f"but tunnel_characteristics.csv lists {snapshot_count}"
             )
-    bottleneck_keys = {(str(row["snapshot"]), int(row["tunnel_cluster"]), int(row["tunnel"])) for row in bottlenecks}
+    bottleneck_counts = Counter(
+        (str(row["snapshot"]), int(row["tunnel_cluster"]), int(row["tunnel"])) for row in bottlenecks
+    )
+    repeated_bottleneck = next((key for key, count in bottleneck_counts.items() if count > 1), None)
+    if repeated_bottleneck is not None:
+        raise OutputError(f"bottlenecks.csv repeats tunnel {repeated_bottleneck}")
     profile_keys = {(str(row["snapshot"]), int(row["tunnel_cluster"]), int(row["tunnel"])) for row in profiles}
     residue_counts = Counter(int(row["tunnel_cluster"]) for row in residues)
     for key in tunnel_keys:
         if key not in profile_keys:
             raise OutputError(f"tunnel_profiles.csv has no points for tunnel {key}")
-        if key not in bottleneck_keys:
+        if bottleneck_counts[key] != 1:
             raise OutputError(f"bottlenecks.csv has no bottleneck row for tunnel {key}")
     for cluster_id in tunnel_counts:
         if residue_counts[cluster_id] == 0:
