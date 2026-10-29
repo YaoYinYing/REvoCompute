@@ -408,8 +408,11 @@ def test_workflow_submission_failure_cannot_inherit_previous_stage_evidence(task
     from revocompute.execution_graph import compile_graph
 
     graph = compile_graph(tt)
-    module.task_store.update_task(
+    # A dispatched Task is active; a terminal row cannot open a stage attempt,
+    # so the second stage's submission boundary would never be reached.
+    assert module.task_store.update_task(
         task_id,
+        status="pending",
         run_stage="first",
         input_form=json.dumps({
             "execution_graph": {
