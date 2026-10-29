@@ -8,12 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from revocompute.execution_graph import (
-    GraphValidationError,
-    UnsupportedGraphCapability,
-    canonical_digest,
-    compile_graph,
-)
+from revocompute.execution_graph import GraphValidationError, canonical_digest, compile_graph
 from revocompute.task_types import StagePortSpec, WorkflowStage
 
 
@@ -59,9 +54,26 @@ def test_declared_output_paths_must_not_overlap():
         compile_graph(graph(first, second))
 
 
-def test_branch_rejected_as_unsupported_capability():
-    with pytest.raises(UnsupportedGraphCapability, match="branch at a"):
-        compile_graph(graph(stage("a"), stage("b", "a:out"), stage("c", "a:out")))
+def test_fork_join_and_diamond_compile_in_topological_order():
+    fork = compile_graph(graph(stage("a"), stage("b", "a:out"), stage("c", "a:out")))
+    assert fork.execution_order == ("a", "b", "c")
+
+    def join_stage(name, sources):
+        return WorkflowStage(
+            name, name, False,
+            inputs=tuple(StagePortSpec(f"input{index}", "x", source=source) for index, source in enumerate(sources)),
+        )
+
+    join = compile_graph(graph(stage("b"), stage("c"), join_stage("d", ["b:out", "c:out"])))
+    assert join.execution_order == ("b", "c", "d")
+
+    diamond = compile_graph(
+        graph(stage("a"), stage("b", "a:out"), stage("c", "a:out"), join_stage("d", ["b:out", "c:out"]))
+    )
+    assert diamond.execution_order == ("a", "b", "c", "d")
+    assert diamond.execution_order == compile_graph(
+        graph(stage("a"), stage("b", "a:out"), stage("c", "a:out"), join_stage("d", ["b:out", "c:out"]))
+    ).execution_order
 
 
 def test_graph_bounds():

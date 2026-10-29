@@ -31,7 +31,7 @@ from conftest import (
     _task_owner,
 )
 from jsonschema import Draft202012Validator
-from revocompute.execution_graph import GraphValidationError, UnsupportedGraphCapability, compile_graph
+from revocompute.execution_graph import GraphValidationError, compile_graph
 from revocompute.resource_ledger import DataLifecycleState
 from revocompute.task_types import TaskInputRole
 from werkzeug.utils import secure_filename
@@ -414,11 +414,7 @@ def test_multistage_runner_multimer_submission_preserves_selected_preset(monkeyp
     assert frozen["document"]["execution_order"] == ["multistage_runner.features", "multistage_runner.model"]
 
 
-@pytest.mark.parametrize(("error", "status"), [
-    (GraphValidationError("graph contains a cycle"), 400),
-    (UnsupportedGraphCapability("native executor does not support branch at demo"), 503),
-])
-def test_submission_refuses_a_task_whose_graph_cannot_run(monkeypatch, tmp_path, error, status):
+def test_submission_refuses_a_task_whose_graph_cannot_run(monkeypatch, tmp_path):
     module = _load_pssm_module(
         monkeypatch, tmp_path,
         extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "multistage_runner"},
@@ -433,7 +429,7 @@ def test_submission_refuses_a_task_whose_graph_cannot_run(monkeypatch, tmp_path,
     routes_globals = unwrap(module.app.view_functions["upload_file"]).__globals__
 
     def refuse(_task_type):
-        raise error
+        raise GraphValidationError("graph contains a cycle")
 
     monkeypatch.setitem(routes_globals, "compile_graph", refuse)
     fasta_path = Path(__file__).resolve().parents[1] / "tests/data/fasta/Sli_S4.fasta"
@@ -449,7 +445,7 @@ def test_submission_refuses_a_task_whose_graph_cannot_run(monkeypatch, tmp_path,
             content_type="multipart/form-data",
         )
 
-    assert response.status_code == status
+    assert response.status_code == 400
     assert {task["md5sum"] for task in module.task_store.list_tasks()} == before
 
 

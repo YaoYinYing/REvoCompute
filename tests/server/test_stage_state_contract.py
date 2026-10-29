@@ -18,7 +18,7 @@ from revocompute import task_runtime
 from revocompute.db import TaskDatabase
 from revocompute.execution_graph import compile_graph
 from revocompute.resource_policy import ResolvedResources
-from revocompute.task_types import RunnerConfig, RuntimeFamily, TaskType, WorkflowStage
+from revocompute.task_types import RunnerConfig, RuntimeFamily, StagePortSpec, TaskType, WorkflowStage
 
 
 def _policy(requires_gpu: bool) -> ResolvedResources:
@@ -42,8 +42,14 @@ def _policy(requires_gpu: bool) -> ResolvedResources:
 def _task_type() -> TaskType:
     runtime = RuntimeFamily("multistage_runner", ("bash", "run.sh"), "runner.def", "image.sif")
     stages = (
-        WorkflowStage("multistage_runner.features", "Features", False, ("-s", "features"), ("msa",)),
-        WorkflowStage("multistage_runner.model", "Model", True, ("-s", "model"), ("model",)),
+        WorkflowStage(
+            "multistage_runner.features", "Features", False, ("-s", "features"), ("msa",),
+            outputs=(StagePortSpec("features", "features", path="features.dat", required=False),),
+        ),
+        WorkflowStage(
+            "multistage_runner.model", "Model", True, ("-s", "model"), ("model",),
+            inputs=(StagePortSpec("features", "features", source="multistage_runner.features:features"),),
+        ),
     )
     return TaskType(
         "multistage_runner",
@@ -186,6 +192,7 @@ def test_workflow_keeps_task_running_while_the_next_stage_is_queued(tmp_path, mo
 
     monkeypatch.setattr(task_runtime, "_create_job", _create_job)
     _freeze(database, task_id, tt)
+    (tmp_path / "results").mkdir()
 
     result = task_runtime._run_compute_workflow(
         task_id,
@@ -309,6 +316,7 @@ def test_failed_stage_stops_the_workflow_before_the_next_allocation(tmp_path, mo
 
     monkeypatch.setattr(task_runtime, "_create_job", _create_job)
     _freeze(database, task_id, tt)
+    (tmp_path / "results").mkdir()
 
     result = task_runtime._run_compute_workflow(
         task_id,

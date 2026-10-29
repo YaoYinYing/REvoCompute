@@ -4,8 +4,7 @@
 
 """Compile manifest workflows into a deterministic execution graph.
 
-Independent roots are serialized in deterministic order; only branch and join
-shapes are refused because serializing them would change their semantics.
+Fork, join, and independent roots are serialized in deterministic order.
 """
 
 from __future__ import annotations
@@ -20,10 +19,6 @@ GRAPH_IR_VERSION = 1
 
 class GraphValidationError(ValueError):
     """The workflow does not describe a valid graph."""
-
-
-class UnsupportedGraphCapability(ValueError):
-    """The native executor cannot run this valid graph."""
 
 
 @dataclass(frozen=True)
@@ -125,9 +120,6 @@ def compile_graph(task_type: Any) -> CompiledGraph:
         depth[name] = 1 + max((depth[parent] for parent in predecessors[name]), default=0)
         if depth[name] > 16:
             raise GraphValidationError("graph exceeds depth bound of 16")
-    for name in order:
-        if len(edges[name]) > 1 or len(predecessors[name]) > 1:
-            raise UnsupportedGraphCapability(f"native executor does not support branch at {name}")
     ordered_nodes = tuple(nodes[name] for name in order)
     inputs = tuple(graph_inputs[name] for name in sorted(graph_inputs))
     document = {"ir_version": GRAPH_IR_VERSION, "nodes": [asdict(node) for node in ordered_nodes],

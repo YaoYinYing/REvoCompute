@@ -1163,6 +1163,20 @@ def _record_workflow_refusal(task_id: str, stage_name: str, reason_code: str) ->
         logging.exception("Could not retain workflow refusal for task %s", task_id)
 
 
+def _record_blocked_nodes(task_id: str, blocked: set[str]) -> None:
+    """Record one bounded diagnostic naming every node blocked by a failure."""
+    try:
+        evidence = task_store.get_task_diagnostics(task_id) or {}
+        evidence.update(
+            reason_code="stage_blocked_by_failed_dependency",
+            blocked_stages=sorted(blocked),
+            stage_id=", ".join(sorted(blocked))[:255],
+        )
+        task_store.record_task_diagnostics(task_id, evidence)
+    except Exception:
+        logging.exception("Could not retain blocked-stage evidence for task %s", task_id)
+
+
 def _frozen_execution_graph(task: dict[str, Any]) -> dict[str, Any] | None:
     """The submission-frozen graph, or ``None`` when it is absent or malformed."""
     raw = task.get("input_form")
@@ -1216,115 +1230,199 @@ def _run_compute_workflow(
         if current is None or int(run["attempt"]) > int(current["attempt"]):
             latest_runs[str(run["stage_name"])] = run
     stages = {stage.name: (index, stage) for index, stage in enumerate(tt.workflow)}
-    for node in graph.nodes:
-        index, stage = stages[node.id]
-        latest = latest_runs.get(stage.name)
-        if latest is not None and latest["status"] == stage_state.COMPLETED:
-            refusal = _stage_reuse_valid(output_dir, node.outputs, latest)
-            if refusal is not None:
-                _record_workflow_refusal(task_id, stage.name, refusal)
-                return JobState.FAILED
-            continue
-        if latest is None and (legacy_state.get(stage.name) or {}).get("status") == "completed":
-            # No row means the mirror's completion has no verified artifact
-            # identity; skipping it would trust evidence the Server never saw.
-            _record_workflow_refusal(task_id, stage.name, "stage_output_unverified")
-            return JobState.FAILED
-        policy = resource_policies.get(stage.name)
-        if policy is None:
-            raise ResourceValidationError(f"Workflow stage {stage.name!r} has no resource snapshot")
-        markers = {name: tt.stage_markers[name] for name in stage.stage_markers}
-        stage_tt = replace(
-            tt,
-            name=stage.name.replace(".", "-"),
-            runner_args=stage.runner_args,
-            gpus=stage.requires_gpu,
-            requires_network=stage.requires_network,
-            stage_markers=markers,
-            workflow=(),
-        )
-        first_marker = next(iter(markers))
-        # A progress-only write that is also the cancellation gate: a terminal
-        # Task rejects it, so no attempt or allocation starts for it.
-        if not task_store.update_task(task_id, run_stage=first_marker):
-            return JobState.CANCELLED
-        attempt_row = _begin_stage_attempt(task_id, index, stage.name, policy)
-        attempt = int(attempt_row["attempt"]) if attempt_row else None
-        user_id = int(task.get("submitted_by_user_id") or 0)
-        # A workflow stage has no reservation of its own after the first one
-        # consumed the Task's single submission hold, so its allocation start is
-        # admitted on the balance that is actually left — decided atomically with
-        # the allocation itself, not by a read here.
-        callbacks = _compute_allocation_callbacks(
-            task_id=task_id,
-            user_id=user_id,
-            stage_id=stage.name,
+    producers = {
+        node.id: {
+            binding.rsplit(":", 1)[0]
+            for binding in node.inputs.values()
+            if not binding.startswith("graph:")
+        }
+        for node in graph.nodes
+    }
+    children: dict[str, set[str]] = {node.id: set() for node in graph.nodes}
+    for child, parents in producers.items():
+        for parent in parents:
+            children[parent].add(child)
+    completed: set[str] = set()
+    failed: set[str] = set()
+    blocked: set[str] = set()
+
+    def block_descendants(node_id: str) -> None:
+        pending = list(children[node_id])
+        while pending:
+            descendant = pending.pop()
+            if descendant in completed or descendant in failed or descendant in blocked:
+                continue
+            blocked.add(descendant)
+            pending.extend(children[descendant])
+
+    # A serial schedule over the compiled DAG: ready nodes run in graph order,
+    # a failed node blocks only its descendants, and independent siblings still
+    # run. The graph-level required-output policy is a later manifest feature;
+    # validated sibling outputs remain published while the Task reports failed.
+    while True:
+        progressed = False
+        for node in graph.nodes:
+            if node.id in completed or node.id in failed or node.id in blocked:
+                continue
+            parents = producers[node.id]
+            if any(parent in failed or parent in blocked for parent in parents):
+                blocked.add(node.id)
+                progressed = True
+                continue
+            if not parents <= completed:
+                continue
+            latest = latest_runs.get(node.id)
+            if latest is not None and latest["status"] == stage_state.COMPLETED:
+                refusal = _stage_reuse_valid(output_dir, node.outputs, latest)
+                if refusal is not None:
+                    _record_workflow_refusal(task_id, node.id, refusal)
+                    failed.add(node.id)
+                    block_descendants(node.id)
+                else:
+                    completed.add(node.id)
+                progressed = True
+                continue
+            if latest is None and (legacy_state.get(node.id) or {}).get("status") == "completed":
+                # No row means the mirror's completion has no verified artifact
+                # identity; skipping it would trust evidence the Server never saw.
+                _record_workflow_refusal(task_id, node.id, "stage_output_unverified")
+                failed.add(node.id)
+                block_descendants(node.id)
+                progressed = True
+                continue
+            index, stage = stages[node.id]
+            result = _execute_workflow_node(
+                task_id, task, tt, stage, index, node, runner, entities, output_dir,
+                resource_policies, stage_callback, legacy_state,
+            )
+            progressed = True
+            if result == JobState.CANCELLED:
+                return result
+            if result == JobState.COMPLETED:
+                completed.add(node.id)
+            else:
+                failed.add(node.id)
+                block_descendants(node.id)
+        if all(node.id in completed or node.id in failed or node.id in blocked for node in graph.nodes):
+            break
+        if not progressed:
+            raise RuntimeError(
+                f"Workflow made no progress; unresolved stages: "
+                f"{', '.join(node.id for node in graph.nodes if node.id not in completed | failed | blocked)}"
+            )
+    if blocked:
+        _record_blocked_nodes(task_id, blocked)
+    return JobState.FAILED if failed else JobState.COMPLETED
+
+
+def _execute_workflow_node(
+    task_id: str,
+    task: dict[str, Any],
+    tt,
+    stage,
+    index: int,
+    node,
+    runner,
+    entities: list[dict],
+    output_dir: str,
+    resource_policies: dict[str, ResolvedResources],
+    stage_callback,
+    legacy_state: dict[str, dict[str, Any]],
+) -> JobState:
+    """Open and settle one ready node's attempt under the existing guarantees."""
+    policy = resource_policies.get(stage.name)
+    if policy is None:
+        raise ResourceValidationError(f"Workflow stage {stage.name!r} has no resource snapshot")
+    markers = {name: tt.stage_markers[name] for name in stage.stage_markers}
+    stage_tt = replace(
+        tt,
+        name=stage.name.replace(".", "-"),
+        runner_args=stage.runner_args,
+        gpus=stage.requires_gpu,
+        requires_network=stage.requires_network,
+        stage_markers=markers,
+        workflow=(),
+    )
+    first_marker = next(iter(markers))
+    # A progress-only write that is also the cancellation gate: a terminal
+    # Task rejects it, so no attempt or allocation starts for it.
+    if not task_store.update_task(task_id, run_stage=first_marker):
+        return JobState.CANCELLED
+    attempt_row = _begin_stage_attempt(task_id, index, stage.name, policy)
+    attempt = int(attempt_row["attempt"]) if attempt_row else None
+    user_id = int(task.get("submitted_by_user_id") or 0)
+    # A workflow stage has no reservation of its own after the first one
+    # consumed the Task's single submission hold, so its allocation start is
+    # admitted on the balance that is actually left — decided atomically with
+    # the allocation itself, not by a read here.
+    callbacks = _compute_allocation_callbacks(
+        task_id=task_id,
+        user_id=user_id,
+        stage_id=stage.name,
+        resource_policy=policy,
+        required_entitlements=(tt.runtime.access_policy.requires if tt.runtime.access_policy else ()),
+        runner_family=tt.runtime.name,
+        attempt=attempt,
+    )
+    try:
+        job = _create_job(
+            task_id,
+            stage_tt,
+            runner,
+            entities,
+            output_dir,
+            stage_callback,
+            username=task.get("username", ""),
             resource_policy=policy,
-            required_entitlements=(tt.runtime.access_policy.requires if tt.runtime.access_policy else ()),
-            runner_family=tt.runtime.name,
-            attempt=attempt,
+            allocation_dispatched_callback=callbacks[0],
+            allocation_started_callback=callbacks[1],
+            allocation_finished_callback=callbacks[2],
+            allocation_accounting=user_id > 0,
         )
-        try:
-            job = _create_job(
-                task_id,
-                stage_tt,
-                runner,
-                entities,
-                output_dir,
-                stage_callback,
-                username=task.get("username", ""),
-                resource_policy=policy,
-                allocation_dispatched_callback=callbacks[0],
-                allocation_started_callback=callbacks[1],
-                allocation_finished_callback=callbacks[2],
-                allocation_accounting=user_id > 0,
-            )
-            jid = job.submit()
-        except Exception:
-            _settle_unsubmitted_attempt(task_id, stage.name, attempt)
-            raise
-        handles: dict[str, Any] = {}
-        mirror = _mirror_json(task_id, legacy_state)
-        if mirror is not None:
-            handles["workflow_state"] = mirror
-        if isinstance(job, SlurmJob):
-            handles["slurm_job_id"] = jid
-        if not task_store.update_task(task_id, **handles):
-            job.cancel()
-            _finish_stage_attempt(task_id, stage.name, attempt, JobState.CANCELLED)
-            return JobState.CANCELLED
-        try:
-            result = job.poll()
-        except GPUCreditUnavailableError:
-            _settle_stage_attempt(
-                task_id, stage.name, attempt, status=stage_state.FAILED, reason_code="admission_failed"
-            )
-            raise
-        if isinstance(job, SlurmJob) and not job.wrapper_executed:
-            # This stage never produced allocation evidence, so no allocation
-            # fact exists for it and the Task's scheduler-owned reservation (if it
-            # is still the one from an earlier stage that was never dispatched)
-            # goes back rather than staying committed with nothing to consume it.
-            task_store.release_reservation(
-                task_id=task_id, reason_code=ReservationReason.RELEASED.value, at=time.time()
-            )
-        failure_reason = getattr(job, "failure_reason", None)
-        identity = _stage_output_identity(output_dir, node.outputs)
-        if result == JobState.COMPLETED and identity is None:
-            result = JobState.FAILED
-            failure_reason = "stage_output_missing"
-        _finish_stage_attempt(
-            task_id, stage.name, attempt, result, failure_reason=failure_reason,
-            output_identity=identity,
+        jid = job.submit()
+    except Exception:
+        _settle_unsubmitted_attempt(task_id, stage.name, attempt)
+        raise
+    handles: dict[str, Any] = {}
+    mirror = _mirror_json(task_id, legacy_state)
+    if mirror is not None:
+        handles["workflow_state"] = mirror
+    if isinstance(job, SlurmJob):
+        handles["slurm_job_id"] = jid
+    if not task_store.update_task(task_id, **handles):
+        job.cancel()
+        _finish_stage_attempt(task_id, stage.name, attempt, JobState.CANCELLED)
+        return JobState.CANCELLED
+    try:
+        result = job.poll()
+    except GPUCreditUnavailableError:
+        _settle_stage_attempt(
+            task_id, stage.name, attempt, status=stage_state.FAILED, reason_code="admission_failed"
         )
-        settled: dict[str, Any] = {"slurm_job_id": None, "container_id": None}
-        mirror = _mirror_json(task_id, legacy_state)
-        if mirror is not None:
-            settled["workflow_state"] = mirror
-        task_store.update_task(task_id, **settled)
-        if result != JobState.COMPLETED:
-            return result
-    return JobState.COMPLETED
+        raise
+    if isinstance(job, SlurmJob) and not job.wrapper_executed:
+        # This stage never produced allocation evidence, so no allocation
+        # fact exists for it and the Task's scheduler-owned reservation (if it
+        # is still the one from an earlier stage that was never dispatched)
+        # goes back rather than staying committed with nothing to consume it.
+        task_store.release_reservation(
+            task_id=task_id, reason_code=ReservationReason.RELEASED.value, at=time.time()
+        )
+    failure_reason = getattr(job, "failure_reason", None)
+    identity = _stage_output_identity(output_dir, node.outputs)
+    if result == JobState.COMPLETED and identity is None:
+        result = JobState.FAILED
+        failure_reason = "stage_output_missing"
+    _finish_stage_attempt(
+        task_id, stage.name, attempt, result, failure_reason=failure_reason,
+        output_identity=identity,
+    )
+    settled: dict[str, Any] = {"slurm_job_id": None, "container_id": None}
+    mirror = _mirror_json(task_id, legacy_state)
+    if mirror is not None:
+        settled["workflow_state"] = mirror
+    task_store.update_task(task_id, **settled)
+    return result
 
 
 _OUTPUT_IDENTITY_FORMAT = 1

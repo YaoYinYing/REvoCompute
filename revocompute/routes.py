@@ -110,11 +110,7 @@ from revocompute.ingress_security import (
     phase_for_code,
 )
 from revocompute.db import GPUCreditUnavailableError, TaskIdReservedError
-from revocompute.execution_graph import (
-    GraphValidationError,
-    UnsupportedGraphCapability,
-    compile_graph,
-)
+from revocompute.execution_graph import GraphValidationError, compile_graph
 from revocompute.operational_events import emit_event
 from revocompute.ratelimit import rate_limit
 from revocompute import resource_lifecycle
@@ -2357,8 +2353,6 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
             compiled_graph = compile_graph(tt)
         except GraphValidationError as exc:
             return jsonify({"error": f"This task type's execution graph is invalid: {exc}"}), 400
-        except UnsupportedGraphCapability as exc:
-            return jsonify({"error": f"This task type's execution graph cannot run here: {exc}"}), 503
         execution_graph = {
             "ir_version": compiled_graph.ir_version,
             "digest": compiled_graph.digest,

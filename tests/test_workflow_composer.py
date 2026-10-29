@@ -225,7 +225,9 @@ def test_resume_revalidates_completed_producer_outputs(monkeypatch, tmp_path, mu
     else:
         assert result == JobState.FAILED
         assert started == []
-        assert (task_runtime.task_store.get_task_diagnostics(task_id) or {})["reason_code"] == expected_reason
+        evidence = task_runtime.task_store.get_task_diagnostics(task_id) or {}
+        assert evidence["reason_code"] == "stage_blocked_by_failed_dependency"
+        assert evidence["blocked_stages"] == ["multistage_runner.model"]
 
 
 def test_composer_refuses_unverified_legacy_completed_stage(monkeypatch):
@@ -233,8 +235,14 @@ def test_composer_refuses_unverified_legacy_completed_stage(monkeypatch):
 
     runtime = RuntimeFamily("multistage_runner", ("bash", "run.sh"), "runner.def", "image.sif")
     stages = (
-        WorkflowStage("multistage_runner.features", "Features", False, ("-s", "features"), ("msa",)),
-        WorkflowStage("multistage_runner.model", "Model", True, ("-s", "model"), ("model",)),
+        WorkflowStage(
+            "multistage_runner.features", "Features", False, ("-s", "features"), ("msa",),
+            outputs=(StagePortSpec("features", "features", path="features.dat"),),
+        ),
+        WorkflowStage(
+            "multistage_runner.model", "Model", True, ("-s", "model"), ("model",),
+            inputs=(StagePortSpec("features", "features", source="multistage_runner.features:features"),),
+        ),
     )
     task_type = TaskType(
         "multistage_runner",
@@ -265,10 +273,15 @@ def test_composer_refuses_unverified_legacy_completed_stage(monkeypatch):
 
     assert result == JobState.FAILED
     assert created == []
-    assert (task_runtime.task_store.get_task_diagnostics("a" * 32) or {})["reason_code"] == "stage_output_unverified"
+    evidence = task_runtime.task_store.get_task_diagnostics("a" * 32) or {}
+    assert evidence["reason_code"] == "stage_blocked_by_failed_dependency"
+    assert evidence["blocked_stages"] == ["multistage_runner.model"]
 
 
-@pytest.mark.parametrize(("frozen", "reason"), [(None, "execution_graph_unverified"), ("changed", "execution_graph_changed")])
+@pytest.mark.parametrize(
+    ("frozen", "reason"),
+    [(None, "execution_graph_unverified"), ("changed", "execution_graph_changed")],
+)
 def test_dispatch_refuses_graph_that_differs_from_submission(monkeypatch, frozen, reason):
     task_runtime = _live_task_runtime()
     runtime = RuntimeFamily("multistage_runner", ("bash", "run.sh"), "runner.def", "image.sif")
@@ -296,6 +309,129 @@ def test_dispatch_refuses_graph_that_differs_from_submission(monkeypatch, frozen
     )
     assert result == JobState.FAILED
     assert (task_runtime.task_store.get_task_diagnostics(task_id) or {})["reason_code"] == reason
+
+
+def _diamond_workflow() -> TaskType:
+    runtime = RuntimeFamily("multistage_runner", ("bash", "run.sh"), "runner.def", "image.sif")
+    stage_a = WorkflowStage(
+        "dag.a", "A", False, ("-s", "a"), ("a",), outputs=(StagePortSpec("out", "x", path="a.dat"),),
+    )
+    stage_b = WorkflowStage(
+        "dag.b", "B", False, ("-s", "b"), ("b",),
+        inputs=(StagePortSpec("in", "x", source="dag.a:out"),),
+        outputs=(StagePortSpec("out", "x", path="b.dat"),),
+    )
+    stage_c = WorkflowStage(
+        "dag.c", "C", False, ("-s", "c"), ("c",),
+        inputs=(StagePortSpec("in", "x", source="dag.a:out"),),
+        outputs=(StagePortSpec("out", "x", path="c.dat"),),
+    )
+    stage_d = WorkflowStage(
+        "dag.d", "D", False, ("-s", "d"), ("d",),
+        inputs=(
+            StagePortSpec("left", "x", source="dag.b:out"),
+            StagePortSpec("right", "x", source="dag.c:out"),
+        ),
+        outputs=(StagePortSpec("out", "x", path="d.dat"),),
+    )
+    return TaskType(
+        "dag", "Synthetic DAG", runtime, (),
+        stage_markers={"a": "A", "b": "B", "c": "C", "d": "D"},
+        workflow=(stage_a, stage_b, stage_c, stage_d),
+    )
+
+
+def test_fork_join_runs_serial_schedule_and_resume_after_branch_failure(monkeypatch, tmp_path):
+    task_runtime = _live_task_runtime()
+    task_type = _diamond_workflow()
+    output = tmp_path / "output"
+    output.mkdir()
+    fail_b = {"value": True}
+    started = []
+
+    class Job:
+        def __init__(self, name):
+            self.name = name
+
+        def submit(self):
+            return "42"
+
+        def poll(self):
+            suffix = self.name.rsplit("-", 1)[-1]
+            if suffix == "b" and fail_b["value"]:
+                return JobState.FAILED
+            (output / f"{suffix}.dat").write_text(suffix)
+            return JobState.COMPLETED
+
+    def create(_task_id, stage_tt, *_args, **_kwargs):
+        started.append(stage_tt.name)
+        return Job(stage_tt.name)
+
+    monkeypatch.setattr(task_runtime, "_create_job", create)
+    monkeypatch.setattr(task_runtime.task_store, "update_task", lambda *args, **kwargs: True)
+    task_id = "7" * 32
+    _ensure_task_row(task_runtime, task_id)
+    policies = {stage.name: _policy(False) for stage in task_type.workflow}
+
+    first = task_runtime._run_compute_workflow(
+        task_id, _frozen(task_type), task_type, RunnerConfig(), [], str(output), policies, lambda _: None,
+    )
+
+    assert first == JobState.FAILED
+    assert started == ["dag-a", "dag-b", "dag-c"]
+    assert (output / "c.dat").read_text() == "c"
+    runs = {run["stage_name"]: run for run in task_runtime.task_store.list_stage_runs(task_id)}
+    assert set(runs) == {"dag.a", "dag.b", "dag.c"}
+    assert runs["dag.c"]["status"] == "COMPLETED"
+    evidence = task_runtime.task_store.get_task_diagnostics(task_id)
+    assert evidence["reason_code"] == "stage_blocked_by_failed_dependency"
+    assert evidence["blocked_stages"] == ["dag.d"]
+
+    fail_b["value"] = False
+    started.clear()
+    second = task_runtime._run_compute_workflow(
+        task_id, _frozen(task_type), task_type, RunnerConfig(), [], str(output), policies, lambda _: None,
+    )
+
+    assert second == JobState.COMPLETED
+    assert started == ["dag-b", "dag-d"]
+    runs = task_runtime.task_store.list_stage_runs(task_id)
+    assert {(run["stage_name"], run["status"]) for run in runs if run["attempt"] == 1} == {
+        ("dag.a", "COMPLETED"), ("dag.b", "FAILED"), ("dag.c", "COMPLETED"), ("dag.d", "COMPLETED")
+    }
+
+
+def test_fork_and_join_both_complete_in_deterministic_order(monkeypatch, tmp_path):
+    task_runtime = _live_task_runtime()
+    task_type = _diamond_workflow()
+    output = tmp_path / "output"
+    output.mkdir()
+    started = []
+
+    class Job:
+        def submit(self):
+            return "42"
+
+        def poll(self):
+            return JobState.COMPLETED
+
+    def create(_task_id, stage_tt, *_args, **_kwargs):
+        suffix = stage_tt.name.rsplit("-", 1)[-1]
+        started.append(stage_tt.name)
+        (output / f"{suffix}.dat").write_text(suffix)
+        return Job()
+
+    monkeypatch.setattr(task_runtime, "_create_job", create)
+    monkeypatch.setattr(task_runtime.task_store, "update_task", lambda *args, **kwargs: True)
+    task_id = "8" * 32
+    _ensure_task_row(task_runtime, task_id)
+    result = task_runtime._run_compute_workflow(
+        task_id, _frozen(task_type), task_type, RunnerConfig(), [], str(output),
+        {stage.name: _policy(False) for stage in task_type.workflow}, lambda _: None,
+    )
+
+    assert result == JobState.COMPLETED
+    assert started == ["dag-a", "dag-b", "dag-c", "dag-d"]
 
 
 def test_latest_failed_attempt_is_not_reused(monkeypatch, tmp_path):
