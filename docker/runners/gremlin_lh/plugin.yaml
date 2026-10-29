@@ -8,6 +8,7 @@ runtime:
   build_inputs:
   - gremlin_lh/run.sh
   - gremlin_lh/fit_model.py
+  - gremlin_lh/stage_inputs.py
   - gremlin_lh/requirements.lock
   # Family adapter code is still baked here; migration to runtime_overlay is deferred (docs/runner-guide/runtime-bundles.md).
   runtime_overlay:
