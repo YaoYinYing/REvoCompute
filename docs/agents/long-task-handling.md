@@ -1048,11 +1048,6 @@ carry-forward, and no post-adoption review may be recorded as a clarification.
 A narrower rule for clarification-only edits becomes available only through a
 separately reviewed, applicability-aware classifier with regression tests.
 
-Elsewhere, a documentation move that leaves every governing requirement and piece
-of admissible evidence intact does not invalidate a completed independent review;
-record that decision in the current-main check. Never carry evidence across a
-changed scientific or safety rule.
-
 The class decides the gate:
 
 ```text
@@ -1076,10 +1071,10 @@ changed, invalidate only the evidence that depended on it, then run the smallest
 safe current-main gate". For system-boundary (R3) work the strict principle is
 unchanged — exact head, fresh framing, counterexample-driven review, with no
 owner READY, Advisor confidence, prior approval, or green CI substituting for it.
-The optimization for R3 is only that a content-identical rebase may take a
-focused exact-head delta review instead of a second full rediscovery pass, and
-the reviewer must still verify the unchanged patch identity and the new base
-interaction explicitly.
+The optimization for R3 is only that, where the drift class permits a delta gate,
+a content-identical rebase may take a focused exact-head delta review instead of
+a second full rediscovery pass, and the reviewer must still verify the unchanged
+patch identity and the new base interaction explicitly.
 
 `tools/campaign_merge_candidate.py` computes these identities (`patch_digest`,
 `changed_paths_digest`, and the merge-tree of head into base) and returns the
