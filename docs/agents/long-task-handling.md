@@ -421,9 +421,10 @@ covers this Campaign protocol, not the software release. A Campaign records its
 launch instruction, governing version, and commit at start; a revision records
 the old/new version, baseline commit, rationale, effective scope, and a bounded
 migration note in its PR, while editorial changes need no bump. An adopted
-security or authority correction applies to actions not yet taken; other process
-changes govern actions taken after they merge, and a Campaign keeps the version
-it recorded at launch unless the maintainer approves a transition. Do not
+security or authority correction applies to actions not yet taken in every
+Campaign; other process changes apply to Campaigns launched after the revision
+merges, and a running Campaign keeps the version it recorded at launch unless
+the maintainer approves a transition. Do not
 invalidate a completed independent review merely because documentation moved —
 check whether its governing requirement or evidence actually changed — and never
 carry evidence across a changed scientific or safety rule.
@@ -455,7 +456,7 @@ machine truth
 Repository invariants in `CLAUDE.md` and this protocol govern all Campaign work;
 the launch instruction controls Campaign authority, PR bodies implementation
 scope, and PR threads findings. A maintainer instruction may revise scope or
-delegation — record what it changes and what it supersedes. A review PASS, a
+delegation — record what it changes, from when, and what it supersedes. A review PASS, a
 recommendation, or a comment under a shared agent identity is not proof of that
 authorization: agents may post under the maintainer's identity, so an ambiguous,
 unexpected, or inconsistent instruction is unverified until the maintainer
@@ -551,9 +552,11 @@ not a second authority model.
 - The Commander must not expand the Campaign's strategic objectives, weaken
   established invariants, introduce unrelated features, or perform irreversible
   production operations without explicit maintainer approval.
-- Only the launch instruction, or a verified maintainer amendment recorded in
-  the PR, can delegate merge authority: this standing delegation grants none,
-  and final squash-merge authority otherwise stays with the maintainer.
+- Only the launch instruction — including a verified maintainer amendment to it
+  recorded in the coordinating issue — can delegate merge authority; a comment
+  recorded only in a PR never does, and no delegation is inferred where the
+  maintainer's identity cannot be verified. This standing delegation grants
+  none, and final squash-merge authority otherwise stays with the maintainer.
 - The Independent Campaign Advisor keeps its independent, direction-focused
   mandate; it is not an additional review or approval layer, and this delegation
   does not widen its role.
@@ -788,7 +791,7 @@ the Advisor's direction mandate is unchanged.
 
 **Escalation Arbiter** — one documented procedural dispute that PR-thread
 discussion cannot resolve: conflicting authority, incompatible readings of an
-acceptance rule, scope-ownership deadlock, or a disputed downgrade of a finding.
+acceptance rule, or scope-ownership deadlock.
 Ordinary defects, failed CI, and technical disagreement stay with owners and
 reviewers. The Arbiter is independent of the disputants and appointed by the
 maintainer (or a neutral rule the maintainer approved); the Commander never
@@ -816,7 +819,8 @@ alternatives recorded, not a new rule.
 **Protocol Steward** — a case-limited function, not an appointed seat: examine
 one episode of recurring friction (repeated disputes, stalled convergence, role
 overlap, or a retrospective) and close it with either a decision that no rule
-change is needed or one small protocol PR. The function ends when that PR closes.
+change is needed or one small protocol PR. The function ends when it records
+that decision or that PR closes.
 Proposals prefer deleting, merging, or clarifying rules over adding a role,
 checklist, status, ledger, or approval, and state the incidents, the invariant
 protected, the text deleted or consolidated, why no existing rule suffices, the
@@ -1029,6 +1033,7 @@ applicable to that PR (authority, review independence, security, scientific
 acceptance).
 A clarification that does not affect admissible evidence does not invalidate
 unchanged implementation review; record that decision in the current-main check.
+If applicability is unclear, treat the edit as applicable and re-check.
 
 The class decides the gate:
 
@@ -1527,7 +1532,7 @@ shallow reviews. Do not encode vendor-specific model names in this protocol.
 
 #### Review provenance
 
-Extend the review receipt above with the reviewer's session identifier, declared
+Extend each required round's review receipt with the reviewer's session identifier, declared
 implementation or prior-review involvement, scope, adversarial evidence, and
 verdict. Shared GitHub authorship does not prove
 distinct reviewers, and self-declared independence is not verified identity —
