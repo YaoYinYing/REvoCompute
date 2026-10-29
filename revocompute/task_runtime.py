@@ -1182,11 +1182,6 @@ def _run_compute_workflow(
         index, stage = stages[node.id]
         if stage.name in completed:
             continue
-        if any(
-            not binding.startswith("graph:") and binding.rsplit(":", 1)[0] not in completed
-            for binding in node.inputs.values()
-        ):
-            return JobState.FAILED
         policy = resource_policies.get(stage.name)
         if policy is None:
             raise ResourceValidationError(f"Workflow stage {stage.name!r} has no resource snapshot")
@@ -1283,10 +1278,6 @@ def _run_compute_workflow(
 
 def _stage_outputs_present(output_dir: str, outputs) -> bool:
     for port in outputs:
-        if not port.path:
-            if port.required:
-                return False
-            continue
         try:
             matches = list(Path(output_dir).glob(port.path))
             if not matches:

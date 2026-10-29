@@ -2,7 +2,11 @@
 # Distributed under the terms of the GNU General Public License v3.0.
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Compile manifest workflows into a deterministic execution graph."""
+"""Compile manifest workflows into a deterministic execution graph.
+
+Independent roots are serialized in deterministic order; only branch and join
+shapes are refused because serializing them would change their semantics.
+"""
 
 from __future__ import annotations
 

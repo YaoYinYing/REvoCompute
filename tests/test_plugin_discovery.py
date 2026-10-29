@@ -346,12 +346,11 @@ def test_workflow_stage_must_declare_both_capability_keys(tmp_path):
 
 
 def test_workflow_stage_markers_must_partition_declared_markers(tmp_path):
-    """A composed workflow's stage markers form an exact ordered partition.
+    """Every task-level marker has exactly one stage owner.
 
-    The runtime replaces the TaskType with a stage-local one holding only that
-    stage's markers, so an omitted marker is emitted by the Runner and dropped,
-    and a marker two stages both claim would advance the wrong stage.  Discovery
-    fails closed instead of leaving either ambiguity to run time.
+    A marker two stages claim would advance the wrong stage, and an omitted
+    marker would be emitted and dropped. Marker order is not significant:
+    explicit graph edges define execution sequence.
     """
     family = tmp_path / "demo"
     task_dir = family / "tasks" / "echo"
@@ -406,4 +405,27 @@ def test_workflow_stage_markers_must_partition_declared_markers(tmp_path):
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="must assign every declared stage marker: second is unassigned"):
+        discover_plugins(str(tmp_path))
+
+
+def test_workflow_output_port_requires_a_path(tmp_path):
+    family = tmp_path / "demo"
+    task_dir = family / "tasks" / "echo"
+    task_dir.mkdir(parents=True)
+    (family / "plugin.yaml").write_text(
+        "id: demo\nversion: '1'\nruntime: {image_artifact: demo.sif, definition: demo.def}\n"
+        "tasks: [tasks/echo/task.yaml]\n",
+        encoding="utf-8",
+    )
+    (family / "demo.def").write_text("Bootstrap: demo\n", encoding="utf-8")
+    keys = "  requires_gpu: false\n  requires_network: false\n"
+    (task_dir / "task.yaml").write_text(
+        _workflow_yaml(
+            f"- name: features\n{keys}  runner_args: [-s, features]\n  stage_markers: [first]\n"
+            "  outputs:\n  - name: data\n    type: text\n"
+            f"- name: model\n{keys}  runner_args: [-s, model]\n  stage_markers: [second]\n"
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="output port 'data' requires a path"):
         discover_plugins(str(tmp_path))

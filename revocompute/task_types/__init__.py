@@ -1189,6 +1189,8 @@ def _load_stage_ports(raw: Any, task_name: str, stage_name: str, *, input_port: 
         if not isinstance(data_type, str) or not data_type:
             raise ValueError(f"Workflow stage {task_name}.{stage_name} port {name!r} requires a type")
         path = port.get("path")
+        if not input_port and path is None:
+            raise ValueError(f"Workflow stage {task_name}.{stage_name} output port {name!r} requires a path")
         if path is not None and (not isinstance(path, str) or not path or Path(path).is_absolute() or ".." in Path(path).parts):
             raise ValueError(f"Workflow stage {task_name}.{stage_name} port {name!r} has an invalid path")
         required = port.get("required", True)
