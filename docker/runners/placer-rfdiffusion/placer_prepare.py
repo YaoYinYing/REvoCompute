@@ -209,9 +209,11 @@ def _pdb_residues(text: str) -> list[Residue]:
             continue
         if line[:6] not in {"ATOM  ", "HETATM"} or len(line) < 27:
             continue
-        # Keep the raw column: upstream keys a blank protein chain as " ", while
-        # ligand chains are stripped.
+        # Upstream keys a blank ATOM/polymer chain as " " and strips every
+        # HETATM chain (GetChain().strip()); keep the two forms distinct.
         chain = line[21:22]
+        if line[:6] == "HETATM":
+            chain = chain.strip()
         if line[:6] == "ATOM  " and chain != current_chain:
             # Upstream groups contiguous ATOM runs by chain, so a repeated
             # non-contiguous block silently overwrites the earlier one.

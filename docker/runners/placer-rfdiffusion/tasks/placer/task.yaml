@@ -196,9 +196,12 @@ parameters:
       pattern: '^(?:[A-Za-z0-9]+|[A-Za-z0-9]+-[0-9]+|[A-Za-z0-9]+-[A-Za-z0-9]+-[0-9]+)(?:\s+(?:[A-Za-z0-9]+|[A-Za-z0-9]+-[0-9]+|[A-Za-z0-9]+-[A-Za-z0-9]+-[0-9]+))*$|^$'
     target_res:
       type: string
-      description: Protein residue that centers the crop when rebuilding side
-        chains, as chain-resno (for example A-149). Required when the input has
-        no ligand.
+      description: Protein residue used as the crop target, as chain-resno (for
+        example A-149). On PDB it selects that residue for side-chain rebuilding
+        and fixes every other residue; without an explicit center the crop is
+        centered there. On mmCIF upstream uses only the chain, so the residue
+        number does not constrain the crop, which otherwise centers on a
+        non-backbone atom in that chain. Required when the input has no ligand.
       default: ''
       pattern: '^(?:[A-Za-z0-9]+-[0-9]+)?$'
     fixed_ligand_noise:

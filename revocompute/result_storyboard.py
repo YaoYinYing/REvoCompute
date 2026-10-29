@@ -54,7 +54,7 @@ _LOGICAL_FILE_ID = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 _RESULT_FILE_ROLES = frozenset({"evidence", "provenance", "diagnostic", "artifact"})
 # Roles that describe run records rather than a scientific result. A primary
 # view cannot source or promote one.
-RECORD_FILE_ROLES = _RESULT_FILE_ROLES - {"evidence", "artifact"}
+RECORD_FILE_ROLES = frozenset({"provenance", "diagnostic"})
 
 
 class ResultContractError(ValueError):
@@ -171,9 +171,12 @@ def expected_file_tree(task_type: Any, server_dir: str) -> dict[str, dict[str, A
     return load_expected_file_tree(contract_dir(task_type, server_dir) / "expected_files.yaml")
 
 
+SERVER_RECORD_PREFIXES = ("debug/", "execution/", "log/")
+
+
 def is_server_record(path: str) -> bool:
     """True for the input snapshot and execution records the server owns."""
-    return path.startswith(("debug/", "execution/", "log/"))
+    return path.startswith(SERVER_RECORD_PREFIXES)
 
 
 def resolve_expected_files(
@@ -324,6 +327,7 @@ def storyboard_asset_root(task_type: Any, server_dir: str) -> Path:
 
 __all__ = [
     "RECORD_FILE_ROLES",
+    "SERVER_RECORD_PREFIXES",
     "ResultContractError",
     "contract_dir",
     "contract_directory",

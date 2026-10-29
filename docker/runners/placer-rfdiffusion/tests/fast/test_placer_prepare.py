@@ -378,6 +378,29 @@ def test_excluded_common_ligands_leave_the_ligand_census(tmp_path):
                                    so4_only)
 
 
+def test_blank_pdb_chains_for_protein_and_ion_do_not_conflict(tmp_path):
+    # Upstream keeps a blank polymer chain as " " but strips the HETATM chain
+    # to "", so these are different keys and the shared-chain guard must not
+    # reject a blank-chain ion.
+    structure = _write(tmp_path, "blank_both.pdb", "\n".join([
+        _line("ATOM", 1, "CA", "ALA", "", 1),
+        _line("HETATM", 2, "C1", "LIG", "", 1, x=5.0),
+        "END",
+    ]))
+    records = prepare.read_structure(structure)
+    assert {record.chain for record in records} == {" ", ""}
+    params = _params(predict_ligand="LIG")
+    prepare.validate_structure(params, prepare.validate_params(params), records, structure)
+
+
+def test_named_pdb_ligand_chain_is_matched(tmp_path):
+    structure = _write(tmp_path, "complex.pdb", _complex())
+    records = prepare.read_structure(structure)
+    assert ("B", 1, "LIG") in prepare._ligands(records)
+    params = _params(predict_ligand="B-LIG-1")
+    prepare.validate_structure(params, prepare.validate_params(params), records, structure)
+
+
 def test_ligand_chain_cannot_be_reused_by_protein(tmp_path):
     # Upstream parses protein ATOM records and ligand HETATM records separately
     # and asserts that no ligand chain letter already exists in the protein.
@@ -708,7 +731,7 @@ def test_pdb_polymer_heavy_atoms_must_match_the_residue_library(tmp_path, atom):
                                    structure)
 
 
-def test_blank_pdb_chain_is_keyed_as_space_and_cannot_be_selected(tmp_path):
+def test_blank_pdb_polymer_chain_is_keyed_as_space_and_cannot_be_selected(tmp_path):
     structure = _write(tmp_path, "blank.pdb", "\n".join([
         _line("ATOM", 1, "CA", "ALA", "", 1),
         _line("HETATM", 2, "C1", "LIG", "B", 1, x=5.0),

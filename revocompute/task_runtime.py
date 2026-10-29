@@ -69,6 +69,7 @@ from revocompute.resource_policy import ResolvedResources, ResourceValidationErr
 from revocompute.result_projection import artifact_capability
 from revocompute.result_storyboard import (
     RECORD_FILE_ROLES,
+    SERVER_RECORD_PREFIXES,
     ResultContractError,
     declared_file_roles,
     expected_file_tree,
@@ -1538,11 +1539,12 @@ def _verify_snapshot(fe: dict[str, Any], snapshot_path: str, receipt: Any) -> st
 
 def _default_artifact_role(relative_path: str) -> str:
     basename = os.path.basename(relative_path)
-    if relative_path == "citations.bib" or relative_path.startswith("debug/"):
+    if relative_path == "citations.bib":
         return "provenance"
+    if relative_path.startswith(SERVER_RECORD_PREFIXES):
+        return "provenance" if relative_path.startswith("debug/") else "diagnostic"
     if (
-        relative_path.startswith(("execution/", "log/"))
-        or basename == "task_failed.txt"
+        basename == "task_failed.txt"
         or (basename.startswith(".") and basename.endswith("-complete"))
         or relative_path.endswith((".stderr.log", ".stdout.log", ".err"))
     ):
@@ -1773,8 +1775,7 @@ def _resolve_result_views(
                 # wins over plain view membership, and the server's default
                 # classification is the last resort.
                 if role == "primary":
-                    if view_source_eligible(path, "primary"):
-                        artifact["role"] = "primary"
+                    artifact["role"] = "primary"
                     continue
                 resolved_role = declared_roles.get(path) or role
                 if artifact["role"] in {"provenance", "diagnostic", "primary"}:
