@@ -90,6 +90,7 @@ nav:
       - Architecture: developer-guide/architecture.md
       - Plugin Kernel: developer-guide/plugin-kernel.md
       - Execution Model: developer-guide/execution-model.md
+      - Execution Stage State: developer-guide/execution-stage-state.md
       - Authenticated Tool Runtime: developer-guide/tool-runtime.md
       - Result View Plugin Contract: developer-guide/result-view-plugins.md
       - Scientific Result Inventory: developer-guide/result-inventory.md

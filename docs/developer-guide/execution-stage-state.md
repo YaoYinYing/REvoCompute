@@ -1,7 +1,9 @@
-# RFC — durable execution-stage state
+# Execution Stage State
 
-> Status: accepted for implementation in PR #118. Core only. No Runner protocol
-> change, no stage-selection UI, no artifact reuse (PR #119).
+This page defines the durable execution-stage state contract implemented by
+PR #118: `stage_runs` is the only stage authority and `tasks.workflow_state` is
+its compatibility projection. Runner protocol changes, stage-selection UI, and
+artifact reuse are separate.
 
 ## Problem
 
