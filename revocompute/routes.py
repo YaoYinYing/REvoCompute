@@ -1301,6 +1301,14 @@ def _input_workspace_steps(tt) -> list[dict]:
     return steps
 
 
+def _execution_graph_payload(tt) -> dict[str, Any] | None:
+    """The graph identity a workflow Task freezes at submission."""
+    if not tt.workflow:
+        return None
+    graph = compile_graph(tt)
+    return {"ir_version": graph.ir_version, "digest": graph.digest, "document": graph.document}
+
+
 @app.route("/compute/api/types/<name>", methods=["GET"])
 @optional_user
 def task_type_form(name: str):
@@ -1334,43 +1342,48 @@ def task_type_form(name: str):
             return jsonify({"error": f"Task resource policy is invalid: {exc}"}), 503
 
     workspace_payload = _input_workspace_payload(tt)
-    return jsonify(
-        {
-            **_task_summary(tt),
-            **_task_guidance(tt),
-            "access": _runner_access_payload(tt),
-            "definition_version": 4,
-            "runtime_family": tt.runtime.name,
-            "gpus": tt.gpus,
-            "requires_network": tt.requires_network or any(stage.requires_network for stage in tt.workflow),
-            "inputs": [
-                {
-                    "id": role.name,
-                    "title": role.title,
-                    "type": role.type,
-                    "formats": list(role.formats),
-                    "extensions": list(role.extensions),
-                    "accept": ",".join(role.extensions),
-                    "cardinality": {"min": role.minimum, "max": role.maximum},
-                    "description": role.description,
-                }
-                for role in tt.inputs
-            ],
-            "citations": [citation.projection() for citation in tt.citations],
-            "workflow": [
-                {
-                    "name": stage.name,
-                    "display_name": stage.display_name,
-                    "requires_gpu": stage.requires_gpu,
-                    "requires_network": stage.requires_network,
-                    "stage_markers": list(stage.stage_markers),
-                }
-                for stage in tt.workflow
-            ],
-            "max_request_bytes": current_app.config["MAX_CONTENT_LENGTH"],
-            "input_workspace": workspace_payload,
-        }
-    )
+    try:
+        execution_graph = _execution_graph_payload(tt)
+    except GraphValidationError as exc:
+        return jsonify({"error": f"This task type's execution graph is invalid: {exc}"}), 400
+    payload = {
+        **_task_summary(tt),
+        **_task_guidance(tt),
+        "access": _runner_access_payload(tt),
+        "definition_version": 4,
+        "runtime_family": tt.runtime.name,
+        "gpus": tt.gpus,
+        "requires_network": tt.requires_network or any(stage.requires_network for stage in tt.workflow),
+        "inputs": [
+            {
+                "id": role.name,
+                "title": role.title,
+                "type": role.type,
+                "formats": list(role.formats),
+                "extensions": list(role.extensions),
+                "accept": ",".join(role.extensions),
+                "cardinality": {"min": role.minimum, "max": role.maximum},
+                "description": role.description,
+            }
+            for role in tt.inputs
+        ],
+        "citations": [citation.projection() for citation in tt.citations],
+        "workflow": [
+            {
+                "name": stage.name,
+                "display_name": stage.display_name,
+                "requires_gpu": stage.requires_gpu,
+                "requires_network": stage.requires_network,
+                "stage_markers": list(stage.stage_markers),
+            }
+            for stage in tt.workflow
+        ],
+        "max_request_bytes": current_app.config["MAX_CONTENT_LENGTH"],
+        "input_workspace": workspace_payload,
+    }
+    if execution_graph is not None:
+        payload["execution_graph"] = execution_graph
+    return jsonify(payload)
 
 
 def _enabled_task_type_or_404(name: str):
@@ -2378,17 +2391,10 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
     resource_policy = placement.primary
     resource_policies = placement.stage_resources
 
-    execution_graph = None
-    if tt.workflow:
-        try:
-            compiled_graph = compile_graph(tt)
-        except GraphValidationError as exc:
-            return jsonify({"error": f"This task type's execution graph is invalid: {exc}"}), 400
-        execution_graph = {
-            "ir_version": compiled_graph.ir_version,
-            "digest": compiled_graph.digest,
-            "document": compiled_graph.document,
-        }
+    try:
+        execution_graph = _execution_graph_payload(tt)
+    except GraphValidationError as exc:
+        return jsonify({"error": f"This task type's execution graph is invalid: {exc}"}), 400
 
     uploaded_inputs, upload_error = _validate_input_uploads(task_type)
     if upload_error is not None:

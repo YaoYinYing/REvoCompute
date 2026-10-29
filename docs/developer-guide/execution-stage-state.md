@@ -137,6 +137,18 @@ reason/semantic planned resources (``source`` is ``record``, ``legacy``, or
 ``definition``). Existing fields are unchanged, so old clients keep working; the
 list payload omits the per-stage detail rather than issuing one query per Task.
 
+Each stage also carries ``dependency``, which answers whether the stage's graph
+inputs are available and is independent of the scheduler ``status``:
+``completed`` (latest attempt completed and artifact reuse verified when the
+stage declares outputs), ``blocked`` (the stage or an ancestor failed, per the
+recorded blocked-stage diagnostic and graph edges), ``ready`` (every producer
+completed), or ``waiting`` otherwise. A single-stage Task has no graph and
+reports ``completed``, ``blocked``, or ``ready`` from its own attempt.
+
+``GET /compute/api/types/<name>`` includes ``execution_graph`` for workflow
+Task Types: the same canonical ``ir_version``/``document``/``digest`` that
+submission freezes. Single-stage Task Types omit the key.
+
 Historical rows are never backfilled (there is no evidence of attempts to
 invent). When a stage has no StageRun, the API reads that stage from the legacy
 ``workflow_state``; a Task with no records at all is labelled ``legacy``. A

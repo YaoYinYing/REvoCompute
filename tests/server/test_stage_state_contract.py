@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 import json
+from pathlib import Path
 import sqlite3
 import time
 
@@ -72,6 +73,56 @@ def _single_stage_type() -> TaskType:
         ".fasta",
         "FASTA",
         stage_markers={"execute": "Execute"},
+    )
+
+
+def _fork_task_type() -> TaskType:
+    runtime = RuntimeFamily("multistage_runner", ("bash", "run.sh"), "runner.def", "image.sif")
+    a = WorkflowStage(
+        "fork.a", "A", False, (), ("a",), outputs=(StagePortSpec("out", "x", path="a.dat"),),
+    )
+    b = WorkflowStage(
+        "fork.b", "B", False, (), ("b",),
+        inputs=(StagePortSpec("in", "x", source="fork.a:out"),),
+        outputs=(StagePortSpec("out", "x", path="b.dat"),),
+    )
+    c = WorkflowStage(
+        "fork.c", "C", False, (), ("c",),
+        inputs=(StagePortSpec("in", "x", source="fork.a:out"),),
+        outputs=(StagePortSpec("out", "x", path="c.dat"),),
+    )
+    d = WorkflowStage(
+        "fork.d", "D", False, (), ("d",),
+        inputs=(
+            StagePortSpec("left", "x", source="fork.b:out"),
+            StagePortSpec("right", "x", source="fork.c:out"),
+        ),
+        outputs=(StagePortSpec("out", "x", path="d.dat"),),
+    )
+    return TaskType(
+        "fork", "Fork", runtime, (),
+        stage_markers={"a": "A", "b": "B", "c": "C", "d": "D"},
+        workflow=(a, b, c, d),
+    )
+
+
+def _settle_stage(
+    database: TaskDatabase, task_id: str, index: int, stage: WorkflowStage,
+    result_dir: Path, *, status: str,
+) -> None:
+    attempt = database.begin_stage_attempt(task_id=task_id, stage_index=index, stage_name=stage.name)
+    identity = None
+    if status == stage_state.COMPLETED:
+        for port in stage.outputs:
+            (result_dir / port.path).write_text(stage.name, encoding="utf-8")
+        identity = task_runtime._stage_output_identity(str(result_dir), stage.outputs)
+    assert database.finish_stage_attempt(
+        task_id=task_id,
+        stage_name=stage.name,
+        attempt=attempt["attempt"],
+        status=status,
+        reason_code="completed" if status == stage_state.COMPLETED else "nonzero_exit",
+        output_identity=identity,
     )
 
 
@@ -243,6 +294,74 @@ def test_workflow_keeps_task_running_while_the_next_stage_is_queued(tmp_path, mo
     assert final["current"] is None
     mirror = json.loads(database.get_task(task_id)["workflow_state"])
     assert [step["status"] for step in mirror.values()] == ["completed", "completed"]
+
+
+def test_dependency_distinguishes_completed_ready_and_waiting_branches(tmp_path, monkeypatch):
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "d" * 32
+    _insert_task(database, task_id, status="running")
+    monkeypatch.setattr(task_runtime, "task_store", database)
+    tt = _fork_task_type()
+    monkeypatch.setattr(task_runtime, "_get_task_type", lambda name: (tt, None))
+    result_dir = tmp_path / "result"
+    result_dir.mkdir()
+    monkeypatch.setattr(task_runtime, "_task_result_dir", lambda task: str(result_dir))
+    _settle_stage(database, task_id, 0, tt.workflow[0], result_dir, status=stage_state.COMPLETED)
+    _settle_stage(database, task_id, 1, tt.workflow[1], result_dir, status=stage_state.COMPLETED)
+
+    projection = task_runtime.stage_projection(database.get_task(task_id))
+
+    assert {item["name"]: item["dependency"] for item in projection["items"]} == {
+        "fork.a": "completed",
+        "fork.b": "completed",
+        "fork.c": "ready",
+        "fork.d": "waiting",
+    }
+
+
+def test_blocked_join_reports_blocked_while_sibling_stays_completed(tmp_path, monkeypatch):
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "d" * 32
+    _insert_task(database, task_id, status="running")
+    monkeypatch.setattr(task_runtime, "task_store", database)
+    tt = _fork_task_type()
+    monkeypatch.setattr(task_runtime, "_get_task_type", lambda name: (tt, None))
+    result_dir = tmp_path / "result"
+    result_dir.mkdir()
+    monkeypatch.setattr(task_runtime, "_task_result_dir", lambda task: str(result_dir))
+    _settle_stage(database, task_id, 0, tt.workflow[0], result_dir, status=stage_state.COMPLETED)
+    _settle_stage(database, task_id, 1, tt.workflow[1], result_dir, status=stage_state.FAILED)
+    _settle_stage(database, task_id, 2, tt.workflow[2], result_dir, status=stage_state.COMPLETED)
+    database.record_task_diagnostics(
+        task_id, {"reason_code": "nonzero_exit", "stage_id": "fork.b", "blocked_stages": ["fork.d"]}
+    )
+
+    projection = task_runtime.stage_projection(database.get_task(task_id))
+
+    assert {item["name"]: item["dependency"] for item in projection["items"]} == {
+        "fork.a": "completed",
+        "fork.b": "blocked",
+        "fork.c": "completed",
+        "fork.d": "blocked",
+    }
+    assert database.get_task_diagnostics(task_id)["blocked_stages"] == ["fork.d"]
+
+
+def test_single_stage_task_dependency_is_ready_while_non_terminal(tmp_path, monkeypatch):
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "d" * 32
+    _insert_task(database, task_id, status="running", task_type="cpu_runner")
+    monkeypatch.setattr(task_runtime, "task_store", database)
+    tt = _single_stage_type()
+    monkeypatch.setattr(task_runtime, "_get_task_type", lambda name: (tt, None))
+    attempt = database.begin_stage_attempt(task_id=task_id, stage_index=0, stage_name=tt.name)
+    database.record_stage_running(task_id=task_id, stage_name=tt.name, attempt=attempt["attempt"])
+
+    projection = task_runtime.stage_projection(database.get_task(task_id))
+
+    assert projection["items"][0]["status"] == stage_state.RUNNING
+    assert projection["items"][0]["dependency"] == "ready"
+    assert "execution_graph" not in projection
 
 
 def test_failed_attempt_uses_the_adapter_reason_and_never_another_attempt_evidence(tmp_path, monkeypatch):

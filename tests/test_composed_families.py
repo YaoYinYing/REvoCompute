@@ -91,6 +91,8 @@ def test_composed_submission_freezes_node_families_and_pins_every_bundle(monkeyp
     task = module.task_store.get_task(task_id)
     input_form = json.loads(task["input_form"])
     manifest = _task_manifest(module, task_id)
+    detail = module.app.test_client().get("/compute/api/types/multistage_runner").get_json()
+    assert detail["execution_graph"] == input_form["execution_graph"]
     nodes = {node["id"]: node["family"] for node in input_form["execution_graph"]["document"]["nodes"]}
     assert nodes == {
         "multistage_runner.features": "multistage_runner",

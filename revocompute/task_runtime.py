@@ -36,7 +36,7 @@ from celery import Celery
 from revocompute.admission import resolve_submission_readiness
 from revocompute.config import ComputeConfig, ensure_directories, env_csv, env_int, env_path
 from revocompute.db import GPUAuthorizationUnavailableError, GPUCreditUnavailableError, TaskDatabase
-from revocompute.execution_graph import canonical_digest, compile_graph
+from revocompute.execution_graph import GraphValidationError, canonical_digest, compile_graph
 from revocompute.infrastructure import (
     InfrastructureComponent,
     _gpu_inventory_probe,
@@ -451,12 +451,14 @@ def stage_projection(task: dict[str, Any]) -> dict[str, Any] | None:
                     planned=None,
                 )
             )
+        _attach_stage_dependencies(task, tt, items, {}, None)
         return _stage_summary("legacy", items)
 
     legacy = _workflow_state(task)
     # The newest attempt of a stage is the stage's current evidence; earlier
     # attempts stay visible in history but not as the stage's state.
     latest: dict[int, dict[str, Any]] = {}
+    latest_by_name: dict[str, dict[str, Any]] = {}
     by_name_index = {stage.name: index for index, stage in enumerate(declared)}
     # A stage removed from the manifest keeps a display position of its own; it
     # must not overwrite a current stage that now occupies its stored index.
@@ -479,6 +481,8 @@ def stage_projection(task: dict[str, Any]) -> dict[str, Any] | None:
                 index = candidate
         if index not in latest or run["attempt"] > latest[index]["attempt"]:
             latest[index] = run
+        if name not in latest_by_name or run["attempt"] > latest_by_name[name]["attempt"]:
+            latest_by_name[name] = run
     displays = {index: stage.display_name for index, stage in enumerate(declared)}
     if not declared and tt is not None:
         # The implicit single stage is the Task type itself.
@@ -531,7 +535,96 @@ def stage_projection(task: dict[str, Any]) -> dict[str, Any] | None:
                 planned=planned,
             )
         )
+    try:
+        output_dir = _task_result_dir(task)
+    except (OSError, ValueError):
+        output_dir = None
+    _attach_stage_dependencies(task, tt, items, latest_by_name, output_dir)
     return _stage_summary("record", items)
+
+
+def _attach_stage_dependencies(
+    task: dict[str, Any],
+    tt: Any,
+    items: list[dict[str, Any]],
+    latest_by_name: dict[str, dict[str, Any]],
+    output_dir: str | None,
+) -> None:
+    """Add each stage's dependency state beside its scheduler status.
+
+    ``completed`` requires the latest attempt to be COMPLETED *and*, when the
+    stage declares artifacts, to pass the same reuse verification the scheduler
+    applies.  ``blocked`` comes from the recorded blocked-stage diagnostic and
+    the graph's ancestors; ``ready`` requires every producer to be completed.
+    """
+    graph = None
+    if tt is not None and getattr(tt, "workflow", ()):
+        try:
+            graph = compile_graph(tt)
+        except GraphValidationError:
+            graph = None
+    if graph is None:
+        for item in items:
+            item["dependency"] = (
+                "completed"
+                if item["status"] == stage_state.COMPLETED
+                else "blocked"
+                if item["status"] == stage_state.FAILED
+                else "ready"
+            )
+        return
+    nodes = {node.id: node for node in graph.nodes}
+    completed: set[str] = set()
+    for item in items:
+        node = nodes.get(item["name"])
+        if item["status"] != stage_state.COMPLETED:
+            continue
+        if node is not None and node.outputs:
+            recorded = latest_by_name.get(item["name"])
+            if output_dir is None:
+                continue
+            try:
+                if _stage_reuse_valid(output_dir, node.outputs, recorded) is not None:
+                    continue
+            except (OSError, TypeError, ValueError):
+                continue
+        completed.add(item["name"])
+    evidence = task_store.get_task_diagnostics(str(task.get("md5sum") or "")) or {}
+    blocked = {str(name) for name in evidence.get("blocked_stages", ())}
+    blocked.update(item["name"] for item in items if item["status"] == stage_state.FAILED)
+    parents = {
+        node_id: {
+            binding.rsplit(":", 1)[0]
+            for binding in node.inputs.values()
+            if not binding.startswith("graph:")
+        }
+        for node_id, node in nodes.items()
+    }
+
+    def ancestors(name: str) -> set[str]:
+        seen: set[str] = set()
+        pending = list(parents.get(name, ()))
+        while pending:
+            parent = pending.pop()
+            if parent in seen:
+                continue
+            seen.add(parent)
+            pending.extend(parents.get(parent, ()))
+        return seen
+
+    blocked.update(name for name in nodes if ancestors(name) & blocked)
+    for item in items:
+        name = item["name"]
+        if name in completed:
+            item["dependency"] = "completed"
+        elif name in blocked:
+            item["dependency"] = "blocked"
+        elif name not in nodes:
+            item["dependency"] = "waiting"
+        elif all(parent in completed for parent in parents[name]):
+            item["dependency"] = "ready"
+        else:
+            item["dependency"] = "waiting"
 
 
 def _stage_summary(source: str, items: list[dict[str, Any]]) -> dict[str, Any]:

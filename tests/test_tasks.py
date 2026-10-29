@@ -414,6 +414,34 @@ def test_multistage_runner_multimer_submission_preserves_selected_preset(monkeyp
     assert frozen["document"]["execution_order"] == ["multistage_runner.features", "multistage_runner.model"]
 
 
+def test_workflow_type_detail_projects_the_graph_submission_freezes(monkeypatch, tmp_path):
+    module = _load_pssm_module(
+        monkeypatch, tmp_path,
+        extra_env={
+            "RUNNER_UID": "1234", "RUNNER_GID": "5678",
+            "ENABLED_TASKRUNNERS": "multistage_runner,cpu_runner",
+        },
+    )
+    client = module.app.test_client()
+
+    response = client.get("/compute/api/types/multistage_runner")
+
+    assert response.status_code == 200
+    execution_graph = response.get_json()["execution_graph"]
+    task_type, _ = module.task_runtime._get_task_type("multistage_runner")
+    compiled = compile_graph(task_type)
+    assert execution_graph == json.loads(
+        json.dumps(
+            {
+                "ir_version": compiled.ir_version,
+                "digest": compiled.digest,
+                "document": compiled.document,
+            }
+        )
+    )
+    assert "execution_graph" not in client.get("/compute/api/types/cpu_runner").get_json()
+
+
 def test_submission_refuses_a_task_whose_graph_cannot_run(monkeypatch, tmp_path):
     module = _load_pssm_module(
         monkeypatch, tmp_path,
