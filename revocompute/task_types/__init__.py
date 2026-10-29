@@ -1282,8 +1282,11 @@ def _load_workflow(raw: Any, task_name: str, stage_markers: dict[str, str]) -> t
             )
         requires_gpu = entry["requires_gpu"]
         requires_network = entry["requires_network"]
-        runner_args = entry.get("runner_args", ())
-        raw_markers = entry.get("stage_markers", ())
+        # An omitted optional list means "none", not a type error: the graph
+        # documentation's own example omits runner_args on a stage that runs its
+        # image entrypoint unchanged.
+        runner_args = entry.get("runner_args", [])
+        raw_markers = entry.get("stage_markers", [])
         if not isinstance(name, str) or not name.replace("_", "").isalnum() or name in seen:
             raise ValueError(f"Task type {task_name!r} has an invalid or duplicate workflow stage name")
         family = entry.get("family")

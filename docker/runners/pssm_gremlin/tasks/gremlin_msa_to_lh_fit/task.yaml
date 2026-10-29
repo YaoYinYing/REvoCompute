@@ -67,7 +67,6 @@ workflow:
   display_name: GREMLIN_LH model fit
   requires_gpu: false
   requires_network: false
-  runner_args: []
   stage_markers: [gremlin]
   inputs:
   - {name: alignment, type: alignment, from: "gremlin_msa_to_lh_fit.msa:alignment"}
