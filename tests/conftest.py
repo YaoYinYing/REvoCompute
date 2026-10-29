@@ -533,7 +533,9 @@ def _inject_task_type(module, task_type, runner):
         raise RuntimeError("task_types has no active plugin manager; run discover first")
     contributions = manager.contributions
     contributions.register("tasks", task_type.name, task_type, plugin_id="test")
-    contributions.register("runner_configs", task_type.name, runner, plugin_id="test")
+    family_id = task_type.runtime.name
+    if contributions.get("runner_configs", family_id) is None:
+        contributions.register("runner_configs", family_id, runner, plugin_id="test")
     return task_type
 
 

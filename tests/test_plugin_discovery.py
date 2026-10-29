@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from revocompute.task_types import discover_plugins, get, list_policies, list_types
+from revocompute.task_types import discover_plugins, get, get_family, list_policies, list_types
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -343,6 +343,28 @@ def test_workflow_stage_must_declare_both_capability_keys(tmp_path):
 
 
 
+
+
+def test_tasks_in_one_family_share_the_family_runner_config(tmp_path):
+    family = tmp_path / "demo"
+    for name in ("first", "second"):
+        task_dir = family / "tasks" / name
+        task_dir.mkdir(parents=True)
+        (task_dir / "task.yaml").write_text(f"id: {name}\ninputs: {{}}\n", encoding="utf-8")
+    (family / "plugin.yaml").write_text(
+        "id: demo\nversion: '1'\nruntime: {image_artifact: demo.sif, definition: demo.def}\n"
+        "tasks: [tasks/first/task.yaml, tasks/second/task.yaml]\n",
+        encoding="utf-8",
+    )
+    (family / "demo.def").write_text("Bootstrap: demo\n", encoding="utf-8")
+    (family / "runner.yaml").write_text("max_runtime_seconds: 7200\n", encoding="utf-8")
+
+    discover_plugins(str(tmp_path))
+
+    _, runtime = get_family("demo")
+    assert get("first")[1] is runtime
+    assert get("second")[1] is runtime
+    assert runtime.max_runtime_seconds == 7200
 
 
 def test_workflow_stage_family_must_resolve_to_a_registered_runtime_family(tmp_path):

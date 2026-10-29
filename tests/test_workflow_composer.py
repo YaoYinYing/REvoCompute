@@ -13,12 +13,18 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from revocompute.access_control import AccessPolicy
 from revocompute.execution_graph import compile_graph
 from revocompute.job import JobState
 from revocompute.job.runners.slurm_runner import SlurmJob
 from revocompute.resource_policy import ResolvedResources
-from revocompute.task_types import RunnerConfig, RuntimeFamily, StagePortSpec, TaskType, WorkflowStage, get
+from revocompute.task_types import (
+    RuntimeFamily,
+    StagePortSpec,
+    TaskType,
+    WorkflowStage,
+    get,
+    get_family,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -132,7 +138,7 @@ def test_graph_scheduler_validates_outputs_and_preserves_attempts(monkeypatch, t
     task_id = {"valid": "1", "missing": "2", "escape": "3"}[output_kind] * 32
     _ensure_task_row(task_runtime, task_id)
     result = task_runtime._run_compute_workflow(
-        task_id, _frozen(task_type), task_type, RunnerConfig(), [], str(output),
+        task_id, _frozen(task_type), task_type, [], str(output),
         {stage.name: _policy(stage.requires_gpu) for stage in task_type.workflow}, lambda _: None,
     )
     runs = task_runtime.task_store.list_stage_runs(task_id)
@@ -198,7 +204,7 @@ def test_resume_revalidates_completed_producer_outputs(monkeypatch, tmp_path, mu
     monkeypatch.setattr(task_runtime.task_store, "update_task", lambda *args, **kwargs: True)
     policies = {stage.name: _policy(stage.requires_gpu) for stage in task_type.workflow}
     assert task_runtime._run_compute_workflow(
-        task_id, _frozen(task_type), task_type, RunnerConfig(), [], str(output), policies, lambda _: None,
+        task_id, _frozen(task_type), task_type, [], str(output), policies, lambda _: None,
     ) == JobState.FAILED
     first_call["done"] = True
     assert task_runtime.task_store.list_stage_runs(task_id)[0]["output_identity"]
@@ -217,7 +223,7 @@ def test_resume_revalidates_completed_producer_outputs(monkeypatch, tmp_path, mu
     started = []
     monkeypatch.setattr(task_runtime, "_create_job", lambda _id, tt, *a, **kw: started.append(tt.name) or Job(tt.name))
     result = task_runtime._run_compute_workflow(
-        task_id, _frozen(task_type), task_type, RunnerConfig(), [], str(output), policies, lambda _: None,
+        task_id, _frozen(task_type), task_type, [], str(output), policies, lambda _: None,
     )
     if expected_reason is None:
         assert result == JobState.COMPLETED
@@ -266,7 +272,7 @@ def test_composer_refuses_unverified_legacy_completed_stage(monkeypatch):
     _ensure_task_row(task_runtime, "a" * 32)
 
     result = task_runtime._run_compute_workflow(
-        "a" * 32, task, task_type, RunnerConfig(), [], "/tmp/results",
+        "a" * 32, task, task_type, [], "/tmp/results",
         {"multistage_runner.features": _policy(False), "multistage_runner.model": _policy(True)},
         lambda stage: None,
     )
@@ -304,7 +310,7 @@ def test_dispatch_refuses_graph_that_differs_from_submission(monkeypatch, frozen
     task_id = ("1" if frozen is None else "2") * 32
     _ensure_task_row(task_runtime, task_id)
     result = task_runtime._run_compute_workflow(
-        task_id, task, task_type, RunnerConfig(), [], "/tmp/results",
+        task_id, task, task_type, [], "/tmp/results",
         {features.name: _policy(False)}, lambda _: None,
     )
     assert result == JobState.FAILED
@@ -341,15 +347,16 @@ def _diamond_workflow() -> TaskType:
     )
 
 
-def test_foreign_family_node_is_refused_before_dispatch(monkeypatch, tmp_path):
-    """Until cross-family dispatch lands, a foreign node must not run in the wrong image."""
+def test_foreign_family_node_uses_that_family_runtime_runner_and_policy(monkeypatch, tmp_path):
     task_runtime = _live_task_runtime()
+    foreign_runtime, foreign_runner = get_family("restricted_runner")
     base = _diamond_workflow()
-    foreign = replace(base.workflow[1], family="foreign_runner")
+    foreign = replace(base.workflow[1], family="restricted_runner")
     task_type = replace(base, workflow=(base.workflow[0], foreign, *base.workflow[2:]))
     output = tmp_path / "output"
     output.mkdir()
-    started = []
+    created = []
+    callback_arguments = []
 
     class Job:
         def __init__(self, name):
@@ -362,26 +369,40 @@ def test_foreign_family_node_is_refused_before_dispatch(monkeypatch, tmp_path):
             (output / f"{self.name.rsplit('-', 1)[-1]}.dat").write_text("ok")
             return JobState.COMPLETED
 
-    def create(_task_id, stage_tt, *_args, **_kwargs):
-        started.append(stage_tt.name)
+    def create(_task_id, stage_tt, runner, *_args, **_kwargs):
+        created.append((stage_tt, runner))
         return Job(stage_tt.name)
 
+    real_callbacks = task_runtime._compute_allocation_callbacks
+
+    def callbacks(**kwargs):
+        callback_arguments.append(kwargs)
+        return real_callbacks(**kwargs)
+
     monkeypatch.setattr(task_runtime, "_create_job", create)
+    monkeypatch.setattr(task_runtime, "_compute_allocation_callbacks", callbacks)
     monkeypatch.setattr(task_runtime.task_store, "update_task", lambda *args, **kwargs: True)
     task_id = "e" * 32
     _ensure_task_row(task_runtime, task_id)
     policies = {stage.name: _policy(False) for stage in task_type.workflow}
 
     result = task_runtime._run_compute_workflow(
-        task_id, _frozen(task_type), task_type, RunnerConfig(), [], str(output), policies, lambda _: None,
+        task_id, _frozen(task_type), task_type, [], str(output), policies, lambda _: None,
     )
 
-    assert result == JobState.FAILED
-    assert "dag-b" not in started
-    assert {run["stage_name"] for run in task_runtime.task_store.list_stage_runs(task_id)} == {"dag.a", "dag.c"}
-    evidence = task_runtime.task_store.get_task_diagnostics(task_id)
-    assert evidence["reason_code"] == "stage_family_unsupported"
-    assert evidence["blocked_stages"] == ["dag.d"]
+    assert result == JobState.COMPLETED
+    by_name = {stage_tt.name: (stage_tt, runner) for stage_tt, runner in created}
+    foreign_tt, foreign_job_runner = by_name["dag-b"]
+    assert foreign_tt.runtime is foreign_runtime
+    assert foreign_tt.runtime.slurm_image == foreign_runtime.slurm_image
+    assert foreign_tt.runtime.entrypoint == foreign_runtime.entrypoint
+    assert foreign_job_runner is foreign_runner
+    callback = next(item for item in callback_arguments if item["stage_id"] == "dag.b")
+    assert callback["required_entitlements"] == ("synthetic_noncommercial",)
+    assert callback["runner_family"] == "restricted_runner"
+    own_tt, own_job_runner = by_name["dag-a"]
+    assert own_tt.runtime.name == "multistage_runner"
+    assert own_job_runner is get_family("multistage_runner")[1]
 
 
 def test_fork_join_runs_serial_schedule_and_resume_after_branch_failure(monkeypatch, tmp_path):
@@ -421,7 +442,7 @@ def test_fork_join_runs_serial_schedule_and_resume_after_branch_failure(monkeypa
     policies = {stage.name: _policy(False) for stage in task_type.workflow}
 
     first = task_runtime._run_compute_workflow(
-        task_id, _frozen(task_type), task_type, RunnerConfig(), [], str(output), policies, lambda _: None,
+        task_id, _frozen(task_type), task_type, [], str(output), policies, lambda _: None,
     )
 
     assert first == JobState.FAILED
@@ -437,7 +458,7 @@ def test_fork_join_runs_serial_schedule_and_resume_after_branch_failure(monkeypa
     fail_b["value"] = False
     started.clear()
     second = task_runtime._run_compute_workflow(
-        task_id, _frozen(task_type), task_type, RunnerConfig(), [], str(output), policies, lambda _: None,
+        task_id, _frozen(task_type), task_type, [], str(output), policies, lambda _: None,
     )
 
     assert second == JobState.COMPLETED
@@ -473,7 +494,7 @@ def test_fork_and_join_both_complete_in_deterministic_order(monkeypatch, tmp_pat
     task_id = "8" * 32
     _ensure_task_row(task_runtime, task_id)
     result = task_runtime._run_compute_workflow(
-        task_id, _frozen(task_type), task_type, RunnerConfig(), [], str(output),
+        task_id, _frozen(task_type), task_type, [], str(output),
         {stage.name: _policy(False) for stage in task_type.workflow}, lambda _: None,
     )
 
@@ -525,7 +546,7 @@ def test_latest_failed_attempt_is_not_reused(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(task_runtime.task_store, "update_task", lambda *args, **kwargs: True)
     result = task_runtime._run_compute_workflow(
-        task_id, _frozen(task_type), task_type, RunnerConfig(), [], str(output),
+        task_id, _frozen(task_type), task_type, [], str(output),
         {features.name: _policy(False)}, lambda _: None,
     )
 
@@ -539,23 +560,10 @@ def test_latest_failed_attempt_is_not_reused(monkeypatch, tmp_path):
 def test_gpu_workflow_uses_owning_runtime_for_allocation_authorization(monkeypatch):
     task_runtime = _live_task_runtime()
 
-    access_policy = AccessPolicy(
-        "synthetic_noncommercial",
-        "Synthetic restricted access",
-        "Restricted runtime",
-        ("synthetic_terms",),
-        True,
-    )
-    runtime = RuntimeFamily(
-        "multistage_runner",
-        ("bash", "run.sh"),
-        "runner.def",
-        "image.sif",
-        access_policy=access_policy,
-    )
-    stage = WorkflowStage("multistage_runner.model", "Model", True, ("-s", "model"), ("model",))
+    runtime, runner = get_family("restricted_runner")
+    stage = WorkflowStage("restricted_runner.model", "Model", True, ("-s", "model"), ("model",))
     task_type = TaskType(
-        "multistage_runner",
+        "restricted_runner",
         "Synthetic staged calculation",
         runtime,
         (),
@@ -585,10 +593,9 @@ def test_gpu_workflow_uses_owning_runtime_for_allocation_authorization(monkeypat
         "f" * 32,
         _frozen(task_type, submitted_by_user_id=17, username="tester"),
         task_type,
-        RunnerConfig(),
         [],
         "/tmp/results",
-        {"multistage_runner.model": _policy(True)},
+        {"restricted_runner.model": _policy(True)},
         lambda stage_name: None,
     )
 
@@ -601,10 +608,10 @@ def test_gpu_workflow_uses_owning_runtime_for_allocation_authorization(monkeypat
     assert request == {
         "task_id": "f" * 32,
         "user_id": 17,
-        "stage_id": "multistage_runner.model",
+        "stage_id": "restricted_runner.model",
         "resource_policy": _policy(True),
-        "required_entitlements": ("synthetic_terms",),
-        "runner_family": "multistage_runner",
+        "required_entitlements": ("synthetic_noncommercial",),
+        "runner_family": "restricted_runner",
     }
 
 
@@ -629,7 +636,6 @@ def test_composer_does_not_submit_after_cancellation_claim_fails(monkeypatch):
         "b" * 32,
         _frozen(task_type),
         task_type,
-        RunnerConfig(),
         [],
         "/tmp/results",
         {"multistage_runner.model": _policy(True)},
@@ -671,7 +677,6 @@ def test_composer_cancels_submitted_job_when_handle_cannot_be_persisted(monkeypa
         "c" * 32,
         _frozen(task_type),
         task_type,
-        RunnerConfig(),
         [],
         "/tmp/results",
         {"multistage_runner.model": _policy(True)},
@@ -916,7 +921,7 @@ def test_composed_af3_workflow_advances_task_run_stage_through_all_markers(monke
     """The composer's stage callbacks expose every task-level marker in order."""
     task_runtime = _live_task_runtime()
 
-    task_type, runner = get("restricted_runner")
+    task_type, _runner = get("restricted_runner")
     task_level = list(task_type.stage_markers)
     assert task_level == ["data_pipeline", "feature_validation", "inference", "output_validation"]
 
@@ -958,7 +963,6 @@ def test_composed_af3_workflow_advances_task_run_stage_through_all_markers(monke
         "a" * 32,
         _frozen(task_type, username="tester"),
         task_type,
-        runner,
         [],
         "/tmp/results",
         {stage.name: _policy(stage.requires_gpu) for stage in task_type.workflow},

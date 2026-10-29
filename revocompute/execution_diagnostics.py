@@ -28,7 +28,6 @@ REASONS = {
     "execution_graph_unverified": "The submission-frozen execution graph is missing or cannot be verified.",
     "execution_graph_changed": "The execution graph changed after submission.",
     "stage_blocked_by_failed_dependency": "A stage could not run because an upstream stage failed or was blocked.",
-    "stage_family_unsupported": "A stage requires a runtime family this worker cannot dispatch.",
     "submission_failed": "The allocation request could not be submitted.",
     "job_id_unavailable": "The allocation request returned no usable scheduler job identity.",
     "allocation_unrecorded": "Execution was stopped because its allocation could not be recorded safely.",

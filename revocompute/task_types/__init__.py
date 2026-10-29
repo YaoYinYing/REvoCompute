@@ -629,6 +629,13 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
             runtime_overlay=runtime_overlay,
         )
         manager.register_contribution(family_id, "runtime_families", family_id, runtime)
+        runner_file = family_dir / "runner.yaml"
+        manager.register_contribution(
+            family_id,
+            "runner_configs",
+            family_id,
+            _load_runner_config(str(runner_file)) if runner_file.is_file() else RunnerConfig(),
+        )
         task_refs = manifest_obj.tasks
         for ref in task_refs:
             ref_path = Path(str(ref))
@@ -696,10 +703,7 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
                     description="",
                     order=len(categories),
                 )
-            runner_file = family_dir / "runner.yaml"
-            runner_cfg = _load_runner_config(str(runner_file)) if runner_file.is_file() else RunnerConfig()
             manager.register_contribution(family_id, "tasks", task_id, task)
-            manager.register_contribution(family_id, "runner_configs", task_id, runner_cfg)
     _validate_stage_families(manager)
     _install_snapshot(_RegistryState(plugin_manager=manager, categories=categories, policies=policies))
 
@@ -836,23 +840,29 @@ def get(name: str) -> tuple[TaskType, RunnerConfig]:
     if manager is None:
         raise KeyError(f"Unknown task type: {name!r}") from None
     try:
-        return (
-            manager.contributions.resolve("tasks", name),
-            manager.contributions.resolve("runner_configs", name),
-        )
+        task = manager.contributions.resolve("tasks", name)
+        return task, get_family(task.runtime.name)[1]
     except KeyError:
         raise KeyError(f"Unknown task type: {name!r}") from None
 
 
-def get_runtime_family(family_id: str) -> RuntimeFamily:
-    """Resolve a discovered runtime family from the active registry."""
+def get_family(family_id: str) -> tuple[RuntimeFamily, RunnerConfig]:
+    """Resolve a runtime family and the one RunnerConfig every task in it shares."""
     manager = _active().plugin_manager
     if manager is None:
         raise KeyError(f"Unknown runtime family: {family_id!r}") from None
     try:
-        return manager.contributions.resolve("runtime_families", family_id)
+        return (
+            manager.contributions.resolve("runtime_families", family_id),
+            manager.contributions.resolve("runner_configs", family_id),
+        )
     except KeyError:
         raise KeyError(f"Unknown runtime family: {family_id!r}") from None
+
+
+def get_runtime_family(family_id: str) -> RuntimeFamily:
+    """Resolve a discovered runtime family from the active registry."""
+    return get_family(family_id)[0]
 
 
 def list_types() -> list[TaskType]:

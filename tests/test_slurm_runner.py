@@ -2337,6 +2337,45 @@ def test_runtime_bundle_is_bound_read_only_at_the_reserved_mount(tmp_path):
     assert subprocess.run(["bash", "-n"], input=script, text=True, check=False).returncode == 0
 
 
+def test_runtime_bundle_is_selected_for_the_job_family(tmp_path):
+    from revocompute.task_types import RuntimeFamily
+
+    digest, path = _materialized_bundle(tmp_path)
+    inputs = tmp_path / "workspace" / "task-1" / "inputs"
+    inputs.mkdir(parents=True)
+    (inputs / "task.json").write_text(
+        json.dumps(
+            {"runtime_bundles": {"cpu_runner": "sha256:" + "0" * 64, "gpu_runner": digest}}
+        ),
+        encoding="utf-8",
+    )
+    task_type = replace(
+        _make_task_type(),
+        runtime=RuntimeFamily(
+            name="gpu_runner",
+            entrypoint=("bash", "/app/run.sh"),
+            definition="gpu_runner.def",
+            slurm_image="/opt/images/gpu_runner.sif",
+            image_artifact="gpu_runner.sif",
+        ),
+    )
+    entities = _make_entities()
+    entities[0] = {**entities[0], "snapshot_root": str(inputs)}
+    job = SlurmJob(
+        "task-1",
+        task_type,
+        _make_runner(),
+        entities,
+        str(tmp_path / "out"),
+        username="alice",
+        runtime_bundle_root=str(tmp_path / "runtime-bundles"),
+    )
+
+    script = job._render_wrapper()
+
+    assert f"--bind '{path}':'/opt/revocompute/runtime':ro" in script
+
+
 def test_absent_runtime_bundle_declaration_adds_no_runtime_mount(tmp_path):
     job = _bundle_job(tmp_path, None)
 

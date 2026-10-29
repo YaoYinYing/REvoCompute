@@ -92,7 +92,7 @@ from revocompute.storage import (
     _ResultTreeWalker,
 )
 from revocompute.citations import citations_bibtex
-from revocompute.task_types import default_task_type, get as _get_task_type
+from revocompute.task_types import default_task_type, get as _get_task_type, get_family as _get_family
 from revocompute.task_types import discover_plugins as _discover_plugins
 
 CONFIG = ComputeConfig.from_env()
@@ -1199,7 +1199,6 @@ def _run_compute_workflow(
     task_id: str,
     task: dict[str, Any],
     tt,
-    runner,
     entities: list[dict],
     output_dir: str,
     resource_policies: dict[str, ResolvedResources],
@@ -1289,17 +1288,9 @@ def _run_compute_workflow(
                 block_descendants(node.id)
                 progressed = True
                 continue
-            if node.family != tt.runtime.name:
-                # Until cross-family dispatch lands, refuse rather than run the
-                # node in the composing family's image.
-                _record_workflow_refusal(task_id, node.id, "stage_family_unsupported")
-                failed.add(node.id)
-                block_descendants(node.id)
-                progressed = True
-                continue
             index, stage = stages[node.id]
             result = _execute_workflow_node(
-                task_id, task, tt, stage, index, node, runner, entities, output_dir,
+                task_id, task, tt, stage, index, node, entities, output_dir,
                 resource_policies, stage_callback, legacy_state,
             )
             progressed = True
@@ -1329,7 +1320,6 @@ def _execute_workflow_node(
     stage,
     index: int,
     node,
-    runner,
     entities: list[dict],
     output_dir: str,
     resource_policies: dict[str, ResolvedResources],
@@ -1341,9 +1331,11 @@ def _execute_workflow_node(
     if policy is None:
         raise ResourceValidationError(f"Workflow stage {stage.name!r} has no resource snapshot")
     markers = {name: tt.stage_markers[name] for name in stage.stage_markers}
+    stage_runtime, stage_runner = _get_family(node.family)
     stage_tt = replace(
         tt,
         name=stage.name.replace(".", "-"),
+        runtime=stage_runtime,
         runner_args=stage.runner_args,
         gpus=stage.requires_gpu,
         requires_network=stage.requires_network,
@@ -1367,15 +1359,15 @@ def _execute_workflow_node(
         user_id=user_id,
         stage_id=stage.name,
         resource_policy=policy,
-        required_entitlements=(tt.runtime.access_policy.requires if tt.runtime.access_policy else ()),
-        runner_family=tt.runtime.name,
+        required_entitlements=(stage_runtime.access_policy.requires if stage_runtime.access_policy else ()),
+        runner_family=stage_runtime.name,
         attempt=attempt,
     )
     try:
         job = _create_job(
             task_id,
             stage_tt,
-            runner,
+            stage_runner,
             entities,
             output_dir,
             stage_callback,
@@ -3056,7 +3048,6 @@ def _execute_compute_task(
                 md5sum,
                 task,
                 tt,
-                runner,
                 entities,
                 output_dir,
                 resource_policies,

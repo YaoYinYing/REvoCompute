@@ -20,13 +20,13 @@ FIXTURES = ROOT / "tests" / "fixtures" / "runners"
 FASTA = ROOT / "tests" / "data" / "fasta" / "Sli_S4.fasta"
 
 
-def _runner_root(tmp_path: Path, *, foreign_gpu: bool, task_gpus: bool) -> Path:
-    """A copy of the fixture tree whose calculation runs in ``cpu_runner``."""
+def _runner_root(tmp_path: Path, *, foreign_gpu: bool, task_gpus: bool, foreign: str = "cpu_runner") -> Path:
+    """A copy of the fixture tree whose calculation runs in ``foreign``."""
     root = tmp_path / "runners"
     shutil.copytree(FIXTURES, root)
     task_yaml = root / "multistage_runner" / "tasks" / "predict" / "task.yaml"
     raw = yaml.safe_load(task_yaml.read_text(encoding="utf-8"))
-    raw["workflow"][1]["family"] = "cpu_runner"
+    raw["workflow"][1]["family"] = foreign
     raw["workflow"][1]["requires_gpu"] = foreign_gpu
     raw["gpus"] = task_gpus
     task_yaml.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
@@ -51,15 +51,17 @@ def _submit(module, *, allow_gpu: bool):
         )
 
 
-def _composed_module(monkeypatch, tmp_path: Path, *, foreign_gpu: bool, task_gpus: bool):
-    root = _runner_root(tmp_path, foreign_gpu=foreign_gpu, task_gpus=task_gpus)
+def _composed_module(
+    monkeypatch, tmp_path: Path, *, foreign_gpu: bool, task_gpus: bool, foreign: str = "cpu_runner"
+):
+    root = _runner_root(tmp_path, foreign_gpu=foreign_gpu, task_gpus=task_gpus, foreign=foreign)
     return _load_pssm_module(
         monkeypatch,
         tmp_path,
         extra_env={
             "RUNNER_UID": "1234",
             "RUNNER_GID": "5678",
-            "ENABLED_TASKRUNNERS": "multistage_runner,cpu_runner",
+            "ENABLED_TASKRUNNERS": f"multistage_runner,{foreign}",
         },
         runner_root=root,
     )
@@ -128,6 +130,24 @@ def test_unready_referenced_family_refuses_submission_without_a_task_row(monkeyp
     assert body["runner"] == "cpu_runner"
     assert body["status"] == "NOT_CONFIGURED"
     assert {task["md5sum"] for task in module.task_store.list_tasks()} == before
+
+
+def test_foreign_family_access_policy_must_admit_the_user_and_is_audited(monkeypatch, tmp_path):
+    module = _composed_module(
+        monkeypatch, tmp_path, foreign_gpu=True, task_gpus=True, foreign="restricted_runner"
+    )
+    _queued(module, monkeypatch)
+    before = {task["md5sum"] for task in module.task_store.list_tasks()}
+
+    response = _submit(module, allow_gpu=True)
+
+    assert response.status_code == 403, response.get_data(as_text=True)[:500]
+    assert {task["md5sum"] for task in module.task_store.list_tasks()} == before
+    events = module.app.config["user_db"].list_runner_access_events(
+        policy_id="synthetic_noncommercial"
+    )
+    assert events and events[0]["runtime_family"] == "restricted_runner"
+    assert events[0]["outcome"] == "denied"
 
 
 def test_graph_gpu_stage_requires_entitlement_even_when_the_task_is_cpu(monkeypatch, tmp_path):

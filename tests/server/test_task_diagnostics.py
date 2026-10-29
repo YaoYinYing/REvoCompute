@@ -378,6 +378,22 @@ def test_workflow_submission_failure_cannot_inherit_previous_stage_evidence(task
 
     module, client, task_id, root, owner, *_ = task_context
     runtime = module.task_runtime
+    from revocompute import runtime_bundle
+
+    inputs = root.parent / "inputs"
+    inputs.mkdir(parents=True, exist_ok=True)
+    (inputs / "task.json").write_text(
+        json.dumps(
+            {
+                "runtime_bundles": {
+                    "cpu_runner": runtime_bundle.load_index(module.CONFIG.runtime_bundle_root)["cpu_runner"]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    entities = _make_entities()
+    entities[0] = {**entities[0], "snapshot_root": str(inputs)}
     stages = (
         WorkflowStage("pipeline.first", "First", False, (), ("first",)),
         WorkflowStage("pipeline.second", "Second", False, (), ("second",)),
@@ -406,7 +422,7 @@ def test_workflow_submission_failure_cannot_inherit_previous_stage_evidence(task
         job = SlurmJob(
             task_id, stage_tt, runner, entities, output_dir, callback,
             manage_db=SimpleNamespace(slurm_enabled=lambda: enabled[0]), task_store=module.task_store,
-            resource_policy=policy,
+            resource_policy=policy, runtime_bundle_root=module.CONFIG.runtime_bundle_root,
         )
         original_poll = job.poll
 
@@ -430,7 +446,7 @@ def test_workflow_submission_failure_cannot_inherit_previous_stage_evidence(task
     task = module.task_store.get_task(task_id)
     with pytest.raises(RuntimeError, match="SLURM is disabled"):
         runtime._run_compute_workflow(
-            task_id, task, tt, _make_runner(), _make_entities(), str(root),
+            task_id, task, tt, entities, str(root),
             {stage.name: policy for stage in stages}, lambda stage: None,
         )
     # A completed adapter can be asked to capture again, e.g. by late cancellation.

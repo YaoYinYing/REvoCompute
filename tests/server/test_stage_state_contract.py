@@ -199,7 +199,6 @@ def test_workflow_keeps_task_running_while_the_next_stage_is_queued(tmp_path, mo
         task_id,
         database.get_task(task_id),
         tt,
-        RunnerConfig(),
         [],
         str(tmp_path / "results"),
         {
@@ -323,7 +322,6 @@ def test_failed_stage_stops_the_workflow_before_the_next_allocation(tmp_path, mo
         task_id,
         database.get_task(task_id),
         tt,
-        RunnerConfig(),
         [],
         str(tmp_path / "results"),
         {
