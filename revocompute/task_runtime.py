@@ -543,6 +543,21 @@ def stage_projection(task: dict[str, Any]) -> dict[str, Any] | None:
     return _stage_summary("record", items)
 
 
+def _stage_outputs_present(output_dir: str, outputs) -> bool:
+    """Cheap existence/containment check for a status projection, never a hash."""
+    try:
+        for port in outputs:
+            matches = list(Path(output_dir).glob(port.path))
+            if not matches and port.required:
+                return False
+            for path in matches:
+                if not _path_is_within(output_dir, str(path)):
+                    return False
+    except (OSError, TypeError, ValueError):
+        return False
+    return True
+
+
 def _attach_stage_dependencies(
     task: dict[str, Any],
     tt: Any,
@@ -580,13 +595,20 @@ def _attach_stage_dependencies(
         if item["status"] != stage_state.COMPLETED:
             continue
         if node is not None and node.outputs:
+            # A status read must stay cheap: the recorded identity's shape plus
+            # an existence/containment check is enough to label the row.  The
+            # full content re-hash still runs where reuse is decided (dispatch
+            # and resume), so this projection can never authorize a reuse.
             recorded = latest_by_name.get(item["name"])
-            if output_dir is None:
+            identity = (recorded or {}).get("output_identity")
+            if not isinstance(identity, str) or not identity:
                 continue
             try:
-                if _stage_reuse_valid(output_dir, node.outputs, recorded) is not None:
+                if json.loads(identity).get("output_identity_format") != _OUTPUT_IDENTITY_FORMAT:
                     continue
-            except (OSError, TypeError, ValueError):
+            except (AttributeError, TypeError, ValueError):
+                continue
+            if output_dir is None or not _stage_outputs_present(output_dir, node.outputs):
                 continue
         completed.add(item["name"])
     evidence = task_store.get_task_diagnostics(str(task.get("md5sum") or "")) or {}
@@ -1147,24 +1169,24 @@ def _workflow_state_mirror(
 
 def _settle_stage_attempt(
     task_id: str, stage_name: str, attempt: int | None, *, status: str, reason_code: str,
-    output_identity: str | None = None,
+    output_identity: str | None = None, require_identity: bool = False,
 ) -> bool:
-    """Best-effort attempt settlement; bookkeeping never fails an allocation."""
+    """Best-effort attempt settlement; returns whether the transition committed."""
     if attempt is None:
         return False
     try:
-        task_store.finish_stage_attempt(
+        return task_store.finish_stage_attempt(
             task_id=task_id,
             stage_name=stage_name,
             attempt=attempt,
             status=status,
             reason_code=stage_state.bounded_reason(reason_code),
             output_identity=output_identity,
+            require_identity=require_identity,
         )
     except Exception:
         logging.exception("Could not settle stage attempt %s/%s for task %s", stage_name, attempt, task_id)
         return False
-    return True
 
 
 def _settle_unsubmitted_attempt(task_id: str, stage_name: str, attempt: int | None) -> None:
@@ -1215,7 +1237,8 @@ def _finish_stage_attempt(
     *,
     failure_reason: str | None = None,
     output_identity: str | None = None,
-) -> None:
+    require_identity: bool = False,
+) -> bool:
     """Settle one attempt from the allocation outcome Core observed.
 
     This is bookkeeping beside the scientific outcome: a failed write must not
@@ -1226,6 +1249,7 @@ def _finish_stage_attempt(
     The reason comes from the job that produced this outcome, never from the
     Task-level diagnostics row: that row is overwritten by the next stage or
     attempt, so borrowing it would attribute another allocation's failure here.
+    Returns whether the durable transition committed.
     """
     status = {
         JobState.COMPLETED: stage_state.COMPLETED,
@@ -1233,16 +1257,16 @@ def _finish_stage_attempt(
         JobState.CANCELLED: stage_state.CANCELLED,
     }.get(state)
     if status is None:
-        return
+        return False
     if status == stage_state.COMPLETED:
         reason_code = stage_state.Reason.COMPLETED
     elif status == stage_state.CANCELLED:
         reason_code = stage_state.Reason.TASK_CANCELLED
     else:
         reason_code = failure_reason or "allocation_failed"
-    _settle_stage_attempt(
+    return _settle_stage_attempt(
         task_id, stage_name, attempt, status=status, reason_code=reason_code,
-        output_identity=output_identity,
+        output_identity=output_identity, require_identity=require_identity,
     )
 
 
@@ -1501,14 +1525,20 @@ def _execute_workflow_node(
             task_id=task_id, reason_code=ReservationReason.RELEASED.value, at=time.time()
         )
     failure_reason = getattr(job, "failure_reason", None)
-    identity = _stage_output_identity(output_dir, node.outputs)
+    identity = _stage_output_identity(output_dir, node.outputs) if result == JobState.COMPLETED else None
     if result == JobState.COMPLETED and identity is None:
         result = JobState.FAILED
         failure_reason = "stage_output_missing"
-    _finish_stage_attempt(
+    settled_attempt = _finish_stage_attempt(
         task_id, stage.name, attempt, result, failure_reason=failure_reason,
-        output_identity=identity,
+        output_identity=identity, require_identity=result == JobState.COMPLETED,
     )
+    if result == JobState.COMPLETED and not settled_attempt:
+        # The allocation succeeded but its completion did not become durable.
+        # Running a consumer on that evidence would claim a state the Server
+        # never recorded.
+        _record_workflow_refusal(task_id, stage.name, "stage_settlement_failed")
+        result = JobState.FAILED
     settled: dict[str, Any] = {"slurm_job_id": None, "container_id": None}
     mirror = _mirror_json(task_id, legacy_state)
     if mirror is not None:

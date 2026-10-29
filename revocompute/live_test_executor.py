@@ -19,6 +19,7 @@ from typing import Any
 
 from revocompute import task_runtime
 from revocompute import resource_ledger as rloan
+from revocompute.execution_graph import execution_graph_payload
 from revocompute.live_tests import atomic_write_json, sha256_file
 from revocompute.resource_observations import observations_for_guidance
 
@@ -37,7 +38,12 @@ _SACCT_ACCELERATOR_FIELDS = ("JobIDRaw", "TRESUsageInMax", "TRESUsageInAve")
 
 
 def _task_input_form(
-    entities: list[dict], snapshot_root: Path, storage_key: str, resources: dict, runtime_bundles: dict[str, str]
+    entities: list[dict],
+    snapshot_root: Path,
+    storage_key: str,
+    resources: dict,
+    runtime_bundles: dict[str, str],
+    execution_graph: dict[str, Any] | None,
 ) -> str:
     """Serialize the live-test task row's ``input_form``.
 
@@ -46,18 +52,20 @@ def _task_input_form(
     example unconditional generation) has no file entity to carry that
     identity, so it must be present at the top level or the job cannot resolve
     its workspace.  ``runtime_bundles`` is recorded here because the task
-    row is the only durable index of "a launchable Task references this bundle".
+    row is the only durable index of "a launchable Task references this bundle",
+    and ``execution_graph`` is the same frozen graph a production workflow
+    submission writes.
     """
-    return json.dumps(
-        {
-            "entities": entities,
-            "snapshot_root": str(snapshot_root),
-            "workspace_key": storage_key,
-            "runtime_bundles": runtime_bundles,
-            **resources,
-        },
-        sort_keys=True,
-    )
+    form = {
+        "entities": entities,
+        "snapshot_root": str(snapshot_root),
+        "workspace_key": storage_key,
+        "runtime_bundles": runtime_bundles,
+        **resources,
+    }
+    if execution_graph is not None:
+        form["execution_graph"] = execution_graph
+    return json.dumps(form, sort_keys=True)
 
 
 def _live_task_manifest(
@@ -259,7 +267,7 @@ def _evidence(task: dict[str, Any], output_root: Path | None = None) -> dict[str
 
 def _prepare_gpu_accounting(task_type_def: Any) -> dict[str, Any] | None:
     """Seed isolated authorization and balance state for a GPU live case."""
-    if not task_type_def.gpus:
+    if not (task_type_def.gpus or any(stage.requires_gpu for stage in task_type_def.workflow)):
         return None
     policy = task_type_def.runtime.access_policy
     entitlements = {name: None for name in (policy.requires if policy else ())}
@@ -495,7 +503,14 @@ def execute(request_path: str | os.PathLike[str]) -> dict[str, Any]:
     except runtime_bundle.RuntimeBundleError as exc:
         raise ValueError(f"live-test runtime bundle is unavailable: {exc}") from exc
     runtime_bundles = {task_type_def.runtime.name: pinned} if pinned else {}
-    input_form = _task_input_form(entities, snapshot_root, storage_key, request["resources"], runtime_bundles)
+    input_form = _task_input_form(
+        entities,
+        snapshot_root,
+        storage_key,
+        request["resources"],
+        runtime_bundles,
+        execution_graph_payload(task_type_def),
+    )
     atomic.write_text(
         json.dumps(
             _live_task_manifest(task_id, task_type, task_type_def, parameters, manifest_inputs, runtime_bundles),

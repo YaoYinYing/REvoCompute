@@ -3037,15 +3037,20 @@ class TaskDatabase:
         reason_code: str | None = None,
         ended_at: float | None = None,
         output_identity: str | None = None,
+        require_identity: bool = False,
     ) -> bool:
         """Settle one attempt with a terminal status, monotonically.
 
         The predicate is the legal-predecessor set, so a late or stale write
         aimed at an already-terminal attempt changes nothing and reports
-        ``False`` instead of regressing recorded evidence.
+        ``False`` instead of regressing recorded evidence.  A workflow caller
+        sets ``require_identity`` so a COMPLETED transition without its
+        artifact identity is refused rather than recorded.
         """
         if status not in stage_state.TERMINAL_STATUSES:
             raise ValueError(f"finish_stage_attempt needs a terminal status, got {status!r}")
+        if require_identity and status == stage_state.COMPLETED and not output_identity:
+            return False
         timestamp = time.time() if ended_at is None else ended_at
         values: dict[str, Any] = {
             "status": status,

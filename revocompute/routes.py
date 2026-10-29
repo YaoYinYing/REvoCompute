@@ -110,7 +110,7 @@ from revocompute.ingress_security import (
     phase_for_code,
 )
 from revocompute.db import GPUCreditUnavailableError, TaskIdReservedError
-from revocompute.execution_graph import GraphValidationError, compile_graph
+from revocompute.execution_graph import GraphValidationError, execution_graph_payload
 from revocompute.operational_events import emit_event
 from revocompute.ratelimit import rate_limit
 from revocompute import resource_lifecycle
@@ -1301,14 +1301,6 @@ def _input_workspace_steps(tt) -> list[dict]:
     return steps
 
 
-def _execution_graph_payload(tt) -> dict[str, Any] | None:
-    """The graph identity a workflow Task freezes at submission."""
-    if not tt.workflow:
-        return None
-    graph = compile_graph(tt)
-    return {"ir_version": graph.ir_version, "digest": graph.digest, "document": graph.document}
-
-
 @app.route("/compute/api/types/<name>", methods=["GET"])
 @optional_user
 def task_type_form(name: str):
@@ -1343,7 +1335,7 @@ def task_type_form(name: str):
 
     workspace_payload = _input_workspace_payload(tt)
     try:
-        execution_graph = _execution_graph_payload(tt)
+        execution_graph = execution_graph_payload(tt)
     except GraphValidationError as exc:
         return jsonify({"error": f"This task type's execution graph is invalid: {exc}"}), 400
     payload = {
@@ -2392,7 +2384,7 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
     resource_policies = placement.stage_resources
 
     try:
-        execution_graph = _execution_graph_payload(tt)
+        execution_graph = execution_graph_payload(tt)
     except GraphValidationError as exc:
         return jsonify({"error": f"This task type's execution graph is invalid: {exc}"}), 400
 

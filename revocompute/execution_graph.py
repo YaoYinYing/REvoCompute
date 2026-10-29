@@ -142,6 +142,14 @@ def compile_graph(task_type: Any) -> CompiledGraph:
     return CompiledGraph(ordered_nodes, inputs, tuple(order), digest, document)
 
 
+def execution_graph_payload(task_type: Any) -> dict[str, Any] | None:
+    """The graph identity a workflow Task freezes at submission."""
+    if not task_type.workflow:
+        return None
+    graph = compile_graph(task_type)
+    return {"ir_version": graph.ir_version, "digest": graph.digest, "document": graph.document}
+
+
 def canonical_digest(document: dict[str, Any]) -> str:
     """The one digest definition shared by compilation and frozen-graph checks."""
     return hashlib.sha256(json.dumps(document, sort_keys=True, separators=(",", ":")).encode()).hexdigest()

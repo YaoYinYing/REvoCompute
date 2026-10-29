@@ -199,6 +199,36 @@ def test_attempt_identity_is_exactly_once_and_transitions_are_monotonic(tmp_path
         database.engine.dispose()
 
 
+def test_workflow_completion_requires_a_recorded_identity(tmp_path):
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    try:
+        task_id = "a" * 32
+        _insert_task(database, task_id, status="running")
+        database.begin_stage_attempt(task_id=task_id, stage_index=0, stage_name="features")
+
+        assert not database.finish_stage_attempt(
+            task_id=task_id,
+            stage_name="features",
+            attempt=1,
+            status=stage_state.COMPLETED,
+            output_identity=None,
+            require_identity=True,
+        )
+        assert database.list_stage_runs(task_id)[0]["status"] != stage_state.COMPLETED
+
+        assert database.finish_stage_attempt(
+            task_id=task_id,
+            stage_name="features",
+            attempt=1,
+            status=stage_state.COMPLETED,
+            output_identity='{"output_identity_format": 1, "files": []}',
+            require_identity=True,
+        )
+        assert database.list_stage_runs(task_id)[0]["status"] == stage_state.COMPLETED
+    finally:
+        database.engine.dispose()
+
+
 def test_workflow_keeps_task_running_while_the_next_stage_is_queued(tmp_path, monkeypatch):
     database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
     task_id = "b" * 32
@@ -309,6 +339,10 @@ def test_dependency_distinguishes_completed_ready_and_waiting_branches(tmp_path,
     _settle_stage(database, task_id, 0, tt.workflow[0], result_dir, status=stage_state.COMPLETED)
     _settle_stage(database, task_id, 1, tt.workflow[1], result_dir, status=stage_state.COMPLETED)
 
+    def _must_not_hash(*_args, **_kwargs):
+        raise AssertionError("a status projection must not hash artifact contents")
+
+    monkeypatch.setattr(task_runtime, "_stage_output_identity", _must_not_hash)
     projection = task_runtime.stage_projection(database.get_task(task_id))
 
     assert {item["name"]: item["dependency"] for item in projection["items"]} == {

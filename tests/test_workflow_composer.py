@@ -405,6 +405,47 @@ def test_foreign_family_node_uses_that_family_runtime_runner_and_policy(monkeypa
     assert own_job_runner is get_family("multistage_runner")[1]
 
 
+def test_unsettled_completion_stops_before_consumer_dispatch(monkeypatch, tmp_path):
+    """A COMPLETED allocation whose durable transition fails must not advance the DAG."""
+    task_runtime = _live_task_runtime()
+    task_type = _diamond_workflow()
+    output = tmp_path / "output"
+    output.mkdir()
+    started = []
+
+    class Job:
+        def __init__(self, name):
+            self.name = name
+
+        def submit(self):
+            return "42"
+
+        def poll(self):
+            (output / f"{self.name.rsplit('-', 1)[-1]}.dat").write_text("ok")
+            return JobState.COMPLETED
+
+    def create(_task_id, stage_tt, *_args, **_kwargs):
+        started.append(stage_tt.name)
+        return Job(stage_tt.name)
+
+    monkeypatch.setattr(task_runtime, "_create_job", create)
+    monkeypatch.setattr(task_runtime.task_store, "update_task", lambda *args, **kwargs: True)
+    monkeypatch.setattr(task_runtime.task_store, "finish_stage_attempt", lambda **kwargs: False)
+    task_id = "a1" * 16
+    _ensure_task_row(task_runtime, task_id)
+    policies = {stage.name: _policy(False) for stage in task_type.workflow}
+
+    result = task_runtime._run_compute_workflow(
+        task_id, _frozen(task_type), task_type, [], str(output), policies, lambda _: None,
+    )
+
+    assert result == JobState.FAILED
+    assert started == ["dag-a"]
+    evidence = task_runtime.task_store.get_task_diagnostics(task_id)
+    assert evidence["reason_code"] == "stage_settlement_failed"
+    assert evidence["stage_id"] == "dag.a"
+
+
 def test_fork_join_runs_serial_schedule_and_resume_after_branch_failure(monkeypatch, tmp_path):
     task_runtime = _live_task_runtime()
     task_type = _diamond_workflow()

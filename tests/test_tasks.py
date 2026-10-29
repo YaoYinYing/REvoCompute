@@ -452,14 +452,10 @@ def test_submission_refuses_a_task_whose_graph_cannot_run(monkeypatch, tmp_path)
     user = module.app.config["user_db"].get_user_by_username("tester")
     module.app.config["user_db"].update_user(user["id"], allow_gpu_use=True)
     before = {task["md5sum"] for task in module.task_store.list_tasks()}
-    from inspect import unwrap
-
-    routes_globals = unwrap(module.app.view_functions["upload_file"]).__globals__
-
     def refuse(_task_type):
         raise GraphValidationError("graph contains a cycle")
 
-    monkeypatch.setitem(routes_globals, "compile_graph", refuse)
+    monkeypatch.setattr("revocompute.execution_graph.compile_graph", refuse)
     fasta_path = Path(__file__).resolve().parents[1] / "tests/data/fasta/Sli_S4.fasta"
     with fasta_path.open("rb") as handle:
         response = client.post(

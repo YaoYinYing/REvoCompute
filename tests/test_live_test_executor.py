@@ -35,7 +35,7 @@ def test_fileless_live_case_serializes_explicit_task_workspace_identity(tmp_path
     form = json.loads(
         live_test_executor._task_input_form(
             [], snapshot_root, "live-test-fileless_runner", {"resource_policy": None},
-            {"fileless_runner": "sha256:" + "a" * 64},
+            {"fileless_runner": "sha256:" + "a" * 64}, None,
         )
     )
     assert form["entities"] == []
@@ -45,6 +45,71 @@ def test_fileless_live_case_serializes_explicit_task_workspace_identity(tmp_path
     assert form["snapshot_root"] == str(snapshot_root)
     assert form["resource_policy"] is None
     assert form["runtime_bundles"] == {"fileless_runner": "sha256:" + "a" * 64}
+
+
+def test_workflow_live_task_form_carries_a_dispatchable_frozen_graph(tmp_path):
+    from revocompute import task_runtime
+    from revocompute.execution_graph import execution_graph_payload
+    from revocompute.task_types import RuntimeFamily, StagePortSpec, TaskType, WorkflowStage
+
+    runtime = RuntimeFamily("live_family", ("bash", "run.sh"), "runner.def", "image.sif")
+    first = WorkflowStage(
+        "live.first", "First", False, (), ("first",),
+        outputs=(StagePortSpec("out", "x", path="first.dat"),),
+    )
+    second = WorkflowStage(
+        "live.second", "Second", False, (), ("second",),
+        inputs=(StagePortSpec("in", "x", source="live.first:out"),),
+    )
+    task_type = TaskType(
+        "live", "Live", runtime, (),
+        stage_markers={"first": "First", "second": "Second"},
+        workflow=(first, second),
+    )
+    graph = execution_graph_payload(task_type)
+    form = json.loads(
+        live_test_executor._task_input_form([], tmp_path / "inputs", "live-key", {}, {}, graph)
+    )
+
+    frozen = task_runtime._frozen_execution_graph({"input_form": json.dumps(form)})
+
+    assert frozen is not None
+    assert frozen["digest"] == graph["digest"]
+
+
+def test_gpu_accounting_uses_any_gpu_stage_in_the_graph(monkeypatch):
+    from revocompute.task_types import RuntimeFamily, TaskType, WorkflowStage
+
+    runtime = RuntimeFamily("live_cpu_family", ("bash", "run.sh"), "runner.def", "image.sif")
+    cpu = WorkflowStage("live.prepare", "Prepare", False, (), ("prepare",))
+    gpu = WorkflowStage("live.model", "Model", True, (), ("model",))
+    task_type = TaskType(
+        "live_cpu", "Live CPU", runtime, (), gpus=False,
+        stage_markers={"prepare": "Prepare", "model": "Model"},
+        workflow=(cpu, gpu),
+    )
+    published = []
+    monkeypatch.setattr(
+        live_test_executor.task_runtime.task_store,
+        "project_gpu_authorization",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        live_test_executor.task_runtime.task_store,
+        "gpu_credit_summary",
+        lambda _user_id: {"period": "2026-10", "remaining_gpu_seconds": 10},
+    )
+    monkeypatch.setattr(
+        live_test_executor, "atomic_write_json", lambda path, payload: published.append((path, payload))
+    )
+
+    context = live_test_executor._prepare_gpu_accounting(task_type)
+
+    assert context == {
+        "user_id": live_test_executor._LIVE_TEST_GPU_USER_ID,
+        "before": {"period": "2026-10", "remaining_gpu_seconds": 10},
+    }
+    assert published
 
 
 def test_worker_executor_records_every_workflow_scheduler_identity(monkeypatch):
