@@ -62,13 +62,24 @@ def _without_format_characters(text: str) -> str:
     return "".join(character for character in text if unicodedata.category(character) != "Cf")
 
 
+def _normalized_text(text: str) -> str:
+    """Strip terminal controls and every invisible ``Cf`` character.
+
+    Log text and known secrets must pass through this identical filter, or a
+    secret containing a control byte normalized out of the log would no longer
+    match the unnormalized secret and would leak.
+    """
+    return _without_format_characters(_ANSI_CONTROL.sub("", text))
+
+
 def safe_diagnostic_text(value: Any, *, secret_values: tuple[str, ...] = ()) -> str:
     """Redact known credentials, credential syntax, URLs and private path context."""
-    text = _without_format_characters(_ANSI_CONTROL.sub("", str(value or "")))
-    # The excerpt is already stripped of format characters, so a known secret
-    # that contains one must be normalized the same way before it can match.
-    known = {_without_format_characters(secret) for secret in secret_values}
-    known.update(_without_format_characters(value) for value in diagnostic_secret_values(os.environ))
+    text = _normalized_text(str(value or ""))
+    # Normalize every secret source exactly like the text above; otherwise a
+    # control byte stripped from the log would survive in the secret and defeat
+    # the replacement.
+    known = {_normalized_text(secret) for secret in secret_values}
+    known.update(_normalized_text(value) for value in diagnostic_secret_values(os.environ))
     known.discard("")
     for secret in sorted(known, key=len, reverse=True):
         if secret:
@@ -83,7 +94,7 @@ def safe_diagnostic_text(value: Any, *, secret_values: tuple[str, ...] = ()) -> 
     text = _HOST_PATH.sub("[path redacted]", text)
     text = _HOST_DETAIL.sub("[host detail redacted]", text)
     text = _PRIVATE_NETWORK.sub("[private network redacted]", text)
-    return _without_format_characters(_ANSI_CONTROL.sub("", text))
+    return _normalized_text(text)
 
 
 def redacted_log_lines(lines: Iterable[str], *, secret_values: tuple[str, ...] = ()) -> Iterator[str]:
@@ -91,7 +102,7 @@ def redacted_log_lines(lines: Iterable[str], *, secret_values: tuple[str, ...] =
     known = (*secret_values, *diagnostic_secret_values(os.environ))
     pieces = tuple(
         normalized for secret in known for line in secret.splitlines()
-        if (normalized := _without_format_characters(line))
+        if (normalized := _normalized_text(line))
     )
     private_key = False
     for line in lines:

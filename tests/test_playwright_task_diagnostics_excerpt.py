@@ -35,6 +35,12 @@ EXCERPT = (
 )
 
 
+LONG_LINE = (
+    "start " + "filler " * 300 + "NEEDLE one " + "filler " * 300
+    + "NEEDLE two " + "filler " * 300 + "NEEDLE three end"
+)
+
+
 def _failed_scenario():
     return controlled_scenario().with_lifecycle("queued", "running", "failed").with_result("failed_diagnostics")
 
@@ -104,6 +110,37 @@ def test_escape_in_the_excerpt_search_keeps_the_dashboard_evidence_dialog_open(p
     # A second Escape on the empty query belongs to the dialog and closes it.
     page.keyboard.press("Escape")
     expect(dialog).to_be_hidden()
+
+
+def test_search_scrolls_the_selected_occurrence_into_view_within_one_long_line(page: Page) -> None:
+    """Several distant hits share one wrapped row; navigation scrolls the chosen occurrence."""
+    scenario = _failed_scenario()
+    excerpt_url = _mount_evidence(page, scenario)
+    page.route(excerpt_url, lambda route: route.fulfill(
+        status=200, content_type="text/plain; charset=utf-8", body=LONG_LINE + "\n",
+    ))
+    _open_evidence(page)
+    page.get_by_role("button", name="Read full retained stderr excerpt", exact=True).click()
+
+    search = page.locator(".task-diagnostic-search-input")
+    expect(search).to_be_visible()
+    search.fill("needle")
+    expect(page.locator("mark")).to_have_count(3)
+    next_match = page.get_by_role("button", name="Next match", exact=True)
+    next_match.click()
+    next_match.click()
+
+    active = page.locator("mark.is-current-match")
+    expect(active).to_have_count(1)
+    expect(active).to_have_text("NEEDLE")
+    assert active.evaluate(
+        """node => {
+            const host = node.closest('.task-diagnostic-lines');
+            const box = host.getBoundingClientRect();
+            const hit = node.getBoundingClientRect();
+            return hit.top >= box.top - 1 && hit.bottom <= box.bottom + 1;
+        }"""
+    ), "the selected occurrence must be inside the excerpt viewport"
 
 
 def test_loading_and_failure_feedback_are_visible_before_the_excerpt_region(page: Page) -> None:

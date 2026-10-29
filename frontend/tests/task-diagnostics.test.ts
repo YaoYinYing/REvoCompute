@@ -84,9 +84,12 @@ it('searches literally, counts matches and navigates by button and keyboard', as
   input.dispatch('input', {});
   expect(host.querySelectorAll('mark')).toHaveLength(2);
   expect(host.textContent).toContain('Match 1 of 2');
+  expect(host.querySelectorAll('mark')[0]!.classList.contains('is-current-match')).toBe(true);
   const buttons = host.querySelectorAll('button');
   buttons[2]!.dispatch('click', {});  // next
   expect(host.textContent).toContain('Match 2 of 2');
+  expect(host.querySelectorAll('mark')[1]!.classList.contains('is-current-match')).toBe(true);
+  expect(host.querySelectorAll('mark')[0]!.classList.contains('is-current-match')).toBe(false);
   input.dispatch('keydown', { key: 'Enter', shiftKey: false, preventDefault: () => undefined });
   expect(host.textContent).toContain('Match 1 of 2');
   input.dispatch('keydown', { key: 'Enter', shiftKey: true, preventDefault: () => undefined });
@@ -94,6 +97,23 @@ it('searches literally, counts matches and navigates by button and keyboard', as
   input.dispatch('keydown', { key: 'Escape', preventDefault: () => undefined });
   expect(input.value).toBe('');
   expect(host.querySelectorAll('mark')).toHaveLength(0);
+});
+
+it('tracks the selected occurrence among several hits on one long line', async () => {
+  await openExcerpt(`start ${'x'.repeat(80)} needled ${'x'.repeat(80)} needled ${'x'.repeat(80)} needled\n`);
+  const input = host.querySelector('input') as unknown as HarnessNode & { value: string };
+  input.value = 'needled';
+  input.dispatch('input', {});
+  const next = host.querySelectorAll('button')[2]!;
+  expect(host.querySelectorAll('mark')).toHaveLength(3);
+  expect(host.querySelectorAll('mark.is-current-match')).toHaveLength(1);
+  next.dispatch('click', {});
+  expect(host.textContent).toContain('Match 2 of 3');
+  expect(host.querySelectorAll('mark')[1]!.classList.contains('is-current-match')).toBe(true);
+  next.dispatch('click', {});
+  expect(host.textContent).toContain('Match 3 of 3');
+  expect(host.querySelectorAll('mark')[2]!.classList.contains('is-current-match')).toBe(true);
+  expect(host.querySelectorAll('mark.is-current-match')).toHaveLength(1);
 });
 
 it('renders CR and CRLF line endings as separate excerpt lines', async () => {

@@ -12,7 +12,13 @@ from pathlib import Path
 import pytest
 from conftest import _admin_client_auth, _load_pssm_module, _test_client_auth, _upsert_task_for_user
 from jsonschema import Draft202012Validator
-from revocompute.execution_diagnostics import STATUS_PATH, bounded_log, safe_diagnostic_text, scheduler_failure
+from revocompute.execution_diagnostics import (
+    STATUS_PATH,
+    bounded_log,
+    redacted_log_lines,
+    safe_diagnostic_text,
+    scheduler_failure,
+)
 from revocompute.storage import publish_result_text
 
 
@@ -223,9 +229,14 @@ def test_invisible_format_controls_cannot_reorder_the_retained_excerpt(task_cont
     assert downloaded.text == "safe evil text\n"
 
 
-def test_known_secret_with_a_format_character_is_still_redacted():
-    secret = "sec\u200bret-hello"
+@pytest.mark.parametrize("secret", ["abc\x80def", "abc\u200bdef"])
+def test_known_secret_with_an_invisible_character_is_still_redacted(secret):
+    # The log text loses C1 controls and Cf characters; a secret that keeps them
+    # would no longer match. Both sources must be normalized identically.
     assert safe_diagnostic_text(f"token is {secret} here", secret_values=(secret,)) == "token is [redacted] here"
+    assert list(redacted_log_lines([f"token is {secret} here\n"], secret_values=(secret,))) == [
+        "token is [redacted] here\n"
+    ]
 
 
 def test_log_bounds_preserve_utf8_and_only_complete_lines():

@@ -30,17 +30,20 @@ function findMatches(lines: string[], query: string): { matches: Match[]; capped
   return { matches, capped: false };
 }
 
-function paint(body: HTMLElement, text: string, matches: Match[]): void {
-  if (!matches.length) { body.textContent = text; return; }
+function paint(body: HTMLElement, text: string, matches: Match[]): HTMLElement[] {
+  if (!matches.length) { body.textContent = text; return []; }
   const nodes: Array<Text | HTMLElement> = [];
+  const marks: HTMLElement[] = [];
   let at = 0;
   for (const match of matches) {
     if (match.start > at) nodes.push(document.createTextNode(text.slice(at, match.start)));
-    nodes.push(element('mark', text.slice(match.start, match.end)));
+    const mark = element('mark', text.slice(match.start, match.end));
+    marks.push(mark); nodes.push(mark);
     at = match.end;
   }
   if (at < text.length) nodes.push(document.createTextNode(text.slice(at)));
   body.replaceChildren(...nodes);
+  return marks;
 }
 
 /**
@@ -86,7 +89,9 @@ function addRetainedExcerpt(
   const bodies: HTMLElement[] = [];
   const highlighted = new Set<number>();
   let matches: Match[] = [];
+  let marks: HTMLElement[] = [];
   let active = -1;
+  let activeMark: HTMLElement | null = null;
   let capped = false;
 
   const show = (visible: boolean): void => {
@@ -103,10 +108,18 @@ function addRetainedExcerpt(
   const select = (position: number): void => {
     if (!matches.length) return;
     active = ((position % matches.length) + matches.length) % matches.length;
-    const line = matches[active]!.line;
     for (const row of rows) row.classList.remove('is-current');
-    const row = rows[line];
-    if (row) { row.classList.add('is-current'); row.scrollIntoView({ block: 'center' }); }
+    const row = rows[matches[active]!.line];
+    if (row) row.classList.add('is-current');
+    if (activeMark) activeMark.classList.remove('is-current-match');
+    activeMark = marks[active] ?? null;
+    if (activeMark) {
+      activeMark.classList.add('is-current-match');
+      // A single long wrapped line can contain many matches, so scroll the
+      // chosen occurrence itself; centering the whole tall row would leave it
+      // offscreen.
+      activeMark.scrollIntoView({ block: 'center', inline: 'nearest' });
+    } else if (row) row.scrollIntoView({ block: 'center' });
     status.textContent = t(capped ? 'diagnostics.searchCapped' : 'diagnostics.searchCount',
       { current: active + 1, total: matches.length });
   };
@@ -117,7 +130,7 @@ function addRetainedExcerpt(
       if (body && text !== undefined) body.textContent = text;
     }
     for (const row of rows) row.classList.remove('is-current');
-    highlighted.clear(); matches = []; active = -1; capped = false;
+    highlighted.clear(); matches = []; marks = []; active = -1; activeMark = null; capped = false;
     const query = input.value;
     if (!query) { status.textContent = ''; setNavigation(false); return; }
     const found = findMatches(shown, query);
@@ -128,7 +141,7 @@ function addRetainedExcerpt(
       const group: Match[] = [];
       while (index < matches.length && matches[index]!.line === line) { group.push(matches[index]!); index += 1; }
       const body = bodies[line];
-      if (body) { paint(body, shown[line] ?? '', group); highlighted.add(line); }
+      if (body) { marks.push(...paint(body, shown[line] ?? '', group)); highlighted.add(line); }
     }
     if (!matches.length) { status.textContent = t('diagnostics.searchNone'); setNavigation(false); return; }
     setNavigation(true); select(0);

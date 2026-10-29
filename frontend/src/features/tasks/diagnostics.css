@@ -18,4 +18,5 @@
 .task-diagnostic-gutter{flex:0 0 auto;min-width:3.5rem;text-align:right;color:var(--app-muted);user-select:none}
 .task-diagnostic-line-text{min-width:0;white-space:pre-wrap;overflow-wrap:anywhere}
 .task-diagnostic-line-text mark{background:var(--app-warning);color:var(--app-bg)}
+.task-diagnostic-line-text mark.is-current-match{background:var(--app-accent);color:var(--app-bg);outline:2px solid var(--app-ink);outline-offset:1px}
 @media(max-width:40rem){.task-diagnostic-search{flex-direction:column;align-items:stretch}.task-diagnostic-search-input{flex:0 0 auto;width:100%}.task-diagnostic-lines{max-height:18rem;font-size:13px}.task-diagnostic-gutter{min-width:2.5rem}}
