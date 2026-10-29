@@ -420,17 +420,24 @@ If one of these is false, continue the refactor.
 covers this Campaign protocol, not the software release. A Campaign records its
 launch instruction, governing version, and commit at start; a revision records
 the old/new version, baseline commit, rationale, effective scope, and a bounded
-migration note in its PR, while editorial changes need no bump. An adopted
-security or authority correction applies to actions not yet taken in every
-Campaign; other process changes apply to Campaigns launched after the revision
-merges, and a running Campaign keeps the version it recorded at launch unless
-the maintainer approves a transition. Adopting v1.5 is itself an intentional
-one-time C3 for Campaigns already running: their authority, security, review
-independence and scientific-acceptance rules stay at v1 where v1.5 narrows them,
-while the universal corrections above apply to actions not yet taken. Do not
-invalidate a completed independent review merely because documentation moved —
-check whether its governing requirement or evidence actually changed — and never
-carry evidence across a changed scientific or safety rule.
+migration note in its PR, while editorial changes need no bump.
+
+A revision carries two kinds of change. A change that **restricts** what any
+Campaign may do — an unverified instruction never authorizes work, a security or
+privacy hole, a scientific or safety rule that was wrong — applies to actions not
+yet taken in every Campaign, including one already running under an older
+version. A change that relaxes or only rewords process — a lighter evidence form,
+an efficiency, a clarification — applies only to Campaigns launched after the
+revision merges. Where the two readings differ, the restrictive one wins. A
+running Campaign otherwise keeps the version it recorded at launch unless the
+maintainer approves a transition.
+
+Adopting v1.5 while Campaigns are running is therefore one intentional C3 event:
+each active PR takes a fresh full merge-grade review against its exact head after
+the revision lands, because nothing distinguishes a safe clarification from a
+requirement change (see Drift). Reviews completed before the adoption stay on the
+record but do not carry into that gate, and evidence is never carried across a
+changed scientific or safety rule.
 
 A **Campaign** is a set of related PRs delivered as one effort, identified by a
 coordinating GitHub issue or by an explicitly named PR group in the launch
@@ -1028,22 +1035,22 @@ C2  direct overlap or          same files changed, a shared schema/API changed,
     dependency surface         a dependency ancestor landed
 C3  global invalidator         pyproject/lock/dependency policy, test framework,
                                CI workflow, shared trust/persistence boundary,
-                               task schema or applicable Campaign acceptance/authority policy
+                               task schema or Campaign acceptance/authority policy
 ```
 
-A protocol-only edit is C3 for an active PR only when it changes a requirement
-applicable to that PR (authority, review independence, security, scientific
-acceptance).
-A clarification that does not affect admissible evidence does not invalidate
-unchanged implementation review; record that decision in the current-main check.
-If applicability is unclear, treat the edit as applicable and re-check.
-
-That applicability judgement is a manual one. `tools/campaign_merge_candidate.py`
-has no applicability input and lists this page as an unconditional global
-invalidator, so its answer for a protocol-doc base change is always C3. Treat the
-helper as conservatively correct: no agent may override or narrow its result to
-claim the C0/C1 carry-forward. The narrower rule becomes available only through a
+This page is itself a global invalidator, because applicability cannot be judged
+from the path. `tools/campaign_merge_candidate.py` has no applicability input, so
+any base move touching it returns C3 — or C2 when a changed patch digest or a
+non-adoptable prior review already forces a fresh review — and the full gate
+applies either way. That answer stands: no agent may narrow it to claim a C0/C1
+carry-forward, and no post-adoption review may be recorded as a clarification.
+A narrower rule for clarification-only edits becomes available only through a
 separately reviewed, applicability-aware classifier with regression tests.
+
+Elsewhere, a documentation move that leaves every governing requirement and piece
+of admissible evidence intact does not invalidate a completed independent review;
+record that decision in the current-main check. Never carry evidence across a
+changed scientific or safety rule.
 
 The class decides the gate:
 
