@@ -1,0 +1,26 @@
+demos:
+- id: trp_cage_monomer
+  title: Trp-cage miniprotein
+  purpose: Run a small single-chain prediction without MSAs, templates, or an external service.
+  context: >-
+    The 20-residue TC5b miniprotein folds without disulfides or ligands, so this
+    preset exercises the monomer path and stays far below the token admission
+    bound.
+  source:
+    name: TC5b miniprotein sequence (Neidigh, Fesinmeyer & Andersen, 2002)
+    url: https://doi.org/10.1038/nsb798
+  license:
+    id: cc0-1.0
+    name: CC0 1.0 Universal (public domain dedication)
+    url: https://creativecommons.org/publicdomain/zero/1.0/
+  inputs:
+    specification:
+    - path: files/trp_cage.json
+      sha256: bbbe90f4567ccf204937d8dd126d2f3f91dd8656932e49e1219b9b61dbfdd9be
+      media_type: application/json
+  parameters:
+    msa_mode: none
+    template_mode: none
+    rna_msa_mode: none
+    num_samples: 1
+    num_recycles: 1

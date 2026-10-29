@@ -375,6 +375,19 @@ class UpdateCurrentUserRequest(BaseModel):
         return self
 
 
+def _parameter_error_name(exc: Any) -> str | None:
+    """Name the parameter a schema error points at, including composite rules."""
+    path = list(getattr(exc, "absolute_path", ()))
+    if path:
+        return str(path[-1])
+    schema_path = list(getattr(exc, "schema_path", ()))
+    if "properties" in schema_path:
+        index = len(schema_path) - 1 - schema_path[::-1].index("properties")
+        if index + 1 < len(schema_path):
+            return str(schema_path[index + 1])
+    return None
+
+
 class TaskSubmissionRequest(BaseModel):
     """Task submission form payload — validated at the API boundary.
 
@@ -408,12 +421,16 @@ class TaskSubmissionRequest(BaseModel):
             Draft202012Validator(tt.schema, format_checker=FormatChecker()).validate(merged)
         except Exception as exc:
             message = getattr(exc, "message", str(exc))
-            if getattr(exc, "validator", None) == "maximum":
-                message = f"Parameter {exc.absolute_path[-1]!r} must be at most {exc.validator_value}"
-            elif getattr(exc, "validator", None) == "minimum":
-                message = f"Parameter {exc.absolute_path[-1]!r} must be at least {exc.validator_value}"
-            elif getattr(exc, "validator", None) == "type":
-                message = f"Parameter {exc.absolute_path[-1]!r} must be a valid value"
+            validator = getattr(exc, "validator", None)
+            parameter = _parameter_error_name(exc)
+            if validator == "maximum" and parameter is not None:
+                message = f"Parameter {parameter!r} must be at most {exc.validator_value}"
+            elif validator == "minimum" and parameter is not None:
+                message = f"Parameter {parameter!r} must be at least {exc.validator_value}"
+            elif validator == "type" and parameter is not None:
+                message = f"Parameter {parameter!r} must be a valid value"
+            elif parameter is not None:
+                message = f"Parameter {parameter!r} is invalid: {message}"
             raise ValueError(f"Invalid parameters for task type {self.task_type!r}: {message}") from None
 
         return self

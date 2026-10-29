@@ -1,0 +1,14 @@
+[
+  {
+    "name": "trp_cage",
+    "sequences": [
+      {
+        "proteinChain": {
+          "sequence": "NLYIQWLKDGGPSSGRPPPS",
+          "count": 1,
+          "id": ["A"]
+        }
+      }
+    ]
+  }
+]

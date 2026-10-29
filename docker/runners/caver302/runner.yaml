@@ -1,0 +1,8 @@
+# CPU-only family: no host mounts, no GPU, no network. The SIF supplies the heap
+# bound and the entrypoint sets an internal timeout below this maximum; neither
+# is a Task parameter.
+max_runtime_seconds: 3600
+# Memory is a deployment resource policy, not a runner field. CAVER's JVM
+# reserves ~1 GB regardless of -Xmx (observed MaxRSS ~0.9 GB on a single
+# frame), so the deployment must give this task at least 2 GB; a bare unitless
+# value such as "64" reaches Slurm as --mem=64 and is read as 64 MB.

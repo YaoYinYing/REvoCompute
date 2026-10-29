@@ -57,7 +57,8 @@ VALUE_EXCEPTIONS = {
     # Immutable format-parser corpus is shared input data, not plugin assets.
     "tests/test_input_validation.py": {
         "tests/data/foundry/rf3_monomer.json", "tests/data/foundry/rfd3_unconditional.json",
-        "tests/data/chai1/entity_ligand.fasta", "alphafold3",
+        "tests/data/chai1/entity_ligand.fasta",
+        "tests/data/mol1/minimal.json", "tests/data/mol1/supplied_msa.json", "alphafold3",
     },
 }
 FORBIDDEN_IMPORTS = ("docker.runners", "docker.runner_testkit", "tests.runners", "runner_protocol")

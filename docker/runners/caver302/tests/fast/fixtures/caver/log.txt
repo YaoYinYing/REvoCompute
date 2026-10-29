@@ -1,0 +1,3 @@
+Caver computation started.
+Merging all PDB files into one multimodel PDB file.
+Loading tunnels from C:\caver_3.0\examples\guided_example\inputs\out\data\tunnels\tunnels_1.pdb.obj

@@ -68,9 +68,12 @@ from revocompute.resource_observations import work_items_projection
 from revocompute.resource_policy import ResolvedResources, ResourceValidationError
 from revocompute.result_projection import artifact_capability
 from revocompute.result_storyboard import (
+    RECORD_FILE_ROLES,
+    SERVER_RECORD_PREFIXES,
     ResultContractError,
     declared_file_roles,
     expected_file_tree,
+    is_server_record,
     resolve_expected_files,
     storyboard_declaration,
 )
@@ -1536,11 +1539,12 @@ def _verify_snapshot(fe: dict[str, Any], snapshot_path: str, receipt: Any) -> st
 
 def _default_artifact_role(relative_path: str) -> str:
     basename = os.path.basename(relative_path)
-    if relative_path == "citations.bib" or relative_path.startswith("debug/"):
+    if relative_path == "citations.bib":
         return "provenance"
+    if relative_path.startswith(SERVER_RECORD_PREFIXES):
+        return "provenance" if relative_path.startswith("debug/") else "diagnostic"
     if (
-        relative_path.startswith(("execution/", "log/"))
-        or basename == "task_failed.txt"
+        basename == "task_failed.txt"
         or (basename.startswith(".") and basename.endswith("-complete"))
         or relative_path.endswith((".stderr.log", ".stdout.log", ".err"))
     ):
@@ -1693,15 +1697,38 @@ def _resolve_result_views(
         return views, checks, problems
     paths = [artifact["path"] for artifact in artifacts]
     artifact_by_path = {artifact["path"]: artifact for artifact in artifacts}
+
+    def view_source_eligible(path: str, view_role: str) -> bool:
+        """Whether ``path`` may be a source of a view with ``view_role``.
+
+        Server-owned snapshot and execution paths are never sources in any view.
+        A primary view also excludes any file the result tree declares
+        provenance or diagnostic; an evidence view may still source such a
+        declared file, such as a runner-owned run record, when it lives outside
+        those server-owned paths.
+        """
+        if path not in artifact_by_path or is_server_record(path):
+            return False
+        if view_role != "primary":
+            return True
+        return (
+            artifact_by_path[path].get("role") not in RECORD_FILE_ROLES
+            and declared_roles.get(path) not in RECORD_FILE_ROLES
+        )
+
     for definition in task_type.result_workspace:
         resolved_sources: dict[str, list[str]] = {}
         for source_name, selectors in definition.sources.items():
             matches: list[str] = []
             for selector in selectors:
                 selected = (
-                    [path for path in paths if fnmatchcase(path, selector.value)]
+                    [
+                        path
+                        for path in paths
+                        if fnmatchcase(path, selector.value) and view_source_eligible(path, definition.role)
+                    ]
                     if selector.is_glob
-                    else [selector.value] if selector.value in artifact_by_path else []
+                    else [selector.value] if view_source_eligible(selector.value, definition.role) else []
                 )
                 if len(selected) > 500:
                     problems.append(f"{definition.title}: {source_name} matched more than 500 artifacts")

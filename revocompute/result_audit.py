@@ -55,6 +55,7 @@ from typing import Any
 
 from revocompute.result_projection import artifact_capability
 from revocompute.result_storyboard import (
+    RECORD_FILE_ROLES,
     ResultContractError,
     expected_file_tree,
     storyboard_declaration,
@@ -439,18 +440,16 @@ def _audit_primary_role_conflict(
 ) -> list[ContractFinding]:
     """A primary view's source must not also be declared a provenance/diagnostic file.
 
-    ``task_runtime._resolve_result_views`` publishes an artifact a primary view
-    selects as ``role: primary``, overriding whatever role the family's
-    ``expected_files.yaml`` declared for it. A file the family calls provenance or
-    diagnostic that a primary view also selects therefore has two contradicting
-    owners, and the published role silently follows the view. In the shipped
-    fleet no primary view's source is declared provenance/diagnostic, so this
-    invariant holds today; the check exists so a future declaration cannot
-    introduce the contradiction unseen.
+    ``task_runtime._resolve_result_views`` never uses a server-owned snapshot or
+    execution path as a view source, and a primary view cannot promote a declared
+    provenance/diagnostic artifact. A primary view that selects one would
+    therefore silently omit that source (and fail a required source), while the
+    declaration still claims the file. In the shipped fleet no primary view's
+    source is declared provenance/diagnostic, so this invariant holds today; the
+    check exists so a future declaration cannot introduce the mismatch unseen.
     """
     if not tree:
         return []
-    overridden = {"provenance", "diagnostic"}
     findings: list[ContractFinding] = []
     for view in task.result_workspace:
         if view.role != "primary":
@@ -458,14 +457,15 @@ def _audit_primary_role_conflict(
         for source_name, selectors in view.sources.items():
             for selector in selectors:
                 for logical_id, entry in _covering_entries(tree, selector):
-                    if str(entry.get("role") or "") in overridden:
+                    if str(entry.get("role") or "") in RECORD_FILE_ROLES:
                         findings.append(
                             ContractFinding(
                                 "result.primary_view_overrides_declared_role",
                                 task.name,
                                 f"primary view source {source_name!r} ({selector.value!r}) selects logical file "
-                                f"{logical_id!r}, which the result tree declares {entry.get('role')!r}; the "
-                                f"published role would follow the view and contradict the declaration",
+                                f"{logical_id!r}, which the result tree declares {entry.get('role')!r}; "
+                                "a primary view cannot use it as a source; the view would silently omit it "
+                                "(and fail a required source)",
                                 view.id,
                             )
                         )

@@ -89,6 +89,17 @@ _MANIFEST_CREATE_FLAGS = (
 #: leaves a Task finished with a result no consumer can open.
 MANIFEST_MAX_BYTES = 8 * 1024 * 1024
 
+#: Files the Server writes directly in a Task result root, beside the runner's
+#: own tree.  A Runner that turns a user-supplied name into a directory at that
+#: level must refuse these: a directory named ``manifest.json`` cannot be
+#: replaced by the publication rename, and the Server's ``citations.bib`` or
+#: ``task_failed.txt`` write raises over a directory of that name.  The writer
+#: sites are :meth:`StorageResolver.get_manifest_path` and the
+#: ``publish_result_text`` calls in ``task_runtime``.  Runner-owned result-layout
+#: names (``ERR``, ``task_finished``, a family's provenance files) are
+#: deliberately absent: each runner owns its own tree and refuses those itself.
+RESERVED_RESULT_ROOT_FILES = frozenset({"manifest.json", "citations.bib", "task_failed.txt"})
+
 
 def manifest_byte_limit() -> int:
     """Return the one serialized-manifest byte ceiling writer and reader share.
