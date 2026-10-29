@@ -30,11 +30,11 @@ Integrate Mol-1 full structure prediction with validated biomolecular JSON and e
 - [x] Add demo inputs, operator documentation and bounded artifacts. No citation is shipped because the upstream README has not published one yet (recorded in MODEL_ASSETS.md).
 
 ## Tests and acceptance
-- [x] Build exact pinned SIF and run official supported small case on real GPU; record VRAM, versions and outputs (Smoke `minimal-mol1`, Slurm 406763, A100-PCIE-40GB, 5,189 MiB GPU peak).
+- [x] Build exact pinned SIF and run official supported small case on real GPU; record VRAM, versions and outputs (Smoke `minimal-mol1` at head `a4044a0`, Slurm 408009, A100-PCIE-40GB, 5,189 MiB GPU peak, 177 GPU-seconds).
 - [ ] Verify no unapproved network when MSA missing; respect operator network permissions and user privacy. (Refusal paths are tested and the smoke ran with `msa_mode: none`; no packet capture was made.)
 - [x] Reject malformed component JSON, inconsistent covalent bonds, malicious paths, oversized molecular systems and missing files before GPU reservation.
 - [x] Validate non-empty CIF, per-seed ranks, confidence scale and residue-vs-token mapping, provenance and replay (live output checks passed).
-- [ ] Run Runner fast tests, `doctor --strict`, browser creation/result smoke, security and resource admission tests, full CI. (Fast, input-validation, boundary and audit gates pass; `doctor --strict` on a GPU host, browser smoke and full CI remain.)
+- [ ] Run Runner fast tests, `doctor --strict`, browser creation/result smoke, security and resource admission tests, full CI. (Fast 52 passed, input validation 137 passed, test-boundary check clean; `doctor --strict` on a GPU host, browser smoke and full CI remain.)
 
 ## Explicit non-goals
 - No fine-tuning, model training, GPU memory benchmark claims, or full antibody product expansion.
