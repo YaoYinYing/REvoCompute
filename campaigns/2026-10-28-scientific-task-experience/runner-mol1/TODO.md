@@ -1,6 +1,6 @@
 # TODO — feat(runner): Mol-1 biomolecular complex prediction
 
-**Implemented on this branch; R1 and R2 findings are closed at head `64e44bb`.**
+**Implemented on this branch; R1, R2 and R3 findings are closed at head `43ab867`.**
 The final SIF passed the `minimal-mol1` smoke case on an A100-PCIE-40GB
 (5,189 MiB GPU peak). Larger-system and default-parameter fit, `doctor
 --strict` on a GPU host, browser smoke, and independent scientific validation
