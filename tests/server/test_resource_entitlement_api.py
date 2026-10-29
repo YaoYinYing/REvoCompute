@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import time
 
+import sqlalchemy as sa
 from conftest import _admin_client_auth, _load_pssm_module, _test_client_auth
 from jsonschema import Draft202012Validator
 
@@ -251,3 +252,39 @@ def test_reading_the_ledger_never_appends_or_rewrites_a_row(monkeypatch, tmp_pat
 
     after = module.task_store.list_ledger(user["id"], limit=200)
     assert [row["id"] for row in after] == [row["id"] for row in before]
+
+
+def test_both_envelope_routes_refuse_the_same_unrepresentable_balance(monkeypatch, tmp_path):
+    """The account and Admin envelope reads answer one corrupt balance alike.
+
+    The user route already mapped ``AccountingOverflow`` to the shared ledger
+    refusal; the Admin drill-in let the same overflow escape as a 500 HTML body.
+    Both routes now return the identical bounded 503, and the Admin route still
+    refuses a regular user before it reads anything.
+    """
+    module = _module(monkeypatch, tmp_path)
+    client = module.app.test_client()
+    regular = _test_client_auth(module)
+    admin = _admin_client_auth(module)
+    user = _user(module)
+    period = module.task_store.gpu_credit_summary(user["id"])["period"]
+    with module.task_store.engine.begin() as conn:
+        conn.execute(sa.insert(module.task_store.resource_ledger_table).values(
+            subject_type="user", subject_id=user["id"], period=period,
+            kind="admin_adjustment", unit="gpu_second", resource_class="",
+            quantity=2**53 + 1, actor_user_id=99, reason="Corrupt fixture",
+            reason_code="admin_adjustment", evidence_source="policy",
+            idempotency_key="overflow-envelope-parity-fixture", created_at=time.time(),
+        ))
+    admin_path = f"/compute/api/auth/admin/users/{user['id']}/resource-entitlement"
+
+    own = client.get("/compute/api/resource-entitlement", headers=regular)
+    operator = client.get(admin_path, headers=admin)
+    denied = client.get(admin_path, headers=regular)
+
+    assert own.status_code == 503
+    assert operator.status_code == 503
+    assert own.get_json() == operator.get_json()
+    assert own.get_json()["unavailable_reason"] == "ledger_value_out_of_range"
+    assert "compute" not in own.get_json() and "compute" not in operator.get_json()
+    assert denied.status_code in (401, 403)

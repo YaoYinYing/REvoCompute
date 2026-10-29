@@ -5698,6 +5698,8 @@ def admin_user_resource_entitlement(user_id: int):
         payload = _entitlement_payload(user_id)
     except ResourceValidationError as exc:
         return _typed_resource_refusal(exc)
+    except rloan.AccountingOverflow as exc:
+        return _ledger_read_refusal(exc)
     return jsonify(payload), 200
 
 
