@@ -424,7 +424,10 @@ migration note in its PR, while editorial changes need no bump. An adopted
 security or authority correction applies to actions not yet taken in every
 Campaign; other process changes apply to Campaigns launched after the revision
 merges, and a running Campaign keeps the version it recorded at launch unless
-the maintainer approves a transition. Do not
+the maintainer approves a transition. Adopting v1.5 is itself an intentional
+one-time C3 for Campaigns already running: their authority, security, review
+independence and scientific-acceptance rules stay at v1 where v1.5 narrows them,
+while the universal corrections above apply to actions not yet taken. Do not
 invalidate a completed independent review merely because documentation moved —
 check whether its governing requirement or evidence actually changed — and never
 carry evidence across a changed scientific or safety rule.
@@ -1034,6 +1037,13 @@ acceptance).
 A clarification that does not affect admissible evidence does not invalidate
 unchanged implementation review; record that decision in the current-main check.
 If applicability is unclear, treat the edit as applicable and re-check.
+
+That applicability judgement is a manual one. `tools/campaign_merge_candidate.py`
+has no applicability input and lists this page as an unconditional global
+invalidator, so its answer for a protocol-doc base change is always C3. Treat the
+helper as conservatively correct: no agent may override or narrow its result to
+claim the C0/C1 carry-forward. The narrower rule becomes available only through a
+separately reviewed, applicability-aware classifier with regression tests.
 
 The class decides the gate:
 
