@@ -5,6 +5,7 @@
 """Compile manifest workflows into a deterministic execution graph.
 
 Fork, join, and independent roots are serialized in deterministic order.
+A required consumer input implies a required producer output.
 """
 
 from __future__ import annotations
@@ -92,6 +93,10 @@ def compile_graph(task_type: Any) -> CompiledGraph:
                 raise GraphValidationError(f"unknown port: {binding}")
             if output.type != port.type:
                 raise GraphValidationError(f"artifact type mismatch: {binding} -> {name}:{port.name}")
+            if port.required and not output.required:
+                raise GraphValidationError(
+                    f"required input {name}:{port.name} cannot bind optional output {binding}"
+                )
             edges[producer].add(name)
         nodes[name] = StageNode(
             name,

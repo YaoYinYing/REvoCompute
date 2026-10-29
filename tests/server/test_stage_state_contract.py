@@ -44,7 +44,7 @@ def _task_type() -> TaskType:
     stages = (
         WorkflowStage(
             "multistage_runner.features", "Features", False, ("-s", "features"), ("msa",),
-            outputs=(StagePortSpec("features", "features", path="features.dat", required=False),),
+            outputs=(StagePortSpec("features", "features", path="features.dat"),),
         ),
         WorkflowStage(
             "multistage_runner.model", "Model", True, ("-s", "model"), ("model",),
@@ -177,6 +177,7 @@ def test_workflow_keeps_task_running_while_the_next_stage_is_queued(tmp_path, mo
             return "42"
 
         def poll(self):
+            (tmp_path / "results" / "features.dat").write_text("features")
             _snapshot("poll")
             return task_runtime.JobState.COMPLETED
 

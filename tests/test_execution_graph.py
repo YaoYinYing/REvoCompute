@@ -64,6 +64,50 @@ def test_invalid_graph_rejected(stages, message):
         compile_graph(graph(*stages))
 
 
+def test_required_consumer_cannot_bind_an_optional_producer_output():
+    producer = WorkflowStage(
+        "a", "a", False, outputs=(StagePortSpec("out", "x", path="a.dat", required=False),),
+    )
+    consumer = WorkflowStage(
+        "b", "b", False, inputs=(StagePortSpec("input", "x", source="a:out"),),
+    )
+    with pytest.raises(GraphValidationError, match="required input b:input cannot bind optional output a:out"):
+        compile_graph(graph(producer, consumer))
+
+
+def test_optional_consumer_may_bind_an_optional_producer_output():
+    producer = WorkflowStage(
+        "a", "a", False, outputs=(StagePortSpec("out", "x", path="a.dat", required=False),),
+    )
+    consumer = WorkflowStage(
+        "b", "b", False, inputs=(StagePortSpec("input", "x", source="a:out", required=False),),
+    )
+    assert compile_graph(graph(producer, consumer)).execution_order == ("a", "b")
+
+
+def test_diamond_join_required_input_from_an_optional_producer_is_rejected():
+    producer = WorkflowStage(
+        "a", "a", False, outputs=(StagePortSpec("out", "x", path="a.dat"),),
+    )
+    optional_branch = WorkflowStage(
+        "b", "b", False,
+        inputs=(StagePortSpec("input", "x", source="a:out"),),
+        outputs=(StagePortSpec("out", "x", path="b.dat", required=False),),
+    )
+    other_branch = WorkflowStage(
+        "c", "c", False, outputs=(StagePortSpec("out", "x", path="c.dat"),),
+    )
+    join = WorkflowStage(
+        "d", "d", False,
+        inputs=(
+            StagePortSpec("left", "x", source="b:out"),
+            StagePortSpec("right", "x", source="c:out"),
+        ),
+    )
+    with pytest.raises(GraphValidationError, match="required input d:left cannot bind optional output b:out"):
+        compile_graph(graph(producer, optional_branch, other_branch, join))
+
+
 def test_declared_output_paths_must_not_overlap():
     first = WorkflowStage(
         "a", "a", False, outputs=(StagePortSpec("out", "x", path="features/*.dat"),),
