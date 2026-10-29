@@ -20,3 +20,4 @@ runtime:
   - /app/revocompute/run.sh
 tasks:
 - tasks/gremlin/task.yaml
+- tasks/gremlin_msa_to_lh_fit/task.yaml

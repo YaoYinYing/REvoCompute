@@ -1,0 +1,206 @@
+display_name: PSSM-GREMLIN MSA to GREMLIN_LH fit
+category: evolution
+
+summary: Search and filter a homologous alignment for one protein sequence, then fit a
+  regularized Potts model and residue-coupling landscape to it.
+use_when: Use this to obtain GREMLIN_LH couplings from a sequence when no alignment is available.
+input_summary: One protein sequence as FASTA, either uploaded or pasted.
+output_summary: The filtered alignment, model fields and couplings, raw and APC score matrices, ranked
+  residue pairs, sequence scores, and fit provenance.
+considerations:
+- Results depend on homolog coverage in the configured sequence databases.
+- Runtime and memory grow rapidly with alignment width because the fitted coupling tensor is quadratic in
+  positions and amino-acid states.
+inputs:
+  sequence:
+    title: Protein sequence
+    type: protein_sequence
+    cardinality: {min: 1, max: 1}
+    formats: [fasta]
+input_workspace:
+  steps:
+  - id: material
+    title: Provide the input
+    description: Choose the scientific input for this experiment
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: FASTA input
+    - plugin: sequence
+      id: sequence_editor
+      title: Sequence
+      description: Upload a FASTA file or paste one protein sequence.
+      options: {role: sequence}
+  - id: settings
+    title: Set the experiment
+    description: Adjust only the controls that matter for this run
+    capabilities:
+    - plugin: parameters
+      id: task_parameters
+      title: MSA search and GREMLIN_LH fit settings
+  - id: review
+    title: Review and run
+    description: Check the input and settings before creating the task snapshot
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Review
+      options:
+        show_paths: true
+stage_markers:
+  hhblits: HHblits MSA generation
+  hhfilter: HHfilter filtering
+  gremlin: GREMLIN_LH Potts model fitting
+workflow:
+- name: msa
+  display_name: MSA search and filtering
+  requires_gpu: false
+  requires_network: false
+  runner_args: ["-s", "msa", "-j", "${allocated_cpus}"]
+  stage_markers: [hhblits, hhfilter]
+  inputs:
+  - {name: sequence, type: protein_sequence, from: "graph:sequence"}
+  outputs:
+  - {name: alignment, type: alignment, path: "gremlin_msa/*.i90c75_aln.fas"}
+- name: fit
+  family: gremlin_lh
+  display_name: GREMLIN_LH model fit
+  requires_gpu: false
+  requires_network: false
+  runner_args: []
+  stage_markers: [gremlin]
+  inputs:
+  - {name: alignment, type: alignment, from: "gremlin_msa_to_lh_fit.msa:alignment"}
+  outputs:
+  - {name: mrf_model, type: model, path: "model/gremlin_mrf.npz"}
+  - {name: coupling_plot, type: image, path: "plots/coupling_apc.png"}
+id: gremlin_msa_to_lh_fit
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties:
+    iter:
+      type: integer
+      description: Maximum HHblits iterations used to collect homologous sequences.
+      default: 100
+      minimum: 1
+      maximum: 10000
+    evalue:
+      type: string
+      description: HHblits E-value threshold for accepting database sequence matches.
+      default: 1E-10
+    mact:
+      type: number
+      description: HHblits posterior-probability threshold controlling local alignment
+        extent.
+      default: 0.35
+      minimum: 0.0
+      maximum: 1.0
+    maxfilt:
+      type: integer
+      description: Maximum number of HHblits prefilter matches passed to full alignment.
+      default: 100000000
+      minimum: 1
+    neffmax:
+      type: number
+      description: Maximum effective sequence count retained during HHblits diversity
+        filtering.
+      default: 20.0
+      minimum: 1.0
+    num_iterations:
+      type: integer
+      default: 3
+      minimum: 1
+      maximum: 10
+      description: GREMLIN optimization iterations
+    regularization:
+      type: string
+      description: "Coupling penalty: conventional squared L2, low-rank spectral LH, or group-sparse block LB."
+      default: LH
+      enum: [L2, LH, LB]
+    lambda_l2:
+      x-advanced: true
+      type: number
+      description: L2 coupling strength; also regularizes fields when field terms are enabled.
+      default: 0.01
+      exclusiveMinimum: 0
+      maximum: 10
+    lambda_lh:
+      type: number
+      description: Low-rank spectral penalty strength used in LH mode.
+      default: 0.1
+      exclusiveMinimum: 0
+      maximum: 10
+    lambda_lb:
+      x-advanced: true
+      type: number
+      description: Group-sparse block penalty strength used in LB mode.
+      default: 0.005
+      exclusiveMinimum: 0
+      maximum: 10
+    iterations:
+      type: integer
+      description: Number of Adam optimization updates.
+      default: 400
+      minimum: 1
+      maximum: 5000
+    batch_size:
+      type: integer
+      description: Maximum number of MSA rows sampled without replacement for each update; the effective
+        batch is clamped to the row count, so smaller alignments use every row.
+      default: 100
+      minimum: 2
+      maximum: 10000
+    learning_rate:
+      x-advanced: true
+      type: number
+      description: Learning rate for the notebook's scalar-second-moment Adam optimizer.
+      default: 1.0
+      exclusiveMinimum: 0
+      maximum: 10
+    identity_cutoff:
+      x-advanced: true
+      type: number
+      description: Aligned-sequence identity threshold used to down-weight phylogenetically similar rows.
+      default: 0.8
+      minimum: 0.1
+      maximum: 1.0
+    gap_cutoff:
+      x-advanced: true
+      type: number
+      description: Columns whose gap-state fraction exceeds this value are excluded only when computing
+        sequence similarity weights; they are still modeled.
+      default: 0.5
+      minimum: 0
+      maximum: 1
+    use_bias:
+      x-advanced: true
+      type: boolean
+      description: Fit one-body residue fields in addition to pairwise couplings.
+      default: true
+    inverse_covariance_init:
+      x-advanced: true
+      type: boolean
+      description: Initialize couplings from the regularized inverse covariance instead of zeros. The
+        upstream notebook uses this initialization; zero initialization is the bounded production default.
+      default: false
+    exact_lh_eigenvalue:
+      x-advanced: true
+      type: boolean
+      description: Use an exact eigendecomposition for LH instead of the notebook's faster one-step power estimate.
+      default: false
+    a3m:
+      x-advanced: true
+      type: boolean
+      description: Remove lowercase A3M insertion residues and insertion-gap dots before validating
+        alignment width; match-state deletion gaps are preserved.
+      default: true
+    seed:
+      x-advanced: true
+      type: integer
+      x-ui-control: {kind: seed}
+      description: Random seed controlling mini-batch sampling.
+      default: 0
+      minimum: 0
+      maximum: 4294967295
