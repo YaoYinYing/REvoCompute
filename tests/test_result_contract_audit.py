@@ -307,8 +307,8 @@ def test_a_required_source_with_no_declared_tree_is_surfaced_not_passed(tmp_path
     assert "result.required_source_undeclared_tree" in _codes(findings)
 
 
-def test_a_primary_view_overriding_a_declared_provenance_role_is_flagged(tmp_path):
-    """A primary view's source must not also be declared provenance/diagnostic."""
+def test_a_primary_view_sourcing_a_declared_provenance_role_is_flagged(tmp_path):
+    """A primary view cannot use a file declared provenance/diagnostic as a source."""
     family = _write_family(
         tmp_path,
         view_yaml=_matrix_view("matrix", "matrix.csv"),

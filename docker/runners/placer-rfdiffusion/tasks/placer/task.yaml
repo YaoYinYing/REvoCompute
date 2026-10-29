@@ -6,24 +6,48 @@ citations:
   bibtex: >-
     @article{Anishchenko_2024, title={Modeling protein-small molecule conformational ensembles with PLACER}, url={http://dx.doi.org/10.1101/2024.09.25.614868}, DOI={10.1101/2024.09.25.614868}, publisher={openRxiv}, author={Anishchenko, Ivan and Kipnis, Yakov and Kalvet, Indrek and Zhou, Guangfeng and Krishna, Rohith and Pellock, Samuel J. and Lauko, Anna and Lee, Gyu Rie and An, Linna and Dauparas, Justas and DiMaio, Frank and Baker, David}, year={2024}, month=Sept }
 
-summary: All-atom modeling of protein-ligand complexes from an input structure (PLACER).
-use_when: Use this to generate or refine all-atom protein–ligand complex models from
-  supplied structures.
-input_summary: One or more PDB or mmCIF complexes, with one selected as the primary
-  structure.
-output_summary: Sampled complex structures and PLACER scoring tables.
+summary: Reconstruct and sample local all-atom protein and ligand conformations
+  around a selected ligand or residue (PLACER).
+use_when: Use this to refine or sample ligand placement and conformation, and to
+  rebuild the side chains around a ligand or target residue, from a structure
+  that already contains those atoms. It is not a blind global docking search and
+  does not predict binding affinity.
+input_summary: One PDB or mmCIF protein structure, either a protein–ligand complex
+  or an apo protein with a target residue.
+output_summary: An ensemble of sampled structures and one CSV of per-sample
+  geometry and confidence metrics.
 considerations:
-- Ligand, residue, mutation, bond, and crop identifiers must follow the pinned PLACER
-  syntax.
+- PLACER rebuilds a local crop around the selected ligand or target residue; it
+  does not search the whole protein surface by default.
+- Without predict_ligand, PLACER picks one ligand at random per sample when the
+  input has several; use predict_multi to rebuild and score several together.
+- Ligand identifiers use name3, name3-resno, or chain-name3-resno; the target
+  residue uses chain-resno. Mutations use resno+chain:name3. Crop and
+  corruption centers use chain-resno-name3-atom.
+- Crop and corruption centers need at least one ligand in the input; a
+  ligand-free structure uses target_res alone.
+- PDB insertion codes and alternate locations are not preserved, and PDB inputs
+  containing them are rejected; mmCIF alternate locations are resolved by
+  highest occupancy and insertion codes are ignored. PLACER does not predict
+  hydrogens.
+- Ligand bond orders, hybridization and atom typing are inferred from the input
+  structure; PLACER's optional ligand reference file is not exposed, so a
+  ligand whose PDB chemistry is ambiguous may be rebuilt incorrectly.
+- mmCIF input must be RCSB-style; mmCIF written by other prediction methods may
+  not parse.
 runner_args:
 - placer
 gpus: true
 inputs:
   structures:
-    title: Protein-ligand complexes
+    title: Protein structure
     type: protein_structure
-    cardinality: {min: 1, max: 64}
+    cardinality: {min: 1, max: 1}
     formats: [pdb, cif, mmcif]
+    description: The structure PLACER rebuilds. A ligand to sample must already be
+      present; an apo structure needs a target residue. For mmCIF, chains are
+      label_asym_id, protein numbering is label_seq_id, and ligand numbering is
+      auth_seq_id.
 input_workspace:
   steps:
   - id: material
@@ -33,27 +57,25 @@ input_workspace:
     - plugin: files
       id: source_files
       title: Structure workspace
-      description: Upload all PDB/mmCIF inputs; nested paths remain intact.
-      options: {primary_role: structures}
+      description: Upload the PDB/mmCIF structure.
     - plugin: structure
       id: structure_builder
-      title: Structures and ligands
-      description: Inspect the primary structure and its chains before sampling.
+      title: Structure and ligands
+      description: Inspect the structure, its chains and its ligands before sampling.
       options:
         source: source_files
         role: structures
-        select_chains: true
-        select_residues: true
+        select_chains: false
+        select_residues: false
   - id: intent
     title: Define the scientific intent
-    description: Specify which molecular features the method should preserve, redesign,
-      or analyze
+    description: Specify which ligands, residues or regions PLACER should rebuild
     capabilities:
     - plugin: regions
       id: placement_regions
       title: Placement context
-      description: Specify target residues, mutations, ligands, or crop centers when
-        needed.
+      description: Choose the ligands to sample, hold fixed, mutate, or center the
+        crop on.
       options:
         source: structure_builder
         fields:
@@ -63,7 +85,6 @@ input_workspace:
         - mutate
         - crop_centers
         - corruption_centers
-        syntax: placer
   - id: settings
     title: Set the experiment
     description: Adjust only the controls that matter for this run
@@ -85,8 +106,9 @@ result_workspace:
   - plugin: candidate-collection
     id: complex_models
     role: primary
-    title: Predicted complex models
-    description: Protein–ligand complex models in the order emitted by PLACER.
+    title: Sampled complex models
+    description: One PDB file holding every sample as a MODEL record, in the order
+      PLACER emitted or reranked them.
     sources:
       candidates:
       - glob: '*_model.pdb'
@@ -95,9 +117,13 @@ result_workspace:
   - plugin: entity-table
     id: model_scores
     role: evidence
-    title: Model confidence and geometry scores
-    description: PLACER model metrics; interpretation depends on the selected reranking
-      field.
+    title: Per-sample geometry and confidence
+    description: One row per sampled MODEL. Lower fape, rmsd, kabsch and prmsd are
+      better; higher lddt, plddt and plddt_pde are better. fape, lddt, rmsd and
+      kabsch are measured against the input reference; prmsd is predicted
+      coordinate uncertainty and plddt/plddt_pde are predicted confidence. rmsd
+      and kabsch report zero when no ligand atoms are corrupted (apo or
+      target_res side-chain mode).
     sources:
       table:
       - glob: '*.csv'
@@ -112,6 +138,7 @@ result_workspace:
       - fape
       - lddt
       - rmsd
+      - kabsch
       - prmsd
       - plddt
       - plddt_pde
@@ -122,83 +149,120 @@ parameters:
   $schema: https://json-schema.org/draft/2020-12/schema
   type: object
   additionalProperties: false
+  allOf:
+  - if:
+      properties: {predict_ligand: {minLength: 1}}
+      required: [predict_ligand]
+    then:
+      properties: {fixed_ligand: {maxLength: 0}}
+  - if:
+      properties: {crop_centers: {minLength: 1}}
+      required: [crop_centers]
+    then:
+      properties: {corruption_centers: {maxLength: 0}}
+  - if:
+      properties: {use_sm: {const: false}}
+      required: [use_sm]
+    then:
+      properties:
+        predict_ligand: {maxLength: 0}
+        fixed_ligand: {maxLength: 0}
   properties:
     num_samples:
       type: integer
-      description: Number of independently sampled ligand-placement structures to
-        generate.
+      description: Independent samples per structure; PLACER recommends 50–100 for
+        most cases.
       default: 50
       minimum: 1
       maximum: 10000
     predict_ligand:
       type: string
-      description: Space-separated ligand residue names whose coordinates PLACER should
-        predict.
+      description: Ligand instances to rebuild and score, as space-separated name3,
+        name3-resno, or chain-name3-resno (for example lig or B-lig-1). A bare
+        token is a residue name, not a chain. All other ligands stay fixed.
       default: ''
+      pattern: '^(?:[A-Za-z0-9]+|[A-Za-z0-9]+-[0-9]+|[A-Za-z0-9]+-[A-Za-z0-9]+-[0-9]+)(?:\s+(?:[A-Za-z0-9]+|[A-Za-z0-9]+-[0-9]+|[A-Za-z0-9]+-[A-Za-z0-9]+-[0-9]+))*$|^$'
     use_sm:
       type: boolean
-      description: Uses PLACER small-molecule features when representing ligand atoms.
+      description: Keep the small molecule in the model. Turn off for an apo run
+        that rebuilds only protein residues. Cannot be combined with
+        predict_ligand or fixed_ligand.
       default: true
     fixed_ligand:
       type: string
-      description: Space-separated ligand residue names held fixed during coordinate
-        prediction.
+      description: Ligand instances held at their input coordinates, with the same
+        identifier syntax as predict_ligand. Cannot be combined with predict_ligand.
       default: ''
+      pattern: '^(?:[A-Za-z0-9]+|[A-Za-z0-9]+-[0-9]+|[A-Za-z0-9]+-[A-Za-z0-9]+-[0-9]+)(?:\s+(?:[A-Za-z0-9]+|[A-Za-z0-9]+-[0-9]+|[A-Za-z0-9]+-[A-Za-z0-9]+-[0-9]+))*$|^$'
     target_res:
       type: string
-      description: Optional target residue specification used to center the cropped
-        model input.
+      description: Protein residue used as the crop target, as chain-resno (for
+        example A-149). On PDB the target residue is the only eligible crop
+        center; every other residue is excluded from center selection, and
+        without an explicit center the crop centers on a non-backbone atom of
+        that residue. In target mode no atoms are marked corrupted, so every
+        atom in the crop is predicted. On mmCIF upstream uses only the chain, so
+        the residue number does not constrain the crop, which otherwise centers
+        on a non-backbone atom in that chain. Required when the input has no
+        ligand.
       default: ''
+      pattern: '^(?:[A-Za-z0-9]+-[0-9]+)?$'
     fixed_ligand_noise:
       type: number
-      description: Coordinate noise magnitude applied to ligands marked as fixed.
+      description: Coordinate noise added to fixed ligand atoms. Defaults to
+        PLACER's backbone noise.
       minimum: 0
     rerank:
       type: string
-      description: Confidence metric used to rerank sampled structures; empty preserves
-        generation order.
+      description: Metric used to order the output models and CSV rows. prmsd is
+        ascending; plddt and plddt_pde are descending. Empty keeps generation
+        order and the printed model numbers.
       default: ''
       enum:
       - ''
       - prmsd
       - plddt
       - plddt_pde
-    cautious:
-      type: boolean
-      description: Enables conservative input checks that reject ambiguous or unsupported
-        structures.
-      default: false
     exclude_common_ligands:
       type: boolean
-      description: Excludes common crystallization additives and solvent molecules
-        from ligand prediction.
+      description: Skip common crystallization additives and solvents from the
+        parsed ligands.
       default: false
     predict_multi:
       type: boolean
-      description: Predicts multiple ligand instances jointly rather than selecting
-        a single instance.
+      description: Rebuild and score all selected ligand instances together.
+        Requires more than one ligand and is respected with predict_ligand and
+        fixed_ligand.
       default: false
     bonds:
       type: string
-      description: Space-separated custom covalent bond specifications supplied to
-        PLACER.
+      description: Extra covalent bonds as space-separated chain-resno-name3-atom
+        pairs and a length, for example A-42-ALA-CB:B-173-JRP-CL:1.8.
       default: ''
+      pattern: '^(?:\S+:\S+:\S+(?:\s+\S+:\S+:\S+)*)?$'
     mutate:
       type: string
-      description: Space-separated residue mutation specifications applied before
-        prediction.
+      description: Residue mutations as space-separated resno+chain:name3, for
+        example 128A:TRP. The target must be in PLACER's shipped residue
+        library; custom residue definitions are not exposed. PDB input only.
       default: ''
+      pattern: '^(?:[0-9]+[A-Za-z0-9]*:[A-Za-z0-9]+(?:\s+[0-9]+[A-Za-z0-9]*:[A-Za-z0-9]+)*)?$'
     crop_centers:
       type: string
-      description: Space-separated residue or atom selections used as explicit crop
-        centers.
+      description: Crop centers as space-separated chain-resno-name3-atom, for
+        example B-200-HEM-FE. One is chosen at random; it recenters the crop
+        sphere and leaves every predicted ligand to be corrupted from its input
+        coordinates. It neither selects nor relocates ligands; use
+        corruption_centers to relocate them. Cannot be combined with
+        corruption_centers.
       default: ''
+      pattern: '^(?:[A-Za-z0-9]+-[0-9]+-[A-Za-z0-9]+-[A-Za-z0-9'']+(?:\s+[A-Za-z0-9]+-[0-9]+-[A-Za-z0-9]+-[A-Za-z0-9'']+)*)?$'
     corruption_centers:
       type: string
-      description: Space-separated residue or atom selections around which coordinates
-        are corrupted.
+      description: Atoms toward which PLACER corrupts each predicted ligand, with
+        the same syntax as crop centers. One is chosen at random per ligand and
+        becomes that ligand's starting coordinate; at least one per predicted
+        ligand is required. Cannot be combined with crop_centers. Also sets the
+        crop center, so it recenters the crop in an apo run (use_sm off).
       default: ''
-    ignore_ligand_hydrogens:
-      type: boolean
-      description: Omits ligand hydrogen atoms when building PLACER model features.
-      default: false
+      pattern: '^(?:[A-Za-z0-9]+-[0-9]+-[A-Za-z0-9]+-[A-Za-z0-9'']+(?:\s+[A-Za-z0-9]+-[0-9]+-[A-Za-z0-9]+-[A-Za-z0-9'']+)*)?$'

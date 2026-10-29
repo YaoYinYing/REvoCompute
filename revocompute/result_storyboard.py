@@ -52,6 +52,9 @@ _LOGICAL_FILE_ID = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 # absent on purpose: it belongs to the task's single primary view, which the
 # server owns, not to a runner file declaration.
 _RESULT_FILE_ROLES = frozenset({"evidence", "provenance", "diagnostic", "artifact"})
+# Roles that describe run records rather than a scientific result. A primary
+# view cannot source or promote one.
+RECORD_FILE_ROLES = frozenset({"provenance", "diagnostic"})
 
 
 class ResultContractError(ValueError):
@@ -168,6 +171,14 @@ def expected_file_tree(task_type: Any, server_dir: str) -> dict[str, dict[str, A
     return load_expected_file_tree(contract_dir(task_type, server_dir) / "expected_files.yaml")
 
 
+SERVER_RECORD_PREFIXES = ("debug/", "execution/", "log/")
+
+
+def is_server_record(path: str) -> bool:
+    """True for the input snapshot and execution records the server owns."""
+    return path.startswith(SERVER_RECORD_PREFIXES)
+
+
 def resolve_expected_files(
     tree: dict[str, dict[str, Any]], artifacts: list[dict[str, Any]]
 ) -> tuple[dict[str, list[dict[str, Any]]], list[dict[str, Any]], list[str]]:
@@ -178,6 +189,12 @@ def resolve_expected_files(
     problems: list[str] = []
     for logical_id, definition in tree.items():
         selector = definition.get("path") or definition["pattern"]
+        # A scientific selector must not claim the input snapshot or an
+        # execution record just because a basename happens to match: an upload
+        # named ``3fap_model.pdb`` would otherwise turn ``*_model.pdb`` into
+        # "expected one file, found 2". Entries that declare themselves
+        # provenance or diagnostic still address those server-owned paths.
+        record_eligible = definition.get("role") in RECORD_FILE_ROLES
         matches = [
             {
                 **by_path[path],
@@ -185,7 +202,9 @@ def resolve_expected_files(
                 "cardinality": definition["cardinality"],
             }
             for path in sorted(by_path)
-            if fnmatchcase(path, selector) and by_path[path]["size"] > 0
+            if fnmatchcase(path, selector)
+            and by_path[path]["size"] > 0
+            and (record_eligible or not is_server_record(path))
         ]
         if definition["cardinality"] == "one" and len(matches) > 1:
             problems.append(f"{logical_id}: expected one file, found {len(matches)}")
@@ -307,11 +326,14 @@ def storyboard_asset_root(task_type: Any, server_dir: str) -> Path:
 
 
 __all__ = [
+    "RECORD_FILE_ROLES",
+    "SERVER_RECORD_PREFIXES",
     "ResultContractError",
     "contract_dir",
     "contract_directory",
     "declared_file_roles",
     "declared_result_contracts",
+    "is_server_record",
     "expected_file_tree",
     "load_expected_file_tree",
     "resolve_expected_files",

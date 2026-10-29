@@ -133,10 +133,10 @@ sequences, structure inspection, residue/region controls, typed parameters, and
 the terminal `review` capability. The page does not render that review step as a
 protocol column; it renders the submission summary as a Task Snapshot rail built
 from the collected capability summaries, so the summary appears once. A simple
-FASTA task therefore stays small, while RFdiffusion or
-PLACER can expose a guided multi-file structure workflow without task-name
-conditionals in the page orchestrator. Specialized varieties, such as the
-RFdiffusion region/contig builder, remain separate statically loaded plugins.
+FASTA task therefore stays small, while a task can declare a guided structure
+workflow without task-name conditionals in the page orchestrator. Specialized
+varieties, such as the RFdiffusion region/contig builder, remain separate
+statically loaded plugins.
 The anonymous `GET /compute/api/task-parameters/<task-type>` route exposes the
 canonical Draft 2020-12 parameter schema directly from the owning
 `task.yaml`; clients should consume it instead of maintaining parameter names,
