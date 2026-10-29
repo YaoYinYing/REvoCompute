@@ -25,7 +25,7 @@ FAMILY = ROOT / "docker/runners/caver302"
 FIXTURES = Path(__file__).resolve().parent / "fixtures/caver"
 sys.path.insert(0, str(FAMILY))
 
-from normalize_results import OutputError, normalize  # noqa: E402
+from normalize_results import OutputError, normalize, parse_bottlenecks, parse_residues  # noqa: E402
 
 RAW_FILES = {
     "summary.txt": FIXTURES / "summary.txt",
@@ -81,7 +81,9 @@ def test_normalizes_authentic_output_into_declared_tables(tmp_path: Path) -> Non
     assert tunnels[0]["curvature"] == "1.349512442"
 
     profiles = read_csv(output / "profiles.csv")
-    assert len(profiles) == 35
+    # One authentic profile point per tunnel: the fixture is the guided-example
+    # profile table sliced to the first point of every axis.
+    assert len(profiles) == 83
     assert profiles[0] == {
         "snapshot": "1.pdb",
         "tunnel_cluster": "1",
@@ -96,14 +98,14 @@ def test_normalizes_authentic_output_into_declared_tables(tmp_path: Path) -> Non
     }
 
     bottlenecks = read_csv(output / "bottlenecks.csv")
-    assert len(bottlenecks) == 9
+    assert len(bottlenecks) == 83
     assert bottlenecks[0]["bottleneck_x_angstrom"] == "12.1187"
     assert bottlenecks[0]["bottleneck_radius_angstrom"] == "1.01758"
     # Every contacting residue is published, not just the first.
     assert bottlenecks[0]["bottleneck_residues"] == "X:146,X:142,X:173,X:242,X:169,X:138,X:141,X:145"
 
     residues = read_csv(output / "residues.csv")
-    assert len(residues) == 39
+    assert len(residues) == 171
     assert residues[0]["chain"] == "X"
     assert residues[0]["residue_number"] == "38"
     assert residues[0]["residue_name"] == "ASN"
@@ -116,9 +118,11 @@ def test_normalizes_authentic_output_into_declared_tables(tmp_path: Path) -> Non
 
     assert summary["cluster_count"] == 5
     assert summary["tunnel_count"] == 83
-    assert summary["profile_point_count"] == 35
-    assert summary["bottleneck_row_count"] == 9
-    assert summary["lining_residue_count"] == 39
+    assert summary["profile_point_count"] == 83
+    assert summary["bottleneck_row_count"] == 83
+    # A residue can line several clusters; 44 of the 171 rows repeat a residue.
+    assert summary["lining_residue_row_count"] == 171
+    assert summary["lining_residue_count"] == 72
     assert summary["cluster_ids"] == [1, 2, 3, 4, 5]
     assert len(summary["snapshot_labels"]) == 50
     assert len(summary["cluster_table_sha256"]) == 64
@@ -180,7 +184,7 @@ def test_uncomputed_error_axis_is_skipped(tmp_path: Path) -> None:
     raw, output = prepare(tmp_path)
     _blank_axis(raw, "Upper limit of R overestimation")
     summary = normalize(raw, output, {})
-    assert summary["profile_point_count"] == 35
+    assert summary["profile_point_count"] == 83
     assert read_csv(output / "profiles.csv")[0]["radius_angstrom"] == "1.644"
 
 
@@ -191,44 +195,94 @@ def test_uncomputed_required_axis_is_an_error(tmp_path: Path) -> None:
         normalize(raw, output, {})
 
 
-def test_bottleneck_row_keeps_every_contacting_residue(tmp_path: Path) -> None:
-    raw, output = prepare(tmp_path)
-    text = (FIXTURES / "bottlenecks_multi.csv").read_text(encoding="utf-8").replace("frame_1.pdb", "1.pdb")
-    (raw / "analysis/bottlenecks.csv").write_text(text, encoding="utf-8")
-    normalize(raw, output, {})
-    rows = read_csv(output / "bottlenecks.csv")
+def test_bottleneck_row_keeps_every_contacting_residue() -> None:
+    rows = parse_bottlenecks(FIXTURES / "bottlenecks_multi.csv")
     assert rows[0]["bottleneck_residues"] == "A:500,A:367,A:600,A:363"
 
 
-def test_blank_chain_residues_are_parsed_by_column(tmp_path: Path) -> None:
-    raw, output = prepare(tmp_path)
-    (raw / "analysis/residues.txt").write_bytes((FIXTURES / "residues_blank_chain.txt").read_bytes())
-    normalize(raw, output, {})
-    rows = read_csv(output / "residues.csv")
+def test_blank_chain_residues_are_parsed_by_column() -> None:
+    rows = parse_residues(FIXTURES / "residues_blank_chain.txt")
     assert rows[0]["chain"] == ""
-    assert rows[0]["residue_number"] == "98"
+    assert rows[0]["residue_number"] == 98
     assert rows[0]["residue_name"] == "ARG"
     assert rows[0]["lining_atoms"].startswith("1:CD_541")
 
 
-def test_insertion_coded_residues_are_parsed_by_column(tmp_path: Path) -> None:
-    raw, output = prepare(tmp_path)
-    (raw / "analysis/residues.txt").write_bytes((FIXTURES / "residues_insertion_code.txt").read_bytes())
-    normalize(raw, output, {})
-    rows = read_csv(output / "residues.csv")
-    assert [(row["residue_number"], row["insertion_code"]) for row in rows] == [("100", "A"), ("100", "")]
+def test_insertion_coded_residues_are_parsed_by_column() -> None:
+    rows = parse_residues(FIXTURES / "residues_insertion_code.txt")
+    assert [(row["residue_number"], row["insertion_code"]) for row in rows] == [(100, "A"), (100, "")]
 
 
-def test_lining_residue_count_counts_distinct_residues(tmp_path: Path) -> None:
-    raw, output = prepare(tmp_path)
-    (raw / "analysis/residues.txt").write_bytes((FIXTURES / "residues_duplicates.txt").read_bytes())
-    summary = normalize(raw, output, {})
-    rows = read_csv(output / "residues.csv")
+def test_lining_residue_count_counts_distinct_residues() -> None:
+    rows = parse_residues(FIXTURES / "residues_duplicates.txt")
     assert len(rows) == 3
     # A:98 lines two clusters, so the distinct count must be smaller than the row count.
-    assert summary["lining_residue_row_count"] == 3
-    assert summary["lining_residue_count"] == 2
-    assert {(row["chain"], row["residue_number"]) for row in rows} == {("A", "98"), ("A", "101")}
+    assert {(row["chain"], row["residue_number"]) for row in rows} == {("A", 98), ("A", 101)}
+
+
+def _summary_lines(raw: Path) -> list[str]:
+    return (raw / "summary.txt").read_text(encoding="utf-8").splitlines()
+
+
+def _rewrite_summary_field(raw: Path, cluster: int, field: int, value: int) -> None:
+    """Rewrite one numeric field of one tunnel-cluster summary row."""
+    lines = _summary_lines(raw)
+    for index, line in enumerate(lines):
+        fields = line.split()
+        if len(fields) == 18 and fields[0].lstrip("-").isdigit() and int(fields[0]) == cluster:
+            fields[field] = str(value)
+            lines[index] = "  ".join(fields)
+            break
+    else:
+        raise AssertionError(f"summary row for cluster {cluster} not found")
+    (raw / "summary.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def test_missing_bottleneck_row_is_an_error(tmp_path: Path) -> None:
+    raw, output = prepare(tmp_path)
+    lines = (raw / "analysis/bottlenecks.csv").read_text(encoding="utf-8").splitlines()
+    (raw / "analysis/bottlenecks.csv").write_text("\n".join(lines[:-1]) + "\n", encoding="utf-8")
+    with pytest.raises(OutputError, match="has no bottleneck row for tunnel"):
+        normalize(raw, output, {})
+
+
+def test_missing_profile_rows_are_an_error(tmp_path: Path) -> None:
+    raw, output = prepare(tmp_path)
+    path = raw / "analysis/tunnel_profiles.csv"
+    lines = path.read_text(encoding="utf-8").splitlines()
+    kept = [lines[0]]
+    for line in lines[1:]:
+        cells = [cell.strip() for cell in line.split(",")]
+        if cells[0] == "2.pdb" and cells[1] == "1" and cells[2] == "1":
+            continue
+        kept.append(line)
+    path.write_text("\n".join(kept) + "\n", encoding="utf-8")
+    with pytest.raises(OutputError, match="has no points for tunnel"):
+        normalize(raw, output, {})
+
+
+def test_missing_residue_block_is_an_error(tmp_path: Path) -> None:
+    raw, output = prepare(tmp_path)
+    path = raw / "analysis/residues.txt"
+    lines = path.read_text(encoding="utf-8").splitlines()
+    kept = lines[: lines.index("== Tunnel cluster 5 ==")]
+    path.write_text("\n".join(kept) + "\n", encoding="utf-8")
+    with pytest.raises(OutputError, match="has no residue rows for tunnel cluster 5"):
+        normalize(raw, output, {})
+
+
+def test_summary_tunnel_count_mismatch_is_an_error(tmp_path: Path) -> None:
+    raw, output = prepare(tmp_path)
+    _rewrite_summary_field(raw, 1, 1, 49)
+    with pytest.raises(OutputError, match="summary.txt reports 82 tunnels"):
+        normalize(raw, output, {})
+
+
+def test_summary_snapshot_count_mismatch_is_an_error(tmp_path: Path) -> None:
+    raw, output = prepare(tmp_path)
+    _rewrite_summary_field(raw, 2, 2, 27)
+    with pytest.raises(OutputError, match="reports 27 snapshots in cluster 2"):
+        normalize(raw, output, {})
 
 
 def test_residues_with_an_unknown_cluster_are_an_error(tmp_path: Path) -> None:

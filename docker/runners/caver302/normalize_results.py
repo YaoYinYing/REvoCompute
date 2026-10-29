@@ -22,6 +22,7 @@ import json
 import math
 import re
 import shutil
+from collections import Counter
 from pathlib import Path
 
 SUMMARY_COLUMNS = (
@@ -386,9 +387,10 @@ def normalize(raw_out: Path, output_dir: Path, provenance: dict[str, object]) ->
     residues = parse_residues(require_file(raw_out / "analysis/residues.txt"))
 
     cluster_ids = {int(cluster["cluster"]) for cluster in clusters}
-    tunnel_keys = {
+    tunnel_keys = [
         (str(tunnel["snapshot"]), int(tunnel["tunnel_cluster"]), int(tunnel["tunnel"])) for tunnel in tunnels
-    }
+    ]
+    tunnel_key_set = set(tunnel_keys)
     for tunnel in tunnels:
         if int(tunnel["tunnel_cluster"]) not in cluster_ids:
             raise OutputError(f"tunnel_characteristics.csv names unknown cluster {tunnel['tunnel_cluster']}")
@@ -398,8 +400,43 @@ def normalize(raw_out: Path, output_dir: Path, provenance: dict[str, object]) ->
     for name, rows in (("tunnel_profiles.csv", profiles), ("bottlenecks.csv", bottlenecks)):
         for row in rows:
             key = (str(row["snapshot"]), int(row["tunnel_cluster"]), int(row["tunnel"]))
-            if key not in tunnel_keys:
+            if key not in tunnel_key_set:
                 raise OutputError(f"{name} names a tunnel absent from tunnel_characteristics.csv: {key}")
+
+    # CAVER's summary counts are the record of how many tunnels and snapshots it
+    # analyzed. Every authenticated output satisfies these invariants, and a
+    # truncated table still parses, so a partial output would otherwise be
+    # published as a complete result.
+    cluster_tunnel_sum = sum(int(cluster["tunnel_count"]) for cluster in clusters)
+    if cluster_tunnel_sum != len(tunnels):
+        raise OutputError(
+            f"summary.txt reports {cluster_tunnel_sum} tunnels but tunnel_characteristics.csv lists {len(tunnels)}"
+        )
+    tunnel_counts = Counter(int(tunnel["tunnel_cluster"]) for tunnel in tunnels)
+    for cluster in clusters:
+        cluster_id = int(cluster["cluster"])
+        if int(cluster["tunnel_count"]) != tunnel_counts[cluster_id]:
+            raise OutputError(
+                f"summary.txt reports {cluster['tunnel_count']} tunnels in cluster {cluster_id} "
+                f"but tunnel_characteristics.csv lists {tunnel_counts[cluster_id]}"
+            )
+        snapshot_count = len({str(t["snapshot"]) for t in tunnels if int(t["tunnel_cluster"]) == cluster_id})
+        if int(cluster["snapshot_count"]) != snapshot_count:
+            raise OutputError(
+                f"summary.txt reports {cluster['snapshot_count']} snapshots in cluster {cluster_id} "
+                f"but tunnel_characteristics.csv lists {snapshot_count}"
+            )
+    bottleneck_keys = {(str(row["snapshot"]), int(row["tunnel_cluster"]), int(row["tunnel"])) for row in bottlenecks}
+    profile_keys = {(str(row["snapshot"]), int(row["tunnel_cluster"]), int(row["tunnel"])) for row in profiles}
+    residue_counts = Counter(int(row["tunnel_cluster"]) for row in residues)
+    for key in tunnel_keys:
+        if key not in profile_keys:
+            raise OutputError(f"tunnel_profiles.csv has no points for tunnel {key}")
+        if key not in bottleneck_keys:
+            raise OutputError(f"bottlenecks.csv has no bottleneck row for tunnel {key}")
+    for cluster_id in tunnel_counts:
+        if residue_counts[cluster_id] == 0:
+            raise OutputError(f"residues.txt has no residue rows for tunnel cluster {cluster_id}")
 
     _write_csv(output_dir / "clusters.csv", CLUSTER_FIELDS, clusters)
     _write_csv(output_dir / "tunnels.csv", TUNNEL_FIELDS, tunnels)
