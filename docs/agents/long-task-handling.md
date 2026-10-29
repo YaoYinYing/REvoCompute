@@ -416,9 +416,16 @@ If one of these is false, continue the refactor.
 
 ## Multi-agent Campaign Protocol
 
-**Protocol version: 1.5.** The pre-#127 `main` baseline is version **1**, at
-commit `edd5fbe068bce7c5a3082f0c8558f32bad682cc4`. This version belongs to
-the Campaign protocol, not to the REvoCompute software release.
+**Protocol version: 1.5** (baseline: v1 at `edd5fbe`, pre-#127). The version
+covers this Campaign protocol, not the software release. A Campaign records its
+launch instruction, governing version, and commit at start; a revision records
+the old/new version, baseline commit, rationale, effective scope, and a bounded
+migration note in its PR, while editorial changes need no bump. An adopted
+security or authority correction applies to actions not yet taken; other process
+changes are prospective unless an approved transition says otherwise. Do not
+invalidate a completed independent review merely because documentation moved —
+check whether its governing requirement or evidence actually changed — and never
+carry evidence across a changed scientific or safety rule.
 
 A **Campaign** is a set of related PRs delivered as one effort, identified by a
 coordinating GitHub issue or by an explicitly named PR group in the launch
@@ -426,7 +433,7 @@ instruction. Use this protocol when the task is identified as a Campaign, when a
 Campaign Commander role is named, or whenever several PRs progress in parallel
 under one coordination effort.
 
-### Sources of truth
+### Sources of truth and authority
 
 Do not replace any of these with conversation memory:
 
@@ -444,25 +451,17 @@ machine truth
     tests, CI, live acceptance, and exact-head evidence
 ```
 
-### Decision authority and instruction precedence
-
-Repository invariants in `CLAUDE.md` and this protocol govern all Campaign work.
-An authenticated maintainer decision may explicitly revise a Campaign's scope
-or delegation; its scope, effective point, and superseded instruction must be
-recorded. Within those boundaries the approved launch instruction controls
-Campaign-specific authority, the coordinating issue and PR bodies control
-implementation scope, and PR threads preserve findings and coordination.
-An agent recommendation, review PASS, or GitHub comment by a shared agent
-identity is **not** itself proof of maintainer authorization.
-
-Authority is not inferred from a later timestamp, a more confident agent, or
-an apparent approval in a PR thread. A later verified maintainer instruction
-may replace an earlier one; a change to repository-wide safety invariants
-requires an explicit, reviewed policy change. One-off exceptions are bounded
-to the stated operation/PR/head and expire when their conditions change.
-Where origin, precedence, or delegation is in doubt, take no privileged or
-irreversible action; record the conflict and ask for a verified decision.
-Neither the Commander nor an Arbiter can manufacture missing authority.
+Repository invariants in `CLAUDE.md` and this protocol govern all Campaign work;
+within them, the launch instruction controls Campaign authority, PR bodies
+control implementation scope, and PR threads carry findings. A verified
+maintainer instruction may revise scope or delegation — record what it changes,
+from when, and what it supersedes. A review PASS, a recommendation, or a comment
+under a shared agent identity is not proof of that authorization, and authority
+is never inferred from timing or apparent approval. A one-off exception is
+bounded to the stated operation, PR, and head and expires with them. Where
+authority is doubtful, take no privileged or irreversible action: record the
+conflict and ask for a verified decision. Neither the Commander nor an Arbiter
+can manufacture missing authority.
 
 ### Campaign Commander
 
@@ -483,9 +482,8 @@ Commander:
 
 The Commander should not make feature changes itself. Small coordination-only
 edits are allowed, but the Commander must not become a hidden additional PR
-owner. The Commander does not merge or squash-merge unless the authenticated launch
-instruction, or an authenticated maintainer amendment to it, expressly grants
-that authority; the normal endpoint is
+owner. The Commander does not merge or squash-merge unless the launch
+instruction explicitly grants that authority; the normal endpoint is
 `READY_FOR_FINAL_REVIEW`.
 
 #### Control-plane quiescence
@@ -551,9 +549,9 @@ not a second authority model.
 - The Commander must not expand the Campaign's strategic objectives, weaken
   established invariants, introduce unrelated features, or perform irreversible
   production operations without explicit maintainer approval.
-- Only the authenticated launch instruction or its authenticated maintainer
-  amendment can delegate merge authority: this standing delegation grants
-  none, and final squash-merge authority otherwise stays with the maintainer.
+- Only the launch instruction, or a verified maintainer amendment recorded in
+  the PR, can delegate merge authority: this standing delegation grants none,
+  and final squash-merge authority otherwise stays with the maintainer.
 - The Independent Campaign Advisor keeps its independent, direction-focused
   mandate; it is not an additional review or approval layer, and this delegation
   does not widen its role.
@@ -779,29 +777,21 @@ this framework is unnecessary
 this evidence can be smaller
 ```
 
-### Exception governance: Arbiter and Protocol Steward
+### On-demand exception roles
 
-These are **on-demand functions, not standing seats or extra PR approval gates**.
-They do not join the ordinary Owner / Reviewer / Commander delivery path, do
-not occupy reserved slots, and yield their execution slot when the case closes.
-The Independent Advisor remains responsible for direction and unnecessary
-work; neither new function replaces that mandate.
+Two functions let a Campaign correct itself without new gates or permanent
+seats. Neither occupies a reserved slot, joins the Owner/Reviewer/Commander
+delivery path, or approves work; each yields its slot when the case closes, and
+the Advisor's direction mandate is unchanged.
 
-#### Escalation Arbiter — adjudicate a specific procedural dispute
-
-Escalate only a documented disagreement that routine PR-thread discussion
-cannot resolve: conflicting authority, incompatible readings of acceptance
-rules, scope-ownership deadlock, or a disputed downgrade of a finding.
-Before activation, identify the contested decision, competing positions,
-governing text, exact PR heads, and concrete evidence. Ordinary defects stay
-with the owner and independent reviewers; the Arbiter is not an emergency
-reviewer, implementation owner, or a path around failed CI.
-
-The Arbiter must be independent of the disputants and appointed by the
-maintainer or an approved neutral selection rule; the Commander must not
-select its own judge in a dispute involving Commander authority. Inspect
-primary evidence, explain the **existing** rule, and publish one short ruling
-in the affected PR thread:
+**Escalation Arbiter** — one documented procedural dispute that PR-thread
+discussion cannot resolve: conflicting authority, incompatible readings of an
+acceptance rule, scope-ownership deadlock, or a disputed downgrade of a finding.
+Ordinary defects, failed CI, and technical disagreement stay with owners and
+reviewers. The Arbiter is independent of the disputants and appointed by the
+maintainer (or a neutral rule the maintainer approved); the Commander never
+selects the judge when its own authority is in dispute. It inspects primary
+evidence, states the existing rule, and posts one ruling in the affected PR:
 
 ```text
 ESCALATION RULING
@@ -809,45 +799,24 @@ Case / exact head(s):
 Evidence and competing interpretations:
 Applicable rule and authority:
 Ruling within delegated scope (or REFER TO MAINTAINER):
-Responsible owner / next action:
+Owner / next action:
 ```
 
-A procedural interpretation within already delegated authority controls
-coordination for that case. It **cannot** waive security, scientific evidence,
-reviewer independence, a live acceptance gate, or maintainer-only merge and
-deployment powers. For a genuine policy gap, scope expansion, privilege change,
-or unresolved material scientific disagreement, record the alternatives and
-refer to the maintainer without inventing a new rule. A ruling is not a new
-review round; technical blockers still need their independent recheck.
+A ruling controls coordination for that case only. It cannot waive security,
+scientific evidence, reviewer independence, live acceptance, or maintainer-only
+merge and deployment powers, and it is not a review round — technical blockers
+still need their independent recheck. A policy gap, scope expansion, privilege
+change, or unresolved scientific disagreement goes to the maintainer with the
+alternatives recorded, not a new rule.
 
-#### Protocol Steward — reduce recurring governance friction
-
-The Steward examines repeated disputes, stalled review convergence, role
-overlap, and Campaign retrospectives; it does not supervise daily PR work.
-The Advisor may flag a pattern, but proposing a rule change is a distinct
-task. Prefer **removing, merging, or clarifying existing rules** before adding
-a role, checklist, status, ledger, or mandatory approval. Never silently
-rewrite the protocol from the Commander's implementation worktree.
-
-Proposals are small, reviewable protocol PRs against the canonical docs and
-identify: observed incidents, the invariant being protected, text deleted or
-consolidated, why a simpler existing rule is insufficient, operational cost,
-and effects on active Campaigns. The Steward cannot approve or merge its own
-proposal; the maintainer owns adoption. A one-off arbitration does not by
-itself justify a permanent rule.
-
-#### Protocol versions and active-Campaign compatibility
-
-Record the applicable launch instruction, protocol **version**, and commit at
-Campaign start. Each substantive protocol revision updates the version in this
-section and records the old/new versions, baseline commit, rationale, effective
-scope, and a bounded migration note in its PR. Editorial-only changes do not
-require a version bump. An adopted security/authority correction applies immediately to actions
-not yet taken; otherwise, process changes are prospective unless an explicitly
-approved transition says otherwise. Do not retrospectively invalidate a
-completed independent review merely because documentation moved: evaluate
-whether its governing acceptance requirement or evidence actually changed.
-Never carry forward evidence for a newly changed scientific or safety rule.
+**Protocol Steward** — recurring governance friction: repeated disputes, stalled
+convergence, role overlap, retrospectives. It does not supervise daily work. It
+proposes small protocol PRs that prefer deleting, merging, or clarifying rules
+over adding a role, checklist, status, ledger, or approval, and states the
+incidents, the invariant protected, the text deleted or consolidated, why no
+existing rule suffices, the cost, and the effect on active Campaigns. A Steward
+cannot approve or merge its own proposal; adoption is the maintainer's, and a
+single arbitration does not justify a permanent rule.
 
 ### Concurrency budget
 
@@ -1050,11 +1019,10 @@ C3  global invalidator         pyproject/lock/dependency policy, test framework,
                                task schema or applicable Campaign acceptance/authority policy
 ```
 
-A protocol-only edit is C3 for an active PR **only if** it changes a
-requirement applicable to that PR (such as authority, review independence, or
-scientific acceptance). A clarification with no effect on the PR's admissible
-evidence does not invalidate unchanged implementation review by itself; record
-the applicability decision in the bounded current-main integration check.
+A protocol-only edit is C3 for an active PR only when it changes a requirement
+applicable to that PR (authority, review independence, scientific acceptance).
+A clarification that does not affect admissible evidence does not invalidate
+unchanged implementation review; record that decision in the current-main check.
 
 The class decides the gate:
 
@@ -1551,19 +1519,16 @@ implementation, review, and final challenge all inherit the same model, framing,
 and author summary — one strong independent challenge beats several correlated
 shallow reviews. Do not encode vendor-specific model names in this protocol.
 
-#### Review provenance and independence receipt
+#### Review provenance
 
-For every independent review required by a Campaign's launch, capture the
-reviewed head/base, reviewer session or stable execution identifier, declared
-implementation/prior-review involvement, review scope, adversarial evidence,
-and verdict in its canonical PR record. Shared GitHub authorship does not prove
-distinct reviewers; conversely, self-declared independence is not verified
-identity. Flag unverifiable independence rather than claiming a guarantee.
-A targeted recheck by the same reviewer closes findings but does not become
-a second independent reviewer or a substitute for a separately required
-review round. A launch-specified reviewer pair applies **per named round**;
-later extra rounds do not silently compensate for an incomplete earlier one.
-Do not impose a universal round count on other Campaigns.
+Record each required review in its canonical PR record: exact head/base,
+reviewer session identifier, declared implementation or prior-review involvement,
+scope, adversarial evidence, and verdict. Shared GitHub authorship does not prove
+distinct reviewers, and self-declared independence is not verified identity —
+state the limit rather than claiming a guarantee. A same-reviewer recheck closes
+findings but is neither a second reviewer nor a substitute for a required round;
+a launch-specified pair applies per named round, and later rounds do not backfill
+an incomplete one. Do not impose a universal round count on other Campaigns.
 
 #### Fresh-context merge review
 
@@ -1646,14 +1611,13 @@ expanding into a framework. For R3 PRs and repeated conceptual blockers such an
 out-of-cycle challenge is expected rather than optional. The Advisor does not
 duplicate line-by-line findings, gate approval, or take implementation ownership.
 
-#### Review convergence and escalation trigger
+#### Review convergence
 
-If a conceptual blocker repeatedly survives minimal fixes, materially new P2+
-findings appear after successive rechecks, or review churn grows without
-shrinking the gap to acceptance, pause reflexive patch/review repetition.
-Ask the Advisor for a bounded architecture/scope check; use the Arbiter only
-if the parties then dispute the governing rule or authorized resolution.
-No numeric review quota authorizes lowering scientific or security standards.
+If a conceptual blocker survives repeated minimal fixes, new P2+ findings keep
+appearing after rechecks, or churn grows without narrowing the gap, stop the
+patch/review loop and ask the Advisor for one bounded architecture or scope
+check. Use the Arbiter only if the governing rule or authorized resolution is
+then disputed. No review quota lowers scientific or security standards.
 
 #### Review stopping rule
 
