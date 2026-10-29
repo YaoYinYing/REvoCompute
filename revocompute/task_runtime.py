@@ -1325,6 +1325,8 @@ def _stage_output_identity(output_dir: str, outputs) -> str | None:
                     matches.append(tuple(relative.parts))
                 if not matches and port.required:
                     return None
+                if len(matches) > _published_artifact_limit():
+                    return None
                 for parts in sorted(set(matches)):
                     verified = walker.open_published_file(
                         parts, max_bytes=max(_published_byte_limit() - total_bytes, 0)
