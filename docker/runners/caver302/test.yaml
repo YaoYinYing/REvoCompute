@@ -18,3 +18,14 @@ collections:
         start_residue_number: 500
         start_atom_name: FE
         max_distance: 5
+    - id: caver-1suo-group-coordinates-only
+      task: caver
+      input:
+        roles:
+          structure: [tests/data/pdb/1SUO_coordinates_only.pdb]
+      parameters:
+        # A 54-column coordinates-only PDB through the group start point: covers
+        # the minimum coordinate block CAVER reads and a chain:residue group
+        # centroid in the same heme pocket as the atom-mode baseline.
+        start_point_mode: group
+        start_group: "A:436,A:438"
