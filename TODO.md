@@ -12,6 +12,22 @@
 > docs/agents/single-pr-campaign.md and current Protocol.
 > This root TODO is ephemeral and MUST be removed before final merge.
 
+## Delivery status (update as milestones land)
+
+| Area | State |
+| --- | --- |
+| Graph IR, typed ports, deterministic digest | delivered (M2a `92a49ac`) |
+| Frozen graph at submission + dispatch digest verification | delivered (M2b `927cf74`) |
+| Stage artifact identity, resume verification, output validation | delivered (M2c `1426e77`) |
+| Fork/join readiness, branch isolation, blocked diagnostics | delivered, executed serially (M2d `60163ca`) |
+| Cross-family stage declaration, per-family readiness/bundle/dispatch | delivered (M2e `982e4de`) |
+| Graph-aware API: `execution_graph`, per-stage `dependency` | delivered (M4a `78b8a43`) |
+| `[Stage] [Status]` browser rendering | in progress |
+| Concurrent branch execution, per-stage reservations, sibling cancellation | not delivered |
+| PSSM-GREMLIN stage split, GREMLIN_LH composed path, OpenDDE audit | blocked: runners bake `run.sh` into the SIF; needs rebuild + live acceptance authorization |
+| Real Slurm/Apptainer scientific acceptance | blocked: needs an operator-provided isolated deployment and a GPU window |
+| Nextflow backend | disabled, structural evidence recorded |
+
 ## 0 — Exclusive activation / stop gate
 
 - [x] Keep PR **Draft** and the Commander control state **PARKED** until

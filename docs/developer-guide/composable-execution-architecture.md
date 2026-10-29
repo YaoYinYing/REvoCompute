@@ -1,11 +1,17 @@
 # Composable Scientific Execution Architecture
 
-> **Status: ACTIVE CAMPAIGN DESIGN RECORD — NOT YET IMPLEMENTED.**
+> **Status: ACTIVE CAMPAIGN — PARTIALLY DELIVERED.**
 > PR #130 is activated as an exclusive single-PR campaign under Protocol v1.6.
-> This page stays non-normative until it is reconciled with the delivered code
-> and approved at final merge review; in conflict, current executable contracts
-> and `CLAUDE.md` remain authoritative until cutover. It does not authorize a
-> production deployment, database migration, or SIF promotion.
+> Delivered in this PR: the versioned graph compiler and typed stage ports, the
+> submission-frozen graph, stage artifact identity with resume verification,
+> fork/join readiness with branch isolation (executed serially), cross-family
+> stage references with per-family readiness, bundles and dispatch, and the
+> graph-aware API projection. Not delivered: concurrent branch execution,
+> the PSSM-GREMLIN stage split and GREMLIN_LH composed path (runners bake
+> `run.sh` into the SIF), live scientific acceptance, and the browser
+> `[Stage] [Status]` surface. Sections below describe the target contract;
+> treat undelivered parts as design, not capability. This page does not
+> authorize a production deployment, database migration, or SIF promotion.
 >
 > **Activation baseline:** main at 36e30afa234595d8af09bf7aa3818b9bb6d06487;
 > Protocol v1.6. The live activation record is the PR #130 thread.
