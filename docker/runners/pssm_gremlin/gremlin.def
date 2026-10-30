@@ -40,7 +40,7 @@ From: condaforge/mambaforge:24.9.2-0
     test -x /opt/conda/envs/GREMLIN/bin/psiblast
     /opt/conda/envs/GREMLIN/bin/python -c "import Bio, numpy, pandas, scipy, tensorflow"
     test -x /app/revocompute/run.sh
-    /opt/conda/bin/python -m py_compile /app/revocompute/stage_inputs.py
+    /opt/conda/bin/python -B -c "compile(open('/app/revocompute/stage_inputs.py').read(), 'stage_inputs.py', 'exec')"
     test -d /opt/revocompute/runtime
 
 %runscript
