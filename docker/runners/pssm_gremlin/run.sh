@@ -270,55 +270,33 @@ RUN_FIT() {
     local alignment_stem
     alignment_stem=$(basename "${alignment%.fas}")
     local model="${dst_gremlin}/${alignment_stem}.GREMLIN.mrf.pkl"
+    local plot="${dst_gremlin}/${alignment_stem}_GREMLIN_mtx.png"
 
-    # A model is reusable only for the same alignment bytes, iteration, and fit
-    # script. The key lives in a dot-directory outside every declared output glob.
-    # Scope: the key covers this stage's inputs and the model it produces, not
-    # the image. A promotion between attempts can therefore reuse a model fitted
-    # under the previous image; the Server records the attempt's image identity,
-    # so a refit under a new image is the only way to re-derive it. The declared
-    # plot is deleted before a refit, so it can never be published with another
-    # alignment's model.
-    local alignment_sha
-    alignment_sha=$(sha256sum "$alignment" | cut -d' ' -f1)
+    # The fit is recomputed on every attempt: this Runner cannot bind the runtime
+    # image identity, so a cache would require an immutable image pin.
+    # Recomputation keeps the published outputs attributable to the attempt that
+    # ran. A model or plot left in the shared tree is never trusted or reused.
     local fit_script="${GREMLIN_TFV1_SCRIPT:-${REVODESIGN_RUNSCRIPT_PATH}/${SCRIPT_PATH}/GREMLIN_TFv1.py}"
-    local script_sha
-    script_sha=$(sha256sum "$fit_script" | cut -d' ' -f1)
-    local identity
-    identity=$(printf '%s\n%s\n%s\n' "$alignment_sha" "$gremlin_iter" "$script_sha" | sha256sum | cut -d' ' -f1)
-    local key="${dst}/.gremlin_fit/${alignment_stem}.identity"
-    # The key authenticates both the fit inputs and the model bytes it names, so
-    # a truncated or replaced model is never reused under a matching identity.
-    local cached_model_sha=''
-    if [[ -s "$model" ]]; then
-      cached_model_sha=$(sha256sum "$model" | cut -d' ' -f1)
-    fi
-
-    mkdir -p "$dst_gremlin" "$(dirname "$key")"
+    mkdir -p "$dst_gremlin"
+    rm -f "$model" "$plot"
     echo Running GREMLIN ...
     pushd "$dst_gremlin"
     echo "REVODESIGN_STAGE:gremlin"
-    if [[ -n "$cached_model_sha" && -f "$key" && "$(cat "$key")" == "$identity $cached_model_sha" ]]; then
-      echo "Checkpoint matches this alignment, iteration and fit script: ${model}; skip GREMLIN_TFv1"
-    else
-      rm -f "$model" "$key" "${dst_gremlin}/${alignment_stem}_GREMLIN_mtx.png"
-      local -a cmd=(
-          python
-          "$fit_script"
-          "$alignment"
-          "$dst_gremlin"
-          "$gremlin_iter"
-      )
-      echo "${cmd[*]}"
-      "${cmd[@]}" 1>"${pipline_res_dir}"/log/"${instance}"_gremlin_tfv1.log 2>"${pipline_res_dir}"/log/"${instance}"_gremlin_tfv1.err
-    fi
+    local -a cmd=(
+        python
+        "$fit_script"
+        "$alignment"
+        "$dst_gremlin"
+        "$gremlin_iter"
+    )
+    echo "${cmd[*]}"
+    "${cmd[@]}" 1>"${pipline_res_dir}"/log/"${instance}"_gremlin_tfv1.log 2>"${pipline_res_dir}"/log/"${instance}"_gremlin_tfv1.err
     popd
 
-    if [[ ! -s "$model" ]]; then
-        echo "fit stage did not produce ${model}" >&2
+    if [[ ! -s "$model" || ! -s "$plot" ]]; then
+        echo "fit stage did not produce ${model} and ${plot}" >&2
         exit 1
     fi
-    printf '%s %s\n' "$identity" "$(sha256sum "$model" | cut -d' ' -f1)" > "$key"
 }
 
 # Stage pssm: PSI-BLAST against UniRef90. Independent of the msa and fit stages.

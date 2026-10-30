@@ -1,13 +1,13 @@
 # Copyright (c) 2026 The REvoDesign Developers.
 # Distributed under the terms of the GNU General Public License v3.0.
 # SPDX-License-Identifier: GPL-3.0-only
-"""PSSM-GREMLIN stage selection and fit checkpoint identity.
+"""PSSM-GREMLIN stage selection and fit output provenance.
 
 Each test runs the real ``run.sh`` against a protocol manifest with stub
 search tools on PATH, so the assertions cover the executable stage logic:
 which stage ran, what it wrote, and whether a repeated stage is skipped. The
 fit script is stubbed through ``GREMLIN_TFV1_SCRIPT`` so a test can observe
-which alignment bytes were actually fitted.
+which alignment bytes were actually fitted and which outputs were published.
 """
 
 from __future__ import annotations
@@ -32,8 +32,9 @@ INSTANCE = "2KL8"
 STEM = f"{INSTANCE}.i90c75_aln"
 
 # Runs as ``python <this file> <alignment> <output_dir> <iteration>``. It
-# records the fitted alignment identity and writes the model the fit stage
-# checks for; STUB_FIT_FAIL simulates an interrupted fit.
+# records the alignment bytes it fitted and writes the model and plot the fit
+# stage checks for. STUB_FIT_FAIL simulates a fit that fails before writing
+# outputs; STUB_NO_PLOT writes the model but no plot.
 FIT_STUB = """\
 import hashlib
 import os
@@ -45,13 +46,13 @@ data = pathlib.Path(alignment).read_bytes()
 digest = hashlib.sha256(data).hexdigest()
 with open(os.path.join(os.environ["STUB_CALLS"], "fit.calls"), "a", encoding="utf-8") as handle:
     handle.write(f"{alignment}\\t{digest}\\t{iteration}\\n")
+if os.environ.get("STUB_FIT_FAIL"):
+    sys.exit(1)
 model = pathlib.Path(output_dir) / (pathlib.Path(alignment).stem + ".GREMLIN.mrf.pkl")
 plot = pathlib.Path(output_dir) / (pathlib.Path(alignment).stem + "_GREMLIN_mtx.png")
-if os.environ.get("STUB_FIT_FAIL"):
-    model.write_text("interrupted\\n", encoding="utf-8")
-    sys.exit(1)
 model.write_text(f"model {digest}\\n", encoding="utf-8")
-plot.write_text(f"plot {digest}\\n", encoding="utf-8")
+if not os.environ.get("STUB_NO_PLOT"):
+    plot.write_text(f"plot {digest}\\n", encoding="utf-8")
 """
 
 
@@ -138,13 +139,8 @@ def _model(output: Path) -> Path:
     return output / "gremlin_res" / f"{STEM}.GREMLIN.mrf.pkl"
 
 
-def _key(output: Path) -> Path:
-    return output / ".gremlin_fit" / f"{STEM}.identity"
-
-
-def _key_fields(output: Path) -> list[str]:
-    """The key authenticates the identity and the model bytes it names."""
-    return _key(output).read_text(encoding="utf-8").split()
+def _plot(output: Path) -> Path:
+    return output / "gremlin_res" / f"{STEM}_GREMLIN_mtx.png"
 
 
 def _run(tmp_path: Path, *extra_args: str, output: Path | None = None, env=None, params=None):
@@ -306,6 +302,7 @@ def test_fit_stage_without_a_shared_alignment_runs_from_the_document(tmp_path: P
     assert fitted[0][0] == str(artifact)
     assert fitted[0][1] == _sha(artifact.read_bytes())
     assert _model(output).read_text(encoding="utf-8") == f"model {_sha(artifact.read_bytes())}\n"
+    assert _plot(output).read_text(encoding="utf-8") == f"plot {_sha(artifact.read_bytes())}\n"
 
 
 def test_fit_stage_refuses_a_documented_alignment_that_changed(tmp_path: Path) -> None:
@@ -330,7 +327,7 @@ def test_fit_stage_refuses_a_documented_alignment_that_changed(tmp_path: Path) -
 
 
 def test_fit_reruns_for_different_alignment_bytes_with_the_same_filename(tmp_path: Path) -> None:
-    """A checkpoint belongs to the bytes that produced it, not to a basename."""
+    """A fit belongs to the bytes that produced it, not to a basename."""
     env, _bin, calls = _stub_environment(tmp_path)
     output = tmp_path / "output"
     first = _staged_alignment(tmp_path, "first", b">q\nACDE\n>h\nACDE\n")
@@ -344,8 +341,9 @@ def test_fit_reruns_for_different_alignment_bytes_with_the_same_filename(tmp_pat
     assert first_run.returncode == 0, first_run.stderr
     first_model = _model(output).read_text(encoding="utf-8")
     assert first_model == f"model {_sha(first.read_bytes())}\n"
+    assert _plot(output).read_text(encoding="utf-8") == f"plot {_sha(first.read_bytes())}\n"
 
-    # The first model and key are still present; input B is a different verified
+    # The first outputs are still present; input B is a different verified
     # alignment that happens to share a filename.
     document = _stage_inputs_document(tmp_path, second)
     second_run = _run(
@@ -359,57 +357,74 @@ def test_fit_reruns_for_different_alignment_bytes_with_the_same_filename(tmp_pat
     assert fitted[1][1] == _sha(second.read_bytes())
     assert _model(output).read_text(encoding="utf-8") != first_model
     assert _model(output).read_text(encoding="utf-8") == f"model {_sha(second.read_bytes())}\n"
-    assert (output / "gremlin_res" / f"{STEM}_GREMLIN_mtx.png").read_text(encoding="utf-8") == (
-        f"plot {_sha(second.read_bytes())}\n"
-    )
+    assert _plot(output).read_text(encoding="utf-8") == f"plot {_sha(second.read_bytes())}\n"
 
 
-def test_fit_skips_only_for_the_same_authenticated_identity(tmp_path: Path) -> None:
+def test_fit_replaces_a_stale_plot(tmp_path: Path) -> None:
+    """A non-empty plot left from an earlier fit is regenerated, never republished."""
     env, _bin, calls = _stub_environment(tmp_path)
     output = tmp_path / "output"
     artifact = _staged_alignment(tmp_path, "stage", b">q\nACDE\n>h\nACDE\n")
     document = _stage_inputs_document(tmp_path, artifact)
     run_env = {**env, "TASK_STAGE_INPUTS": str(document)}
+    expected = f"plot {_sha(artifact.read_bytes())}\n"
 
-    first = _run(tmp_path, "-s", "fit", output=output, env=run_env)
-    second = _run(tmp_path, "-s", "fit", output=output, env=run_env)
-
+    first = _run(tmp_path, "-s", "fit", output=output, env=dict(run_env))
     assert first.returncode == 0, first.stderr
-    assert second.returncode == 0, second.stderr
-    assert len(_fit_calls(calls)) == 1
-    assert "skip GREMLIN_TFv1" in second.stdout
-    fields = _key_fields(output)
-    assert len(fields) == 2
-    assert fields[1] == _sha(_model(output).read_bytes())
+    model_before = _model(output).read_bytes()
+    assert _plot(output).read_text(encoding="utf-8") == expected
 
-
-def test_fit_reruns_when_the_model_does_not_match_its_key(tmp_path: Path) -> None:
-    """A matching identity is not enough: the model bytes must match the key too."""
-    env, _bin, calls = _stub_environment(tmp_path)
-    output = tmp_path / "output"
-    artifact = _staged_alignment(tmp_path, "stage", b">q\nACDE\n>h\nACDE\n")
-    document = _stage_inputs_document(tmp_path, artifact)
-    run_env = {**env, "TASK_STAGE_INPUTS": str(document)}
-    expected = f"model {_sha(artifact.read_bytes())}\n"
-
-    first = _run(tmp_path, "-s", "fit", output=output, env=run_env)
-    assert first.returncode == 0, first.stderr
-    model = _model(output)
-    key_fields = _key_fields(output)
-    assert len(key_fields) == 2
-    assert key_fields[1] == _sha(model.read_bytes())
-
-    # Truncated but non-empty model with its key left intact: the identity still
-    # matches, so only the recorded model digest can refuse the reuse.
-    model.write_bytes(model.read_bytes()[:8])
-    second = _run(tmp_path, "-s", "fit", output=output, env=run_env)
+    _plot(output).write_bytes(b"stale plot\n")
+    second = _run(tmp_path, "-s", "fit", output=output, env=dict(run_env))
 
     assert second.returncode == 0, second.stderr
     assert len(_fit_calls(calls)) == 2
-    assert model.read_text(encoding="utf-8") == expected
-    refreshed = _key_fields(output)
-    assert len(refreshed) == 2
-    assert refreshed[1] == _sha(model.read_bytes())
+    assert _model(output).read_bytes() == model_before
+    assert _plot(output).read_text(encoding="utf-8") == expected
+
+
+def test_fit_regenerates_a_missing_plot(tmp_path: Path) -> None:
+    """A missing required plot forces a fit that regenerates it."""
+    env, _bin, calls = _stub_environment(tmp_path)
+    output = tmp_path / "output"
+    artifact = _staged_alignment(tmp_path, "stage", b">q\nACDE\n>h\nACDE\n")
+    document = _stage_inputs_document(tmp_path, artifact)
+    run_env = {**env, "TASK_STAGE_INPUTS": str(document)}
+    expected = f"plot {_sha(artifact.read_bytes())}\n"
+
+    first = _run(tmp_path, "-s", "fit", output=output, env=dict(run_env))
+    assert first.returncode == 0, first.stderr
+    _plot(output).unlink()
+    second = _run(tmp_path, "-s", "fit", output=output, env=dict(run_env))
+
+    assert second.returncode == 0, second.stderr
+    assert len(_fit_calls(calls)) == 2
+    assert _model(output).read_text(encoding="utf-8") == f"model {_sha(artifact.read_bytes())}\n"
+    assert _plot(output).read_text(encoding="utf-8") == expected
+
+
+def test_fit_fails_when_the_fit_produces_no_plot(tmp_path: Path) -> None:
+    """A failed output check must not publish a plot left in the shared tree."""
+    env, _bin, calls = _stub_environment(tmp_path)
+    output = tmp_path / "output"
+    artifact = _staged_alignment(tmp_path, "stage", b">q\nACDE\n>h\nACDE\n")
+    document = _stage_inputs_document(tmp_path, artifact)
+    stale_plot = _plot(output)
+    stale_plot.parent.mkdir(parents=True)
+    stale_plot.write_bytes(b"stale plot\n")
+
+    failed = _run(
+        tmp_path,
+        "-s",
+        "fit",
+        output=output,
+        env={**env, "TASK_STAGE_INPUTS": str(document), "STUB_NO_PLOT": "1"},
+    )
+
+    assert failed.returncode != 0
+    assert "fit stage did not produce" in failed.stderr
+    assert _fit_calls(calls)
+    assert not stale_plot.exists()
 
 
 def test_fit_reruns_when_the_iteration_parameter_changes(tmp_path: Path) -> None:
@@ -429,61 +444,27 @@ def test_fit_reruns_when_the_iteration_parameter_changes(tmp_path: Path) -> None
     assert [line[2] for line in fitted] == ["100", "101"]
 
 
-def test_fit_reruns_when_the_identity_key_is_missing_or_truncated(tmp_path: Path) -> None:
+def test_fit_failure_publishes_no_stale_output(tmp_path: Path) -> None:
+    """Pre-existing outputs are removed before a fit, so a failure cannot publish them."""
     env, _bin, calls = _stub_environment(tmp_path)
     output = tmp_path / "output"
     artifact = _staged_alignment(tmp_path, "stage", b">q\nACDE\n>h\nACDE\n")
     document = _stage_inputs_document(tmp_path, artifact)
-    run_env = {**env, "TASK_STAGE_INPUTS": str(document)}
-    expected = f"model {_sha(artifact.read_bytes())}\n"
     model = _model(output)
-    key = _key(output)
+    plot = _plot(output)
     model.parent.mkdir(parents=True)
+    model.write_bytes(b"stale model\n")
+    plot.write_bytes(b"stale plot\n")
 
-    # Model present but no key: it cannot be authenticated, so it is refitted.
-    model.write_text("stale checkpoint", encoding="utf-8")
-    missing = _run(tmp_path, "-s", "fit", output=output, env=run_env)
-    assert missing.returncode == 0, missing.stderr
-    assert len(_fit_calls(calls)) == 1
-    assert model.read_text(encoding="utf-8") == expected
-    assert len(_key_fields(output)) == 2
+    failed = _run(
+        tmp_path,
+        "-s",
+        "fit",
+        output=output,
+        env={**env, "TASK_STAGE_INPUTS": str(document), "STUB_FIT_FAIL": "1"},
+    )
 
-    # A truncated key is not an authenticated cache entry either.
-    truncated = key.read_text(encoding="utf-8")[:16]
-    model.write_text("stale checkpoint", encoding="utf-8")
-    key.write_text(truncated, encoding="utf-8")
-    retried = _run(tmp_path, "-s", "fit", output=output, env=run_env)
-    assert retried.returncode == 0, retried.stderr
-    assert len(_fit_calls(calls)) == 2
-    assert model.read_text(encoding="utf-8") == expected
-    assert key.read_text(encoding="utf-8") != truncated
-    assert _key_fields(output)[1] == _sha(model.read_bytes())
-
-
-def test_fit_rerun_after_an_interrupted_fit_leaves_no_key(tmp_path: Path) -> None:
-    env, _bin, calls = _stub_environment(tmp_path)
-    output = tmp_path / "output"
-    artifact = _staged_alignment(tmp_path, "stage", b">q\nACDE\n>h\nACDE\n")
-    document = _stage_inputs_document(tmp_path, artifact)
-    run_env = {**env, "TASK_STAGE_INPUTS": str(document)}
-    model = _model(output)
-    key = _key(output)
-    model.parent.mkdir(parents=True)
-    model.write_text("checkpoint from a failed run", encoding="utf-8")
-
-    # The interrupted fit removes the unauthenticated checkpoint, writes a
-    # partial one, fails, and must not authenticate it.
-    failed = _run(tmp_path, "-s", "fit", output=output, env={**run_env, "STUB_FIT_FAIL": "1"})
     assert failed.returncode != 0
     assert len(_fit_calls(calls)) == 1
-    assert not key.exists()
-
-    # The partial model is not trusted; the retry fits again and writes the key.
-    retried = _run(tmp_path, "-s", "fit", output=output, env=run_env)
-    assert retried.returncode == 0, retried.stderr
-    assert len(_fit_calls(calls)) == 2
-    assert key.is_file()
-    assert model.read_text(encoding="utf-8") == f"model {_sha(artifact.read_bytes())}\n"
-    fields = _key_fields(output)
-    assert len(fields) == 2
-    assert fields[1] == _sha(model.read_bytes())
+    assert not model.exists()
+    assert not plot.exists()

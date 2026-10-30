@@ -103,14 +103,13 @@ Files are portable evidence, NOT an alternative transactional status store.
 Stage publication is confined, bounded, checked for malicious symlinks/hardlink
 escapes/FIFO/path traversal and safely committed, including crash races.
 
-GREMLIN fit checkpoints demonstrate this rule: the Runner authenticates the
-admitted alignment bytes, iteration, fit script, and model bytes before reusing
-the fit, and removes the declared plot before refitting. The checkpoint key does
-not include the runtime image because the stage runner receives no verified image
-digest. An image replacement between attempts can therefore reuse a fit produced
-under the previous image; the recorded attempt identity does not prove which
-image produced a cached artifact. Binding the image requires a verified digest in
-the execution contract.
+The GREMLIN fit is recomputed on every attempt. Its outputs sit in a tree that
+survives retries, and this Runner cannot bind the runtime image Apptainer opens:
+the execution contract carries a path, and a promotion can replace the file
+behind it. Reusing a previous fit would therefore publish bytes no attempt can
+attribute to its own image, so the stage removes its declared outputs and fits
+again. A checkpoint becomes admissible only when the attempt carries an
+immutable, content-addressed image identity; that work is tracked separately.
 
 ## Graph grammar and compilation
 
