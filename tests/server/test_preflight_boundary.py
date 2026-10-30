@@ -25,7 +25,7 @@ def _submission_evidence() -> AdmissionEvidence:
     """The admission evidence this deployment publishes for a ready Runner."""
     return AdmissionEvidence(
         {
-            "runner_family": "gremlin",
+            "runner_family": "demo_runner",
             "status": "READY",
             "ready": True,
             "reason_code": "READY",

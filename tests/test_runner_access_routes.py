@@ -135,7 +135,7 @@ def test_production_admission_blocks_non_ready_before_queue_side_effect(monkeypa
         "revocompute.admission.resolve_submission_readiness",
         lambda *_args, **_kwargs: AdmissionEvidence(
             {
-                "runner_family": "gremlin",
+                "runner_family": "demo_runner",
                 "status": "VALIDATION_STALE",
                 "ready": False,
                 "reason_code": "RECEIPT_STALE",
@@ -161,7 +161,7 @@ def test_production_admission_allows_ready_runner(monkeypatch, tmp_path):
         "revocompute.admission.resolve_submission_readiness",
         lambda *_args, **_kwargs: AdmissionEvidence(
             {
-                "runner_family": "gremlin",
+                "runner_family": "demo_runner",
                 "status": "READY",
                 "ready": True,
                 "reason_code": "READY",
