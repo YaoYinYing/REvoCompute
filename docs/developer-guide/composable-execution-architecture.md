@@ -8,13 +8,14 @@
 > binding into a consumer stage's declared input role, cross-family stage
 > references with per-family readiness, bundles and dispatch, one composed
 > cross-family Task Type (PSSM-MSA → GREMLIN_LH), the graph-aware API projection,
-> and the `[Stage] [Status]` results surface with browser evidence from CI. Not
-> delivered: concurrent branch execution, editable user Pipelines (the compiler
-> and validation are shared; there is no composition API or editor), and live
-> scientific acceptance with per-family re-acceptance. Sections below describe
-> the target contract; treat undelivered parts as design, not capability. This
-> page does not authorize a production deployment, database migration, or SIF
-> promotion.
+> the `[Stage] [Status]` results surface with browser evidence from CI, and
+> target-host live acceptance for AlphaFold 3, PSSM-GREMLIN, and GREMLIN_LH —
+> including a real composed run whose consumer stage resolves only the verified
+> stage input document. Not delivered: concurrent branch execution and editable
+> user Pipelines (the compiler and validation are shared; there is no composition
+> API or editor). Sections below describe the target contract; treat undelivered
+> parts as design, not capability. This page does not authorize a production
+> deployment, database migration, or SIF promotion.
 >
 > **Activation baseline:** main at 36e30afa234595d8af09bf7aa3818b9bb6d06487;
 > Protocol v1.6. The live activation record is the PR #130 thread.
