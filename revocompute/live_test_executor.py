@@ -267,6 +267,17 @@ def _evidence(task: dict[str, Any], output_root: Path | None = None) -> dict[str
     }
 
 
+def _live_storage_key() -> str:
+    """The isolated per-run user directory name for the enabled family scope.
+
+    A composed run enables several families, so the scope is joined with ``-``:
+    a comma is not a legal storage-key character, and the resolver rejects it
+    before any task row exists.
+    """
+    names = [part.strip() for part in os.environ.get("ENABLED_TASKRUNNERS", "runner").split(",") if part.strip()]
+    return "live-test-" + "-".join(names or ["runner"])
+
+
 def _pinned_runtime_bundles(task_type_def: Any, candidate_digest: str | None) -> dict[str, str | None]:
     """Pin every runtime family the live-test graph will execute.
 
@@ -424,7 +435,7 @@ def execute(request_path: str | os.PathLike[str]) -> dict[str, Any]:
 
     submission = TaskSubmissionRequest.model_validate({"task_type": task_type, "params": request["parameters"]})
     parameters = submission.coerce_params()
-    storage_key = f"live-test-{os.environ.get('ENABLED_TASKRUNNERS', 'runner')}"
+    storage_key = _live_storage_key()
     resolver = StorageResolver(str(scratch / "results"), str(scratch / "workspaces"), task_runtime.task_store)
     identity = {"md5sum": task_id, "storage_key": storage_key}
     snapshot_root = Path(resolver.get_input_root(identity)) / "inputs"

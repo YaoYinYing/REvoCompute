@@ -47,6 +47,19 @@ def test_fileless_live_case_serializes_explicit_task_workspace_identity(tmp_path
     assert form["runtime_bundles"] == {"fileless_runner": "sha256:" + "a" * 64}
 
 
+def test_live_storage_key_survives_a_composed_enabled_scope(tmp_path, monkeypatch):
+    """A composed run enables several families; the resolver rejects a comma."""
+    from revocompute.storage import StorageResolver
+
+    monkeypatch.setenv("ENABLED_TASKRUNNERS", "gremlin,gremlin_lh")
+    resolver = StorageResolver(str(tmp_path / "results"), str(tmp_path / "workspaces"), None)
+    root = resolver.get_input_root({"md5sum": "a" * 32, "storage_key": live_test_executor._live_storage_key()})
+    assert Path(root).name == "a" * 32
+
+    monkeypatch.setenv("ENABLED_TASKRUNNERS", "gremlin_lh")
+    assert live_test_executor._live_storage_key() == "live-test-gremlin_lh"
+
+
 def test_workflow_live_task_form_carries_a_dispatchable_frozen_graph(tmp_path):
     from revocompute import task_runtime
     from revocompute.execution_graph import execution_graph_payload
