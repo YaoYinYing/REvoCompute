@@ -11,7 +11,7 @@ import re
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Collection, Mapping
 
 import yaml
 from jsonschema import Draft202012Validator, FormatChecker
@@ -44,6 +44,9 @@ class LiveTestPlan:
     collections: Mapping[str, tuple[LiveTestCase, ...]]
     digest: str
     fixture_hashes: Mapping[str, str] = field(default_factory=dict)
+    #: ``(case id, task)`` pairs this deployment cannot run because the Task's
+    #: composed family is not enabled.  Recorded, never silently counted.
+    omitted: tuple[tuple[str, str], ...] = ()
 
     def select(self, collection: str, *, task: str | None = None) -> tuple[LiveTestCase, ...]:
         if collection not in self.collections:
@@ -115,6 +118,7 @@ def load_live_test_plan(
     *,
     repo_root: str | Path,
     task_schemas: Mapping[str, Mapping[str, Any]],
+    unavailable_tasks: Collection[str] = (),
 ) -> LiveTestPlan:
     """Parse and statically validate a version-1 family test.yaml."""
     source = Path(path)
@@ -130,6 +134,8 @@ def load_live_test_plan(
     if not isinstance(collections, Mapping) or not collections:
         raise LiveTestConfigurationError("test.yaml collections must be a non-empty mapping")
     parsed: dict[str, tuple[LiveTestCase, ...]] = {}
+    unavailable = set(unavailable_tasks)
+    omitted: list[tuple[str, str]] = []
     fixture_hashes: dict[str, str] = {}
     seen: set[str] = set()
     for name, declaration in collections.items():
@@ -152,6 +158,12 @@ def load_live_test_plan(
                 raise LiveTestConfigurationError(f"Duplicate live-test case ID: {case_id!r}")
             seen.add(case_id)
             if task not in task_schemas:
+                # A Task whose composed family this deployment does not enable
+                # has no contract to validate against, so its case cannot run
+                # here.  Any other unknown Task is still a manifest error.
+                if task in unavailable:
+                    omitted.append((case_id, str(task)))
+                    continue
                 raise LiveTestConfigurationError(f"Unknown TaskType in live test: {task!r}")
             input_decl = raw_case.get("input")
             roles = input_decl.get("roles") if isinstance(input_decl, Mapping) else None
@@ -189,7 +201,7 @@ def load_live_test_plan(
         "test_yaml_sha256": sha256_file(source),
         "fixtures": fixture_hashes,
     })
-    return LiveTestPlan(source, parsed, digest, fixture_hashes)
+    return LiveTestPlan(source, parsed, digest, fixture_hashes, tuple(omitted))
 
 
 @dataclass(slots=True)

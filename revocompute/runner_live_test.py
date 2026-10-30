@@ -184,6 +184,15 @@ def _validation_workspace_capabilities(family_root: Path, plugin_doc: Mapping[st
     return projection
 
 
+def _enabled_scope(state) -> set[str] | None:
+    """The deployment's enabled-family universe, or ``None`` when it enables all."""
+    raw = state.get("ENABLED_TASKRUNNERS") if state is not None else None
+    if not raw:
+        raw = os.environ.get("ENABLED_TASKRUNNERS")
+    names = {value for part in str(raw or "").split(",") if (value := part.strip())}
+    return names or None
+
+
 def load_validation_identity(
     family: RuntimeFamily,
     *,
@@ -197,17 +206,25 @@ def load_validation_identity(
     from revocompute.task_types import _RESULT_VIEW_PRESENTATION_KEYS, discover_plugins, get
 
     plugin_root = family.root.parent
-    discover_plugins(str(plugin_root))
+    discover_plugins(str(plugin_root), _enabled_scope(state))
     manifest = next(item for item in load_plugin_families(plugin_root) if item.name == family.name)
     schemas: dict[str, dict[str, Any]] = {}
     definitions: dict[str, tuple[Any, Any]] = {}
     task_dirs: dict[str, str] = {}
     plugin_doc = yaml.safe_load((manifest.root / "plugin.yaml").read_text(encoding="utf-8")) or {}
+    # A Task declared here whose composed family this deployment does not enable
+    # was never registered.  Its contract cannot be validated, so the plan
+    # records its cases as omitted instead of failing the whole identity.
+    unavailable: set[str] = set()
     for ref in plugin_doc.get("tasks", ()):
         ref_path = Path(str(ref))
         task_doc = yaml.safe_load((manifest.root / ref_path).read_text(encoding="utf-8")) or {}
         task_id = str(task_doc.get("id") or ref_path.parent.name)
-        task_type, runner = get(task_id)
+        try:
+            task_type, runner = get(task_id)
+        except KeyError:
+            unavailable.add(task_id)
+            continue
         definitions[task_id] = (task_type, runner)
         schemas[task_id] = task_type.schema
         task_dirs[task_id] = ref_path.parent.as_posix() if ref_path.parent != Path(".") else ""
@@ -215,6 +232,7 @@ def load_validation_identity(
         manifest.root / "test.yaml",
         repo_root=repo_root,
         task_schemas=schemas,
+        unavailable_tasks=unavailable,
     )
     if resource_provider is None and state is None:
         raise LiveTestConfigurationError("Validation identity requires current effective resource configuration")
@@ -321,6 +339,9 @@ def load_validation_identity(
         "expected_files": declared_result_contracts(manifest.root, task_dirs),
         "policies": policies,
         "workspace_capabilities": _validation_workspace_capabilities(manifest.root, plugin_doc),
+        # Cases this deployment cannot run are named in the identity, so a
+        # filtered plan is visible in the receipt and never reads as a pass.
+        "omitted_cases": [{"id": case_id, "task": task} for case_id, task in plan.omitted],
         "resources": required_resources,
     })
     return ValidationIdentity(plan, canonical_digest(config_public), tuple(resource_snapshots))
