@@ -544,7 +544,7 @@ class RunnerLiveTestWorker:
         """The artifact a submission in ``family`` would run right now."""
         if family.name == self.family.name:
             return self.artifact
-        return _selected_artifact(family)[0]
+        return _selected_artifact(family)
 
     def _run_case(
         self,
@@ -1167,10 +1167,10 @@ def _family_owns_task(family: RuntimeFamily, task: str) -> bool:
     return _declared_task(family, task) is not None
 
 
-def _selected_artifact(family: RuntimeFamily) -> tuple[Path, str]:
-    """The artifact a submission in ``family`` would run, and how it was chosen."""
+def _selected_artifact(family: RuntimeFamily) -> Path:
+    """The artifact a submission in ``family`` would run: a staged candidate first."""
     candidate = Path(f"{family.slurm_image}.next")
-    return (candidate, "candidate") if candidate.is_file() else (Path(family.slurm_image), "active")
+    return candidate if candidate.is_file() else Path(family.slurm_image)
 
 
 def _task_graph_families(
@@ -1248,7 +1248,7 @@ def _composed_artifacts(
         for family in _task_graph_families(owner, task_id, families):
             if family.name == owner.name:
                 continue
-            artifact = _selected_artifact(family)[0]
+            artifact = _selected_artifact(family)
             digest = sha256_file(artifact) if artifact.is_file() else ""
             evidence = read_artifact_evidence(family, artifact, "build")[1] if artifact.is_file() else None
             records[family.name] = {
@@ -1285,7 +1285,7 @@ def _verify_composed_artifacts(
             raise LiveTestConfigurationError(
                 f"Composed stage runtime bundle for {name!r} changed after its identity was recorded"
             )
-        artifact = _selected_artifact(families[name])[0]
+        artifact = _selected_artifact(families[name])
         if not artifact.is_file():
             raise LiveTestConfigurationError(f"Composed stage family {name!r} has no artifact")
         if sha256_file(artifact) != record["sha256"]:
