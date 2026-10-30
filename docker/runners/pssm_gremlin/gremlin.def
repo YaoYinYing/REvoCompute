@@ -20,6 +20,10 @@ From: condaforge/mambaforge:24.9.2-0
 
 %environment
     export PATH="/opt/conda/envs/GREMLIN/bin:/opt/conda/bin:$PATH"
+    # The stage-input resolver is REvoCompute code and needs a modern Python;
+    # the GREMLIN environment stays pinned at its own interpreter for the
+    # scientific scripts.
+    export GREMLIN_PYTHON=/opt/conda/bin/python
     export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
     export HTTP_PROXY=""
     export HTTPS_PROXY=""
@@ -36,6 +40,7 @@ From: condaforge/mambaforge:24.9.2-0
     test -x /opt/conda/envs/GREMLIN/bin/psiblast
     /opt/conda/envs/GREMLIN/bin/python -c "import Bio, numpy, pandas, scipy, tensorflow"
     test -x /app/revocompute/run.sh
+    /opt/conda/bin/python -m py_compile /app/revocompute/stage_inputs.py
     test -d /opt/revocompute/runtime
 
 %runscript

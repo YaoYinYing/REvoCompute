@@ -1098,10 +1098,19 @@ def _submission_payload(tt) -> dict[str, Any] | None:
     )
     if evidence is None:
         return None
+    accepted = evidence.accepts(tt.name)
     if g.get("current_user") is None:
-        return {"submittable": evidence.ready}
+        return {"submittable": accepted}
+    if not accepted and evidence.ready:
+        return {
+            "ready": False,
+            "status": evidence.status.value,
+            "reason_code": "LIVE_TEST_CASE_OMITTED",
+            "message": "The deployment's Runner acceptance did not run this Task's live-test case",
+            "next_action": "live-test",
+        }
     return {
-        "ready": evidence.ready,
+        "ready": accepted,
         "status": evidence.status.value,
         "reason_code": evidence.reason_code,
         "message": evidence.message,
@@ -2347,7 +2356,27 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
     # non-ready Runner cannot create task or scheduler side effects.
     for family in referenced_families.values():
         admission = submission_admission(CONFIG.server_dir, family.name, manage_db=managedb)
-        if admission is not None and not admission.ready:
+        if admission is not None and not admission.accepts(task_type):
+            if admission.ready:
+                # The family is validated, but its acceptance never ran this
+                # Task's own case (a narrower live-test scope).  Submitting it
+                # would execute a composed path no receipt has covered.
+                return (
+                    jsonify(
+                        {
+                            "error": "Runner is currently unavailable for new submissions",
+                            "runner": family.name,
+                            "status": admission.status.value,
+                            "reason": "LIVE_TEST_CASE_OMITTED",
+                            "message": (
+                                "The deployment's Runner acceptance did not run this Task's live-test case; "
+                                "re-run the live test with every family it references enabled"
+                            ),
+                            "next_action": "live-test",
+                        }
+                    ),
+                    503,
+                )
             return (
                 jsonify(
                     {

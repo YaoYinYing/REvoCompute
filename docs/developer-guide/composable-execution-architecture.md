@@ -233,9 +233,9 @@ Rules the code enforces:
   validated candidate to its active path keeps the acceptance that covered its
   bytes.
 - A live-test scope that cannot run every case its `test.yaml` declares omits
-  them from the plan, and a plan with an omitted case yields no READY verdict
-  and no submission attestation. A deployment that enables a family whose Tasks
-  run in another family must enable that family too.
+  them from the plan and publishes those Tasks in the admission evidence; only
+  their submissions are refused, so a family's remaining Tasks stay available
+  and one narrow invocation cannot authorize the composed path it skipped.
 - Known limitations. A stage's declared outputs live in the Task's shared output
   tree, so a re-attempt settles the files present there; a Runner that
   checkpoints deliberately reuses its own earlier outputs, and changed
