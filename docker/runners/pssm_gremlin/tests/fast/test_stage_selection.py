@@ -5,9 +5,9 @@
 
 Each test runs the real ``run.sh`` against a protocol manifest with stub
 search tools on PATH, so the assertions cover the executable stage logic:
-which stage ran, what it wrote, and whether a repeated stage is skipped. The
-fit script is stubbed through ``GREMLIN_TFV1_SCRIPT`` so a test can observe
-which alignment bytes were actually fitted and which outputs were published.
+which stage ran and what it wrote. The fit script is stubbed through
+``GREMLIN_TFV1_SCRIPT`` so a test can observe which alignment bytes were
+actually fitted and which outputs were published.
 """
 
 from __future__ import annotations
@@ -78,12 +78,13 @@ def _stub_environment(tmp_path: Path) -> tuple[dict[str, str], Path, Path]:
         bin_dir / "hhblits",
         """#!/bin/bash
 set -e
+echo "hhblits" >> "${STUB_CALLS}/hhblits.calls"
+[[ -n "${STUB_HHBLITS_FAIL:-}" ]] && exit 1
 prev=""
 for arg in "$@"; do
   if [[ "$prev" == "-oa3m" ]]; then printf ">q\\nACDE\\n>h\\nACDE\\n" > "$arg"; fi
   prev="$arg"
 done
-echo "hhblits" >> "${STUB_CALLS}/hhblits.calls"
 """,
     )
     _write_executable(
@@ -105,12 +106,13 @@ echo "hhfilter" >> "${STUB_CALLS}/hhfilter.calls"
         """#!/bin/bash
 set -e
 if [[ "${1:-}" == "-version" ]]; then echo "psiblast: 2.13.0+"; exit 0; fi
+echo "psiblast" >> "${STUB_CALLS}/psiblast.calls"
+[[ -n "${STUB_PSIBLAST_FAIL:-}" ]] && exit 1
 prev=""
 for arg in "$@"; do
   if [[ "$prev" == "-out_ascii_pssm" ]]; then printf "1 A 0\\n" > "$arg"; fi
   prev="$arg"
 done
-echo "psiblast" >> "${STUB_CALLS}/psiblast.calls"
 """,
     )
     env = {
@@ -179,20 +181,135 @@ def test_msa_stage_writes_alignment_and_does_not_run_pssm(tmp_path: Path) -> Non
     assert _calls(calls, "psiblast") == 0
 
 
-def test_msa_stage_is_idempotent(tmp_path: Path) -> None:
+MSA_OUTPUT = ">q\nACDE\n>h\nACDE\n"
+PSSM_OUTPUT = "1 A 0\n"
+
+
+def test_msa_stage_recomputes_on_every_run(tmp_path: Path) -> None:
     env, _bin, calls = _stub_environment(tmp_path)
     output = tmp_path / "output"
-    first = _run(tmp_path, "-s", "msa", "-U", str(tmp_path / "uniref30"), output=output, env=env)
-    second = _run(tmp_path, "-s", "msa", "-U", str(tmp_path / "uniref30"), output=output, env=env)
+    args = ("-s", "msa", "-U", str(tmp_path / "uniref30"))
+    first = _run(tmp_path, *args, output=output, env=env)
+    alignment = output / "gremlin_msa" / f"{STEM}.fas"
+    alignment.write_text("stale alignment\n", encoding="utf-8")
+    second = _run(tmp_path, *args, output=output, env=env)
+
     assert first.returncode == 0, first.stderr
     assert second.returncode == 0, second.stderr
+    assert _calls(calls, "hhblits") == 2
+    assert _calls(calls, "hhfilter") == 2
+    assert alignment.read_text(encoding="utf-8") == MSA_OUTPUT
+
+
+def test_msa_stage_replaces_outputs_from_an_earlier_run(tmp_path: Path) -> None:
+    """A valid-looking alignment and its intermediates are never reused."""
+    env, _bin, calls = _stub_environment(tmp_path)
+    output = tmp_path / "output"
+    msa_dir = output / "gremlin_msa"
+    msa_dir.mkdir(parents=True)
+    alignment = msa_dir / f"{STEM}.fas"
+    expected_msa = msa_dir / f"{INSTANCE}.i90c75.a3m"
+    a3m = msa_dir / f"{INSTANCE}.a3m"
+    for path in (alignment, expected_msa, a3m):
+        path.write_text(">old\nAAAA\n", encoding="utf-8")
+
+    completed = _run(
+        tmp_path, "-s", "msa", "-U", str(tmp_path / "uniref30"), output=output, env=env
+    )
+
+    assert completed.returncode == 0, completed.stderr
     assert _calls(calls, "hhblits") == 1
     assert _calls(calls, "hhfilter") == 1
-    assert "skipping hhblits/hhfilter" in second.stdout
+    assert alignment.read_text(encoding="utf-8") == MSA_OUTPUT
+    assert expected_msa.read_text(encoding="utf-8") == MSA_OUTPUT
+    assert a3m.read_text(encoding="utf-8") == MSA_OUTPUT
+
+
+def test_failed_msa_publishes_no_stale_output(tmp_path: Path) -> None:
+    """A failing recompute must not leave an earlier alignment behind."""
+    env, _bin, calls = _stub_environment(tmp_path)
+    output = tmp_path / "output"
+    msa_dir = output / "gremlin_msa"
+    msa_dir.mkdir(parents=True)
+    alignment = msa_dir / f"{STEM}.fas"
+    expected_msa = msa_dir / f"{INSTANCE}.i90c75.a3m"
+    a3m = msa_dir / f"{INSTANCE}.a3m"
+    for path in (alignment, expected_msa, a3m):
+        path.write_text(">old\nAAAA\n", encoding="utf-8")
+
+    failed = _run(
+        tmp_path,
+        "-s",
+        "msa",
+        "-U",
+        str(tmp_path / "uniref30"),
+        output=output,
+        env={**env, "STUB_HHBLITS_FAIL": "1"},
+    )
+
+    assert failed.returncode != 0
+    assert _calls(calls, "hhblits") == 1
+    assert not alignment.exists()
+    assert not expected_msa.exists()
+    assert not a3m.exists()
+
+
+def test_pssm_stage_replaces_outputs_from_an_earlier_run(tmp_path: Path) -> None:
+    """A valid-looking PSSM and its checkpoint are never reused."""
+    env, _bin, calls = _stub_environment(tmp_path)
+    output = tmp_path / "output"
+    pssm_dir = output / "pssm_msa"
+    pssm_dir.mkdir(parents=True)
+    ascii_file = pssm_dir / f"{INSTANCE}_ascii_mtx_file"
+    checkpoint = pssm_dir / f"{INSTANCE}.ckp"
+    ascii_file.write_text("stale ascii\n", encoding="utf-8")
+    checkpoint.write_text("stale checkpoint\n", encoding="utf-8")
+
+    completed = _run(
+        tmp_path,
+        "-s",
+        "pssm",
+        "-u",
+        _formatted_uniref90(tmp_path),
+        output=output,
+        env=env,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert _calls(calls, "psiblast") == 1
+    assert ascii_file.read_text(encoding="utf-8") == PSSM_OUTPUT
+    assert not checkpoint.exists()
+
+
+def test_failed_pssm_publishes_no_stale_output(tmp_path: Path) -> None:
+    """A failing recompute must not leave an earlier PSSM behind."""
+    env, _bin, calls = _stub_environment(tmp_path)
+    output = tmp_path / "output"
+    pssm_dir = output / "pssm_msa"
+    pssm_dir.mkdir(parents=True)
+    ascii_file = pssm_dir / f"{INSTANCE}_ascii_mtx_file"
+    checkpoint = pssm_dir / f"{INSTANCE}.ckp"
+    ascii_file.write_text("stale ascii\n", encoding="utf-8")
+    checkpoint.write_text("stale checkpoint\n", encoding="utf-8")
+
+    failed = _run(
+        tmp_path,
+        "-s",
+        "pssm",
+        "-u",
+        _formatted_uniref90(tmp_path),
+        output=output,
+        env={**env, "STUB_PSIBLAST_FAIL": "1"},
+    )
+
+    assert failed.returncode != 0
+    assert _calls(calls, "psiblast") == 1
+    assert not ascii_file.exists()
+    assert not checkpoint.exists()
 
 
 def test_empty_stage_outputs_are_rebuilt_rather_than_reused(tmp_path: Path) -> None:
-    """A zero-byte leftover from an interrupted stage is not a completed stage."""
+    """A zero-byte leftover is deleted before the stage recomputes."""
     env, _bin, calls = _stub_environment(tmp_path)
     output = tmp_path / "output"
     alignment = output / "gremlin_msa" / f"{STEM}.fas"
@@ -209,8 +326,8 @@ def test_empty_stage_outputs_are_rebuilt_rather_than_reused(tmp_path: Path) -> N
     assert pssm_run.returncode == 0, pssm_run.stderr
     assert _calls(calls, "hhblits") == 1
     assert _calls(calls, "psiblast") == 1
-    assert alignment.stat().st_size > 0
-    assert pssm.stat().st_size > 0
+    assert alignment.read_text(encoding="utf-8") == MSA_OUTPUT
+    assert pssm.read_text(encoding="utf-8") == PSSM_OUTPUT
 
 
 def test_fit_stage_without_msa_alignment_fails_closed(tmp_path: Path) -> None:

@@ -76,11 +76,20 @@ the contract does not pre-declare one.
 (``INTERRUPTED``) or re-dispatch creates the next attempt; terminal attempts are
 never edited. A duplicate StageRun open finds and reuses the live attempt because
 of the partial unique index. Attempt identity is the stage *name*, not its
-manifest position, so reordering or inserting a stage resumes the existing
-attempt and numbers the next one per stage; a stage that has never run can take
-an index another stage already used without colliding. Duplicate *execution* of
-a Task is prevented by the existing ``claim_task_execution`` mutex, not by
-StageRun uniqueness alone.
+manifest position, so reordering or inserting a stage keeps the existing
+attempt's identity and numbers the next one per stage; a stage that has never
+run can take an index another stage already used without colliding. Duplicate
+*execution* of a Task is prevented by the existing ``claim_task_execution``
+mutex, not by StageRun uniqueness alone.
+
+A new execution never reuses a stage completed by an earlier execution. An
+attempt records no runtime-image identity, so a ``COMPLETED`` row cannot be
+attributed to the image the new execution runs — a promotion may have replaced
+the SIF at the same path. Every declared stage therefore executes again and the
+composer reuses only attempts it completed itself; a consumer stages from that
+fresh attempt. The sole reuse refusal that remains is a stage with no record at
+all whose legacy ``workflow_state`` entry claims completion: that completion has
+no artifact identity, so the stage fails ``stage_output_unverified``.
 
 ## Task status projection
 
@@ -139,11 +148,12 @@ list payload omits the per-stage detail rather than issuing one query per Task.
 
 Each stage also carries ``dependency``, which answers whether the stage's graph
 inputs are available and is independent of the scheduler ``status``:
-``completed`` (latest attempt completed and artifact reuse verified when the
-stage declares outputs), ``blocked`` (the stage or an ancestor failed, per the
-recorded blocked-stage diagnostic and graph edges), ``ready`` (every producer
-completed), or ``waiting`` otherwise. A single-stage Task has no graph and
-reports ``completed``, ``blocked``, or ``ready`` from its own attempt.
+``completed`` (latest attempt completed and, when the stage declares outputs,
+its recorded identity names files that are still published), ``blocked`` (the
+stage or an ancestor failed, per the recorded blocked-stage diagnostic and graph
+edges), ``ready`` (every producer completed), or ``waiting`` otherwise. A
+single-stage Task has no graph and reports ``completed``, ``blocked``, or
+``ready`` from its own attempt.
 
 ``GET /compute/api/types/<name>`` includes ``execution_graph`` for workflow
 Task Types: the same canonical ``ir_version``/``document``/``digest`` that

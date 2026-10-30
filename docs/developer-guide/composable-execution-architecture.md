@@ -3,7 +3,7 @@
 > **Status: ACTIVE CAMPAIGN — PARTIALLY DELIVERED.**
 > PR #130 is activated as an exclusive single-PR campaign under Protocol v1.6.
 > Delivered in this PR: the versioned graph compiler and typed stage ports, the
-> submission-frozen graph, stage artifact identity with resume verification,
+> submission-frozen graph, stage artifact identity verified as a consumer stages it,
 > fork/join readiness with branch isolation (executed serially), produced-artifact
 > binding into a consumer stage's declared input role, cross-family stage
 > references with per-family readiness, bundles and dispatch, one composed
@@ -211,8 +211,9 @@ Rules the code enforces:
   match, and a required consumer input cannot bind an optional producer output.
   A port binds by logical type; the consumer's accepted upload formats constrain
   what a user may upload, never what a producer publishes.
-- Before the consumer owns a stage attempt, the Server resolves the producer's
-  latest attempt, requires `COMPLETED` with its recorded artifact identity,
+- Before the consumer owns a stage attempt, the Server resolves the attempt the
+  producer completed in this execution, requires `COMPLETED` with its recorded
+  artifact identity,
   matches the producer port's declared paths, re-verifies every file's size and
   sha256 against that identity, and copies the files into a server-owned stage
   input directory outside the shared output tree.
@@ -249,15 +250,16 @@ Rules the code enforces:
   their submissions are refused, so a family's remaining Tasks stay available
   and one narrow invocation cannot authorize the composed path it skipped.
 - Known limitations. A stage's declared outputs live in the Task's shared output
-  tree, so a re-attempt settles the files present there; a Runner may skip a
-  stage whose only input is the Task's immutable snapshot, and the GREMLIN fit
-  recomputes every attempt because it cannot bind its runtime image. The
-  composed live acceptance runs CPU cases with accounting disabled, so it
-  exercises the artifact handoff and submission admission, not the
+  tree, so a re-attempt settles the files present there; every declared stage
+  recomputes in each execution because no attempt records the runtime image it
+  ran. The composed live acceptance runs CPU cases with accounting disabled, so
+  it exercises the artifact handoff and submission admission, not the
   allocation-time readiness gate, which each family's own acceptance covers.
-- A resumed workflow stays safe: a completed producer is re-hashed against its
-  recorded identity before its consumer clears dependency readiness, so a
-  changed artifact fails the producer instead of silently feeding a consumer.
+- A new execution re-runs every stage. No attempt records the runtime image it
+  ran, so a completion from an earlier execution cannot be attributed to this
+  execution's image; reusing it could attribute another image's artifact to this
+  attempt. A consumer still re-hashes the producer's recorded identity when it
+  stages the artifact, so a changed file never silently feeds it.
 
 ## Scheduling and state
 

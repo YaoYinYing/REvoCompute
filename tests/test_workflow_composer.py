@@ -162,84 +162,64 @@ def test_graph_scheduler_validates_outputs_and_preserves_attempts(monkeypatch, t
         assert runs[0]["reason_code"] == "stage_output_missing"
 
 
-@pytest.mark.parametrize(("mutation", "expected_reason"), [
-    ("unchanged", None),
-    ("deleted", "stage_output_invalid"),
-    ("changed", "stage_output_invalid"),
-    ("unverified", "stage_output_unverified"),
-])
-def test_resume_revalidates_completed_producer_outputs(monkeypatch, tmp_path, mutation, expected_reason):
+def test_a_stage_completed_by_an_earlier_execution_is_recomputed(monkeypatch, tmp_path):
+    """A COMPLETED row from an earlier execution cannot be tied to this image."""
     task_runtime = _live_task_runtime()
     runtime = RuntimeFamily("multistage_runner", ("bash", "run.sh"), "runner.def", "image.sif")
     features = WorkflowStage(
         "multistage_runner.features", "Features", False, ("-s", "features"), ("msa",),
         outputs=(StagePortSpec("features", "features", path="features.dat"),),
     )
-    model = WorkflowStage(
-        "multistage_runner.model", "Model", True, ("-s", "model"), ("model",),
-        inputs=(StagePortSpec("features", "features", source="multistage_runner.features:features"),),
-    )
     task_type = TaskType(
         "multistage_runner", "Synthetic staged calculation", runtime, (),
-        stage_markers={"msa": "MSA", "model": "Model"}, workflow=(features, model),
+        stage_markers={"msa": "MSA"}, workflow=(features,),
     )
     output = tmp_path / "output"
     output.mkdir()
-    task_id = mutation.encode().hex().ljust(32, "0")[:32]
+    task_id = "e" * 32
     _ensure_task_row(task_runtime, task_id)
+    (output / "features.dat").write_text("features")
+    first = task_runtime.task_store.begin_stage_attempt(
+        task_id=task_id, stage_index=0, stage_name=features.name
+    )
+    identity = task_runtime._stage_output_identity(str(output), features.outputs)
+    assert identity is not None
+    assert task_runtime.task_store.finish_stage_attempt(
+        task_id=task_id, stage_name=features.name, attempt=first["attempt"],
+        status="COMPLETED", reason_code="completed", output_identity=identity,
+    )
 
-    first_call = {"done": False}
+    started = []
 
     class Job:
-        def __init__(self, name):
-            self.name = name
-
         def submit(self):
             return "42"
 
         def poll(self):
-            if self.name.endswith("features"):
-                (output / "features.dat").write_text("features")
-                return JobState.COMPLETED
-            return JobState.COMPLETED if first_call["done"] else JobState.FAILED
+            (output / "features.dat").write_text("recomputed")
+            return JobState.COMPLETED
 
-    def create(_task_id, stage_tt, *_args, **_kwargs):
-        return Job(stage_tt.name)
-
-    monkeypatch.setattr(task_runtime, "_create_job", create)
-    monkeypatch.setattr(task_runtime.task_store, "update_task", lambda *args, **kwargs: True)
-    policies = {stage.name: _policy(stage.requires_gpu) for stage in task_type.workflow}
-    assert task_runtime._run_compute_workflow(
-        task_id, _frozen(task_type), task_type, _workspace(tmp_path), str(output), policies, lambda _: None,
-    ) == JobState.FAILED
-    first_call["done"] = True
-    assert task_runtime.task_store.list_stage_runs(task_id)[0]["output_identity"]
-
-    if mutation == "deleted":
-        (output / "features.dat").unlink()
-    elif mutation == "changed":
-        (output / "features.dat").write_text("tampered")
-    elif mutation == "unverified":
-        with task_runtime.task_store.engine.begin() as conn:
-            conn.exec_driver_sql(
-                "UPDATE stage_runs SET output_identity = NULL WHERE task_id = ?",
-                (task_id,),
-            )
-
-    started = []
-    monkeypatch.setattr(task_runtime, "_create_job", lambda _id, tt, *a, **kw: started.append(tt.name) or Job(tt.name))
-    result = task_runtime._run_compute_workflow(
-        task_id, _frozen(task_type), task_type, _workspace(tmp_path), str(output), policies, lambda _: None,
+    monkeypatch.setattr(
+        task_runtime, "_create_job", lambda _id, tt, *a, **kw: started.append(tt.name) or Job()
     )
-    if expected_reason is None:
-        assert result == JobState.COMPLETED
-        assert started == ["multistage_runner-model"]
-    else:
-        assert result == JobState.FAILED
-        assert started == []
-        evidence = task_runtime.task_store.get_task_diagnostics(task_id) or {}
-        assert evidence["reason_code"] == expected_reason
-        assert evidence["blocked_stages"] == ["multistage_runner.model"]
+    monkeypatch.setattr(task_runtime.task_store, "update_task", lambda *args, **kwargs: True)
+
+    # Recovery rewrites the mirror from the records, so it also claims this
+    # stage completed; the recorded row, not the mirror, decides that it runs.
+    task = _frozen(
+        task_type,
+        workflow_state=json.dumps({features.name: {"status": "completed", "job_id": "41"}}),
+    )
+    result = task_runtime._run_compute_workflow(
+        task_id, task, task_type, _workspace(tmp_path), str(output),
+        {features.name: _policy(False)}, lambda _: None,
+    )
+
+    assert result == JobState.COMPLETED
+    assert started == ["multistage_runner-features"]
+    runs = sorted(task_runtime.task_store.list_stage_runs(task_id), key=lambda run: run["attempt"])
+    assert [(run["attempt"], run["status"]) for run in runs] == [(1, "COMPLETED"), (2, "COMPLETED")]
+    assert (output / "features.dat").read_text() == "recomputed"
 
 
 def test_composer_refuses_unverified_legacy_completed_stage(monkeypatch):
@@ -538,7 +518,9 @@ def test_fork_join_runs_serial_schedule_and_resume_after_branch_failure(monkeypa
     )
 
     assert second == JobState.COMPLETED
-    assert started == ["dag-b", "dag-d"]
+    # A new execution recomputes every stage: no attempt records its image, so
+    # the completed dag.a and dag.c from the first execution are not reused.
+    assert started == ["dag-a", "dag-b", "dag-c", "dag-d"]
     runs = task_runtime.task_store.list_stage_runs(task_id)
     assert {(run["stage_name"], run["status"]) for run in runs if run["attempt"] == 1} == {
         ("dag.a", "COMPLETED"), ("dag.b", "FAILED"), ("dag.c", "COMPLETED"), ("dag.d", "COMPLETED")

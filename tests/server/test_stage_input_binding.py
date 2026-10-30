@@ -163,10 +163,11 @@ def test_the_consumer_reads_a_verified_copy_named_by_a_server_document(tmp_path,
     assert (directory / "features" / "2KL8.dat").read_text(encoding="utf-8") == "features"
 
 
-def test_a_changed_producer_artifact_never_becomes_a_consumer_input(tmp_path, monkeypatch):
+def test_the_consumer_stages_from_the_attempt_completed_in_this_execution(tmp_path, monkeypatch):
+    """A COMPLETED row from an earlier execution is recomputed, not reused."""
     database, task_id, task_type, output = _prepare(tmp_path, monkeypatch)
     (output / "features").mkdir()
-    (output / "features" / "2KL8.dat").write_text("features", encoding="utf-8")
+    (output / "features" / "2KL8.dat").write_text("stale", encoding="utf-8")
     index = next(i for i, stage in enumerate(task_type.workflow) if stage.name == "stage_input_runner.features")
     attempt = database.begin_stage_attempt(
         task_id=task_id, stage_index=index, stage_name="stage_input_runner.features"
@@ -181,19 +182,31 @@ def test_a_changed_producer_artifact_never_becomes_a_consumer_input(tmp_path, mo
         reason_code="completed",
         output_identity=identity,
     )
-    (output / "features" / "2KL8.dat").write_text("tampered", encoding="utf-8")
 
-    def _create_job(*_args, **_kwargs):
-        raise AssertionError("a consumer must not run on an artifact the Server cannot verify")
+    staged: dict[str, str | None] = {}
+
+    def _create_job(_task_id, stage_tt, _runner, _entities, _output, stage_callback=None, **kwargs):
+        staged[stage_tt.name] = kwargs.get("stage_inputs_dir")
+        return _Job(stage_tt, output)
 
     monkeypatch.setattr(task_runtime, "_create_job", _create_job)
 
     result = _run(database, task_id, task_type, output, _workspace(tmp_path))
 
-    assert result == task_runtime.JobState.FAILED
-    diagnostics = database.get_task_diagnostics(task_id) or {}
-    assert diagnostics.get("reason_code") == "stage_output_invalid"
-    assert not (tmp_path / "workspace" / "stage_inputs").exists()
+    assert result == task_runtime.JobState.COMPLETED
+    directory = Path(staged["stage_input_runner-model"])
+    document = json.loads((directory / STAGE_INPUTS_DOCUMENT_NAME).read_text(encoding="utf-8"))
+    entry = document["inputs"]["features"]
+    # The consumer's document names the attempt this execution completed, and
+    # the bytes are that attempt's, not the earlier row's.
+    assert entry["producer_attempt"] == 2
+    assert entry["files"][0]["sha256"] == hashlib.sha256(b"features").hexdigest()
+    assert (directory / "features" / "2KL8.dat").read_text(encoding="utf-8") == "features"
+    assert [
+        (run["attempt"], run["status"])
+        for run in database.list_stage_runs(task_id)
+        if run["stage_name"] == "stage_input_runner.features"
+    ] == [(1, "COMPLETED"), (2, "COMPLETED")]
 
 
 def test_a_consumer_without_an_execution_workspace_is_refused_before_any_allocation(tmp_path, monkeypatch):

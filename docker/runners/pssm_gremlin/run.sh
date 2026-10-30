@@ -184,44 +184,41 @@ RUN_MSA() {
 
     local expected_msa="${instance}.i90c75.a3m"
     local alignment="${instance}.i90c75_aln.fas"
-    if [[ -s "${dst_msa}/${alignment}" ]]; then
-        echo "MSA alignment exists: ${dst_msa}/${alignment}; skipping hhblits/hhfilter."
-        return 0
-    fi
 
     command -v hhblits >/dev/null 2>&1 || { echo "msa stage requires hhblits on PATH" >&2; exit 1; }
     command -v hhfilter >/dev/null 2>&1 || { echo "msa stage requires hhfilter on PATH" >&2; exit 1; }
 
+    # This stage is recomputed on every invocation. Outputs and intermediates
+    # left in the shared tree came from an earlier attempt and are never reused.
+    rm -f "${dst_msa}/${alignment}" "${dst_msa}/${expected_msa}" \
+          "${dst_msa}/${instance}.a3m" "${dst_msa}/${instance}.hhr"
+
     echo Running GREMLIN sequence searching ...
     pushd "$dst_msa"
     echo "REVODESIGN_STAGE:hhblits"
-    if [[ ! -f "${instance}.a3m" ]]; then
-        local -a cmd=(
-            hhblits
-            -i "$fasta"
-            -oa3m "${instance}.a3m"
-            -o "${instance}.hhr"
-            -d "$uniref30_db"
-            -n "$iter"
-            -e "$evalue"
-            -mact "$mact"
-            -maxfilt "$maxfilt"
-            -neffmax "$neffmax"
-            -cpu "$nproc"
-            -nodiff
-            -realign_max 10000000
-            -maxmem "$maxmem"
-        )
-        echo "${cmd[*]}"
-        "${cmd[@]}" 1>"${pipline_res_dir}"/log/"${instance}"_gremlin_hhblits.log 2>"${pipline_res_dir}"/log/"${instance}"_gremlin_hhblits.err
-    fi
+    local -a cmd=(
+        hhblits
+        -i "$fasta"
+        -oa3m "${instance}.a3m"
+        -o "${instance}.hhr"
+        -d "$uniref30_db"
+        -n "$iter"
+        -e "$evalue"
+        -mact "$mact"
+        -maxfilt "$maxfilt"
+        -neffmax "$neffmax"
+        -cpu "$nproc"
+        -nodiff
+        -realign_max 10000000
+        -maxmem "$maxmem"
+    )
+    echo "${cmd[*]}"
+    "${cmd[@]}" 1>"${pipline_res_dir}"/log/"${instance}"_gremlin_hhblits.log 2>"${pipline_res_dir}"/log/"${instance}"_gremlin_hhblits.err
 
     echo "REVODESIGN_STAGE:hhfilter"
-    local -a cmd=(hhfilter -i "${instance}.a3m" -id 90 -cov 75 -o "$expected_msa")
+    cmd=(hhfilter -i "${instance}.a3m" -id 90 -cov 75 -o "$expected_msa")
     echo "${cmd[*]}"
-    if [[ ! -f "$expected_msa" ]]; then
-      "${cmd[@]}" 1>"${pipline_res_dir}"/log/"${instance}"_gremlin_hhfilter.log 2>"${pipline_res_dir}"/log/"${instance}"_gremlin_hhfilter.err
-    fi
+    "${cmd[@]}" 1>"${pipline_res_dir}"/log/"${instance}"_gremlin_hhfilter.log 2>"${pipline_res_dir}"/log/"${instance}"_gremlin_hhfilter.err
 
     # post-processing
     # remove lower case
@@ -350,22 +347,23 @@ RUN_PSSM() {
 
     mkdir -p "$dst_msa"
 
+    # This stage is recomputed on every invocation. Outputs and intermediates
+    # left in the shared tree came from an earlier attempt and are never reused.
     pushd "$dst_msa"
-    if [[ ! -s "${instance}_ascii_mtx_file" ]]; then
-        local -a cmd=(
-            "${blast_bin}/psiblast"
-            -query "$fasta"
-            -db "$uniref90_db"
-            -out_pssm "${instance}.ckp"
-            -evalue 0.01
-            -out_ascii_pssm "${instance}_ascii_mtx_file"
-            -out "${instance}_output_file"
-            -num_iterations "$num_iterations"
-            -num_threads "$nproc"
-        )
-        echo "${cmd[*]}"
-        "${cmd[@]}" 1>"${pipline_res_dir}"/log/"${instance}"_pssm_psiblast.log 2>"${pipline_res_dir}"/log/"${instance}"_pssm_psiblast.err
-    fi
+    rm -f "${instance}_ascii_mtx_file" "${instance}.ckp"
+    local -a cmd=(
+        "${blast_bin}/psiblast"
+        -query "$fasta"
+        -db "$uniref90_db"
+        -out_pssm "${instance}.ckp"
+        -evalue 0.01
+        -out_ascii_pssm "${instance}_ascii_mtx_file"
+        -out "${instance}_output_file"
+        -num_iterations "$num_iterations"
+        -num_threads "$nproc"
+    )
+    echo "${cmd[*]}"
+    "${cmd[@]}" 1>"${pipline_res_dir}"/log/"${instance}"_pssm_psiblast.log 2>"${pipline_res_dir}"/log/"${instance}"_pssm_psiblast.err
     wait
     popd
 

@@ -570,9 +570,9 @@ def _attach_stage_dependencies(
 ) -> None:
     """Add each stage's dependency state beside its scheduler status.
 
-    ``completed`` requires the latest attempt to be COMPLETED *and*, when the
-    stage declares artifacts, to pass the same reuse verification the scheduler
-    applies.  ``blocked`` comes from the recorded blocked-stage diagnostic and
+    ``completed`` requires the latest attempt to be COMPLETED and, when the
+    stage declares artifacts, a recorded identity whose files are still
+    present.  ``blocked`` comes from the recorded blocked-stage diagnostic and
     the graph's ancestors; ``ready`` requires every producer to be completed.
     """
     graph = None
@@ -600,8 +600,8 @@ def _attach_stage_dependencies(
         if node is not None and node.outputs:
             # A status read must stay cheap: the recorded identity's shape plus
             # an existence/containment check is enough to label the row.  The
-            # full content re-hash still runs where reuse is decided (dispatch
-            # and resume), so this projection can never authorize a reuse.
+            # full content re-hash still runs when a consumer stages the
+            # artifact, so this projection can never authorize execution.
             recorded = latest_by_name.get(item["name"])
             identity = (recorded or {}).get("output_identity")
             if not isinstance(identity, str) or not identity:
@@ -1346,12 +1346,13 @@ def _run_compute_workflow(
         _record_workflow_refusal(task_id, tt.name, "execution_graph_changed")
         return JobState.FAILED
     legacy_state = _workflow_state(task)
-    runs = task_store.list_stage_runs(task_id)
+    # No attempt records the runtime image it ran, so a COMPLETED row from an
+    # earlier execution of this Task cannot be attributed to this execution's
+    # image: a promotion may have replaced the SIF at the same path.  Every
+    # stage therefore runs again; ``latest_runs`` holds only attempts that
+    # settle here, which is what a consumer stages from.
     latest_runs: dict[str, dict[str, Any]] = {}
-    for run in runs:
-        current = latest_runs.get(str(run["stage_name"]))
-        if current is None or int(run["attempt"]) > int(current["attempt"]):
-            latest_runs[str(run["stage_name"])] = run
+    recorded_stages = {str(run["stage_name"]) for run in task_store.list_stage_runs(task_id)}
     stages = {stage.name: (index, stage) for index, stage in enumerate(tt.workflow)}
     nodes_by_id = {node.id: node for node in graph.nodes}
     producers = {
@@ -1395,20 +1396,11 @@ def _run_compute_workflow(
                 continue
             if not parents <= completed:
                 continue
-            latest = latest_runs.get(node.id)
-            if latest is not None and latest["status"] == stage_state.COMPLETED:
-                refusal = _stage_reuse_valid(output_dir, node.outputs, latest)
-                if refusal is not None:
-                    _record_workflow_refusal(task_id, node.id, refusal)
-                    failed.add(node.id)
-                    block_descendants(node.id)
-                else:
-                    completed.add(node.id)
-                progressed = True
-                continue
-            if latest is None and (legacy_state.get(node.id) or {}).get("status") == "completed":
-                # No row means the mirror's completion has no verified artifact
-                # identity; skipping it would trust evidence the Server never saw.
+            if node.id not in recorded_stages and (legacy_state.get(node.id) or {}).get("status") == "completed":
+                # No row for this stage means the mirror's completion has no
+                # verified artifact identity; skipping it would trust evidence
+                # the Server never saw.  A stage with a row is recomputed
+                # instead, because that row cannot be tied to this image.
                 _record_workflow_refusal(task_id, node.id, "stage_output_unverified")
                 failed.add(node.id)
                 block_descendants(node.id)
@@ -1811,22 +1803,6 @@ def _latest_stage_run(task_id: str, stage_name: str) -> dict[str, Any] | None:
     """The newest attempt row for one stage, or ``None`` when it never ran."""
     runs = [run for run in task_store.list_stage_runs(task_id) if str(run["stage_name"]) == stage_name]
     return max(runs, key=lambda run: int(run["attempt"])) if runs else None
-
-
-def _stage_reuse_valid(output_dir: str, outputs, recorded: dict[str, Any] | None) -> str | None:
-    """Return the refusal reason for the latest completed attempt's outputs."""
-    if not outputs:
-        return None
-    if not recorded or not recorded.get("output_identity"):
-        return "stage_output_unverified"
-    try:
-        document = json.loads(recorded["output_identity"])
-        if document.get("output_identity_format") != _OUTPUT_IDENTITY_FORMAT:
-            return "stage_output_unverified"
-    except (TypeError, ValueError, AttributeError):
-        return "stage_output_unverified"
-    current = _stage_output_identity(output_dir, outputs)
-    return "stage_output_invalid" if current is None or current != recorded["output_identity"] else None
 
 
 # ---------------------------------------------------------------------------
