@@ -19,6 +19,7 @@ from revocompute.runner_live_test import (
     ValidationIdentity,
     _composed_artifacts,
     _verify_composed_artifacts,
+    receipt_valid_for_artifact,
     active_receipt_valid,
     candidate_receipt_valid,
     run_live_tests,
@@ -588,6 +589,29 @@ def test_composed_case_refuses_a_companion_bundle_that_changed(tmp_path, monkeyp
     monkeypatch.setattr("revocompute.runner_readiness.bundle_digest", lambda _state, _family: "sha256:changed")
     with pytest.raises(LiveTestConfigurationError, match="runtime bundle for 'companion_runner' changed"):
         _verify_composed_artifacts(state, records, families)
+
+
+def test_a_promotion_check_resolves_the_companion_the_deployment_runs(tmp_path, monkeypatch):
+    owner, companion = _composed_tree(tmp_path)
+    families = {owner.name: owner, companion.name: companion}
+    monkeypatch.setattr(
+        "revocompute.runner_live_test._identity_families", lambda *_args, **_kwargs: families
+    )
+    resolved: list[list[str]] = []
+    construct = RunnerLiveTestWorker.__init__
+
+    def _spy(self, *args, **kwargs):
+        resolved.append(sorted(item.name for item in kwargs.get("families", ())))
+        return construct(self, *args, **kwargs)
+
+    monkeypatch.setattr(RunnerLiveTestWorker, "__init__", _spy)
+
+    receipt_valid_for_artifact(_State(tmp_path), owner, f"{owner.slurm_image}.next")
+
+    # The promotion check answers for the deployment, so it must hand the worker
+    # every installed family; knowing only its own would report a composed Task
+    # as unloaded and refuse a candidate that passed its composed acceptance.
+    assert resolved == [[companion.name, owner.name]]
 
 
 def test_a_single_family_task_records_no_composed_artifacts(tmp_path):

@@ -1310,11 +1310,17 @@ def receipt_valid_for_artifact(
     ``sif_sha256`` is supplied, the artifact must still hash to it; a file that
     changed after the caller measured it is not validated.
     """
-    worker = RunnerLiveTestWorker(state, family, artifact_path=artifact_path)
-    artifact = worker.artifact
-    if not artifact.is_file():
-        return False
     try:
+        # This check answers for the deployment, so it resolves the deployment's
+        # families exactly as readiness does; a composed Task whose companion is
+        # installed must not read as unloaded here and block its own promotion.
+        families = _identity_families(family, family.root.parent, None, state) if family.root is not None else {}
+        worker = RunnerLiveTestWorker(
+            state, family, artifact_path=artifact_path, families=tuple(families.values())
+        )
+        artifact = worker.artifact
+        if not artifact.is_file():
+            return False
         identity = worker._load_identity()
         provenance = _build_provenance(state, family)
         required = {case.id for case in identity.plan.select("smoke")}

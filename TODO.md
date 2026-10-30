@@ -25,9 +25,9 @@
 | `[Stage] [Status]` browser rendering | delivered; browser evidence from the CI BrowserContracts lane (green at `954e361`, `44d1ae5`) |
 | Produced-artifact binding into a consumer input role | delivered (`44d1ae5`): verified copy, role directories, `TASK_STAGE_INPUTS`, read-only bind, bounded refusals |
 | Concurrent branch execution, per-stage reservations, sibling cancellation | not delivered (serial schedule accepted, D3=A) |
-| PSSM-GREMLIN stage split, GREMLIN_LH produced-artifact consumption | runner split and document consumption delivered in isolated SIFs (not promoted); composed `gremlin_msa_to_lh_fit` Task Type registered with its own result tree and a cross-family smoke case (`5328678`, `6d6776f`); two CI lanes red on the split, D2 Owner fixing |
+| PSSM-GREMLIN stage split, GREMLIN_LH produced-artifact consumption | delivered (D2=A): the `gremlin_msa_to_lh_fit` composed Task runs on real Slurm/Apptainer, and both GREMLIN families' consuming stages read only the Server's verified stage-input document. Isolated SIFs, not promoted |
 | OpenDDE audit | not started |
-| Real Slurm/Apptainer scientific acceptance | blocked: needs an operator-provided isolated deployment and a GPU window (D1=A, after all outstanding P1s are cleared) |
+| Real Slurm/Apptainer scientific acceptance | delivered in the isolated deployment (D1=A, D2=A): AlphaFold 3, PSSM-GREMLIN (including the composed cross-family case) and GREMLIN_LH pass at `9bf4ea5`; production untouched |
 | Nextflow backend | disabled, structural evidence recorded |
 
 ## 0 — Exclusive activation / stop gate
@@ -47,9 +47,12 @@
       and a compact dependency/ownership ledger in the PR #130 thread. The
       thread is the durable record; a local `IMPLEMENTATION_STATE.md` is
       gitignored scratch and is not cited as evidence.
-- [ ] Appoint scoped independent reviewers, Examiner, and a final disinterested
-      Campaign Acceptance Auditor. Integrate all implementation under this one
-      PR; isolated worktrees permitted only after activation.
+- [x] Scoped independent reviews completed at `b954b56` (architecture R1,
+      security/admission R2) and their findings remediated at `5ef0920`,
+      `dbc98c3`, `9bf4ea5`; the two P1s are closed.
+- [ ] Appoint the Examiner browser pass over the current head and a final
+      disinterested Campaign Acceptance Auditor. Integrate all implementation
+      under this one PR; isolated worktrees permitted only after activation.
 - [ ] If another PR needs to proceed during exclusive execution, stop,
       escalate to the maintainer, and explicitly re-plan the exclusivity.
       Do not grant a subagent a unilateral exception.
