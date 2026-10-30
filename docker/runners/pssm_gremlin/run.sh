@@ -273,6 +273,12 @@ RUN_FIT() {
 
     # A model is reusable only for the same alignment bytes, iteration, and fit
     # script. The key lives in a dot-directory outside every declared output glob.
+    # Scope: the key covers this stage's inputs and the model it produces, not
+    # the image. A promotion between attempts can therefore reuse a model fitted
+    # under the previous image; the Server records the attempt's image identity,
+    # so a refit under a new image is the only way to re-derive it. The declared
+    # plot is deleted before a refit, so it can never be published with another
+    # alignment's model.
     local alignment_sha
     alignment_sha=$(sha256sum "$alignment" | cut -d' ' -f1)
     local fit_script="${GREMLIN_TFV1_SCRIPT:-${REVODESIGN_RUNSCRIPT_PATH}/${SCRIPT_PATH}/GREMLIN_TFv1.py}"
@@ -295,7 +301,7 @@ RUN_FIT() {
     if [[ -n "$cached_model_sha" && -f "$key" && "$(cat "$key")" == "$identity $cached_model_sha" ]]; then
       echo "Checkpoint matches this alignment, iteration and fit script: ${model}; skip GREMLIN_TFv1"
     else
-      rm -f "$model" "$key"
+      rm -f "$model" "$key" "${dst_gremlin}/${alignment_stem}_GREMLIN_mtx.png"
       local -a cmd=(
           python
           "$fit_script"

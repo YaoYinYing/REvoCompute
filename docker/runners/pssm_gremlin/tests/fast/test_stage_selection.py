@@ -46,10 +46,12 @@ digest = hashlib.sha256(data).hexdigest()
 with open(os.path.join(os.environ["STUB_CALLS"], "fit.calls"), "a", encoding="utf-8") as handle:
     handle.write(f"{alignment}\\t{digest}\\t{iteration}\\n")
 model = pathlib.Path(output_dir) / (pathlib.Path(alignment).stem + ".GREMLIN.mrf.pkl")
+plot = pathlib.Path(output_dir) / (pathlib.Path(alignment).stem + "_GREMLIN_mtx.png")
 if os.environ.get("STUB_FIT_FAIL"):
     model.write_text("interrupted\\n", encoding="utf-8")
     sys.exit(1)
 model.write_text(f"model {digest}\\n", encoding="utf-8")
+plot.write_text(f"plot {digest}\\n", encoding="utf-8")
 """
 
 
@@ -357,6 +359,9 @@ def test_fit_reruns_for_different_alignment_bytes_with_the_same_filename(tmp_pat
     assert fitted[1][1] == _sha(second.read_bytes())
     assert _model(output).read_text(encoding="utf-8") != first_model
     assert _model(output).read_text(encoding="utf-8") == f"model {_sha(second.read_bytes())}\n"
+    assert (output / "gremlin_res" / f"{STEM}_GREMLIN_mtx.png").read_text(encoding="utf-8") == (
+        f"plot {_sha(second.read_bytes())}\n"
+    )
 
 
 def test_fit_skips_only_for_the_same_authenticated_identity(tmp_path: Path) -> None:

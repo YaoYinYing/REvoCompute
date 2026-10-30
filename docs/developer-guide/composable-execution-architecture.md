@@ -107,7 +107,12 @@ Resumption inside a Stage is a Runner optimization, not evidence: a Runner may
 skip work only when it authenticates the cached output against the bytes and
 parameters that produced it. A file present at an output path is never that
 authentication, because the output tree survives retries and a sibling input may
-reuse the filename.
+reuse the filename. The GREMLIN fit checkpoint authenticates its admitted
+alignment, iteration, fit script, and model bytes; its declared plot is removed
+before refitting. The key does not include the runtime image because the stage
+runner receives no verified image digest; the Server's attempt identity remains
+authoritative for the image that actually ran. A future image-aware cache needs
+to pass that digest through the execution contract before including it here.
 
 ## Graph grammar and compilation
 
