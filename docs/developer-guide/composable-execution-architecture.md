@@ -251,13 +251,16 @@ Rules the code enforces:
   and one narrow invocation cannot authorize the composed path it skipped.
 - Known limitations. A stage's declared outputs live in the Task's shared output
   tree, so a re-attempt settles the files present there. The Server executes
-  every declared stage in each execution because no attempt records the runtime
-  image it ran, and a Runner makes the published bytes attributable to its
-  attempt only by deleting each declared output before recomputing it. The
-  GREMLIN families do; the AlphaFold 3 features and model stages still skip on
-  an existing output, so a retry there can settle bytes an earlier image
-  produced. The composed live acceptance runs CPU cases with accounting disabled, so
-  it exercises the artifact handoff and submission admission, not the
+  every declared stage in each execution, except a stage with no StageRun record
+  whose legacy `workflow_state` entry claims completion, which is refused as
+  `stage_output_unverified`. No attempt records the runtime image it ran, so a
+  Runner keeps the published bytes attributable to its attempt by deleting or
+  rewriting every declared output rather than reusing what it finds. The GREMLIN
+  PSSM runner deletes them first, and the GREMLIN-LH fit rewrites each one; the
+  AlphaFold 3 features and model stages still skip on an existing output, so a
+  retry there can settle bytes an earlier image produced. The composed live
+  acceptance runs CPU cases with accounting disabled, so it exercises the
+  artifact handoff and submission admission, not the
   allocation-time readiness gate, which each family's own acceptance covers.
 - A new execution executes every stage. No attempt records the runtime image it
   ran, so a completion from an earlier execution cannot be attributed to this
