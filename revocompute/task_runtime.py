@@ -553,12 +553,9 @@ def _stage_outputs_present(output_dir: str, outputs) -> bool:
     """Cheap existence/containment check for a status projection, never a hash."""
     try:
         for port in outputs:
-            matches = list(Path(output_dir).glob(port.path))
-            if not matches and port.required:
+            matches = _port_matches(output_dir, port)
+            if matches is None or (not matches and port.required):
                 return False
-            for path in matches:
-                if not _path_is_within(output_dir, str(path)):
-                    return False
     except (OSError, TypeError, ValueError):
         return False
     return True

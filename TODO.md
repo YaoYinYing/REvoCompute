@@ -239,11 +239,6 @@
 - [ ] Commander submits only READY_FOR_FINAL_REVIEW with explicit risks
       and exact SHA. **Only maintainer can authorize squash merge.**
 
-## Pending cleanups (fold into the next unavoidable server commit)
-
-- `task_runtime._stage_outputs_present` duplicates the glob + containment logic of
-  `_port_matches`; it should call it instead of keeping a second reading of a port.
-
 ## Explicit non-goals
 
 - No Python/Groovy/Shell code supplied by users as a Pipeline definition.
