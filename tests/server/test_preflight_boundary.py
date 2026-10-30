@@ -16,7 +16,23 @@ import pytest
 
 import conftest
 from conftest import _load_pssm_module, _test_client_auth
+from revocompute.admission import AdmissionEvidence
 from revocompute.task_types import TaskInputRole
+
+
+
+def _submission_evidence() -> AdmissionEvidence:
+    """The admission evidence this deployment publishes for a ready Runner."""
+    return AdmissionEvidence(
+        {
+            "runner_family": "gremlin",
+            "status": "READY",
+            "ready": True,
+            "reason_code": "READY",
+            "message": "ready",
+            "next_action": "none",
+        }
+    )
 
 
 @pytest.mark.parametrize("endpoint", ["/compute/api/post", "/compute/api/preflight/pdb_only"])
@@ -442,13 +458,7 @@ def test_infrastructure_rejection_runs_after_security_and_leaves_no_durable_task
         route = route.__wrapped__
     monkeypatch.setattr(
         "revocompute.admission.resolve_submission_readiness",
-        lambda *_args, **_kwargs: SimpleNamespace(
-            ready=True,
-            status=SimpleNamespace(value="READY"),
-            reason_code="READY",
-            message="ready",
-            next_action="none",
-        ),
+        lambda *_args, **_kwargs: _submission_evidence(),
     )
     queued = []
     monkeypatch.setattr(module.run_compute_task, "apply_async", lambda *args, **kwargs: queued.append(True))
@@ -499,13 +509,7 @@ def test_preflight_projects_degraded_readiness_and_busy_capacity_without_blockin
         route = route.__wrapped__
     monkeypatch.setattr(
         "revocompute.admission.resolve_submission_readiness",
-        lambda *_args, **_kwargs: SimpleNamespace(
-            ready=True,
-            status=SimpleNamespace(value="READY"),
-            reason_code="READY",
-            message="ready",
-            next_action="none",
-        ),
+        lambda *_args, **_kwargs: _submission_evidence(),
     )
     module.app.config["infrastructure_readiness"] = SimpleNamespace(
         report=lambda: {
@@ -562,13 +566,7 @@ def test_cpu_preflight_ignores_unavailable_gpu_inventory(monkeypatch, tmp_path):
         route = route.__wrapped__
     monkeypatch.setattr(
         "revocompute.admission.resolve_submission_readiness",
-        lambda *_args, **_kwargs: SimpleNamespace(
-            ready=True,
-            status=SimpleNamespace(value="READY"),
-            reason_code="READY",
-            message="ready",
-            next_action="none",
-        ),
+        lambda *_args, **_kwargs: _submission_evidence(),
     )
     headers = _test_client_auth(module)
     user = module.app.config["user_db"].get_user_by_username("tester")
@@ -636,13 +634,7 @@ def test_a_gpu_submission_holds_the_final_unit_it_was_admitted_on(monkeypatch, t
     # runner is simply available.
     monkeypatch.setattr(
         "revocompute.admission.resolve_submission_readiness",
-        lambda *_args, **_kwargs: SimpleNamespace(
-            ready=True,
-            status=SimpleNamespace(value="READY"),
-            reason_code="READY",
-            message="ready",
-            next_action="none",
-        ),
+        lambda *_args, **_kwargs: _submission_evidence(),
     )
     headers = _test_client_auth(module)
     user = module.app.config["user_db"].get_user_by_username("tester")
@@ -703,13 +695,7 @@ def test_a_dispatch_that_never_reached_the_queue_releases_the_hold(monkeypatch, 
     # runner is simply available.
     monkeypatch.setattr(
         "revocompute.admission.resolve_submission_readiness",
-        lambda *_args, **_kwargs: SimpleNamespace(
-            ready=True,
-            status=SimpleNamespace(value="READY"),
-            reason_code="READY",
-            message="ready",
-            next_action="none",
-        ),
+        lambda *_args, **_kwargs: _submission_evidence(),
     )
     headers = _test_client_auth(module)
     user = module.app.config["user_db"].get_user_by_username("tester")
