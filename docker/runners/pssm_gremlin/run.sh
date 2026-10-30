@@ -184,7 +184,7 @@ RUN_MSA() {
 
     local expected_msa="${instance}.i90c75.a3m"
     local alignment="${instance}.i90c75_aln.fas"
-    if [[ -f "${dst_msa}/${alignment}" ]]; then
+    if [[ -s "${dst_msa}/${alignment}" ]]; then
         echo "MSA alignment exists: ${dst_msa}/${alignment}; skipping hhblits/hhfilter."
         return 0
     fi
@@ -271,16 +271,34 @@ RUN_FIT() {
     alignment_stem=$(basename "${alignment%.fas}")
     local model="${dst_gremlin}/${alignment_stem}.GREMLIN.mrf.pkl"
 
-    mkdir -p "$dst_gremlin"
+    # A model is reusable only for the same alignment bytes, iteration, and fit
+    # script. The key lives in a dot-directory outside every declared output glob.
+    local alignment_sha
+    alignment_sha=$(sha256sum "$alignment" | cut -d' ' -f1)
+    local fit_script="${GREMLIN_TFV1_SCRIPT:-${REVODESIGN_RUNSCRIPT_PATH}/${SCRIPT_PATH}/GREMLIN_TFv1.py}"
+    local script_sha
+    script_sha=$(sha256sum "$fit_script" | cut -d' ' -f1)
+    local identity
+    identity=$(printf '%s\n%s\n%s\n' "$alignment_sha" "$gremlin_iter" "$script_sha" | sha256sum | cut -d' ' -f1)
+    local key="${dst}/.gremlin_fit/${alignment_stem}.identity"
+    # The key authenticates both the fit inputs and the model bytes it names, so
+    # a truncated or replaced model is never reused under a matching identity.
+    local cached_model_sha=''
+    if [[ -s "$model" ]]; then
+      cached_model_sha=$(sha256sum "$model" | cut -d' ' -f1)
+    fi
+
+    mkdir -p "$dst_gremlin" "$(dirname "$key")"
     echo Running GREMLIN ...
     pushd "$dst_gremlin"
     echo "REVODESIGN_STAGE:gremlin"
-    if [[ -f "$model" ]]; then
-      echo "Checkpoint file exists: ${model} skip GREMLIN_TFv1"
+    if [[ -n "$cached_model_sha" && -f "$key" && "$(cat "$key")" == "$identity $cached_model_sha" ]]; then
+      echo "Checkpoint matches this alignment, iteration and fit script: ${model}; skip GREMLIN_TFv1"
     else
+      rm -f "$model" "$key"
       local -a cmd=(
           python
-          "${REVODESIGN_RUNSCRIPT_PATH}/${SCRIPT_PATH}/GREMLIN_TFv1.py"
+          "$fit_script"
           "$alignment"
           "$dst_gremlin"
           "$gremlin_iter"
@@ -294,6 +312,7 @@ RUN_FIT() {
         echo "fit stage did not produce ${model}" >&2
         exit 1
     fi
+    printf '%s %s\n' "$identity" "$(sha256sum "$model" | cut -d' ' -f1)" > "$key"
 }
 
 # Stage pssm: PSI-BLAST against UniRef90. Independent of the msa and fit stages.
@@ -348,7 +367,7 @@ RUN_PSSM() {
     mkdir -p "$dst_msa"
 
     pushd "$dst_msa"
-    if [[ ! -f "${instance}_ascii_mtx_file" ]]; then
+    if [[ ! -s "${instance}_ascii_mtx_file" ]]; then
         local -a cmd=(
             "${blast_bin}/psiblast"
             -query "$fasta"

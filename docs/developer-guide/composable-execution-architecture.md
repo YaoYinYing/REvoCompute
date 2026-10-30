@@ -103,6 +103,12 @@ Files are portable evidence, NOT an alternative transactional status store.
 Stage publication is confined, bounded, checked for malicious symlinks/hardlink
 escapes/FIFO/path traversal and safely committed, including crash races.
 
+Resumption inside a Stage is a Runner optimization, not evidence: a Runner may
+skip work only when it authenticates the cached output against the bytes and
+parameters that produced it. A file present at an output path is never that
+authentication, because the output tree survives retries and a sibling input may
+reuse the filename.
+
 ## Graph grammar and compilation
 
 Define **one server-owned, versioned graph IR**, independent of Nextflow DSL
