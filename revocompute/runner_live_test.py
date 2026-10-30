@@ -16,7 +16,7 @@ import time
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Collection, Mapping, Sequence
 
 import yaml
 
@@ -199,6 +199,7 @@ def load_validation_identity(
     state=None,
     resource_provider=None,
     repo_root: str | Path = SERVER_ROOT,
+    families: Mapping[str, RuntimeFamily] | None = None,
 ) -> ValidationIdentity:
     """Resolve the family contract and effective resources into one replayable identity."""
     if family.root is None:
@@ -261,6 +262,14 @@ def load_validation_identity(
         for snapshot in resource_snapshots
         if snapshot.task_type in required_tasks
     }
+    # A composed acceptance names the exact companion artifacts it will run, so
+    # a later change to a companion SIF is invalidated rather than inherited.
+    known_families = _identity_families(family, plugin_root, families, state)
+    composed_artifacts = (
+        _composed_artifacts(state, family, known_families, required_tasks) if state is not None and known_families else []
+    )
+    if composed_artifacts:
+        _verify_composed_artifacts(state, composed_artifacts, known_families)
 
     def result_contract(view) -> dict[str, Any]:
         # Keep every mapping key except the label/scale-only ones, so a new
@@ -343,6 +352,7 @@ def load_validation_identity(
         # filtered plan is visible in the receipt and never reads as a pass.
         "omitted_cases": [{"id": case_id, "task": task} for case_id, task in plan.omitted],
         "resources": required_resources,
+        "composed_artifacts": composed_artifacts,
     })
     return ValidationIdentity(plan, canonical_digest(config_public), tuple(resource_snapshots))
 
@@ -438,11 +448,21 @@ class RunnerLiveTestWorker:
                 raise RunnerLiveTestError(
                     "TEST_CONFIGURATION_FAILURE", "The selected live-test scope contains no cases"
                 )
+            # Freeze the exact companion artifacts before any case runs, then
+            # re-verify those bytes at each launch: a composed acceptance names
+            # the pair it accepted instead of inheriting whatever is on disk.
+            composed = _composed_artifacts(self.state, self.family, self._families, {case.task for case in selected})
+            _verify_composed_artifacts(self.state, composed, self._families)
             for case in selected:
                 self._transition(report, "SEEDING")
                 case_started = time.monotonic()
                 try:
-                    case_result = self._run_case(case, report, identity.resources_for(case.task))
+                    case_result = self._run_case(
+                        case,
+                        report,
+                        identity.resources_for(case.task),
+                        _composed_for(self.family, case.task, composed, self._families),
+                    )
                 except RunnerLiveTestError as exc:
                     # Preserve the failed case in the machine report before
                     # propagating its structured category to the run level.
@@ -490,7 +510,9 @@ class RunnerLiveTestWorker:
             report.transitions.append(state)
 
     def _load_identity(self) -> ValidationIdentity:
-        return load_validation_identity(self.family, state=self.state, repo_root=self.repo_root)
+        return load_validation_identity(
+            self.family, state=self.state, repo_root=self.repo_root, families=self._families
+        )
 
     def _validate_candidate(self) -> None:
         artifact = self.artifact
@@ -504,43 +526,22 @@ class RunnerLiveTestWorker:
                 raise RunnerLiveTestError("SIF_VALIDATION_FAILURE", message[-2000:])
 
     def _graph_families(self, task_type: str) -> list[RuntimeFamily]:
-        """This Task's own family, then every other family its stages run.
-
-        The worker enables and mounts exactly these, so a composed stage can run
-        a companion family's artifact instead of the Task being dropped as
-        unregistered.  A family with no declaration to inspect falls back to
-        itself: the worker is also used to re-check one explicit artifact.
-        """
-        document = _declared_task(self.family, task_type)
-        families = [self.family]
-        if document is None:
-            return families
-        owner = str(
-            (yaml.safe_load((self.family.root / "plugin.yaml").read_text(encoding="utf-8")) or {}).get("id")
-            or self.family.name
-        )
-        for stage in document.get("workflow") or ():
-            if not isinstance(stage, dict):
-                continue
-            name = str(stage.get("family") or owner)
-            if any(item.name == name for item in families):
-                continue
-            companion = self._families.get(name)
-            if companion is None:
-                raise RunnerLiveTestError(
-                    "TEST_CONFIGURATION_FAILURE",
-                    f"Task {task_type!r} runs stage family {name!r}, which this invocation did not load",
-                )
-            families.append(companion)
-        return families
+        """This Task's own family, then every other family its stages run."""
+        return _task_graph_families(self.family, task_type, self._families)
 
     def _artifact_for(self, family: RuntimeFamily) -> Path:
         """The artifact a submission in ``family`` would run right now."""
         if family.name == self.family.name:
             return self.artifact
-        return _submission_artifact(family)
+        return _selected_artifact(family)[0]
 
-    def _run_case(self, case, report: LiveTestReport, resources: TaskResourceSnapshot) -> dict[str, Any]:
+    def _run_case(
+        self,
+        case,
+        report: LiveTestReport,
+        resources: TaskResourceSnapshot,
+        composed: Sequence[Mapping[str, Any]] = (),
+    ) -> dict[str, Any]:
         case_started = time.monotonic()
         self.work_root.mkdir(parents=True, exist_ok=True)
         task_id = hashlib.sha256(f"{self.work_root.name}-{case.id}".encode()).hexdigest()[:32]
@@ -553,12 +554,17 @@ class RunnerLiveTestWorker:
                 files.append(
                     {"role": role, "relative_path": str(source.relative_to(self.repo_root)), "sha256": sha256_file(source)}
                 )
+        # The frozen companion artifacts are re-verified here, immediately before
+        # submission: bytes that moved since the identity cannot launch.
+        _verify_composed_artifacts(self.state, composed, self._families)
         atomic_write_json(request_path, {"task_id": task_id, "task_type": case.task, "result_path": "/run/revocompute-live/result.json", "parameters": dict(case.parameters), "files": files, "resources": resources.as_dict(), "artifact_path": str(self.artifact.resolve()), "artifact_sha256": sha256_file(self.artifact), "runtime_bundle_sha256": self._candidate_bundle})
         request_path.chmod(0o444)
         self._transition(report, "SUBMITTED")
         self._transition(report, "RUNNING")
         try:
-            execution = self._execute_in_worker(task_id, case.task, self.work_root, request_path, result_path)
+            execution = self._execute_in_worker(
+                task_id, case.task, self.work_root, request_path, result_path, composed=composed
+            )
             report.execution_uid = execution.get("execution_uid")
             report.execution_gid = execution.get("execution_gid")
             report.scheduler_user = execution.get("scheduler_user")
@@ -626,6 +632,9 @@ class RunnerLiveTestWorker:
                 "artifact_count": len(artifacts),
                 "output_check": output_check,
                 "gpu_accounting": gpu_accounting,
+                # Which exact companion artifacts this case ran, so a composed
+                # receipt names the pair it accepted.
+                "composed_artifacts": composed,
                 "duration_seconds": round(time.monotonic() - case_started, 3),
             }
         except RunnerLiveTestError:
@@ -908,7 +917,15 @@ class RunnerLiveTestWorker:
             and total == entry_usage == balance_delta == reported_usage
         )
 
-    def _execute_in_worker(self, task_id: str, task_type: str, work_root: Path, request_path: Path | None = None, result_path: Path | None = None) -> dict[str, Any]:
+    def _execute_in_worker(
+        self,
+        task_id: str,
+        task_type: str,
+        work_root: Path,
+        request_path: Path | None = None,
+        result_path: Path | None = None,
+        composed: Sequence[Mapping[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         request_path = request_path or work_root / "live-test-request.json"
         result_path = result_path or work_root / "live-test-execution.json"
         # Build the candidate server image without touching running containers.
@@ -929,6 +946,10 @@ class RunnerLiveTestWorker:
         # cannot resolve.
         families = self._graph_families(task_type)
         artifacts = {family.name: str(self._artifact_for(family).resolve()) for family in families}
+        # A composed case runs the exact companion artifacts its record names,
+        # never whatever happens to sit at the family's path at launch time.
+        for record in composed or ():
+            artifacts[str(record["family"])] = str(record["path"])
         mounts = [
             argument
             for artifact in artifacts.values()
@@ -1137,10 +1158,135 @@ def _family_owns_task(family: RuntimeFamily, task: str) -> bool:
     return _declared_task(family, task) is not None
 
 
-def _submission_artifact(family: RuntimeFamily) -> Path:
-    """A staged candidate when one exists, else the family's active SIF."""
+def _selected_artifact(family: RuntimeFamily) -> tuple[Path, str]:
+    """The artifact a submission in ``family`` would run, and how it was chosen."""
     candidate = Path(f"{family.slurm_image}.next")
-    return candidate if candidate.is_file() else Path(family.slurm_image)
+    return (candidate, "candidate") if candidate.is_file() else (Path(family.slurm_image), "active")
+
+
+def _task_graph_families(
+    owner: RuntimeFamily, task_type: str, families: Mapping[str, RuntimeFamily]
+) -> list[RuntimeFamily]:
+    """This Task's own family, then every other family its stages run.
+
+    A family with no declaration to inspect falls back to itself: the worker is
+    also used to re-check one explicit artifact.
+    """
+    document = _declared_task(owner, task_type)
+    selected = [owner]
+    if document is None:
+        return selected
+    owner_id = str(
+        (yaml.safe_load((owner.root / "plugin.yaml").read_text(encoding="utf-8")) or {}).get("id") or owner.name
+    )
+    for stage in document.get("workflow") or ():
+        if not isinstance(stage, dict):
+            continue
+        name = str(stage.get("family") or owner_id)
+        if any(item.name == name for item in selected):
+            continue
+        companion = families.get(name)
+        if companion is None:
+            raise RunnerLiveTestError(
+                "TEST_CONFIGURATION_FAILURE",
+                f"Task {task_type!r} runs stage family {name!r}, which this invocation did not load",
+            )
+        selected.append(companion)
+    return selected
+
+
+def _identity_families(
+    owner: RuntimeFamily,
+    plugin_root: Path,
+    families: Mapping[str, RuntimeFamily] | None,
+    state,
+) -> Mapping[str, RuntimeFamily]:
+    """Every family a composed stage could name, with absolute image paths.
+
+    The live-test worker passes the families it already resolved; readiness and
+    registry callers get the same set derived from the deployment's image root,
+    so one family's identity digest does not depend on which caller computed it.
+    """
+    if families:
+        return dict(families)
+    if state is None:
+        return {}
+    images = Path(state.server_dir()).parent / "images"
+    return {
+        item.name: replace(
+            item,
+            slurm_image=item.slurm_image if Path(item.slurm_image).is_absolute() else str(images / item.slurm_image),
+        )
+        for item in load_plugin_families(plugin_root)
+        if item.name != owner.name
+    } | {owner.name: owner}
+
+
+def _composed_artifacts(
+    state, owner: RuntimeFamily, families: Mapping[str, RuntimeFamily], tasks: Collection[str]
+) -> list[dict[str, Any]]:
+    """The exact companion artifacts and bundles a composed acceptance would run.
+
+    Recorded before launch and re-verified before every submission: a composed
+    acceptance names the pair it accepted, and a companion whose bytes, build
+    provenance or bundle changed afterwards cannot reuse it.
+    """
+    from revocompute.runner_readiness import bundle_digest
+
+    records: dict[str, dict[str, Any]] = {}
+    for task_id in sorted(tasks):
+        for family in _task_graph_families(owner, task_id, families):
+            if family.name == owner.name:
+                continue
+            artifact, mode = _selected_artifact(family)
+            digest = sha256_file(artifact) if artifact.is_file() else ""
+            evidence = read_artifact_evidence(family, artifact, "build")[1] if artifact.is_file() else None
+            records[family.name] = {
+                "family": family.name,
+                "path": str(artifact.resolve()),
+                "mode": mode,
+                "sha256": digest,
+                "build_provenance_digest": (evidence or {}).get("build_provenance_digest"),
+                "runtime_bundle_sha256": bundle_digest(state, family),
+            }
+    return [records[name] for name in sorted(records)]
+
+
+def _composed_for(
+    owner: RuntimeFamily, task_type: str, records: Sequence[Mapping[str, Any]], families: Mapping[str, RuntimeFamily]
+) -> list[Mapping[str, Any]]:
+    """The frozen records that belong to one case's graph."""
+    names = {family.name for family in _task_graph_families(owner, task_type, families)} - {owner.name}
+    return [record for record in records if str(record["family"]) in names]
+
+
+def _verify_composed_artifacts(
+    state, records: Sequence[Mapping[str, Any]], families: Mapping[str, RuntimeFamily]
+) -> None:
+    """Refuse a composed run whose companion artifact is not the recorded one."""
+    from revocompute.runner_readiness import bundle_digest
+
+    for record in records:
+        name = str(record["family"])
+        if record.get("runtime_bundle_sha256") != bundle_digest(state, families[name]):
+            raise RunnerLiveTestError(
+                "TEST_CONFIGURATION_FAILURE",
+                f"Composed stage runtime bundle for {name!r} changed after its identity was recorded",
+            )
+        artifact = Path(str(record["path"]))
+        if not artifact.is_file():
+            raise RunnerLiveTestError("TEST_CONFIGURATION_FAILURE", f"Composed stage family {name!r} has no artifact")
+        if sha256_file(artifact) != record["sha256"]:
+            raise RunnerLiveTestError(
+                "TEST_CONFIGURATION_FAILURE",
+                f"Composed stage artifact for {name!r} changed after its identity was recorded",
+            )
+        expected = str(_build_provenance(state, families[name])["build_provenance_digest"])
+        if record.get("build_provenance_digest") != expected:
+            raise RunnerLiveTestError(
+                "TEST_CONFIGURATION_FAILURE",
+                f"Composed stage artifact for {name!r} has no matching direct-build provenance",
+            )
 
 
 def receipt_valid_for_artifact(

@@ -17,6 +17,8 @@ from revocompute.runner_live_test import (
     RunnerLiveTestWorker,
     TaskResourceSnapshot,
     ValidationIdentity,
+    _composed_artifacts,
+    _verify_composed_artifacts,
     active_receipt_valid,
     candidate_receipt_valid,
     run_live_tests,
@@ -80,7 +82,8 @@ def test_live_worker_records_explicit_success_lifecycle(tmp_path, monkeypatch):
     worker._load_identity = _identity
     worker._validate_candidate = lambda: None
 
-    def run_case(case, report, resources):
+    def run_case(case, report, resources, composed=()):
+        assert list(composed) == []
         assert report.resource_snapshots[case.task] == resources.as_dict()
         for state in ("SUBMITTED", "RUNNING", "ACCEPTING"):
             worker._transition(report, state)
@@ -414,6 +417,112 @@ def test_live_worker_refuses_a_stage_family_the_invocation_did_not_load(tmp_path
         worker._graph_families("composed_task")
 
     assert excinfo.value.category == "TEST_CONFIGURATION_FAILURE"
+
+
+def _accepted_companion(tmp_path, owner, companion, provenance="build-b"):
+    """A companion candidate with matching direct-build evidence."""
+    artifact = Path(owner.slurm_image)
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    artifact.write_bytes(b"owner candidate")
+    candidate = Path(f"{companion.slurm_image}.next")
+    candidate.write_bytes(b"companion candidate")
+    write_artifact_evidence(companion, sha256_file(candidate), "build", {"build_provenance_digest": provenance})
+    return candidate
+
+
+def test_composed_case_records_and_runs_the_exact_companion_artifact(tmp_path, monkeypatch):
+    owner, companion = _composed_tree(tmp_path)
+    candidate = _accepted_companion(tmp_path, owner, companion)
+    families = {owner.name: owner, companion.name: companion}
+    monkeypatch.setattr(
+        "revocompute.runner_live_test._build_provenance", lambda _state, _family: {"build_provenance_digest": "build-b"}
+    )
+    state = _State(tmp_path)
+
+    records = _composed_artifacts(state, owner, families, {"composed_task"})
+    _verify_composed_artifacts(state, records, families)
+
+    assert [(item["family"], item["mode"]) for item in records] == [("companion_runner", "candidate")]
+    assert records[0]["sha256"] == sha256_file(candidate)
+    assert records[0]["path"] == str(candidate.resolve())
+
+
+def test_composed_case_refuses_a_changed_companion_before_submission(tmp_path, monkeypatch):
+    owner, companion = _composed_tree(tmp_path)
+    candidate = _accepted_companion(tmp_path, owner, companion)
+    families = {owner.name: owner, companion.name: companion}
+    monkeypatch.setattr(
+        "revocompute.runner_live_test._build_provenance", lambda _state, _family: {"build_provenance_digest": "build-b"}
+    )
+    state = _State(tmp_path)
+    records = _composed_artifacts(state, owner, families, {"composed_task"})
+    candidate.write_bytes(b"replaced after acceptance")
+
+    with pytest.raises(RunnerLiveTestError, match="changed after its identity was recorded"):
+        _verify_composed_artifacts(state, records, families)
+
+
+def test_composed_case_refuses_a_companion_without_matching_build_provenance(tmp_path, monkeypatch):
+    owner, companion = _composed_tree(tmp_path)
+    _accepted_companion(tmp_path, owner, companion, provenance="stale-build")
+    families = {owner.name: owner, companion.name: companion}
+    monkeypatch.setattr(
+        "revocompute.runner_live_test._build_provenance", lambda _state, _family: {"build_provenance_digest": "build-b"}
+    )
+    state = _State(tmp_path)
+
+    records = _composed_artifacts(state, owner, families, {"composed_task"})
+    with pytest.raises(RunnerLiveTestError, match="no matching direct-build provenance"):
+        _verify_composed_artifacts(state, records, families)
+
+
+def test_composed_case_refuses_a_changed_companion_before_any_submission(tmp_path, monkeypatch):
+    owner, companion = _composed_tree(tmp_path)
+    candidate = _accepted_companion(tmp_path, owner, companion)
+    monkeypatch.setattr(
+        "revocompute.runner_live_test._build_provenance", lambda _state, _family: {"build_provenance_digest": "build-b"}
+    )
+    worker = RunnerLiveTestWorker(_State(tmp_path), owner, families=[owner, companion])
+    worker.candidate.parent.mkdir(parents=True, exist_ok=True)
+    worker.candidate.write_bytes(b"owner candidate")
+    families = {owner.name: owner, companion.name: companion}
+    frozen = _composed_artifacts(_State(tmp_path), owner, families, {"composed_task"})
+    submissions = []
+    monkeypatch.setattr(worker, "_execute_in_worker", lambda *args, **kwargs: submissions.append(args))
+    candidate.write_bytes(b"swapped between identity and launch")
+
+    with pytest.raises(RunnerLiveTestError, match="changed after its identity was recorded"):
+        worker._run_case(
+            SimpleNamespace(id="case", task="composed_task", parameters={}, inputs={}),
+            LiveTestReport(owner.name, "smoke", "", "", "", ""),
+            TaskResourceSnapshot("composed_task", None, ()),
+            frozen,
+        )
+
+    assert submissions == []
+
+
+def test_composed_case_refuses_a_companion_bundle_that_changed(tmp_path, monkeypatch):
+    owner, companion = _composed_tree(tmp_path)
+    _accepted_companion(tmp_path, owner, companion)
+    families = {owner.name: owner, companion.name: companion}
+    monkeypatch.setattr(
+        "revocompute.runner_live_test._build_provenance", lambda _state, _family: {"build_provenance_digest": "build-b"}
+    )
+    monkeypatch.setattr("revocompute.runner_readiness.bundle_digest", lambda _state, _family: "sha256:published")
+    state = _State(tmp_path)
+    records = _composed_artifacts(state, owner, families, {"composed_task"})
+    _verify_composed_artifacts(state, records, families)
+
+    monkeypatch.setattr("revocompute.runner_readiness.bundle_digest", lambda _state, _family: "sha256:changed")
+    with pytest.raises(RunnerLiveTestError, match="runtime bundle for 'companion_runner' changed"):
+        _verify_composed_artifacts(state, records, families)
+
+
+def test_a_single_family_task_records_no_composed_artifacts(tmp_path):
+    worker = _worker(tmp_path)
+
+    assert _composed_artifacts(worker.state, worker.family, {worker.family.name: worker.family}, {"predict"}) == []
 
 
 def test_live_workers_share_candidate_server_image_build(tmp_path, monkeypatch):
