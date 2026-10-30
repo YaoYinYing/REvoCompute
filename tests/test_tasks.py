@@ -931,8 +931,10 @@ def test_worker_redispatch_with_existing_stage_run_keeps_task_running(monkeypatc
     module.task_store.update_task(
         md5sum, input_form=json.dumps(form), submitted_by_user_id=0
     )
-    # The Task was already running when its CPU stage completed; this re-entry
-    # must skip that stage, keep the Task running, and open the GPU stage.
+    # The Task was already running when its CPU stage completed. This re-entry
+    # re-runs that stage too: no attempt records its runtime image, so a
+    # completion from an earlier execution cannot be attributed to this one.
+    # The Task stays running and the GPU stage still opens.
     prior = module.task_store.begin_stage_attempt(
         task_id=md5sum, stage_index=0, stage_name="multistage_runner.features"
     )
@@ -984,16 +986,17 @@ def test_worker_redispatch_with_existing_stage_run_keeps_task_running(monkeypatc
 
     module.task_runtime._execute_compute_task(md5sum)
 
-    # The completed CPU stage was not run again.
-    assert created == ["multistage_runner-model"]
+    # Both stages run in this execution; the earlier completion is history.
+    assert created == ["multistage_runner-features", "multistage_runner-model"]
     # The GPU stage is queued; the Task is still running, not rolled back.
     assert observed["multistage_runner-model:dispatched"] == "running"
     assert observed["model:after_marker"] == "running"
     assert observed["multistage_runner-model:started"] == "running"
     runs = module.task_store.list_stage_runs(md5sum)
-    assert [(run["stage_index"], run["status"]) for run in runs] == [
-        (0, "COMPLETED"),
-        (1, "COMPLETED"),
+    assert sorted((run["stage_index"], run["attempt"], run["status"]) for run in runs) == [
+        (0, 1, "COMPLETED"),
+        (0, 2, "COMPLETED"),
+        (1, 1, "COMPLETED"),
     ]
 
 
