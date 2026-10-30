@@ -253,5 +253,6 @@ PY
 echo "Running API, web-page, and production Slurm/Apptainer orchestration checks..."
 FULL_STACK_ADMIN_PASSWORD="${ADMIN_PASSWORD}" python "${SERVER_ROOT}/tests/full_stack_smoke.py" \
   --base-url "http://127.0.0.1:${PORT}" \
-  --fasta "${QUERY_FASTA}"
+  --fasta "${QUERY_FASTA}" \
+  --database "${WORK_DIR}/state/server/revocompute.sqlite3"
 echo "Full-stack mocked-HPC test passed."

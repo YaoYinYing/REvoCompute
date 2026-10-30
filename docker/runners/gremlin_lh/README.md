@@ -283,6 +283,7 @@ run.
 | --- | --- | --- |
 | Missing/unknown input role | `task_input` | `unknown input role` |
 | Stage input role absent from the document | `stage_inputs.py` | `does not declare role` |
+| Stage input role names more than one file | `stage_inputs.py` | `must name exactly one file` |
 | Stage input content changed after admission | `stage_inputs.py` | `digest does not match` |
 | Fewer than two rows | `parse_alignment` | `at least two sequences` |
 | Unequal row widths | `parse_alignment` | `unequal widths` |

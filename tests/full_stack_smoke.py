@@ -7,11 +7,14 @@ from __future__ import annotations
 import argparse
 import io
 import os
+import sqlite3
 import time
 import zipfile
 from pathlib import Path
 
 import requests
+
+GREMLIN_STAGES = ("gremlin.msa", "gremlin.fit", "gremlin.pssm")
 
 
 def _wait_for_server(session: requests.Session, base_url: str, timeout: float = 90.0) -> None:
@@ -73,7 +76,7 @@ def _wait_for_task(
     task_id: str,
     headers: dict[str, str],
     timeout: float = 240.0,
-) -> None:
+) -> dict:
     deadline = time.monotonic() + timeout
     last_payload: object = None
     while time.monotonic() < deadline:
@@ -86,11 +89,55 @@ def _wait_for_task(
             raise AssertionError(f"GET running/{task_id} returned HTTP {response.status_code}: {response.text[:300]}")
         last_payload = response.json()
         if last_payload.get("status") == "finished":
-            return
+            return last_payload
         if last_payload.get("status") == "failed":
             raise AssertionError(f"GREMLIN task failed: {last_payload}")
         time.sleep(5)
     raise AssertionError(f"GREMLIN task timed out; last status: {last_payload}")
+
+
+def _assert_gremlin_stage_records(payload: dict, task_id: str, database_path: Path | None) -> None:
+    """The three-stage split must leave three independent, verified attempts.
+
+    ``dependency == completed`` is projected only when the stage's latest
+    attempt is COMPLETED with a recorded output identity whose declared outputs
+    still resolve, so it is the public evidence of a valid identity. The
+    database check is the authority for the durable rows and for the distinct
+    scheduler identity every allocation must own.
+    """
+    stages = payload.get("stages") or {}
+    items = {item["name"]: item for item in stages.get("items", [])}
+    for name in GREMLIN_STAGES:
+        item = items.get(name)
+        assert item is not None, f"stage {name} missing from the running payload: {sorted(items)}"
+        assert item["source"] == "record", item
+        assert item["attempt"] == 1, item
+        assert item["dependency"] == "completed", item
+    if database_path is None:
+        return
+    connection = sqlite3.connect(f"{database_path.resolve().as_uri()}?mode=ro", uri=True, timeout=30)
+    try:
+        rows = connection.execute(
+            "select stage_name, attempt, status, output_identity, slurm_job_id"
+            " from stage_runs where task_id = ?",
+            (task_id,),
+        ).fetchall()
+        allocations = {
+            row[0]
+            for row in connection.execute(
+                "select distinct slurm_job_id from resource_allocations where task_id = ?",
+                (task_id,),
+            )
+        }
+    finally:
+        connection.close()
+    by_name = {row[0]: row for row in rows}
+    assert set(by_name) == set(GREMLIN_STAGES), by_name
+    for name, row in by_name.items():
+        assert row[1] == 1 and row[2] == "COMPLETED" and row[3], (name, row)
+    job_ids = [row[4] for row in rows]
+    assert all(job_ids) and len(set(job_ids)) == len(job_ids), job_ids
+    assert set(job_ids) <= allocations, (job_ids, allocations)
 
 
 def _wait_for_archive(
@@ -117,6 +164,7 @@ def run_full_stack_checks(
     username: str,
     password: str,
     task_timeout: float = 7200.0,
+    database_path: Path | None = None,
 ) -> None:
     with requests.Session() as session:
         _wait_for_server(session, base_url)
@@ -177,7 +225,8 @@ def run_full_stack_checks(
             )
         assert submitted.status_code == 302, f"Task submission failed: {submitted.status_code} {submitted.text[:300]}"
         task_id = submitted.headers["Location"].rstrip("/").rsplit("/", 1)[-1]
-        _wait_for_task(session, base_url, task_id, headers, timeout=task_timeout)
+        final_payload = _wait_for_task(session, base_url, task_id, headers, timeout=task_timeout)
+        _assert_gremlin_stage_records(final_payload, task_id, database_path)
 
         tasks = session.get(f"{base_url}/compute/api/tasks", headers=headers, timeout=10)
         assert tasks.status_code == 200, tasks.text[:300]
@@ -245,6 +294,12 @@ def main() -> None:
         default=7200.0,
         help="maximum seconds to wait for the production GREMLIN task (default: 7200)",
     )
+    parser.add_argument(
+        "--database",
+        type=Path,
+        default=None,
+        help="host path to the task database, for durable stage/accounting assertions",
+    )
     args = parser.parse_args()
     username = os.environ.get("FULL_STACK_USERNAME") or os.environ.get("FULL_STACK_ADMIN_USERNAME", "admin")
     password = os.environ.get("FULL_STACK_PASSWORD") or os.environ.get("FULL_STACK_ADMIN_PASSWORD", "")
@@ -256,6 +311,7 @@ def main() -> None:
         username,
         password,
         task_timeout=args.task_timeout,
+        database_path=args.database,
     )
 
 

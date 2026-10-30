@@ -16,7 +16,12 @@ case "${command_name}" in
       echo "mock srun did not receive a wrapper script" >&2
       exit 2
     }
-    export SLURM_JOB_ID=4242
+    # Each srun is one mocked allocation, and the wrapper prints this identity
+    # as the job the server records. The pid is unique per serial srun
+    # invocation; reusing one id across workflow stages would collide with the
+    # allocation ledger's (slurm_job_id, unit) identity and make a later stage
+    # look like a duplicate of the first.
+    export SLURM_JOB_ID="$$"
     export SLURM_CPUS_PER_TASK="${SLURM_CPUS_PER_TASK:-2}"
     exec "$@"
     ;;
@@ -62,10 +67,12 @@ case "${command_name}" in
     shift 2
     input=""
     output=""
+    stage="all"
     while [[ $# -gt 0 ]]; do
       case "$1" in
         -i) input="${2:?missing manifest path}"; shift 2 ;;
         -o) output="${2:?missing output path}"; shift 2 ;;
+        -s) stage="${2:?missing stage}"; shift 2 ;;
         *) shift ;;
       esac
     done
@@ -79,16 +86,43 @@ case "${command_name}" in
       echo "mock apptainer could not resolve task workspace binds" >&2
       exit 2
     }
+    case "${stage}" in
+      all|msa|fit|pssm) ;;
+      *)
+        echo "mock apptainer received an unknown stage: ${stage}" >&2
+        exit 2
+        ;;
+    esac
     input_name="$(python -c 'import json,sys; data=json.load(open(sys.argv[1])); print(data["inputs"]["sequence"][0]["relative_path"])' "${input}")"
     prefix="${input_name%.*}"
     mkdir -p "${output}/log" "${output}/gremlin_msa" "${output}/gremlin_res" "${output}/pssm_msa"
-    printf 'REVODESIGN_STAGE:hhblits\n'
-    printf '>query\nACDEFGHIKLMNPQRSTVWY\n' >"${output}/gremlin_msa/${prefix}.i90c75.a3m"
-    printf 'REVODESIGN_STAGE:gremlin\n'
-    printf 'mock coupling data\n' >"${output}/gremlin_res/${prefix}.i90c75_aln.GREMLIN.mrf.pkl"
-    printf 'mock png data\n' >"${output}/gremlin_res/${prefix}_GREMLIN_mtx.png"
-    printf 'REVODESIGN_STAGE:blast\n'
-    printf 'mock PSSM data\n' >"${output}/pssm_msa/${prefix}_ascii_mtx_file"
+    # The fake Runner honours the selected stage and writes exactly that
+    # stage's declared outputs, so the Server's missing-output and
+    # stage-input-identity checks see what the real split produces.
+    case "${stage}" in
+      all|msa)
+        printf 'REVODESIGN_STAGE:hhblits\n'
+        printf '>query\nACDEFGHIKLMNPQRSTVWY\n' >"${output}/gremlin_msa/${prefix}.i90c75.a3m"
+        printf 'mock alignment\n' >"${output}/gremlin_msa/${prefix}.i90c75_aln.fas"
+        ;;
+    esac
+    case "${stage}" in
+      all|fit)
+        [[ -s "${output}/gremlin_msa/${prefix}.i90c75_aln.fas" ]] || {
+          echo "mock fit stage requires the msa alignment" >&2
+          exit 1
+        }
+        printf 'REVODESIGN_STAGE:gremlin\n'
+        printf 'mock coupling data\n' >"${output}/gremlin_res/${prefix}.i90c75_aln.GREMLIN.mrf.pkl"
+        printf 'mock png data\n' >"${output}/gremlin_res/${prefix}_GREMLIN_mtx.png"
+        ;;
+    esac
+    case "${stage}" in
+      all|pssm)
+        printf 'REVODESIGN_STAGE:blast\n'
+        printf 'mock PSSM data\n' >"${output}/pssm_msa/${prefix}_ascii_mtx_file"
+        ;;
+    esac
     printf 'finished\n' >"${output}/log/task_finished"
     ;;
   sbatch|scancel|sacct|sinfo)

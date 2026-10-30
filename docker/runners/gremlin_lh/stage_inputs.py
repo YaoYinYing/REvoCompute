@@ -36,8 +36,15 @@ def resolve(document_path: Path, role: str) -> Path:
     entry = inputs.get(role) if isinstance(inputs, dict) else None
     if not isinstance(entry, dict):
         raise StageInputError(f"stage input document does not declare role {role!r}")
-    raw_path = entry.get("path")
-    expected = entry.get("sha256")
+    files = entry.get("files")
+    if not isinstance(files, list) or not all(isinstance(item, dict) for item in files):
+        raise StageInputError(f"stage input {role!r} has no verified file list")
+    if len(files) != 1:
+        raise StageInputError(f"stage input {role!r} must name exactly one file, got {len(files)}")
+    raw_path = files[0].get("path")
+    expected = files[0].get("sha256")
+    if entry.get("path") != raw_path:
+        raise StageInputError(f"stage input {role!r} path disagrees with its verified file list")
     if not isinstance(raw_path, str) or not isinstance(expected, str) or not _SHA256.fullmatch(expected):
         raise StageInputError(f"stage input {role!r} has no verified path and sha256")
     path = Path(raw_path)

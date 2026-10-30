@@ -66,11 +66,16 @@ def _document(tmp_path: Path, artifact: Path, sha256: str | None = None, role: s
                 "inputs": {
                     role: {
                         "path": str(artifact),
-                        "sha256": sha256 or _digest(artifact),
-                        "size": artifact.stat().st_size,
+                        "files": [
+                            {
+                                "path": str(artifact),
+                                "source_path": "gremlin_msa/2KL8.i90c75_aln.fas",
+                                "sha256": sha256 or _digest(artifact),
+                                "size": artifact.stat().st_size,
+                            }
+                        ],
                         "producer": "gremlin.msa",
                         "producer_attempt": 1,
-                        "source_path": "gremlin_msa/2KL8.i90c75_aln.fas",
                     }
                 },
             }
@@ -80,18 +85,76 @@ def _document(tmp_path: Path, artifact: Path, sha256: str | None = None, role: s
     return document
 
 
-def _runner_env(tmp_path: Path, document: Path | None = None) -> dict[str, str]:
+#: Artifacts run.sh requires after the fit. A fast-lane stub writes them all;
+#: the real JAX fit belongs to the separately provisioned scientific lane.
+REQUIRED_ARTIFACTS = (
+    "summary.json",
+    "query.fasta",
+    "alignment/filtered_alignment.a3m",
+    "alignment/statistics.json",
+    "alignment/sequence_weights.tsv",
+    "model/gremlin_mrf.npz",
+    "model/metadata.json",
+    "model/training_history.csv",
+    "model/sequence_scores.tsv",
+    "profiles/profile.tsv",
+    "couplings/pairwise_scores.tsv",
+    "couplings/raw_scores.csv",
+    "couplings/apc_scores.csv",
+    "plots/coupling_apc.png",
+)
+
+_STUB_FIT = """\
+import hashlib
+import os
+import pathlib
+import sys
+
+args = sys.argv[1:]
+input_path = pathlib.Path(args[args.index("--input") + 1])
+output_dir = pathlib.Path(args[args.index("--output-dir") + 1])
+digest = hashlib.sha256(input_path.read_bytes()).hexdigest()
+pathlib.Path(os.environ["STUB_INPUT_LOG"]).write_text(f"{input_path}\\n{digest}\\n", encoding="utf-8")
+if digest != os.environ["STUB_EXPECTED_SHA256"]:
+    sys.stderr.write(f"stub fit received unexpected input bytes: {input_path}\\n")
+    raise SystemExit(2)
+for name in %r:
+    target = output_dir / name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("stub", encoding="utf-8")
+""" % (REQUIRED_ARTIFACTS,)
+
+
+def _stub_fit(tmp_path: Path, artifact: Path) -> tuple[Path, Path]:
+    """A dependency-free fit executable and the log of the input it received."""
+    stub = tmp_path / "stub_fit.py"
+    stub.write_text(_STUB_FIT, encoding="utf-8")
+    return stub, tmp_path / "fit-input.txt"
+
+
+def _runner_env(
+    tmp_path: Path,
+    *,
+    document: Path | None = None,
+    fit_model: Path | None = None,
+    expected_sha256: str | None = None,
+    input_log: Path | None = None,
+) -> dict[str, str]:
     mplconfig = tmp_path / "mplconfig"
     mplconfig.mkdir(exist_ok=True)
     env = {
         **os.environ,
         "TASK_TYPE": "pssm_msa_to_lh-fit",
         "GREMLIN_LH_PYTHON": sys.executable,
-        "GREMLIN_LH_FIT_MODEL": str(FAMILY / "fit_model.py"),
+        "GREMLIN_LH_FIT_MODEL": str(fit_model or (FAMILY / "fit_model.py")),
         "MPLCONFIGDIR": str(mplconfig),
     }
     if document is not None:
         env["TASK_STAGE_INPUTS"] = str(document)
+    if expected_sha256 is not None:
+        env["STUB_EXPECTED_SHA256"] = expected_sha256
+    if input_log is not None:
+        env["STUB_INPUT_LOG"] = str(input_log)
     return env
 
 
@@ -120,6 +183,34 @@ def test_resolve_rejects_a_role_the_document_does_not_declare(tmp_path: Path) ->
         stage_inputs.resolve(document, "sequence")
 
 
+def test_resolve_rejects_a_multi_file_role(tmp_path: Path) -> None:
+    artifact = tmp_path / "alignment.a3m"
+    artifact.write_text(">q\nACDE\n>h\nACDE\n", encoding="utf-8")
+    document = _document(tmp_path, artifact)
+    document.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "stage": "pssm_msa_to_lh.fit",
+                "inputs": {
+                    "alignment": {
+                        "path": str(tmp_path),
+                        "files": [
+                            {"path": str(artifact), "sha256": _digest(artifact), "size": 1},
+                            {"path": str(artifact) + ".2", "sha256": _digest(artifact), "size": 1},
+                        ],
+                        "producer": "gremlin.msa",
+                        "producer_attempt": 1,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(stage_inputs.StageInputError, match="exactly one file"):
+        stage_inputs.resolve(document, "alignment")
+
+
 def test_resolve_rejects_a_symlink(tmp_path: Path) -> None:
     real = tmp_path / "real.a3m"
     real.write_text(">q\nACDE\n>h\nACDE\n", encoding="utf-8")
@@ -145,14 +236,30 @@ def test_run_sh_uses_the_stage_input_instead_of_the_task_manifest(tmp_path: Path
     artifact = tmp_path / "produced.a3m"
     artifact.write_text(FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
     document = _document(tmp_path, artifact)
-    # The manifest's own role is malformed, so a fallback to task.json would fail.
+    # The manifest's own role is malformed, so a fallback to task.json would
+    # hand the stub different bytes and fail its digest check.
     malformed = tmp_path / "manifest-input.a3m"
     malformed.write_text("ACDE\n", encoding="utf-8")
+    stub, input_log = _stub_fit(tmp_path, artifact)
     output = tmp_path / "output"
     completed = run_with_manifest(
-        RUN_SCRIPT, malformed, output, _runner_env(tmp_path, document), params=RUN_PARAMETERS, role="alignment"
+        RUN_SCRIPT,
+        malformed,
+        output,
+        _runner_env(
+            tmp_path,
+            document=document,
+            fit_model=stub,
+            expected_sha256=_digest(artifact),
+            input_log=input_log,
+        ),
+        params=RUN_PARAMETERS,
+        role="alignment",
     )
     assert completed.returncode == 0, completed.stderr
+    recorded_path, recorded_digest = input_log.read_text(encoding="utf-8").split()
+    assert Path(recorded_path) == artifact
+    assert recorded_digest == _digest(artifact)
     assert (output / "summary.json").is_file()
     assert (output / "task_finished").is_file()
 
@@ -161,11 +268,24 @@ def test_run_sh_fails_closed_on_a_changed_stage_input(tmp_path: Path) -> None:
     artifact = tmp_path / "produced.a3m"
     artifact.write_text(FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
     document = _document(tmp_path, artifact, sha256="0" * 64)
+    stub, input_log = _stub_fit(tmp_path, artifact)
     output = tmp_path / "output"
     completed = run_with_manifest(
-        RUN_SCRIPT, artifact, output, _runner_env(tmp_path, document), params=RUN_PARAMETERS, role="alignment"
+        RUN_SCRIPT,
+        artifact,
+        output,
+        _runner_env(
+            tmp_path,
+            document=document,
+            fit_model=stub,
+            expected_sha256=_digest(artifact),
+            input_log=input_log,
+        ),
+        params=RUN_PARAMETERS,
+        role="alignment",
     )
     assert completed.returncode != 0
     assert "digest does not match" in completed.stderr
+    assert not input_log.exists()
     assert not (output / "summary.json").exists()
     assert not (output / "task_finished").exists()
