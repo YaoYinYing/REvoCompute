@@ -90,6 +90,11 @@ def _finished_stage_payload() -> dict:
     }
 
 
+def _job_ids(*, reuse: str | None = None) -> dict[str, str]:
+    """One distinct scheduler identity per declared stage, or ``reuse`` for each."""
+    return {name: reuse or str(10 + index) for index, name in enumerate(GREMLIN_STAGES)}
+
+
 def _write_evidence(database: Path, job_ids: dict[str, str], allocations: set[str]) -> None:
     """The durable rows the smoke assertion reads, using its query's columns."""
     connection = sqlite3.connect(database)
@@ -112,15 +117,15 @@ def _write_evidence(database: Path, job_ids: dict[str, str], allocations: set[st
 
 def test_smoke_requires_three_verified_stage_attempts(tmp_path: Path) -> None:
     database = tmp_path / "tasks.sqlite3"
-    job_ids = {"gremlin.msa": "11", "gremlin.fit": "12", "gremlin.pssm": "13"}
+    job_ids = _job_ids()
     _write_evidence(database, job_ids, set(job_ids.values()))
     _assert_gremlin_stage_records(_finished_stage_payload(), "task", database)
 
 
 def test_smoke_rejects_a_colliding_allocation_identity(tmp_path: Path) -> None:
     database = tmp_path / "tasks.sqlite3"
-    job_ids = {"gremlin.msa": "11", "gremlin.fit": "11", "gremlin.pssm": "13"}
-    _write_evidence(database, job_ids, {"11", "13"})
+    job_ids = _job_ids(reuse="11")
+    _write_evidence(database, job_ids, {"11"})
     with pytest.raises(AssertionError):
         _assert_gremlin_stage_records(_finished_stage_payload(), "task", database)
 
@@ -134,7 +139,7 @@ def test_smoke_rejects_a_stage_without_a_durable_attempt(tmp_path: Path) -> None
 
 def test_smoke_rejects_an_allocation_without_a_recorded_fact(tmp_path: Path) -> None:
     database = tmp_path / "tasks.sqlite3"
-    job_ids = {"gremlin.msa": "11", "gremlin.fit": "12", "gremlin.pssm": "13"}
-    _write_evidence(database, job_ids, {"11", "12"})
+    job_ids = _job_ids()
+    _write_evidence(database, job_ids, set(job_ids.values()) - {job_ids[GREMLIN_STAGES[-1]]})
     with pytest.raises(AssertionError):
         _assert_gremlin_stage_records(_finished_stage_payload(), "task", database)
