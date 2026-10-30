@@ -199,6 +199,16 @@ from revocompute.manage_db import ManageDatabase
 
 
 class State:
+    """The generated deployment environment, read the way the controller reads it."""
+
+    def __init__(self):
+        self.env = {}
+        for line in (root / "server-test.env").read_text(encoding="utf-8").splitlines():
+            if "=" not in line or line.lstrip().startswith("#"):
+                continue
+            key, value = line.split("=", 1)
+            self.env[key.strip()] = value.strip().strip('"').strip("'")
+
     def server_dir(self):
         return str(root / "state" / "server")
 
@@ -210,7 +220,7 @@ class State:
             "RUNNER_GID": str(gid),
             "RUNNER_USERNAME": "revodesign",
         }
-        return values.get(key, os.environ.get(key, ""))
+        return values.get(key) or self.env.get(key) or os.environ.get(key, "")
 
     def exported(self):
         return dict(os.environ)
@@ -228,6 +238,14 @@ artifact = Path(family.slurm_image)
 provenance = _build_provenance(state, family)
 write_artifact_evidence(family, sha256_file(artifact), "build", provenance)
 identity = load_validation_identity(family, state=state)
+# This deployment enables one family, so a composed Task that needs another is
+# omitted by name rather than silently counted as passed.
+print(
+    "Live-test plan:",
+    [case.id for case in identity.plan.select("smoke")],
+    "omitted:",
+    [case_id for case_id, _task in identity.plan.omitted],
+)
 receipt = {
     "receipt_contract_version": LIVE_TEST_RECEIPT_VERSION,
     "runner_family": family.name,
