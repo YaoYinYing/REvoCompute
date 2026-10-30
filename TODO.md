@@ -27,7 +27,8 @@
 | Concurrent branch execution, per-stage reservations, sibling cancellation | not delivered (serial schedule accepted, D3=A) |
 | PSSM-GREMLIN stage split, GREMLIN_LH produced-artifact consumption | delivered (D2=A): the `gremlin_msa_to_lh_fit` composed Task runs on real Slurm/Apptainer, and both GREMLIN families' consuming stages read only the Server's verified stage-input document. Isolated SIFs, not promoted |
 | OpenDDE audit | not started |
-| Real Slurm/Apptainer scientific acceptance | delivered in the isolated deployment (D1=A, D2=A): AlphaFold 3, PSSM-GREMLIN (including the composed cross-family case) and GREMLIN_LH pass at `9bf4ea5`; production untouched |
+| Real Slurm/Apptainer scientific acceptance | delivered in the isolated deployment (D1=A, D2=A): AlphaFold 3, PSSM-GREMLIN (including the composed cross-family case) and GREMLIN_LH pass at `48fcdb4`; both staged candidates satisfy every `promote-sifs` precondition (checked read-only, nothing promoted); production untouched |
+`promote-sifs` precondition, verified read-only; nothing was promoted); production untouched |
 | Nextflow backend | disabled, structural evidence recorded |
 
 ## 0 — Exclusive activation / stop gate
@@ -49,7 +50,7 @@
       gitignored scratch and is not cited as evidence.
 - [x] Scoped independent reviews completed at `b954b56` (architecture R1,
       security/admission R2) and their findings remediated at `5ef0920`,
-      `dbc98c3`, `9bf4ea5`; the two P1s are closed.
+      `dbc98c3`, `48fcdb4`; the two P1s are closed.
 - [ ] Appoint the Examiner browser pass over the current head and a final
       disinterested Campaign Acceptance Auditor. Integrate all implementation
       under this one PR; isolated worktrees permitted only after activation.
