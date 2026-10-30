@@ -51,13 +51,13 @@ def test_live_storage_key_survives_a_composed_enabled_scope(tmp_path, monkeypatc
     """A composed run enables several families; the resolver rejects a comma."""
     from revocompute.storage import StorageResolver
 
-    monkeypatch.setenv("ENABLED_TASKRUNNERS", "gremlin,gremlin_lh")
+    monkeypatch.setenv("ENABLED_TASKRUNNERS", "alpha_runner,beta_runner")
     resolver = StorageResolver(str(tmp_path / "results"), str(tmp_path / "workspaces"), None)
     root = resolver.get_input_root({"md5sum": "a" * 32, "storage_key": live_test_executor._live_storage_key()})
     assert Path(root).name == "a" * 32
 
-    monkeypatch.setenv("ENABLED_TASKRUNNERS", "gremlin_lh")
-    assert live_test_executor._live_storage_key() == "live-test-gremlin_lh"
+    monkeypatch.setenv("ENABLED_TASKRUNNERS", "alpha_runner")
+    assert live_test_executor._live_storage_key() == "live-test-alpha_runner"
 
 
 def test_workflow_live_task_form_carries_a_dispatchable_frozen_graph(tmp_path):
