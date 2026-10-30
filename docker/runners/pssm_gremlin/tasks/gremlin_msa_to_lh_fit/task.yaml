@@ -50,7 +50,7 @@ input_workspace:
 stage_markers:
   hhblits: HHblits MSA generation
   hhfilter: HHfilter filtering
-  gremlin: GREMLIN_LH Potts model fitting
+  gremlin_lh_fit: GREMLIN_LH Potts model fitting
 workflow:
 - name: msa
   display_name: MSA search and filtering
@@ -67,7 +67,7 @@ workflow:
   display_name: GREMLIN_LH model fit
   requires_gpu: false
   requires_network: false
-  stage_markers: [gremlin]
+  stage_markers: [gremlin_lh_fit]
   inputs:
   - {name: alignment, type: alignment, from: "gremlin_msa_to_lh_fit.msa:alignment"}
   outputs:
