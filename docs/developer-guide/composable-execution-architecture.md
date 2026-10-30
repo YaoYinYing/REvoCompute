@@ -146,11 +146,12 @@ workflow:
 
 Rules the code enforces:
 
-- `family` is identifier-validated in the owning task manifest. After every
-  family and task is registered, discovery refuses a stage naming a family that
-  exists nowhere in the runner tree. A family that exists but is not enabled is
-  a deployment choice, not a manifest defect: the Tasks that need it are not
-  registered, and every other Task in its own family still loads.
+- `family` is identifier-validated in the owning task manifest. A deployment
+  that names its enabled families cannot run a stage anywhere else, so a Task
+  whose stage needs another family is not registered (one warning) while every
+  other Task still loads; a narrowed deployment tree need not contain that
+  family at all. A deployment that enables every family is validated against
+  the runner tree instead, and a stage naming no real family is refused.
 - Submission resolves every referenced family, requires each family's access
   policy to admit the user, requires each family's submission admission
   evidence to be ready, and pins one Runtime Bundle per referenced family. One

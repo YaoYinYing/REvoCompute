@@ -465,27 +465,21 @@ def _load_ui_control(raw: Any, param_type: str | None, minimum: Any, maximum: An
     return {"kind": "seed", "random": {"minimum": lower, "maximum": upper}}
 
 
-def _tree_family_ids(root: str) -> set[str]:
-    """Every runtime family id present in the runner tree, enabled or not."""
-    identifiers: set[str] = set()
-    for path in Path(root).glob("*/plugin.yaml"):
-        try:
-            raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        except (OSError, yaml.YAMLError):
-            continue
-        if isinstance(raw, dict) and isinstance(raw.get("id"), str):
-            identifiers.add(raw["id"])
-    return identifiers
+def _unenabled_families_used(workflow: Any, enabled: set[str] | None) -> set[str]:
+    """The families a task's stages run in that this deployment does not enable.
 
-
-def _disabled_families_used(workflow: Any, disabled: set[str]) -> set[str]:
-    """The disabled families a task's declared stages run in, if any."""
-    if not disabled or not isinstance(workflow, list):
+    A deployment that names its families cannot run a stage anywhere else,
+    whatever the tree on disk holds: a narrowed deployment tree may omit that
+    family entirely.  A deployment that enables every family is validated
+    against the tree instead, so a stage naming no real family is still an
+    authoring error and the post-registration family check refuses it.
+    """
+    if not enabled or not isinstance(workflow, list):
         return set()
     return {
         str(stage["family"])
         for stage in workflow
-        if isinstance(stage, dict) and isinstance(stage.get("family"), str) and stage["family"] in disabled
+        if isinstance(stage, dict) and isinstance(stage.get("family"), str) and stage["family"] not in enabled
     }
 
 
@@ -534,10 +528,10 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
     from revocompute.plugins import PluginManager
     manager = PluginManager()
     manifests = manager.discover(root, enabled=enabled)
-    # A composed Task may run a stage in another family.  Disabling a family must
-    # remove the Tasks that need it, not abort discovery for every Task in every
-    # family, while a manifest naming no real family stays an authoring error.
-    disabled_families = _tree_family_ids(root) - set(enabled) if enabled else set()
+    # A composed Task may run a stage in another family.  An explicit enabled
+    # list is this deployment's whole family universe, so a stage outside it
+    # removes the Task rather than aborting discovery for every family.
+    enabled_families = set(enabled) if enabled else None
     categories: dict[str, Category] = {}
     capability_schemas: dict[str, dict[str, Any]] = {}
     workspace_schemas_by_owner: dict[str, dict[str, dict[str, Any]]] = {}
@@ -682,10 +676,10 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
                     f"{', '.join(sorted(legacy_citation_fields))}; migrate to the 'citations' contract"
                 )
             task_id = str(raw.get("id") or raw.get("name") or task_path.parent.name)
-            off = _disabled_families_used(raw.get("workflow"), disabled_families)
+            off = _unenabled_families_used(raw.get("workflow"), enabled_families)
             if off:
                 logging.warning(
-                    "Task %r is not registered while runtime family %s is disabled",
+                    "Task %r is not registered while runtime family %s is not enabled",
                     task_id, ", ".join(repr(name) for name in off),
                 )
                 continue

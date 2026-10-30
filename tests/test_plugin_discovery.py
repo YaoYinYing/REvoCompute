@@ -527,9 +527,10 @@ def test_workflow_output_port_requires_a_path(tmp_path):
         discover_plugins(str(tmp_path))
 
 
-def _cross_family_tree(tmp_path, *, foreign: str) -> Path:
+def _cross_family_tree(tmp_path, *, foreign: str, deploy_foreign: bool = True) -> Path:
     """A host family whose second stage runs in ``foreign``."""
-    for family_id in ("demo", "other"):
+    family_ids = ["demo"] + (["other"] if deploy_foreign else [])
+    for family_id in family_ids:
         family = tmp_path / family_id
         (family / "tasks").mkdir(parents=True, exist_ok=True)
         (family / "plugin.yaml").write_text(
@@ -550,8 +551,8 @@ def _cross_family_tree(tmp_path, *, foreign: str) -> Path:
     return tmp_path
 
 
-def test_a_task_whose_stage_family_is_disabled_is_not_registered(tmp_path):
-    """Disabling a family drops the Tasks that need it instead of aborting discovery."""
+def test_a_task_whose_stage_family_is_not_enabled_is_not_registered(tmp_path):
+    """An enabled list is the deployment universe; a Task outside it does not load."""
     root = _cross_family_tree(tmp_path, foreign="other")
 
     discover_plugins(str(root), enabled={"demo"})
@@ -561,9 +562,17 @@ def test_a_task_whose_stage_family_is_disabled_is_not_registered(tmp_path):
     assert [task_type.name for task_type in list_types()] == ["echo"]
 
 
+def test_a_narrowed_deployment_tree_still_loads_the_families_it_enables(tmp_path):
+    """A deployment tree may not contain the composed Task's other family at all."""
+    root = _cross_family_tree(tmp_path, foreign="other", deploy_foreign=False)
+
+    discover_plugins(str(root), enabled={"demo"})
+    assert list_types() == []
+
+
 def test_a_task_naming_no_real_family_is_still_an_authoring_error(tmp_path):
-    """A disabled family is a deployment choice; an absent one is a manifest defect."""
-    root = _cross_family_tree(tmp_path, foreign="absent_family")
+    """With every family enabled there is no deployment excuse for an unknown one."""
+    root = _cross_family_tree(tmp_path, foreign="absent_family", deploy_foreign=False)
 
     with pytest.raises(ValueError, match="unknown runtime family"):
-        discover_plugins(str(root), enabled={"demo"})
+        discover_plugins(str(root))
