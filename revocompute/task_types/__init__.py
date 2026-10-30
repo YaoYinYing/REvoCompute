@@ -1256,7 +1256,9 @@ def _load_stage_ports(raw: Any, task_name: str, stage_name: str, *, input_port: 
         if not isinstance(port, dict) or set(port) - allowed:
             raise ValueError(f"Workflow stage {task_name}.{stage_name} has an invalid artifact port")
         name, data_type = port.get("name"), port.get("type")
-        if not isinstance(name, str) or not name or name in seen:
+        if not _valid_identifier(name) or name in seen:
+            # A port name becomes a directory under the stage-input bind and a
+            # component of its container path, so it is an identifier, not text.
             raise ValueError(f"Workflow stage {task_name}.{stage_name} has an invalid or duplicate port name")
         if not isinstance(data_type, str) or not data_type:
             raise ValueError(f"Workflow stage {task_name}.{stage_name} port {name!r} requires a type")

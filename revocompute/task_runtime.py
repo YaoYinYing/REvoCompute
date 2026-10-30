@@ -1595,14 +1595,30 @@ def _port_matches(output_dir: str, port) -> list[tuple[str, ...]] | None:
     """Result-relative paths of every file one declared port publishes.
 
     ``None`` means the port's own declaration reached outside the output root,
-    so its identity is unverifiable rather than empty.
+    so its identity is unverifiable rather than empty.  The scan stops one match
+    past the publication cap because every caller refuses a larger set: a status
+    read never enumerates a parameter-influenced tree without a bound.
     """
-    matches = []
+    matches: set[tuple[str, ...]] = set()
+    limit = _published_artifact_limit() + 1
     for path in Path(output_dir).glob(port.path):
         if not _path_is_within(output_dir, str(path)):
             return None
-        matches.append(tuple(Path(os.path.relpath(path, output_dir)).parts))
-    return sorted(set(matches))
+        matches.add(tuple(Path(os.path.relpath(path, output_dir)).parts))
+        if len(matches) >= limit:
+            break
+    return sorted(matches)
+
+
+def _published_port_paths(output_dir: str, ports) -> set[str] | None:
+    """Every path the declared ports publish, in an output identity's shape."""
+    paths: set[str] = set()
+    for port in ports:
+        matches = _port_matches(output_dir, port)
+        if matches is None:
+            return None
+        paths.update("/".join(parts) for parts in matches)
+    return paths
 
 
 def _stage_output_identity(output_dir: str, outputs) -> str | None:
@@ -1731,9 +1747,21 @@ def _materialize_stage_inputs(
                     published = {item["path"]: (int(item["size"]), str(item["sha256"])) for item in identity["files"]}
                 except (TypeError, ValueError, KeyError, AttributeError):
                     return "stage_input_unavailable"
-                matches = _port_matches(output_dir, port)
-                if matches is None or not matches or len(matches) > _published_artifact_limit():
+                # The recorded identity is the whole artifact: a file it names
+                # that no declared port publishes any more was published and
+                # then lost, so this attempt's namespace is not that artifact.
+                recorded_paths = _published_port_paths(output_dir, producer.outputs if producer else ())
+                if recorded_paths is None or set(published) != recorded_paths:
                     return "stage_input_invalid"
+                matches = _port_matches(output_dir, port)
+                if matches is None or len(matches) > _published_artifact_limit():
+                    return "stage_input_invalid"
+                if not matches:
+                    # An optional port that published nothing leaves the
+                    # consumer's optional role undeclared rather than empty.
+                    if port.required:
+                        return "stage_input_invalid"
+                    continue
                 prefix = _static_prefix(port.path)
                 role_dir = os.path.join(stage_inputs_dir, role)
                 staged = []
@@ -4122,6 +4150,28 @@ def _reclaim_abandoned_reservations(*, now: float | None = None) -> int:
     return released
 
 
+def _slurm_job_is_active(job_id: str) -> bool:
+    """Whether Slurm still reports a numeric job as live.
+
+    A handle Slurm no longer knows is not worth cancelling, and cancelling it
+    would fail the recovery pass.  An unanswerable query keeps the older
+    behaviour: the recovery attempt decides.
+    """
+    if not job_id.isdigit():
+        return False
+    scontrol = shutil.which("scontrol")
+    if not scontrol:
+        return True
+    try:
+        completed = subprocess.run(
+            [scontrol, "show", "job", job_id], capture_output=True, text=True, timeout=10, check=True
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    state, _elapsed = _parse_scontrol_job(completed.stdout)
+    return bool(state) and state not in _TERMINAL_SLURM_STATES
+
+
 def _recover_orphaned_tasks() -> int:
     """Resolve compute records whose owning Celery worker disappeared."""
     # A demo deployment never resolves a restored compute row: recovery can
@@ -4144,7 +4194,21 @@ def _recover_orphaned_tasks() -> int:
         if workflow_task:
             if not task_store.claim_task_recovery(md5sum, expected_status=str(task.get("status") or "")):
                 continue
-            stop_error = _stop_orphaned_workflow_execution(md5sum, slurm_job_id, container_id)
+            # A stage records its allocation in its own row before the Task row
+            # is updated, so a worker that died in between leaves the only
+            # handle to a live allocation there.  Cancel every one of them.
+            handles = {slurm_job_id} if slurm_job_id else set()
+            for run in task_store.list_stage_runs(md5sum):
+                recorded = str(run.get("slurm_job_id") or "").strip()
+                if not recorded or run.get("status") in stage_state.TERMINAL_STATUSES:
+                    continue
+                if _slurm_job_is_active(recorded):
+                    handles.add(recorded)
+            stop_error = ""
+            for handle in sorted(handles):
+                stop_error = _stop_orphaned_workflow_execution(md5sum, handle, container_id)
+                if stop_error:
+                    break
             if stop_error:
                 # The allocation could not be stopped, so it may still be
                 # running.  Reporting the Task as queued would contradict a live

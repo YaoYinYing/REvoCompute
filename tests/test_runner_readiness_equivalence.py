@@ -102,7 +102,7 @@ def test_cli_and_service_evaluation_share_one_verdict(tmp_path, monkeypatch):
             "provenance": {"build_provenance_digest": "sha256:build-current"},
             "stale": False,
             "identity": lambda *_a, **_k: SimpleNamespace(
-                plan=SimpleNamespace(digest="sha256:test-current", select=lambda _c: ()),
+                plan=SimpleNamespace(digest="sha256:test-current", select=lambda _c: (), omitted=()),
                 configuration_digest="sha256:config-current",
             ),
         },
@@ -147,7 +147,7 @@ def test_admission_agrees_with_the_evaluator_on_the_published_payload(tmp_path, 
             "provenance": {"build_provenance_digest": "sha256:build-current"},
             "stale": False,
             "identity": lambda *_a, **_k: SimpleNamespace(
-                plan=SimpleNamespace(digest="sha256:test-current", select=lambda _c: ()),
+                plan=SimpleNamespace(digest="sha256:test-current", select=lambda _c: (), omitted=()),
                 configuration_digest="sha256:config-current",
             ),
         },
@@ -187,7 +187,7 @@ def test_unknown_or_disabled_family_evaluates_not_configured(tmp_path, monkeypat
             "provenance": {"build_provenance_digest": "sha256:build-current"},
             "stale": False,
             "identity": lambda *_a, **_k: SimpleNamespace(
-                plan=SimpleNamespace(digest="sha256:test-current", select=lambda _c: ()),
+                plan=SimpleNamespace(digest="sha256:test-current", select=lambda _c: (), omitted=()),
                 configuration_digest="sha256:config-current",
             ),
         },

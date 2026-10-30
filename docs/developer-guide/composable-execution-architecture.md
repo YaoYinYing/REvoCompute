@@ -209,7 +209,9 @@ Rules the code enforces:
 - A role is a set. A producer port that publishes several files (one per chain,
   for example) becomes a role directory with the layout below the port's static
   prefix preserved; the server-written document lists every verified file and
-  names the file itself when the role is exactly one artifact.
+  names the file itself when the role is exactly one artifact. An optional port
+  that matched nothing leaves the consumer's optional role undeclared; a
+  required port that matched nothing refuses the stage.
 - The stage container binds that directory read-only and receives
   `TASK_STAGE_INPUTS`; a Runner re-hashes the artifact before use. Single-stage
   Tasks and `graph:` role inputs are unchanged. An adapter that resolves its role
@@ -219,11 +221,28 @@ Rules the code enforces:
   example. Server admission is identical for both.
 - A missing, changed, or unverifiable producer artifact refuses the stage before
   any attempt or allocation (`stage_input_unavailable`, `stage_input_invalid`).
-  The Server never supplies a described input from the shared writable output
-  tree.
+  The identity describes the whole artifact: a file it names that no declared
+  port publishes any more refuses the stage instead of narrowing what the
+  consumer is handed. The Server never supplies a described input from the
+  shared writable output tree.
 - The live-test harness enables and mounts every family a composed Task's graph
   names, so one isolated invocation exercises a stage that runs in a companion
   family instead of recording its case as omitted.
+- The composed acceptance is content-bound, never path-bound: it records each
+  companion's sha256, direct-build provenance and runtime bundle, so promoting a
+  validated candidate to its active path keeps the acceptance that covered its
+  bytes.
+- A live-test scope that cannot run every case its `test.yaml` declares omits
+  them from the plan, and a plan with an omitted case yields no READY verdict
+  and no submission attestation. A deployment that enables a family whose Tasks
+  run in another family must enable that family too.
+- Known limitations. A stage's declared outputs live in the Task's shared output
+  tree, so a re-attempt settles the files present there; a Runner that
+  checkpoints deliberately reuses its own earlier outputs, and changed
+  parameters rely on the Runner's own invalidation. The composed live acceptance
+  runs CPU cases with accounting disabled, so it exercises the artifact handoff
+  and submission admission, not the allocation-time readiness gate, which each
+  family's own acceptance covers.
 - A resumed workflow stays safe: a completed producer is re-hashed against its
   recorded identity before its consumer clears dependency readiness, so a
   changed artifact fails the producer instead of silently feeding a consumer.

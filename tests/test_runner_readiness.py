@@ -88,6 +88,7 @@ def evidence(tmp_path: Path, monkeypatch):
     plan = SimpleNamespace(
         digest="sha256:test-current",
         select=lambda collection: (SimpleNamespace(id="minimal"),) if collection == "smoke" else (),
+        omitted=(),
     )
     monkeypatch.setattr("revocompute.runner_readiness.diagnose", lambda *_args, **_kwargs: DoctorReport(()))
     monkeypatch.setattr("revocompute.runner_readiness._build_provenance", lambda *_args: current)
@@ -255,6 +256,30 @@ def test_staged_candidate_lifecycle_preserves_active_and_unrelated_evidence(evid
     assert promoted.sif_sha256 == candidate_sha
     assert resolve_runner_readiness(state, other).sif_sha256 == other_sha
     assert other_receipt_path.read_bytes() == other_receipt
+
+
+def test_a_plan_that_omits_a_declared_case_cannot_publish_readiness(evidence, monkeypatch):
+    state, family, active = evidence
+    _write_receipt(family, active)
+    plan = SimpleNamespace(
+        digest="sha256:test-current",
+        select=lambda collection: (SimpleNamespace(id="minimal"),) if collection == "smoke" else (),
+        omitted=(("composed-case", "composed_task"),),
+    )
+    monkeypatch.setattr(
+        "revocompute.runner_readiness.load_validation_identity",
+        lambda *_args, **_kwargs: ValidationIdentity(
+            plan, "sha256:config-current", (TaskResourceSnapshot("predict", None, ()),)
+        ),
+    )
+
+    result = resolve_runner_readiness(state, family)
+
+    # A narrowed scope ran fewer cases than the family declares, so its receipt
+    # cannot authorize a deployment that enables the missing family's stage.
+    assert result.status is RunnerReadinessStatus.NOT_CONFIGURED
+    assert "composed-case" in result.message
+    assert not result.ready
 
 
 def test_wrong_scheduler_identity_is_validation_stale_even_with_correct_uid_gid(evidence):

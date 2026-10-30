@@ -809,6 +809,57 @@ def test_workflow_recovery_claims_stops_and_requeues_once(monkeypatch):
     assert updates[-1][1]["celery_task_id"] == "replacement-task"
 
 
+def test_workflow_recovery_cancels_an_allocation_only_its_stage_recorded(monkeypatch):
+    task_runtime = _live_task_runtime()
+
+    task = {
+        "md5sum": "f" * 32,
+        "status": "running",
+        "task_type": "multistage_runner",
+        "slurm_job_id": None,
+        "container_id": None,
+        "workflow_state": json.dumps({"multistage_runner.features": {"status": "running"}}),
+    }
+    stops = []
+
+    class _TaskType:
+        workflow = (object(),)
+
+    class _Queued:
+        id = "replacement-task"
+
+    monkeypatch.setattr(task_runtime.task_store, "list_tasks", lambda: [task])
+    monkeypatch.setattr(task_runtime.task_store, "claim_task_recovery", lambda *args, **kwargs: True)
+    monkeypatch.setattr(task_runtime.task_store, "update_task", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        task_runtime.task_store,
+        "list_stage_runs",
+        lambda _task_id: [
+            {
+                "stage_name": "multistage_runner.features", "stage_index": 1, "attempt": 1,
+                "status": "running", "slurm_job_id": "4321",
+            },
+            {
+                "stage_name": "multistage_runner.prepare", "stage_index": 0, "attempt": 1,
+                "status": "completed", "slurm_job_id": "1111",
+            },
+        ],
+    )
+    monkeypatch.setattr(task_runtime, "_slurm_job_is_active", lambda job_id: job_id == "4321")
+    monkeypatch.setattr(task_runtime, "_get_task_type", lambda name: (_TaskType(), object()))
+    monkeypatch.setattr(
+        task_runtime,
+        "_stop_orphaned_workflow_execution",
+        lambda *args: stops.append(args) or "",
+    )
+    monkeypatch.setattr(task_runtime.run_compute_task, "apply_async", lambda *args, **kwargs: _Queued())
+
+    assert task_runtime._recover_orphaned_tasks() == 1
+    # The Task row never saw this allocation; cancelling only the row's handle
+    # would leave it running while a replacement attempt was dispatched.
+    assert stops == [("f" * 32, "4321", "")]
+
+
 def test_workflow_recovery_enqueue_failure_stays_discoverable(monkeypatch):
     task_runtime = _live_task_runtime()
 

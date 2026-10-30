@@ -38,15 +38,15 @@ def _policy() -> ResolvedResources:
     )
 
 
-def _task_type(producer_path: str = "features/*.dat") -> TaskType:
+def _task_type(producer_path: str = "features/*.dat", *, optional: bool = False) -> TaskType:
     runtime = RuntimeFamily("stage_input_runner", ("bash", "run.sh"), "runner.def", "image.sif")
     producer = WorkflowStage(
         "stage_input_runner.features", "Features", False, ("-s", "features"), ("msa",),
-        outputs=(StagePortSpec("features", "features", path=producer_path),),
+        outputs=(StagePortSpec("features", "features", path=producer_path, required=not optional),),
     )
     consumer = WorkflowStage(
         "stage_input_runner.model", "Model", False, ("-s", "model"), ("model",),
-        inputs=(StagePortSpec("features", "features", source="stage_input_runner.features:features"),),
+        inputs=(StagePortSpec("features", "features", source="stage_input_runner.features:features", required=not optional),),
     )
     return TaskType(
         "stage_input_runner",
@@ -63,11 +63,11 @@ def _workspace(tmp_path) -> list[dict]:
 
 
 def _prepare(
-    tmp_path, monkeypatch, *, producer_path: str = "features/*.dat"
+    tmp_path, monkeypatch, *, producer_path: str = "features/*.dat", optional: bool = False
 ) -> tuple[TaskDatabase, str, TaskType, Path]:
     database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
     monkeypatch.setattr(task_runtime, "task_store", database)
-    task_type = _task_type(producer_path)
+    task_type = _task_type(producer_path, optional=optional)
     monkeypatch.setattr(task_runtime, "_get_task_type", lambda name: (task_type, None))
     monkeypatch.setattr(task_runtime, "_get_family", lambda name: (task_type.runtime, None))
     task_id = "c" * 32
@@ -218,9 +218,11 @@ def test_a_consumer_without_an_execution_workspace_is_refused_before_any_allocat
 
 
 def _producer_run(
-    tmp_path, monkeypatch, files: dict[str, str], *, producer_path: str = "features/*.dat"
+    tmp_path, monkeypatch, files: dict[str, str], *, producer_path: str = "features/*.dat", optional: bool = False
 ) -> tuple[str, str, dict, dict]:
-    database, task_id, task_type, output = _prepare(tmp_path, monkeypatch, producer_path=producer_path)
+    database, task_id, task_type, output = _prepare(
+        tmp_path, monkeypatch, producer_path=producer_path, optional=optional
+    )
     for relative, content in files.items():
         target = output / relative
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -296,3 +298,35 @@ def test_a_nested_producer_port_keeps_its_layout_below_the_static_prefix(tmp_pat
         f"{STAGE_INPUTS_CONTAINER_DIR}/features/1abc/b_data.json",
     ]
     assert (stage_inputs / "features" / "1abc" / "b_data.json").read_text(encoding="utf-8") == "b"
+
+
+def test_an_optional_port_that_published_nothing_leaves_its_role_undeclared(tmp_path, monkeypatch):
+    output, _task_id, nodes, latest = _producer_run(
+        tmp_path, monkeypatch, {"unrelated/notes.txt": "x"}, optional=True
+    )
+    node = nodes["stage_input_runner.model"]
+    stage_inputs = tmp_path / "workspace" / "stage_inputs" / node.id
+
+    assert task_runtime._materialize_stage_inputs(str(stage_inputs), output, node, nodes, latest) is None
+
+    document = json.loads((stage_inputs / STAGE_INPUTS_DOCUMENT_NAME).read_text(encoding="utf-8"))
+    # An optional producer port with no matches is an absent role, not an empty
+    # one: the consumer's own declaration says the role may be missing.
+    assert document["inputs"] == {}
+    assert not (stage_inputs / "features").exists()
+
+
+def test_a_recorded_file_the_tree_no_longer_holds_refuses_the_whole_artifact(tmp_path, monkeypatch):
+    output, _task_id, nodes, latest = _producer_run(
+        tmp_path, monkeypatch, {"features/a.dat": "a", "features/b.dat": "b"}
+    )
+    (Path(output) / "features" / "b.dat").unlink()
+    node = nodes["stage_input_runner.model"]
+    stage_inputs = tmp_path / "workspace" / "stage_inputs" / node.id
+
+    refusal = task_runtime._materialize_stage_inputs(str(stage_inputs), output, node, nodes, latest)
+
+    # The identity names two files and only one is still published, so this
+    # attempt's tree is not the artifact the producer settled.
+    assert refusal == "stage_input_invalid"
+    assert not (stage_inputs / STAGE_INPUTS_DOCUMENT_NAME).exists()

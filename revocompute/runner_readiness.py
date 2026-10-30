@@ -194,6 +194,12 @@ def _receipt_evidence(
         required = tuple(sorted(case.id for case in identity.plan.select("smoke")))
     except (OSError, KeyError, TypeError, ValueError, StopIteration, LiveTestConfigurationError, RegistryError):
         return _ReceiptEvidence({}, None, "Runner live-test identity cannot be resolved")
+    if identity.plan.omitted:
+        # A narrowed scope runs fewer cases than the family declares.  Its
+        # receipt cannot stand for the declared set, so it cannot authorize a
+        # deployment that enables the families those cases run.
+        omitted = ", ".join(sorted(case for case, _task in identity.plan.omitted))
+        return _ReceiptEvidence({}, None, f"Declared live-test cases cannot run in this deployment: {omitted}")
     try:
         expected_uid = int(state.get("RUNNER_UID")) if state.get("RUNNER_UID") else None
         expected_gid = int(state.get("RUNNER_GID")) if state.get("RUNNER_GID") else None

@@ -23,7 +23,7 @@ from revocompute.runner_live_test import (
     candidate_receipt_valid,
     run_live_tests,
 )
-from revocompute.live_tests import LiveTestReport, sha256_file
+from revocompute.live_tests import LiveTestConfigurationError, LiveTestReport, sha256_file
 from revocompute.artifact_evidence import write_artifact_evidence
 from revocompute.runner_registry import RuntimeFamily
 
@@ -421,6 +421,24 @@ def _composed_tree(tmp_path: Path) -> tuple[RuntimeFamily, RuntimeFamily]:
     )
 
 
+def test_a_promoted_companion_satisfies_the_acceptance_that_covered_its_bytes(tmp_path, monkeypatch):
+    owner, companion = _composed_tree(tmp_path)
+    candidate = _accepted_companion(tmp_path, owner, companion)
+    families = {owner.name: owner, companion.name: companion}
+    monkeypatch.setattr(
+        "revocompute.runner_live_test._build_provenance", lambda _state, _family: {"build_provenance_digest": "build-b"}
+    )
+    state = _State(tmp_path)
+    records = _composed_artifacts(state, owner, families, {"composed_task"})
+
+    # Promotion moves the same validated bytes to the active path.
+    active = Path(companion.slurm_image)
+    candidate.rename(active)
+    _verify_composed_artifacts(state, records, families)
+
+    assert _composed_artifacts(state, owner, families, {"composed_task"}) == records
+
+
 def test_live_worker_enables_and_mounts_every_family_a_composed_task_runs(tmp_path, monkeypatch):
     owner, companion = _composed_tree(tmp_path)
     artifact = Path(owner.slurm_image)
@@ -493,9 +511,11 @@ def test_composed_case_records_and_runs_the_exact_companion_artifact(tmp_path, m
     records = _composed_artifacts(state, owner, families, {"composed_task"})
     _verify_composed_artifacts(state, records, families)
 
-    assert [(item["family"], item["mode"]) for item in records] == [("companion_runner", "candidate")]
+    assert [item["family"] for item in records] == ["companion_runner"]
     assert records[0]["sha256"] == sha256_file(candidate)
-    assert records[0]["path"] == str(candidate.resolve())
+    # Content is what the acceptance names: a promoted candidate keeps the
+    # receipt that covered its bytes, so no path is recorded.
+    assert "path" not in records[0] and "mode" not in records[0]
 
 
 def test_composed_case_refuses_a_changed_companion_before_submission(tmp_path, monkeypatch):
@@ -509,7 +529,7 @@ def test_composed_case_refuses_a_changed_companion_before_submission(tmp_path, m
     records = _composed_artifacts(state, owner, families, {"composed_task"})
     candidate.write_bytes(b"replaced after acceptance")
 
-    with pytest.raises(RunnerLiveTestError, match="changed after its identity was recorded"):
+    with pytest.raises(LiveTestConfigurationError, match="changed after its identity was recorded"):
         _verify_composed_artifacts(state, records, families)
 
 
@@ -523,7 +543,7 @@ def test_composed_case_refuses_a_companion_without_matching_build_provenance(tmp
     state = _State(tmp_path)
 
     records = _composed_artifacts(state, owner, families, {"composed_task"})
-    with pytest.raises(RunnerLiveTestError, match="no matching direct-build provenance"):
+    with pytest.raises(LiveTestConfigurationError, match="no matching direct-build provenance"):
         _verify_composed_artifacts(state, records, families)
 
 
@@ -566,7 +586,7 @@ def test_composed_case_refuses_a_companion_bundle_that_changed(tmp_path, monkeyp
     _verify_composed_artifacts(state, records, families)
 
     monkeypatch.setattr("revocompute.runner_readiness.bundle_digest", lambda _state, _family: "sha256:changed")
-    with pytest.raises(RunnerLiveTestError, match="runtime bundle for 'companion_runner' changed"):
+    with pytest.raises(LiveTestConfigurationError, match="runtime bundle for 'companion_runner' changed"):
         _verify_composed_artifacts(state, records, families)
 
 

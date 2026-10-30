@@ -148,3 +148,25 @@ def test_graph_bounds():
         compile_graph(graph(stage("a"), *(stage(str(i), "a:out") for i in range(9))))
     with pytest.raises(GraphValidationError, match="depth"):
         compile_graph(graph(stage("0"), *(stage(str(i), f"{i - 1}:out") for i in range(1, 17))))
+
+
+def test_a_port_name_cannot_escape_the_stage_input_directory():
+    from revocompute.task_types import _load_stage_ports
+
+    # The name becomes a directory under the stage-input bind and a component of
+    # the container path the consumer resolves, so it is an identifier.
+    for bad in ("../outputs", "features/../../outputs", "a b"):
+        with pytest.raises(ValueError, match="invalid or duplicate port name"):
+            _load_stage_ports(
+                [{"name": bad, "type": "features", "from": "demo.features:features"}],
+                "demo",
+                "model",
+                input_port=True,
+            )
+        with pytest.raises(ValueError, match="invalid or duplicate port name"):
+            _load_stage_ports(
+                [{"name": bad, "type": "features", "path": "features/*.dat"}],
+                "demo",
+                "features",
+                input_port=False,
+            )

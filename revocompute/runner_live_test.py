@@ -535,7 +535,10 @@ class RunnerLiveTestWorker:
 
     def _graph_families(self, task_type: str) -> list[RuntimeFamily]:
         """This Task's own family, then every other family its stages run."""
-        return _task_graph_families(self.family, task_type, self._families)
+        try:
+            return _task_graph_families(self.family, task_type, self._families)
+        except LiveTestConfigurationError as exc:
+            raise RunnerLiveTestError("TEST_CONFIGURATION_FAILURE", str(exc)) from exc
 
     def _artifact_for(self, family: RuntimeFamily) -> Path:
         """The artifact a submission in ``family`` would run right now."""
@@ -564,15 +567,16 @@ class RunnerLiveTestWorker:
                 )
         # The frozen companion artifacts are re-verified here, immediately before
         # submission: bytes that moved since the identity cannot launch.
-        _verify_composed_artifacts(self.state, composed, self._families)
+        try:
+            _verify_composed_artifacts(self.state, composed, self._families)
+        except LiveTestConfigurationError as exc:
+            raise RunnerLiveTestError("TEST_CONFIGURATION_FAILURE", str(exc)) from exc
         atomic_write_json(request_path, {"task_id": task_id, "task_type": case.task, "result_path": "/run/revocompute-live/result.json", "parameters": dict(case.parameters), "files": files, "resources": resources.as_dict(), "artifact_path": str(self.artifact.resolve()), "artifact_sha256": sha256_file(self.artifact), "runtime_bundle_sha256": self._candidate_bundle})
         request_path.chmod(0o444)
         self._transition(report, "SUBMITTED")
         self._transition(report, "RUNNING")
         try:
-            execution = self._execute_in_worker(
-                task_id, case.task, self.work_root, request_path, result_path, composed=composed
-            )
+            execution = self._execute_in_worker(task_id, case.task, self.work_root, request_path, result_path)
             report.execution_uid = execution.get("execution_uid")
             report.execution_gid = execution.get("execution_gid")
             report.scheduler_user = execution.get("scheduler_user")
@@ -932,7 +936,6 @@ class RunnerLiveTestWorker:
         work_root: Path,
         request_path: Path | None = None,
         result_path: Path | None = None,
-        composed: Sequence[Mapping[str, Any]] | None = None,
     ) -> dict[str, Any]:
         request_path = request_path or work_root / "live-test-request.json"
         result_path = result_path or work_root / "live-test-execution.json"
@@ -953,11 +956,9 @@ class RunnerLiveTestWorker:
         # the Slurm wrapper executes on the host -- not a container path the host
         # cannot resolve.
         families = self._graph_families(task_type)
+        # The case verified these exact bytes immediately before this call; the
+        # path is resolved here only because the Slurm wrapper runs on the host.
         artifacts = {family.name: str(self._artifact_for(family).resolve()) for family in families}
-        # A composed case runs the exact companion artifacts its record names,
-        # never whatever happens to sit at the family's path at launch time.
-        for record in composed or ():
-            artifacts[str(record["family"])] = str(record["path"])
         mounts = [
             argument
             for artifact in artifacts.values()
@@ -1195,9 +1196,8 @@ def _task_graph_families(
             continue
         companion = families.get(name)
         if companion is None:
-            raise RunnerLiveTestError(
-                "TEST_CONFIGURATION_FAILURE",
-                f"Task {task_type!r} runs stage family {name!r}, which this invocation did not load",
+            raise LiveTestConfigurationError(
+                f"Task {task_type!r} runs stage family {name!r}, which this invocation did not load"
             )
         selected.append(companion)
     return selected
@@ -1237,7 +1237,9 @@ def _composed_artifacts(
 
     Recorded before launch and re-verified before every submission: a composed
     acceptance names the pair it accepted, and a companion whose bytes, build
-    provenance or bundle changed afterwards cannot reuse it.
+    provenance or bundle changed afterwards cannot reuse it.  Only content is
+    recorded, never a path: promoting a validated candidate moves its bytes to
+    the active path without changing the acceptance that covered them.
     """
     from revocompute.runner_readiness import bundle_digest
 
@@ -1246,13 +1248,11 @@ def _composed_artifacts(
         for family in _task_graph_families(owner, task_id, families):
             if family.name == owner.name:
                 continue
-            artifact, mode = _selected_artifact(family)
+            artifact = _selected_artifact(family)[0]
             digest = sha256_file(artifact) if artifact.is_file() else ""
             evidence = read_artifact_evidence(family, artifact, "build")[1] if artifact.is_file() else None
             records[family.name] = {
                 "family": family.name,
-                "path": str(artifact.resolve()),
-                "mode": mode,
                 "sha256": digest,
                 "build_provenance_digest": (evidence or {}).get("build_provenance_digest"),
                 "runtime_bundle_sha256": bundle_digest(state, family),
@@ -1271,29 +1271,31 @@ def _composed_for(
 def _verify_composed_artifacts(
     state, records: Sequence[Mapping[str, Any]], families: Mapping[str, RuntimeFamily]
 ) -> None:
-    """Refuse a composed run whose companion artifact is not the recorded one."""
+    """Refuse a composed run whose companion artifact is not the recorded one.
+
+    A configuration problem here is reported as ``LiveTestConfigurationError``:
+    readiness and attestation callers treat identity resolution as a bounded
+    failure, so one family's companion cannot fail the whole deployment's view.
+    """
     from revocompute.runner_readiness import bundle_digest
 
     for record in records:
         name = str(record["family"])
         if record.get("runtime_bundle_sha256") != bundle_digest(state, families[name]):
-            raise RunnerLiveTestError(
-                "TEST_CONFIGURATION_FAILURE",
-                f"Composed stage runtime bundle for {name!r} changed after its identity was recorded",
+            raise LiveTestConfigurationError(
+                f"Composed stage runtime bundle for {name!r} changed after its identity was recorded"
             )
-        artifact = Path(str(record["path"]))
+        artifact = _selected_artifact(families[name])[0]
         if not artifact.is_file():
-            raise RunnerLiveTestError("TEST_CONFIGURATION_FAILURE", f"Composed stage family {name!r} has no artifact")
+            raise LiveTestConfigurationError(f"Composed stage family {name!r} has no artifact")
         if sha256_file(artifact) != record["sha256"]:
-            raise RunnerLiveTestError(
-                "TEST_CONFIGURATION_FAILURE",
-                f"Composed stage artifact for {name!r} changed after its identity was recorded",
+            raise LiveTestConfigurationError(
+                f"Composed stage artifact for {name!r} changed after its identity was recorded"
             )
         expected = str(_build_provenance(state, families[name])["build_provenance_digest"])
         if record.get("build_provenance_digest") != expected:
-            raise RunnerLiveTestError(
-                "TEST_CONFIGURATION_FAILURE",
-                f"Composed stage artifact for {name!r} has no matching direct-build provenance",
+            raise LiveTestConfigurationError(
+                f"Composed stage artifact for {name!r} has no matching direct-build provenance"
             )
 
 
