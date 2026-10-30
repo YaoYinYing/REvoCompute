@@ -169,7 +169,9 @@ Rules the code enforces:
   the composing runner's timeout default.
 - The frozen graph records each node's resolved family id. The family's SIF
   image and entrypoint are not part of the digest, so re-deploying an image
-  does not change a submitted Task's frozen graph.
+  does not change a submitted Task's frozen graph. A promotion between
+  submission and execution therefore runs the new image under that graph; the
+  Runtime Bundle is pinned into the submission, the image is the deployment's.
 
 Cross-family references are additive to the existing single-family manifest:
 a task that omits `family` keeps its current meaning.
@@ -223,8 +225,10 @@ Rules the code enforces:
   any attempt or allocation (`stage_input_unavailable`, `stage_input_invalid`).
   The identity describes the whole artifact: a file it names that no declared
   port publishes any more refuses the stage instead of narrowing what the
-  consumer is handed. The Server never supplies a described input from the
-  shared writable output tree.
+  consumer is handed. The Task output tree stays mounted for every stage, so
+  this is not a confinement boundary: the copy the role resolves is the
+  verified one, and integrity rests on the Runner resolving that role from the
+  document rather than on mount isolation.
 - The live-test harness enables and mounts every family a composed Task's graph
   names, so one isolated invocation exercises a stage that runs in a companion
   family instead of recording its case as omitted.

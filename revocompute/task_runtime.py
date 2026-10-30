@@ -1713,8 +1713,10 @@ def _materialize_stage_inputs(
     COMPLETED attempt whose identity names the file is stageable, the bytes are
     re-verified while they are copied, and the Runner re-checks the digest it is
     handed.  The copy is what binds a produced artifact to the consumer's
-    declared input role -- sharing the writable output tree would let a stage
-    consume bytes the Server never admitted.
+    declared input role.  The Task output tree stays mounted for every stage, so
+    this is not a confinement boundary: it is the one path the Server has
+    verified for that role, and a Runner that reads the producer's raw files
+    instead has left the contract.
 
     A role is a set: a port such as ``features/*/*_data.json`` publishes one
     file per chain.  Each role therefore lands in its own directory, with the
