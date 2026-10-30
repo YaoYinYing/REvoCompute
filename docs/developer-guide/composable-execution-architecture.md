@@ -6,13 +6,15 @@
 > submission-frozen graph, stage artifact identity with resume verification,
 > fork/join readiness with branch isolation (executed serially), produced-artifact
 > binding into a consumer stage's declared input role, cross-family stage
-> references with per-family readiness, bundles and dispatch, the graph-aware API
-> projection, and the `[Stage] [Status]` results surface. Not delivered:
-> concurrent branch execution, the registered composed PSSM-MSA → GREMLIN_LH Task
-> Type, live scientific acceptance and per-family re-acceptance, and browser
-> evidence for the stage surface. Sections below describe the target contract;
-> treat undelivered parts as design, not capability. This page does not
-> authorize a production deployment, database migration, or SIF promotion.
+> references with per-family readiness, bundles and dispatch, one composed
+> cross-family Task Type (PSSM-MSA → GREMLIN_LH), the graph-aware API projection,
+> and the `[Stage] [Status]` results surface with browser evidence from CI. Not
+> delivered: concurrent branch execution, editable user Pipelines (the compiler
+> and validation are shared; there is no composition API or editor), and live
+> scientific acceptance with per-family re-acceptance. Sections below describe
+> the target contract; treat undelivered parts as design, not capability. This
+> page does not authorize a production deployment, database migration, or SIF
+> promotion.
 >
 > **Activation baseline:** main at 36e30afa234595d8af09bf7aa3818b9bb6d06487;
 > Protocol v1.6. The live activation record is the PR #130 thread.
