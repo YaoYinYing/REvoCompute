@@ -104,6 +104,57 @@ def test_live_worker_records_explicit_success_lifecycle(tmp_path, monkeypatch):
     assert read_staged_digest(worker.family) == digest
 
 
+def test_live_worker_submits_the_companion_records_the_identity_hashed(tmp_path, monkeypatch):
+    """The receipt's digest and the submitted pair must come from one snapshot."""
+    owner, companion = _composed_tree(tmp_path)
+    candidate = _accepted_companion(tmp_path, owner, companion)
+    worker = RunnerLiveTestWorker(_State(tmp_path), owner, families=[owner, companion])
+
+    digest = "sha256:6d27641e2684684537fb3f401639558228855c1d5721fd1b4b29fd70e8cffd1e"
+    monkeypatch.setattr("revocompute.runner_live_test.build_slurm_images", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        "revocompute.runner_live_test.read_artifact_evidence",
+        lambda *_args: (digest, {"sif_sha256": digest, "build_provenance_digest": "build"}),
+    )
+    monkeypatch.setattr(
+        "revocompute.runner_live_test._build_provenance",
+        lambda *_args: {"build_provenance_digest": "build", "apptainer_version": "1.4"},
+    )
+    frozen = {
+        "family": companion.name,
+        "path": str(candidate.resolve()),
+        "mode": "candidate",
+        "sha256": sha256_file(candidate),
+        "build_provenance_digest": "build",
+        "runtime_bundle_sha256": None,
+    }
+    case = SimpleNamespace(id="case", task="composed_task", parameters={}, inputs={})
+    plan = SimpleNamespace(
+        digest="test", select=lambda *_args, **_kwargs: [case], omitted=(), collections={}, fixture_hashes={}
+    )
+    seen = []
+
+    def identity():
+        return ValidationIdentity(plan, "config", (TaskResourceSnapshot("composed_task", None, ()),), (frozen,))
+
+    def recompute(*_args, **_kwargs):
+        raise AssertionError("the run must submit the identity's snapshot, not a fresh selection")
+
+    def run_case(case, report, resources, composed=()):
+        seen.append(list(composed))
+        for state in ("SUBMITTED", "RUNNING", "ACCEPTING"):
+            worker._transition(report, state)
+        return {"case_id": "case", "passed": True}
+
+    worker._load_identity = identity
+    worker._validate_candidate = lambda: None
+    worker._run_case = run_case
+    monkeypatch.setattr("revocompute.runner_live_test._composed_artifacts", recompute)
+
+    assert worker.run().passed
+    assert seen == [[frozen]]
+
+
 def test_live_worker_reports_validation_failure_and_timeout_category(tmp_path, monkeypatch):
     worker = _worker(tmp_path)
     worker.candidate.parent.mkdir(parents=True)

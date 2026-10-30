@@ -11,7 +11,9 @@
 > the `[Stage] [Status]` results surface with browser evidence from CI, and
 > target-host live acceptance for AlphaFold 3, PSSM-GREMLIN, and GREMLIN_LH —
 > including a real composed run whose consumer stage resolves only the verified
-> stage input document. Not delivered: concurrent branch execution and editable
+> stage input document (the receipts live in the deployment, not in this
+> repository; the dated record is the PR #130 thread). Not delivered: concurrent
+> branch execution and editable
 > user Pipelines (the compiler and validation are shared; there is no composition
 > API or editor). Sections below describe the target contract; treat undelivered
 > parts as design, not capability. This page does not authorize a production
@@ -197,6 +199,8 @@ Rules the code enforces:
 
 - The consumer's input name is the Runner's input role, the port types must
   match, and a required consumer input cannot bind an optional producer output.
+  A port binds by logical type; the consumer's accepted upload formats constrain
+  what a user may upload, never what a producer publishes.
 - Before the consumer owns a stage attempt, the Server resolves the producer's
   latest attempt, requires `COMPLETED` with its recorded artifact identity,
   matches the producer port's declared paths, re-verifies every file's size and
@@ -209,8 +213,8 @@ Rules the code enforces:
 - The stage container binds that directory read-only and receives
   `TASK_STAGE_INPUTS`; a Runner re-hashes the artifact before use. Single-stage
   Tasks and `graph:` role inputs are unchanged. An adapter that resolves its role
-  from that document consumes only the verified copy (`gremlin_lh` does); an
-  adapter that still reads the producer's published files from the task output
+  from that document consumes only the verified copy (both GREMLIN families do);
+  an adapter that still reads the producer's published files from the task output
   tree keeps its own integrity check, and the AF3 model stage is the present
   example. Server admission is identical for both.
 - A missing, changed, or unverifiable producer artifact refuses the stage before

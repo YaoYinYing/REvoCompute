@@ -11,6 +11,9 @@ considerations:
 - Results depend on homolog coverage in the configured sequence databases.
 - Runtime and memory grow rapidly with alignment width because the fitted coupling tensor is quadratic in
   positions and amino-acid states.
+- The coupling fit models at most 512 alignment columns; a wider query is refused after the search has run.
+- The coupling fit accepts the 20 canonical residues only; a homolog set containing X, U, O, B or Z is
+  refused rather than modeled, even though the same alignment is accepted by the GREMLIN coupling fit.
 inputs:
   sequence:
     title: Protein sequence
@@ -79,12 +82,6 @@ parameters:
   type: object
   additionalProperties: false
   properties:
-    iter:
-      type: integer
-      description: Maximum HHblits iterations used to collect homologous sequences.
-      default: 100
-      minimum: 1
-      maximum: 10000
     evalue:
       type: string
       description: HHblits E-value threshold for accepting database sequence matches.
@@ -107,12 +104,6 @@ parameters:
         filtering.
       default: 20.0
       minimum: 1.0
-    num_iterations:
-      type: integer
-      default: 3
-      minimum: 1
-      maximum: 10
-      description: GREMLIN optimization iterations
     regularization:
       type: string
       description: "Coupling penalty: conventional squared L2, low-rank spectral LH, or group-sparse block LB."

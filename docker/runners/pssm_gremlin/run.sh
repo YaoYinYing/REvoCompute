@@ -254,10 +254,17 @@ RUN_FIT() {
     dst=$(readlink -f "$(pwd)")
     local dst_msa="${dst}/gremlin_msa"
     local dst_gremlin="${dst}/gremlin_res"
-    local alignment="${dst_msa}/${instance}.i90c75_aln.fas"
-    if [[ ! -s "$alignment" ]]; then
-        echo "fit stage requires the msa-stage alignment ${alignment}; run -s msa (or -s all) first." >&2
-        exit 1
+    local alignment
+    if [[ -n "${TASK_STAGE_INPUTS:-}" ]]; then
+        # A composed stage consumes only the Server's verified copy of the
+        # producer's artifact, never the shared writable output tree.
+        alignment=$("${GREMLIN_PYTHON:-python3}" "${REVODESIGN_RUNSCRIPT_PATH}/stage_inputs.py" resolve "$TASK_STAGE_INPUTS" alignment)
+    else
+        alignment="${dst_msa}/${instance}.i90c75_aln.fas"
+        if [[ ! -s "$alignment" ]]; then
+            echo "fit stage requires the msa-stage alignment ${alignment}; run -s msa (or -s all) first." >&2
+            exit 1
+        fi
     fi
 
     local alignment_stem

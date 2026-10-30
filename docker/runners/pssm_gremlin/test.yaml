@@ -23,7 +23,6 @@ collections:
             sequence:
             - tests/data/msa/2KL8.fasta
         parameters:
-          iter: 1
           maxfilt: 1000
           neffmax: 5
           iterations: 2

@@ -177,3 +177,76 @@ def test_all_selects_msa_fit_and_pssm(tmp_path: Path) -> None:
     assert (output / "log" / "task_finished").is_file()
     assert _calls(calls, "hhblits") == 1
     assert _calls(calls, "psiblast") == 1
+
+
+def _stage_inputs_document(tmp_path: Path, artifact: Path, digest: str | None = None) -> Path:
+    import hashlib
+    import json
+
+    document = tmp_path / "stage_inputs.json"
+    document.write_text(
+        json.dumps({
+            "version": 1,
+            "stage": "gremlin_msa_to_lh_fit.fit",
+            "inputs": {
+                "alignment": {
+                    "path": str(artifact),
+                    "files": [{
+                        "path": str(artifact),
+                        "source_path": f"gremlin_msa/{artifact.name}",
+                        "sha256": digest or hashlib.sha256(artifact.read_bytes()).hexdigest(),
+                        "size": artifact.stat().st_size,
+                    }],
+                    "producer": "gremlin_msa_to_lh_fit.msa",
+                    "producer_attempt": 1,
+                }
+            },
+        }),
+        encoding="utf-8",
+    )
+    return document
+
+
+def test_fit_stage_without_a_shared_alignment_runs_from_the_document(tmp_path: Path) -> None:
+    """A composed fit consumes the Server's copy; the shared tree need not exist."""
+    env, _bin, _calls = _stub_environment(tmp_path)
+    output = tmp_path / "output"
+    staged = tmp_path / "stage" / "alignment"
+    staged.mkdir(parents=True)
+    artifact = staged / f"{INSTANCE}.i90c75_aln.fas"
+    artifact.write_text(">q\nACDE\n>h\nACDE\n", encoding="utf-8")
+    document = _stage_inputs_document(tmp_path, artifact)
+    model = output / "gremlin_res" / f"{INSTANCE}.i90c75_aln.GREMLIN.mrf.pkl"
+    model.parent.mkdir(parents=True)
+    model.write_text("checkpoint", encoding="utf-8")
+
+    completed = _run(
+        tmp_path, "-s", "fit", output=output, env={**env, "TASK_STAGE_INPUTS": str(document)}
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "Checkpoint file exists" in completed.stdout
+
+
+def test_fit_stage_refuses_a_documented_alignment_that_changed(tmp_path: Path) -> None:
+    """The document, not the shared writable tree, decides which bytes are modelled."""
+    env, _bin, calls = _stub_environment(tmp_path)
+    output = tmp_path / "output"
+    shared = output / "gremlin_msa"
+    shared.mkdir(parents=True)
+    (shared / f"{INSTANCE}.i90c75_aln.fas").write_text(">q\nACDE\n", encoding="utf-8")
+    staged = tmp_path / "stage" / "alignment"
+    staged.mkdir(parents=True)
+    artifact = staged / f"{INSTANCE}.i90c75_aln.fas"
+    artifact.write_text(">q\nACDE\n>h\nACDE\n", encoding="utf-8")
+    document = _stage_inputs_document(tmp_path, artifact)
+    artifact.write_text(">q\nAAAA\n>h\nAAAA\n", encoding="utf-8")
+
+    completed = _run(
+        tmp_path, "-s", "fit", output=output, env={**env, "TASK_STAGE_INPUTS": str(document)}
+    )
+
+    assert completed.returncode != 0
+    assert "digest does not match" in completed.stderr
+    assert _calls(calls, "hhblits") == 0
+    assert _calls(calls, "psiblast") == 0

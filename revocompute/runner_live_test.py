@@ -114,6 +114,9 @@ class ValidationIdentity:
     plan: LiveTestPlan
     configuration_digest: str
     resources: tuple[TaskResourceSnapshot, ...]
+    #: The exact companion artifacts hashed into ``configuration_digest``.  The
+    #: run submits these records, never a fresher selection under an older digest.
+    composed_artifacts: tuple[dict[str, Any], ...] = ()
 
     def resources_for(self, task_type: str) -> TaskResourceSnapshot:
         try:
@@ -357,7 +360,9 @@ def load_validation_identity(
         # Only a family with a composed case carries this, so the identity of a
         # family that runs alone is unchanged and its existing receipt stands.
         config_public["composed_artifacts"] = composed_artifacts
-    return ValidationIdentity(plan, canonical_digest(config_public), tuple(resource_snapshots))
+    return ValidationIdentity(
+        plan, canonical_digest(config_public), tuple(resource_snapshots), tuple(composed_artifacts)
+    )
 
 
 class RunnerLiveTestWorker:
@@ -451,10 +456,10 @@ class RunnerLiveTestWorker:
                 raise RunnerLiveTestError(
                     "TEST_CONFIGURATION_FAILURE", "The selected live-test scope contains no cases"
                 )
-            # Freeze the exact companion artifacts before any case runs, then
-            # re-verify those bytes at each launch: a composed acceptance names
-            # the pair it accepted instead of inheriting whatever is on disk.
-            composed = _composed_artifacts(self.state, self.family, self._families, {case.task for case in selected})
+            # The identity already froze and hashed the companion artifacts;
+            # submit those exact records, never a fresher selection, and
+            # re-verify their bytes at each launch.
+            composed = list(identity.composed_artifacts)
             _verify_composed_artifacts(self.state, composed, self._families)
             for case in selected:
                 self._transition(report, "SEEDING")

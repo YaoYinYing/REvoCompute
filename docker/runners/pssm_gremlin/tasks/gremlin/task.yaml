@@ -100,7 +100,7 @@ parameters:
   properties:
     iter:
       type: integer
-      description: Maximum HHblits iterations used to collect homologous sequences.
+      description: GREMLIN optimization iterations used by the coupling fit.
       default: 100
       minimum: 1
       maximum: 10000
@@ -131,4 +131,4 @@ parameters:
       default: 3
       minimum: 1
       maximum: 10
-      description: GREMLIN optimization iterations
+      description: PSI-BLAST iterations used to build the PSSM.

@@ -5,6 +5,7 @@ From: condaforge/mambaforge:24.9.2-0
     pssm_gremlin/GREMLIN.yml /GREMLIN.yml
     pssm_gremlin/scripts /app/revocompute/scripts
     pssm_gremlin/run.sh /app/revocompute/run.sh
+    pssm_gremlin/stage_inputs.py /app/revocompute/stage_inputs.py
 
 %post
     conda env create -f /GREMLIN.yml
