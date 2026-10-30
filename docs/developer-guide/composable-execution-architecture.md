@@ -249,12 +249,12 @@ Rules the code enforces:
   their submissions are refused, so a family's remaining Tasks stay available
   and one narrow invocation cannot authorize the composed path it skipped.
 - Known limitations. A stage's declared outputs live in the Task's shared output
-  tree, so a re-attempt settles the files present there; a Runner that
-  checkpoints deliberately reuses its own earlier outputs, and changed
-  parameters rely on the Runner's own invalidation. The composed live acceptance
-  runs CPU cases with accounting disabled, so it exercises the artifact handoff
-  and submission admission, not the allocation-time readiness gate, which each
-  family's own acceptance covers.
+  tree, so a re-attempt settles the files present there; a Runner may skip a
+  stage whose only input is the Task's immutable snapshot, and the GREMLIN fit
+  recomputes every attempt because it cannot bind its runtime image. The
+  composed live acceptance runs CPU cases with accounting disabled, so it
+  exercises the artifact handoff and submission admission, not the
+  allocation-time readiness gate, which each family's own acceptance covers.
 - A resumed workflow stays safe: a completed producer is re-hashed against its
   recorded identity before its consumer clears dependency readiness, so a
   changed artifact fails the producer instead of silently feeding a consumer.

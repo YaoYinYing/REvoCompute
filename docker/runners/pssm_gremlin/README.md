@@ -25,8 +25,12 @@ selects one, or `all` for the historical complete run:
 The `msa` and `pssm` stages are separate roots over the same sequence; `fit`
 consumes the `msa` alignment, so it cannot run before `msa`. `-s all` runs
 `msa`, `fit`, `pssm` in that order, preserving the original monolithic run.
-Each stage skips work whose output already exists, so re-running a stage is a
-no-op and `-s fit` needs no sequence database. A stage that finds its input
+`msa` and `pssm` skip work whose output already exists; their only input is the
+Task's immutable sequence, so a present output came from that input. `fit` never
+reuses an earlier result: it deletes its declared outputs and refits on every
+attempt, because this Runner cannot bind the runtime image that executes, and a
+model or plot left in the shared tree cannot be attributed to the current
+attempt. `-s fit` needs no sequence database. A stage that finds its input
 missing fails with the path it expected and a named precondition; it never
 silently produces an empty result.
 
