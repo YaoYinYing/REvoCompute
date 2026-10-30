@@ -8,6 +8,9 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+import yaml
+
 from revocompute.artifact_evidence import read_staged_digest
 from revocompute.runner_live_test import (
     RunnerLiveTestError,
@@ -160,17 +163,35 @@ def test_live_worker_keeps_structured_case_when_seeding_fails(tmp_path, monkeypa
     ]
 
 
-def test_live_worker_targets_explicit_active_artifact(tmp_path):
+def test_live_worker_runs_an_explicit_artifact_not_a_staged_candidate(tmp_path, monkeypatch):
     worker = _worker(tmp_path)
     active = Path(worker.family.slurm_image)
-
+    active.parent.mkdir(parents=True)
+    active.write_bytes(b"active")
+    worker.candidate.write_bytes(b"staged candidate")
     targeted = RunnerLiveTestWorker(worker.state, worker.family, artifact_path=active)
-
-    assert targeted.artifact == active
-    environment = targeted._runtime_environment(tmp_path / "work")
-    assert environment["REVOCOMPUTE_RUNTIME_ARTIFACT_OVERRIDES"] == (
-        '{"demo": "' + str(active.resolve()) + '"}'
+    request_result = targeted.work_root / "live-test-execution.json"
+    request_result.parent.mkdir(parents=True)
+    request_result.write_text(json.dumps({
+        "execution_uid": 129, "execution_gid": 137, "scheduler_user": "revodesign",
+        "slurm_job_id": "42", "slurm_jobs": [],
+    }))
+    commands = []
+    monkeypatch.setattr("revocompute_ctl.build.build_web_images", lambda *_args: None)
+    monkeypatch.setattr("revocompute.runner_live_test.detect_compose_cmd", lambda: ("docker", "compose"))
+    monkeypatch.setattr(
+        "revocompute.runner_live_test.run_cmd",
+        lambda argv, **_kwargs: commands.append(list(argv)) or type(
+            "Result", (), {"returncode": 0, "stdout": "", "stderr": ""}
+        )(),
     )
+
+    targeted._execute_in_worker("a" * 32, "predict", targeted.work_root)
+
+    command = commands[-1]
+    assert targeted.artifact == active
+    assert f"{active.resolve()}:/run/revocompute-live/artifacts/demo.sif:ro" in command
+    assert f"{worker.candidate.resolve()}:/run/revocompute-live/artifacts/demo.sif:ro" not in command
 
 
 def test_active_and_candidate_receipts_bind_to_artifact_bytes(tmp_path, monkeypatch):
@@ -267,6 +288,130 @@ def test_live_worker_uses_candidate_image_one_off_worker_and_contract_mount(tmp_
     assert f"SERVER_DIR={worker.state.server_dir()}/live-tests/{'a' * 32}" in command
     assert f"DB_PATH={worker.state.server_dir()}/live-tests/{'a' * 32}/live-test.sqlite3" in command
     assert any("/run/revocompute-candidate-runners" in value and value.endswith(":ro") for value in command)
+
+
+def _composed_tree(tmp_path: Path) -> tuple[RuntimeFamily, RuntimeFamily]:
+    """A synthetic family whose Task runs its second stage in another family."""
+    runners = tmp_path / "runners"
+    owner_root = runners / "composed_runner"
+    (owner_root / "tasks" / "compose").mkdir(parents=True)
+    (owner_root / "plugin.yaml").write_text(
+        yaml.safe_dump({
+            "api_version": 1,
+            "id": "composed_runner",
+            "version": "1",
+            "runtime": {
+                "image_artifact": "composed_runner_v1.sif",
+                "definition": "composed_runner.def",
+                "entrypoint": ["bash", "/app/run.sh"],
+                "build_inputs": ["composed_runner/run.sh"],
+            },
+            "tasks": ["tasks/compose/task.yaml"],
+        }),
+        encoding="utf-8",
+    )
+    (owner_root / "tasks" / "compose" / "task.yaml").write_text(
+        yaml.safe_dump({
+            "id": "composed_task",
+            "display_name": "Composed",
+            "category": "analysis",
+            "inputs": {
+                "sequence": {
+                    "title": "Sequence",
+                    "type": "protein_sequence",
+                    "formats": ["fasta"],
+                    "cardinality": {"min": 1, "max": 1},
+                }
+            },
+            "workflow": [
+                {"name": "prepare", "runner_args": ["-s", "prepare"]},
+                {"name": "calculate", "family": "companion_runner", "runner_args": ["-s", "run"]},
+            ],
+        }),
+        encoding="utf-8",
+    )
+    companion_root = runners / "companion_runner"
+    companion_root.mkdir()
+    (companion_root / "plugin.yaml").write_text(
+        yaml.safe_dump({
+            "api_version": 1,
+            "id": "companion_runner",
+            "version": "1",
+            "runtime": {
+                "image_artifact": "companion_runner_v1.sif",
+                "definition": "companion_runner.def",
+                "entrypoint": ["bash", "/app/run.sh"],
+                "build_inputs": ["companion_runner/run.sh"],
+            },
+            "tasks": [],
+        }),
+        encoding="utf-8",
+    )
+    return (
+        RuntimeFamily(
+            "composed_runner",
+            "1",
+            "composed_runner.def",
+            "composed_runner_v1.sif",
+            str(tmp_path / "images" / "composed_runner_v1.sif"),
+            root=owner_root,
+        ),
+        RuntimeFamily(
+            "companion_runner",
+            "1",
+            "companion_runner.def",
+            "companion_runner_v1.sif",
+            str(tmp_path / "images" / "companion_runner_v1.sif"),
+            root=companion_root,
+        ),
+    )
+
+
+def test_live_worker_enables_and_mounts_every_family_a_composed_task_runs(tmp_path, monkeypatch):
+    owner, companion = _composed_tree(tmp_path)
+    artifact = Path(owner.slurm_image)
+    artifact.parent.mkdir(parents=True)
+    artifact.write_bytes(b"candidate")
+    companion_candidate = Path(f"{companion.slurm_image}.next")
+    companion_candidate.write_bytes(b"companion candidate")
+    worker = RunnerLiveTestWorker(_State(tmp_path), owner, families=[owner, companion])
+    request_result = worker.work_root / "live-test-execution.json"
+    request_result.parent.mkdir(parents=True)
+    request_result.write_text(json.dumps({
+        "execution_uid": 129, "execution_gid": 137, "scheduler_user": "revodesign",
+        "slurm_job_id": "42", "slurm_jobs": [],
+    }))
+    commands = []
+    monkeypatch.setattr("revocompute_ctl.build.build_web_images", lambda *_args: None)
+    monkeypatch.setattr("revocompute.runner_live_test.detect_compose_cmd", lambda: ("docker", "compose"))
+    monkeypatch.setattr(
+        "revocompute.runner_live_test.run_cmd",
+        lambda argv, **_kwargs: commands.append(list(argv)) or type(
+            "Result", (), {"returncode": 0, "stdout": "", "stderr": ""}
+        )(),
+    )
+
+    worker._execute_in_worker("a" * 32, "composed_task", worker.work_root)
+
+    command = commands[-1]
+    assert "ENABLED_TASKRUNNERS=composed_runner,companion_runner" in command
+    assert f"{artifact.resolve()}:/run/revocompute-live/artifacts/composed_runner.sif:ro" in command
+    assert f"{companion_candidate.resolve()}:/run/revocompute-live/artifacts/companion_runner.sif:ro" in command
+    overrides = next(item for item in command if item.startswith("REVOCOMPUTE_RUNTIME_ARTIFACT_OVERRIDES="))
+    assert json.loads(overrides.split("=", 1)[1]) == {
+        "composed_runner": "/run/revocompute-live/artifacts/composed_runner.sif",
+        "companion_runner": "/run/revocompute-live/artifacts/companion_runner.sif",
+    }
+
+
+def test_live_worker_refuses_a_stage_family_the_invocation_did_not_load(tmp_path):
+    owner, _companion = _composed_tree(tmp_path)
+    worker = RunnerLiveTestWorker(_State(tmp_path), owner)
+
+    with pytest.raises(RunnerLiveTestError) as excinfo:
+        worker._graph_families("composed_task")
+
+    assert excinfo.value.category == "TEST_CONFIGURATION_FAILURE"
 
 
 def test_live_workers_share_candidate_server_image_build(tmp_path, monkeypatch):

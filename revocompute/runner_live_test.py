@@ -16,7 +16,7 @@ import time
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 import yaml
 
@@ -64,6 +64,10 @@ from revocompute.resource_policy import (
     ResourcePolicyValues,
     ResolvedResources,
 )
+
+
+#: Where the one-off worker sees the SIFs an invocation's Task graph can run.
+_LIVE_ARTIFACT_DIR = "/run/revocompute-live/artifacts"
 
 
 class RunnerLiveTestError(RuntimeError):
@@ -359,12 +363,17 @@ class RunnerLiveTestWorker:
         task: str | None = None,
         artifact_path: str | Path | None = None,
         candidate_bundle: str | None = None,
+        families: Sequence[RuntimeFamily] = (),
     ):
         self.state = state
         self.family = family
         self.collection = collection
         self.task = task
         self._explicit_artifact = Path(artifact_path) if artifact_path is not None else None
+        #: Every family this invocation loaded, so a composed Task's stage can
+        #: run another family's artifact rather than being dropped as unknown.
+        self._families = {item.name: item for item in families}
+        self._families.setdefault(family.name, family)
         #: The exact Runtime Bundle digest this run validates.  The controller
         #: materializes it before the run; the worker binds this digest rather
         #: than the published binding.
@@ -498,26 +507,42 @@ class RunnerLiveTestWorker:
                 message = (result.stderr or result.stdout or "Apptainer validation failed").strip()
                 raise RunnerLiveTestError("SIF_VALIDATION_FAILURE", message[-2000:])
 
-    def _runtime_environment(self, work_root: Path) -> dict[str, str]:
-        environment = self.state.exported()
-        environment.update(
-            {
-                "SERVER_DIR": str(work_root),
-                "DB_PATH": str(work_root / "live-test.sqlite3"),
-                "MANAGE_DB_PATH": self.state.get("MANAGE_DB_PATH")
-                or str(Path(self.state.server_dir()) / "manage.sqlite"),
-                "RUNNERS_DIR": str(self.family.root.parent),
-                "REVOCOMPUTE_IMAGE_DIR": str(Path(self.family.slurm_image).parent),
-                "REVOCOMPUTE_RUNTIME_ARTIFACT_OVERRIDES": json.dumps(
-                    {self.family.name: str(self.artifact.resolve())}, sort_keys=True
-                ),
-                "ENABLED_TASKRUNNERS": self.family.name,
-                "REVOCOMPUTE_JOB_EXECUTOR": "slurm",
-                "REVOCOMPUTE_CONTAINER_RUNTIME": "apptainer",
-                "REVOCOMPUTE_SCRATCH_BACKEND": self.state.get("REVOCOMPUTE_SCRATCH_BACKEND") or "disk",
-            }
+    def _graph_families(self, task_type: str) -> list[RuntimeFamily]:
+        """This Task's own family, then every other family its stages run.
+
+        The worker enables and mounts exactly these, so a composed stage can run
+        a companion family's artifact instead of the Task being dropped as
+        unregistered.  A family with no declaration to inspect falls back to
+        itself: the worker is also used to re-check one explicit artifact.
+        """
+        document = _declared_task(self.family, task_type)
+        families = [self.family]
+        if document is None:
+            return families
+        owner = str(
+            (yaml.safe_load((self.family.root / "plugin.yaml").read_text(encoding="utf-8")) or {}).get("id")
+            or self.family.name
         )
-        return environment
+        for stage in document.get("workflow") or ():
+            if not isinstance(stage, dict):
+                continue
+            name = str(stage.get("family") or owner)
+            if any(item.name == name for item in families):
+                continue
+            companion = self._families.get(name)
+            if companion is None:
+                raise RunnerLiveTestError(
+                    "TEST_CONFIGURATION_FAILURE",
+                    f"Task {task_type!r} runs stage family {name!r}, which this invocation did not load",
+                )
+            families.append(companion)
+        return families
+
+    def _artifact_for(self, family: RuntimeFamily) -> Path:
+        """The artifact a submission in ``family`` would run right now."""
+        if family.name == self.family.name:
+            return self.artifact
+        return _submission_artifact(family)
 
     def _run_case(self, case, report: LiveTestReport, resources: TaskResourceSnapshot) -> dict[str, Any]:
         case_started = time.monotonic()
@@ -532,7 +557,7 @@ class RunnerLiveTestWorker:
                 files.append(
                     {"role": role, "relative_path": str(source.relative_to(self.repo_root)), "sha256": sha256_file(source)}
                 )
-        atomic_write_json(request_path, {"task_id": task_id, "task_type": case.task, "result_path": "/run/revocompute-live/result.json", "parameters": dict(case.parameters), "files": files, "resources": resources.as_dict(), "artifact_path": "/run/revocompute-live/artifact.sif", "artifact_sha256": sha256_file(self.artifact), "runtime_bundle_sha256": self._candidate_bundle})
+        atomic_write_json(request_path, {"task_id": task_id, "task_type": case.task, "result_path": "/run/revocompute-live/result.json", "parameters": dict(case.parameters), "files": files, "resources": resources.as_dict(), "artifact_path": f"{_LIVE_ARTIFACT_DIR}/{self.family.name}.sif", "artifact_sha256": sha256_file(self.artifact), "runtime_bundle_sha256": self._candidate_bundle})
         request_path.chmod(0o444)
         self._transition(report, "SUBMITTED")
         self._transition(report, "RUNNING")
@@ -902,20 +927,31 @@ class RunnerLiveTestWorker:
             raise RunnerLiveTestError("EXECUTION_FAILURE", f"candidate server image build failed: {exc}") from exc
         runner_mount = "/run/revocompute-candidate-runners"
         isolated_server_dir = Path(self.state.server_dir()) / "live-tests" / task_id
+        # Every family this Task's graph runs gets its artifact mounted at the
+        # path the worker is told to resolve it from, so a composed stage runs
+        # the same artifact identity this invocation staged.
+        families = self._graph_families(task_type)
+        artifacts = {family.name: self._artifact_for(family) for family in families}
+        mounts = [
+            argument
+            for name, artifact in artifacts.items()
+            for argument in ("-v", f"{artifact.resolve()}:{_LIVE_ARTIFACT_DIR}/{name}.sif:ro")
+        ]
+        overrides = {name: f"{_LIVE_ARTIFACT_DIR}/{name}.sif" for name in artifacts}
         command = [
             *detect_compose_cmd(), *self.state.compose_args(), "--env-file", self.state.env_file,
             "run", "--rm", "--no-deps", "-T",
             "-v", f"{request_path}:/run/revocompute-live/request.json:ro",
             "-v", f"{self.repo_root}:/run/revocompute-live/fixtures:ro",
-            "-v", f"{self.artifact.resolve()}:/run/revocompute-live/artifact.sif:ro",
+            *mounts,
             "-v", f"{self.family.root.parent}:{runner_mount}:ro",
             "-e", f"SERVER_DIR={isolated_server_dir}",
             "-e", f"DB_PATH={isolated_server_dir}/live-test.sqlite3",
             "-e", f"MANAGE_DB_PATH={self.state.get('MANAGE_DB_PATH') or Path(self.state.server_dir()) / 'manage.sqlite'}",
             "-e", f"RUNNERS_DIR={runner_mount}",
-            "-e", "REVOCOMPUTE_IMAGE_DIR=/run/revocompute-live",
-            "-e", f"REVOCOMPUTE_RUNTIME_ARTIFACT_OVERRIDES={json.dumps({self.family.name: str(self.artifact.resolve())}, sort_keys=True)}",
-            "-e", f"ENABLED_TASKRUNNERS={self.family.name}",
+            "-e", f"REVOCOMPUTE_IMAGE_DIR={_LIVE_ARTIFACT_DIR}",
+            "-e", f"REVOCOMPUTE_RUNTIME_ARTIFACT_OVERRIDES={json.dumps(overrides, sort_keys=True)}",
+            "-e", f"ENABLED_TASKRUNNERS={','.join(artifacts)}",
             "-e", "REVOCOMPUTE_LIVE_FIXTURES=/run/revocompute-live/fixtures",
             "worker", "python", "-m", "revocompute.live_test_executor", "/run/revocompute-live/request.json",
         ]
@@ -1045,7 +1081,12 @@ def run_live_tests(
     passed = True
     for family in selected:
         report = RunnerLiveTestWorker(
-            state, family, collection=collection, task=task, candidate_bundle=candidate_bundles.get(family.name)
+            state,
+            family,
+            collection=collection,
+            task=task,
+            candidate_bundle=candidate_bundles.get(family.name),
+            families=families,
         ).run(build=build)
         passed = passed and report.passed
     # A successful case writes a new receipt, so the immutable admission
@@ -1083,15 +1124,26 @@ def prepare_live_test_server_image(state, proxy_build_args: list[str] | None = N
         raise RunnerLiveTestError("EXECUTION_FAILURE", f"candidate server image build failed: {exc}") from exc
 
 
-def _family_owns_task(family: RuntimeFamily, task: str) -> bool:
-    if family.root is None:
-        return False
+def _declared_task(family: RuntimeFamily, task: str) -> dict[str, Any] | None:
+    """The Task document ``family`` declares under ``task``, or ``None``."""
+    if family.root is None or not (family.root / "plugin.yaml").is_file():
+        return None
     doc = yaml.safe_load((family.root / "plugin.yaml").read_text(encoding="utf-8")) or {}
     for ref in doc.get("tasks", ()):
         task_doc = yaml.safe_load((family.root / ref).read_text(encoding="utf-8")) or {}
         if str(task_doc.get("id") or Path(ref).parent.name) == task:
-            return True
-    return False
+            return task_doc
+    return None
+
+
+def _family_owns_task(family: RuntimeFamily, task: str) -> bool:
+    return _declared_task(family, task) is not None
+
+
+def _submission_artifact(family: RuntimeFamily) -> Path:
+    """A staged candidate when one exists, else the family's active SIF."""
+    candidate = Path(f"{family.slurm_image}.next")
+    return candidate if candidate.is_file() else Path(family.slurm_image)
 
 
 def receipt_valid_for_artifact(

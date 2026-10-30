@@ -207,10 +207,18 @@ Rules the code enforces:
   names the file itself when the role is exactly one artifact.
 - The stage container binds that directory read-only and receives
   `TASK_STAGE_INPUTS`; a Runner re-hashes the artifact before use. Single-stage
-  Tasks and `graph:` role inputs are unchanged.
+  Tasks and `graph:` role inputs are unchanged. An adapter that resolves its role
+  from that document consumes only the verified copy (`gremlin_lh` does); an
+  adapter that still reads the producer's published files from the task output
+  tree keeps its own integrity check, and the AF3 model stage is the present
+  example. Server admission is identical for both.
 - A missing, changed, or unverifiable producer artifact refuses the stage before
   any attempt or allocation (`stage_input_unavailable`, `stage_input_invalid`).
-  A consumer never falls back to the shared writable output tree.
+  The Server never supplies a described input from the shared writable output
+  tree.
+- The live-test harness enables and mounts every family a composed Task's graph
+  names, so one isolated invocation exercises a stage that runs in a companion
+  family instead of recording its case as omitted.
 - A resumed workflow stays safe: a completed producer is re-hashed against its
   recorded identity before its consumer clears dependency readiness, so a
   changed artifact fails the producer instead of silently feeding a consumer.
