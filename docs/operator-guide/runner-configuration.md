@@ -133,9 +133,9 @@ uses the mounted local databases for feature construction; `colabfold_af2`
 uses the public ColabFold MMseqs2 service and mounted
 `/mnt/db/weights/alphafold/colabfold` parameters. Each persists its CPU-stage
 output before local GPU inference and optional Amber relaxation. A restart
-cancels the active allocation and re-runs every stage: a stage attempt records
-no runtime-image identity, so a completion from an earlier execution cannot be
-attributed to the image the restarted Task runs.
+cancels the active allocation and executes every stage again: a stage attempt
+records no runtime-image identity, so a completion from an earlier execution
+cannot be attributed to the image the restarted Task runs.
 
 AlphaFold 3 is a third, independent runtime family. It accepts the current
 upstream AlphaFold 3 JSON contract and runs a CPU-only data pipeline followed
@@ -144,7 +144,10 @@ the task result tree; prediction outputs remain in a separate modeling tree.
 The production image pins upstream revision
 `c0f97eda2f1f482fd94d3a38bece18c7069b4a5c`. The site's historical
 `/repo/alphafold3` `native-run` branch is only an operator reference for the
-local database layout and is not image source code.
+local database layout and is not image source code. Its features and model
+stages skip on an existing output, so a retry re-executes the stage in the
+Server but can settle bytes an earlier image produced; see
+[produced-artifact binding](../developer-guide/composable-execution-architecture.md#produced-artifact-binding-delivered-contract).
 
 AlphaFold 3 databases and model parameters are operator-managed read-only
 mounts declared in `docker/runners/alphafold3/runner.yaml`; they are never copied into
