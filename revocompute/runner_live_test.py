@@ -352,8 +352,11 @@ def load_validation_identity(
         # filtered plan is visible in the receipt and never reads as a pass.
         "omitted_cases": [{"id": case_id, "task": task} for case_id, task in plan.omitted],
         "resources": required_resources,
-        "composed_artifacts": composed_artifacts,
     })
+    if composed_artifacts:
+        # Only a family with a composed case carries this, so the identity of a
+        # family that runs alone is unchanged and its existing receipt stands.
+        config_public["composed_artifacts"] = composed_artifacts
     return ValidationIdentity(plan, canonical_digest(config_public), tuple(resource_snapshots))
 
 
