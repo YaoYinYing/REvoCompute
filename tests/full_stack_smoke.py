@@ -164,6 +164,7 @@ def run_full_stack_checks(
     username: str,
     password: str,
     task_timeout: float = 7200.0,
+    *,
     database_path: Path | None = None,
 ) -> None:
     with requests.Session() as session:
