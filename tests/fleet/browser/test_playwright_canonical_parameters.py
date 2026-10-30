@@ -94,7 +94,7 @@ def _prepare_backend(monkeypatch, tmp_path, *, entitlement: str | None):
     """Load the installed fleet with the GPU admission the real boundary needs."""
     from types import SimpleNamespace
 
-from revocompute.admission import AdmissionEvidence
+    from revocompute.admission import AdmissionEvidence
 
     module = _load_fleet_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     module.app.config["manage_db"].resource_set("slurm_enabled", "true")
