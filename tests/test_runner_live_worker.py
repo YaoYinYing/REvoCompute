@@ -190,8 +190,8 @@ def test_live_worker_runs_an_explicit_artifact_not_a_staged_candidate(tmp_path, 
 
     command = commands[-1]
     assert targeted.artifact == active
-    assert f"{active.resolve()}:/run/revocompute-live/artifacts/demo.sif:ro" in command
-    assert f"{worker.candidate.resolve()}:/run/revocompute-live/artifacts/demo.sif:ro" not in command
+    assert f"{active.resolve()}:{active.resolve()}:ro" in command
+    assert f"{worker.candidate.resolve()}:{worker.candidate.resolve()}:ro" not in command
 
 
 def test_active_and_candidate_receipts_bind_to_artifact_bytes(tmp_path, monkeypatch):
@@ -394,13 +394,15 @@ def test_live_worker_enables_and_mounts_every_family_a_composed_task_runs(tmp_pa
     worker._execute_in_worker("a" * 32, "composed_task", worker.work_root)
 
     command = commands[-1]
+    # The Slurm wrapper runs on the host, so every composed family resolves to
+    # the artifact's own path; the worker only needs those files readable.
     assert "ENABLED_TASKRUNNERS=composed_runner,companion_runner" in command
-    assert f"{artifact.resolve()}:/run/revocompute-live/artifacts/composed_runner.sif:ro" in command
-    assert f"{companion_candidate.resolve()}:/run/revocompute-live/artifacts/companion_runner.sif:ro" in command
+    assert f"{artifact.resolve()}:{artifact.resolve()}:ro" in command
+    assert f"{companion_candidate.resolve()}:{companion_candidate.resolve()}:ro" in command
     overrides = next(item for item in command if item.startswith("REVOCOMPUTE_RUNTIME_ARTIFACT_OVERRIDES="))
     assert json.loads(overrides.split("=", 1)[1]) == {
-        "composed_runner": "/run/revocompute-live/artifacts/composed_runner.sif",
-        "companion_runner": "/run/revocompute-live/artifacts/companion_runner.sif",
+        "composed_runner": str(artifact.resolve()),
+        "companion_runner": str(companion_candidate.resolve()),
     }
 
 
