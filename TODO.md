@@ -22,10 +22,12 @@
 | Fork/join readiness, branch isolation, blocked diagnostics | delivered, executed serially (M2d `60163ca`) |
 | Cross-family stage declaration, per-family readiness/bundle/dispatch | delivered (M2e `982e4de`) |
 | Graph-aware API: `execution_graph`, per-stage `dependency` | delivered (M4a `78b8a43`) |
-| `[Stage] [Status]` browser rendering | in progress |
-| Concurrent branch execution, per-stage reservations, sibling cancellation | not delivered |
-| PSSM-GREMLIN stage split, GREMLIN_LH composed path, OpenDDE audit | blocked: runners bake `run.sh` into the SIF; needs rebuild + live acceptance authorization |
-| Real Slurm/Apptainer scientific acceptance | blocked: needs an operator-provided isolated deployment and a GPU window |
+| `[Stage] [Status]` browser rendering | delivered; browser evidence from the CI BrowserContracts lane (green at `954e361`, `44d1ae5`) |
+| Produced-artifact binding into a consumer input role | delivered (`44d1ae5`): verified copy, role directories, `TASK_STAGE_INPUTS`, read-only bind, bounded refusals |
+| Concurrent branch execution, per-stage reservations, sibling cancellation | not delivered (serial schedule accepted, D3=A) |
+| PSSM-GREMLIN stage split, GREMLIN_LH produced-artifact consumption | runner split and document consumption delivered in isolated SIFs (not promoted); composed `gremlin_msa_to_lh_fit` Task Type registered with its own result tree and a cross-family smoke case (`5328678`, `6d6776f`); two CI lanes red on the split, D2 Owner fixing |
+| OpenDDE audit | not started |
+| Real Slurm/Apptainer scientific acceptance | blocked: needs an operator-provided isolated deployment and a GPU window (D1=A, after all outstanding P1s are cleared) |
 | Nextflow backend | disabled, structural evidence recorded |
 
 ## 0 — Exclusive activation / stop gate

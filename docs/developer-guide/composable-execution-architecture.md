@@ -145,8 +145,10 @@ workflow:
 Rules the code enforces:
 
 - `family` is identifier-validated in the owning task manifest. After every
-  family and task is registered, discovery refuses a stage naming a family
-  that is not registered (unknown or disabled).
+  family and task is registered, discovery refuses a stage naming a family that
+  exists nowhere in the runner tree. A family that exists but is not enabled is
+  a deployment choice, not a manifest defect: the Tasks that need it are not
+  registered, and every other Task in its own family still loads.
 - Submission resolves every referenced family, requires each family's access
   policy to admit the user, requires each family's submission admission
   evidence to be ready, and pins one Runtime Bundle per referenced family. One

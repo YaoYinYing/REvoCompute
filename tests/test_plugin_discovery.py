@@ -525,3 +525,45 @@ def test_workflow_output_port_requires_a_path(tmp_path):
     )
     with pytest.raises(ValueError, match="output port 'data' requires a path"):
         discover_plugins(str(tmp_path))
+
+
+def _cross_family_tree(tmp_path, *, foreign: str) -> Path:
+    """A host family whose second stage runs in ``foreign``."""
+    for family_id in ("demo", "other"):
+        family = tmp_path / family_id
+        (family / "tasks").mkdir(parents=True, exist_ok=True)
+        (family / "plugin.yaml").write_text(
+            f"id: {family_id}\nversion: '1'\nruntime: {{image_artifact: {family_id}.sif, definition: {family_id}.def}}\n"
+            + ("tasks: [tasks/echo/task.yaml]\n" if family_id == "demo" else "tasks: []\n"),
+            encoding="utf-8",
+        )
+        (family / f"{family_id}.def").write_text(f"Bootstrap: {family_id}\n", encoding="utf-8")
+    task_dir = tmp_path / "demo" / "tasks" / "echo"
+    task_dir.mkdir(parents=True)
+    (task_dir / "task.yaml").write_text(
+        "id: echo\n" + INPUTS + STAGE_MARKERS + "workflow:\n"
+        "- {name: local, display_name: Local, requires_gpu: false, requires_network: false, stage_markers: [first]}\n"
+        f"- {{name: remote, display_name: Remote, family: {foreign}, requires_gpu: false,"
+        " requires_network: false, stage_markers: [second]}\n",
+        encoding="utf-8",
+    )
+    return tmp_path
+
+
+def test_a_task_whose_stage_family_is_disabled_is_not_registered(tmp_path):
+    """Disabling a family drops the Tasks that need it instead of aborting discovery."""
+    root = _cross_family_tree(tmp_path, foreign="other")
+
+    discover_plugins(str(root), enabled={"demo"})
+    assert list_types() == []
+
+    discover_plugins(str(root), enabled={"demo", "other"})
+    assert [task_type.name for task_type in list_types()] == ["echo"]
+
+
+def test_a_task_naming_no_real_family_is_still_an_authoring_error(tmp_path):
+    """A disabled family is a deployment choice; an absent one is a manifest defect."""
+    root = _cross_family_tree(tmp_path, foreign="absent_family")
+
+    with pytest.raises(ValueError, match="unknown runtime family"):
+        discover_plugins(str(root), enabled={"demo"})

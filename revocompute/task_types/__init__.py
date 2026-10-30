@@ -12,6 +12,7 @@ runner configuration.
 
 from __future__ import annotations
 
+import logging
 import os
 import json
 import re
@@ -464,6 +465,30 @@ def _load_ui_control(raw: Any, param_type: str | None, minimum: Any, maximum: An
     return {"kind": "seed", "random": {"minimum": lower, "maximum": upper}}
 
 
+def _tree_family_ids(root: str) -> set[str]:
+    """Every runtime family id present in the runner tree, enabled or not."""
+    identifiers: set[str] = set()
+    for path in Path(root).glob("*/plugin.yaml"):
+        try:
+            raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        except (OSError, yaml.YAMLError):
+            continue
+        if isinstance(raw, dict) and isinstance(raw.get("id"), str):
+            identifiers.add(raw["id"])
+    return identifiers
+
+
+def _disabled_families_used(workflow: Any, disabled: set[str]) -> set[str]:
+    """The disabled families a task's declared stages run in, if any."""
+    if not disabled or not isinstance(workflow, list):
+        return set()
+    return {
+        str(stage["family"])
+        for stage in workflow
+        if isinstance(stage, dict) and isinstance(stage.get("family"), str) and stage["family"] in disabled
+    }
+
+
 def _validate_stage_families(manager: Any) -> None:
     """Refuse a workflow stage that names a runtime family discovery never registered.
 
@@ -509,6 +534,10 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
     from revocompute.plugins import PluginManager
     manager = PluginManager()
     manifests = manager.discover(root, enabled=enabled)
+    # A composed Task may run a stage in another family.  Disabling a family must
+    # remove the Tasks that need it, not abort discovery for every Task in every
+    # family, while a manifest naming no real family stays an authoring error.
+    disabled_families = _tree_family_ids(root) - set(enabled) if enabled else set()
     categories: dict[str, Category] = {}
     capability_schemas: dict[str, dict[str, Any]] = {}
     workspace_schemas_by_owner: dict[str, dict[str, dict[str, Any]]] = {}
@@ -653,6 +682,13 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
                     f"{', '.join(sorted(legacy_citation_fields))}; migrate to the 'citations' contract"
                 )
             task_id = str(raw.get("id") or raw.get("name") or task_path.parent.name)
+            off = _disabled_families_used(raw.get("workflow"), disabled_families)
+            if off:
+                logging.warning(
+                    "Task %r is not registered while runtime family %s is disabled",
+                    task_id, ", ".join(repr(name) for name in off),
+                )
+                continue
             schema = dict(raw.get("schema") or raw.get("parameters") or {})
             params = _load_task_params(raw.get("params"), schema, task_id)
             workspace_owner = manifest_obj.runner_family or family_id
