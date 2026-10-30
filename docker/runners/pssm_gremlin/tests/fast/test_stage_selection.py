@@ -477,6 +477,24 @@ def test_fit_reruns_for_different_alignment_bytes_with_the_same_filename(tmp_pat
     assert _plot(output).read_text(encoding="utf-8") == f"plot {_sha(second.read_bytes())}\n"
 
 
+def test_fit_removes_stale_contact_sidecars(tmp_path: Path) -> None:
+    """Undeclared contact files from another alignment are not republished."""
+    env, _bin, calls = _stub_environment(tmp_path)
+    output = tmp_path / "output"
+    artifact = _staged_alignment(tmp_path, "stage", b">q\nACDE\n>h\nACDE\n")
+    document = _stage_inputs_document(tmp_path, artifact)
+    run_env = {**env, "TASK_STAGE_INPUTS": str(document)}
+    sidecar = output / "gremlin_res" / "W_for_positions_1_2.csv"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text("from another alignment\n", encoding="utf-8")
+
+    completed = _run(tmp_path, "-s", "fit", output=output, env=dict(run_env))
+
+    assert completed.returncode == 0, completed.stderr
+    assert len(_fit_calls(calls)) == 1
+    assert not sidecar.exists()
+
+
 def test_fit_replaces_a_stale_plot(tmp_path: Path) -> None:
     """A non-empty plot left from an earlier fit is regenerated, never republished."""
     env, _bin, calls = _stub_environment(tmp_path)

@@ -275,7 +275,9 @@ RUN_FIT() {
     # ran. A model or plot left in the shared tree is never trusted or reused.
     local fit_script="${GREMLIN_TFV1_SCRIPT:-${REVODESIGN_RUNSCRIPT_PATH}/${SCRIPT_PATH}/GREMLIN_TFv1.py}"
     mkdir -p "$dst_gremlin"
-    rm -f "$model" "$plot"
+    # The result tree is published wholesale, so undeclared contact sidecars
+    # from another alignment must not survive a recompute either.
+    rm -f "$model" "$plot" "${dst_gremlin}"/W_for_positions_*
     echo Running GREMLIN ...
     pushd "$dst_gremlin"
     echo "REVODESIGN_STAGE:gremlin"

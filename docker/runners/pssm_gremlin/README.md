@@ -27,7 +27,8 @@ consumes the `msa` alignment, so it cannot run before `msa`. `-s all` runs
 `msa`, `fit`, `pssm` in that order, preserving the original monolithic run.
 Every selected stage deletes its declared outputs and recomputes on every
 invocation. None of them can bind the runtime image that executes, so an output
-left in the shared tree cannot be attributed to the current attempt.
+left in the shared tree by an earlier attempt cannot be attributed to the
+current one.
 `-s fit` needs no sequence database. A stage that finds its input
 missing fails with the path it expected and a named precondition; it never
 silently produces an empty result.
