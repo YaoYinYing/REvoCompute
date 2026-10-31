@@ -400,6 +400,108 @@ def test_a_bookkeeping_outage_does_not_mask_the_unconfirmed_allocation(tmp_path,
         )
 
 
+def test_an_unrecorded_allocation_after_submit_failure_keeps_the_launch_gate(tmp_path, monkeypatch):
+    """(c) srun started but its identity was lost: never settle, never retry."""
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "e1" * 16
+    _insert_task(database, task_id, status="running")
+    monkeypatch.setattr(task_runtime, "task_store", database)
+
+    job = task_runtime.SlurmJob(
+        task_id, _single_stage_type(), RunnerConfig(), [], str(tmp_path / "out")
+    )
+    job._process = object()
+    job.submit = lambda: (_ for _ in ()).throw(RuntimeError("response lost after srun"))
+    monkeypatch.setattr(task_runtime, "_create_job", lambda *_args, **_kwargs: job)
+
+    with pytest.raises(task_runtime.AllocationUnconfirmed, match="without recording its identity"):
+        task_runtime._run_compute_job(
+            task_id, _single_stage_type(), RunnerConfig(), [], str(tmp_path / "out"),
+            resource_policy=_policy(),
+        )
+
+    run = database.list_stage_runs(task_id)[0]
+    assert (run["status"], run["slurm_job_id"], bool(run["dispatch_claim"])) == (
+        stage_state.QUEUED, None, True,
+    )
+    assert database.get_task(task_id)["status"] == "running"
+
+    # A redelivery observes the live claim and starts no second srun.
+    monkeypatch.setattr(
+        task_runtime, "_create_job", lambda *_args, **_kwargs: pytest.fail("must not submit")
+    )
+    with pytest.raises(task_runtime.StageDispatchConflict):
+        task_runtime._run_compute_job(
+            task_id, _single_stage_type(), RunnerConfig(), [], str(tmp_path / "out"),
+            resource_policy=_policy(),
+        )
+
+
+def test_a_workflow_stage_keeps_the_gate_when_its_process_started(tmp_path, monkeypatch):
+    """The composed path takes the same decision for an unrecorded allocation."""
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "e2" * 16
+    _insert_task(database, task_id)
+    workflow_type = _workflow_type()
+    _freeze(database, task_id, workflow_type)
+    monkeypatch.setattr(task_runtime, "task_store", database)
+    monkeypatch.setattr(task_runtime, "_get_family", lambda _family: (workflow_type.runtime, RunnerConfig()))
+
+    job = task_runtime.SlurmJob(
+        task_id, workflow_type, RunnerConfig(), [], str(tmp_path / "out")
+    )
+    job._process = object()
+    job.submit = lambda: (_ for _ in ()).throw(RuntimeError("response lost after srun"))
+    monkeypatch.setattr(task_runtime, "_create_job", lambda *_args, **_kwargs: job)
+
+    with pytest.raises(task_runtime.AllocationUnconfirmed, match="without recording its identity"):
+        task_runtime._run_compute_workflow(
+            task_id,
+            database.get_task(task_id),
+            workflow_type,
+            [],
+            str(tmp_path / "out"),
+            {STAGE: _policy()},
+            lambda _stage: None,
+        )
+
+    run = database.list_stage_runs(task_id)[0]
+    assert (run["status"], run["slurm_job_id"], bool(run["dispatch_claim"])) == (
+        stage_state.QUEUED, None, True,
+    )
+
+
+def test_a_popen_failure_permits_a_fresh_attempt(tmp_path, monkeypatch):
+    """(d) A failure proven to precede srun creation keeps the retry safe."""
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "e3" * 16
+    _insert_task(database, task_id, status="running")
+    monkeypatch.setattr(task_runtime, "task_store", database)
+
+    job = task_runtime.SlurmJob(
+        task_id, _single_stage_type(), RunnerConfig(), [], str(tmp_path / "out")
+    )
+    job.submit = lambda: (_ for _ in ()).throw(RuntimeError("script could not be written"))
+    monkeypatch.setattr(task_runtime, "_create_job", lambda *_args, **_kwargs: job)
+
+    with pytest.raises(RuntimeError, match="script could not be written"):
+        task_runtime._run_compute_job(
+            task_id, _single_stage_type(), RunnerConfig(), [], str(tmp_path / "out"),
+            resource_policy=_policy(),
+        )
+
+    assert database.list_stage_runs(task_id)[0]["status"] == stage_state.FAILED
+
+    submissions: list[str] = []
+    monkeypatch.setattr(task_runtime, "_create_job", _job_factory(submissions))
+    state = task_runtime._run_compute_job(
+        task_id, _single_stage_type(), RunnerConfig(), [], str(tmp_path / "out"),
+        resource_policy=_policy(),
+    )
+    assert state == task_runtime.JobState.COMPLETED
+    assert submissions == ["7001"]
+
+
 def test_a_task_cancelled_during_submit_cancels_the_slurm_allocation(tmp_path, monkeypatch):
     """The single-stage guard mirrors the workflow path for a real SlurmJob."""
     database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))

@@ -1217,9 +1217,14 @@ def _run_compute_job(
             allocation_finished_callback=finished_callback,
             allocation_accounting=accounting,
         )
+    except Exception:
+        # No job exists, so no scheduler process can have been created.
+        _settle_unsubmitted_attempt(task_id, tt.name, attempt)
+        raise
+    try:
         jid = job.submit()
     except Exception:
-        _settle_unsubmitted_attempt(task_id, tt.name, attempt)
+        _settle_unsubmitted_attempt(task_id, tt.name, attempt, job)
         raise
     # Persist the job handle so cancel can stop the running process even
     # after a server restart (Celery/Redis state is ephemeral).  A rejected
@@ -1297,22 +1302,26 @@ def _settle_stage_attempt(
         return False
 
 
-def _settle_unsubmitted_attempt(task_id: str, stage_name: str, attempt: int | None) -> None:
+def _settle_unsubmitted_attempt(
+    task_id: str, stage_name: str, attempt: int | None, job: Any = None
+) -> None:
     """Close an attempt whose submission raised before any allocation existed.
 
     A cancellation that lands during submission is the important case: without
     this settlement the attempt would stay live forever, because the cancelled
     Task's failure path deliberately refuses to touch a terminal Task.
 
-    A submission that failed *after* the scheduler accepted it already recorded
-    its handle on the attempt.  Settling it here would let an authorized retry
-    open a second allocation beside a request that may still be running, so the
-    allocation is cancelled first.  When that cancellation cannot be proven, the
-    Task keeps the handle and stays running: ``AllocationUnconfirmed`` tells the
-    caller not to fail it, and recovery cancels from the recorded handle.
+    An attempt is settled only when the failure proves no allocation was
+    accepted: the job adapter never started a scheduler process, or the
+    allocation it recorded was cancelled.  A ``SlurmJob`` that already started
+    ``srun`` without recording a handle may own a live allocation, and a
+    recorded handle that could not be cancelled certainly may, so both keep the
+    attempt live and the Task running via ``AllocationUnconfirmed`` instead of
+    releasing the launch gate for a retry.
     """
     if attempt is None:
         return
+    launch_started = isinstance(job, SlurmJob) and getattr(job, "_process", None) is not None
     handle = ""
     try:
         for run in task_store.list_stage_runs(task_id):
@@ -1339,6 +1348,16 @@ def _settle_unsubmitted_attempt(task_id: str, stage_name: str, attempt: int | No
             f"stage attempt {stage_name!r} recorded allocation {handle} but submission failed; "
             "it could not be cancelled, so the Task stays running for recovery"
         )
+    if not handle and launch_started:
+        # srun was created but its identity never reached the attempt.  That
+        # allocation cannot be cancelled by id, so the launch gate must stay
+        # held: settling this attempt would let a retry start a second one.
+        message = (
+            f"Stage attempt {stage_name!r} #{attempt} of task {task_id} started a scheduler "
+            "process without recording its identity; an allocation may exist"
+        )
+        _mark_allocation_unconfirmed(task_id, "", message)
+        raise AllocationUnconfirmed(message)
     reason_code = "submission_failed"
     status = stage_state.FAILED
     current = str((task_store.get_task(task_id) or {}).get("status") or "").strip().lower()
@@ -1673,9 +1692,14 @@ def _execute_workflow_node(
             allocation_accounting=user_id > 0,
             stage_inputs_dir=stage_inputs_dir,
         )
+    except Exception:
+        # No job exists, so no scheduler process can have been created.
+        _settle_unsubmitted_attempt(task_id, stage.name, attempt)
+        raise
+    try:
         jid = job.submit()
     except Exception:
-        _settle_unsubmitted_attempt(task_id, stage.name, attempt)
+        _settle_unsubmitted_attempt(task_id, stage.name, attempt, job)
         raise
     handles: dict[str, Any] = {}
     mirror = _mirror_json(task_id, legacy_state)
