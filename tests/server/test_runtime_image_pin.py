@@ -975,3 +975,142 @@ def test_the_receipt_is_validated_against_the_bundle_the_task_will_pin(monkeypat
     assert seen["bundle"] == _IMAGE_SHA_B
     assert response.status_code == 503
     assert response.get_json()["reason"] == "RUNTIME_BUNDLE_CHANGED"
+
+
+def _activate_bundle_b(tmp_path, module, family) -> str:
+    """Materialize a second real Runtime Bundle and activate it atomically."""
+    import shutil
+    from conftest import _materialize_runtime_bundles
+    from revocompute.runner_host import build_server_host
+    from revocompute.runner_readiness import bundle_digest
+
+    state = build_server_host(module.CONFIG)
+    before = bundle_digest(state, family)
+    runners_b = tmp_path / "runners_b"
+    shutil.copytree(Path(module.CONFIG.server_dir) / "docker" / "runners", runners_b)
+    overlay = runners_b / family.runtime_overlay[0]
+    overlay.write_text(overlay.read_text(encoding="utf-8") + "\n# bundle B\n", encoding="utf-8")
+    _materialize_runtime_bundles(runners_b, Path(module.CONFIG.runtime_bundle_root))
+    after = bundle_digest(state, family)
+    assert after and after != before
+    return after
+
+
+def _pinned_task(module, task_id):
+    task = module.task_store.get_task(task_id)
+    form = json.loads(task["input_form"])
+    snapshot = Path(module.app.config["storage_resolver"].get_input_root(task))
+    manifest = json.loads((snapshot / "inputs" / "task.json").read_text(encoding="utf-8"))
+    return task, form, manifest
+
+
+def _submitted_task_id(module, response) -> str:
+    return (
+        response.get_json()["task_id"]
+        if response.is_json
+        else response.headers["Location"].rsplit("/", 1)[-1]
+    )
+
+
+def test_activation_immediately_after_receipt_validation_refuses_without_side_effects(
+    monkeypatch, tmp_path
+):
+    """Activation A->B after the receipt answered for A cannot rebind the pin."""
+    module, family = _submission_setup(monkeypatch, tmp_path, image=True, receipt=True)
+    from revocompute import runner_live_test
+    from revocompute.runner_host import build_server_host
+    from revocompute.runner_readiness import bundle_digest
+
+    digest_a = bundle_digest(build_server_host(module.CONFIG), family)
+    assert digest_a
+    queued = []
+    monkeypatch.setattr(module.run_compute_task, "apply_async", lambda *_a, **_k: queued.append(True))
+    workspace_before = sorted(Path(module.CONFIG.workspace_folder).rglob("*"))
+    results_before = sorted(Path(module.CONFIG.results_folder).rglob("*"))
+    seen: list[str | None] = []
+    real_validate = runner_live_test.receipt_valid_for_artifact
+
+    def validate_then_activate(*args, **kwargs):
+        seen.append(kwargs.get("expected_runtime_bundle"))
+        accepted = real_validate(*args, **kwargs)
+        assert accepted, "the active bundle's real receipt must be accepted first"
+        _activate_bundle_b(tmp_path, module, family)
+        return accepted
+
+    monkeypatch.setattr(runner_live_test, "receipt_valid_for_artifact", validate_then_activate)
+
+    response = _post(module)
+
+    assert seen == [digest_a], "the validator must answer for the bundle admission pinned"
+    assert response.status_code == 503, response.get_data(as_text=True)
+    assert response.get_json()["reason"] == "RUNTIME_BUNDLE_CHANGED"
+    assert module.task_store.list_tasks() == []
+    assert queued == []
+    assert sorted(Path(module.CONFIG.workspace_folder).rglob("*")) == workspace_before
+    assert sorted(Path(module.CONFIG.results_folder).rglob("*")) == results_before
+
+
+def test_unchanged_active_bundle_admits_and_pins_it(monkeypatch, tmp_path):
+    module, family = _submission_setup(monkeypatch, tmp_path, image=True, receipt=True)
+    from revocompute.runner_host import build_server_host
+    from revocompute.runner_readiness import bundle_digest
+
+    digest_a = bundle_digest(build_server_host(module.CONFIG), family)
+    assert digest_a
+
+    response = _post(module)
+
+    assert response.status_code in (200, 302), response.get_data(as_text=True)
+    _task, form, manifest = _pinned_task(module, _submitted_task_id(module, response))
+    assert form["runtime_bundles"]["cpu_runner"] == digest_a
+    assert manifest["runtime_bundles"]["cpu_runner"] == digest_a
+
+
+def test_bundle_b_with_its_own_real_receipt_admits(monkeypatch, tmp_path):
+    """The positive control for a genuine activation: B's own acceptance admits."""
+    module, family = _submission_setup(monkeypatch, tmp_path, image=True, receipt=True)
+    digest_b = _activate_bundle_b(tmp_path, module, family)
+    _write_receipt(module, family, sha256_file(Path(family.slurm_image)))
+
+    response = _post(module)
+
+    assert response.status_code in (200, 302), response.get_data(as_text=True)
+    _task, form, manifest = _pinned_task(module, _submitted_task_id(module, response))
+    assert form["runtime_bundles"]["cpu_runner"] == digest_b
+    assert manifest["runtime_bundles"]["cpu_runner"] == digest_b
+
+
+def test_activation_after_the_pin_keeps_the_queued_task_on_a(monkeypatch, tmp_path):
+    module, family = _submission_setup(monkeypatch, tmp_path, image=True, receipt=True)
+    from revocompute.runner_host import build_server_host
+    from revocompute.runner_readiness import bundle_digest
+
+    digest_a = bundle_digest(build_server_host(module.CONFIG), family)
+    response = _post(module)
+    assert response.status_code in (200, 302), response.get_data(as_text=True)
+    task_id = _submitted_task_id(module, response)
+    task_before, form_before, manifest_before = _pinned_task(module, task_id)
+    assert form_before["runtime_bundles"]["cpu_runner"] == digest_a
+
+    digest_b = _activate_bundle_b(tmp_path, module, family)
+    assert digest_b != digest_a
+
+    task_after, form_after, manifest_after = _pinned_task(module, task_id)
+    assert task_after["md5sum"] == task_id
+    assert task_after["status"] == task_before["status"]
+    assert form_after["runtime_bundles"]["cpu_runner"] == digest_a
+    assert manifest_after["runtime_bundles"]["cpu_runner"] == digest_a
+    assert manifest_after == manifest_before
+
+    # The activation switched the index atomically and kept A materialized for
+    # the Task that already pinned it, including under the production
+    # retention pass that receives the active index and every queued pin.
+    from revocompute import runtime_bundle as bundles
+
+    store = Path(module.CONFIG.runtime_bundle_root)
+    assert bundles.load_index(store)["cpu_runner"] == digest_b
+    referenced = set(bundles.load_index(store).values()) | set(
+        form_after["runtime_bundles"].values()
+    )
+    assert digest_a not in bundles.garbage_collect(store, referenced=referenced)
+    assert bundles.resolve_pinned(store, digest_a) is not None
