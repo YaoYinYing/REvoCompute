@@ -730,7 +730,7 @@ def test_recovery_cancels_known_handles_before_refusing_an_unknown_one(monkeypat
     monkeypatch.setattr(task_runtime, "task_store", _Store())
     monkeypatch.setattr(task_runtime, "CONFIG", replace(task_runtime.CONFIG, demo_mode=False))
     monkeypatch.setattr(task_runtime, "_get_task_type", lambda _name: (_TaskType(), object()))
-    monkeypatch.setattr(task_runtime, "_slurm_job_is_active", lambda _job_id: True)
+    monkeypatch.setattr(task_runtime, "_slurm_job_state", lambda _job_id: "active")
     monkeypatch.setattr(
         task_runtime,
         "_stop_orphaned_workflow_execution",
@@ -741,6 +741,155 @@ def test_recovery_cancels_known_handles_before_refusing_an_unknown_one(monkeypat
     assert stopped == ["9003"]
     assert updates[-1]["status"] == "running"
     assert "cancel the Task to settle it" in updates[-1]["error"]
+
+
+def test_workflow_recovery_stops_a_stage_handle_the_controller_cannot_confirm(monkeypatch):
+    """A stage-named allocation with no answer from the controller is stopped."""
+    task = {"md5sum": "f1" * 16, "status": "running", "task_type": STAGE}
+    updates: list[dict] = []
+    stopped: list[str] = []
+    enqueued: list[tuple] = []
+
+    class _Store:
+        def list_tasks(self):
+            return [task]
+
+        def claim_task_recovery(self, _task_id, *, expected_status):
+            return expected_status == "running"
+
+        def list_stage_runs(self, _task_id):
+            return [{
+                "stage_name": STAGE, "stage_index": 0, "attempt": 1,
+                "status": stage_state.RUNNING, "slurm_job_id": "9003", "dispatch_claim": "w1",
+            }]
+
+        def finish_active_stage_runs(self, _task_id, *, status, reason_code):
+            return 0
+
+        def update_task(self, _task_id, **fields):
+            updates.append(fields)
+            return True
+
+    class _TaskType:
+        workflow = (object(),)
+
+    monkeypatch.setattr(task_runtime, "task_store", _Store())
+    monkeypatch.setattr(task_runtime, "CONFIG", replace(task_runtime.CONFIG, demo_mode=False))
+    monkeypatch.setattr(task_runtime, "_get_task_type", lambda _name: (_TaskType(), object()))
+    monkeypatch.setattr(task_runtime, "_slurm_job_state", lambda _job_id: "unknown")
+    monkeypatch.setattr(
+        task_runtime,
+        "_stop_orphaned_workflow_execution",
+        lambda _task_id, handle, _container: stopped.append(handle) or "Could not cancel SLURM job",
+    )
+    monkeypatch.setattr(
+        task_runtime.run_compute_task, "apply_async",
+        lambda *args, **kwargs: enqueued.append((args, kwargs)) or pytest.fail("must not re-enqueue"),
+    )
+
+    assert task_runtime._recover_orphaned_tasks() == 1
+    assert stopped == ["9003"]
+    assert enqueued == []
+    assert updates[-1]["status"] == "running"
+
+
+def test_workflow_recovery_resumes_when_a_stage_handle_is_controller_confirmed_gone(monkeypatch):
+    """A confirmed-terminal stage handle needs no stop and must not strand the Task."""
+    task = {"md5sum": "f2" * 16, "status": "running", "task_type": STAGE}
+    updates: list[dict] = []
+    stopped: list[str] = []
+    enqueued: list[tuple] = []
+
+    class _Store:
+        def list_tasks(self):
+            return [task]
+
+        def claim_task_recovery(self, _task_id, *, expected_status):
+            return expected_status == "running"
+
+        def list_stage_runs(self, _task_id):
+            return [{
+                "stage_name": STAGE, "stage_index": 0, "attempt": 1,
+                "status": stage_state.RUNNING, "slurm_job_id": "9004", "dispatch_claim": "w1",
+            }]
+
+        def finish_active_stage_runs(self, _task_id, *, status, reason_code):
+            return 0
+
+        def update_task(self, _task_id, **fields):
+            updates.append(fields)
+            return True
+
+    class _TaskType:
+        workflow = (object(),)
+
+    class _Queued:
+        id = "replacement-task"
+
+    monkeypatch.setattr(task_runtime, "task_store", _Store())
+    monkeypatch.setattr(task_runtime, "CONFIG", replace(task_runtime.CONFIG, demo_mode=False))
+    monkeypatch.setattr(task_runtime, "_get_task_type", lambda _name: (_TaskType(), object()))
+    monkeypatch.setattr(task_runtime, "_slurm_job_state", lambda _job_id: "inactive")
+    monkeypatch.setattr(
+        task_runtime,
+        "_stop_orphaned_workflow_execution",
+        lambda _task_id, handle, _container: stopped.append(handle) or "",
+    )
+    monkeypatch.setattr(
+        task_runtime.run_compute_task, "apply_async",
+        lambda *args, **kwargs: enqueued.append((args, kwargs)) or _Queued(),
+    )
+
+    assert task_runtime._recover_orphaned_tasks() == 1
+    assert stopped == []
+    assert len(enqueued) == 1
+    assert any(update.get("status") == "pending" for update in updates)
+
+
+def test_single_stage_recovery_cancels_a_stage_named_allocation(tmp_path, monkeypatch):
+    """A handle recorded only on the attempt is cancelled before the Task fails."""
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "f3" * 16
+    _insert_task(database, task_id, status="running")
+    attempt = database.begin_stage_attempt(task_id=task_id, stage_index=0, stage_name=STAGE)
+    assert database.record_stage_dispatched(
+        task_id=task_id, stage_name=STAGE, attempt=attempt["attempt"], slurm_job_id="9005"
+    )
+    monkeypatch.setattr(task_runtime, "task_store", database)
+    monkeypatch.setattr(task_runtime, "_get_task_type", lambda _name: (_single_stage_type(), None))
+    monkeypatch.setattr(task_runtime, "_slurm_job_state", lambda _job_id: "active")
+    cancelled: list[str] = []
+    monkeypatch.setattr(
+        task_runtime, "_cancel_recorded_allocation", lambda handle: cancelled.append(handle) or True
+    )
+    monkeypatch.setattr(
+        task_runtime,
+        "_record_failure",
+        lambda md5sum, *_args, **_kwargs: database.update_task(md5sum, status="failed"),
+    )
+
+    assert task_runtime._recover_orphaned_tasks() == 1
+    assert cancelled == ["9005"]
+    assert database.get_task(task_id)["status"] == "failed"
+
+
+def test_single_stage_recovery_holds_a_stage_named_allocation_it_cannot_stop(tmp_path, monkeypatch):
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "f4" * 16
+    _insert_task(database, task_id, status="running")
+    attempt = database.begin_stage_attempt(task_id=task_id, stage_index=0, stage_name=STAGE)
+    assert database.record_stage_dispatched(
+        task_id=task_id, stage_name=STAGE, attempt=attempt["attempt"], slurm_job_id="9006"
+    )
+    monkeypatch.setattr(task_runtime, "task_store", database)
+    monkeypatch.setattr(task_runtime, "_get_task_type", lambda _name: (_single_stage_type(), None))
+    monkeypatch.setattr(task_runtime, "_slurm_job_state", lambda _job_id: "active")
+    monkeypatch.setattr(task_runtime, "_cancel_recorded_allocation", lambda _handle: False)
+
+    assert task_runtime._recover_orphaned_tasks() == 1
+    task = database.get_task(task_id)
+    assert task["status"] == "running"
+    assert "9006 could not be cancelled" in task["error"]
 
 
 def test_recovery_never_replaces_an_unresolved_claimed_dispatch(monkeypatch):

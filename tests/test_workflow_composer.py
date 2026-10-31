@@ -778,6 +778,7 @@ def test_workflow_recovery_claims_stops_and_requeues_once(monkeypatch):
         lambda task_id, **fields: updates.append((task_id, fields)) or True,
     )
     monkeypatch.setattr(task_runtime, "_get_task_type", lambda name: (_TaskType(), object()))
+    monkeypatch.setattr(task_runtime, "_slurm_job_state", lambda _job_id: "active")
     monkeypatch.setattr(
         task_runtime,
         "_stop_orphaned_workflow_execution",
@@ -827,7 +828,7 @@ def test_workflow_recovery_cancels_an_allocation_only_its_stage_recorded(monkeyp
             },
         ],
     )
-    monkeypatch.setattr(task_runtime, "_slurm_job_is_active", lambda job_id: job_id == "4321")
+    monkeypatch.setattr(task_runtime, "_slurm_job_state", lambda job_id: "active" if job_id == "4321" else "inactive")
     monkeypatch.setattr(task_runtime, "_get_task_type", lambda name: (_TaskType(), object()))
     monkeypatch.setattr(
         task_runtime,
