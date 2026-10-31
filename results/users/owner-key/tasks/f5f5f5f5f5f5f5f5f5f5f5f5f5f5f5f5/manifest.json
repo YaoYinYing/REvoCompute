@@ -1,0 +1,56 @@
+{
+  "artifacts": [
+    {
+      "capability": "text",
+      "media_type": "application/json",
+      "path": "debug/submission.json",
+      "preview": "text",
+      "role": "provenance",
+      "sha256": "04584ad448a58adc6fc760c1f5241adf21d78ae1bc399fd928b2f793a3295730",
+      "size": 120
+    },
+    {
+      "capability": "text",
+      "media_type": "text/plain",
+      "path": "task_failed.txt",
+      "preview": "text",
+      "role": "diagnostic",
+      "sha256": "fe6577c967bf83ea16bccbd696e3ac8402ec8f05b7033e2fb2d2849d8bbeec4a",
+      "size": 123
+    }
+  ],
+  "created_at": "2026-10-31T12:32:59.285120+08:00",
+  "limitations": [],
+  "outcome": null,
+  "output_check": {
+    "checks": [],
+    "problems": [
+      "Result contract is invalid: Runner assets must live under docker/runners"
+    ],
+    "state": "not_assessed"
+  },
+  "result": {
+    "files": {}
+  },
+  "run": {
+    "citations": [],
+    "finished_at": "2026-10-31T12:32:59.285120+08:00",
+    "inputs": [],
+    "method": {
+      "id": "cpu_runner",
+      "name": "Synthetic CPU runner",
+      "output_summary": "",
+      "summary": ""
+    },
+    "parameters": [],
+    "started_at": null,
+    "submitted_at": "2026-10-31T12:32:59.277287+08:00",
+    "walltime_seconds": null
+  },
+  "schema_version": 3,
+  "storyboard": null,
+  "task_id": "f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5",
+  "task_type": "cpu_runner",
+  "total_size": 243,
+  "views": []
+}

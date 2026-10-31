@@ -2444,7 +2444,7 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
     # snapshot that carries a pin nor starts an allocation.
     if not preflight_only:
         from revocompute.runner_live_test import receipt_valid_for_artifact
-        from revocompute.runner_readiness import load_instance_families
+        from revocompute.runner_readiness import bundle_digest, load_instance_families
         from revocompute.runner_registry import RegistryError
 
         host_state = build_server_host(CONFIG)
@@ -2452,6 +2452,7 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
         # artifact checked is the exact path this submission pins.  A
         # deployment that applies no admission decision never resolves it.
         deployment_families: dict[str, Any] | None = None
+        accepted_bundles: dict[str, str] = {}
 
         def _same_path(left: Any, right: Any) -> bool:
             left, right = str(left or ""), str(right or "")
@@ -2528,6 +2529,10 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
                     f"for runtime image {image.digest}",
                     "live-test",
                 )
+            # The receipt covers this bundle.  The manifest resolves its own
+            # binding later from the activation index, so remember what was
+            # accepted and refuse if that later read names anything else.
+            accepted_bundles[family.name] = bundle_digest(host_state, validated_family) or ""
             runtime_images[family.name] = image.digest
     # Reject GPU-ineligible users and invalid scheduler configuration before
     # writing uploads or creating a task record.
@@ -2901,6 +2906,20 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
             )
     except runtime_bundle.RuntimeBundleError as exc:
         return jsonify({"error": f"This Runner is not ready to accept submissions: {exc}"}), 503
+    # The acceptance above covered one Runtime Bundle per family.  An
+    # activation between that check and this resolution would pin code the
+    # receipt never validated, so the two reads must agree.
+    for name, accepted in accepted_bundles.items():
+        if runtime_bundles.get(name, "") != accepted:
+            admission = admissions.get(name)
+            return _runner_refusal(
+                name,
+                admission.status.value if admission is not None else "READY",
+                "The Runner code binding changed while this submission was being admitted; "
+                "resubmit after the activation settles.",
+                "retry",
+                reason="RUNTIME_BUNDLE_CHANGED",
+            )
     # The map is also recorded on the task row, because the task store is the
     # only durable index of "a Task that can still be launched references this
     # bundle" — retention reads it so a queued Task's runtime code is never

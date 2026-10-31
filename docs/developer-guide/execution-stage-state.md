@@ -118,7 +118,9 @@ exactly those bytes: receipt contract version, every required passed case,
 build provenance, test-definition, configuration and Runtime Bundle identity,
 and execution identity. A missing, failed, partial, stale or wrong-family
 receipt, or READY evidence describing a different SIF, refuses the submission
-before Task creation and scheduler side effects. A deployment configured with
+before Task creation and scheduler side effects. The manifest resolves its own
+Runtime Bundle binding later, so the digest acceptance covered is remembered and
+a binding that changed in between refuses the submission. A deployment configured with
 the Slurm executor that applies no managed admission decision refuses every
 submission rather than creating a Task that can only fail at launch.
 

@@ -908,3 +908,20 @@ def test_a_non_text_observation_is_treated_as_absent(tmp_path):
     Path(job.runtime_image_receipt_path).write_bytes(b"\xff\xfe\x00schema_version=2\n")
     job._job_id = "4217"
     assert job.runtime_image_observation() is None
+
+
+def test_a_bundle_activation_during_admission_refuses_the_submission(monkeypatch, tmp_path):
+    """The manifest must pin the bundle the receipt validated, not a later one."""
+    module, _family_row = _submission_setup(monkeypatch, tmp_path, image=True, receipt=True)
+    from revocompute import runner_live_test, runner_readiness
+
+    # Admission accepts the bytes and records bundle A; the manifest's later
+    # resolution names none, which is the activation-drift case.
+    monkeypatch.setattr(runner_live_test, "receipt_valid_for_artifact", lambda *_a, **_k: True)
+    monkeypatch.setattr(runner_readiness, "bundle_digest", lambda _state, _family: _IMAGE_SHA_A)
+
+    response = _post(module)
+
+    assert response.status_code == 503, response.get_data(as_text=True)
+    assert response.get_json()["reason"] == "RUNTIME_BUNDLE_CHANGED"
+    assert module.task_store.list_tasks() == []

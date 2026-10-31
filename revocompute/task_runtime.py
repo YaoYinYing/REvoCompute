@@ -1588,11 +1588,11 @@ def _run_compute_workflow(
         _record_workflow_refusal(task_id, tt.name, "execution_graph_changed")
         return JobState.FAILED
     legacy_state = _workflow_state(task)
-    # No attempt records the runtime image it ran, so a COMPLETED row from an
-    # earlier execution of this Task cannot be attributed to this execution's
-    # image: a promotion may have replaced the SIF at the same path.  Every
-    # stage therefore runs again; ``latest_runs`` holds only attempts that
-    # settle here, which is what a consumer stages from.
+    # Every stage runs again on a new execution.  A COMPLETED row now records
+    # the image digest its wrapper observed, but a row from an earlier
+    # execution is still not evidence for this one: the composer's
+    # ``latest_runs`` holds only attempts that settle here, which is what a
+    # consumer stages from, and reuse remains a separate decision.
     latest_runs: dict[str, dict[str, Any]] = {}
     recorded_stages = {str(run["stage_name"]) for run in task_store.list_stage_runs(task_id)}
     stages = {stage.name: (index, stage) for index, stage in enumerate(tt.workflow)}
