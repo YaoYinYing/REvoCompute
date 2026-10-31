@@ -1113,17 +1113,30 @@ def _mark_allocation_unconfirmed(task_id: str, handle: str, message: str) -> Non
         )
 
 
-def _cancel_recorded_allocation(handle: str) -> bool:
-    """Ask the scheduler to cancel one allocation; ``False`` when that is unproven."""
+def _cancel_recorded_allocation(handle: str, *, confirm_seconds: float = 5.0) -> bool:
+    """Cancel one allocation and confirm the controller reports it gone.
+
+    ``scancel`` returning zero is a request, not termination: Slurm still sends
+    a signal and waits out its own ``KillWait``.  Only a controller-confirmed
+    inactive job counts as cancelled, so an unanswerable or still-running
+    allocation keeps its holder from being settled.
+    """
     scancel = shutil.which("scancel")
     if not scancel or not str(handle).isdigit():
         return False
     try:
         subprocess.run([scancel, str(handle)], timeout=10, check=True)
     except (OSError, subprocess.SubprocessError) as exc:
-        logging.warning("Could not cancel allocation %s: %s", handle, exc)
+        logging.warning("Could not request cancellation of allocation %s: %s", handle, exc)
         return False
-    return True
+    deadline = time.monotonic() + confirm_seconds
+    while True:
+        if _slurm_job_state(str(handle)) == "inactive":
+            return True
+        if time.monotonic() >= deadline:
+            logging.warning("Allocation %s did not stop within %.0f s", handle, confirm_seconds)
+            return False
+        time.sleep(0.5)
 
 
 def _claim_stage_launch(task_id: str, stage_name: str, attempt: int) -> None:
@@ -3667,13 +3680,10 @@ def _stop_orphaned_workflow_execution(task_id: str, slurm_job_id: str, container
     """Stop a workflow allocation before another worker resumes its stage."""
     if slurm_job_id:
         if slurm_job_id.isdigit():
-            scancel = shutil.which("scancel")
-            if not scancel:
-                return f"Cannot resume while SLURM job {slurm_job_id} cannot be cancelled"
-            try:
-                subprocess.run([scancel, slurm_job_id], timeout=10, check=True)
-            except (OSError, subprocess.SubprocessError) as exc:
-                return f"Could not cancel SLURM job {slurm_job_id}: {exc}"
+            if _slurm_job_state(slurm_job_id) != "inactive" and not _cancel_recorded_allocation(
+                slurm_job_id
+            ):
+                return f"SLURM job {slurm_job_id} could not be confirmed stopped"
         else:
             match = re.fullmatch(r"srun-([1-9][0-9]*)", slurm_job_id)
             if not match:

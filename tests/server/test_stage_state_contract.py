@@ -980,6 +980,29 @@ def test_single_stage_worker_loss_keeps_a_task_whose_allocation_is_reported_runn
 
 
 @pytest.mark.parametrize(
+    ("scancel_returncode", "state", "expected"),
+    [
+        (0, "inactive", True),
+        (0, "active", False),
+        (0, "unknown", False),
+        (1, "inactive", False),
+    ],
+)
+def test_a_cancellation_request_is_not_termination(monkeypatch, scancel_returncode, state, expected):
+    monkeypatch.setattr(task_runtime.shutil, "which", lambda command: f"/usr/bin/{command}")
+
+    def _run(args, **_kwargs):
+        if scancel_returncode:
+            raise subprocess.CalledProcessError(scancel_returncode, args)
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(task_runtime.subprocess, "run", _run)
+    monkeypatch.setattr(task_runtime, "_slurm_job_state", lambda _job_id: state)
+
+    assert task_runtime._cancel_recorded_allocation("4155", confirm_seconds=0.0) is expected
+
+
+@pytest.mark.parametrize(
     ("returncode", "output", "expected"),
     [
         (0, "JobId=4155 JobState=RUNNING\n", "active"),
