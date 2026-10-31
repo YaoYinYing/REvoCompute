@@ -950,6 +950,37 @@ def test_single_stage_task_handle_recovery_settles_a_confirmed_gone_job(tmp_path
     assert database.list_stage_runs(task_id)[0]["status"] == stage_state.INTERRUPTED
 
 
+def test_single_stage_recovery_cancels_an_attempt_handle_beside_a_task_handle(tmp_path, monkeypatch):
+    """A stage handle is examined even when the Task row also names one."""
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "f7" * 16
+    _insert_task(database, task_id, status="running")
+    database.update_task(task_id, slurm_job_id="8009")
+    attempt = database.begin_stage_attempt(task_id=task_id, stage_index=0, stage_name=STAGE)
+    assert database.record_stage_dispatched(
+        task_id=task_id, stage_name=STAGE, attempt=attempt["attempt"], slurm_job_id="8010"
+    )
+    database.record_stage_running(task_id=task_id, stage_name=STAGE, attempt=attempt["attempt"])
+    monkeypatch.setattr(task_runtime, "task_store", database)
+    monkeypatch.setattr(task_runtime, "_get_task_type", lambda _name: (_single_stage_type(), None))
+    monkeypatch.setattr(
+        task_runtime, "_slurm_job_state", lambda job_id: "inactive" if job_id == "8009" else "active"
+    )
+    cancelled: list[str] = []
+    monkeypatch.setattr(
+        task_runtime, "_cancel_recorded_allocation", lambda handle: cancelled.append(handle) or True
+    )
+    monkeypatch.setattr(
+        task_runtime,
+        "_record_failure",
+        lambda md5sum, *_args, **_kwargs: database.update_task(md5sum, status="failed"),
+    )
+
+    assert task_runtime._recover_orphaned_tasks() == 1
+    assert "8010" in cancelled
+    assert database.get_task(task_id)["status"] == "failed"
+
+
 def test_recovery_never_replaces_an_unresolved_claimed_dispatch(monkeypatch):
     """(c) Worker-loss recovery does not re-enqueue over an unknown allocation."""
     task = {"md5sum": "c3" * 16, "status": "running", "task_type": STAGE}

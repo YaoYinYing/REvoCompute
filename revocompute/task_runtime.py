@@ -4482,7 +4482,37 @@ def _recover_orphaned_tasks() -> int:
                     resumed.revoke(terminate=True)
             handled += 1
             continue
-        if not slurm_job_id and _unresolved_dispatch_claim(task_store.list_stage_runs(md5sum)):
+        runs = task_store.list_stage_runs(md5sum)
+        stage_handles = {
+            str(run.get("slurm_job_id") or "").strip()
+            for run in runs
+            if run.get("status") not in stage_state.TERMINAL_STATUSES
+        } - {"", slurm_job_id}
+        # A worker can die after an attempt recorded its allocation but before
+        # the Task row was updated, and a restored row can name one handle on
+        # the Task and another on an attempt.  Every attempt handle is cancelled
+        # or held before any claim check or settlement, whichever form the Task
+        # row happened to take.
+        unresolved: list[str] = []
+        for handle in sorted(stage_handles):
+            if not handle.isdigit():
+                if _stop_orphaned_workflow_execution(md5sum, handle, ""):
+                    unresolved.append(handle)
+                continue
+            if _slurm_job_state(handle) == "inactive":
+                continue
+            if not _cancel_recorded_allocation(handle):
+                unresolved.append(handle)
+        if unresolved:
+            message = (
+                "SLURM task lost its worker; allocations "
+                f"{', '.join(unresolved)} could not be cancelled"
+            )
+            task_store.update_task(md5sum, status="running", error=message)
+            logging.error("Recovery left task %s running: %s", md5sum, message)
+            handled += 1
+            continue
+        if _unresolved_dispatch_claim(runs):
             message = (
                 "A stage attempt claimed a dispatch but recorded no scheduler handle; "
                 "an allocation may exist, so recovery will not start a replacement; cancel the Task to settle it"
@@ -4491,33 +4521,7 @@ def _recover_orphaned_tasks() -> int:
             logging.error("Recovery refused task %s: %s", md5sum, message)
             handled += 1
             continue
-        stage_handles = {
-            str(run.get("slurm_job_id") or "").strip()
-            for run in task_store.list_stage_runs(md5sum)
-            if run.get("status") not in stage_state.TERMINAL_STATUSES
-        } - {""}
         if not slurm_job_id and stage_handles:
-            # The attempt recorded its allocation before the Task row was
-            # updated, so a worker that died in between names the only handle.
-            unresolved: list[str] = []
-            for handle in sorted(stage_handles):
-                if not handle.isdigit():
-                    if _stop_orphaned_workflow_execution(md5sum, handle, ""):
-                        unresolved.append(handle)
-                    continue
-                if _slurm_job_state(handle) == "inactive":
-                    continue
-                if not _cancel_recorded_allocation(handle):
-                    unresolved.append(handle)
-            if unresolved:
-                message = (
-                    "SLURM task lost its worker; allocations "
-                    f"{', '.join(unresolved)} could not be cancelled"
-                )
-                task_store.update_task(md5sum, status="running", error=message)
-                logging.error("Recovery left task %s running: %s", md5sum, message)
-                handled += 1
-                continue
             try:
                 task_store.finish_active_stage_runs(
                     md5sum, status=stage_state.INTERRUPTED, reason_code=stage_state.Reason.WORKER_LOST
