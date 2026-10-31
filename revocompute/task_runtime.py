@@ -25,6 +25,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import uuid
 import zipfile
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -806,13 +807,21 @@ def _compute_allocation_callbacks(
         if not stage_target:
             return
         try:
-            task_store.record_stage_dispatched(
+            recorded = task_store.record_stage_dispatched(
                 task_id=task_id,
                 stage_name=stage_id,
                 attempt=attempt,
                 slurm_job_id=str(slurm_job_id),
                 at=dispatched_at,
             )
+            if not recorded:
+                # The attempt already owns a different handle.  That is a
+                # duplicate launch that reached the scheduler despite the
+                # claim, never permission to overwrite or continue.
+                logging.error(
+                    "Stage attempt %s/#%s of task %s refused allocation %s; it already owns another handle",
+                    stage_id, attempt, task_id, slurm_job_id,
+                )
         except Exception:
             # Stage records are bookkeeping; the allocation fact and the
             # scientific run do not depend on this write succeeding.
@@ -1062,6 +1071,39 @@ def _recover_surviving_host_allocations() -> None:
             logging.exception("Dispatch-time %s adoption failed", name)
 
 
+class StageDispatchConflict(RuntimeError):
+    """Another dispatch already owns the launch of this live stage attempt.
+
+    Raised before any scheduler request is made, so the loser of the claim
+    starts no allocation and leaves the owner's attempt and handle untouched.
+    """
+
+
+def _claim_stage_launch(task_id: str, stage_name: str, attempt: int) -> None:
+    """Become the single launch owner of a live attempt, or fail closed.
+
+    The claim is committed to the attempt row before the job adapter exists, so
+    two dispatches of the same attempt can never both reach ``srun``.  The
+    loser is told which allocation the attempt already owns when one is
+    recorded, but it never submits and never settles the owner's attempt.
+    """
+    claim_id = uuid.uuid4().hex
+    if task_store.claim_stage_dispatch(
+        task_id=task_id, stage_name=stage_name, attempt=attempt, claim_id=claim_id
+    ):
+        return
+    handle = ""
+    for run in task_store.list_stage_runs(task_id):
+        if run.get("stage_name") == stage_name and int(run.get("attempt") or 0) == attempt:
+            handle = str(run.get("slurm_job_id") or "").strip()
+            break
+    detail = f"; allocation {handle} is already recorded" if handle else ""
+    raise StageDispatchConflict(
+        f"Stage attempt {stage_name!r} #{attempt} of task {task_id} is already owned by "
+        f"another dispatch{detail}"
+    )
+
+
 def _run_compute_job(
     task_id: str,
     tt,
@@ -1093,6 +1135,7 @@ def _run_compute_job(
     if attempt is None:
         _record_workflow_refusal(task_id, tt.name, "stage_attempt_unavailable")
         return JobState.FAILED
+    _claim_stage_launch(task_id, tt.name, attempt)
     # No entitlement read here: the decision belongs to the atomic
     # allocation-start transition, which knows whether this Task holds a
     # reservation of its own (the workflow and re-dispatch cases do not).
@@ -1203,7 +1246,33 @@ def _settle_unsubmitted_attempt(task_id: str, stage_name: str, attempt: int | No
     A cancellation that lands during submission is the important case: without
     this settlement the attempt would stay live forever, because the cancelled
     Task's failure path deliberately refuses to touch a terminal Task.
+
+    A submission that failed *after* the scheduler accepted it already recorded
+    its handle on the attempt.  That attempt is left live: settling it here
+    would let an authorized retry open a second allocation beside a request
+    that may still be running.  Recovery cancels or settles it from evidence.
     """
+    if attempt is None:
+        return
+    try:
+        for run in task_store.list_stage_runs(task_id):
+            if run.get("stage_name") == stage_name and int(run.get("attempt") or 0) == attempt:
+                if str(run.get("slurm_job_id") or "").strip():
+                    logging.error(
+                        "Stage attempt %s/#%s of task %s failed after recording allocation %s; "
+                        "leaving it live for reconciliation",
+                        stage_name, attempt, task_id, run["slurm_job_id"],
+                    )
+                    return
+                break
+    except Exception:
+        # Without a fresh read, dispatch cannot be ruled out.  Leaving the
+        # attempt live is the fail-closed choice.
+        logging.exception(
+            "Could not verify whether stage attempt %s/#%s of task %s dispatched; leaving it live",
+            stage_name, attempt, task_id,
+        )
+        return
     reason_code = "submission_failed"
     status = stage_state.FAILED
     current = str((task_store.get_task(task_id) or {}).get("status") or "").strip().lower()
@@ -1498,6 +1567,7 @@ def _execute_workflow_node(
         # would be invisible to settlement, recovery, and the cancellation gate.
         _record_workflow_refusal(task_id, stage.name, "stage_attempt_unavailable")
         return JobState.FAILED
+    _claim_stage_launch(task_id, stage.name, attempt)
     user_id = int(task.get("submitted_by_user_id") or 0)
     # A workflow stage has no reservation of its own after the first one
     # consumed the Task's single submission hold, so its allocation start is
@@ -3440,6 +3510,12 @@ def _execute_compute_task(
             run_stage=final_stage,
         )
         _cleanup_task_workspace(task)
+    except StageDispatchConflict as exc:
+        # A duplicate dispatch lost the launch claim to a live worker.  The
+        # owner still owns the Task, the attempt, and its allocation, so this
+        # path records no failure and settles nothing.
+        logging.warning("Task %s lost its launch claim to another dispatch: %s", md5sum, exc)
+        return
     except Exception as exc:  # pylint: disable=broad-except
         emit_event(
             "runner.stage.failed",
@@ -4150,6 +4226,16 @@ def _slurm_job_is_active(job_id: str) -> bool:
     return bool(state) and state not in _TERMINAL_SLURM_STATES
 
 
+def _unresolved_dispatch_claim(runs: list[dict[str, Any]]) -> bool:
+    """Whether a live attempt claimed a launch but never recorded its handle."""
+    return any(
+        run.get("status") in stage_state.ACTIVE_STATUSES
+        and str(run.get("dispatch_claim") or "").strip()
+        and not str(run.get("slurm_job_id") or "").strip()
+        for run in runs
+    )
+
+
 def _recover_orphaned_tasks() -> int:
     """Resolve compute records whose owning Celery worker disappeared."""
     # A demo deployment never resolves a restored compute row: recovery can
@@ -4172,11 +4258,26 @@ def _recover_orphaned_tasks() -> int:
         if workflow_task:
             if not task_store.claim_task_recovery(md5sum, expected_status=str(task.get("status") or "")):
                 continue
+            runs = task_store.list_stage_runs(md5sum)
+            if _unresolved_dispatch_claim(runs):
+                # A claim is written before the scheduler request and only the
+                # recorded handle proves what that request became.  Without it
+                # an allocation may still be queued or running, so starting a
+                # replacement would duplicate it and forgetting the claim would
+                # lose it.  Fail closed until reconciliation resolves it.
+                message = (
+                    "A stage attempt claimed a dispatch but recorded no scheduler handle; "
+                    "an allocation may exist, so recovery will not start a replacement"
+                )
+                task_store.update_task(md5sum, status="running", error=message)
+                logging.error("Recovery refused workflow %s: %s", md5sum, message)
+                handled += 1
+                continue
             # A stage records its allocation in its own row before the Task row
             # is updated, so a worker that died in between leaves the only
             # handle to a live allocation there.  Cancel every one of them.
             handles = {slurm_job_id} if slurm_job_id else set()
-            for run in task_store.list_stage_runs(md5sum):
+            for run in runs:
                 recorded = str(run.get("slurm_job_id") or "").strip()
                 if not recorded or run.get("status") in stage_state.TERMINAL_STATUSES:
                     continue
@@ -4229,6 +4330,15 @@ def _recover_orphaned_tasks() -> int:
             else:
                 if not task_store.update_task(md5sum, celery_task_id=resumed.id):
                     resumed.revoke(terminate=True)
+            handled += 1
+            continue
+        if not slurm_job_id and _unresolved_dispatch_claim(task_store.list_stage_runs(md5sum)):
+            message = (
+                "A stage attempt claimed a dispatch but recorded no scheduler handle; "
+                "an allocation may exist, so recovery will not start a replacement"
+            )
+            task_store.update_task(md5sum, status="running", error=message)
+            logging.error("Recovery refused task %s: %s", md5sum, message)
             handled += 1
             continue
         if slurm_job_id:

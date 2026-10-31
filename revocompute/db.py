@@ -732,6 +732,11 @@ class TaskDatabase:
             Column("attempt", Integer, nullable=False),
             Column("status", String, nullable=False),
             Column("slurm_job_id", String),
+            # The one dispatch that may launch this attempt.  Written before the
+            # adapter can create a scheduler request and never cleared, so a
+            # duplicate or resumed caller that finds it set fails closed instead
+            # of starting a second allocation under the same attempt.
+            Column("dispatch_claim", String),
             Column("planned_resources", Text),
             Column("started_at", Float),
             Column("ended_at", Float),
@@ -877,6 +882,8 @@ class TaskDatabase:
             columns = {column["name"] for column in sa_inspect(conn).get_columns("stage_runs")}
             if "output_identity" not in columns:
                 conn.exec_driver_sql("ALTER TABLE stage_runs ADD COLUMN output_identity TEXT DEFAULT NULL")
+            if "dispatch_claim" not in columns:
+                conn.exec_driver_sql("ALTER TABLE stage_runs ADD COLUMN dispatch_claim TEXT DEFAULT NULL")
             for index in self.stage_runs_table.indexes:
                 index.create(bind=conn, checkfirst=True)
         except IntegrityError as exc:
@@ -2984,6 +2991,44 @@ class TaskDatabase:
                 ),
             )
             .values(slurm_job_id=str(slurm_job_id), updated_at=timestamp)
+        )
+        with self.engine.begin() as conn:
+            return conn.execute(stmt).rowcount == 1
+
+    def claim_stage_dispatch(
+        self,
+        *,
+        task_id: str,
+        stage_name: str,
+        attempt: int,
+        claim_id: str,
+    ) -> bool:
+        """Make ``claim_id`` the only launch owner of one live attempt.
+
+        The compare-and-set runs before the caller may create a scheduler
+        request, so of two concurrent dispatches exactly one proceeds and the
+        other observes ``False`` and must not submit.  A terminal attempt, an
+        attempt that already recorded a scheduler handle, or one another caller
+        already claimed is never claimable.  The claim is not a lease: it is
+        never taken over, because no later caller can prove that the first
+        claimant's ``srun`` was not accepted.
+        """
+        if not str(claim_id or "").strip():
+            raise ValueError("claim_id must be non-empty")
+        stmt = (
+            update(self.stage_runs_table)
+            .where(
+                self.stage_runs_table.c.task_id == task_id,
+                self.stage_runs_table.c.stage_name == stage_name,
+                self.stage_runs_table.c.attempt == attempt,
+                self.stage_runs_table.c.status == stage_state.QUEUED,
+                self.stage_runs_table.c.slurm_job_id.is_(None),
+                or_(
+                    self.stage_runs_table.c.dispatch_claim.is_(None),
+                    self.stage_runs_table.c.dispatch_claim == str(claim_id),
+                ),
+            )
+            .values(dispatch_claim=str(claim_id), updated_at=time.time())
         )
         with self.engine.begin() as conn:
             return conn.execute(stmt).rowcount == 1
