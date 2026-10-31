@@ -174,9 +174,12 @@ Rules the code enforces:
   exactly those bytes. A family without a resolvable digest, without that
   acceptance, or with a failed/partial/stale/wrong-family receipt refuses the
   submission with ``503``; READY evidence that describes a different SIF is not
-  acceptance for the pinned one. One refusal rejects the whole submission before
-  any allocation. The pin is recorded in the immutable ``task.json`` and mirrored
-  on the Task row.
+  acceptance for the pinned one. A Slurm deployment that applies no managed
+  admission decision refuses every submission. Acceptance identity is computed
+  from the already-active registry (no request-time discovery snapshot) and the
+  active family contract must agree with the deployment family view. One
+  refusal rejects the whole submission before any allocation. The pin is
+  recorded in the immutable ``task.json`` and mirrored on the Task row.
 - GPU eligibility is graph-aware: if any stage in any referenced family
   requires an accelerator, the user needs GPU access.
 - Dispatch resolves each node's runtime image pin, entrypoint, mounts,

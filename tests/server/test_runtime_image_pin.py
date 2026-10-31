@@ -25,7 +25,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from conftest import _load_pssm_module, _runtime_image_receipt, _test_client_auth
+from conftest import (
+    _DeploymentConfigView,
+    _load_pssm_module,
+    _routes_globals,
+    _runtime_image_receipt,
+    _test_client_auth,
+)
 from revocompute import runtime_image, stage_state, task_types, task_runtime
 from revocompute.db import TaskDatabase
 from revocompute.job import JobState
@@ -354,6 +360,76 @@ def test_a_receipt_that_does_not_prove_accepted_bytes_never_admits(
 
     assert response.status_code == 503, response.get_data(as_text=True)
     assert response.get_json()["reason"] == "RUNTIME_IMAGE_UNPINNED"
+    assert module.task_store.list_tasks() == []
+    assert queued == []
+
+
+def test_submission_reads_published_evidence_without_installing_a_registry(monkeypatch, tmp_path):
+    """Admission must not mutate the process-wide registry during a request."""
+    module, _family_row = _submission_setup(monkeypatch, tmp_path, image=True, receipt=True)
+    from revocompute import task_types as task_types_module
+
+    active_before = task_types_module._active()
+    discovery_calls = []
+    monkeypatch.setattr(
+        task_types_module, "discover_plugins", lambda *_a, **_k: discovery_calls.append(True)
+    )
+
+    response = _post(module)
+
+    assert response.status_code in (202, 302), response.get_data(as_text=True)
+    assert discovery_calls == []
+    assert task_types_module._active() is active_before
+
+
+def test_an_active_family_that_disagrees_with_the_deployment_family_refuses(monkeypatch, tmp_path):
+    """Acceptance for one family contract must not admit another's execution."""
+    module, _family_row = _submission_setup(monkeypatch, tmp_path, image=True, receipt=True)
+    from dataclasses import replace
+
+    route_globals = _routes_globals(module)
+    real_get_task_type = route_globals["_get_task_type"]
+
+    def divergent(name):
+        task_type, runner = real_get_task_type(name)
+        return (
+            replace(
+                task_type,
+                runtime=replace(task_type.runtime, entrypoint=("bash", "/app/divergent.sh")),
+            ),
+            runner,
+        )
+
+    monkeypatch.setitem(route_globals, "_get_task_type", divergent)
+    queued = []
+    monkeypatch.setattr(module.run_compute_task, "apply_async", lambda *_a, **_k: queued.append(True))
+
+    response = _post(module)
+
+    assert response.status_code == 503, response.get_data(as_text=True)
+    assert response.get_json()["reason"] == "RUNTIME_IMAGE_UNPINNED"
+    assert "disagrees" in response.get_json()["message"]
+    assert module.task_store.list_tasks() == []
+    assert queued == []
+
+
+def test_a_slurm_deployment_without_managed_admission_refuses_submission(monkeypatch, tmp_path):
+    """A Slurm executor with the Runner feature off cannot pin anything."""
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "cpu_runner"},
+    )
+    monkeypatch.setitem(
+        _routes_globals(module), "CONFIG", _DeploymentConfigView(module.CONFIG, "slurm")
+    )
+    queued = []
+    monkeypatch.setattr(module.run_compute_task, "apply_async", lambda *_a, **_k: queued.append(True))
+
+    response = _post(module)
+
+    assert response.status_code == 503, response.get_data(as_text=True)
+    assert response.get_json()["reason"] == "RUNNER_ADMISSION_UNMANAGED"
     assert module.task_store.list_tasks() == []
     assert queued == []
 

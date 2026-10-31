@@ -203,14 +203,22 @@ def load_validation_identity(
     resource_provider=None,
     repo_root: str | Path = SERVER_ROOT,
     families: Mapping[str, RuntimeFamily] | None = None,
+    discover: bool = True,
 ) -> ValidationIdentity:
-    """Resolve the family contract and effective resources into one replayable identity."""
+    """Resolve the family contract and effective resources into one replayable identity.
+
+    ``discover=False`` is for a process whose registry already holds this plugin
+    tree (the web service).  Discovery otherwise installs a process-wide
+    snapshot, which a concurrent request must not trigger; callers that opt out
+    have already established the tree and enabled scope.
+    """
     if family.root is None:
         raise LiveTestConfigurationError("Runner family source root is unavailable")
     from revocompute.task_types import _RESULT_VIEW_PRESENTATION_KEYS, discover_plugins, get
 
     plugin_root = family.root.parent
-    discover_plugins(str(plugin_root), _enabled_scope(state))
+    if discover:
+        discover_plugins(str(plugin_root), _enabled_scope(state))
     manifest = next(item for item in load_plugin_families(plugin_root) if item.name == family.name)
     schemas: dict[str, dict[str, Any]] = {}
     definitions: dict[str, tuple[Any, Any]] = {}
@@ -378,9 +386,11 @@ class RunnerLiveTestWorker:
         artifact_path: str | Path | None = None,
         candidate_bundle: str | None = None,
         families: Sequence[RuntimeFamily] = (),
+        discover: bool = True,
     ):
         self.state = state
         self.family = family
+        self._discover = discover
         self.collection = collection
         self.task = task
         self._explicit_artifact = Path(artifact_path) if artifact_path is not None else None
@@ -519,7 +529,11 @@ class RunnerLiveTestWorker:
 
     def _load_identity(self) -> ValidationIdentity:
         return load_validation_identity(
-            self.family, state=self.state, repo_root=self.repo_root, families=self._families
+            self.family,
+            state=self.state,
+            repo_root=self.repo_root,
+            families=self._families,
+            discover=self._discover,
         )
 
     def _validate_candidate(self) -> None:
@@ -1300,7 +1314,12 @@ def _verify_composed_artifacts(
 
 
 def receipt_valid_for_artifact(
-    state, family: RuntimeFamily, artifact_path: str | Path, *, sif_sha256: str | None = None
+    state,
+    family: RuntimeFamily,
+    artifact_path: str | Path,
+    *,
+    sif_sha256: str | None = None,
+    discover: bool = True,
 ) -> bool:
     """Return whether required smoke tests passed for the exact artifact identity.
 
@@ -1309,6 +1328,9 @@ def receipt_valid_for_artifact(
     so an identity-only lookup can return another artifact's receipt.  When
     ``sif_sha256`` is supplied, the artifact must still hash to it; a file that
     changed after the caller measured it is not validated.
+
+    ``discover=False`` is for a caller whose process already holds this plugin
+    tree; see ``load_validation_identity``.
     """
     try:
         # This check answers for the deployment, so it resolves the deployment's
@@ -1316,7 +1338,11 @@ def receipt_valid_for_artifact(
         # installed must not read as unloaded here and block its own promotion.
         families = _identity_families(family, family.root.parent, None, state) if family.root is not None else {}
         worker = RunnerLiveTestWorker(
-            state, family, artifact_path=artifact_path, families=tuple(families.values())
+            state,
+            family,
+            artifact_path=artifact_path,
+            families=tuple(families.values()),
+            discover=discover,
         )
         artifact = worker.artifact
         if not artifact.is_file():

@@ -2365,6 +2365,41 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
         family.name: submission_admission(CONFIG.server_dir, family.name, manage_db=managedb)
         for family in referenced_families.values()
     }
+
+    def _runner_refusal(
+        family_name: str,
+        status: str,
+        message: str,
+        next_action: str,
+        reason: str = "RUNTIME_IMAGE_UNPINNED",
+    ):
+        return (
+            jsonify(
+                {
+                    "error": "Runner is currently unavailable for new submissions",
+                    "runner": family_name,
+                    "status": status,
+                    "reason": reason,
+                    "message": message,
+                    "next_action": next_action,
+                }
+            ),
+            503,
+        )
+
+    # A Slurm deployment that applies no managed admission decision would pin
+    # no image and create a Task that can only fail when the scheduler refuses
+    # it.  Refuse at the shared submission boundary instead.  A non-Slurm
+    # (preview/demo) deployment keeps its existing behavior.
+    if CONFIG.job_executor == "slurm" and all(item is None for item in admissions.values()):
+        return _runner_refusal(
+            tt.runtime.name,
+            "NOT_CONFIGURED",
+            "This deployment executes on Slurm but applies no managed Runner admission decision, "
+            "so submissions are refused instead of creating an unpinned Task.",
+            "doctor",
+            reason="RUNNER_ADMISSION_UNMANAGED",
+        )
     for family in referenced_families.values():
         admission = admissions[family.name]
         if admission is None:
@@ -2418,20 +2453,31 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
         # deployment that applies no admission decision never resolves it.
         deployment_families: dict[str, Any] | None = None
 
-        def _image_refusal(family_name: str, status: str, message: str, next_action: str):
-            return (
-                jsonify(
-                    {
-                        "error": "Runner is currently unavailable for new submissions",
-                        "runner": family_name,
-                        "status": status,
-                        "reason": "RUNTIME_IMAGE_UNPINNED",
-                        "message": message,
-                        "next_action": next_action,
-                    }
-                ),
-                503,
-            )
+        def _same_path(left: Any, right: Any) -> bool:
+            left, right = str(left or ""), str(right or "")
+            if not left or not right:
+                return left == right
+            try:
+                return os.path.samefile(left, right)
+            except OSError:
+                return Path(left).resolve() == Path(right).resolve()
+
+        def _family_disagrees(left: Any, right: Any) -> bool:
+            """Whether the active and deployment views describe different contracts.
+
+            The SIF path itself is not compared: acceptance is bound to the
+            bytes at the pinned path by ``sif_sha256``, so two paths holding the
+            same artifact are the same execution.  The source root, definition,
+            entrypoint, build inputs and runtime overlay determine the contract
+            and the Runtime Bundle binding submission will pin.
+            """
+            for field_name in ("name", "version", "definition", "image_artifact"):
+                if getattr(left, field_name, "") != getattr(right, field_name, ""):
+                    return True
+            for field_name in ("entrypoint", "build_inputs", "runtime_overlay"):
+                if tuple(getattr(left, field_name, ())) != tuple(getattr(right, field_name, ())):
+                    return True
+            return not _same_path(getattr(left, "root", ""), getattr(right, "root", ""))
 
         for family in referenced_families.values():
             admission = admissions[family.name]
@@ -2443,7 +2489,7 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
                         item.name: item for item in load_instance_families(host_state)
                     }
                 except (OSError, ValueError, runtime_bundle.RuntimeBundleError, RegistryError):
-                    return _image_refusal(
+                    return _runner_refusal(
                         family.name,
                         admission.status.value,
                         "The deployment's Runner inventory cannot be resolved",
@@ -2452,16 +2498,30 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
             try:
                 image = runtime_image.runtime_image_for_submission(family)
             except runtime_image.RuntimeImageError as exc:
-                return _image_refusal(family.name, admission.status.value, str(exc), "build-sif")
+                return _runner_refusal(family.name, admission.status.value, str(exc), "build-sif")
             # Resolving the pin is not acceptance: only the deployment's
             # live-test authority can prove these exact bytes carry a current,
             # passed validation with the identity submission would pin.  A
             # READY attestation for another SIF is not evidence for this one.
+            # The acceptance identity must describe the same family contract the
+            # Task will execute, so a disagreement refuses rather than silently
+            # preferring either view.
             validated_family = deployment_families.get(family.name)
-            if validated_family is None or not receipt_valid_for_artifact(
-                host_state, validated_family, image.path, sif_sha256=image.digest
+            if validated_family is None or _family_disagrees(family, validated_family):
+                return _runner_refusal(
+                    family.name,
+                    admission.status.value,
+                    "The active Runner family contract disagrees with the deployment's family view",
+                    "doctor",
+                )
+            if not receipt_valid_for_artifact(
+                host_state,
+                validated_family,
+                image.path,
+                sif_sha256=image.digest,
+                discover=False,
             ):
-                return _image_refusal(
+                return _runner_refusal(
                     family.name,
                     admission.status.value,
                     f"Runner family {family.name!r} has no current accepted live-test receipt "

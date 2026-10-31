@@ -118,7 +118,18 @@ exactly those bytes: receipt contract version, every required passed case,
 build provenance, test-definition, configuration and Runtime Bundle identity,
 and execution identity. A missing, failed, partial, stale or wrong-family
 receipt, or READY evidence describing a different SIF, refuses the submission
-before Task creation and scheduler side effects.
+before Task creation and scheduler side effects. A deployment configured with
+the Slurm executor that applies no managed admission decision refuses every
+submission rather than creating a Task that can only fail at launch.
+
+The acceptance identity is computed from the registry the web process already
+holds: a submission does not install a discovery snapshot during the request.
+The active family object that supplies the pin must agree with the deployment
+family that supplies acceptance on every identity-bearing field (source root,
+definition, artifact, entrypoint, build inputs and runtime overlay); a
+disagreement refuses instead of silently preferring one view. The SIF path
+itself is not compared: acceptance is bound to the bytes at the pinned path by
+``sif_sha256``.
 
 The Slurm wrapper re-hashes the SIF immediately before it invokes Apptainer,
 writes a schema-2 receipt binding Task, StageAttempt, family, Slurm job ID,

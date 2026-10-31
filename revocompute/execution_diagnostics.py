@@ -30,7 +30,8 @@ REASONS = {
     "stage_blocked_by_failed_dependency": "A stage could not run because an upstream stage failed or was blocked.",
     "stage_attempt_unavailable": "A stage attempt could not be opened durably, so no allocation was submitted.",
     "stage_settlement_failed": (
-        "A completed stage could not be recorded durably, so its dependents were not dispatched."
+        "A completed stage could not be recorded durably, so its results were not published "
+        "and no dependents were dispatched."
     ),
     "image_identity_missing": (
         "A completed allocation left no runtime-image observation equal to the Task's pin, "

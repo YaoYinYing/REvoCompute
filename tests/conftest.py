@@ -279,6 +279,25 @@ def _pin_runtime_image(module, *families: str) -> None:
         )
 
 
+def _routes_globals(module) -> dict:
+    """Globals of the route whose submission boundary reads deployment config."""
+    route = module.app.view_functions["upload_file"]
+    while hasattr(route, "__wrapped__"):
+        route = route.__wrapped__
+    return route.__globals__
+
+
+class _DeploymentConfigView:
+    """The app's settings with an explicit executor mode for the route boundary."""
+
+    def __init__(self, config, job_executor: str):
+        self._config = config
+        self.job_executor = job_executor
+
+    def __getattr__(self, name):
+        return getattr(self._config, name)
+
+
 def _load_pssm_module(monkeypatch, tmp_path, extra_env: dict | None = None, *, runner_root: Path | None = None):
     """Load a fresh copy of ``revocompute.py`` with test-isolated env vars.
 
@@ -373,6 +392,13 @@ def _load_pssm_module(monkeypatch, tmp_path, extra_env: dict | None = None, *, r
     sys.modules["revocompute.app"] = module
     try:
         spec.loader.exec_module(module)  # type: ignore[attr-defined]
+        # The isolated app executes nothing through Slurm.  Declare that for
+        # the submission admission gate so an unmanaged test deployment is not
+        # mistaken for a misconfigured Slurm deployment; a test that exercises
+        # that refusal sets the executor back to "slurm" on these globals.
+        _routes_globals(module)["CONFIG"] = _DeploymentConfigView(
+            module.CONFIG, job_executor="demo"
+        )
         module.run_compute_task = module.task_runtime.run_compute_task
         module._ROOT_MOUNT_DIRECTORY = module.task_runtime._ROOT_MOUNT_DIRECTORY
         _LOADED_APP_MODULES.append(module)
