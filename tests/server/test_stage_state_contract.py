@@ -949,6 +949,56 @@ def test_single_stage_worker_loss_settles_a_job_the_controller_reports_terminal(
     assert database.list_stage_runs(task_id)[0]["status"] == stage_state.INTERRUPTED
 
 
+def test_single_stage_worker_loss_keeps_a_task_whose_allocation_is_reported_running(tmp_path, monkeypatch):
+    """A controller-confirmed live allocation is never failed away."""
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "0" * 31 + "3"
+    _insert_task(
+        database, task_id, status="running", task_type="cpu_runner", slurm_job_id="4155"
+    )
+    attempt = database.begin_stage_attempt(
+        task_id=task_id, stage_index=0, stage_name="cpu_runner"
+    )
+    database.record_stage_running(task_id=task_id, stage_name="cpu_runner", attempt=attempt["attempt"])
+    monkeypatch.setattr(task_runtime, "task_store", database)
+    monkeypatch.setattr(task_runtime, "_get_task_type", lambda name: (_single_stage_type(), None))
+    monkeypatch.setattr(task_runtime.shutil, "which", lambda command: f"/usr/bin/{command}")
+
+    def _run(args, **_kwargs):
+        if args[0].endswith("scancel"):
+            raise subprocess.CalledProcessError(1, args)
+        return subprocess.CompletedProcess(args, 0, stdout="JobId=4155 JobState=RUNNING\n", stderr="")
+
+    monkeypatch.setattr(task_runtime.subprocess, "run", _run)
+
+    assert task_runtime._recover_orphaned_tasks() == 1
+
+    task = database.get_task(task_id)
+    assert task["status"] == "running"
+    assert "cancellation could not be confirmed" in task["error"]
+    assert database.list_stage_runs(task_id)[0]["status"] == stage_state.RUNNING
+
+
+@pytest.mark.parametrize(
+    ("returncode", "output", "expected"),
+    [
+        (0, "JobId=4155 JobState=RUNNING\n", "active"),
+        (0, "JobId=4155 JobState=COMPLETED\n", "inactive"),
+        (1, "slurm_load_jobs error: Invalid job id specified\n", "inactive"),
+        (1, "slurm_load_jobs error: Unable to contact slurm controller\n", "unknown"),
+    ],
+)
+def test_slurm_job_state_distinguishes_unreachable_from_finished(monkeypatch, returncode, output, expected):
+    monkeypatch.setattr(task_runtime.shutil, "which", lambda command: f"/usr/bin/{command}")
+    monkeypatch.setattr(
+        task_runtime.subprocess,
+        "run",
+        lambda args, **_kwargs: subprocess.CompletedProcess(args, returncode, stdout=output, stderr=""),
+    )
+
+    assert task_runtime._slurm_job_state("4155") == expected
+
+
 def test_single_stage_worker_loss_keeps_a_task_whose_allocation_cannot_be_stopped(tmp_path, monkeypatch):
     """A failed Task would never be revisited, so it stays running instead."""
     database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))

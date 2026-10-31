@@ -4326,7 +4326,10 @@ def _slurm_job_state(job_id: str) -> str:
     except (OSError, subprocess.SubprocessError):
         return "unknown"
     if getattr(completed, "returncode", 1) != 0:
-        return "inactive"
+        # A nonzero exit means the id is unknown only when the controller
+        # answered; a contact failure must not be read as a finished job.
+        answer = f"{completed.stdout or ''}\n{completed.stderr or ''}".lower()
+        return "inactive" if "invalid job id" in answer else "unknown"
     state, _elapsed = _parse_scontrol_job(completed.stdout)
     if not state:
         return "unknown"
@@ -4463,10 +4466,10 @@ def _recover_orphaned_tasks() -> int:
             if cancellation_error:
                 # scancel failing on an already-terminal job is the common
                 # case, so ask the controller rather than assuming activity.
-                # Only an unanswerable controller keeps the Task running: an
-                # allocation that may still exist must not be failed away.
+                # Only a controller that reports the job gone settles the Task;
+                # an active or unanswerable one keeps it running.
                 liveness = _slurm_job_state(slurm_job_id)
-                if liveness == "unknown":
+                if liveness != "inactive":
                     message = f"SLURM task lost its worker{cancellation_error}"
                     task_store.update_task(md5sum, status="running", error=message)
                     logging.error("Recovery left task %s running: %s", md5sum, message)
