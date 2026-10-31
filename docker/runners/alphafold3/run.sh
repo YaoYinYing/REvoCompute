@@ -21,16 +21,29 @@ done
 
 input_file=$(readlink -f "$input_file")
 output_dir=$(readlink -f "$output_dir")
-[[ -f "$input_file" ]] || { echo "Task manifest not found: $input_file" >&2; exit 1; }
+
+features_dir="$output_dir/features"
+modeling_dir="$output_dir/modeling"
+feature_marker="$output_dir/.alphafold3-features-complete"
+
 mkdir -p "$output_dir"
+# Each attempt clears the outputs of the stages it runs before any preflight
+# check, because this Runner cannot bind the runtime image: a failed attempt
+# must not leave an earlier attempt's tree publishable under this one. The
+# features stage also clears the modeling tree, which it invalidates.
+case "$run_stage" in
+  features|all)
+    rm -rf "$features_dir" "$feature_marker" "$modeling_dir" "$output_dir/task_finished" ;;
+  model)
+    rm -rf "$modeling_dir" "$output_dir/task_finished" ;;
+esac
+
+[[ -f "$input_file" ]] || { echo "Task manifest not found: $input_file" >&2; exit 1; }
 
 json_path=$(task_input specification)
 [[ -f "$json_path" ]] || { echo "AlphaFold 3 JSON input not found: $json_path" >&2; exit 1; }
 [[ "${json_path,,}" == *.json ]] || { echo "AlphaFold 3 input must be a .json file" >&2; exit 1; }
 
-features_dir="$output_dir/features"
-modeling_dir="$output_dir/modeling"
-feature_marker="$output_dir/.alphafold3-features-complete"
 db_dir="${ALPHAFOLD3_DB_DIR:-/mnt/alphafold3/databases}"
 small_bfd="${ALPHAFOLD3_SMALL_BFD_PATH:-/mnt/alphafold3/reduced_bfd/bfd-first_non_consensus_sequences.fasta}"
 model_dir="${ALPHAFOLD3_MODEL_DIR:-/mnt/alphafold3/models}"
@@ -115,13 +128,8 @@ scientific_args() {
 run_features() {
   [[ -d "$db_dir" ]] || { echo "AlphaFold 3 database directory is missing: $db_dir" >&2; exit 1; }
   [[ -s "$small_bfd" ]] || { echo "AlphaFold 3 reduced BFD database is missing: $small_bfd" >&2; exit 1; }
-  # The pipeline is recomputed on every attempt: this Runner cannot bind the
-  # runtime image, so features left in the shared tree by an earlier attempt
-  # would be published as this attempt's output. Structures are deleted with
-  # them because a features attempt that fails must not leave an earlier
-  # attempt's result tree publishable under this one. The marker below only
-  # carries this run's processed JSON to the model stage.
-  rm -rf "$features_dir" "$feature_marker" "$modeling_dir" "$output_dir/task_finished"
+  # The marker below only carries this run's processed JSON to the model stage;
+  # the outputs themselves were cleared when this attempt started.
   mkdir -p "$features_dir"
   echo "REVODESIGN_STAGE:data_pipeline"
   scientific_args features
@@ -141,11 +149,6 @@ run_features() {
 }
 
 run_model() {
-  # Inference is recomputed on every attempt: this Runner cannot bind the
-  # runtime image, so structures left in the shared tree by an earlier attempt
-  # would be published as this attempt's output. They are removed before the
-  # input checks so a failed attempt publishes nothing from the last one.
-  rm -rf "$modeling_dir" "$output_dir/task_finished"
   mkdir -p "$modeling_dir"
   [[ -s "$feature_marker" ]] || { echo "Validated AlphaFold 3 processed JSON is missing" >&2; exit 1; }
   local processed_json expected_hash actual_hash

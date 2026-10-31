@@ -331,6 +331,75 @@ def test_a_confirmed_cancellation_settles_the_lost_response_attempt(tmp_path, mo
     assert (run["status"], run["slurm_job_id"]) == (stage_state.FAILED, "9002")
 
 
+def test_an_unreadable_attempt_never_fails_the_task_over_an_allocation(tmp_path, monkeypatch):
+    """(c) A read outage is treated as unconfirmed, not as a failed Task."""
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "c8" * 16
+    _insert_task(database, task_id, status="running")
+    monkeypatch.setattr(task_runtime, "task_store", database)
+
+    class _NeverSubmitted:
+        def submit(self):
+            raise RuntimeError("connection lost before submission")
+
+        def poll(self):  # pragma: no cover - never reached
+            raise AssertionError("poll must not be reached")
+
+    monkeypatch.setattr(task_runtime, "_create_job", lambda *_args, **_kwargs: _NeverSubmitted())
+
+    def _unreadable(_task_id):
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(database, "list_stage_runs", _unreadable)
+
+    with pytest.raises(task_runtime.AllocationUnconfirmed, match="could not be verified"):
+        task_runtime._run_compute_job(
+            task_id, _single_stage_type(), RunnerConfig(), [], str(tmp_path / "out"),
+            resource_policy=_policy(),
+        )
+
+    assert database.get_task(task_id)["status"] == "running"
+
+
+def test_a_bookkeeping_outage_does_not_mask_the_unconfirmed_allocation(tmp_path, monkeypatch):
+    """(c) The Task-running signal survives a failed handle write."""
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "c9" * 16
+    _insert_task(database, task_id, status="running")
+    monkeypatch.setattr(task_runtime, "task_store", database)
+
+    class _LostResponseJob:
+        def __init__(self, callback):
+            self._callback = callback
+
+        def submit(self):
+            self._callback("9004", time.time(), False)
+            raise RuntimeError("connection lost after scheduler acceptance")
+
+        def poll(self):  # pragma: no cover - never reached
+            raise AssertionError("poll must not be reached")
+
+    monkeypatch.setattr(
+        task_runtime, "_create_job",
+        lambda *_args, **kwargs: _LostResponseJob(kwargs["allocation_dispatched_callback"]),
+    )
+    monkeypatch.setattr(task_runtime, "_cancel_recorded_allocation", lambda _handle: False)
+    real_update = database.update_task
+
+    def _write_raises(_task_id, **fields):
+        if "Submission did not confirm" in str(fields.get("error", "")):
+            raise RuntimeError("database write failed")
+        return real_update(_task_id, **fields)
+
+    monkeypatch.setattr(database, "update_task", _write_raises)
+
+    with pytest.raises(task_runtime.AllocationUnconfirmed):
+        task_runtime._run_compute_job(
+            task_id, _single_stage_type(), RunnerConfig(), [], str(tmp_path / "out"),
+            resource_policy=_policy(),
+        )
+
+
 def test_a_cancellation_between_claim_and_submit_starts_no_allocation(tmp_path, monkeypatch):
     """(P2) A Task cancelled after the claim never reaches the scheduler."""
     database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))

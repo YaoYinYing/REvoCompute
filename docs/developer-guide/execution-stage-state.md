@@ -72,10 +72,18 @@ with no record, and every attempt opens directly in ``QUEUED``. A future stage
 selector adds its own skipped state together with the writer that produces it;
 the contract does not pre-declare one.
 
-**Retries.** One attempt = one allocation attempt. Worker-loss recovery
+**Retries.** One attempt = one allocation attempt. A launch claim on the attempt
+row is taken before the job adapter exists, so a duplicate or resumed dispatch
+finds the live attempt and starts no second ``srun``. Worker-loss recovery
 (``INTERRUPTED``) or re-dispatch creates the next attempt; terminal attempts are
-never edited. A duplicate StageRun open finds and reuses the live attempt because
-of the partial unique index. Attempt identity is the stage *name*, not its
+never edited. Recovery cancels every allocation the Task row or its attempts
+name. When a claim recorded no handle, or a cancellation cannot be confirmed,
+the Task stays running with the explanation instead of failing over a possibly
+live allocation, and cancelling the Task settles the claim. An allocation known
+only from adopted scheduler evidence — a host log or wrapper receipt — is not
+named by the Task row, so stopping it remains a scheduler-side action. A
+duplicate StageRun open finds and reuses the live attempt because of the partial
+unique index. Attempt identity is the stage *name*, not its
 manifest position, so reordering or inserting a stage keeps the existing
 attempt's identity and numbers the next one per stage; a stage that has never
 run can take an index another stage already used without colliding. Duplicate

@@ -1090,6 +1090,29 @@ class AllocationUnconfirmed(RuntimeError):
     """
 
 
+def _mark_allocation_unconfirmed(task_id: str, handle: str, message: str) -> None:
+    """Leave the Task running with the allocation named; never mask the failure.
+
+    The caller is about to raise ``AllocationUnconfirmed``, so a bookkeeping
+    outage here must not replace that signal with a database error: the Task
+    would then fail through the generic path and its allocation would survive
+    unowned.
+    """
+    fields: dict[str, Any] = {"status": "running", "error": message}
+    if handle:
+        fields["slurm_job_id"] = handle
+    try:
+        written = task_store.update_task(task_id, **fields)
+    except Exception:
+        logging.exception("Could not record the unconfirmed allocation of task %s", task_id)
+        written = False
+    if not written:
+        logging.error(
+            "The unconfirmed allocation of task %s (%s) is not rooted anywhere; cancel it in the scheduler",
+            task_id, handle or "unknown",
+        )
+
+
 def _cancel_recorded_allocation(handle: str) -> bool:
     """Ask the scheduler to cancel one allocation; ``False`` when that is unproven."""
     scancel = shutil.which("scancel")
@@ -1297,20 +1320,21 @@ def _settle_unsubmitted_attempt(task_id: str, stage_name: str, attempt: int | No
                 handle = str(run.get("slurm_job_id") or "").strip()
                 break
     except Exception:
-        # Without a fresh read, dispatch cannot be ruled out.  Leaving the
-        # attempt live is the fail-closed choice.
+        # Without a fresh read, dispatch cannot be ruled out, so the attempt
+        # stays live and the caller must not fail the Task over it.
         logging.exception(
-            "Could not verify whether stage attempt %s/#%s of task %s dispatched; leaving it live",
+            "Could not verify whether stage attempt %s/#%s of task %s dispatched",
             stage_name, attempt, task_id,
         )
-        return
-    if handle and not _cancel_recorded_allocation(handle):
-        task_store.update_task(
-            task_id,
-            slurm_job_id=handle,
-            status="running",
-            error=f"Submission did not confirm; allocation {handle} may still run",
+        message = (
+            f"Stage attempt {stage_name!r} #{attempt} of task {task_id} could not be verified "
+            "after a failed submission; an allocation may exist"
         )
+        _mark_allocation_unconfirmed(task_id, "", message)
+        raise AllocationUnconfirmed(message) from None
+    if handle and not _cancel_recorded_allocation(handle):
+        message = f"Submission did not confirm; allocation {handle} may still run"
+        _mark_allocation_unconfirmed(task_id, handle, message)
         raise AllocationUnconfirmed(
             f"stage attempt {stage_name!r} recorded allocation {handle} but submission failed; "
             "it could not be cancelled, so the Task stays running for recovery"
@@ -4410,6 +4434,15 @@ def _recover_orphaned_tasks() -> int:
                     logging.warning("Recovery could not cancel SLURM job %s for %s: %s", slurm_job_id, md5sum, exc)
             else:
                 cancellation_error = "; scheduler cancellation could not be attempted"
+            if cancellation_error:
+                # The allocation may still be running.  Failing the Task would
+                # stop recovery from ever revisiting it, so keep it running
+                # until the scheduler confirms the cancellation.
+                message = f"SLURM task lost its worker{cancellation_error}"
+                task_store.update_task(md5sum, status="running", error=message)
+                logging.error("Recovery left task %s running: %s", md5sum, message)
+                handled += 1
+                continue
             # The owning worker is gone; the attempt was interrupted, not
             # observed to fail scientifically.  The Task itself cannot resume,
             # so it still settles as failed below.

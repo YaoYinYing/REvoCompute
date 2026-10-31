@@ -228,6 +228,35 @@ def test_failed_attempt_publishes_no_output_from_the_previous_one(tmp_path):
     assert not (output / "modeling/test_job/test_job_model.cif").exists()
 
 
+def test_a_preflight_failure_publishes_no_output_from_the_previous_attempt(tmp_path):
+    env, manifest, _ = _runner_env(tmp_path)
+    output = tmp_path / "result"
+    assert _run_stage(env, manifest, output, "features").returncode == 0
+    assert _run_stage(env, manifest, output, "model").returncode == 0
+    assert (output / "modeling/test_job/test_job_model.cif").is_file()
+
+    missing_db = {**env, "ALPHAFOLD3_DB_DIR": str(tmp_path / "absent")}
+    features = _run_stage(missing_db, manifest, output, "features")
+    assert features.returncode != 0
+    assert not (output / "modeling/test_job/test_job_model.cif").exists()
+    assert not (output / "task_finished").exists()
+
+    assert _run_stage(env, manifest, output, "features").returncode == 0
+    assert _run_stage(env, manifest, output, "model").returncode == 0
+    low_cpu = {**env, "NPROC": "3"}
+    model = _run_stage(low_cpu, manifest, output, "model")
+    assert model.returncode != 0
+    assert not (output / "modeling/test_job/test_job_model.cif").exists()
+    assert not (output / "task_finished").exists()
+
+    assert _run_stage(env, manifest, output, "features").returncode == 0
+    assert _run_stage(env, manifest, output, "model").returncode == 0
+    missing_manifest = _run_stage(env, tmp_path / "absent.json", output, "features")
+    assert missing_manifest.returncode != 0
+    assert not (output / "modeling/test_job/test_job_model.cif").exists()
+    assert not (output / "task_finished").exists()
+
+
 def test_model_stage_with_an_invalid_feature_marker_publishes_no_output(tmp_path):
     env, manifest, _ = _runner_env(tmp_path)
     output = tmp_path / "result"

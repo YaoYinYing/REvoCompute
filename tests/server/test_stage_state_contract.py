@@ -902,7 +902,8 @@ def test_single_stage_worker_loss_interrupts_its_attempt(tmp_path, monkeypatch):
     database.record_stage_running(task_id=task_id, stage_name="cpu_runner", attempt=attempt["attempt"])
     monkeypatch.setattr(task_runtime, "task_store", database)
     monkeypatch.setattr(task_runtime, "_get_task_type", lambda name: (_single_stage_type(), None))
-    monkeypatch.setattr(task_runtime.shutil, "which", lambda command: None)
+    monkeypatch.setattr(task_runtime.shutil, "which", lambda command: f"/usr/bin/{command}")
+    monkeypatch.setattr(task_runtime.subprocess, "run", lambda args, **kwargs: None)
     monkeypatch.setattr(task_runtime, "_record_failure", lambda *args, **kwargs: None)
 
     assert task_runtime._recover_orphaned_tasks() == 1
@@ -912,6 +913,29 @@ def test_single_stage_worker_loss_interrupts_its_attempt(tmp_path, monkeypatch):
         stage_state.INTERRUPTED,
         stage_state.Reason.WORKER_LOST,
     )
+
+
+def test_single_stage_worker_loss_keeps_a_task_whose_allocation_cannot_be_stopped(tmp_path, monkeypatch):
+    """A failed Task would never be revisited, so it stays running instead."""
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "0" * 31 + "1"
+    _insert_task(
+        database, task_id, status="running", task_type="cpu_runner", slurm_job_id="4154"
+    )
+    attempt = database.begin_stage_attempt(
+        task_id=task_id, stage_index=0, stage_name="cpu_runner"
+    )
+    database.record_stage_running(task_id=task_id, stage_name="cpu_runner", attempt=attempt["attempt"])
+    monkeypatch.setattr(task_runtime, "task_store", database)
+    monkeypatch.setattr(task_runtime, "_get_task_type", lambda name: (_single_stage_type(), None))
+    monkeypatch.setattr(task_runtime.shutil, "which", lambda command: None)
+
+    assert task_runtime._recover_orphaned_tasks() == 1
+
+    task = database.get_task(task_id)
+    assert task["status"] == "running"
+    assert "cancellation could not be attempted" in task["error"]
+    assert database.list_stage_runs(task_id)[0]["status"] == stage_state.RUNNING
 
 
 def test_a_terminal_task_cannot_acquire_a_live_attempt(tmp_path):
