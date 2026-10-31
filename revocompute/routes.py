@@ -2910,7 +2910,9 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
     # activation between that check and this resolution would pin code the
     # receipt never validated, so the two reads must agree.
     for name, accepted in accepted_bundles.items():
-        if runtime_bundles.get(name, "") != accepted:
+        # A family with no runtime overlay resolves to ``None`` and acceptance
+        # stores ``""``; both mean "no bundle", so compare normalized.
+        if (runtime_bundles.get(name) or "") != (accepted or ""):
             admission = admissions.get(name)
             return _runner_refusal(
                 name,

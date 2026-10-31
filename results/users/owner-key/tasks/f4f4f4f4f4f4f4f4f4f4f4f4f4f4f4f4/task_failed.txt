@@ -1,5 +1,0 @@
-REvoDesign cpu_runner task failed
-Task ID: f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4
-Input: input.fasta
-
-Compute task lost its worker before recording a resource handle

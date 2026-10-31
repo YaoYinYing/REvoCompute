@@ -1,5 +1,0 @@
-REvoDesign cpu_runner task failed
-Task ID: 00000000000000000000000000000001
-Input: input.fasta
-
-SLURM task lost its worker; scheduler cancellation could not be attempted

@@ -1,5 +1,0 @@
-REvoDesign cpu_runner task failed
-Task ID: f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5
-Input: input.fasta
-
-SLURM task lost its worker
