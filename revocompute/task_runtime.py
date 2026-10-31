@@ -4361,9 +4361,9 @@ def _slurm_job_state(job_id: str) -> str:
     if getattr(completed, "returncode", 1) != 0:
         # A nonzero exit means the id is unknown only when the controller
         # answered; a contact failure must not be read as a finished job.
-        answer = f"{completed.stdout or ''}\n{completed.stderr or ''}".lower()
-        return "inactive" if "invalid job id" in answer else "unknown"
-    state, _elapsed = _parse_scontrol_job(completed.stdout)
+        answer = f"{getattr(completed, 'stdout', '') or ''}\n{getattr(completed, 'stderr', '') or ''}"
+        return "inactive" if "invalid job id" in answer.lower() else "unknown"
+    state, _elapsed = _parse_scontrol_job(getattr(completed, "stdout", "") or "")
     if not state:
         return "unknown"
     return "inactive" if state in _TERMINAL_SLURM_STATES else "active"
@@ -4536,13 +4536,11 @@ def _recover_orphaned_tasks() -> int:
             continue
         if slurm_job_id:
             cancellation_error = ""
-            scancel = shutil.which("scancel")
-            if scancel and slurm_job_id.isdigit():
-                try:
-                    subprocess.run([scancel, slurm_job_id], timeout=10, check=True)
-                except (OSError, subprocess.SubprocessError) as exc:
-                    cancellation_error = f"; scheduler cancellation could not be confirmed: {exc}"
-                    logging.warning("Recovery could not cancel SLURM job %s for %s: %s", slurm_job_id, md5sum, exc)
+            if slurm_job_id.isdigit():
+                # scancel acceptance is a request; the helper confirms the
+                # controller reports the allocation gone.
+                if not _cancel_recorded_allocation(slurm_job_id):
+                    cancellation_error = "; scheduler cancellation could not be confirmed"
             else:
                 cancellation_error = "; scheduler cancellation could not be attempted"
             if cancellation_error:

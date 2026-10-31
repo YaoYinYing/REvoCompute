@@ -1025,7 +1025,13 @@ def test_worker_recovery_cancels_slurm_orphans_and_preserves_unstarted_queue(mon
 
     monkeypatch.setattr(runtime.task_store, "list_tasks", lambda: tasks)
     monkeypatch.setattr(runtime.shutil, "which", lambda command: f"/usr/bin/{command}")
-    monkeypatch.setattr(runtime.subprocess, "run", lambda args, **kwargs: cancellations.append((args, kwargs)))
+    def _run(args, **kwargs):
+        if args[0].endswith("scancel"):
+            cancellations.append((args, kwargs))
+            return None
+        return runtime.subprocess.CompletedProcess(args, 0, stdout="JobState=COMPLETED\n", stderr="")
+
+    monkeypatch.setattr(runtime.subprocess, "run", _run)
     monkeypatch.setattr(runtime, "_record_failure", lambda *args, **kwargs: failures.append(args))
     monkeypatch.setattr(
         runtime.SlurmJob,

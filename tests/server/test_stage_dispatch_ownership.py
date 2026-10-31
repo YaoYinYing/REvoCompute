@@ -12,6 +12,7 @@ paths against a real ``TaskDatabase`` and count scheduler submissions.
 from __future__ import annotations
 
 import json
+import subprocess
 import threading
 import time
 from dataclasses import replace
@@ -890,6 +891,63 @@ def test_single_stage_recovery_holds_a_stage_named_allocation_it_cannot_stop(tmp
     task = database.get_task(task_id)
     assert task["status"] == "running"
     assert "9006 could not be cancelled" in task["error"]
+
+
+@pytest.mark.parametrize("state", ["active", "unknown"])
+def test_single_stage_task_handle_recovery_holds_until_the_controller_confirms(tmp_path, monkeypatch, state):
+    """A Task-level handle is settled only after confirmed scheduler inactivity."""
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "f5" * 16
+    _insert_task(database, task_id, status="running")
+    database.update_task(task_id, slurm_job_id="9007")
+    attempt = database.begin_stage_attempt(task_id=task_id, stage_index=0, stage_name=STAGE)
+    database.record_stage_running(task_id=task_id, stage_name=STAGE, attempt=attempt["attempt"])
+    monkeypatch.setattr(task_runtime, "task_store", database)
+    monkeypatch.setattr(task_runtime, "_get_task_type", lambda _name: (_single_stage_type(), None))
+    # A successful cancellation request is not termination: the real helper
+    # must poll the controller and refuse to settle a live allocation.
+    monkeypatch.setattr(task_runtime.shutil, "which", lambda command: f"/usr/bin/{command}")
+    monkeypatch.setattr(
+        task_runtime.subprocess,
+        "run",
+        lambda args, **_kwargs: subprocess.CompletedProcess(args, 0, stdout="", stderr=""),
+    )
+    monkeypatch.setattr(task_runtime, "_slurm_job_state", lambda _job_id: state)
+    monkeypatch.setattr(task_runtime.time, "sleep", lambda _seconds: None)
+
+    assert task_runtime._recover_orphaned_tasks() == 1
+
+    task = database.get_task(task_id)
+    assert task["status"] == "running"
+    assert "cancellation could not be confirmed" in task["error"]
+    assert database.list_stage_runs(task_id)[0]["status"] == stage_state.RUNNING
+
+
+def test_single_stage_task_handle_recovery_settles_a_confirmed_gone_job(tmp_path, monkeypatch):
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "f6" * 16
+    _insert_task(database, task_id, status="running")
+    database.update_task(task_id, slurm_job_id="9008")
+    attempt = database.begin_stage_attempt(task_id=task_id, stage_index=0, stage_name=STAGE)
+    database.record_stage_running(task_id=task_id, stage_name=STAGE, attempt=attempt["attempt"])
+    monkeypatch.setattr(task_runtime, "task_store", database)
+    monkeypatch.setattr(task_runtime, "_get_task_type", lambda _name: (_single_stage_type(), None))
+    monkeypatch.setattr(task_runtime.shutil, "which", lambda command: f"/usr/bin/{command}")
+    monkeypatch.setattr(
+        task_runtime.subprocess,
+        "run",
+        lambda args, **_kwargs: subprocess.CompletedProcess(args, 0, stdout="", stderr=""),
+    )
+    monkeypatch.setattr(task_runtime, "_slurm_job_state", lambda _job_id: "inactive")
+    monkeypatch.setattr(
+        task_runtime,
+        "_record_failure",
+        lambda md5sum, *_args, **_kwargs: database.update_task(md5sum, status="failed"),
+    )
+
+    assert task_runtime._recover_orphaned_tasks() == 1
+    assert database.get_task(task_id)["status"] == "failed"
+    assert database.list_stage_runs(task_id)[0]["status"] == stage_state.INTERRUPTED
 
 
 def test_recovery_never_replaces_an_unresolved_claimed_dispatch(monkeypatch):

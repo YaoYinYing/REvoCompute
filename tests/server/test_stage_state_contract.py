@@ -904,7 +904,11 @@ def test_single_stage_worker_loss_interrupts_its_attempt(tmp_path, monkeypatch):
     monkeypatch.setattr(task_runtime, "task_store", database)
     monkeypatch.setattr(task_runtime, "_get_task_type", lambda name: (_single_stage_type(), None))
     monkeypatch.setattr(task_runtime.shutil, "which", lambda command: f"/usr/bin/{command}")
-    monkeypatch.setattr(task_runtime.subprocess, "run", lambda args, **kwargs: None)
+
+    def _run(args, **_kwargs):
+        return subprocess.CompletedProcess(args, 0, stdout="JobId=4154 JobState=COMPLETED\n", stderr="")
+
+    monkeypatch.setattr(task_runtime.subprocess, "run", _run)
     monkeypatch.setattr(task_runtime, "_record_failure", lambda *args, **kwargs: None)
 
     assert task_runtime._recover_orphaned_tasks() == 1
@@ -1041,7 +1045,7 @@ def test_single_stage_worker_loss_keeps_a_task_whose_allocation_cannot_be_stoppe
 
     task = database.get_task(task_id)
     assert task["status"] == "running"
-    assert "cancellation could not be attempted" in task["error"]
+    assert "cancellation could not be confirmed" in task["error"]
     assert database.list_stage_runs(task_id)[0]["status"] == stage_state.RUNNING
 
 
