@@ -4340,28 +4340,6 @@ def _reclaim_abandoned_reservations(*, now: float | None = None) -> int:
     return released
 
 
-def _slurm_job_is_active(job_id: str) -> bool:
-    """Whether Slurm still reports a numeric job as live.
-
-    A handle Slurm no longer knows is not worth cancelling, and cancelling it
-    would fail the recovery pass.  An unanswerable query keeps the older
-    behaviour: the recovery attempt decides.
-    """
-    if not job_id.isdigit():
-        return False
-    scontrol = shutil.which("scontrol")
-    if not scontrol:
-        return True
-    try:
-        completed = subprocess.run(
-            [scontrol, "show", "job", job_id], capture_output=True, text=True, timeout=10, check=True
-        )
-    except (OSError, subprocess.SubprocessError):
-        return False
-    state, _elapsed = _parse_scontrol_job(completed.stdout)
-    return bool(state) and state not in _TERMINAL_SLURM_STATES
-
-
 def _slurm_job_state(job_id: str) -> str:
     """``active``, ``inactive`` or ``unknown`` for one scheduler job id.
 
