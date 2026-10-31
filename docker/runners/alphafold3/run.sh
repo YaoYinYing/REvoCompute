@@ -117,9 +117,11 @@ run_features() {
   [[ -s "$small_bfd" ]] || { echo "AlphaFold 3 reduced BFD database is missing: $small_bfd" >&2; exit 1; }
   # The pipeline is recomputed on every attempt: this Runner cannot bind the
   # runtime image, so features left in the shared tree by an earlier attempt
-  # would be published as this attempt's output. The marker below only carries
-  # this run's processed JSON to the model stage.
-  rm -rf "$features_dir" "$feature_marker"
+  # would be published as this attempt's output. Structures are deleted with
+  # them because a features attempt that fails must not leave an earlier
+  # attempt's result tree publishable under this one. The marker below only
+  # carries this run's processed JSON to the model stage.
+  rm -rf "$features_dir" "$feature_marker" "$modeling_dir" "$output_dir/task_finished"
   mkdir -p "$features_dir"
   echo "REVODESIGN_STAGE:data_pipeline"
   scientific_args features
@@ -139,6 +141,12 @@ run_features() {
 }
 
 run_model() {
+  # Inference is recomputed on every attempt: this Runner cannot bind the
+  # runtime image, so structures left in the shared tree by an earlier attempt
+  # would be published as this attempt's output. They are removed before the
+  # input checks so a failed attempt publishes nothing from the last one.
+  rm -rf "$modeling_dir" "$output_dir/task_finished"
+  mkdir -p "$modeling_dir"
   [[ -s "$feature_marker" ]] || { echo "Validated AlphaFold 3 processed JSON is missing" >&2; exit 1; }
   local processed_json expected_hash actual_hash
   processed_json=$(find_processed_json)
@@ -153,11 +161,6 @@ run_model() {
     echo "AlphaFold 3 model parameters are missing from: $model_dir" >&2
     exit 1
   }
-  # Inference is recomputed on every attempt: this Runner cannot bind the
-  # runtime image, so structures left in the shared tree by an earlier attempt
-  # would be published as this attempt's output.
-  rm -rf "$modeling_dir" "$output_dir/task_finished"
-  mkdir -p "$modeling_dir"
   echo "REVODESIGN_STAGE:inference"
   scientific_args model
   "$af3_python" "$af3_script" \

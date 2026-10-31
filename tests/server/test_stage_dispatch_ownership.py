@@ -265,15 +265,24 @@ def test_a_lost_submission_response_keeps_the_allocation_and_blocks_a_retry(tmp_
         task_runtime, "_create_job",
         lambda *_args, **kwargs: _LostResponseJob(kwargs["allocation_dispatched_callback"]),
     )
+    # The cancellation cannot be proven, so the Task must keep the handle and
+    # stay running instead of failing the attempt and abandoning the job.
+    cancelled: list[str] = []
+    monkeypatch.setattr(
+        task_runtime, "_cancel_recorded_allocation", lambda handle: cancelled.append(handle) or False
+    )
 
-    with pytest.raises(RuntimeError, match="connection lost"):
+    with pytest.raises(task_runtime.AllocationUnconfirmed, match="could not be cancelled"):
         task_runtime._run_compute_job(
             task_id, _single_stage_type(), RunnerConfig(), [], str(tmp_path / "out"),
             resource_policy=_policy(),
         )
 
+    assert cancelled == ["9001"]
     run = database.list_stage_runs(task_id)[0]
     assert (run["status"], run["slurm_job_id"]) == (stage_state.QUEUED, "9001")
+    task = database.get_task(task_id)
+    assert (task["status"], task["slurm_job_id"]) == ("running", "9001")
 
     # A redelivery observes the recorded allocation and starts no second srun.
     monkeypatch.setattr(
@@ -286,6 +295,150 @@ def test_a_lost_submission_response_keeps_the_allocation_and_blocks_a_retry(tmp_
         )
     assert "9001" in str(conflict.value)
     assert database.list_stage_runs(task_id)[0]["slurm_job_id"] == "9001"
+
+
+def test_a_confirmed_cancellation_settles_the_lost_response_attempt(tmp_path, monkeypatch):
+    """(c) Once the orphaned allocation is cancelled, the attempt may settle."""
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "c4" * 16
+    _insert_task(database, task_id, status="running")
+    monkeypatch.setattr(task_runtime, "task_store", database)
+
+    class _LostResponseJob:
+        def __init__(self, callback):
+            self._callback = callback
+
+        def submit(self):
+            self._callback("9002", time.time(), False)
+            raise RuntimeError("connection lost after scheduler acceptance")
+
+        def poll(self):  # pragma: no cover - never reached
+            raise AssertionError("poll must not be reached")
+
+    monkeypatch.setattr(
+        task_runtime, "_create_job",
+        lambda *_args, **kwargs: _LostResponseJob(kwargs["allocation_dispatched_callback"]),
+    )
+    monkeypatch.setattr(task_runtime, "_cancel_recorded_allocation", lambda _handle: True)
+
+    with pytest.raises(RuntimeError, match="connection lost"):
+        task_runtime._run_compute_job(
+            task_id, _single_stage_type(), RunnerConfig(), [], str(tmp_path / "out"),
+            resource_policy=_policy(),
+        )
+
+    run = database.list_stage_runs(task_id)[0]
+    assert (run["status"], run["slurm_job_id"]) == (stage_state.FAILED, "9002")
+
+
+def test_a_cancellation_between_claim_and_submit_starts_no_allocation(tmp_path, monkeypatch):
+    """(P2) A Task cancelled after the claim never reaches the scheduler."""
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "c5" * 16
+    _insert_task(database, task_id, status="running")
+    monkeypatch.setattr(task_runtime, "task_store", database)
+
+    real_claim = database.claim_stage_dispatch
+
+    def _cancel_after_claim(**kwargs):
+        claimed = real_claim(**kwargs)
+        assert database.claim_task_cancellation(task_id, finished_at=time.time(), error="cancelled")
+        return claimed
+
+    monkeypatch.setattr(database, "claim_stage_dispatch", _cancel_after_claim)
+    monkeypatch.setattr(
+        task_runtime, "_create_job", lambda *_args, **_kwargs: pytest.fail("must not submit")
+    )
+
+    state = task_runtime._run_compute_job(
+        task_id, _single_stage_type(), RunnerConfig(), [], str(tmp_path / "out"),
+        resource_policy=_policy(),
+    )
+
+    assert state == task_runtime.JobState.CANCELLED
+    run = database.list_stage_runs(task_id)[0]
+    assert run["status"] == stage_state.CANCELLED
+
+
+def test_a_refused_handle_cancels_the_allocation_it_could_not_record(tmp_path, monkeypatch):
+    """(P2) ``record_stage_dispatched=False`` tears the allocation down."""
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "c6" * 16
+    _insert_task(database, task_id, status="running")
+    database.begin_stage_attempt(task_id=task_id, stage_index=0, stage_name=STAGE)
+    assert database.record_stage_dispatched(
+        task_id=task_id, stage_name=STAGE, attempt=1, slurm_job_id="4100"
+    )
+    monkeypatch.setattr(task_runtime, "task_store", database)
+    cancelled: list[str] = []
+    monkeypatch.setattr(
+        task_runtime, "_cancel_recorded_allocation", lambda handle: cancelled.append(handle) or True
+    )
+
+    dispatched, _started, _finished = task_runtime._compute_allocation_callbacks(
+        task_id=task_id,
+        user_id=0,
+        stage_id=STAGE,
+        resource_policy=_policy(),
+        required_entitlements=(),
+        runner_family=STAGE,
+        attempt=1,
+    )
+    dispatched("9999", time.time(), False)
+
+    assert cancelled == ["9999"]
+    assert database.list_stage_runs(task_id)[0]["slurm_job_id"] == "4100"
+
+
+def test_recovery_cancels_known_handles_before_refusing_an_unknown_one(monkeypatch):
+    """A known allocation is stopped even when another attempt has no handle."""
+    task = {"md5sum": "c7" * 16, "status": "running", "slurm_job_id": "9003", "task_type": STAGE}
+    updates: list[dict] = []
+    stopped: list[str] = []
+
+    class _Store:
+        def list_tasks(self):
+            return [task]
+
+        def claim_task_recovery(self, _task_id, *, expected_status):
+            return expected_status == "running"
+
+        def list_stage_runs(self, _task_id):
+            return [
+                {
+                    "stage_name": STAGE, "stage_index": 0, "attempt": 1,
+                    "status": stage_state.RUNNING, "slurm_job_id": "9003", "dispatch_claim": "w1",
+                },
+                {
+                    "stage_name": "next_stage", "stage_index": 1, "attempt": 1,
+                    "status": stage_state.QUEUED, "slurm_job_id": None, "dispatch_claim": "w2",
+                },
+            ]
+
+        def finish_active_stage_runs(self, _task_id, *, status, reason_code):
+            return 0
+
+        def update_task(self, _task_id, **fields):
+            updates.append(fields)
+            return True
+
+    class _TaskType:
+        workflow = (object(),)
+
+    monkeypatch.setattr(task_runtime, "task_store", _Store())
+    monkeypatch.setattr(task_runtime, "CONFIG", replace(task_runtime.CONFIG, demo_mode=False))
+    monkeypatch.setattr(task_runtime, "_get_task_type", lambda _name: (_TaskType(), object()))
+    monkeypatch.setattr(task_runtime, "_slurm_job_is_active", lambda _job_id: True)
+    monkeypatch.setattr(
+        task_runtime,
+        "_stop_orphaned_workflow_execution",
+        lambda _task_id, handle, _container: stopped.append(handle) or "",
+    )
+
+    assert task_runtime._recover_orphaned_tasks() == 1
+    assert stopped == ["9003"]
+    assert updates[-1]["status"] == "running"
+    assert "cancel the Task to settle it" in updates[-1]["error"]
 
 
 def test_recovery_never_replaces_an_unresolved_claimed_dispatch(monkeypatch):

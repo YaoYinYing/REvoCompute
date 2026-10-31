@@ -206,17 +206,41 @@ def test_failed_attempt_publishes_no_output_from_the_previous_one(tmp_path):
     assert _run_stage(env, manifest, output, "model").returncode == 0
     assert (output / "modeling/test_job/test_job_model.cif").is_file()
 
+    # A failed features attempt invalidates the whole task tree: the declared
+    # result is the structure, so an earlier attempt's modeling output must not
+    # survive it.
+    env["AF3_FAIL_STAGE"] = "features"
+    failed_features = _run_stage(env, manifest, output, "features")
+    assert failed_features.returncode == 9
+    assert not (output / "features/test_job/test_job_data.json").exists()
+    assert not (output / ".alphafold3-features-complete").exists()
+    assert not (output / "modeling/test_job/test_job_model.cif").exists()
+    assert not (output / "task_finished").exists()
+
+    env.pop("AF3_FAIL_STAGE")
+    assert _run_stage(env, manifest, output, "features").returncode == 0
+    assert _run_stage(env, manifest, output, "model").returncode == 0
+
     env["AF3_FAIL_STAGE"] = "model"
     failed_model = _run_stage(env, manifest, output, "model")
     assert failed_model.returncode == 9
     assert not (output / "task_finished").exists()
     assert not (output / "modeling/test_job/test_job_model.cif").exists()
 
-    env["AF3_FAIL_STAGE"] = "features"
-    failed_features = _run_stage(env, manifest, output, "features")
-    assert failed_features.returncode == 9
-    assert not (output / "features/test_job/test_job_data.json").exists()
-    assert not (output / ".alphafold3-features-complete").exists()
+
+def test_model_stage_with_an_invalid_feature_marker_publishes_no_output(tmp_path):
+    env, manifest, _ = _runner_env(tmp_path)
+    output = tmp_path / "result"
+    assert _run_stage(env, manifest, output, "features").returncode == 0
+    assert _run_stage(env, manifest, output, "model").returncode == 0
+    (output / ".alphafold3-features-complete").write_text("0" * 64, encoding="utf-8")
+
+    tampered = _run_stage(env, manifest, output, "model")
+
+    assert tampered.returncode != 0
+    assert "changed after feature validation" in tampered.stderr
+    assert not (output / "modeling/test_job/test_job_model.cif").exists()
+    assert not (output / "task_finished").exists()
 
 
 @pytest.mark.parametrize(
