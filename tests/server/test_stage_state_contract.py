@@ -10,6 +10,7 @@ from dataclasses import replace
 import json
 from pathlib import Path
 import sqlite3
+import subprocess
 import time
 
 import pytest
@@ -913,6 +914,39 @@ def test_single_stage_worker_loss_interrupts_its_attempt(tmp_path, monkeypatch):
         stage_state.INTERRUPTED,
         stage_state.Reason.WORKER_LOST,
     )
+
+
+def test_single_stage_worker_loss_settles_a_job_the_controller_reports_terminal(tmp_path, monkeypatch):
+    """scancel failing on an already-finished job must not wedge the Task."""
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "0" * 31 + "2"
+    _insert_task(
+        database, task_id, status="running", task_type="cpu_runner", slurm_job_id="4154"
+    )
+    attempt = database.begin_stage_attempt(
+        task_id=task_id, stage_index=0, stage_name="cpu_runner"
+    )
+    database.record_stage_running(task_id=task_id, stage_name="cpu_runner", attempt=attempt["attempt"])
+    monkeypatch.setattr(task_runtime, "task_store", database)
+    monkeypatch.setattr(task_runtime, "_get_task_type", lambda name: (_single_stage_type(), None))
+    monkeypatch.setattr(task_runtime.shutil, "which", lambda command: f"/usr/bin/{command}")
+    monkeypatch.setattr(
+        task_runtime,
+        "_record_failure",
+        lambda md5sum, *_args, **_kwargs: database.update_task(md5sum, status="failed"),
+    )
+
+    def _run(args, **_kwargs):
+        if args[0].endswith("scancel"):
+            raise subprocess.CalledProcessError(1, args)
+        return subprocess.CompletedProcess(args, 0, stdout="JobId=4154 JobState=COMPLETED\n", stderr="")
+
+    monkeypatch.setattr(task_runtime.subprocess, "run", _run)
+
+    assert task_runtime._recover_orphaned_tasks() == 1
+
+    assert database.get_task(task_id)["status"] == "failed"
+    assert database.list_stage_runs(task_id)[0]["status"] == stage_state.INTERRUPTED
 
 
 def test_single_stage_worker_loss_keeps_a_task_whose_allocation_cannot_be_stopped(tmp_path, monkeypatch):

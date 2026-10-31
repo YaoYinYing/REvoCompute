@@ -4307,6 +4307,32 @@ def _slurm_job_is_active(job_id: str) -> bool:
     return bool(state) and state not in _TERMINAL_SLURM_STATES
 
 
+def _slurm_job_state(job_id: str) -> str:
+    """``active``, ``inactive`` or ``unknown`` for one scheduler job id.
+
+    ``inactive`` covers a terminal state and an id the controller no longer
+    knows; ``unknown`` means the controller could not be asked, which is not
+    evidence that an allocation stopped.
+    """
+    if not str(job_id).isdigit():
+        return "unknown"
+    scontrol = shutil.which("scontrol")
+    if not scontrol:
+        return "unknown"
+    try:
+        completed = subprocess.run(
+            [scontrol, "show", "job", str(job_id)], capture_output=True, text=True, timeout=10
+        )
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+    if getattr(completed, "returncode", 1) != 0:
+        return "inactive"
+    state, _elapsed = _parse_scontrol_job(completed.stdout)
+    if not state:
+        return "unknown"
+    return "inactive" if state in _TERMINAL_SLURM_STATES else "active"
+
+
 def _unresolved_dispatch_claim(runs: list[dict[str, Any]]) -> bool:
     """Whether a live attempt claimed a launch but never recorded its handle."""
     return any(
@@ -4435,14 +4461,17 @@ def _recover_orphaned_tasks() -> int:
             else:
                 cancellation_error = "; scheduler cancellation could not be attempted"
             if cancellation_error:
-                # The allocation may still be running.  Failing the Task would
-                # stop recovery from ever revisiting it, so keep it running
-                # until the scheduler confirms the cancellation.
-                message = f"SLURM task lost its worker{cancellation_error}"
-                task_store.update_task(md5sum, status="running", error=message)
-                logging.error("Recovery left task %s running: %s", md5sum, message)
-                handled += 1
-                continue
+                # scancel failing on an already-terminal job is the common
+                # case, so ask the controller rather than assuming activity.
+                # Only an unanswerable controller keeps the Task running: an
+                # allocation that may still exist must not be failed away.
+                liveness = _slurm_job_state(slurm_job_id)
+                if liveness == "unknown":
+                    message = f"SLURM task lost its worker{cancellation_error}"
+                    task_store.update_task(md5sum, status="running", error=message)
+                    logging.error("Recovery left task %s running: %s", md5sum, message)
+                    handled += 1
+                    continue
             # The owning worker is gone; the attempt was interrupted, not
             # observed to fail scientifically.  The Task itself cannot resume,
             # so it still settles as failed below.

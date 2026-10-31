@@ -400,6 +400,37 @@ def test_a_bookkeeping_outage_does_not_mask_the_unconfirmed_allocation(tmp_path,
         )
 
 
+def test_a_task_cancelled_during_submit_cancels_the_slurm_allocation(tmp_path, monkeypatch):
+    """The single-stage guard mirrors the workflow path for a real SlurmJob."""
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "c10" * 11
+    _insert_task(database, task_id, status="running")
+    monkeypatch.setattr(task_runtime, "task_store", database)
+
+    job = task_runtime.SlurmJob(
+        task_id, _single_stage_type(), RunnerConfig(), [], str(tmp_path / "out")
+    )
+    cancelled: list[str] = []
+
+    def _submit():
+        # The cancellation lands while the scheduler request is in flight.
+        assert database.claim_task_cancellation(task_id, finished_at=time.time(), error="cancelled")
+        return "7005"
+
+    job.submit = _submit
+    job.cancel = lambda: cancelled.append("7005")
+    monkeypatch.setattr(task_runtime, "_create_job", lambda *_args, **_kwargs: job)
+
+    state = task_runtime._run_compute_job(
+        task_id, _single_stage_type(), RunnerConfig(), [], str(tmp_path / "out"),
+        resource_policy=_policy(),
+    )
+
+    assert state == task_runtime.JobState.CANCELLED
+    assert cancelled == ["7005"]
+    assert database.list_stage_runs(task_id)[0]["status"] == stage_state.CANCELLED
+
+
 def test_a_cancellation_between_claim_and_submit_starts_no_allocation(tmp_path, monkeypatch):
     """(P2) A Task cancelled after the claim never reaches the scheduler."""
     database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
